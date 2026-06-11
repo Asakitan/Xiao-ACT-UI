@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.76: Entity 菜单 ACT summary 计数修复.
+
+  1) `gui_modules/sao_gui_menu_mixin.py` 修复 ACT 菜单 list payload 计数。
+     Timeline/Action Log/Combatant/Skill 菜单摘要现在只统计真正的 list/tuple,
+     避免字符串 payload 被拆成字符后显示错误数量。
+
+  2) `gui_modules/sao_gui_menu_mixin.py` 修复 ACT 菜单 numeric payload 归一化。
+     Report/Aggregate/Death/Graph/Plugin/Trigger 等菜单摘要和刷新签名现在过滤非有限或畸形数值,
+     避免坏 payload 造成菜单构建中断或签名误判。
+
 ## v4.5.75: ACT Graph Timeseries Tk points 渲染修复.
 
   1) `gui_modules/sao_gui_graph_timeseries.py` 修复 points payload 形状处理。

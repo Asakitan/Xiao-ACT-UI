@@ -37,6 +37,8 @@ only contains method bodies that access ``self.X``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import math
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -63,6 +65,32 @@ from act_platform.runtime import (
 from config import DEFAULT_HOTKEYS
 from utils.sao_sound import play_sound
 from sao_theme import SAOPopUpMenu
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    if lo is not None:
+        number = max(lo, number)
+    if hi is not None:
+        number = min(hi, number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    return int(_finite_float(value, float(default), lo=lo, hi=hi))
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, (list, tuple)) else 0
 
 
 class SAOPlayerGUIMenuMixin:
@@ -174,8 +202,8 @@ class SAOPlayerGUIMenuMixin:
         try:
             trigger_status = self._get_act_trigger_menu_status()
             trigger_sig = (
-                int(trigger_status.get('rule_count', 0) or 0),
-                int(trigger_status.get('timer_count', 0) or 0),
+                _finite_int(trigger_status.get('rule_count'), 0, lo=0),
+                _finite_int(trigger_status.get('timer_count'), 0, lo=0),
             )
         except Exception:
             trigger_sig = (0, 0)
@@ -192,12 +220,12 @@ class SAOPlayerGUIMenuMixin:
             source_sig = ('missing', '', False, False)
         try:
             report_status = self._get_act_report_menu_status()
-            report_preview = report_status.get('preview') or {}
+            report_preview = _mapping(report_status.get('preview'))
             report_sig = (
                 bool(report_status.get('ok')),
                 str(report_status.get('encounter_id') or ''),
-                int(report_preview.get('total_damage') or 0),
-                int((report_status.get('storage_status') or {}).get('count') or 0),
+                _finite_int(report_preview.get('total_damage'), 0, lo=0),
+                _finite_int(_mapping(report_status.get('storage_status')).get('count'), 0, lo=0),
             )
         except Exception:
             report_sig = (False, '', 0, 0)
@@ -205,8 +233,8 @@ class SAOPlayerGUIMenuMixin:
             timeline_status = self._get_act_timeline_menu_status()
             timeline_sig = (
                 bool(timeline_status.get('ok')),
-                int(len(timeline_status.get('events') or [])),
-                int(timeline_status.get('cursor_ms') or 0),
+                _list_count(timeline_status.get('events')),
+                _finite_int(timeline_status.get('cursor_ms'), 0, lo=0),
                 bool(timeline_status.get('playing')),
             )
         except Exception:
@@ -215,10 +243,10 @@ class SAOPlayerGUIMenuMixin:
             action_log_status = self._get_act_action_log_menu_status()
             action_log_sig = (
                 bool(action_log_status.get('ok')),
-                int(len(action_log_status.get('rows') or [])),
-                int(len(action_log_status.get('grouped_rows') or [])),
-                int((action_log_status.get('cursor') or {}).get('time_ms') or 0),
-                str((action_log_status.get('filters') or {}).get('topic') or ''),
+                _list_count(action_log_status.get('rows')),
+                _list_count(action_log_status.get('grouped_rows')),
+                _finite_int(_mapping(action_log_status.get('cursor')).get('time_ms'), 0, lo=0),
+                str(_mapping(action_log_status.get('filters')).get('topic') or ''),
             )
         except Exception:
             action_log_sig = (False, 0, 0, 0, '')
@@ -235,13 +263,13 @@ class SAOPlayerGUIMenuMixin:
             aggregate_sig = (0,)
         try:
             death_status = self._get_act_death_recap_menu_status()
-            death_summary = death_status.get('summary') or {}
-            death = death_status.get('death') or {}
+            death_summary = _mapping(death_status.get('summary'))
+            death = _mapping(death_status.get('death'))
             death_sig = (
                 bool(death_status.get('ok')),
-                str((death or {}).get('entity_id') or ''),
-                int(death_summary.get('incoming_damage') or 0),
-                int(death_summary.get('death_events') or 0),
+                str(death.get('entity_id') or ''),
+                _finite_int(death_summary.get('incoming_damage'), 0, lo=0),
+                _finite_int(death_summary.get('death_events'), 0, lo=0),
             )
         except Exception:
             death_sig = (False, '', 0, 0)
@@ -250,8 +278,8 @@ class SAOPlayerGUIMenuMixin:
             graph_sig = (
                 bool(graph_status.get('ok')),
                 str(graph_status.get('selected_metric') or ''),
-                int(graph_status.get('row_count') or 0),
-                int(graph_status.get('time_range_ms') or 0),
+                _finite_int(graph_status.get('row_count'), 0, lo=0),
+                _finite_int(graph_status.get('time_range_ms'), 0, lo=0),
             )
         except Exception:
             graph_sig = (False, '', 0, 0)
@@ -260,7 +288,7 @@ class SAOPlayerGUIMenuMixin:
             combatant_sig = (
                 bool(combatant_status.get('ok')),
                 str(combatant_status.get('combatant_id') or ''),
-                int(len(combatant_status.get('skills') or [])),
+                _list_count(combatant_status.get('skills')),
             )
         except Exception:
             combatant_sig = (False, '', 0)
@@ -270,7 +298,7 @@ class SAOPlayerGUIMenuMixin:
                 bool(skill_status.get('ok')),
                 str(skill_status.get('combatant_id') or ''),
                 str(skill_status.get('skill_id') or ''),
-                int(len(skill_status.get('timeline_refs') or [])),
+                _list_count(skill_status.get('timeline_refs')),
             )
         except Exception:
             skill_sig = (False, '', '', 0)
@@ -395,46 +423,47 @@ class SAOPlayerGUIMenuMixin:
         mem_mode_labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
         mem_mode_disp = mem_mode_labels.get(mem_mode, mem_mode.upper())
         plugin_status = self._get_act_plugin_menu_status()
-        plugin_total = int(plugin_status.get('plugin_count', 0) or 0)
-        plugin_active = int(plugin_status.get('active_count', 0) or 0)
+        plugin_total = _finite_int(plugin_status.get('plugin_count'), 0, lo=0)
+        plugin_active = _finite_int(plugin_status.get('active_count'), 0, lo=0)
         trigger_status = self._get_act_trigger_menu_status()
-        trigger_total = int(trigger_status.get('rule_count', 0) or 0)
-        trigger_timers = int(trigger_status.get('timer_count', 0) or 0)
+        trigger_total = _finite_int(trigger_status.get('rule_count'), 0, lo=0)
+        trigger_timers = _finite_int(trigger_status.get('timer_count'), 0, lo=0)
         source_status = self._get_act_data_source_menu_status()
-        source_summary = source_status.get('sources', {}).get('summary', {})
+        source_summary = _mapping(_mapping(source_status.get('sources')).get('summary'))
         source_label = str(source_summary.get('data_source') or source_status.get('requested_mode') or mem_mode_disp).upper()
         source_health_state = str(source_status.get('status') or 'missing').upper()
         report_status = self._get_act_report_menu_status()
-        report_preview = report_status.get('preview') or {}
-        report_total_damage = int(report_preview.get('total_damage') or 0)
+        report_preview = _mapping(report_status.get('preview'))
+        report_total_damage = _finite_int(report_preview.get('total_damage'), 0, lo=0)
         report_state = 'READY' if report_status.get('ok') else 'EMPTY'
         timeline_status = self._get_act_timeline_menu_status()
-        timeline_count = len(timeline_status.get('events') or [])
+        timeline_count = _list_count(timeline_status.get('events'))
         timeline_state = 'PLAY' if timeline_status.get('playing') else 'READY'
         action_log_status = self._get_act_action_log_menu_status()
-        action_log_count = len(action_log_status.get('rows') or [])
-        action_group_count = len(action_log_status.get('grouped_rows') or [])
+        action_log_count = _list_count(action_log_status.get('rows'))
+        action_group_count = _list_count(action_log_status.get('grouped_rows'))
         action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
         aggregate_status = self._get_act_aggregate_menu_status()
-        aggregate_counts = aggregate_status.get('raw_counts') or {}
-        aggregate_state = 'READY' if aggregate_status.get('ok') and int(aggregate_counts.get('rows') or 0) else 'EMPTY'
-        aggregate_label = f"{int(aggregate_counts.get('rows') or 0)}/{int(aggregate_counts.get('skills') or 0)}/{int(aggregate_counts.get('monsters') or 0)}"
+        aggregate_counts = _mapping(aggregate_status.get('raw_counts'))
+        aggregate_rows = _finite_int(aggregate_counts.get('rows'), 0, lo=0)
+        aggregate_state = 'READY' if aggregate_status.get('ok') and aggregate_rows else 'EMPTY'
+        aggregate_label = f"{aggregate_rows}/{_finite_int(aggregate_counts.get('skills'), 0, lo=0)}/{_finite_int(aggregate_counts.get('monsters'), 0, lo=0)}"
         death_status = self._get_act_death_recap_menu_status()
-        death_summary = death_status.get('summary') or {}
-        death_damage = int(death_summary.get('incoming_damage') or 0)
-        death_events = int(death_summary.get('death_events') or 0)
+        death_summary = _mapping(death_status.get('summary'))
+        death_damage = _finite_int(death_summary.get('incoming_damage'), 0, lo=0)
+        death_events = _finite_int(death_summary.get('death_events'), 0, lo=0)
         death_state = 'READY' if death_events else 'EMPTY'
         graph_status = self._get_act_graph_timeseries_menu_status()
         graph_metric = str(graph_status.get('selected_metric') or 'damage')
-        graph_count = int(graph_status.get('row_count') or 0)
+        graph_count = _finite_int(graph_status.get('row_count'), 0, lo=0)
         graph_state = 'READY' if graph_status.get('ok') else 'EMPTY'
         combatant_status = self._get_act_combatant_menu_status()
         combatant_id = str(combatant_status.get('combatant_id') or 'NONE')
-        combatant_count = len(combatant_status.get('skills') or [])
+        combatant_count = _list_count(combatant_status.get('skills'))
         combatant_state = 'READY' if combatant_status.get('ok') else 'EMPTY'
         skill_status = self._get_act_skill_menu_status()
         skill_id = str(skill_status.get('skill_id') or 'NONE')
-        skill_ref_count = len(skill_status.get('timeline_refs') or [])
+        skill_ref_count = _list_count(skill_status.get('timeline_refs'))
         skill_state = 'READY' if skill_status.get('ok') else 'EMPTY'
         session_visible = False
         try:
