@@ -6971,14 +6971,19 @@ function _brRenderRuntime() {
     var state = rt.state || 'idle';
     var text = 'Boss Raid: ' + state.toUpperCase();
     if (state === 'running') {
+        var elapsedSeconds = _clampInt(rt.elapsed_s, 0, 0, 86400);
+        var dpsValue = _clampInt(rt.dps, 0, 0, Number.MAX_SAFE_INTEGER);
+        var damageValue = _clampInt(rt.total_damage, 0, 0, Number.MAX_SAFE_INTEGER);
+        var hpPct = _clampNum(rt.boss_hp_est_pct, 0, 0, 1);
+        var enrageSeconds = _clampInt(rt.enrage_remaining_s, 0, 0, 86400);
         text += ' | ' + (rt.phase_name || 'P?');
-        text += ' | ' + Math.floor(rt.elapsed_s || 0) + 's';
-        text += ' | DPS: ' + (rt.dps || 0);
-        text += ' | DMG: ' + (rt.total_damage || 0);
-        if ((rt.boss_hp_est_pct || 0) > 0) {
-            text += ' | HP: ' + Math.max(0, Math.min(100, Math.round((rt.boss_hp_est_pct || 0) * 1000) / 10)) + '%';
+        text += ' | ' + elapsedSeconds + 's';
+        text += ' | DPS: ' + dpsValue;
+        text += ' | DMG: ' + damageValue;
+        if (hpPct > 0) {
+            text += ' | HP: ' + (Math.round(hpPct * 1000) / 10) + '%';
         }
-        if (rt.enrage_remaining_s > 0) text += ' | Enrage: ' + Math.floor(rt.enrage_remaining_s) + 's';
+        if (enrageSeconds > 0) text += ' | Enrage: ' + enrageSeconds + 's';
     } else if (state === 'completed') {
         text += ' | ✓ COMPLETED';
     }

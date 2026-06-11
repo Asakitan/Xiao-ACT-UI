@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.61: DPS shim 与 BossRaid 运行态数值修复.
+
+  1) `web/pywebview-shim.js` 修复 DPS 实体详情 UID 参数传递。
+     `get_entity_detail(uid)` 现在保持字符串 UID 传给 `dps.entity_detail`,
+     避免大 UID 被 JavaScript Number 截断后详情查不到或串到错误实体。
+
+  2) `web/menu.html` 修复 BossRaid 运行态摘要渲染。
+     elapsed、DPS、DMG、HP 百分比和狂暴倒计时现在使用既有夹取 helper,
+     避免异常 runtime 状态把 `Infinity`/`NaN` 显示到主菜单。
+
 ## v4.5.60: Trigger Timer 与主菜单数值状态修复.
 
   1) `web/trigger_timer_manager.html` 修复触发器摘要和规则数值渲染。

@@ -284,9 +284,8 @@
             return call('dps.toggle_enabled', {}).then(normalizeOk);
         },
         get_entity_detail: function (uid) {
-            var numericUid = Number(uid || 0);
-            if (!isFinite(numericUid)) numericUid = 0;
-            return call('dps.entity_detail', { uid: numericUid }).then(function (detail) {
+            var uidText = String(uid == null ? '' : uid).trim();
+            return call('dps.entity_detail', { uid: uidText }).then(function (detail) {
                 detail = normalizeOk(detail);
                 try {
                     if (detail && detail.ok !== false

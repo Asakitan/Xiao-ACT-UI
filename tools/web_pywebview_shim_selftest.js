@@ -144,13 +144,13 @@ function assert(cond, message) {
       dpsSnapshotApplied = !!payload;
     },
     updateDetail(payload) {
-      dpsDetailApplied = payload && payload.uid === 1001 && payload.skills && payload.skills[0].name === "Slash";
+      dpsDetailApplied = payload && payload.uid === "9007199254740993" && payload.skills && payload.skills[0].name === "Slash";
     },
   };
-  await window.pywebview.api.get_entity_detail(1001);
+  await window.pywebview.api.get_entity_detail("9007199254740993");
   last = calls[calls.length - 1];
   assert(last.name === "dps.entity_detail", "get_entity_detail command mismatch");
-  assert(last.payload.uid === 1001, "get_entity_detail uid was not forwarded");
+  assert(last.payload.uid === "9007199254740993", "get_entity_detail uid should be forwarded as a string");
   assert(dpsDetailApplied, "get_entity_detail should apply the returned detail when DpsMeter is present");
 
   await window.pywebview.api.set_sound_enabled(false);
@@ -488,6 +488,8 @@ function assert(cond, message) {
 
   const dpsPanel = fs.readFileSync(path.join(root, "web/dps.html"), "utf8");
   assert(dpsPanel.includes("sk.skill_name || sk.name || sk.skill_id"), "DPS detail should render C# skill name fields");
+  assert(!shim.includes("var numericUid = Number(uid || 0);"), "pywebview shim must not coerce DPS entity uid to Number");
+  assert(shim.includes("var uidText = String(uid == null ? '' : uid).trim();"), "pywebview shim should preserve DPS entity uid as a string");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
