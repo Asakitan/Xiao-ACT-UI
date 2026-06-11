@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.29: ACT Web 管理面板点击参数转义修复.
+
+  1) `web/plugin_manager.html` 修复插件卡片 action 按钮的 `plugin.id` 传参。
+     `enable/disable/reload/pin/uninstall` 的 inline `onclick` 现在使用 HTML-escaped JSON 参数,
+     插件 ID 中包含引号、反斜杠或实体文本时不再破坏按钮动作。
+
+  2) `web/trigger_timer_manager.html` 修复触发/计时规则卡片按钮的 `rule.id` 传参。
+     `enable/disable/test` 的 inline `onclick` 现在同样先转义 JSON 字符串,
+     避免自定义规则 ID 导致点击无效或参数截断。
+
 ## v4.5.28: Web 菜单属性转义与排行榜渲染修复.
 
   1) `web/menu.html` 移除重复的弱版 `_escAttr()` 定义。

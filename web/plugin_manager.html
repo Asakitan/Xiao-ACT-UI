@@ -456,7 +456,7 @@ button.close {
     }
 
     function jsArg(value) {
-        return JSON.stringify(String(value == null ? '' : value));
+        return esc(JSON.stringify(String(value == null ? '' : value)));
     }
 
     function renderCard(plugin) {

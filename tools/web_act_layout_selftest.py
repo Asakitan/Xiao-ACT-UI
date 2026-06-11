@@ -73,14 +73,26 @@ def _assert_side_scroll(file_name: str, label: str) -> None:
 def _assert_inline_js_args_are_escaped() -> None:
     combatant = _read_web("act_combatant_drilldown.html")
     graph = _read_web("act_graph_timeseries.html")
+    plugin_manager = _read_web("plugin_manager.html")
+    trigger_timer = _read_web("trigger_timer_manager.html")
     if "openSkill(\\''+esc(String(sid))+'\\')" in combatant:
         raise AssertionError("combatant skill onclick must not interpolate skill_id through a quoted JS string")
     if "openLog(' + ms + \",\\'\" + (p.topic || '') + \"\\')\"" in graph:
         raise AssertionError("graph point onclick must not interpolate topic through a quoted JS string")
+    bad_json_arg = "return JSON.stringify(String(value == null ? '' : value));"
+    if bad_json_arg in plugin_manager:
+        raise AssertionError("plugin manager jsArg must HTML-escape JSON args before inline onclick")
+    if bad_json_arg in trigger_timer:
+        raise AssertionError("trigger timer jsArg must HTML-escape JSON args before inline onclick")
     if "function jsArg" not in combatant or "openSkill('+jsArg(sid)+')" not in combatant:
         raise AssertionError("combatant drilldown must encode skill_id with jsArg before wiring onclick")
     if "function jsArg" not in graph or "openLog(' + ms + ',' + jsArg(p.topic || '') + ')" not in graph:
         raise AssertionError("graph timeseries must encode topic with jsArg before wiring onclick")
+    safe_json_arg = "return esc(JSON.stringify(String(value == null ? '' : value)));"
+    if safe_json_arg not in plugin_manager:
+        raise AssertionError("plugin manager must encode plugin ids with escaped jsArg")
+    if safe_json_arg not in trigger_timer:
+        raise AssertionError("trigger timer must encode rule ids with escaped jsArg")
 
 
 def main() -> int:
