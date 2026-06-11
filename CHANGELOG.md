@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.68: Raid Editor 反应匹配与机制预设参数修复.
+
+  1) `web/raid_editor.html` 修复 Boss reaction mapping ID 比较。
+     boss base id / skill id 现在通过有限数 helper 比较,
+     避免坏 ID 值进入 `NaN` 比较导致误匹配或漏匹配。
+
+  2) `web/raid_editor.html` 修复机制 dash 预设识别。
+     sequence 的 hold/delay 毫秒值现在有限化后再比较,
+     避免坏 `hold_ms` 被 `!Number(...)` 误当成 0。
+
 ## v4.5.67: Boss HP 碎片 wave 与监听槽位参数修复.
 
   1) `web/boss_hp.html` 修复碎片特效 wave 参数夹取。

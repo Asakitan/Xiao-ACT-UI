@@ -324,6 +324,32 @@ function _clampNum(v, fallback, lo, hi) {
 function _clampInt(v, fallback, lo, hi) {
     return Math.round(_clampNum(v, fallback, lo, hi));
 }
+function _idNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = _finiteNum(v, null);
+    if (n == null) return null;
+    n = Math.round(n);
+    return (n >= 0 && n <= 999999999) ? n : null;
+}
+function _sameId(a, b, fallback) {
+    var left = _idNum(a, fallback);
+    var right = _idNum(b, fallback);
+    return left != null && right != null && left === right;
+}
+function _stepMs(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = _finiteNum(v, null);
+    if (n == null) return null;
+    return Math.max(0, Math.min(86400000, Math.round(n)));
+}
+function _isZeroStep(v) {
+    return _stepMs(v, 0) === 0;
+}
+function _sameStepMs(a, b) {
+    var left = _stepMs(a, 0);
+    var right = _stepMs(b, 0);
+    return left != null && right != null && left === right;
+}
 function _cssColor(v) {
     var s = String(v == null ? '' : v).trim();
     return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(s) ? s : '#68e4ff';
@@ -379,8 +405,8 @@ function _findMapping(trig, skillId, baseId) {
     for (var i = 0; i < ms.length; i++) {
         var m = ms[i];
         if (m.trigger_type !== trig) continue;
-        if (Number(m.boss_base_id || 0) !== Number(baseId || 0)) continue;
-        if (trig === 'boss_cast' && Number(m.skill_id || 0) !== Number(skillId || 0)) continue;
+        if (!_sameId(m.boss_base_id, baseId, 0)) continue;
+        if (trig === 'boss_cast' && !_sameId(m.skill_id, skillId, 0)) continue;
         return m;
     }
     return null;
@@ -756,8 +782,8 @@ function _mForm(m) {
     var seq = inline.sequence || [];
     var isDash = seq.length >= 2
         && seq.every(function (s) { return (s.key || '').toUpperCase() === (seq[0].key || '').toUpperCase(); })
-        && seq.every(function (s) { return !Number(s.hold_ms || 0); })
-        && seq.slice(1).every(function (s) { return Number(s.delay_ms || 0) === Number(seq[1].delay_ms || 0); });
+        && seq.every(function (s) { return _isZeroStep(s.hold_ms); })
+        && seq.slice(1).every(function (s) { return _sameStepMs(s.delay_ms, seq[1].delay_ms); });
     var preset = seq.length ? (isDash ? 'dash' : 'seq') : (inline.action_key
         ? (String(inline.press_mode) === 'hold' ? 'hold' : 'tap') : 'none');
     var html = '<div style="background:rgba(8,14,22,.55);border-radius:6px;padding:7px;margin-top:5px;font-size:10px;">';

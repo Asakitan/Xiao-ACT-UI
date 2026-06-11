@@ -66,6 +66,22 @@ def main() -> None:
             "return '' + v;",
             "Raid editor _fmtNum must normalize non-finite values before rendering.",
         ),
+        (
+            "Number(m.boss_base_id || 0) !== Number(baseId || 0)",
+            "Raid editor reaction mapping must normalize boss base ids before matching.",
+        ),
+        (
+            "Number(m.skill_id || 0) !== Number(skillId || 0)",
+            "Raid editor reaction mapping must normalize skill ids before matching.",
+        ),
+        (
+            "return !Number(s.hold_ms || 0);",
+            "Raid editor mechanic dash preset must not treat malformed hold_ms as zero.",
+        ),
+        (
+            "Number(s.delay_ms || 0) === Number(seq[1].delay_ms || 0)",
+            "Raid editor mechanic dash preset must normalize delay_ms before comparison.",
+        ),
     ]
     for snippet, message in raid_forbidden:
         _check_absent(raid, snippet, message)
@@ -110,6 +126,34 @@ def main() -> None:
         (
             "var count = _clampInt(rec.count, 0, 0, 999999);",
             "Raid editor mechanics inbox should clamp observed counts.",
+        ),
+        (
+            "function _idNum(v, fallback)",
+            "Raid editor should expose ID normalization for reaction mapping.",
+        ),
+        (
+            "function _sameId(a, b, fallback)",
+            "Raid editor should compare reaction IDs through normalized values.",
+        ),
+        (
+            "function _stepMs(v, fallback)",
+            "Raid editor should normalize mechanic step timings.",
+        ),
+        (
+            "if (!_sameId(m.boss_base_id, baseId, 0)) continue;",
+            "Raid editor reaction mapping should use normalized boss base IDs.",
+        ),
+        (
+            "if (trig === 'boss_cast' && !_sameId(m.skill_id, skillId, 0)) continue;",
+            "Raid editor reaction mapping should use normalized skill IDs.",
+        ),
+        (
+            "seq.every(function (s) { return _isZeroStep(s.hold_ms); })",
+            "Raid editor mechanic dash preset should normalize hold_ms.",
+        ),
+        (
+            "seq.slice(1).every(function (s) { return _sameStepMs(s.delay_ms, seq[1].delay_ms); });",
+            "Raid editor mechanic dash preset should normalize delay_ms.",
         ),
     ]
     for snippet, message in raid_required:
