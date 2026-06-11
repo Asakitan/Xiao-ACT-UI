@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.31: Commander Web 渲染安全与技能槽显示修复.
+
+  1) `web/commander.html` 修复队伍成员与副本信息的 HTML 拼接。
+     member `data-uid`、等级、战力和 Dungeon ID 现在都会先格式化/转义,
+     避免异常字段导致属性截断、乱码或内容渲染不全。
+
+  2) `web/commander.html` 修复技能 CD 槽状态、索引和剩余时间渲染。
+     slot state 现在限定为 `ready/cooldown/active`, CD 百分比会夹到 0..1,
+     index/time/title 统一转义, 避免非法状态类名、NaN 时间或异常文本破坏格子。
+
 ## v4.5.30: Web 64-bit 实体 ID 保真修复.
 
   1) `web/raid_editor.html` 修复实体 role 切换的 UUID 传参。

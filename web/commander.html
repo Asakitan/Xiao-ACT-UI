@@ -361,10 +361,19 @@ document.querySelectorAll('.cmd-tab').forEach(function(tab) {
 });
 
 // ═══ Util ═══
-function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+
+function attr(s) { return esc(s); }
+
+function idText(v) { return String(v == null ? '' : v); }
 
 function fmtTime(ms) {
-    if (ms <= 0) return '';
+    ms = Number(ms || 0);
+    if (!isFinite(ms) || ms <= 0) return '';
     var s = Math.ceil(ms / 1000);
     if (s < 60) return s + 's';
     var m = Math.floor(s / 60);
@@ -379,9 +388,27 @@ function hpColor(pct) {
 }
 
 function fmtFightPoint(fp) {
-    if (!fp || fp <= 0) return '--';
+    fp = Number(fp || 0);
+    if (!isFinite(fp) || fp <= 0) return '--';
     if (fp >= 10000) return (fp / 10000).toFixed(1) + 'w';
-    return fp.toString();
+    return String(fp);
+}
+
+function fmtLevel(level) {
+    level = Number(level || 0);
+    if (!isFinite(level) || level <= 0) return '--';
+    return String(Math.floor(level));
+}
+
+function safeSlotState(state) {
+    state = String(state || 'ready');
+    return (state === 'ready' || state === 'cooldown' || state === 'active') ? state : 'ready';
+}
+
+function pct01(value) {
+    value = Number(value || 0);
+    if (!isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
 }
 
 // ═══ Render Functions ═══
@@ -397,13 +424,14 @@ function renderTeamTab() {
 
     for (var i = 0; i < _data.members.length; i++) {
         var m = _data.members[i];
+        var uidText = idText(m.uid);
         var selfCls = m.is_self ? ' is-self' : '';
         var leaderCls = m.is_leader ? ' is-leader' : '';
-        html += '<div class="member-card' + selfCls + leaderCls + '" data-uid="' + m.uid + '">';
+        html += '<div class="member-card' + selfCls + leaderCls + '" data-uid="' + attr(uidText) + '">';
 
         // Top: name + profession badge
         html += '<div class="member-top">';
-        html += '<span class="member-name">' + esc(m.name || ('UID:' + m.uid)) + '</span>';
+        html += '<span class="member-name">' + esc(m.name || ('UID:' + uidText)) + '</span>';
         if (m.profession) {
             html += '<span class="member-prof">' + esc(m.profession) + '</span>';
         }
@@ -411,8 +439,8 @@ function renderTeamTab() {
 
         // Meta: level, fight power
         html += '<div class="member-meta">';
-        html += '<span>Lv.' + (m.level || '--') + '</span>';
-        html += '<span>CP ' + fmtFightPoint(m.fight_point) + '</span>';
+        html += '<span>Lv.' + esc(fmtLevel(m.level)) + '</span>';
+        html += '<span>CP ' + esc(fmtFightPoint(m.fight_point)) + '</span>';
         if (m.is_self) html += '<span style="color:var(--accent-cyan)">SELF</span>';
         html += '</div>';
 
@@ -431,14 +459,14 @@ function renderTeamTab() {
             html += '<div class="cd-grid">';
             for (var j = 0; j < m.skill_slots.length; j++) {
                 var s = m.skill_slots[j];
-                var slotCls = s.state || 'ready';
-                var fillH = s.cooldown_pct ? (s.cooldown_pct * 100).toFixed(1) : '0';
-                var timeStr = s.state === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
-                var nameAttr = s.name ? ' title="' + esc(s.name) + '"' : '';
+                var slotCls = safeSlotState(s.state);
+                var fillH = (pct01(s.cooldown_pct) * 100).toFixed(1);
+                var timeStr = slotCls === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
+                var nameAttr = s.name ? ' title="' + attr(s.name) + '"' : '';
                 html += '<div class="cd-slot ' + slotCls + '"' + nameAttr + '>';
                 html += '<div class="cd-fill" style="height:' + fillH + '%"></div>';
-                html += '<span class="cd-idx">' + s.index + '</span>';
-                html += '<span class="cd-time">' + timeStr + '</span>';
+                html += '<span class="cd-idx">' + esc(s.index || (j + 1)) + '</span>';
+                html += '<span class="cd-time">' + esc(timeStr) + '</span>';
                 html += '</div>';
             }
             html += '</div>';
@@ -462,7 +490,7 @@ function renderBossTab() {
             '</div>';
     } else {
         html += '<div class="boss-card">';
-        html += '<div class="boss-name">副本 Dungeon ID: ' + _data.dungeon_id + '</div>';
+        html += '<div class="boss-name">副本 Dungeon ID: ' + esc(_data.dungeon_id) + '</div>';
         html += '<div class="boss-phase">ACTIVE</div>';
         html += '</div>';
     }
@@ -472,10 +500,11 @@ function renderBossTab() {
         html += '<div class="team-header" style="margin-top:10px"><span>TEAM OVERVIEW</span><span class="line"></span></div>';
         for (var i = 0; i < _data.members.length; i++) {
             var m = _data.members[i];
+            var uidText = idText(m.uid);
             var selfCls = m.is_self ? ' is-self' : '';
             html += '<div class="member-card' + selfCls + '" style="padding:4px 8px">';
             html += '<div class="member-top">';
-            html += '<span class="member-name" style="font-size:11px">' + esc(m.name || ('UID:' + m.uid)) + '</span>';
+            html += '<span class="member-name" style="font-size:11px">' + esc(m.name || ('UID:' + uidText)) + '</span>';
             if (m.profession) {
                 html += '<span class="member-prof">' + esc(m.profession) + '</span>';
             }
@@ -485,13 +514,13 @@ function renderBossTab() {
                 html += '<div class="cd-grid">';
                 for (var j = 0; j < m.skill_slots.length; j++) {
                     var s = m.skill_slots[j];
-                    var slotCls = s.state || 'ready';
-                    var fillH = s.cooldown_pct ? (s.cooldown_pct * 100).toFixed(1) : '0';
-                    var timeStr = s.state === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
+                    var slotCls = safeSlotState(s.state);
+                    var fillH = (pct01(s.cooldown_pct) * 100).toFixed(1);
+                    var timeStr = slotCls === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
                     html += '<div class="cd-slot ' + slotCls + '">';
                     html += '<div class="cd-fill" style="height:' + fillH + '%"></div>';
-                    html += '<span class="cd-idx">' + s.index + '</span>';
-                    html += '<span class="cd-time">' + timeStr + '</span>';
+                    html += '<span class="cd-idx">' + esc(s.index || (j + 1)) + '</span>';
+                    html += '<span class="cd-time">' + esc(timeStr) + '</span>';
                     html += '</div>';
                 }
                 html += '</div>';
