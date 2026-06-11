@@ -218,7 +218,9 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
 
     function groupMeta(g) {
-        var span = parseInt(g.duration_ms || (Math.max(0, (g.last_time_ms || 0) - (g.first_time_ms || 0))), 10) || 0;
+        var span = Math.max(0, num(g.duration_ms));
+        if (!span) span = Math.max(0, num(g.last_time_ms) - num(g.first_time_ms));
+        span = Math.min(span, 86400000);
         var bits = ['持续 ' + ActTime.fmtDur(span)];
         [['targets', '个目标'], ['monsters', '个怪物'], ['skills', '种技能'], ['actors', '名参与者'], ['dungeons', '个场景']].forEach(function (p) {
             var vals = g[p[0]] || [];

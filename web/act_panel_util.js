@@ -15,31 +15,49 @@
 
     function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
+    function finiteNumber(value, fallback) {
+        var n = Number(value);
+        if (!isFinite(n)) n = Number(fallback || 0);
+        return isFinite(n) ? n : 0;
+    }
+
+    function clampNumber(value, fallback, lo, hi) {
+        var n = finiteNumber(value, fallback);
+        if (lo != null) n = Math.max(lo, n);
+        if (hi != null) n = Math.min(hi, n);
+        return n;
+    }
+
+    function clampInt(value, fallback, lo, hi) {
+        return Math.round(clampNumber(value, fallback, lo, hi));
+    }
+
     function fmtClock(timeMs, withSeconds) {
-        var ms = parseInt(timeMs, 10);
-        if (!isFinite(ms) || ms <= 0) return '--';
+        var ms = clampInt(timeMs, 0, 0, 8640000000000000);
+        if (ms <= 0) return '--';
         var d = new Date(ms);
+        if (!isFinite(d.getTime())) return '--';
         var s = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
         if (withSeconds !== false) s += ':' + pad2(d.getSeconds());
         return s;
     }
 
     function fmtDur(ms) {
-        var t = Math.max(0, parseFloat(ms) || 0) / 1000;
+        var t = clampNumber(ms, 0, 0, Number.MAX_SAFE_INTEGER) / 1000;
         if (t < 60) return t.toFixed(1) + 's';
         if (t < 3600) return Math.floor(t / 60) + ':' + pad2(Math.floor(t % 60));
         return Math.floor(t / 3600) + ':' + pad2(Math.floor((t % 3600) / 60)) + ':' + pad2(Math.floor(t % 60));
     }
 
     function fmtRel(timeMs, baseMs) {
-        var base = parseInt(baseMs, 10) || 0;
+        var base = clampInt(baseMs, 0, 0, 8640000000000000);
         if (!base) return fmtClock(timeMs);
-        var delta = (parseInt(timeMs, 10) || 0) - base;
+        var delta = clampInt(timeMs, 0, 0, 8640000000000000) - base;
         return (delta >= 0 ? '+' : '-') + fmtDur(Math.abs(delta));
     }
 
     function fmtSigned(deltaMs) {
-        var d = parseInt(deltaMs, 10) || 0;
+        var d = clampInt(deltaMs, 0, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
         if (d === 0) return 'T0';
         return (d > 0 ? '+' : '-') + fmtDur(Math.abs(d));
     }

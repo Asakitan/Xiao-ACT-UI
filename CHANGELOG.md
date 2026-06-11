@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.65: ACT 时间工具与聚合时长渲染修复.
+
+  1) `web/act_panel_util.js` 修复共享时间格式化数值边界。
+     `fmtClock`、`fmtDur`、`fmtRel` 和 `fmtSigned` 现在统一过滤非有限数并夹取范围,
+     避免坏时间字段在多个 ACT Web 面板中显示异常时间文本。
+
+  2) `web/act_aggregate.html` 修复聚合分组持续时长渲染。
+     group duration/span 现在使用有限数差值并夹到一天内,
+     避免异常 `duration_ms` 或首末时间戳导致聚合行显示不合理跨度。
+
 ## v4.5.64: pywebview shim ACT 查询参数修复.
 
   1) `web/pywebview-shim.js` 修复 Action Log 查询参数边界。

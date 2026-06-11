@@ -328,6 +328,43 @@ def _assert_trigger_timer_numbers_are_normalized() -> None:
             raise AssertionError("missing safe trigger timer numeric snippet: " + snippet)
 
 
+def _assert_act_time_numbers_are_clamped() -> None:
+    util = _read_web("act_panel_util.js")
+    aggregate = _read_web("act_aggregate.html")
+    for snippet in (
+        "var ms = parseInt(timeMs, 10);",
+        "var t = Math.max(0, parseFloat(ms) || 0) / 1000;",
+        "var base = parseInt(baseMs, 10) || 0;",
+        "var delta = (parseInt(timeMs, 10) || 0) - base;",
+        "var d = parseInt(deltaMs, 10) || 0;",
+    ):
+        if snippet in util:
+            raise AssertionError("ACT shared time helper must clamp finite numeric inputs: " + snippet)
+    for snippet in (
+        "function finiteNumber(value, fallback)",
+        "function clampNumber(value, fallback, lo, hi)",
+        "function clampInt(value, fallback, lo, hi)",
+        "var ms = clampInt(timeMs, 0, 0, 8640000000000000);",
+        "if (!isFinite(d.getTime())) return '--';",
+        "var t = clampNumber(ms, 0, 0, Number.MAX_SAFE_INTEGER) / 1000;",
+        "var base = clampInt(baseMs, 0, 0, 8640000000000000);",
+        "var delta = clampInt(timeMs, 0, 0, 8640000000000000) - base;",
+        "var d = clampInt(deltaMs, 0, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);",
+    ):
+        if snippet not in util:
+            raise AssertionError("missing safe ACT shared time numeric snippet: " + snippet)
+    bad_span = "var span = parseInt(g.duration_ms || (Math.max(0, (g.last_time_ms || 0) - (g.first_time_ms || 0))), 10) || 0;"
+    if bad_span in aggregate:
+        raise AssertionError("aggregate group duration must not parse raw duration/time span")
+    for snippet in (
+        "var span = Math.max(0, num(g.duration_ms));",
+        "if (!span) span = Math.max(0, num(g.last_time_ms) - num(g.first_time_ms));",
+        "span = Math.min(span, 86400000);",
+    ):
+        if snippet not in aggregate:
+            raise AssertionError("missing safe aggregate duration snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -346,6 +383,7 @@ def main() -> int:
     _assert_boss_hp_additional_units_are_safe()
     _assert_dps_hit_fx_numbers_are_normalized()
     _assert_trigger_timer_numbers_are_normalized()
+    _assert_act_time_numbers_are_clamped()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 
