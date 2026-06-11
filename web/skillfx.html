@@ -525,6 +525,19 @@ var _glfx = {
     seed: 1.0
 };
 
+function _finiteNum(value, fallback, lo, hi) {
+    var n = Number(value);
+    if (!isFinite(n)) n = Number(fallback || 0);
+    if (!isFinite(n)) n = 0;
+    if (lo != null) n = Math.max(Number(lo), n);
+    if (hi != null) n = Math.min(Number(hi), n);
+    return n;
+}
+
+function _finiteInt(value, fallback, lo, hi) {
+    return Math.round(_finiteNum(value, fallback, lo, hi));
+}
+
 function snd(name) {
     try {
         if (window.pywebview && window.pywebview.api) {
@@ -762,13 +775,16 @@ function _stopGL() {
 }
 
 function _slotAnchor(slotIndex) {
-    var idx = parseInt(slotIndex || 0, 10) || 0;
-    var slot = _slots.find(function(item) { return parseInt(item.index || 0, 10) === idx; });
+    var idx = _finiteInt(slotIndex, 0, 0, 9);
+    var slot = _slots.find(function(item) { return _finiteInt(item.index, 0, 0, 9) === idx; });
     if (slot && slot.rect) {
+        var rect = slot.rect || {};
+        var w = _finiteNum(rect.w, 64, 1);
+        var h = _finiteNum(rect.h, 64, 1);
         return {
-            x: slot.rect.x + slot.rect.w / 2,
-            y: slot.rect.y + slot.rect.h / 2,
-            radius: Math.max(slot.rect.w, slot.rect.h) * 0.66
+            x: _finiteNum(rect.x, _viewport.width * 0.5) + w / 2,
+            y: _finiteNum(rect.y, _viewport.height * 0.74) + h / 2,
+            radius: Math.max(w, h) * 0.66
         };
     }
     return {
@@ -787,6 +803,19 @@ function _defaultCallout() {
     };
 }
 
+function _normalizeCallout(raw) {
+    var fallback = _defaultCallout();
+    raw = raw && typeof raw === 'object' ? raw : {};
+    var maxW = Math.max(160, _finiteNum(_viewport.width, window.innerWidth, 160));
+    var maxH = Math.max(72, _finiteNum(_viewport.height, window.innerHeight, 72));
+    return {
+        x: _finiteInt(raw.x, fallback.x, 0),
+        y: _finiteInt(raw.y, fallback.y, 0),
+        w: _finiteInt(raw.w, fallback.w, 160, maxW),
+        h: _finiteInt(raw.h, fallback.h, 72, maxH)
+    };
+}
+
 function _resetBurstAnimations(overlay) {
     ['#burst-target', '.target-halo', '.target-orbit.outer', '.target-orbit.inner', '.target-sweep-line', '.target-core', '#burst-beam', '.beam-tail', '.beam-trace', '#burst-caption', '.caption-main']
         .forEach(function(sel) {
@@ -800,7 +829,8 @@ function _resetBurstAnimations(overlay) {
 
 function _positionBurstReady(slotIndex, restartGL) {
     var anchor = _slotAnchor(slotIndex);
-    var callout = _viewport.callout || _defaultCallout();
+    var callout = _normalizeCallout(_viewport.callout || _defaultCallout());
+    _viewport.callout = callout;
     var target = document.getElementById('burst-target');
     var beam = document.getElementById('burst-beam');
     var caption = document.getElementById('burst-caption');
@@ -853,7 +883,7 @@ function _positionBurstReady(slotIndex, restartGL) {
 function showBurstReady(slotIndex) {
     if (_exitingLock) return;          /* fade-out in progress — ignore */
     _burstVisible = true;
-    _currentBurstSlot = parseInt(slotIndex || 0, 10) || 1;
+    _currentBurstSlot = _finiteInt(slotIndex, 1, 1, 9);
     var overlay = document.getElementById('burst-overlay');
     if (_burstTimer) {
         clearTimeout(_burstTimer);
@@ -896,18 +926,12 @@ function hideBurstReady() {
 
 function setViewport(payload) {
     if (!payload || typeof payload !== 'object') return;
-    ['width', 'height', 'padding_x', 'padding_y'].forEach(function(key) {
-        if (typeof payload[key] === 'number' && isFinite(payload[key])) {
-            _viewport[key] = payload[key];
-        }
-    });
+    _viewport.width = _finiteNum(payload.width, _viewport.width || window.innerWidth, 1);
+    _viewport.height = _finiteNum(payload.height, _viewport.height || window.innerHeight, 1);
+    _viewport.padding_x = _finiteNum(payload.padding_x, _viewport.padding_x || 24, 0);
+    _viewport.padding_y = _finiteNum(payload.padding_y, _viewport.padding_y || 24, 0);
     if (payload.callout && typeof payload.callout === 'object') {
-        _viewport.callout = {
-            x: parseInt(payload.callout.x || _viewport.callout.x || 0, 10) || 0,
-            y: parseInt(payload.callout.y || _viewport.callout.y || 0, 10) || 0,
-            w: parseInt(payload.callout.w || _viewport.callout.w || 460, 10) || 460,
-            h: parseInt(payload.callout.h || _viewport.callout.h || 128, 10) || 128
-        };
+        _viewport.callout = _normalizeCallout(payload.callout);
     }
 }
 
@@ -922,7 +946,7 @@ function update(payload) {
 
     var enabled = !!payload.enabled;
     var burstReady = !!payload.burst_ready;
-    var burstSlot = parseInt(payload.burst_slot || 0, 10) || 0;
+    var burstSlot = _finiteInt(payload.burst_slot, 0, 0, 9);
     if (enabled && burstReady && burstSlot > 0) {
         if (!_burstLatchReady || _burstLatchSlot !== burstSlot) {
             if (!_exitingLock) {

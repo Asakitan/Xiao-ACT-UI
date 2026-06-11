@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.58: SkillFX 与 Mem Scope Web 数值渲染修复.
+
+  1) `web/skillfx.html` 修复 burst ready 定位参数渲染。
+     slot、viewport 和 callout 矩形现在统一过滤非有限数并夹到合理范围,
+     避免异常 payload 把 CSS 写成 `NaNpx` 或负尺寸导致特效不可见。
+
+  2) `web/mem_scope.html` 修复搜索进度与伤害排序数值渲染。
+     search count/progress 和 damage totals 现在使用有限数兜底,
+     避免扫描状态显示 `NaN%` 或坏 total 影响排序/表格渲染。
+
 ## v4.5.57: BuffMon 数值渲染与输入解析修复.
 
   1) `gui_modules/sao_gui_buffmon.py` 修复 BuffMon row 渲染数值处理。

@@ -99,6 +99,17 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         toastEl.textContent = msg; toastEl.classList.add('on');
         setTimeout(function () { toastEl.classList.remove('on'); }, 1600);
     }
+    function finiteNum(value, fallback, lo, hi) {
+        var n = Number(value);
+        if (!isFinite(n)) n = Number(fallback || 0);
+        if (!isFinite(n)) n = 0;
+        if (lo != null) n = Math.max(Number(lo), n);
+        if (hi != null) n = Math.min(Number(hi), n);
+        return n;
+    }
+    function finiteInt(value, fallback, lo, hi) {
+        return Math.round(finiteNum(value, fallback, lo, hi));
+    }
 
     function section(title, badge, acc, innerHtml) {
         return '<div class="ms-section" style="--acc:' + acc + '">'
@@ -200,15 +211,15 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         var totals = (d.damage && d.damage.totals) || {};
         var keys = Object.keys(totals);
         if (!keys.length) return section('伤害总表 Damage', 0, 'var(--act-gold)', '<div class="ms-empty">暂无伤害数据。</div>');
-        var rows = keys.map(function (k) { return { uid: k, total: totals[k] }; });
-        rows.sort(function (a, b) { return Number(b.total) - Number(a.total); });
+        var rows = keys.map(function (k) { return { uid: k, total: finiteNum(totals[k], 0, 0) }; });
+        rows.sort(function (a, b) { return b.total - a.total; });
         return section('伤害总表 Damage', keys.length, 'var(--act-gold)', renderTable([['uid', 'UID'], ['total', '总伤害']], rows.slice(0, 20)));
     }
 
     function searchHtml(d) {
         var s = d.search || {};
         var results = s.results || [];
-        var count = s.count || 0;
+        var count = finiteInt(s.count, 0, 0);
         var badge = count ? (results.length + '/' + count) : '0';
         var inner = '';
         if (!jobId) {
@@ -216,7 +227,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         } else if (s.error) {
             inner = '<div class="ms-err">错误: ' + esc(s.error) + '</div>';
         } else if (s.state === 'running') {
-            inner = '<div class="ms-empty">扫描中… ' + Math.round((s.progress || 0) * 100) + '%</div>';
+            inner = '<div class="ms-empty">扫描中… ' + finiteInt(finiteNum(s.progress, 0, 0, 1) * 100, 0, 0, 100) + '%</div>';
         } else if (!results.length) {
             inner = '<div class="ms-empty">无命中（共 ' + count + ' 个，可能为 0）。</div>';
         } else {

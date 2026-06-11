@@ -13,6 +13,8 @@ HP = ROOT / "web" / "hp.html"
 STAMINA = ROOT / "web" / "stamina.html"
 AUTOKEY_EDITOR = ROOT / "web" / "autokey_editor.html"
 MECH_BANNER = ROOT / "web" / "mech_banner.html"
+SKILLFX = ROOT / "web" / "skillfx.html"
+MEM_SCOPE = ROOT / "web" / "mem_scope.html"
 
 
 def _check_absent(source: str, snippet: str, message: str) -> None:
@@ -32,6 +34,8 @@ def main() -> None:
     stamina = STAMINA.read_text(encoding="utf-8")
     autokey = AUTOKEY_EDITOR.read_text(encoding="utf-8")
     mech_banner = MECH_BANNER.read_text(encoding="utf-8")
+    skillfx = SKILLFX.read_text(encoding="utf-8")
+    mem_scope = MEM_SCOPE.read_text(encoding="utf-8")
 
     raid_forbidden = [
         (
@@ -284,6 +288,90 @@ def main() -> None:
     ]
     for snippet, message in mech_required:
         _check_present(mech_banner, snippet, message)
+
+    skillfx_forbidden = [
+        (
+            "var idx = parseInt(slotIndex || 0, 10) || 0;",
+            "SkillFX slot anchors must not parse raw slotIndex values.",
+        ),
+        (
+            "x: parseInt(payload.callout.x || _viewport.callout.x || 0, 10) || 0,",
+            "SkillFX callout x must not parse raw payload values.",
+        ),
+        (
+            "_currentBurstSlot = parseInt(slotIndex || 0, 10) || 1;",
+            "SkillFX current burst slot must use finite slot normalization.",
+        ),
+        (
+            "var burstSlot = parseInt(payload.burst_slot || 0, 10) || 0;",
+            "SkillFX update must normalize burst_slot before use.",
+        ),
+    ]
+    for snippet, message in skillfx_forbidden:
+        _check_absent(skillfx, snippet, message)
+
+    skillfx_required = [
+        (
+            "function _finiteNum(value, fallback, lo, hi)",
+            "SkillFX should expose finite number normalization.",
+        ),
+        (
+            "function _normalizeCallout(raw)",
+            "SkillFX should normalize callout rectangles before CSS writes.",
+        ),
+        (
+            "var idx = _finiteInt(slotIndex, 0, 0, 9);",
+            "SkillFX slot anchors should clamp slot indices.",
+        ),
+        (
+            "var callout = _normalizeCallout(_viewport.callout || _defaultCallout());",
+            "SkillFX positioning should sanitize callout dimensions.",
+        ),
+        (
+            "var burstSlot = _finiteInt(payload.burst_slot, 0, 0, 9);",
+            "SkillFX update should use normalized burst slots.",
+        ),
+    ]
+    for snippet, message in skillfx_required:
+        _check_present(skillfx, snippet, message)
+
+    mem_forbidden = [
+        (
+            "rows.sort(function (a, b) { return Number(b.total) - Number(a.total); });",
+            "Mem Scope damage sorting must not subtract raw Number() values.",
+        ),
+        (
+            "var count = s.count || 0;",
+            "Mem Scope search count must not render raw count values.",
+        ),
+        (
+            "Math.round((s.progress || 0) * 100)",
+            "Mem Scope search progress must not render raw progress values.",
+        ),
+    ]
+    for snippet, message in mem_forbidden:
+        _check_absent(mem_scope, snippet, message)
+
+    mem_required = [
+        (
+            "function finiteNum(value, fallback, lo, hi)",
+            "Mem Scope should expose finite number normalization.",
+        ),
+        (
+            "var rows = keys.map(function (k) { return { uid: k, total: finiteNum(totals[k], 0, 0) }; });",
+            "Mem Scope damage totals should normalize before sorting/rendering.",
+        ),
+        (
+            "var count = finiteInt(s.count, 0, 0);",
+            "Mem Scope search count should normalize before badges.",
+        ),
+        (
+            "finiteInt(finiteNum(s.progress, 0, 0, 1) * 100, 0, 0, 100)",
+            "Mem Scope progress should clamp to 0..100.",
+        ),
+    ]
+    for snippet, message in mem_required:
+        _check_present(mem_scope, snippet, message)
 
     print("web_small_panels_numeric_selftest: ok")
 
