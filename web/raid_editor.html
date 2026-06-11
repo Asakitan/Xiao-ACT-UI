@@ -309,6 +309,8 @@ var _TAG_BADGE = {
 
 function _api() { return (window.pywebview && window.pywebview.api) || null; }
 function _esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function _escAttr(v) { return _esc(v).replace(/'/g, '&#39;'); }
+function _jsArg(v) { return _escAttr(JSON.stringify(String(v == null ? '' : v))); }
 
 function _badges(rec) {
     var tags = (rec && rec.tags) || [];
@@ -446,7 +448,7 @@ function _reactRow(trig, skillId, label, m, rec) {
         '延迟<input id="rd_' + tag + '" value="' + delay + '" style="width:50px;' + _inpCss() + '">ms' +
         'CD<input id="rc_' + tag + '" value="' + cd + '" style="width:40px;' + _inpCss() + '">s' +
         '<label style="display:flex;align-items:center;gap:2px;"><input type="checkbox" id="re_' + tag + '"' + (en ? ' checked' : '') + '>启用</label>' +
-        '<div class="action-btn" style="padding:2px 8px;font-size:10px;" onclick="saveReaction(\'' + trig + '\',' + skillId + ',\'' + id + '\')">保存</div>' +
+        '<div class="action-btn" style="padding:2px 8px;font-size:10px;" onclick="saveReaction(' + _jsArg(trig) + ',' + skillId + ',' + _jsArg(id) + ')">保存</div>' +
         '</div></div>';
 }
 function _inpCss() { return 'background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:4px;padding:2px 4px;margin:0 3px;'; }
@@ -585,7 +587,7 @@ function _mInboxRow(rec) {
         + '<span style="flex:1;font-size:10px;color:#e8f6ff;">' + _esc(label) + '</span>'
         + bindSel
         + '<div class="action-btn accent" style="padding:2px 8px;font-size:10px;" onclick="mechCreateFromSkill('
-        + sid + ',' + JSON.stringify(String(rec.name || '')).replace(/"/g, '&quot;') + ',' + (dur || 'null') + ')">建机制</div>'
+        + sid + ',' + _jsArg(rec.name || '') + ',' + (dur || 'null') + ')">建机制</div>'
         + '</div>';
 }
 
@@ -614,17 +616,17 @@ function _mCard(m) {
     var sum = m.summary || {};
     var sub = [chips.length ? ('检测: ' + chips.join(', ')) : '未绑定检测ID',
                sum.alert_desc || '', sum.dodge_desc || ''].filter(Boolean).join(' · ');
-    var mid = _esc(m.id);
+    var midArg = _jsArg(m.id);
     var html = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;border-left:3px solid ' + _esc(m.color || '#68e4ff') + ';">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
         + '<input type="checkbox"' + (m.enabled !== false ? ' checked' : '')
-        + ' onchange="mechToggle(\'' + mid + '\', this.checked)">'
+        + ' onchange="mechToggle(' + midArg + ', this.checked)">'
         + '<span style="flex:1;font-size:11px;font-weight:600;color:#ffd46f;">' + _esc(m.name || '机制') + '</span>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'tts\'])">🔊</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'banner\'])">横幅</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'dodge\'])">按键</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechEdit(\'' + mid + '\')">编辑</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechDelete(\'' + mid + '\')">删除</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'tts\'])">🔊</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'banner\'])">横幅</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'dodge\'])">按键</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechEdit(' + midArg + ')">编辑</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechDelete(' + midArg + ')">删除</div>'
         + '</div>'
         + '<div style="font-size:9px;color:#9fc0d8;margin-top:2px;">' + _esc(sub) + '</div>';
     var notes = String(m.notes || '').trim();

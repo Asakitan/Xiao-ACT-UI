@@ -48,6 +48,31 @@ def main() -> int:
     for snippet in raid_required:
         if snippet not in raid:
             raise AssertionError("missing clean Raid editor snippet: " + snippet)
+    raid_bad_arg_patterns = [
+        "onclick=\"saveReaction(\\'' + trig",
+        "JSON.stringify(String(rec.name || '')).replace",
+        "onchange=\"mechToggle(\\'' + mid",
+        "onclick=\"mechTest(\\'' + mid",
+        "onclick=\"mechEdit(\\'' + mid",
+        "onclick=\"mechDelete(\\'' + mid",
+    ]
+    for pattern in raid_bad_arg_patterns:
+        if pattern in raid:
+            raise AssertionError("Raid editor inline handler must not single-quote raw dynamic args: " + pattern)
+    raid_safe_arg_required = [
+        "function _jsArg",
+        "onclick=\"saveReaction(' + _jsArg(trig) + ',' + skillId + ',' + _jsArg(id) + ')",
+        "onclick=\"mechCreateFromSkill('",
+        "+ sid + ',' + _jsArg(rec.name || '') + ',' + (dur || 'null') + ')",
+        "var midArg = _jsArg(m.id);",
+        "onchange=\"mechToggle(' + midArg + ', this.checked)",
+        "onclick=\"mechTest(' + midArg + ',[\\'tts\\'])",
+        "onclick=\"mechEdit(' + midArg + ')",
+        "onclick=\"mechDelete(' + midArg + ')",
+    ]
+    for snippet in raid_safe_arg_required:
+        if snippet not in raid:
+            raise AssertionError("missing safe Raid editor inline handler snippet: " + snippet)
     print("web_editor_text_selftest: ok")
     return 0
 
