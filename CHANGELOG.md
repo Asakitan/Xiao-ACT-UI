@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.75: ACT Graph Timeseries Tk points 渲染修复.
+
+  1) `gui_modules/sao_gui_graph_timeseries.py` 修复 points payload 形状处理。
+     图表面板现在只统计和渲染列表中的 Mapping 点位,
+     避免字符串 payload 被拆成字符后在 latest 计算中崩溃。
+
+  2) `gui_modules/sao_gui_graph_timeseries.py` 修复图表数值渲染。
+     time/range、row_count、bar width、point ratio、Action Log 跳转时间和 `_fmt`
+     现在过滤非有限数, 避免异常点位造成渲染中断或显示 `inf` 文本。
+
 ## v4.5.74: ACT Aggregate Tk 数值渲染修复.
 
   1) `gui_modules/sao_gui_act_aggregate.py` 修复 raw_counts 数值渲染。

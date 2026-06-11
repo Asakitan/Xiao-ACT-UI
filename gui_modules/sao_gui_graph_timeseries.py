@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -50,6 +51,30 @@ _BAR_COLORS = {
     "event_count": "#35bfe8",
     "boss_hp_pct": "#e85c7a",
 }
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    if lo is not None:
+        number = max(lo, number)
+    if hi is not None:
+        number = min(hi, number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    return int(_finite_float(value, float(default), lo=lo, hi=hi))
+
+
+def _mapping_points(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [point for point in value if isinstance(point, Mapping)]
 
 
 class GraphTimeseriesPanel:
@@ -268,7 +293,7 @@ class GraphTimeseriesPanel:
         metric = str(status.get('selected_metric') or self._metric_var.get() or 'damage')
         series = status.get('series') if isinstance(status.get('series'), Mapping) else {}
         selected = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
-        points = list(selected.get('points') or [])
+        points = _mapping_points(selected.get('points'))
         latest = points[-1].get('value') if points else 0
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         self._summary_var.set(
@@ -303,14 +328,14 @@ class GraphTimeseriesPanel:
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
-        first_ms = int(points[0].get('time_ms') or 0) if points else 0
-        last_ms = int(points[-1].get('time_ms') or 0) if points else 0
+        first_ms = _finite_int(points[0].get('time_ms'), 0, lo=0) if points else 0
+        last_ms = _finite_int(points[-1].get('time_ms'), 0, lo=0) if points else 0
         span_sub = f"{fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}" if first_ms else '--'
         items = (
             ('Metric', metric.upper(), f"topic {filters.get('topic') or 'ALL'}", 'gold'),
             ('Latest', self._fmt(latest), f"{len(points)} points", 'cyan'),
             ('Range', fmt_dur(status.get('time_range_ms')), span_sub, 'cyan'),
-            ('Rows', int(status.get('row_count') or len(points)), f"raw {'ON' if self._show_raw_points.get() else 'OFF'}", 'gold'),
+            ('Rows', _finite_int(status.get('row_count'), len(points), lo=0), f"raw {'ON' if self._show_raw_points.get() else 'OFF'}", 'gold'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
@@ -341,14 +366,14 @@ class GraphTimeseriesPanel:
         chart.pack(fill='x', pady=(0, 8), padx=4)
         chart_body = tk.Frame(chart, bg=_SAO_PANEL_BODY_BG)
         chart_body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
+        max_value = max(1.0, *[_finite_float(point.get('value'), 0.0, lo=0.0) for point in points])
         color = _BAR_COLORS.get(metric, _SAO_PANEL_ACCENT)
-        first_ms = int(points[0].get('time_ms') or 0) if points else 0
+        first_ms = _finite_int(points[0].get('time_ms'), 0, lo=0) if points else 0
         for point in points[-24:]:
             row = tk.Frame(chart_body, bg=_SAO_PANEL_BODY_BG)
             row.pack(fill='x', padx=8, pady=3)
             time_label = fmt_rel(point.get('time_ms'), first_ms)
-            value = float(point.get('value') or 0.0)
+            value = _finite_float(point.get('value'), 0.0, lo=0.0)
             tk.Label(row, text=time_label, width=10, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8)).pack(side='left')
             bar_wrap = tk.Frame(row, bg='#eeeeee', height=8)
             bar_wrap.pack(side='left', fill='x', expand=True, padx=(6, 8))
@@ -363,11 +388,11 @@ class GraphTimeseriesPanel:
         box.pack(fill='x', pady=(0, 2), padx=4)
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
-        first_ms = int(points[0].get('time_ms') or 0) if points else 0
+        max_value = max(1.0, *[_finite_float(point.get('value'), 0.0, lo=0.0) for point in points])
+        first_ms = _finite_int(points[0].get('time_ms'), 0, lo=0) if points else 0
         for idx, point in enumerate(reversed(points[-16:])):
             row_id = str(point.get('row_id') or '-')
-            time_ms = int(point.get('time_ms') or 0)
+            time_ms = _finite_int(point.get('time_ms'), 0, lo=0)
             topic = str(point.get('topic') or '-').upper()
             meta = f"{topic} · {fmt_clock(time_ms)} ({fmt_rel(time_ms, first_ms)})"
             if self._show_raw_points.get():
@@ -377,7 +402,7 @@ class GraphTimeseriesPanel:
                 title=f"{metric.upper()} {self._fmt(point.get('value'))}",
                 meta=meta,
                 value=row_id if self._show_raw_points.get() else self._fmt(point.get('value')),
-                ratio=float(point.get('value') or 0.0) / max_value if max_value else 0.0,
+                ratio=_finite_float(point.get('value'), 0.0, lo=0.0) / max_value if max_value else 0.0,
                 accent='gold' if metric == 'damage' else 'cyan',
                 zebra=bool(idx % 2),
                 command=lambda t=time_ms, tp=str(point.get('topic') or ''): self._open_action_log_at(t, tp),
@@ -398,7 +423,7 @@ class GraphTimeseriesPanel:
                 self._status_var.set('Action Log panel unavailable')
                 return
             try:
-                panel._cursor_var.set(str(int(time_ms or 0)))
+                panel._cursor_var.set(str(_finite_int(time_ms, 0, lo=0)))
                 if topic:
                     panel._topic_var.set(str(topic))
                 jump = getattr(panel, 'jump_to_time', None) or getattr(panel, 'refresh', None)
@@ -419,6 +444,8 @@ class GraphTimeseriesPanel:
             number = float(value or 0.0)
         except Exception:
             return str(value or '0')
+        if not math.isfinite(number):
+            number = 0.0
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:
@@ -435,8 +462,8 @@ class GraphTimeseriesPanel:
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         return repr((
             metric,
-            int(status.get('time_range_ms') or 0),
-            int(status.get('row_count') or len(points)),
+            _finite_int(status.get('time_range_ms'), 0, lo=0),
+            _finite_int(status.get('row_count'), len(points), lo=0),
             str(status.get('encounter_id') or ''),
             str(filters.get('query') or ''),
             str(filters.get('topic') or ''),

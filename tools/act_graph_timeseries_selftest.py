@@ -146,6 +146,28 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
             time_range_ms=1500,
         )
 
+    def test_tk_render_status_ignores_malformed_points_shape(self) -> None:
+        panel = GraphTimeseriesPanel.__new__(GraphTimeseriesPanel)
+        panel._metric_var = FakeVar("damage")
+        panel._summary_var = FakeVar()
+        panel._status_var = FakeVar()
+        panel._rows = None
+
+        panel._render_status({
+            "selected_metric": "damage",
+            "series": {"damage": {"points": "not-a-list"}},
+            "time_range_ms": 0,
+            "filters": {},
+            "errors": [],
+        })
+
+        self.assertIn("DAMAGE · 0 PTS · 0", panel._summary_var.value)
+
+    def test_tk_fmt_normalizes_non_finite_values(self) -> None:
+        self.assertEqual(GraphTimeseriesPanel._fmt(float("nan")), "0")
+        self.assertEqual(GraphTimeseriesPanel._fmt(float("inf")), "0")
+        self.assertEqual(GraphTimeseriesPanel._fmt(float("-inf")), "0")
+
 
 if __name__ == "__main__":
     unittest.main()
