@@ -260,11 +260,14 @@ public sealed class WebBridgeLifecycle : IDisposable
 
     /// <summary>S200 — attach the legacy file-picker commands used by
     /// menu.html for AutoKey import browsing. Idempotent.</summary>
-    public void AttachFilePicker(Func<string>? rootProvider = null)
+    public void AttachFilePicker(
+        Func<string>? rootProvider = null,
+        SettingsManager? settings = null,
+        GameStateManager? states = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _filePickerBridge?.Dispose();
-        _filePickerBridge = new FilePickerBridge(Router, rootProvider);
+        _filePickerBridge = new FilePickerBridge(Router, rootProvider, settings, states);
     }
 
     /// <summary>S194 — attach ACT platform command handlers for shared

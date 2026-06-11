@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using SaoAuto.Core.Configuration;
 
 namespace SaoAuto.App.WebBridge;
@@ -27,6 +28,7 @@ public sealed class HudSettingsBridge : IDisposable
             BridgeCommands.SetDpsFadeTimeout,
             BridgeCommands.SetDataSource,
             BridgeCommands.SetComponentSource,
+            BridgeCommands.SaveAutoKeyActions,
         };
         _router.Register(BridgeCommands.SetWatchedSlots, HandleWatchedSlots);
         _router.Register(BridgeCommands.SetBurstEnabled, HandleBurstEnabled);
@@ -34,6 +36,7 @@ public sealed class HudSettingsBridge : IDisposable
         _router.Register(BridgeCommands.SetDpsFadeTimeout, HandleDpsFadeTimeout);
         _router.Register(BridgeCommands.SetDataSource, HandleDataSource);
         _router.Register(BridgeCommands.SetComponentSource, HandleComponentSource);
+        _router.Register(BridgeCommands.SaveAutoKeyActions, HandleSaveAutoKeyActions);
     }
 
     public void Dispose()
@@ -140,10 +143,44 @@ public sealed class HudSettingsBridge : IDisposable
         };
     }
 
+    private JsonObject HandleSaveAutoKeyActions(JsonObject? payload)
+    {
+        var actions = ParseActions(payload);
+        if (actions is null)
+            return new JsonObject { ["ok"] = false, ["error"] = "bad_payload" };
+
+        _settings.Set<JsonNode>("autokey_burst_actions", actions.DeepClone());
+        _settings.Save();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["saved_count"] = actions.Count,
+            ["live_reconfigured"] = false,
+        };
+    }
+
     private static string NormalizeDataSourceMode(string mode)
     {
         var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
         return normalized is "tcp" or "memory" or "hybrid" or "auto" ? normalized : "hybrid";
+    }
+
+    private static JsonArray? ParseActions(JsonObject? payload)
+    {
+        if (payload is null) return new JsonArray();
+        if (payload["actions"] is JsonArray arr)
+            return (JsonArray)arr.DeepClone();
+        var json = ReadString(payload["actions_json"], string.Empty);
+        if (string.IsNullOrWhiteSpace(json))
+            return new JsonArray();
+        try
+        {
+            return JsonNode.Parse(json) as JsonArray;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string ReadString(JsonNode? node, string fallback)

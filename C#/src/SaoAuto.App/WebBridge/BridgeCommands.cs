@@ -30,6 +30,7 @@ public static class BridgeCommands
     public const string GetAutoKeyState = "autokey.state.get";
     // S200 — file-picker entry used by menu.html's AutoKey import flow.
     public const string StartAutoKeyImportPicker = "autokey.import_picker.start";
+    public const string SaveAutoKeyActions = "autokey.actions.save";
     // S177 — cloud script-share endpoints (served by AutoKeyCloudBridge).
     public const string SearchAutoKeyScripts = "autokey.cloud.search";
     public const string GetAutoKeyScript = "autokey.cloud.get";
@@ -97,6 +98,7 @@ public static class BridgeCommands
 
     // Generic file browser for legacy pywebview menu pickers.
     public const string BrowseDir = "file.browse_dir";
+    public const string SelectFile = "file.select_file";
     public const string SelectFolder = "file.select_folder";
     public const string BossHpHitRegions = "ui.boss_hp_hit_regions";
 

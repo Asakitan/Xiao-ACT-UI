@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using SaoAuto.App.WebBridge;
+using SaoAuto.Core.Automation;
+using SaoAuto.Core.Configuration;
 using SaoAuto.Core.State;
 
 namespace SaoAuto.Tests.App;
@@ -104,12 +106,14 @@ public class Session200FilePickerBridgeTests : IDisposable
         var bridge = new FilePickerBridge(router, () => _workDir);
 
         Assert.Contains(BridgeCommands.BrowseDir, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SelectFile, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.BrowseDir, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SelectFile, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
     }
@@ -123,6 +127,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         lifecycle.AttachFilePicker(() => _workDir);
 
         Assert.Contains(BridgeCommands.BrowseDir, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SelectFile, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
 
@@ -132,6 +137,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         lifecycle.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.BrowseDir, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SelectFile, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
     }
@@ -143,5 +149,102 @@ public class Session200FilePickerBridgeTests : IDisposable
         lifecycle.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => lifecycle.AttachFilePicker(() => _workDir));
+    }
+
+    [Fact]
+    public void SelectFileImportsAutoKeyProfileAndReturnsFreshState()
+    {
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var states = new GameStateManager();
+        states.Replace(new GameState
+        {
+            PlayerId = "uid-ak",
+            PlayerName = "Sinon",
+            ProfessionId = 4,
+            ProfessionName = "Bow",
+        });
+        var importPath = Path.Combine(_workDir, "auto-key-import.json");
+        File.WriteAllText(importPath,
+            "{\"schema_version\":1,\"profile\":{\"profile_name\":\"Imported AK\",\"actions\":[{\"slot_index\":2}]}}");
+
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir, settings, states);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SelectFile, new JsonObject
+        {
+            ["path"] = importPath,
+            ["consumer"] = "auto_key",
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("auto_key", payload["consumer"]!.GetValue<string>());
+        Assert.Equal("Imported AK", state["profiles_full"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
+        Assert.Equal("uid-ak", state["identity"]!["player_uid"]!.GetValue<string>());
+
+        var reloaded = AutoKeyConfigLoader.Load(new SettingsManager(settingsPath));
+        Assert.Single(reloaded.Profiles);
+        Assert.Equal("Imported AK", reloaded.Profiles[0].ProfileName);
+    }
+
+    [Fact]
+    public void SelectFileImportsBossRaidProfileAndPreservesTimeS()
+    {
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var importPath = Path.Combine(_workDir, "boss-raid-import.json");
+        File.WriteAllText(importPath, """
+        {
+          "schema_version": 1,
+          "profile": {
+            "profile_name": "Imported Raid",
+            "phases": [
+              { "timelines": [ { "time_s": 7.5, "label": "Stack" } ] }
+            ]
+          }
+        }
+        """);
+
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SelectFile, new JsonObject
+        {
+            ["path"] = importPath,
+            ["consumer"] = "boss_raid",
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var timeline = state["profiles_full"]!.AsArray()[0]!["phases"]!.AsArray()[0]!["timelines"]!.AsArray()[0]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("boss_raid", payload["consumer"]!.GetValue<string>());
+        Assert.Equal("Imported Raid", state["profiles_full"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
+        Assert.Equal(7.5, timeline["time_s"]!.GetValue<double>());
+        Assert.False(timeline.ContainsKey("time_seconds"));
+
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settingsPath));
+        Assert.Single(reloaded.Profiles);
+        Assert.Equal("Imported Raid", reloaded.Profiles[0].ProfileName);
+    }
+
+    [Fact]
+    public void SelectFileWithoutSettingsReturnsPythonConsumableError()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SelectFile, new JsonObject
+        {
+            ["path"] = Path.Combine(_workDir, "zeta.json"),
+            ["consumer"] = "auto_key",
+        }));
+
+        Assert.False(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Contains("not available", reply.Payload["message"]!.GetValue<string>());
     }
 }

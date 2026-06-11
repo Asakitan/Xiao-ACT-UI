@@ -37,13 +37,19 @@ public sealed class MenuStateBridge : IDisposable
     }
 
     private JsonObject HandleAutoKeyState()
+        => new() { ["ok"] = true, ["state"] = BuildAutoKeyState(_settings, _states) };
+
+    private JsonObject HandleBossRaidState()
+        => new() { ["ok"] = true, ["state"] = BuildBossRaidState(_settings, _states) };
+
+    internal static JsonObject BuildAutoKeyState(SettingsManager settings, GameStateManager? states)
     {
-        var identityContext = CurrentIdentity();
-        var config = AutoKeyConfigLoader.Load(_settings, identityContext.Author);
+        var identityContext = CurrentIdentity(states);
+        var config = AutoKeyConfigLoader.Load(settings, identityContext.Author);
         var active = AutoKeyProfileStore.ActiveProfile(config);
         var identity = IdentityObject(identityContext.Author, identityContext.Source);
 
-        var state = new JsonObject
+        return new JsonObject
         {
             ["enabled"] = config.Enabled,
             ["active_profile_id"] = config.ActiveProfileId,
@@ -60,15 +66,13 @@ public sealed class MenuStateBridge : IDisposable
             ["last_remote_search"] = AutoKeySearchObject(config.LastRemoteSearch),
             ["runtime"] = new JsonObject(),
         };
-
-        return new JsonObject { ["ok"] = true, ["state"] = state };
     }
 
-    private JsonObject HandleBossRaidState()
+    internal static JsonObject BuildBossRaidState(SettingsManager settings, GameStateManager? states)
     {
-        var identityContext = CurrentIdentity();
+        var identityContext = CurrentIdentity(states);
         using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
-        var config = BossRaidConfigStore.Load(_settings, authorDoc.RootElement.Clone());
+        var config = BossRaidConfigStore.Load(settings, authorDoc.RootElement.Clone());
         var active = BossRaidProfile.ActiveProfile(config);
         var configNode = BossRaidConfigStore.ConfigToJsonObject(config);
         var profilesFull = CloneArray(configNode["profiles"] as JsonArray);
@@ -77,7 +81,7 @@ public sealed class MenuStateBridge : IDisposable
             ? BossRaidProfile.DefaultServerUrl
             : config.ServerUrl;
 
-        var state = new JsonObject
+        return new JsonObject
         {
             ["enabled"] = config.Enabled,
             ["active_profile_id"] = config.ActiveProfileId,
@@ -92,15 +96,13 @@ public sealed class MenuStateBridge : IDisposable
             ["last_remote_search"] = CloneNode(configNode["last_remote_search"]) ?? new JsonObject(),
             ["runtime"] = new JsonObject(),
         };
-
-        return new JsonObject { ["ok"] = true, ["state"] = state };
     }
 
-    private IdentityContext CurrentIdentity()
+    private static IdentityContext CurrentIdentity(GameStateManager? states)
     {
-        if (_states is null)
+        if (states is null)
             return new IdentityContext(AuthorSnapshot.Empty, "profile");
-        var snapshot = _states.Snapshot;
+        var snapshot = states.Snapshot;
         return new IdentityContext(AutoKeyConfigLoader.AuthorFromState(snapshot), "packet");
     }
 

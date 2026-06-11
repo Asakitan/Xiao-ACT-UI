@@ -240,6 +240,18 @@ function assert(cond, message) {
   assert(last.name === "autokey.import_picker.start", "start_auto_key_import_picker command mismatch");
   assert(last.payload.path === "D:\\profiles", "start_auto_key_import_picker path was not forwarded");
 
+  window._pickerConsumer = "auto_key";
+  await window.pywebview.api.select_file("D:\\profiles\\ak.json");
+  last = calls[calls.length - 1];
+  assert(last.name === "file.select_file", "select_file command mismatch");
+  assert(last.payload.path === "D:\\profiles\\ak.json", "select_file path was not forwarded");
+  assert(last.payload.consumer === "auto_key", "select_file consumer was not forwarded");
+
+  await window.pywebview.api.save_autokey_actions("[{\"trigger_slot\":1,\"action_slot\":3}]");
+  last = calls[calls.length - 1];
+  assert(last.name === "autokey.actions.save", "save_autokey_actions command mismatch");
+  assert(last.payload.actions_json.indexOf("trigger_slot") >= 0, "save_autokey_actions JSON was not forwarded");
+
   let autoKeyEditorTab = "";
   window._akSetTab = function (tab) { autoKeyEditorTab = tab; };
   await window.pywebview.api.toggle_autokey_editor();

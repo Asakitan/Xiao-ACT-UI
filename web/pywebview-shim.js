@@ -139,6 +139,19 @@
         start_auto_key_import_picker: function (path) {
             return call('autokey.import_picker.start', { path: String(path || '') }).then(normalizeOk);
         },
+        select_file: function (path) {
+            var consumer = '';
+            try { consumer = String(window._pickerConsumer || ''); } catch (_) {}
+            return call('file.select_file', {
+                path: String(path || ''),
+                consumer: consumer
+            }).then(normalizeOk);
+        },
+        save_autokey_actions: function (actionsJson) {
+            return call('autokey.actions.save', {
+                actions_json: String(actionsJson || '[]')
+            }).then(normalizeOk);
+        },
         toggle_autokey_editor: function () {
             var localHandled = openEmbeddedEditor('_akSetTab');
             return call('ui.menu_action', {

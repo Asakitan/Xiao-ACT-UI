@@ -1,5 +1,9 @@
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using SaoAuto.Core.Automation;
+using SaoAuto.Core.Configuration;
+using SaoAuto.Core.State;
 
 namespace SaoAuto.App.WebBridge;
 
@@ -13,20 +17,31 @@ public sealed class FilePickerBridge : IDisposable
 {
     private readonly BridgeRouter _router;
     private readonly Func<string> _rootProvider;
+    private readonly SettingsManager? _settings;
+    private readonly GameStateManager? _states;
     private readonly string[] _commands;
+    private string _pendingConsumer = string.Empty;
     private bool _disposed;
 
-    public FilePickerBridge(BridgeRouter router, Func<string>? rootProvider = null)
+    public FilePickerBridge(
+        BridgeRouter router,
+        Func<string>? rootProvider = null,
+        SettingsManager? settings = null,
+        GameStateManager? states = null)
     {
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _rootProvider = rootProvider ?? (() => AppContext.BaseDirectory);
+        _settings = settings;
+        _states = states;
         _commands = new[]
         {
             BridgeCommands.BrowseDir,
+            BridgeCommands.SelectFile,
             BridgeCommands.SelectFolder,
             BridgeCommands.StartAutoKeyImportPicker,
         };
         router.Register(BridgeCommands.BrowseDir, HandleBrowse);
+        router.Register(BridgeCommands.SelectFile, HandleSelectFile);
         router.Register(BridgeCommands.SelectFolder, HandleSelectFolder);
         router.Register(BridgeCommands.StartAutoKeyImportPicker, HandleStartAutoKeyImportPicker);
     }
@@ -43,6 +58,7 @@ public sealed class FilePickerBridge : IDisposable
     {
         var requested = ReadString(payload, "path");
         var root = string.IsNullOrWhiteSpace(requested) ? SafeRoot() : requested;
+        _pendingConsumer = "auto_key";
         var browser = Browse(root);
         browser["mode"] = "file";
         if (browser["error"] is not null)
@@ -66,6 +82,62 @@ public sealed class FilePickerBridge : IDisposable
         var requested = ReadString(payload, "path");
         var path = string.IsNullOrWhiteSpace(requested) ? SafeRoot() : requested;
         return Browse(path);
+    }
+
+    private JsonObject HandleSelectFile(JsonObject? payload)
+    {
+        var path = ReadString(payload, "path");
+        var consumer = NormalizeConsumer(ReadString(payload, "consumer"));
+        if (string.IsNullOrEmpty(consumer))
+            consumer = _pendingConsumer;
+        if (string.IsNullOrWhiteSpace(path))
+            return SelectError(path, "No file selected");
+        if (_settings is null)
+            return SelectError(path, "File import is not available in this WebView2 host");
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (consumer == "auto_key")
+            {
+                var author = CurrentAuthor();
+                var config = AutoKeyConfigLoader.Load(_settings, author);
+                var profile = AutoKeyProfileStore.ImportProfileFromPath(fullPath, author);
+                config = AutoKeyProfileStore.UpsertProfile(config, profile, activate: false);
+                AutoKeyConfigLoader.Save(_settings, config);
+                _settings.Save();
+                _pendingConsumer = string.Empty;
+                return new JsonObject
+                {
+                    ["ok"] = true,
+                    ["path"] = fullPath,
+                    ["consumer"] = consumer,
+                    ["state"] = MenuStateBridge.BuildAutoKeyState(_settings, _states),
+                };
+            }
+            if (consumer == "boss_raid")
+            {
+                using var authorDoc = JsonDocument.Parse(AuthorObject(CurrentAuthor()).ToJsonString());
+                var authorElement = authorDoc.RootElement.Clone();
+                var config = BossRaidConfigStore.Load(_settings, authorElement);
+                var profile = BossRaidProfileIo.ImportProfileFromPath(fullPath, authorElement);
+                config = BossRaidProfile.UpsertProfile(config, profile, activate: false);
+                BossRaidConfigStore.Save(_settings, config);
+                _pendingConsumer = string.Empty;
+                return new JsonObject
+                {
+                    ["ok"] = true,
+                    ["path"] = fullPath,
+                    ["consumer"] = consumer,
+                    ["state"] = MenuStateBridge.BuildBossRaidState(_settings, _states),
+                };
+            }
+            return SelectError(path, "No file picker action pending");
+        }
+        catch (Exception ex)
+        {
+            return SelectError(path, ex.Message);
+        }
     }
 
     private static JsonObject HandleSelectFolder(JsonObject? payload) => new()
@@ -147,6 +219,38 @@ public sealed class FilePickerBridge : IDisposable
         ["files"] = new JsonArray(),
         ["error"] = message,
     };
+
+    private static JsonObject SelectError(string path, string message) => new()
+    {
+        ["ok"] = false,
+        ["message"] = message,
+        ["path"] = path ?? string.Empty,
+    };
+
+    private AuthorSnapshot CurrentAuthor()
+    {
+        if (_states is null) return AuthorSnapshot.Empty;
+        return AutoKeyConfigLoader.AuthorFromState(_states.Snapshot);
+    }
+
+    private static JsonObject AuthorObject(AuthorSnapshot author) => new()
+    {
+        ["player_uid"] = author.PlayerUid ?? string.Empty,
+        ["player_name"] = author.PlayerName ?? string.Empty,
+        ["profession_id"] = author.ProfessionId,
+        ["profession_name"] = author.ProfessionName ?? string.Empty,
+    };
+
+    private static string NormalizeConsumer(string value)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "autokey" or "auto_key" or "auto-key" => "auto_key",
+            "bossraid" or "boss_raid" or "boss-raid" => "boss_raid",
+            _ => string.Empty,
+        };
+    }
 
     private static string ReadString(JsonObject? payload, string key)
     {

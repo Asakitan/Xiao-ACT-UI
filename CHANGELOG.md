@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.12: WebView2 本地文件导入与 AutoKey 录制动作保存修复.
+
+  1) `web/pywebview-shim.js` 补齐 `select_file(path)` 并新增
+     `file.select_file` C# 桥接。
+     WebView2 自带文件浏览器选中文件后现在会按 `consumer` 真实导入 AutoKey/BossRaid
+     profile, 持久化 settings, 并返回刷新后的菜单状态, 修复选择文件后无后续处理的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `save_autokey_actions(actions_json)` 并新增
+     `autokey.actions.save` C# 桥接。
+     录制面板动作现在会写入 `autokey_burst_actions`; C# 返回
+     `live_reconfigured:false`, 不伪造运行中 runtime 已热更新。
+
 ## v4.5.11: WebView2 编辑器切换按钮兼容修复.
 
   1) `web/pywebview-shim.js` 补齐 `toggle_autokey_editor()`。

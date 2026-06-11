@@ -72,6 +72,7 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetDataSource, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetComponentSource, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SaveAutoKeyActions, router.RegisteredCommands);
 
         bridge.Dispose();
 
@@ -81,6 +82,7 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetDataSource, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetComponentSource, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SaveAutoKeyActions, router.RegisteredCommands);
     }
 
     [Fact]
@@ -152,5 +154,42 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.Equal("boss", reply.Payload["component"]!.GetValue<string>());
         Assert.Equal("packet", reply.Payload["mode"]!.GetValue<string>());
         Assert.True(reply.Payload["legacy_noop"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void SaveAutoKeyActionsPersistsJsonArray()
+    {
+        var settings = new SettingsManager(_path);
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, settings);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SaveAutoKeyActions, new JsonObject
+        {
+            ["actions_json"] = "[{\"trigger_slot\":1,\"action_slot\":3}]",
+        }));
+
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal(1, reply.Payload["saved_count"]!.GetValue<int>());
+        Assert.False(reply.Payload["live_reconfigured"]!.GetValue<bool>());
+
+        var reloaded = new SettingsManager(_path);
+        var saved = reloaded.Get<JsonArray>("autokey_burst_actions")!;
+        Assert.Single(saved);
+        Assert.Equal(3, saved[0]!["action_slot"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void SaveAutoKeyActionsRejectsNonArrayJson()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, new SettingsManager(_path));
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SaveAutoKeyActions, new JsonObject
+        {
+            ["actions_json"] = "{\"not\":\"array\"}",
+        }));
+
+        Assert.False(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal("bad_payload", reply.Payload["error"]!.GetValue<string>());
     }
 }
