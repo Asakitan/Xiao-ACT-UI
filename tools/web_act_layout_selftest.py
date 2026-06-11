@@ -95,6 +95,32 @@ def _assert_inline_js_args_are_escaped() -> None:
         raise AssertionError("trigger timer must encode rule ids with escaped jsArg")
 
 
+def _assert_drilldown_numbers_are_clamped() -> None:
+    combatant = _read_web("act_combatant_drilldown.html")
+    skill = _read_web("act_skill_drilldown.html")
+    raw_pct = "function pct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }"
+    if raw_pct in combatant:
+        raise AssertionError("combatant drilldown percentages must clamp invalid/out-of-range values")
+    if raw_pct in skill:
+        raise AssertionError("skill drilldown percentages must clamp invalid/out-of-range values")
+    if "const max = Math.max(1, ...skills.map(x => Number(x.amount || 0)));" in combatant:
+        raise AssertionError("combatant drilldown skill max must ignore invalid/negative amounts")
+    if "const w = Math.round(Number(sk.amount || 0) / max * 100);" in combatant:
+        raise AssertionError("combatant drilldown skill bars must clamp width to 0..100")
+    for snippet in (
+        "function finiteNum",
+        "function clamp01",
+        "function barPct",
+        "const max = Math.max(1, ...skills.map(x => nonNeg(x.amount)));",
+        "const w = barPct(sk.amount, max);",
+    ):
+        if snippet not in combatant:
+            raise AssertionError("missing safe combatant drilldown numeric snippet: " + snippet)
+    for snippet in ("function finiteNum", "function clamp01", "function pct(v)"):
+        if snippet not in skill:
+            raise AssertionError("missing safe skill drilldown numeric snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -104,6 +130,7 @@ def main() -> int:
     _assert_side_scroll("trigger_timer_manager.html", "trigger timer manager")
     _assert_selector_scroll("plugin_manager.html", ".side-panel", "plugin manager")
     _assert_inline_js_args_are_escaped()
+    _assert_drilldown_numbers_are_clamped()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

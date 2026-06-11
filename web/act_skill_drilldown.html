@@ -118,8 +118,10 @@
       return { args: args };
     }
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-    function fmt(v) { const n = Number(v || 0); if (!Number.isFinite(n)) return esc(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
-    function pct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
+    function finiteNum(v) { const n = Number(v || 0); return Number.isFinite(n) ? n : 0; }
+    function clamp01(v) { return Math.max(0, Math.min(1, finiteNum(v))); }
+    function fmt(v) { const n = finiteNum(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
+    function pct(v) { return (clamp01(v) * 100).toFixed(1) + '%'; }
     window.SkillDrilldown = {
       last: null,
       expandedRefs: {},

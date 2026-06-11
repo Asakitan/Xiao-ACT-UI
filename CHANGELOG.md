@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.34: ACT Drilldown 数值渲染夹取修复.
+
+  1) `web/act_combatant_drilldown.html` 修复技能条宽度计算。
+     技能 amount 现在先转成有限非负数, bar 宽度会夹在 0..100%,
+     避免异常/负数/NaN 数据让技能条溢出或不显示。
+
+  2) `web/act_combatant_drilldown.html` 与 `web/act_skill_drilldown.html`
+     修复百分比标签格式化。
+     crit/share 等百分比现在会先转有限数并夹到 0..1,
+     避免显示 `NaN%` 或异常大百分比。
+
 ## v4.5.33: BossRaid 菜单数字渲染与转义修复.
 
   1) `web/menu.html` 增强 `_escHtml()`。
