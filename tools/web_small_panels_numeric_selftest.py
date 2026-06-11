@@ -230,6 +230,22 @@ def main() -> None:
             "if (m2.dodge && m2.dodge.inline && (m2.dodge.inline.sequence || []).length)",
             "Raid editor mechanic save must guard nested sequence payload shape.",
         ),
+        (
+            "return '<span onclick=\"mechDraftRemoveSkill(' + sid + ')\"",
+            "Raid editor mechanic skill chips must normalize inline remove IDs.",
+        ),
+        (
+            "return '<span onclick=\"mechDraftRemoveBuff(' + bid + ')\"",
+            "Raid editor mechanic buff chips must normalize inline remove IDs.",
+        ),
+        (
+            "return '<option value=\"' + o.id + '\">'",
+            "Raid editor mechanic observed options must normalize option IDs.",
+        ),
+        (
+            "onclick=\"mechDraftAddSkill(' + h.id + ')\">绑定",
+            "Raid editor mechanic catalog binding must normalize inline add IDs.",
+        ),
     ]
     for snippet, message in raid_forbidden:
         _check_absent(raid, snippet, message)
@@ -420,7 +436,7 @@ def main() -> None:
             "Raid editor mechanic cards/forms should normalize skill-name maps.",
         ),
         (
-            "var ids = _listItems(det.skill_ids).concat(_listItems(det.buff_ids));",
+            "var ids = _idList(det.skill_ids).concat(_idList(det.buff_ids));",
             "Raid editor mechanic cards should normalize detection ID lists.",
         ),
         (
@@ -428,7 +444,7 @@ def main() -> None:
             "Raid editor mechanic forms should normalize sequence rows.",
         ),
         (
-            "var observed = _objectItems(_objectValue(_mechState).observed).filter(function (o) {",
+            "var observed = _objectItems(_objectValue(_mechState).observed).map(function (o) {",
             "Raid editor mechanic forms should normalize observed rows.",
         ),
         (
@@ -448,20 +464,20 @@ def main() -> None:
             "Raid editor mechanic draft collection should normalize detect payloads.",
         ),
         (
-            "var ids = det.skill_ids = _listItems(det.skill_ids);",
-            "Raid editor mechanic draft skill IDs should normalize list payloads.",
+            "var ids = det.skill_ids = _idList(det.skill_ids);",
+            "Raid editor mechanic draft skill IDs should normalize ID list payloads.",
         ),
         (
-            "var ids = det.buff_ids = _listItems(det.buff_ids);",
-            "Raid editor mechanic draft buff IDs should normalize list payloads.",
+            "var ids = det.buff_ids = _idList(det.buff_ids);",
+            "Raid editor mechanic draft buff IDs should normalize ID list payloads.",
         ),
         (
-            "det.skill_ids = _listItems(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });",
-            "Raid editor mechanic draft skill removal should normalize list payloads.",
+            "det.skill_ids = _idList(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });",
+            "Raid editor mechanic draft skill removal should normalize ID list payloads.",
         ),
         (
-            "det.buff_ids = _listItems(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });",
-            "Raid editor mechanic draft buff removal should normalize list payloads.",
+            "det.buff_ids = _idList(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });",
+            "Raid editor mechanic draft buff removal should normalize ID list payloads.",
         ),
         (
             "_mechCatalog = (r && r.ok) ? _objectItems(r.results) : [];",
@@ -482,6 +498,38 @@ def main() -> None:
         (
             "var seq = _objectItems(_objectValue(_objectValue(m2.dodge).inline).sequence);",
             "Raid editor mechanic save should normalize nested sequence payloads.",
+        ),
+        (
+            "function _idList(v)",
+            "Raid editor mechanics should expose ID-list normalization.",
+        ),
+        (
+            "var id = _idNum(v, null);",
+            "Raid editor mechanics should normalize each ID-list item.",
+        ),
+        (
+            "var ids = _idList(det.skill_ids);",
+            "Raid editor mechanic forms should normalize skill chip IDs.",
+        ),
+        (
+            "var buffIds = _idList(det.buff_ids);",
+            "Raid editor mechanic forms should normalize buff chip IDs.",
+        ),
+        (
+            "var observed = _objectItems(_objectValue(_mechState).observed).map(function (o) {",
+            "Raid editor mechanic forms should normalize observed option rows before rendering.",
+        ),
+        (
+            "var oid = _idNum(o.id, null);",
+            "Raid editor mechanic forms should normalize observed option IDs.",
+        ),
+        (
+            "if (hid == null) return '';",
+            "Raid editor mechanic catalog rows should skip malformed binding IDs.",
+        ),
+        (
+            "onclick=\"mechDraftAddSkill(' + hid + ')\">绑定",
+            "Raid editor mechanic catalog bindings should pass normalized IDs.",
         ),
     ]
     for snippet, message in raid_required:

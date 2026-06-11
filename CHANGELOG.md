@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.90: Raid Editor mechanics ID 参数修复.
+
+  1) `web/raid_editor.html` 修复 mechanics 检测 chip 删除参数处理。
+     Raid Editor Web 现在归一 skill/buff 检测 ID 后再渲染删除 handler,
+     避免字符串或坏 ID 打断删除绑定的参数传递。
+
+  2) `web/raid_editor.html` 修复 mechanics observed/catalog 添加参数处理。
+     Raid Editor Web 现在归一观测技能与技能库搜索结果 ID 后再渲染添加入口,
+     避免坏搜索结果或坏观测项打断绑定技能的交互。
+
 ## v4.5.89: Raid Editor mechanics payload 防护修复.
 
   1) `web/raid_editor.html` 修复 mechanics state/list/form payload 形状处理。

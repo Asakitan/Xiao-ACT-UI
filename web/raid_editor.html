@@ -336,6 +336,12 @@ function _sameId(a, b, fallback) {
     var right = _idNum(b, fallback);
     return left != null && right != null && left === right;
 }
+function _idList(v) {
+    return _listItems(v).map(function (v) {
+        var id = _idNum(v, null);
+        return id;
+    }).filter(function (id) { return id != null; });
+}
 function _stepMs(v, fallback) {
     if (v == null || v === '') return fallback;
     var n = _finiteNum(v, null);
@@ -661,6 +667,8 @@ function _mInboxRow(rec) {
 }
 
 function mechCreateFromSkill(sid, name, dur) {
+    sid = _idNum(sid, null);
+    if (sid == null) return;
     var a = _api();
     if (!a || !a.create_mechanic_from_skill) return;
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
@@ -668,6 +676,8 @@ function mechCreateFromSkill(sid, name, dur) {
 }
 
 function mechBind(mid, sid) {
+    sid = _idNum(sid, null);
+    if (sid == null) return;
     var a = _api();
     if (!a || !a.bind_mechanic_skill) return;
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
@@ -678,7 +688,7 @@ function _mCard(m) {
     m = _objectValue(m);
     var names = _objectValue(m.skill_names);
     var det = _objectValue(m.detect);
-    var ids = _listItems(det.skill_ids).concat(_listItems(det.buff_ids));
+    var ids = _idList(det.skill_ids).concat(_idList(det.buff_ids));
     var chips = ids.map(function (sid) {
         var nm = (names[String(sid)] || '').trim();
         return nm ? (nm + '#' + sid) : ('#' + sid);
@@ -798,7 +808,7 @@ function _mForm(m) {
     var dodge = _objectValue(d.dodge);
     var inline = _objectValue(dodge.inline);
     var names = _objectValue(m.skill_names);
-    var ids = _listItems(det.skill_ids);
+    var ids = _idList(det.skill_ids);
     var seq = _objectItems(inline.sequence);
     var isDash = seq.length >= 2
         && seq.every(function (s) { return (s.key || '').toUpperCase() === (seq[0].key || '').toUpperCase(); })
@@ -819,29 +829,36 @@ function _mForm(m) {
         + '<textarea id="mf-notes" class="mech-input" rows="4" style="width:96%;resize:vertical;'
         + 'font-size:10px;line-height:1.5;">' + _esc(d.notes == null ? '' : d.notes) + '</textarea>';
     // 检测
-    var buffIds = _listItems(det.buff_ids);
+    var buffIds = _idList(det.buff_ids);
     html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div>';
     html += '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">● 至少绑定一个 Boss 技能/Buff ID 作触发条件 — 可从内存自动导入或技能库搜索</div>';
     html += '<div style="margin:3px 0;">';
     if (!ids.length && !buffIds.length) html += '<span style="color:#75808d;">未绑定 — 从下方添加</span>';
     html += ids.map(function (sid) {
+        var safeSid = sid;
         var nm = (names[String(sid)] || '').trim();
-        return '<span onclick="mechDraftRemoveSkill(' + sid + ')" style="display:inline-block;background:rgba(117,205,255,.18);color:#e8f6ff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
-            + _esc(nm ? (nm + '#' + sid) : ('#' + sid)) + ' ✕</span>';
+        return '<span onclick="mechDraftRemoveSkill(' + safeSid + ')" style="display:inline-block;background:rgba(117,205,255,.18);color:#e8f6ff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
+            + _esc(nm ? (nm + '#' + safeSid) : ('#' + safeSid)) + ' ✕</span>';
     }).join('');
     html += buffIds.map(function (bid) {
+        var safeBid = bid;
         var nm = (names[String(bid)] || '').trim();
-        return '<span onclick="mechDraftRemoveBuff(' + bid + ')" style="display:inline-block;background:rgba(104,228,255,.12);color:#8fdcff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
-            + _esc('B ' + (nm ? (nm + '#' + bid) : ('#' + bid))) + ' ✕</span>';
+        return '<span onclick="mechDraftRemoveBuff(' + safeBid + ')" style="display:inline-block;background:rgba(104,228,255,.12);color:#8fdcff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
+            + _esc('B ' + (nm ? (nm + '#' + safeBid) : ('#' + safeBid))) + ' ✕</span>';
     }).join('') + '</div>';
-    var observed = _objectItems(_objectValue(_mechState).observed).filter(function (o) {
-        return ids.indexOf(o.id) < 0;
+    var observed = _objectItems(_objectValue(_mechState).observed).map(function (o) {
+        var oid = _idNum(o.id, null);
+        if (oid == null) return null;
+        return { id: oid, name: o.name, count: _clampInt(o.count, 0, 0, 999999) };
+    }).filter(function (o) {
+        return o && ids.indexOf(o.id) < 0;
     });
     if (observed.length) {
         html += '<select id="mf-obs" class="mech-input" style="max-width:170px;" onchange="if(this.value){mechDraftAddSkill(Number(this.value))}">'
             + '<option value="">添加观测技能▾</option>'
             + observed.slice(0, 25).map(function (o) {
-                return '<option value="' + o.id + '">' + _esc((o.name || '技能') + ' #' + o.id + ' ×' + (o.count || 0)) + '</option>';
+                var oid = o.id;
+                return '<option value="' + oid + '">' + _esc((o.name || '技能') + ' #' + oid + ' ×' + (o.count || 0)) + '</option>';
             }).join('') + '</select> ';
     }
     html += _mInput('mf-manual', '技能ID', '', 70)
@@ -851,9 +868,11 @@ function _mForm(m) {
         + _mInput('mf-q', '技能库', '', 90)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechCatalogSearch()">搜索</span>';
     html += _objectItems(_mechCatalog).map(function (h) {
+        var hid = _idNum(h.id, null);
+        if (hid == null) return '';
         return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">'
-            + '<span style="flex:1;color:#e8f6ff;">' + _esc(h.name + ' #' + h.id + ' (' + (h.kind || '') + ')') + '</span>'
-            + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddSkill(' + h.id + ')">绑定</span></div>';
+            + '<span style="flex:1;color:#e8f6ff;">' + _esc(h.name + ' #' + hid + ' (' + (h.kind || '') + ')') + '</span>'
+            + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddSkill(' + hid + ')">绑定</span></div>';
     }).join('');
     // 提醒
     html += '<div class="phase-header" style="font-size:10px;">提醒</div>'
@@ -1016,9 +1035,10 @@ function mechPickColor(c) { _mCollect(); if (_mechDraft) _mechDraft.color = c; r
 function mechDraftAddSkill(sid) {
     _mCollect();
     if (!_mechDraft) return;
+    sid = _idNum(sid, null);
     var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
-    var ids = det.skill_ids = _listItems(det.skill_ids);
-    if (sid > 0 && ids.indexOf(sid) < 0) { ids.push(sid); ids.sort(function (a, b) { return a - b; }); }
+    var ids = det.skill_ids = _idList(det.skill_ids);
+    if (sid != null && sid > 0 && ids.indexOf(sid) < 0) { ids.push(sid); ids.sort(function (a, b) { return a - b; }); }
     renderMechanics();
 }
 function mechDraftAddManual() {
@@ -1028,9 +1048,10 @@ function mechDraftAddManual() {
 function mechDraftAddBuff(bid) {
     _mCollect();
     if (!_mechDraft) return;
+    bid = _idNum(bid, null);
     var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
-    var ids = det.buff_ids = _listItems(det.buff_ids);
-    if (bid > 0 && ids.indexOf(bid) < 0) { ids.push(bid); ids.sort(function (a, b) { return a - b; }); }
+    var ids = det.buff_ids = _idList(det.buff_ids);
+    if (bid != null && bid > 0 && ids.indexOf(bid) < 0) { ids.push(bid); ids.sort(function (a, b) { return a - b; }); }
     renderMechanics();
 }
 function mechDraftAddManualBuff() {
@@ -1040,15 +1061,19 @@ function mechDraftAddManualBuff() {
 function mechDraftRemoveSkill(sid) {
     _mCollect();
     if (!_mechDraft) return;
+    sid = _idNum(sid, null);
+    if (sid == null) return;
     var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
-    det.skill_ids = _listItems(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });
+    det.skill_ids = _idList(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });
     renderMechanics();
 }
 function mechDraftRemoveBuff(bid) {
     _mCollect();
     if (!_mechDraft) return;
+    bid = _idNum(bid, null);
+    if (bid == null) return;
     var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
-    det.buff_ids = _listItems(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });
+    det.buff_ids = _idList(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });
     renderMechanics();
 }
 function mechCatalogSearch() {
