@@ -144,48 +144,61 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function jsq(value) { return esc(String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
-    function numericArg(value, fallback) {
+    function finiteNumberArg(value, fallback) {
         var n = Number(value);
-        return isFinite(n) ? n : fallback;
+        if (!isFinite(n)) n = Number(fallback || 0);
+        return isFinite(n) ? n : 0;
+    }
+    function nonNegIntArg(value, fallback) {
+        return Math.max(0, Math.floor(finiteNumberArg(value, fallback || 0)));
+    }
+    function positiveIntArg(value, fallback) {
+        return Math.max(1, nonNegIntArg(value, fallback || 1));
+    }
+    function safePageOffset(value) {
+        return nonNegIntArg(value, 0);
+    }
+    function safeCursorMs(value) {
+        return nonNegIntArg(value, 0);
     }
     function actionLogPayload(name, args) {
         args = args || [];
         if (name === 'get_action_log_status') {
             return {
-                limit: numericArg(args[0], 80), query: String(args[1] || ''),
-                topic: String(args[2] || ''), cursor_ms: numericArg(args[3], 0),
+                limit: positiveIntArg(args[0], 80), query: String(args[1] || ''),
+                topic: String(args[2] || ''), cursor_ms: safeCursorMs(args[3]),
                 source: String(args[4] || 'live'), encounter_id: String(args[5] || ''),
-                offset: numericArg(args[6], 0)
+                offset: safePageOffset(args[6])
             };
         }
         if (name === 'search_action_log') {
             return {
-                query: String(args[0] || ''), limit: numericArg(args[1], 80),
+                query: String(args[0] || ''), limit: positiveIntArg(args[1], 80),
                 source: String(args[2] || 'live'), encounter_id: String(args[3] || ''),
-                offset: numericArg(args[4], 0)
+                offset: safePageOffset(args[4])
             };
         }
         if (name === 'filter_action_log') {
             return {
                 topic: String(args[0] || ''), query: String(args[1] || ''),
-                limit: numericArg(args[2], 80), source: String(args[3] || 'live'),
-                encounter_id: String(args[4] || ''), offset: numericArg(args[5], 0)
+                limit: positiveIntArg(args[2], 80), source: String(args[3] || 'live'),
+                encounter_id: String(args[4] || ''), offset: safePageOffset(args[5])
             };
         }
         if (name === 'jump_action_log_time') {
             var jumpPayload = {
-                cursor_ms: numericArg(args[0], 0), limit: numericArg(args[1], 80),
+                cursor_ms: safeCursorMs(args[0]), limit: positiveIntArg(args[1], 80),
                 source: String(args[2] || 'live'), encounter_id: String(args[3] || ''),
-                offset: numericArg(args[4], 0)
+                offset: safePageOffset(args[4])
             };
             if (args.length > 5) jumpPayload.topic = String(args[5] || '');
             return jumpPayload;
         }
         if (name === 'copy_action_log') {
             return {
-                limit: numericArg(args[0], 80), query: String(args[1] || ''),
+                limit: positiveIntArg(args[0], 80), query: String(args[1] || ''),
                 topic: String(args[2] || ''), source: String(args[3] || 'live'),
-                encounter_id: String(args[4] || ''), offset: numericArg(args[5], 0)
+                encounter_id: String(args[4] || ''), offset: safePageOffset(args[5])
             };
         }
         if (name === 'toggle_action_log') return { action: 'toggle_action_log' };
@@ -241,7 +254,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var analytics = data.analytics || {};
         var page = analytics.page || cursorState || {};
         var topicGroups = (analytics.groups && analytics.groups.topics) || [];
-        pageOffset = Number(page.offset || cursorState.offset || pageOffset || 0);
+        pageOffset = safePageOffset(page.offset || cursorState.offset || pageOffset || 0);
         lastCursor = cursorState || {};
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : 'var(--act-muted)';
@@ -260,13 +273,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         }).join('') + '</tbody></table>', preserveScroll);
     }
     window.ActionLog = {
-        refresh: function (options) { options = options || {}; return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
+        refresh: function (options) { options = options || {}; return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', safeCursorMs(cursor.value), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
         search: function () { pageOffset = 0; return apiCall('search_action_log', [query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
         filter: function () { pageOffset = 0; return apiCall('filter_action_log', [topic.value || '', query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
-        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset, topic.value || '']).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [safeCursorMs(cursor.value), pageLimit, source.value || 'live', encounter.value || '', pageOffset, topic.value || '']).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
         copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data, { preserveScroll: true }); showToast('Action log copied'); return data; }); },
-        prev: function () { pageOffset = Math.max(0, pageOffset - pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
-        next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset += pageLimit; return ActionLog.refresh({ preserveScroll: false }); },
+        prev: function () { pageOffset = safePageOffset(pageOffset - pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
+        next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset = safePageOffset(pageOffset + pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
         toggleGroup: function (key) { expandedGroups[String(key || '')] = !expandedGroups[String(key || '')]; return ActionLog.refresh(); },
         close: function () { apiCall('toggle_action_log'); },
         fadeIn: function () { shell.classList.add('visible'); },

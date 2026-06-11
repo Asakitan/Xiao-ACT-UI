@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.38: ACT Action Log/Death Recap 数值参数修复.
+
+  1) `web/act_action_log.html` 修复 cursor、offset 和分页参数规范化。
+     Action Log 现在用统一 helper 把 cursor/page offset/limit 夹成有限非负整数,
+     避免 `NaN`、负数或异常输入导致翻页卡住或把脏参数传入行为日志接口。
+
+  2) `web/act_death_recap.html` 修复死亡回放窗口秒数传参。
+     Death Recap 的 refresh/copy 和 bridge fallback 现在统一使用正数 window helper,
+     避免空值、负数或异常输入生成错误回放窗口。
+
 ## v4.5.37: ACT Graph Timeseries 数值渲染与跳转参数修复.
 
   1) `web/act_graph_timeseries.html` 修复时间序列点位数值渲染。

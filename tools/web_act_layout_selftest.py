@@ -187,6 +187,42 @@ def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
             raise AssertionError("missing safe graph timeseries snippet: " + snippet)
 
 
+def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
+    action_log = _read_web("act_action_log.html")
+    death_recap = _read_web("act_death_recap.html")
+    for snippet in (
+        "return isFinite(n) ? n : fallback;",
+        "pageOffset = Number(page.offset || cursorState.offset || pageOffset || 0);",
+        "[pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0)",
+        "[Number(cursor.value || 0), pageLimit",
+    ):
+        if snippet in action_log:
+            raise AssertionError("action log must clamp cursor/offset/limit numeric inputs: " + snippet)
+    for snippet in (
+        "return isFinite(n) ? n : fallback;",
+        "[80, Number(windowInput.value || 8), entity.value || null]",
+    ):
+        if snippet in death_recap:
+            raise AssertionError("death recap must clamp window numeric inputs: " + snippet)
+    for snippet in (
+        "function nonNegIntArg",
+        "function safePageOffset",
+        "function safeCursorMs",
+        "pageOffset = safePageOffset(page.offset || cursorState.offset || pageOffset || 0);",
+        "[pageLimit, query.value || '', topic.value || '', safeCursorMs(cursor.value)",
+        "[safeCursorMs(cursor.value), pageLimit",
+    ):
+        if snippet not in action_log:
+            raise AssertionError("missing safe action log numeric snippet: " + snippet)
+    for snippet in (
+        "function positiveNumberArg",
+        "function safeWindowSeconds",
+        "[80, safeWindowSeconds(windowInput.value), entity.value || null]",
+    ):
+        if snippet not in death_recap:
+            raise AssertionError("missing safe death recap numeric snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -200,6 +236,7 @@ def main() -> int:
     _assert_act_dynamic_classes_and_widths_are_safe()
     _assert_history_indexes_are_normalized()
     _assert_graph_numbers_and_jump_topic_are_normalized()
+    _assert_action_log_and_death_recap_numbers_are_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

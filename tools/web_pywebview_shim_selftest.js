@@ -484,12 +484,12 @@ function assert(cond, message) {
   assert(actionLog.includes("actionLogPayload(name, args || [])"), "action log is missing fallback payload mapping");
   assert(actionLog.includes("source: String(args[4] || 'live')"), "action log status should forward source");
   assert(actionLog.includes("encounter_id: String(args[5] || '')"), "action log status should forward encounter_id");
-  assert(actionLog.includes("offset: numericArg(args[6], 0)"), "action log status should forward offset");
+  assert(actionLog.includes("offset: safePageOffset(args[6])"), "action log status should forward normalized offset");
 
   const deathRecap = fs.readFileSync(path.join(root, "web/act_death_recap.html"), "utf8");
   assert(!deathRecap.includes("{ args: args || [] }"), "death recap still sends bare fallback args");
   assert(deathRecap.includes("deathRecapPayload(name, args || [])"), "death recap is missing fallback payload mapping");
-  assert(deathRecap.includes("window_s: numericArg(args[1], 8.0)"), "death recap should forward window_s");
+  assert(deathRecap.includes("window_s: safeWindowSeconds(args[1])"), "death recap should forward normalized window_s");
   assert(deathRecap.includes("entity_id: args[2] == null || args[2] === '' ? null : args[2]"), "death recap should forward entity_id");
 
   const dataSourceHealth = fs.readFileSync(path.join(root, "web/data_source_health.html"), "utf8");
