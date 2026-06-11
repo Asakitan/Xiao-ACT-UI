@@ -187,6 +187,17 @@ function assert(cond, message) {
   assert(last.name === "settings.set_dps_fade_timeout", "set_dps_fade_timeout command mismatch");
   assert(last.payload.seconds === 12, "set_dps_fade_timeout seconds were not forwarded");
 
+  await window.pywebview.api.set_data_source("memory");
+  last = calls[calls.length - 1];
+  assert(last.name === "settings.set_data_source", "set_data_source command mismatch");
+  assert(last.payload.mode === "memory", "set_data_source mode was not forwarded");
+
+  await window.pywebview.api.set_component_source("boss", "packet");
+  last = calls[calls.length - 1];
+  assert(last.name === "settings.set_component_source", "set_component_source command mismatch");
+  assert(last.payload.component === "boss", "set_component_source component was not forwarded");
+  assert(last.payload.mode === "packet", "set_component_source mode was not forwarded");
+
   await window.pywebview.api.set_auto_key_server_url("http://ak.local/");
   last = calls[calls.length - 1];
   assert(last.name === "autokey.cloud.set_server_url", "set_auto_key_server_url command mismatch");

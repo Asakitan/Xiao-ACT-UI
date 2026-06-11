@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.7: WebView2 数据源设置桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_data_source(mode)` 并新增
+     `settings.set_data_source` C# 桥接。
+     修复 WebView2 路径下数据源模式按钮只更新页面摘要, 没有把 `mem_data_source`
+     写入 settings 的问题; C# 返回 `live_reconfigured:false`, 不伪造运行中重启数据源。
+
+  2) `web/pywebview-shim.js` 补齐 `set_component_source(component, mode)` 并新增
+     `settings.set_component_source` C# ack。
+     保持 Python 版 legacy no-op 语义, 修复 WebView2 路径下旧组件数据源按钮调用缺失 API
+     的问题, 同时保留 component/mode 参数传递用于诊断。
+
+
+
 ## v4.5.6: WebView2 文件夹选择与 Boss HP 命中区域桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `select_folder(path)` 并新增

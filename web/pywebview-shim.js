@@ -99,6 +99,15 @@
             if (!isFinite(value)) value = 0;
             return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
         },
+        set_data_source: function (mode) {
+            return call('settings.set_data_source', { mode: String(mode || '') }).then(normalizeOk);
+        },
+        set_component_source: function (component, mode) {
+            return call('settings.set_component_source', {
+                component: String(component || ''),
+                mode: String(mode || '')
+            }).then(normalizeOk);
+        },
         set_auto_key_server_url: function (url) {
             return call('autokey.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
         },

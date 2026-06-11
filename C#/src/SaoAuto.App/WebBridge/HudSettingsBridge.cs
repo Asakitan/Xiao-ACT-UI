@@ -25,11 +25,15 @@ public sealed class HudSettingsBridge : IDisposable
             BridgeCommands.SetBurstEnabled,
             BridgeCommands.SetBossBarMode,
             BridgeCommands.SetDpsFadeTimeout,
+            BridgeCommands.SetDataSource,
+            BridgeCommands.SetComponentSource,
         };
         _router.Register(BridgeCommands.SetWatchedSlots, HandleWatchedSlots);
         _router.Register(BridgeCommands.SetBurstEnabled, HandleBurstEnabled);
         _router.Register(BridgeCommands.SetBossBarMode, HandleBossBarMode);
         _router.Register(BridgeCommands.SetDpsFadeTimeout, HandleDpsFadeTimeout);
+        _router.Register(BridgeCommands.SetDataSource, HandleDataSource);
+        _router.Register(BridgeCommands.SetComponentSource, HandleComponentSource);
     }
 
     public void Dispose()
@@ -108,6 +112,38 @@ public sealed class HudSettingsBridge : IDisposable
             ["timeout"] = seconds,
             ["seconds"] = seconds,
         };
+    }
+
+    private JsonObject HandleDataSource(JsonObject? payload)
+    {
+        var mode = NormalizeDataSourceMode(ReadString(payload?["mode"], "tcp"));
+        _settings.Set(SettingsKeys.MemDataSource, mode);
+        _settings.Save();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["mode"] = mode,
+            ["live_reconfigured"] = false,
+        };
+    }
+
+    private static JsonObject HandleComponentSource(JsonObject? payload)
+    {
+        var component = ReadString(payload?["component"], string.Empty).Trim();
+        var mode = ReadString(payload?["mode"], string.Empty).Trim().ToLowerInvariant();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["component"] = component,
+            ["mode"] = mode,
+            ["legacy_noop"] = true,
+        };
+    }
+
+    private static string NormalizeDataSourceMode(string mode)
+    {
+        var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized is "tcp" or "memory" or "hybrid" or "auto" ? normalized : "hybrid";
     }
 
     private static string ReadString(JsonNode? node, string fallback)

@@ -103,6 +103,8 @@ public static class BridgeCommands
     public const string SetBurstEnabled = "settings.set_burst_enabled";
     public const string SetBossBarMode = "settings.set_boss_bar_mode";
     public const string SetDpsFadeTimeout = "settings.set_dps_fade_timeout";
+    public const string SetDataSource = "settings.set_data_source";
+    public const string SetComponentSource = "settings.set_component_source";
 
     // Updater
     public const string CheckUpdate = "updater.check";

@@ -70,6 +70,8 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SetBurstEnabled, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossBarMode, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetDataSource, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetComponentSource, router.RegisteredCommands);
 
         bridge.Dispose();
 
@@ -77,6 +79,8 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SetBurstEnabled, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossBarMode, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetDataSource, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetComponentSource, router.RegisteredCommands);
     }
 
     [Fact]
@@ -111,5 +115,42 @@ public class Session197HudSettingsBridgeTests : IDisposable
         Assert.Equal(0, reply!.Payload!["seconds"]!.GetValue<int>());
         var reloaded = new SettingsManager(_path);
         Assert.Equal(0, reloaded.GetInt(SettingsKeys.DpsFadeTimeoutSeconds, defaultValue: 5));
+    }
+
+    [Fact]
+    public void DataSourceNormalizesAndPersists()
+    {
+        var settings = new SettingsManager(_path);
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, settings);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetDataSource, new JsonObject
+        {
+            ["mode"] = "bad-source",
+        }));
+
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal("hybrid", reply.Payload["mode"]!.GetValue<string>());
+        Assert.False(reply.Payload["live_reconfigured"]!.GetValue<bool>());
+        var reloaded = new SettingsManager(_path);
+        Assert.Equal("hybrid", reloaded.GetString(SettingsKeys.MemDataSource));
+    }
+
+    [Fact]
+    public void ComponentSourceReturnsLegacyNoopAck()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, new SettingsManager(_path));
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetComponentSource, new JsonObject
+        {
+            ["component"] = "boss",
+            ["mode"] = "packet",
+        }));
+
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal("boss", reply.Payload["component"]!.GetValue<string>());
+        Assert.Equal("packet", reply.Payload["mode"]!.GetValue<string>());
+        Assert.True(reply.Payload["legacy_noop"]!.GetValue<bool>());
     }
 }
