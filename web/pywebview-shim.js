@@ -475,11 +475,15 @@
         filter_action_log: function (topic, query, limit, source, encounterId, offset) {
             return call('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
         },
-        jump_action_log_time: function (cursorMs, limit, source, encounterId, offset) {
-            return call('act.action_log.jump_to_time', { cursor_ms: cursorMs || 0, limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+        jump_action_log_time: function (cursorMs, limit, source, encounterId, offset, topic) {
+            var payload = { cursor_ms: cursorMs || 0, limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 };
+            if (arguments.length > 5) payload.topic = String(topic || '');
+            return call('act.action_log.jump_to_time', payload);
         },
-        show_action_log_at: function (cursorMs, source, encounterId) {
-            return call('act.action_log.jump_to_time', { cursor_ms: cursorMs || 0, limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 });
+        show_action_log_at: function (cursorMs, source, encounterId, topic) {
+            var payload = { cursor_ms: cursorMs || 0, limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 };
+            if (arguments.length > 3) payload.topic = String(topic || '');
+            return call('act.action_log.jump_to_time', payload);
         },
         copy_action_log: function (limit, query, topic, source, encounterId, offset) {
             return call('act.action_log.copy', { limit: limit || 80, query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });

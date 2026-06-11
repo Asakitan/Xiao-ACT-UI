@@ -2863,14 +2863,15 @@ def act_action_log_filter(owner: Any, *, topic: str = "", query: str | None = No
 
 def act_action_log_jump_to_time(owner: Any, *, cursor_ms: int = 0, limit: int = 80,
                                 source: str | None = None, encounter_id: str | None = None,
-                                offset: int | None = None) -> dict[str, Any]:
+                                offset: int | None = None,
+                                topic: str | None = None) -> dict[str, Any]:
     state = _action_log_state(owner)
     cursor = dict(state.get("cursor") or {})
     cursor["time_ms"] = max(0, int(cursor_ms or 0))
     if offset is not None:
         cursor["offset"] = max(0, int(offset or 0))
     state["cursor"] = cursor
-    return act_action_log_status(owner, limit=limit, source=source, encounter_id=encounter_id)
+    return act_action_log_status(owner, limit=limit, source=source, encounter_id=encounter_id, topic=topic)
 
 
 def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",

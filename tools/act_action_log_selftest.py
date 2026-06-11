@@ -87,6 +87,15 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertEqual(status["cursor"]["nearest_row_id"], status["rows"][1]["id"])
         self.assertTrue(status["rows"][1]["is_cursor"])
 
+    def test_action_log_jump_to_time_can_apply_topic(self) -> None:
+        owner = self._owner_with_events()
+        status = runtime.act_action_log_jump_to_time(owner, cursor_ms=101500, topic="skill")
+
+        self.assertEqual(status["filters"]["topic"], "skill")
+        self.assertEqual([row["topic"] for row in status["rows"]], ["skill"])
+        self.assertEqual(status["cursor"]["nearest_row_id"], status["rows"][0]["id"])
+        self.assertTrue(status["rows"][0]["is_cursor"])
+
     def test_action_log_copy_returns_json_payload(self) -> None:
         owner = self._owner_with_events()
         copied = runtime.act_action_log_copy(owner, limit=2, query="")

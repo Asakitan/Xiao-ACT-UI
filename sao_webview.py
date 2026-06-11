@@ -656,7 +656,7 @@ class SAOWebAPI:
             offset=int(offset or 0),
         ), ensure_ascii=False)
 
-    def jump_action_log_time(self, cursor_ms=0, limit=80, source='live', encounter_id='', offset=0):
+    def jump_action_log_time(self, cursor_ms=0, limit=80, source='live', encounter_id='', offset=0, topic=None):
         return json.dumps(act_action_log_jump_to_time(
             self._g,
             cursor_ms=int(cursor_ms or 0),
@@ -664,9 +664,10 @@ class SAOWebAPI:
             source=str(source or 'live'),
             encounter_id=str(encounter_id or ''),
             offset=int(offset or 0),
+            topic=None if topic is None else str(topic or ''),
         ), ensure_ascii=False)
 
-    def show_action_log_at(self, cursor_ms=0, source='live', encounter_id=''):
+    def show_action_log_at(self, cursor_ms=0, source='live', encounter_id='', topic=None):
         """Ensure the Action Log window is SHOWN (never toggled off) and focus its
         cursor at cursor_ms — the drill target for graph-point / timeline clicks."""
         try:
@@ -681,6 +682,7 @@ class SAOWebAPI:
             source=str(source or 'live'),
             encounter_id=str(encounter_id or ''),
             offset=0,
+            topic=None if topic is None else str(topic or ''),
         )
         try:
             self._g._eval_action_log('if(window.ActionLog&&ActionLog.refresh)ActionLog.refresh()')

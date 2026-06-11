@@ -44,12 +44,18 @@ function assert(cond, message) {
   assert(last.payload.group_by === "field", "aggregate group_by was not forwarded");
   assert(last.payload.group_field === "skill_id", "aggregate group_field was not forwarded");
 
-  await window.pywebview.api.show_action_log_at(12345, "history", "enc-2");
+  await window.pywebview.api.show_action_log_at(12345, "history", "enc-2", "damage");
   last = calls[calls.length - 1];
   assert(last.name === "act.action_log.jump_to_time", "show_action_log_at command mismatch");
   assert(last.payload.cursor_ms === 12345, "show_action_log_at cursor_ms was not forwarded");
   assert(last.payload.source === "history", "show_action_log_at source was not forwarded");
   assert(last.payload.encounter_id === "enc-2", "show_action_log_at encounter_id was not forwarded");
+  assert(last.payload.topic === "damage", "show_action_log_at topic was not forwarded");
+
+  await window.pywebview.api.jump_action_log_time(23456, 24, "live", "", 8, "skill");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.action_log.jump_to_time", "jump_action_log_time command mismatch");
+  assert(last.payload.topic === "skill", "jump_action_log_time topic was not forwarded");
 
   await window.pywebview.api.exit_app();
   last = calls[calls.length - 1];

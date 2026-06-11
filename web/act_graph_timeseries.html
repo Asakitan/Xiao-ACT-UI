@@ -176,7 +176,7 @@
       if (action === 'act.graph.zoom') return { time_range_ms: args[0] || 0, limit: args[1] || 120 };
       if (action === 'act.graph.filter') return { query: String(args[0] || ''), topic: String(args[1] || ''), limit: args[2] || 120 };
       if (action === 'act.graph.export') return { metric: String(args[0] || ''), limit: args[1] || 120, query: String(args[2] || ''), topic: String(args[3] || '') };
-      if (action === 'act.action_log.jump_to_time') return { cursor_ms: args[0] || 0, limit: 80, source: String(args[1] || 'live'), encounter_id: String(args[2] || ''), offset: 0 };
+      if (action === 'act.action_log.jump_to_time') return { cursor_ms: safeMs(args[0]), limit: 80, source: String(args[1] || 'live'), encounter_id: String(args[2] || ''), offset: 0, topic: String(args[3] || '') };
       if (action === 'ui.menu_action') return { action: String(args[0] || '') };
       return { args: args };
     }
@@ -192,6 +192,28 @@
       if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(2) + 'm';
       if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'k';
       return n.toFixed(n % 1 ? 2 : 0);
+    }
+    function finiteNum(value, fallback) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : (fallback || 0);
+    }
+    function safeMs(value) {
+      return Math.max(0, Math.round(finiteNum(value, 0)));
+    }
+    function safeZoom(value) {
+      return safeMs(value);
+    }
+    function safeTopic(value) {
+      return String(value == null ? '' : value);
+    }
+    function normalizedPoints(points) {
+      return (Array.isArray(points) ? points : []).map(p => {
+        const point = (p && typeof p === 'object') ? p : {};
+        return Object.assign({}, point, {
+          _time_ms: safeMs(point.time_ms),
+          _value: finiteNum(point.value, 0),
+        });
+      });
     }
     function drawChart(status) {
       const canvas = document.getElementById('chart');
@@ -215,20 +237,21 @@
       }
       const metric = status.selected_metric || 'damage';
       const stroke = metricColor(metric);
-      const points = (((status.series || {})[metric] || {}).points || []);
+      const rawPoints = (((status.series || {})[metric] || {}).points || []);
+      const points = normalizedPoints(rawPoints);
       if (!points.length) {
         ctx.fillStyle = muted;
         ctx.font = '14px Microsoft YaHei, sans-serif';
         ctx.fillText('No timeseries data', 48, h / 2);
         return;
       }
-      const minT = Math.min(...points.map(p => Number(p.time_ms || 0)));
-      const maxT = Math.max(...points.map(p => Number(p.time_ms || 0)));
-      const maxV = Math.max(1, ...points.map(p => Number(p.value || 0)));
-      const minV = metric === 'boss_hp_pct' ? 0 : Math.min(0, ...points.map(p => Number(p.value || 0)));
+      const minT = Math.min(...points.map(p => p._time_ms));
+      const maxT = Math.max(...points.map(p => p._time_ms));
+      const maxV = Math.max(1, ...points.map(p => p._value));
+      const minV = metric === 'boss_hp_pct' ? 0 : Math.min(0, ...points.map(p => p._value));
       const plot = { l: 42, t: 28, r: w - 18, b: h - 30 };
-      const xOf = p => plot.l + ((Number(p.time_ms || 0) - minT) / Math.max(1, maxT - minT)) * (plot.r - plot.l);
-      const yOf = p => plot.b - ((Number(p.value || 0) - minV) / Math.max(1, maxV - minV)) * (plot.b - plot.t);
+      const xOf = p => plot.l + ((p._time_ms - minT) / Math.max(1, maxT - minT)) * (plot.r - plot.l);
+      const yOf = p => plot.b - ((p._value - minV) / Math.max(1, maxV - minV)) * (plot.b - plot.t);
       // Flat line, no neon shadow glow (matches the flat Tk reference).
       ctx.strokeStyle = stroke;
       ctx.lineWidth = 2;
@@ -250,7 +273,7 @@
         const metric = document.getElementById('metric').value;
         const topic = document.getElementById('topic').value;
         const query = document.getElementById('query').value;
-        const zoom = Number(document.getElementById('zoom').value || 0);
+        const zoom = safeZoom(document.getElementById('zoom').value);
         const status = await callApi('get_graph_timeseries_status', 'act.graph.status', metric, 120, query, topic, zoom);
         this.render(status);
       },
@@ -260,7 +283,7 @@
         this.render(status);
       },
       async zoom() {
-        const zoom = Number(document.getElementById('zoom').value || 0);
+        const zoom = safeZoom(document.getElementById('zoom').value);
         const status = await callApi('zoom_graph_timeseries', 'act.graph.zoom', zoom, 120);
         this.render(status);
       },
@@ -284,16 +307,17 @@
         await callApi('toggle_graph_timeseries', 'ui.menu_action', 'toggle_graph_timeseries');
       },
       async openLog(ms, topic) {
-        await callApi('show_action_log_at', 'act.action_log.jump_to_time', Number(ms) || 0, 'live', '');
-        document.getElementById('status').textContent = 'Action Log @ ' + ActTime.fmtClock(ms);
+        await callApi('show_action_log_at', 'act.action_log.jump_to_time', safeMs(ms), 'live', '', safeTopic(topic));
+        document.getElementById('status').textContent = 'Action Log @ ' + ActTime.fmtClock(safeMs(ms));
       },
       render(status) {
         status = status || {};
         this.last = status;
         const metric = status.selected_metric || document.getElementById('metric').value || 'damage';
         const metricDef = (status.metrics || []).find(m => m.id === metric) || { label: metric };
-        const points = (((status.series || {})[metric] || {}).points || []);
-        const latest = points.length ? points[points.length - 1].value : 0;
+        const rawPoints = (((status.series || {})[metric] || {}).points || []);
+        const points = normalizedPoints(rawPoints);
+        const latest = points.length ? points[points.length - 1]._value : 0;
         document.getElementById('metric').value = metric;
         document.getElementById('encounter').textContent = 'encounter: ' + (status.encounter_id || 'unknown');
         document.getElementById('chartTitle').textContent = metricDef.label || metric;
@@ -303,10 +327,10 @@
         document.getElementById('rangeValue').textContent = ActTime.fmtDur(status.time_range_ms);
         document.getElementById('status').textContent = status.message || 'OK';
         document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + esc(m.label || m.id) + '</span></div>').join('');
-        const t0 = points.length ? Math.min.apply(null, points.map(p => Number(p.time_ms || 0))) : 0;
+        const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;
         document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
-          const ms = Number(p.time_ms || 0);
-          return '<div class="row" title="' + esc(ActTime.fmtRel(ms, t0)) + '" onclick="GraphTimeseries.openLog(' + ms + ',' + jsArg(p.topic || '') + ')"><span>' + esc(ActTime.fmtClock(ms)) + '</span><span>' + esc(p.topic || '') + '</span><span>' + esc(fmt(p.value)) + '</span></div>';
+          const ms = p._time_ms;
+          return '<div class="row" title="' + esc(ActTime.fmtRel(ms, t0)) + '" onclick="GraphTimeseries.openLog(' + ms + ',' + jsArg(p.topic || '') + ')"><span>' + esc(ActTime.fmtClock(ms)) + '</span><span>' + esc(p.topic || '') + '</span><span>' + esc(fmt(p._value)) + '</span></div>';
         }).join('');
         drawChart(status);
       }

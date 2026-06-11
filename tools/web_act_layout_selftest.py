@@ -158,6 +158,35 @@ def _assert_history_indexes_are_normalized() -> None:
         raise AssertionError("report export history rows must use safeHistoryIndex")
 
 
+def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
+    graph = _read_web("act_graph_timeseries.html")
+    raw_number_snippets = (
+        "Math.min(...points.map(p => Number(p.time_ms || 0)))",
+        "Math.max(...points.map(p => Number(p.time_ms || 0)))",
+        "Math.max(1, ...points.map(p => Number(p.value || 0)))",
+        "Math.min(0, ...points.map(p => Number(p.value || 0)))",
+        "Number(p.time_ms || 0)",
+        "Number(p.value || 0)",
+        "Number(document.getElementById('zoom').value || 0)",
+        "Number(ms) || 0, 'live', ''",
+    )
+    for snippet in raw_number_snippets:
+        if snippet in graph:
+            raise AssertionError("graph timeseries must normalize numeric input before rendering/calling APIs: " + snippet)
+    for snippet in (
+        "function finiteNum",
+        "function safeMs",
+        "function safeZoom",
+        "function normalizedPoints",
+        "const points = normalizedPoints(rawPoints);",
+        "const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;",
+        "await callApi('show_action_log_at', 'act.action_log.jump_to_time', safeMs(ms), 'live', '', safeTopic(topic));",
+        "topic: String(args[3] || '')",
+    ):
+        if snippet not in graph:
+            raise AssertionError("missing safe graph timeseries snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -170,6 +199,7 @@ def main() -> int:
     _assert_drilldown_numbers_are_clamped()
     _assert_act_dynamic_classes_and_widths_are_safe()
     _assert_history_indexes_are_normalized()
+    _assert_graph_numbers_and_jump_topic_are_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

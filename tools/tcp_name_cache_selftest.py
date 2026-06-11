@@ -207,7 +207,7 @@ class TcpNameCacheTests(unittest.TestCase):
 
             def write_skill(text: str, mtime: int) -> None:
                 with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"names": {"by_kind": {"skill": {"2414": {"text": text}}}}}, f, ensure_ascii=False)
+                    json.dump({"names": {"by_kind": {"skill": {"987654321": {"text": text}}}}}, f, ensure_ascii=False)
                 os.utime(path, (mtime, mtime))
 
             write_skill("神圣壁垒", 1)
@@ -219,12 +219,12 @@ class TcpNameCacheTests(unittest.TestCase):
                 name_tables.names.reload()
                 resolver = name_tables.NameResolver()
                 with mock.patch.object(name_tables.json, "load", wraps=original_json_load) as mocked_load:
-                    self.assertEqual(resolver.skill(2414), "神圣壁垒")
-                    self.assertEqual(resolver.skill(2414), "神圣壁垒")
+                    self.assertEqual(resolver.skill(987654321), "神圣壁垒")
+                    self.assertEqual(resolver.skill(987654321), "神圣壁垒")
                     self.assertEqual(mocked_load.call_count, 1)
 
                     write_skill("二段名字", 2)
-                    self.assertEqual(resolver.skill(2414), "二段名字")
+                    self.assertEqual(resolver.skill(987654321), "二段名字")
                     self.assertEqual(mocked_load.call_count, 2)
                 name_tables.names.reload()
 
@@ -255,6 +255,9 @@ class TcpNameCacheTests(unittest.TestCase):
         # hand-curated meta tables consumed by dedicated loaders rather than the
         # NameResolver (element.json -> tools.tablekit.element_meta).
         non_resolver_assets = {"element.json"}
+        static_cache_path = getattr(name_tables, "_STATIC_CACHE_PATH", "")
+        if not static_cache_path:
+            non_resolver_assets.add("static_id_name_cache.json")
         runtime_assets = {
             name for name in os.listdir(name_tables._EXTRACTED)
             if name.endswith(".json")
@@ -269,6 +272,8 @@ class TcpNameCacheTests(unittest.TestCase):
             if os.path.abspath(folder) == os.path.abspath(name_tables._EXTRACTED)
         }
         resolver_assets.add(os.path.basename(name_tables._TCP_PREPARSE_CACHE))
+        if static_cache_path:
+            resolver_assets.add(os.path.basename(static_cache_path))
 
         self.assertFalse(sorted(runtime_assets - resolver_assets))
 

@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.37: ACT Graph Timeseries 数值渲染与跳转参数修复.
+
+  1) `web/act_graph_timeseries.html` 修复时间序列点位数值渲染。
+     图表绘制、最新值和点位列表现在统一使用有限数 helper 规整
+     `time_ms/value`, 避免异常数据生成 `NaN` 坐标导致曲线断绘或列表显示异常。
+
+  2) `web/act_graph_timeseries.html`、`web/pywebview-shim.js`、`sao_webview.py`
+     与 `act_platform/runtime.py` 修复 Action Log 跳转的 topic 传参。
+     从图表点钻取到行为日志时会把点位 topic 作为可选过滤参数一路传递,
+     旧调用未传 topic 时仍保持原过滤状态。
+
 ## v4.5.36: ACT 历史报告索引传参修复.
 
   1) `web/act_offline_import.html` 修复离线导入历史加载索引。

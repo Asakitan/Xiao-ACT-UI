@@ -173,11 +173,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             };
         }
         if (name === 'jump_action_log_time') {
-            return {
+            var jumpPayload = {
                 cursor_ms: numericArg(args[0], 0), limit: numericArg(args[1], 80),
                 source: String(args[2] || 'live'), encounter_id: String(args[3] || ''),
                 offset: numericArg(args[4], 0)
             };
+            if (args.length > 5) jumpPayload.topic = String(args[5] || '');
+            return jumpPayload;
         }
         if (name === 'copy_action_log') {
             return {
@@ -261,7 +263,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         refresh: function (options) { options = options || {}; return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
         search: function () { pageOffset = 0; return apiCall('search_action_log', [query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
         filter: function () { pageOffset = 0; return apiCall('filter_action_log', [topic.value || '', query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
-        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset, topic.value || '']).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
         copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data, { preserveScroll: true }); showToast('Action log copied'); return data; }); },
         prev: function () { pageOffset = Math.max(0, pageOffset - pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
         next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset += pageLimit; return ActionLog.refresh({ preserveScroll: false }); },
