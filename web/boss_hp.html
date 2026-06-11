@@ -1455,7 +1455,7 @@ function _triggerBreakBurst() {
 /* ── Shard generator for break/shield shatter ── */
 function _spawnShards(container, type, wave) {
     var isShield = type === 'shield';
-    wave = Number(wave || 0);
+    wave = _clampInt(wave, 0, 0, 4);
     var count = isShield ? (6 + wave * 3) : (9 + wave * 4);
     var w = container.offsetWidth || (isShield ? 560 : 620);
     var h = container.offsetHeight || (isShield ? 60 : 108);

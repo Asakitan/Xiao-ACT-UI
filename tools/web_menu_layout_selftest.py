@@ -131,6 +131,9 @@ def main() -> int:
         "var sizeMb = (s.size || 0) / 1024 / 1024;",
         "var pct = Math.round((s.progress || 0) * 100);",
         "var total = Number(_sessionPlayersPayload.count || rows.length || 0);",
+        "slots.push(parseInt(el.getAttribute('data-slot')));",
+        "var slot = parseInt(el.getAttribute('data-slot'));",
+        "cfg.watched_slots.indexOf(slot) >= 0",
     ]
     for pattern in menu_raw_patterns:
         if pattern in html:
@@ -148,6 +151,13 @@ def main() -> int:
         "var sizeMb = sizeBytes / 1024 / 1024;",
         "var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);",
         "var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);",
+        "function _slotId(value)",
+        "var slot = _slotId(el.getAttribute('data-slot'));",
+        "if (slot != null) slots.push(slot);",
+        "var restoredSlots = {};",
+        "cfg.watched_slots.forEach(function(slotValue) {",
+        "if (slot != null) restoredSlots[slot] = true;",
+        "if (slot != null && restoredSlots[slot]) {",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:

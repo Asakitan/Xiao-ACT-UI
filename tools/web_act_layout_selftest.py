@@ -256,6 +256,7 @@ def _assert_boss_hp_additional_units_are_safe() -> None:
         "var _extPct = Number(data.extinction_pct || 0);",
         "parseInt(data.breaking_stage, 10)",
         "var pct = Math.max(0.05, Math.min(1, Number(lastPct || _lastShieldPct || 0.08)));",
+        "wave = Number(wave || 0);",
     ):
         if snippet in boss_hp:
             raise AssertionError("boss HP additional units must sanitize/clamp mini-unit rendering: " + snippet)
@@ -275,6 +276,7 @@ def _assert_boss_hp_additional_units_are_safe() -> None:
         "var _extPct = _unitPct(data.extinction_pct, 0);",
         "var stage = (data.breaking_stage != null) ? _clampInt(data.breaking_stage, -1, -1, 999) : -1;",
         "var pct = Math.max(0.05, _unitPct(lastPct || _lastShieldPct || 0.08, 0.08));",
+        "wave = _clampInt(wave, 0, 0, 4);",
     ):
         if snippet not in boss_hp:
             raise AssertionError("missing safe boss HP mini-unit snippet: " + snippet)

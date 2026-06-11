@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.67: Boss HP 碎片 wave 与监听槽位参数修复.
+
+  1) `web/boss_hp.html` 修复碎片特效 wave 参数夹取。
+     break/shield shards 现在把 wave 归一化到有限小范围,
+     避免坏值导致碎片不渲染或异常生成过多节点。
+
+  2) `web/menu.html` 修复 watched slots 保存/恢复参数。
+     槽位 ID 现在统一归一化到 1..9,
+     避免 `NaN` 或字符串槽位破坏桥接 payload 与恢复高亮。
+
 ## v4.5.66: DPS resize 与 HP burst 槽位参数修复.
 
   1) `web/dps.html` 修复详情面板 resize 参数夹取。

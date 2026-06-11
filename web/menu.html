@@ -4882,6 +4882,12 @@ function _clampNum(value, fallback, lo, hi) {
 function _clampInt(value, fallback, lo, hi) {
     return Math.round(_clampNum(value, fallback, lo, hi));
 }
+function _slotId(value) {
+    var n = _finiteNum(value, null);
+    if (n == null) return null;
+    n = Math.round(n);
+    return (n >= 1 && n <= 9) ? n : null;
+}
 function _brNumText(value, fallback, hi) {
     var fallbackText = String(fallback == null ? 0 : fallback);
     var n = _clampNum(value, null, 0, hi == null ? null : hi);
@@ -4955,7 +4961,8 @@ document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
 function _saveWatchedSlots() {
     var slots = [];
     document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
-        slots.push(parseInt(el.getAttribute('data-slot')));
+        var slot = _slotId(el.getAttribute('data-slot'));
+        if (slot != null) slots.push(slot);
     });
     if (window.pywebview && window.pywebview.api && window.pywebview.api.set_watched_slots) {
         window.pywebview.api.set_watched_slots(slots);
@@ -6010,9 +6017,14 @@ function restoreMenuSettings(cfg) {
     if (!cfg) return;
     /* Watched slots */
     if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
+        var restoredSlots = {};
+        cfg.watched_slots.forEach(function(slotValue) {
+            var slot = _slotId(slotValue);
+            if (slot != null) restoredSlots[slot] = true;
+        });
         document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
-            var slot = parseInt(el.getAttribute('data-slot'));
-            if (cfg.watched_slots.indexOf(slot) >= 0) {
+            var slot = _slotId(el.getAttribute('data-slot'));
+            if (slot != null && restoredSlots[slot]) {
                 el.classList.add('active');
             } else {
                 el.classList.remove('active');
