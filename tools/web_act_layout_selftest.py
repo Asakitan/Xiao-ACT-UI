@@ -155,13 +155,29 @@ def _assert_history_indexes_are_normalized() -> None:
         raise AssertionError("offline import loadHistory must normalize history index before API call")
     if "Number.isFinite(Number(item._history_index)) ? Number(item._history_index) : idx" in report:
         raise AssertionError("report export history index must clamp finite non-negative integers")
+    for snippet in (
+        "history_limit: numericArg(args[0], 20)",
+        "limit: numericArg(args[0], 20)",
+    ):
+        if snippet in offline or snippet in report:
+            raise AssertionError("ACT history/report limits must clamp fallback payload values: " + snippet)
     for label, source in (("offline import", offline), ("report export", report)):
         if "function safeHistoryIndex" not in source:
             raise AssertionError(f"{label} must provide safeHistoryIndex")
+        if "function safeLimit" not in source:
+            raise AssertionError(f"{label} must provide safeLimit")
     if "OfflineImport.loadHistory(' + safeHistoryIndex(index, i) + ')" not in offline:
         raise AssertionError("offline import history onclick must use safeHistoryIndex")
     if "load_history_report', [safeHistoryIndex(index, 0), true]" not in offline:
         raise AssertionError("offline import loadHistory API call must use safeHistoryIndex")
+    if "history_limit: safeLimit(args[0], 20, 200)" not in offline:
+        raise AssertionError("offline import status payload must clamp history_limit")
+    for snippet in (
+        "limit: safeLimit(args[0], 20, 200), fmt: String(args[1] || 'json')",
+        "limit: safeLimit(args[0], 20, 200), query: String(args[1] || '')",
+    ):
+        if snippet not in report:
+            raise AssertionError("report export payload must clamp limits: " + snippet)
     if "var historyIndex = safeHistoryIndex(item._history_index, idx);" not in report:
         raise AssertionError("report export history rows must use safeHistoryIndex")
 
@@ -244,6 +260,9 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
 def _assert_timeline_speed_is_normalized() -> None:
     timeline = _read_web("act_timeline_vcr.html")
     for snippet in (
+        "limit: numericArg(args[0], 80)",
+        "delta_ms: numericArg(args[0], 1000)",
+        "cursor_ms: numericArg(args[0], 0)",
         "return isFinite(n) ? n : fallback;",
         "speed: numericArg(args[0], 1)",
         "Number(speed.value || 1)",
@@ -251,7 +270,15 @@ def _assert_timeline_speed_is_normalized() -> None:
         if snippet in timeline:
             raise AssertionError("timeline VCR must clamp speed inputs before API calls: " + snippet)
     for snippet in (
+        "function clampIntArg(value, fallback, lo, hi)",
+        "function safeLimit(value)",
+        "function safeDeltaMs(value)",
+        "function safeCursorMs(value)",
+        "if (value == null || value === '') return fallback;",
+        "limit: safeLimit(args[0])",
         "function safeSpeed",
+        "delta_ms: safeDeltaMs(args[0])",
+        "cursor_ms: safeCursorMs(args[0])",
         "speed: safeSpeed(args[0])",
         "apiCall('play_timeline', [safeSpeed(speed.value)])",
         "apiCall('set_timeline_speed', [safeSpeed(speed.value)])",

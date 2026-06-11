@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.70: ACT Timeline 与历史报表 fallback 参数修复.
+
+  1) `web/act_timeline_vcr.html` 修复 Timeline fallback 数值参数。
+     timeline status/step/seek payload 现在夹取 limit、delta_ms 与 cursor_ms,
+     避免异常参数导致跳转范围或单步跨度失控。
+
+  2) `web/act_report_export.html` 与 `web/act_offline_import.html` 修复历史 limit。
+     report/history/offline-import fallback payload 现在夹取 limit 到安全范围,
+     避免坏 limit 进入报表历史查询。
+
 ## v4.5.69: ACT Drilldown 与 Graph fallback 参数修复.
 
   1) `web/act_skill_drilldown.html` 修复 fallback limit 参数。

@@ -158,8 +158,14 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
 
     function numericArg(value, fallback) {
+        if (value == null || value === '') return fallback;
         var number = Number(value);
         return isFinite(number) ? number : fallback;
+    }
+    function safeLimit(value, fallback, hi) {
+        var number = Math.round(numericArg(value, fallback == null ? 20 : fallback));
+        if (!isFinite(number)) number = fallback == null ? 20 : fallback;
+        return Math.max(1, Math.min(hi == null ? 200 : hi, number));
     }
 
     function safeHistoryIndex(value, fallback) {
@@ -171,14 +177,14 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
     function reportPayload(name, args) {
         args = args || [];
-        if (name === 'get_report_export_status') return { limit: numericArg(args[0], 20), fmt: String(args[1] || 'json') };
+        if (name === 'get_report_export_status') return { limit: safeLimit(args[0], 20, 200), fmt: String(args[1] || 'json') };
         if (name === 'export_last_report' || name === 'copy_report_export') return { fmt: String(args[0] || 'json') };
         if (name === 'get_mini_parse_status' || name === 'preview_mini_parse' || name === 'copy_mini_parse') {
             return { formatter_id: String(args[0] || 'summary_table') };
         }
         if (name === 'get_selective_parsing_status' || name === 'clear_selective_parsing') return {};
         if (name === 'update_selective_parsing') return { policy: args[0] || {} };
-        if (name === 'get_history_status') return { limit: numericArg(args[0], 20), query: String(args[1] || '') };
+        if (name === 'get_history_status') return { limit: safeLimit(args[0], 20, 200), query: String(args[1] || '') };
         if (name === 'load_history_report') return { index: safeHistoryIndex(args[0], 0), show: args[1] !== false };
         if (name === 'delete_history_report') return { index: safeHistoryIndex(args[0], 0) };
         if (name === 'clear_history_reports' || name === 'choose_offline_import_file') return {};

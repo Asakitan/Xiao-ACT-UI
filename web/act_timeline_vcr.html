@@ -122,9 +122,25 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
     function numericArg(value, fallback) {
+        if (value == null || value === '') return fallback;
         var n = Number(value);
         if (!isFinite(n)) n = Number(fallback || 0);
         return isFinite(n) ? n : 0;
+    }
+    function clampIntArg(value, fallback, lo, hi) {
+        var n = Math.round(numericArg(value, fallback));
+        if (lo != null) n = Math.max(lo, n);
+        if (hi != null) n = Math.min(hi, n);
+        return n;
+    }
+    function safeLimit(value) {
+        return clampIntArg(value, 80, 1, 500);
+    }
+    function safeDeltaMs(value) {
+        return clampIntArg(value, 1000, -86400000, 86400000);
+    }
+    function safeCursorMs(value) {
+        return clampIntArg(value, 0, 0, 86400000);
     }
     function safeSpeed(value) {
         var n = numericArg(value, 1);
@@ -137,11 +153,11 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function timelinePayload(name, args) {
         args = args || [];
-        if (name === 'get_timeline_status') return { limit: numericArg(args[0], 80), query: String(args[1] || '') };
+        if (name === 'get_timeline_status') return { limit: safeLimit(args[0]), query: String(args[1] || '') };
         if (name === 'play_timeline') return { speed: safeSpeed(args[0]) };
         if (name === 'pause_timeline') return {};
-        if (name === 'step_timeline') return { delta_ms: numericArg(args[0], 1000) };
-        if (name === 'seek_timeline') return { cursor_ms: numericArg(args[0], 0) };
+        if (name === 'step_timeline') return { delta_ms: safeDeltaMs(args[0]) };
+        if (name === 'seek_timeline') return { cursor_ms: safeCursorMs(args[0]) };
         if (name === 'set_timeline_speed') return { speed: safeSpeed(args[0]) };
         if (name === 'filter_timeline') return { query: String(args[0] || '') };
         if (name === 'toggle_timeline_vcr') return { action: 'toggle_timeline_vcr' };

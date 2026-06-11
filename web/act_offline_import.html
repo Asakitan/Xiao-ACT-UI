@@ -116,7 +116,16 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var toastTimer = null;
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
-    function numericArg(value, fallback) { var number = Number(value); return isFinite(number) ? number : fallback; }
+    function numericArg(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function safeLimit(value, fallback, hi) {
+        var number = Math.round(numericArg(value, fallback == null ? 20 : fallback));
+        if (!isFinite(number)) number = fallback == null ? 20 : fallback;
+        return Math.max(1, Math.min(hi == null ? 200 : hi, number));
+    }
     function safeHistoryIndex(value, fallback) {
         var number = Number(value);
         if (!isFinite(number) || number < 0) number = Number(fallback || 0);
@@ -125,7 +134,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function offlinePayload(name, args) {
         args = args || [];
-        if (name === 'get_offline_import_status') return { history_limit: numericArg(args[0], 20) };
+        if (name === 'get_offline_import_status') return { history_limit: safeLimit(args[0], 20, 200) };
         if (name === 'choose_offline_import_file') return {};
         if (name === 'import_offline_report') {
             return { path: String(args[0] || ''), persist: args[1] !== false, show: args[2] !== false };
