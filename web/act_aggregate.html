@@ -182,6 +182,10 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         });
     }
     function num(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
+    function pctWidth(ratio) {
+        ratio = num(ratio);
+        return (Math.max(0, Math.min(1, ratio)) * 100).toFixed(1);
+    }
 
     // _fmt parity with Tk: >=1e6 -> m, >=1e3 -> k, integer -> int, else 2dp
     function fmt(value) {
@@ -286,7 +290,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                     + '<span class="aca-row-value">' + fmtHtml(val) + ' · ' + (g.count || 0) + 'x</span>'
                     + '</div>'
                     + '<div class="aca-row-meta">' + esc(groupMeta(g)) + '</div>'
-                    + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div>'
+                    + '<div class="aca-bar"><div class="aca-fill" style="width:' + pctWidth(ratio) + '%;"></div></div>'
                     + (isOpen ? drawer(g, kind) : '')
                     + '</div>';
             });
@@ -314,7 +318,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 + '<span class="aca-row-title">' + d[1] + '</span>'
                 + '<span class="aca-row-value">' + fmtHtml(latest) + '</span></div>'
                 + '<div class="aca-row-meta">' + pts.length + ' 个采样点 · 峰值 ' + fmt(peak) + '</div>'
-                + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div>';
+                + '<div class="aca-bar"><div class="aca-fill" style="width:' + pctWidth(ratio) + '%;"></div></div></div>';
         });
         var sectionCollapsed = !!collapsedSections.graph;
         return '<div class="aca-section" data-section-key="graph" style="--acc:' + acc('cyan') + ';">'

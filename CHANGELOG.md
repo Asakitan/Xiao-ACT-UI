@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.35: ACT Web 动态样式渲染修复.
+
+  1) `web/act_timeline_vcr.html` 修复事件 topic class 渲染。
+     时间线事件不再把原始 topic 文本直接拼成 CSS class,
+     改用安全分类 helper, 并让 damage/death 类事件稳定使用红色强调样式。
+
+  2) `web/act_aggregate.html` 修复聚合条形宽度渲染。
+     section row 与 graph preview 的 bar width 现在通过 `pctWidth()`
+     夹到 0..100%, 避免负数、NaN 或异常 ratio 造成条形溢出/消失。
+
 ## v4.5.34: ACT Drilldown 数值渲染夹取修复.
 
   1) `web/act_combatant_drilldown.html` 修复技能条宽度计算。

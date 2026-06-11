@@ -121,6 +121,23 @@ def _assert_drilldown_numbers_are_clamped() -> None:
             raise AssertionError("missing safe skill drilldown numeric snippet: " + snippet)
 
 
+def _assert_act_dynamic_classes_and_widths_are_safe() -> None:
+    timeline = _read_web("act_timeline_vcr.html")
+    aggregate = _read_web("act_aggregate.html")
+    if "'<article class=\"event ' + esc(ev.topic || '')" in timeline:
+        raise AssertionError("timeline VCR must not use raw event topic text as a CSS class")
+    if "function eventTopicClass" not in timeline:
+        raise AssertionError("timeline VCR must classify event topics through a safe class helper")
+    if "'<article class=\"event' + eventTopicClass(ev.topic || '')" not in timeline:
+        raise AssertionError("timeline VCR event row must use the safe topic class helper")
+    if "(ratio * 100).toFixed(1)" in aggregate:
+        raise AssertionError("aggregate bar widths must clamp ratios before rendering CSS width")
+    if "function pctWidth" not in aggregate:
+        raise AssertionError("aggregate renderer must provide a clamped width helper")
+    if "style=\"width:' + pctWidth(ratio) + '%;" not in aggregate:
+        raise AssertionError("aggregate bars must render width through pctWidth(ratio)")
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -131,6 +148,7 @@ def main() -> int:
     _assert_selector_scroll("plugin_manager.html", ".side-panel", "plugin manager")
     _assert_inline_js_args_are_escaped()
     _assert_drilldown_numbers_are_clamped()
+    _assert_act_dynamic_classes_and_widths_are_safe()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

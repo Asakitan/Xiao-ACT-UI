@@ -125,6 +125,11 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var n = Number(value);
         return isFinite(n) ? n : fallback;
     }
+    function eventTopicClass(topic) {
+        topic = String(topic || '').toLowerCase();
+        if (topic.indexOf('damage') >= 0 || topic.indexOf('death') >= 0) return ' damage';
+        return '';
+    }
     function timelinePayload(name, args) {
         args = args || [];
         if (name === 'get_timeline_status') return { limit: numericArg(args[0], 80), query: String(args[1] || '') };
@@ -180,7 +185,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         setListHtml(events.map(function (ev, idx) {
             var key = eventKey(ev, idx);
             var open = !!expandedEvents[key];
-            return '<article class="event ' + esc(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(ev.payload || {})) + '</pre></article>';
+            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(ev.payload || {})) + '</pre></article>';
         }).join(''), preserveScroll);
     }
     window.TimelineVcr = {
