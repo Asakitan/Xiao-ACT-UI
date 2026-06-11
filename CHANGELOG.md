@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.14: WebView2 BossRaid 实体角色与菜单阶段按钮修复.
+
+  1) C# `BossRaidEngine` 补齐 Python 对齐的 `SetEntityRole(uuid, role)`,
+     WebView2 `set_entity_role()` 现在会真正切换 tracked entity 的 boss/enemy
+     角色, 并在指定新 boss 时降级旧 boss。
+
+  2) `web/pywebview-shim.js` 补齐菜单动态调用使用的
+     `boss_raid_next_phase()` / `boss_raid_reset()` 兼容别名。
+     `menu.html` 的 BossRaid NEXT PHASE / RESET 按钮不再因为字符串 API 名不匹配失效。
+
 ## v4.5.13: WebView2 Raid Editor 阶段推进与重置桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `raid_next_phase()` 并新增

@@ -301,6 +301,64 @@ public sealed class BossRaidEngine
         }
         if (changed) try { StateChanged?.Invoke(); } catch { /* swallow */ }
     }
+
+    /// <summary>P1 / BR-1: explicit visual-editor role override. Mirrors
+    /// Python's <c>set_entity_role</c>: marking one entity as boss demotes
+    /// any prior boss, while demoting the current boss clears the manual pin.</summary>
+    public bool SetEntityRole(long uuid, string role)
+    {
+        var normalized = (role ?? string.Empty).Trim().ToLowerInvariant();
+        if (uuid == 0 || normalized is not ("boss" or "enemy")) return false;
+
+        bool changed = false;
+        lock (_gate)
+        {
+            if (!_entities.TryGetValue(uuid, out var target)) return false;
+
+            if (normalized == "boss")
+            {
+                foreach (var existingUuid in _entityOrder)
+                {
+                    if (existingUuid == uuid) continue;
+                    if (_entities.TryGetValue(existingUuid, out var existing)
+                        && string.Equals(existing.Role, "boss", StringComparison.Ordinal))
+                    {
+                        _entities[existingUuid] = existing with { Role = "enemy" };
+                        changed = true;
+                    }
+                }
+
+                if (!string.Equals(target.Role, "boss", StringComparison.Ordinal))
+                {
+                    _entities[uuid] = target with { Role = "boss" };
+                    changed = true;
+                }
+                if (_bossUuid != uuid || !_bossManuallySet)
+                {
+                    _bossUuid = uuid;
+                    _bossManuallySet = true;
+                    changed = true;
+                }
+            }
+            else
+            {
+                if (!string.Equals(target.Role, "enemy", StringComparison.Ordinal))
+                {
+                    _entities[uuid] = target with { Role = "enemy" };
+                    changed = true;
+                }
+                if (_bossUuid == uuid)
+                {
+                    _bossUuid = 0;
+                    _bossManuallySet = false;
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed) try { StateChanged?.Invoke(); } catch { /* swallow */ }
+        return true;
+    }
 }
 
 public sealed record RaidPhase(

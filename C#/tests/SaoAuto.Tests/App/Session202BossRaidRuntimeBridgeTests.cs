@@ -70,6 +70,63 @@ public class Session202BossRaidRuntimeBridgeTests
     }
 
     [Fact]
+    public void SetEntityRolePromotesAndDemotesTrackedEntities()
+    {
+        var router = new BridgeRouter();
+        var engine = new BossRaidEngine();
+        using var bridge = new BossRaidRuntimeBridge(router, engine);
+        engine.Start(new[] { new RaidPhase(0, "P1", 30) });
+        engine.OnDamageEvent(0xABC, 100, true, true, false, false, false, "First");
+        engine.OnDamageEvent(0xDEF, 50, true, true, false, false, false, "Second");
+
+        var promote = router.Dispatch(Cmd(BridgeCommands.RaidSetEntityRole, new JsonObject
+        {
+            ["uuid"] = 0xDEF,
+            ["role"] = "boss",
+        }))!.Payload!;
+
+        Assert.True(promote["ok"]!.GetValue<bool>());
+        Assert.Equal("set_entity_role", promote["command"]!.GetValue<string>());
+        Assert.Equal(0xDEF, promote["uuid"]!.GetValue<long>());
+        Assert.Equal("boss", promote["role"]!.GetValue<string>());
+        Assert.Equal(0xDEF, engine.BossUuid);
+        var entities = engine.Entities;
+        Assert.Equal("enemy", entities.Single(e => e.Uuid == 0xABC).Role);
+        Assert.Equal("boss", entities.Single(e => e.Uuid == 0xDEF).Role);
+        Assert.Equal("boss", promote["entities"]!.AsArray()[1]!["role"]!.GetValue<string>());
+
+        var demote = router.Dispatch(Cmd(BridgeCommands.RaidSetEntityRole, new JsonObject
+        {
+            ["uuid"] = 0xDEF,
+            ["role"] = "enemy",
+        }))!.Payload!;
+
+        Assert.True(demote["ok"]!.GetValue<bool>());
+        Assert.Equal(0, engine.BossUuid);
+        Assert.All(engine.Entities, entity => Assert.Equal("enemy", entity.Role));
+    }
+
+    [Fact]
+    public void SetEntityRoleRejectsUnknownEntity()
+    {
+        var router = new BridgeRouter();
+        var engine = new BossRaidEngine();
+        using var bridge = new BossRaidRuntimeBridge(router, engine);
+        engine.Start(new[] { new RaidPhase(0, "P1", 30) });
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.RaidSetEntityRole, new JsonObject
+        {
+            ["uuid"] = 0xABC,
+            ["role"] = "boss",
+        }));
+        var payload = reply!.Payload!;
+
+        Assert.False(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("entity_not_found", payload["error"]!.GetValue<string>());
+        Assert.Equal(0xABC, payload["uuid"]!.GetValue<long>());
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
@@ -78,11 +135,13 @@ public class Session202BossRaidRuntimeBridgeTests
 
         Assert.Contains(BridgeCommands.RaidNextPhase, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.RaidReset, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.RaidSetEntityRole, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.RaidNextPhase, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.RaidReset, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.RaidSetEntityRole, router.RegisteredCommands);
     }
 
     [Fact]
@@ -96,6 +155,7 @@ public class Session202BossRaidRuntimeBridgeTests
 
         Assert.Contains(BridgeCommands.RaidNextPhase, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.RaidReset, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.RaidSetEntityRole, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.RaidReset));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -104,6 +164,7 @@ public class Session202BossRaidRuntimeBridgeTests
 
         Assert.DoesNotContain(BridgeCommands.RaidNextPhase, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.RaidReset, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.RaidSetEntityRole, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]

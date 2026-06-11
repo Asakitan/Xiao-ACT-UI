@@ -76,6 +76,51 @@ public class BossRaidEngineTests
         Assert.Equal(1, endedCount);
     }
 
+    [Fact]
+    public void SetEntityRolePromotesOneBossAndDemotesPreviousBoss()
+    {
+        var engine = new BossRaidEngine();
+        engine.Start(new[] { new RaidPhase(0, "P1", 60) });
+        engine.OnDamageEvent(0xABC, 100, true, true, false, false, false, "First");
+        engine.OnDamageEvent(0xDEF, 50, true, true, false, false, false, "Second");
+
+        Assert.True(engine.SetEntityRole(0xDEF, "boss"));
+
+        Assert.Equal(0xDEF, engine.BossUuid);
+        var entities = engine.Entities;
+        Assert.Equal("enemy", entities.Single(e => e.Uuid == 0xABC).Role);
+        Assert.Equal("boss", entities.Single(e => e.Uuid == 0xDEF).Role);
+    }
+
+    [Fact]
+    public void SetEntityRoleDemotingCurrentBossClearsManualPin()
+    {
+        var engine = new BossRaidEngine();
+        engine.Start(new[] { new RaidPhase(0, "P1", 60) });
+        engine.OnDamageEvent(0xABC, 100, true, true, false, false, false, "First");
+
+        Assert.True(engine.SetEntityRole(0xABC, "enemy"));
+
+        Assert.Equal(0, engine.BossUuid);
+        Assert.Equal("enemy", engine.Entities.Single().Role);
+        engine.OnDamageEvent(0xABC, 50, true, true, false, false, false, "First");
+        Assert.Equal(0xABC, engine.BossUuid);
+        Assert.Equal("boss", engine.Entities.Single().Role);
+    }
+
+    [Fact]
+    public void SetEntityRoleRejectsUnknownOrInvalidInput()
+    {
+        var engine = new BossRaidEngine();
+        engine.Start(new[] { new RaidPhase(0, "P1", 60) });
+        engine.OnDamageEvent(0xABC, 100, true, true, false, false, false, "First");
+
+        Assert.False(engine.SetEntityRole(0xDEF, "boss"));
+        Assert.False(engine.SetEntityRole(0xABC, "healer"));
+        Assert.False(engine.SetEntityRole(0, "boss"));
+        Assert.Equal(0xABC, engine.BossUuid);
+    }
+
     private sealed class TestClock
     {
         public DateTimeOffset Now { get; private set; }

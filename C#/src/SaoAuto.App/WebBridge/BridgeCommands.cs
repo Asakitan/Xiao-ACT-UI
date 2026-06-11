@@ -53,6 +53,7 @@ public static class BridgeCommands
     public const string GetBossRaidState = "bossraid.state.get";
     public const string RaidNextPhase = "bossraid.runtime.next_phase";
     public const string RaidReset = "bossraid.runtime.reset";
+    public const string RaidSetEntityRole = "bossraid.runtime.set_entity_role";
 
     // Commander
     public const string OpenCommander = "commander.open";

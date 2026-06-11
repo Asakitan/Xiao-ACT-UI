@@ -233,6 +233,20 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "bossraid.runtime.reset", "raid_reset command mismatch");
 
+  await window.pywebview.api.set_entity_role(1001, "boss");
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.runtime.set_entity_role", "set_entity_role command mismatch");
+  assert(last.payload.uuid === 1001, "set_entity_role uuid was not forwarded");
+  assert(last.payload.role === "boss", "set_entity_role role was not forwarded");
+
+  await window.pywebview.api.boss_raid_next_phase();
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.runtime.next_phase", "boss_raid_next_phase command mismatch");
+
+  await window.pywebview.api.boss_raid_reset();
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.runtime.reset", "boss_raid_reset command mismatch");
+
   await window.pywebview.api.browse_dir("C:\\temp");
   last = calls[calls.length - 1];
   assert(last.name === "file.browse_dir", "browse_dir command mismatch");

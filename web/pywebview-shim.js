@@ -136,6 +136,18 @@
         raid_reset: function () {
             return call('bossraid.runtime.reset', {}).then(normalizeOk);
         },
+        set_entity_role: function (uuid, role) {
+            return call('bossraid.runtime.set_entity_role', {
+                uuid: uuid,
+                role: String(role || '')
+            }).then(normalizeOk);
+        },
+        boss_raid_next_phase: function () {
+            return call('bossraid.runtime.next_phase', {}).then(normalizeOk);
+        },
+        boss_raid_reset: function () {
+            return call('bossraid.runtime.reset', {}).then(normalizeOk);
+        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },
