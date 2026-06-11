@@ -248,6 +248,14 @@ def _assert_boss_hp_additional_units_are_safe() -> None:
         "var hpPct = (u.hp_pct || 0);",
         "var breakPct = (u.extinction_pct || 1.0);",
         "'<span class=\"name\">' + name + '</span>'",
+        "var pct = Math.max(0, Math.min(1, Number(data.hp_pct || 0)));",
+        "String(data.hp_source || '') === 'packet' && Number(data.total_hp || 0) > 0",
+        "var shieldPct = Math.max(0, Math.min(pct, Number(data.shield_pct || 0)));",
+        "var _rawExt = Number(data.extinction || 0);",
+        "var _rawMaxExt = Number(data.max_extinction || 0);",
+        "var _extPct = Number(data.extinction_pct || 0);",
+        "parseInt(data.breaking_stage, 10)",
+        "var pct = Math.max(0.05, Math.min(1, Number(lastPct || _lastShieldPct || 0.08)));",
     ):
         if snippet in boss_hp:
             raise AssertionError("boss HP additional units must sanitize/clamp mini-unit rendering: " + snippet)
@@ -257,6 +265,16 @@ def _assert_boss_hp_additional_units_are_safe() -> None:
         "var hpPct = _unitPct(u.hp_pct, 0);",
         "var breakPct = _unitPct(u.extinction_pct, 1.0);",
         "'<span class=\"name\">' + _escHtml(name) + '</span>'",
+        "function _nonNegNum",
+        "function _clampInt",
+        "var pct = _unitPct(data.hp_pct, 0);",
+        "String(data.hp_source || '') === 'packet' && _nonNegNum(data.total_hp || 0, 0) > 0",
+        "var shieldPct = Math.min(pct, _unitPct(data.shield_pct, 0));",
+        "var _rawExt = _nonNegNum(data.extinction || 0, 0);",
+        "var _rawMaxExt = _nonNegNum(data.max_extinction || 0, 0);",
+        "var _extPct = _unitPct(data.extinction_pct, 0);",
+        "var stage = (data.breaking_stage != null) ? _clampInt(data.breaking_stage, -1, -1, 999) : -1;",
+        "var pct = Math.max(0.05, _unitPct(lastPct || _lastShieldPct || 0.08, 0.08));",
     ):
         if snippet not in boss_hp:
             raise AssertionError("missing safe boss HP mini-unit snippet: " + snippet)

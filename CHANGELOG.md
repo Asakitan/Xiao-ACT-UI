@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.44: Boss HP 主条数值渲染修复.
+
+  1) `web/boss_hp.html` 修复主 Boss HP/Shield 百分比和文本渲染。
+     主血量百分比、packet HP 文本、护盾百分比与护盾 ghost 宽度现在统一走有限数钳制,
+     避免异常运行时数据渲染出 `NaN%`、`NaN/NaN` 或错误 class 状态。
+
+  2) `web/boss_hp.html` 修复破防条数值和阶段状态传递。
+     extinction/max extinction、预计算 extinction_pct 和 breaking_stage 现在统一规整,
+     避免 `NaN` 进入破防条宽度、文本和状态机。
+
 ## v4.5.43: Web 菜单运行时数值参数修复.
 
   1) `web/menu.html` 修复 DPS idle timeout 控件传参。
