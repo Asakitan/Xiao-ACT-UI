@@ -105,9 +105,33 @@ def boss_skills(rd, pool, boss_ids, log) -> dict:
     return res
 
 
+def enumerate_raids(rd, pool, log) -> dict:
+    """RaidDungeonTable → {dungeon_id: {name, difficulty, group_id, bosses[]}}; 只留有名
+    有 boss 的真 raid 行 (滤掉空名/活动占位行)。返回 (raids, all_boss_ids)。"""
+    cls = TABLE_CLASS["raid_dungeon"]
+    C = {k: v[0] for k, v in table_columns.load_columns([cls], log=lambda *a: None)[cls].items()}
+    raids, all_boss = {}, set()
+    for rp, zl, blob in rd.iter_rows(cls, limit=20000):
+        did = rd.col_i32(blob, C.get("DungeonId"))
+        if not did:
+            continue
+        nm = pool.resolve(rd.col_mlid(blob, C.get("Name")))
+        bosses = [int(b) for b in (rd.col_i32_array(zl, blob, C.get("BossId")) or []) if b]
+        if not nm or not bosses:
+            continue                      # 滤掉占位/活动行
+        raids[int(did)] = {
+            "name": nm, "difficulty": rd.col_i32(blob, C.get("Difficult")),
+            "group_id": rd.col_i32(blob, C.get("GroupId")), "bosses": bosses,
+        }
+        all_boss.update(bosses)
+    log("[name-cache] raid 行=%d, 去重 boss=%d" % (len(raids), len(all_boss)))
+    return raids, all_boss
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--boss", type=int, nargs="*", default=[102800, 102801])
+    ap.add_argument("--boss", type=int, nargs="*", default=None,
+                    help="额外指定 boss id; 不给则自动发现全部 raid boss")
     ap.add_argument("--out", default=_CACHE)
     args = ap.parse_args()
     log = lambda m: print(m, flush=True)
@@ -125,18 +149,31 @@ def main():
     for kind in ("skill", "buff", "monster"):
         cache[kind] = {str(k): v for k, v in enumerate_table(rd, pool, kind, log).items()}
 
-    bs = boss_skills(rd, pool, args.boss, log) if args.boss else {}
+    # 自动发现 3 个 raid 的全部 boss + 各 boss 技能
+    raids, all_boss = enumerate_raids(rd, pool, log)
+    boss_ids = sorted(set(all_boss) | set(args.boss or []))
+    bs = boss_skills(rd, pool, boss_ids, log) if boss_ids else {}
+    mnames = cache["monster"]      # boss 名直接取 monster 段
+    cache["raids"] = {str(d): {**v, "boss_names": [mnames.get(str(b), "") for b in v["bosses"]]}
+                      for d, v in raids.items()}
     cache["boss_skills"] = {str(b): {str(k): v for k, v in d.items()} for b, d in bs.items()}
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=1)
-    log("[name-cache] 写入 %s (skill=%d buff=%d monster=%d)"
-        % (args.out, len(cache["skill"]), len(cache["buff"]), len(cache["monster"])))
-    for b, d in bs.items():
-        log("\n== boss %d 技能 ==" % b)
-        for sid, nm in sorted(d.items()):
-            log("  %d → %s" % (sid, nm or "(无名)"))
+    log("[name-cache] 写入 %s (skill=%d buff=%d monster=%d raid=%d boss=%d)"
+        % (args.out, len(cache["skill"]), len(cache["buff"]), len(cache["monster"]),
+           len(cache["raids"]), len(cache["boss_skills"])))
+    # 按 raid 名分组汇总
+    from collections import defaultdict
+    by_name = defaultdict(set)
+    for d, v in raids.items():
+        by_name[v["name"]].update(v["bosses"])
+    for rname, bset in by_name.items():
+        log("\n== raid 《%s》 boss(%d) ==" % (rname, len(bset)))
+        for b in sorted(bset):
+            d = bs.get(b, {})
+            log("  boss %d %s — %d 技能" % (b, mnames.get(str(b), ""), len(d)))
     return 0
 
 
