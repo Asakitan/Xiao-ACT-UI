@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.43: Web 菜单运行时数值参数修复.
+
+  1) `web/menu.html` 修复 DPS idle timeout 控件传参。
+     菜单中的 DPS 空闲隐藏/结算秒数现在夹到 0..120 并回写控件显示,
+     避免负数或异常值传入设置接口。
+
+  2) `web/menu.html` 与 `web/pywebview-shim.js` 修复运行时 API 数值转发。
+     Boss/AutoKey 联动全局 CD 在菜单侧夹到 0..60,
+     WebView2 shim 的 `set_dps_fade_timeout()` 也会把直接调用夹到 0..120。
+
 ## v4.5.42: Web 菜单表单数值参数修复.
 
   1) `web/menu.html` 修复 AutoKey 编辑器整数表单。

@@ -115,8 +115,8 @@
             return call('settings.set_boss_bar_mode', { mode: String(mode || 'boss_raid') }).then(normalizeOk);
         },
         set_dps_fade_timeout: function (seconds) {
-            var value = parseInt(seconds, 10);
-            if (!isFinite(value)) value = 0;
+            var value = Math.round(finiteNumber(seconds, 0));
+            value = Math.max(0, Math.min(120, value));
             return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
         },
         set_data_source: function (mode) {

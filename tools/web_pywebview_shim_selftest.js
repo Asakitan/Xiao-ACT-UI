@@ -214,6 +214,12 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "settings.set_dps_fade_timeout", "set_dps_fade_timeout command mismatch");
   assert(last.payload.seconds === 12, "set_dps_fade_timeout seconds were not forwarded");
+  await window.pywebview.api.set_dps_fade_timeout(-5);
+  last = calls[calls.length - 1];
+  assert(last.payload.seconds === 0, "set_dps_fade_timeout should clamp negative seconds");
+  await window.pywebview.api.set_dps_fade_timeout(999);
+  last = calls[calls.length - 1];
+  assert(last.payload.seconds === 120, "set_dps_fade_timeout should clamp oversized seconds");
 
   await window.pywebview.api.set_data_source("memory");
   last = calls[calls.length - 1];

@@ -7280,7 +7280,9 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
 })();
 
 function _setDpsFadeTimeout(val) {
-    var v = parseInt(val) || 0;
+    var v = _clampInt(val, 0, 0, 120);
+    var el = document.getElementById('dps-fade-timeout');
+    if (el) el.value = v;
     if (window.pywebview && window.pywebview.api && window.pywebview.api.set_dps_fade_timeout) {
         window.pywebview.api.set_dps_fade_timeout(v);
     }
@@ -7327,7 +7329,7 @@ function _initLinkageUI() {
         var s = resp.state;
         document.getElementById('linkage-enabled').checked = s.enabled;
         document.getElementById('linkage-debug').checked = s.debug_log;
-        document.getElementById('linkage-global-cd').value = s.global_cooldown_s || 1.0;
+        document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);
         _linkageMappings = s.mappings || [];
         _renderLinkageMappings();
     });
@@ -7414,7 +7416,10 @@ function _saveLinkageMappings() {
 function _setLinkageGlobalCD(val) {
     var api = window.pywebview && window.pywebview.api;
     if (api && api.set_linkage_global_cooldown) {
-        api.set_linkage_global_cooldown(parseFloat(val) || 1.0);
+        var seconds = _clampNum(val, 1.0, 0, 60);
+        var el = document.getElementById('linkage-global-cd');
+        if (el) el.value = seconds;
+        api.set_linkage_global_cooldown(seconds);
     }
 }
 

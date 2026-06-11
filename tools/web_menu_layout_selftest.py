@@ -135,6 +135,8 @@ def main() -> int:
     auto_key_raw_patterns = [
         "if (kind === 'int') value = parseInt(value || 0, 10) || 0;",
         "Math.round(Number(condition.value || 0) * 100)",
+        "var v = parseInt(val) || 0;",
+        "api.set_linkage_global_cooldown(parseFloat(val) || 1.0);",
     ]
     for pattern in auto_key_raw_patterns:
         if pattern in html:
@@ -148,6 +150,10 @@ def main() -> int:
         "_akIntValue('post_delay_ms', action.post_delay_ms || 0)",
         "if (kind === 'int') value = _akIntValue(fieldName, value);",
         "var pct = _clampNum(value, 0, 0, 100);",
+        "var v = _clampInt(val, 0, 0, 120);",
+        "document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
+        "var seconds = _clampNum(val, 1.0, 0, 60);",
+        "api.set_linkage_global_cooldown(seconds);",
     ]
     for snippet in auto_key_safe_required:
         if snippet not in html:
