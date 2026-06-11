@@ -122,18 +122,16 @@ public sealed class UiRunner
 
         // S193 — sound playback bridge for the pywebview shim.
         // Catalog points at assets/sounds (deployed by S185); player is
-        // the existing WAV implementation. Skipped silently if the
-        // sounds dir was never deployed (e.g. dev tree without assets).
+        // the existing WAV implementation. The bridge is still registered
+        // when assets are missing so menu sound settings remain persistent.
         using var sounds = new WavSoundPlayer(logger: _log);
         var soundsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "sounds");
-        if (System.IO.Directory.Exists(soundsDir))
+        if (!System.IO.Directory.Exists(soundsDir))
         {
-            webBridge.AttachSound(sounds, new SoundCatalog(soundsDir));
+            _log.LogInformation(
+                "sounds directory missing at {Dir}; sound settings bridge remains available", soundsDir);
         }
-        else
-        {
-            _log.LogInformation("sounds directory missing at {Dir}; sound bridge skipped", soundsDir);
-        }
+        webBridge.AttachSound(sounds, new SoundCatalog(soundsDir), _settings);
         webBridge.AttachLegacyUi(
             logger: _log,
             exitAction: () =>

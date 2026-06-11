@@ -220,13 +220,13 @@ public sealed class WebBridgeLifecycle : IDisposable
     /// <summary>S193 — attach the sound playback bridge so the
     /// pywebview-shim's <c>sound.play</c> calls route into the
     /// in-process <see cref="ISoundPlayer"/>. Idempotent.</summary>
-    public void AttachSound(ISoundPlayer player, SoundCatalog catalog)
+    public void AttachSound(ISoundPlayer player, SoundCatalog catalog, SettingsManager? settings = null)
     {
         if (player is null) throw new ArgumentNullException(nameof(player));
         if (catalog is null) throw new ArgumentNullException(nameof(catalog));
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _soundBridge?.Dispose();
-        _soundBridge = new SoundBridge(Router, player, catalog);
+        _soundBridge = new SoundBridge(Router, player, catalog, settings);
     }
 
     /// <summary>S193 — attach the legacy UI command stub so

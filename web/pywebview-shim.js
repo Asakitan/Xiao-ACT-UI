@@ -53,6 +53,14 @@
         play_sound: function (name) {
             return call('sound.play', { name: String(name || '') });
         },
+        set_sound_enabled: function (enabled) {
+            return call('sound.set_enabled', { enabled: !!enabled }).then(normalizeOk);
+        },
+        set_sound_volume: function (volumePct) {
+            var volume = parseInt(volumePct, 10);
+            if (!isFinite(volume)) volume = 70;
+            return call('sound.set_volume', { volume: volume }).then(normalizeOk);
+        },
         set_hit_regions: function (rects) {
             return call('ui.set_hit_regions', { regions: rects });
         },

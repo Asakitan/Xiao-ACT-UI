@@ -73,6 +73,8 @@ public static class BridgeCommands
     // Sound + UI surface (S193) — invoked by the pywebview compat shim
     // so legacy HUD HTML keeps working without rewrites.
     public const string PlaySound = "sound.play";
+    public const string SetSoundEnabled = "sound.set_enabled";
+    public const string SetSoundVolume = "sound.set_volume";
     public const string SetHitRegions = "ui.set_hit_regions";
     public const string NotifyHpHitRegionsReady = "ui.notify_hp_hit_regions_ready";
     public const string ExitApplication = "ui.exit";

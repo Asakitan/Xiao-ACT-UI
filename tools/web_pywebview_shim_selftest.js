@@ -120,6 +120,16 @@ function assert(cond, message) {
   assert(last.payload.uid === 1001, "get_entity_detail uid was not forwarded");
   assert(dpsDetailApplied, "get_entity_detail should apply the returned detail when DpsMeter is present");
 
+  await window.pywebview.api.set_sound_enabled(false);
+  last = calls[calls.length - 1];
+  assert(last.name === "sound.set_enabled", "set_sound_enabled command mismatch");
+  assert(last.payload.enabled === false, "set_sound_enabled flag was not forwarded");
+
+  await window.pywebview.api.set_sound_volume(35);
+  last = calls[calls.length - 1];
+  assert(last.name === "sound.set_volume", "set_sound_volume command mismatch");
+  assert(last.payload.volume === 35, "set_sound_volume value was not forwarded");
+
   await window.pywebview.api.request_live_snapshot();
   last = calls[calls.length - 1];
   assert(last.name === "state.snapshot", "request_live_snapshot command mismatch");

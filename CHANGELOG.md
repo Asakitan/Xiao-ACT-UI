@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.2: WebView2 菜单音效设置桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_sound_enabled(enabled)` 并新增
+     `sound.set_enabled` C# 桥接。
+     修复 WebView2 路径下菜单音效开关只更新页面控件, 没有即时更新播放器状态或保存
+     `sound_enabled` 设置的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `set_sound_volume(volume)` 并新增
+     `sound.set_volume` C# 桥接。
+     修复 WebView2 路径下音量滑杆的数值没有传到播放器和 `sound_volume` 设置的问题。
+     C# 启动音效桥时也会读取已保存的音效开关和音量。
+
+
+
 ## v4.5.1: WebView2 菜单 HUD 设置桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_watched_slots(slots)` 并新增
