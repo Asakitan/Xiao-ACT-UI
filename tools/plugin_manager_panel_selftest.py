@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 from pathlib import Path
 import unittest
 
-from gui_modules.sao_gui_plugin_manager import PluginManagerPanel, _finite_int
+from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManagerPanel, _finite_int
 
 
 class PluginManagerPanelTests(unittest.TestCase):
@@ -42,6 +42,19 @@ class PluginManagerPanelTests(unittest.TestCase):
         self.assertIn("fail=0/0", meta)
         self.assertNotIn("nan", meta.lower())
         self.assertNotIn("inf", meta.lower())
+
+    def test_detached_panel_dimensions_use_finite_helpers(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_plugin_manager.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("self._want_w = int(width or 0)", source)
+        self.assertNotIn("int(meta.get('width') or 0)", source)
+        self.assertIn("self._want_w = _finite_int(width, 0, lo=0)", source)
+        self.assertIn("w = self._want_w or _finite_int(meta.get('width'), 460, lo=1)", source)
+
+        panel = PluginDetachedPanel(object(), object(), "demo", width=float("nan"), height=float("inf"))
+        self.assertEqual(panel._want_w, 0)
+        self.assertEqual(panel._want_h, 0)
+        self.assertEqual(_finite_int("bad", 460, lo=1), 460)
 
 
 if __name__ == "__main__":

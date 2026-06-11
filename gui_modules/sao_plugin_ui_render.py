@@ -21,6 +21,7 @@ Public surface:
 
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from typing import Any, Callable, Mapping, Optional
 
@@ -38,6 +39,29 @@ _TALIGN = {"right": "e", "center": "center", "left": "w"}
 _CONTAINER_TYPES = ("panel", "section", "card", "row", "group")
 
 
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        num = float(default if value is None or value == "" else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
 def _validate_number(proposed: str) -> bool:
     """Soft numeric guard for input_type=number: allow empty / sign / digits /
     one dot / hex-ish chars (so 0x.. addresses can be typed). Never hard-blocks."""
@@ -48,10 +72,7 @@ def _validate_number(proposed: str) -> bool:
 
 
 def _input_width_px(width: Any) -> int:
-    try:
-        return max(0, int(width or 0))
-    except Exception:
-        return 0
+    return _finite_int(width, 0, lo=0)
 
 
 def _input_width_units(width: Any) -> int:
@@ -140,25 +161,25 @@ def _draw_canvas_ops(cv: tk.Canvas, node: Mapping[str, Any], pal: dict) -> None:
     for op in node.get("ops") or []:
         kind = str(op.get("op") or "")
         if kind in ("rect", "oval"):
-            x, y = int(op.get("x", 0)), int(op.get("y", 0))
-            x2, y2 = x + int(op.get("w", 0)), y + int(op.get("h", 0))
+            x, y = _finite_int(op.get("x"), 0), _finite_int(op.get("y"), 0)
+            x2, y2 = x + _finite_int(op.get("w"), 0), y + _finite_int(op.get("h"), 0)
             fill = _canvas_fill(op.get("fill"), pal, "")
             outline = _canvas_fill(op.get("outline"), pal, "")
             kwargs = {"fill": fill or "", "outline": outline or "",
-                      "width": int(op.get("width", 0) or (1 if outline else 0))}
+                      "width": _finite_int(op.get("width"), 1 if outline else 0, lo=0)}
             if kind == "rect":
                 cv.create_rectangle(x, y, x2, y2, **kwargs)
             else:
                 cv.create_oval(x, y, x2, y2, **kwargs)
         elif kind == "line":
-            cv.create_line(int(op.get("x1", 0)), int(op.get("y1", 0)),
-                           int(op.get("x2", 0)), int(op.get("y2", 0)),
+            cv.create_line(_finite_int(op.get("x1"), 0), _finite_int(op.get("y1"), 0),
+                           _finite_int(op.get("x2"), 0), _finite_int(op.get("y2"), 0),
                            fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
-                           width=int(op.get("width", 1) or 1))
+                           width=_finite_int(op.get("width"), 1, lo=1))
         elif kind == "text":
-            font = ("Segoe UI", int(op.get("size", 10) or 10),
+            font = ("Segoe UI", _finite_int(op.get("size"), 10, lo=1),
                     "bold" if op.get("bold") else "normal")
-            cv.create_text(int(op.get("x", 0)), int(op.get("y", 0)),
+            cv.create_text(_finite_int(op.get("x"), 0), _finite_int(op.get("y"), 0),
                            text=str(op.get("text") or ""),
                            fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
                            font=font, anchor=anchors.get(str(op.get("anchor") or "nw"), "nw"))
@@ -328,7 +349,7 @@ class SpecRenderer:
         elif t == "badge":
             self._update_badge(rn, ns, pal)
         elif t == "spacer":
-            rn.widget.config(height=max(0, int(ns.get("size") or 8)))
+            rn.widget.config(height=_finite_int(ns.get("size"), 8, lo=0))
         elif t == "button":
             self._update_button(rn, ns, pal)
         elif t == "input":
@@ -372,7 +393,7 @@ class SpecRenderer:
                              fg=_text_color(str(ns.get("style") or "value"), pal))
 
     def _build_bar(self, parent, ns, pal) -> _RNode:
-        pct = max(0.0, min(1.0, float(ns.get("pct") or 0.0)))
+        pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
         color = _bar_color(str(ns.get("color") or "cyan"), pal)
         w = tk.Frame(parent, bg=parent["bg"])
         top = tk.Frame(w, bg=parent["bg"])
@@ -392,7 +413,7 @@ class SpecRenderer:
                       spec=ns, pack_kw={"fill": "x"})
 
     def _update_bar(self, rn, ns, pal) -> None:
-        pct = max(0.0, min(1.0, float(ns.get("pct") or 0.0)))
+        pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
         rn.parts["label"].config(text=str(ns.get("label") or ""))
         rn.parts["caption"].config(text=str(ns.get("caption") or ""))
         rn.parts["fill"].config(bg=_bar_color(str(ns.get("color") or "cyan"), pal))
@@ -413,7 +434,7 @@ class SpecRenderer:
                       spec=ns, pack_kw={"fill": "x", "pady": 5})
 
     def _build_spacer(self, parent, ns, pal) -> _RNode:
-        return _RNode("spacer", tk.Frame(parent, bg=parent["bg"], height=max(0, int(ns.get("size") or 8))),
+        return _RNode("spacer", tk.Frame(parent, bg=parent["bg"], height=_finite_int(ns.get("size"), 8, lo=0)),
                       spec=ns, pack_kw={})
 
     def _build_button(self, parent, ns, pal) -> _RNode:
@@ -624,14 +645,14 @@ class SpecRenderer:
             rn.parts["title"].config(text=str(ns.get("title") or ""))
 
     def _build_canvas(self, parent, ns, pal) -> _RNode:
-        w, h = int(ns.get("width") or 1), int(ns.get("height") or 1)
+        w, h = _finite_int(ns.get("width"), 1, lo=1), _finite_int(ns.get("height"), 1, lo=1)
         bg = _canvas_fill(ns.get("bg"), pal, pal["body"]) or pal["body"]
         cv = tk.Canvas(parent, width=w, height=h, bg=bg, highlightthickness=0, bd=0)
         _draw_canvas_ops(cv, ns, pal)
         return _RNode("canvas", cv, spec=ns, pack_kw={"fill": "x", "pady": 4})
 
     def _update_canvas(self, rn, ns, pal) -> None:
-        w, h = int(ns.get("width") or 1), int(ns.get("height") or 1)
+        w, h = _finite_int(ns.get("width"), 1, lo=1), _finite_int(ns.get("height"), 1, lo=1)
         try:
             rn.widget.config(width=w, height=h,
                              bg=_canvas_fill(ns.get("bg"), pal, pal["body"]) or pal["body"])

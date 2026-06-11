@@ -510,8 +510,8 @@ class PluginDetachedPanel:
         #: When set, this window shows only this one registered panel (its own
         #: window). Empty → resolved to the plugin's primary panel in _build().
         self.panel_id = str(panel_id or '')
-        self._want_w = int(width or 0)
-        self._want_h = int(height or 0)
+        self._want_w = _finite_int(width, 0, lo=0)
+        self._want_h = _finite_int(height, 0, lo=0)
         self._win: Optional[tk.Toplevel] = None
         self._panel_host: Optional[tk.Frame] = None
         self._hotkey_host: Optional[tk.Frame] = None
@@ -616,16 +616,16 @@ class PluginDetachedPanel:
         if not self.panel_id:
             self.panel_id = str(meta.get('id') or '')
         # Size: explicit arg > plugin-declared meta > host default (460x620).
-        w = self._want_w or int(meta.get('width') or 0) or 460
-        h = self._want_h or int(meta.get('height') or 0) or 620
-        min_w = int(meta.get('min_width') or 0) or 300
-        min_h = int(meta.get('min_height') or 0) or 280
+        w = self._want_w or _finite_int(meta.get('width'), 460, lo=1)
+        h = self._want_h or _finite_int(meta.get('height'), 620, lo=1)
+        min_w = _finite_int(meta.get('min_width'), 300, lo=1)
+        min_h = _finite_int(meta.get('min_height'), 280, lo=1)
         self._title = str(meta.get('title') or self._plugin_name())
         win = tk.Toplevel(self.root)
         self._win = win
         win.title(f'SAO Plugin · {self._title}')
-        win.geometry(f'{int(w)}x{int(h)}+230+140')
-        win.minsize(min(int(w), int(min_w)), min(int(h), int(min_h)))
+        win.geometry(f'{w}x{h}+230+140')
+        win.minsize(min(w, min_w), min(h, min_h))
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)

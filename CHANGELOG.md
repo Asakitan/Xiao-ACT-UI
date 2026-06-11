@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.55: 插件 Tk 面板数值渲染修复.
+
+  1) `gui_modules/sao_plugin_ui_render.py` 修复插件声明式 UI 数值渲染。
+     bar pct、spacer 高度、canvas 尺寸和绘制 op 坐标/线宽/字号现在过滤非有限数,
+     避免坏插件 spec 让 Tk 插件面板渲染中断或画布缺失。
+
+  2) `gui_modules/sao_gui_plugin_manager.py` 修复 detached plugin panel 尺寸读取。
+     显式窗口尺寸和插件 meta 的 width/height/min_width/min_height 现在使用有限整数兜底,
+     避免异常插件声明导致面板窗口打不开。
+
 ## v4.5.54: ACT Tk 管理面板数值文本修复.
 
   1) `gui_modules/sao_gui_plugin_manager.py` 修复插件管理器计数渲染。
