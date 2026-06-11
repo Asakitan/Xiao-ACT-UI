@@ -387,6 +387,73 @@ def _assert_timeline_and_aggregate_lists_are_guarded() -> None:
             raise AssertionError("missing safe aggregate list/object snippet: " + snippet)
 
 
+def _assert_report_and_offline_lists_are_guarded() -> None:
+    report = _read_web("act_report_export.html")
+    offline = _read_web("act_offline_import.html")
+    for snippet in (
+        "rows.map(function (row, idx)",
+        "items.slice(0, 12).map(function (item, idx)",
+        "payload = payload || {};",
+        "var p = payload.preview || {};",
+        "var rows = p.top_rows || [];",
+        "String((payload.storage_status || {}).count || (payload.history || []).length || 0)",
+        "renderHistory(payload.history || []);",
+        "(!rows.length && !(payload.history || []).length)",
+        "payload.history = historyPayload.encounters || [];",
+        "payload.storage_status = historyPayload.storage_status || payload.storage_status || {};",
+    ):
+        if snippet in report:
+            raise AssertionError("report export must guard list/object payloads: " + snippet)
+    for snippet in (
+        "result = result || {};",
+        "var pv = result.preview || {};",
+        "(result.report || {}).encounter_id",
+        "var rows = (history && history.encounters) || [];",
+        "data = data || {};",
+        "var last = data.last_result || {};",
+        "renderHistory(data.history || {});",
+    ):
+        if snippet in offline:
+            raise AssertionError("offline import must guard list/object payloads: " + snippet)
+    for snippet in (
+        "function listItems(value)",
+        "function objectItems(value)",
+        "function objectValue(value)",
+        "rows = objectItems(rows);",
+        "row = objectValue(row);",
+        "items = objectItems(items);",
+        "item = objectValue(item);",
+        "payload = objectValue(payload);",
+        "var p = objectValue(payload.preview);",
+        "var rows = objectItems(p.top_rows);",
+        "var historyItems = objectItems(payload.history);",
+        "var storage = objectValue(payload.storage_status);",
+        "document.getElementById('sum-count').textContent = String(storage.count || historyItems.length || 0);",
+        "renderHistory(historyItems);",
+        "if (!payload.ok && (!rows.length && !historyItems.length))",
+        "historyPayload = objectValue(historyPayload);",
+        "payload.history = objectItems(historyPayload.encounters);",
+        "payload.storage_status = objectValue(historyPayload.storage_status || payload.storage_status);",
+    ):
+        if snippet not in report:
+            raise AssertionError("missing safe report export list/object snippet: " + snippet)
+    for snippet in (
+        "function listItems(value)",
+        "function objectItems(value)",
+        "function objectValue(value)",
+        "result = objectValue(result);",
+        "var pv = objectValue(result.preview);",
+        "var report = objectValue(result.report);",
+        "var rows = objectItems(objectValue(history).encounters);",
+        "item = objectValue(item);",
+        "data = objectValue(data);",
+        "var last = objectValue(data.last_result);",
+        "renderHistory(data.history);",
+    ):
+        if snippet not in offline:
+            raise AssertionError("missing safe offline import list/object snippet: " + snippet)
+
+
 def _assert_boss_hp_additional_units_are_safe() -> None:
     boss_hp = _read_web("boss_hp.html")
     for snippet in (
@@ -528,6 +595,7 @@ def main() -> int:
     _assert_action_log_and_death_recap_numbers_are_normalized()
     _assert_timeline_speed_is_normalized()
     _assert_timeline_and_aggregate_lists_are_guarded()
+    _assert_report_and_offline_lists_are_guarded()
     _assert_boss_hp_additional_units_are_safe()
     _assert_dps_hit_fx_numbers_are_normalized()
     _assert_trigger_timer_numbers_are_normalized()

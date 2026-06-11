@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.82: ACT Web Report/Offline payload 防护修复.
+
+  1) `web/act_report_export.html` 修复 preview top_rows/history/storage_status payload 形状处理。
+     Report Export Web 现在只渲染对象行与对象历史条目,
+     避免字符串 payload 造成预览表、历史列表或历史数量渲染中断。
+
+  2) `web/act_offline_import.html` 修复 last_result/report/history.encounters payload 形状处理。
+     Offline Import Web 现在归一导入预览对象并只渲染对象历史条目,
+     避免坏 payload 造成导入结果或历史回放列表渲染中断。
+
 ## v4.5.81: ACT Web Timeline/Aggregate payload 防护修复.
 
   1) `web/act_timeline_vcr.html` 修复 events/errors payload 形状处理。

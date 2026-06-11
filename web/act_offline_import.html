@@ -132,6 +132,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         if (!isFinite(number) || number < 0) number = 0;
         return Math.floor(number);
     }
+    function listItems(value) { return Array.isArray(value) ? value : []; }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
     function offlinePayload(name, args) {
         args = args || [];
         if (name === 'get_offline_import_status') return { history_limit: safeLimit(args[0], 20, 200) };
@@ -161,11 +168,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
     function previewHtml(result) {
-        result = result || {};
-        var pv = result.preview || {};
+        result = objectValue(result);
+        var pv = objectValue(result.preview);
+        var report = objectValue(result.report);
         if (!Object.keys(result).length) return '<div class="empty">尚未导入文件。<br/>WAITING FOR IMPORT</div>';
         return '<div class="preview"><h3>IMPORT RESULT</h3><div class="grid">'
-            + '<div class="metric"><span>Encounter</span><strong>' + esc(pv.encounter_id || (result.report || {}).encounter_id || '-') + '</strong></div>'
+            + '<div class="metric"><span>Encounter</span><strong>' + esc(pv.encounter_id || report.encounter_id || '-') + '</strong></div>'
             + '<div class="metric"><span>Format</span><strong>' + esc(result.format || '-') + '</strong></div>'
             + '<div class="metric"><span>Importer</span><strong>' + esc(result.importer || '-') + '</strong></div>'
             + '<div class="metric"><span>Total Damage</span><strong>' + esc(pv.total_damage || '-') + '</strong></div>'
@@ -174,10 +182,11 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             + '</div></div>';
     }
     function renderHistory(history) {
-        var rows = (history && history.encounters) || [];
+        var rows = objectItems(objectValue(history).encounters);
         document.getElementById('sum-history').textContent = String(rows.length || 0);
         if (!rows.length) { historyList.innerHTML = '<div class="empty">暂无历史报告</div>'; return; }
         historyList.innerHTML = rows.slice(0, 12).map(function (item, i) {
+            item = objectValue(item);
             var index = item._history_index == null ? i : item._history_index;
             return '<div class="history-item"><strong>' + esc(item.encounter_id || ('#' + i)) + '</strong><small>'
                 + esc(item.completed_local_time || item.completed_at || '') + ' · dmg=' + esc(item.total_damage || 0)
@@ -185,8 +194,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         }).join('');
     }
     function render(data) {
-        data = data || {};
-        var last = data.last_result || {};
+        data = objectValue(data);
+        var last = objectValue(data.last_result);
         if (data.selected_file && !importPath.value) importPath.value = data.selected_file;
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : String(data.status || 'READY').toUpperCase();
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : 'var(--act-muted)';
@@ -194,7 +203,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('sum-format').textContent = last.format || '--';
         document.getElementById('sum-events').textContent = String(last.event_count || 0);
         preview.innerHTML = previewHtml(last);
-        renderHistory(data.history || {});
+        renderHistory(data.history);
         if (data.ok === false) showToast(data.message || 'Offline import status failed');
     }
     window.OfflineImport = {
