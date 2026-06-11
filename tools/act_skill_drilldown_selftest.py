@@ -13,7 +13,7 @@ from unittest import mock
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
-from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
+from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel, _finite_int
 
 
 class FakeTracker:
@@ -162,6 +162,18 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertNotEqual(sig, panel._signature(name_changed))
         self.assertNotEqual(sig, panel._signature(kind_changed))
         self.assertNotEqual(sig, panel._signature(facts_changed))
+
+    def test_tk_numeric_rendering_uses_finite_helpers(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_skill_drilldown.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("int(status.get('casts') or 0)", source)
+        self.assertNotIn("float(value or 0)", source)
+        self.assertIn("casts = _finite_int(status.get('casts'), 0, lo=0)", source)
+        self.assertEqual(_finite_int(float("nan"), 9, lo=0), 9)
+        self.assertEqual(SkillDrilldownPanel._fmt(float("nan")), "0")
+        self.assertEqual(SkillDrilldownPanel._fmt(float("inf")), "0")
+        self.assertEqual(SkillDrilldownPanel._pct(float("inf")), "0.0%")
+        self.assertEqual(SkillDrilldownPanel._pct(2), "100.0%")
 
     def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
         panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)

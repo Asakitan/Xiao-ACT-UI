@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -31,6 +32,29 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
 
 
 class SkillDrilldownPanel:
@@ -222,7 +246,9 @@ class SkillDrilldownPanel:
             self._combatant_var.set(cid)
         if sid and self._skill_var.get() != sid:
             self._skill_var.set(sid)
-        self._summary_var.set(f"{summary.get('name') or sid or 'NONE'} · {int(status.get('casts') or 0)} CASTS · {int(status.get('hits') or 0)} HITS")
+        casts = _finite_int(status.get('casts'), 0, lo=0)
+        hits = _finite_int(status.get('hits'), 0, lo=0)
+        self._summary_var.set(f"{summary.get('name') or sid or 'NONE'} · {casts} CASTS · {hits} HITS")
         self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · refs={len(refs)} · errors={len(status.get('errors') or [])}")
         if self._rows is None:
             return
@@ -326,8 +352,8 @@ class SkillDrilldownPanel:
             ('Skill ID', status.get('skill_id') or '-'),
             ('Damage', self._fmt(summary.get('damage'))),
             ('Heal', self._fmt(summary.get('heal'))),
-            ('Casts', int(status.get('casts') or 0)),
-            ('Hits', int(status.get('hits') or 0)),
+            ('Casts', _finite_int(status.get('casts'), 0, lo=0)),
+            ('Hits', _finite_int(status.get('hits'), 0, lo=0)),
             ('Crit', self._pct(status.get('crit_rate'))),
             ('Refs', len(status.get('timeline_refs') or [])),
         )
@@ -343,10 +369,7 @@ class SkillDrilldownPanel:
 
     @staticmethod
     def _fmt(value: Any) -> str:
-        try:
-            number = float(value or 0)
-        except Exception:
-            return str(value or '0')
+        number = _finite_float(value, 0.0)
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:
@@ -355,10 +378,7 @@ class SkillDrilldownPanel:
 
     @staticmethod
     def _pct(value: Any) -> str:
-        try:
-            return f"{float(value or 0) * 100:.1f}%"
-        except Exception:
-            return '0.0%'
+        return f"{_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100:.1f}%"
 
     def _signature(self, status: Mapping[str, Any]) -> str:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}

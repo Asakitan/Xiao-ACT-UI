@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.53: ACT Tk 钻取面板数值渲染修复.
+
+  1) `gui_modules/sao_gui_combatant_drilldown.py` 修复成员钻取技能条渲染。
+     技能 amount/hits 和百分比指标现在使用有限数 helper,
+     避免异常 ACT 数据让技能条或百分比渲染中断。
+
+  2) `gui_modules/sao_gui_skill_drilldown.py` 修复技能钻取摘要与事实卡渲染。
+     casts/hits、数值文本和百分比文本现在统一过滤 `NaN`/`Infinity`,
+     避免坏数据导致 Tk 面板显示不全或抛出转换异常。
+
 ## v4.5.52: Web 主菜单配置与更新器数值修复.
 
   1) `web/menu.html` 修复菜单配置回填的音量值。

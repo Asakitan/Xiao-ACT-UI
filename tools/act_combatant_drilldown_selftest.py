@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from act_platform import runtime
-from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
+from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel, _finite_int
 
 
 class FakeTracker:
@@ -129,6 +129,17 @@ class ActCombatantDrilldownRuntimeTests(unittest.TestCase):
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(summary_changed))
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(skill_changed))
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(side_changed))
+
+    def test_tk_numeric_rendering_uses_finite_helpers(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_combatant_drilldown.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("int(skill.get('amount') or 0)", source)
+        self.assertIn("_finite_int(skill.get('amount'), 0, lo=0)", source)
+        self.assertEqual(_finite_int(float("nan"), 7, lo=0), 7)
+        self.assertEqual(CombatantDrilldownPanel._fmt(float("nan")), "0")
+        self.assertEqual(CombatantDrilldownPanel._fmt(float("inf")), "0")
+        self.assertEqual(CombatantDrilldownPanel._pct(float("inf")), "0.0%")
+        self.assertEqual(CombatantDrilldownPanel._pct(2), "100.0%")
 
     def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
         panel = CombatantDrilldownPanel.__new__(CombatantDrilldownPanel)

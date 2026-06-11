@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -29,6 +30,29 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
 
 
 class CombatantDrilldownPanel:
@@ -254,19 +278,25 @@ class CombatantDrilldownPanel:
         header.pack(fill='x', pady=(0, 2), padx=4)
         for text, width in (('Skill', 34), ('Kind', 10), ('Amount', 14), ('Hits', 8), ('Crit', 8)):
             tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
-        max_amount = max(1, *[int(skill.get('amount') or 0) for skill in skills])
+        max_amount = max(1, *[
+            _finite_int(skill.get('amount'), 0, lo=0)
+            for skill in skills
+            if isinstance(skill, Mapping)
+        ])
         for skill in skills[:40]:
+            amount = _finite_int(skill.get('amount'), 0, lo=0)
+            hits = _finite_int(skill.get('hits'), 0, lo=0)
             row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             row.pack(fill='x', pady=2, padx=4)
             row.configure(cursor='hand2')
             color = '#e8fff4' if skill.get('kind') == 'heal' else _SAO_PANEL_BODY_BG
-            bar_width = max(4, min(160, int(160 * int(skill.get('amount') or 0) / max_amount)))
+            bar_width = max(4, min(160, int(160 * amount / max_amount)))
             tk.Frame(row, bg=('#2ebf86' if skill.get('kind') == 'heal' else _SAO_PANEL_GOLD), width=bar_width, height=3).pack(fill='x', anchor='w')
             values = (
                 (str(skill.get('name') or '-'), 34, _SAO_PANEL_VALUE_FG),
                 (str(skill.get('kind') or '-'), 10, _SAO_PANEL_LABEL_FG),
-                (self._fmt(skill.get('amount')), 14, _SAO_PANEL_VALUE_FG),
-                (str(skill.get('hits') or 0), 8, _SAO_PANEL_LABEL_FG),
+                (self._fmt(amount), 14, _SAO_PANEL_VALUE_FG),
+                (str(hits), 8, _SAO_PANEL_LABEL_FG),
                 (self._pct(skill.get('crit_rate')), 8, _SAO_PANEL_LABEL_FG),
             )
             line = tk.Frame(row, bg=color)
@@ -322,10 +352,7 @@ class CombatantDrilldownPanel:
 
     @staticmethod
     def _fmt(value: Any) -> str:
-        try:
-            number = float(value or 0)
-        except Exception:
-            return str(value or '0')
+        number = _finite_float(value, 0.0)
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:
@@ -334,10 +361,7 @@ class CombatantDrilldownPanel:
 
     @staticmethod
     def _pct(value: Any) -> str:
-        try:
-            return f"{float(value or 0) * 100:.1f}%"
-        except Exception:
-            return '0.0%'
+        return f"{_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100:.1f}%"
 
     @staticmethod
     def _signature(status: Mapping[str, Any]) -> str:
