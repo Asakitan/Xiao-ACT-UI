@@ -136,7 +136,11 @@ def _scan_aligned_int(
     *,
     width: int,
 ) -> List[int]:
-    """对齐 i32/u32/i64/u64 的 cy_memscan 加速路径."""
+    """对齐 i32/u32/i64/u64 的 cy_memscan 加速路径.
+
+    分块 + read_bytes_into 复用 scratch 零拷贝喂内核 (取代每 region 整块 read_bytes
+    的两次拷贝), 与 fingerprint_v2.locate_v2 同款姿势。
+    """
     hits: List[int] = []
     if width == 8:
         v = value & 0xFFFFFFFFFFFFFFFF
@@ -144,20 +148,34 @@ def _scan_aligned_int(
     else:
         v = value & 0xFFFFFFFF
         find_fn = _cy.find_aligned_u32
+    read_into = getattr(pm, "read_bytes_into", None)
+    chunk = 16 * 1024 * 1024
+    scratch = bytearray(chunk) if read_into is not None else None
     for region in pm.iter_regions():
         if region.size > max_region_size:
             continue
-        buf = pm.read_bytes(region.base, region.size)
-        if buf is None:
-            continue
-        remaining = max_hits - len(hits)
-        if remaining <= 0:
-            break
-        offs = find_fn(buf, v, max_hits=remaining)
-        for off in offs:
-            hits.append(region.base + off)
-        if len(hits) >= max_hits:
-            return hits
+        off = 0
+        while off < region.size:
+            n = min(chunk, region.size - off)
+            if read_into is not None:
+                got = read_into(region.base + off, scratch, n)
+                if got <= 0:
+                    break
+                buf = memoryview(scratch)[:got]
+            else:
+                blob = pm.read_bytes(region.base + off, n)
+                if blob is None:
+                    break
+                buf = blob
+                got = n
+            remaining = max_hits - len(hits)
+            if remaining <= 0:
+                return hits
+            for o in find_fn(buf, v, max_hits=remaining):
+                hits.append(region.base + off + o)
+            if len(hits) >= max_hits:
+                return hits
+            off += n
     return hits
 
 

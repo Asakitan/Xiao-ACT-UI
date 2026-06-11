@@ -94,9 +94,11 @@ class StaticResolver:
         """In-memory klass-by-name fallback (version-robust, no dump, onedir-safe)."""
         if self._live_index is None:
             try:
-                from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
+                # Shared process index: one GA scan for the union of critical
+                # classes, warm-started from the persisted per-version RVAs.
+                from mem_probe.il2cpp.klass_index import resolve_klasses
                 want = set(self._LIVE_CLASSES) | {class_name}
-                self._live_index = build_live_class_index(self.pm, want, time_budget_s=40)
+                self._live_index = resolve_klasses(self.pm, want, time_budget_s=40)
             except Exception:
                 self._live_index = {}
         kp = int(self._live_index.get(class_name, 0) or 0)
@@ -137,21 +139,31 @@ class StaticResolver:
         t0 = time.time()
         bytes_scanned = 0
         klass = klass_ptr & 0xFFFFFFFFFFFFFFFF
+        chunk = 16 * 1024 * 1024
+        read_into = getattr(self.pm, "read_bytes_into", None)
+        scratch = bytearray(chunk)            # one reused buffer for the whole scan
         for r in self.pm.iter_regions(only_readable=True, only_private=True):
             if max_region is not None and r.size > max_region:
                 continue
-            chunk = 16 * 1024 * 1024
             off = 0
             while off < r.size:
                 n = min(chunk, r.size - off)
-                blob = self.pm.read_bytes(r.base + off, n)
-                if blob is None:
-                    break
-                bytes_scanned += n
+                if read_into is not None:
+                    got = read_into(r.base + off, scratch, n)
+                    if got <= 0:
+                        break
+                    buf = memoryview(scratch)[:got]
+                else:
+                    blob = self.pm.read_bytes(r.base + off, n)
+                    if blob is None:
+                        break
+                    buf = blob
+                    got = n
+                bytes_scanned += got
                 remaining = max_hits - len(hits)
                 if remaining <= 0:
                     return hits
-                offs = _cy.find_aligned_u64(blob, klass, max_hits=remaining)
+                offs = _cy.find_aligned_u64(buf, klass, max_hits=remaining)
                 for o in offs:
                     hits.append(r.base + off + o)
                 if len(hits) >= max_hits:

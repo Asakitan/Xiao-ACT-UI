@@ -584,17 +584,21 @@ class MemStateBridge:
         SceneTable name via SceneConfigMgr.curSceneId_ (reliable); the reader's first
         build is heavy (heap scans) so it runs once on a background thread, until then
         we fall back to the provider's scene id + the offline dungeon table."""
+        # The TCP/provider-known scene id (read straight from CharSerialize.SceneData
+        # by the self provider) is the most specific anchor for the SceneConfigMgr
+        # value-scan: passing it turns an N-way known-id set scan into a single-needle
+        # search. Harmless when 0 (reader falls back to the full known-id set).
+        ls = getattr(self._provider, "last_snap", None)
+        smid = int(getattr(ls, "scene_map_id", 0) or 0) if ls else 0
         r = self._map_reader
         if r is not None and r.ready:
-            sid = r.current_scene_id()
+            sid = r.current_scene_id(hint_scene_id=smid)
             if sid:
                 return sid, r.name_for_scene(sid)
         if not self._map_reader_built and not self._map_reader_busy:
             self._map_reader_busy = True
             threading.Thread(target=self._build_map_reader, name="mem-mapname",
                              daemon=True).start()
-        ls = getattr(self._provider, "last_snap", None)
-        smid = int(getattr(ls, "scene_map_id", 0) or 0) if ls else 0
         nr = self._name_resolver()
         nm = (nr.dungeon(smid, default="") if (nr and smid) else "")
         return smid, nm

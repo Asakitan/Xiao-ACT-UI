@@ -78,6 +78,8 @@ class CameraReader:
         self._off_camstate = 0
         self._off_quat = None     # 缓存 RawOrientation 在 camstate 内的偏移 (位置锚定后)
         self._last_locate = 0.0
+        self._hint_base = 0       # region base that last held CameraManager
+        self._scratch = None      # reused scan buffer
 
     # ---- klass 名校验 ----
     def _kname(self, kp: int) -> str:
@@ -106,6 +108,52 @@ class CameraReader:
         self._off_brain = int(ob) if ob else CAMMGR_BRAIN_OFF
         self._off_camstate = int(oc) if oc else BRAIN_CAMSTATE_OFF
 
+    def _scan_region_for_cammgr(self, r, kp: int, _cy) -> bool:
+        """Cython klass-sentinel scan of one private region (zero-copy scratch).
+        Validates each hit's brain_ -> CinemachineBrain; sets self._cammgr/_brain."""
+        pm = self._pm
+        read_into = getattr(pm, "read_bytes_into", None)
+        chunk = 16 * 1024 * 1024
+        if self._scratch is None or len(self._scratch) < min(chunk, r.size):
+            self._scratch = bytearray(min(chunk, r.size))
+        off = 0
+        while off < r.size:
+            n = min(chunk, r.size - off)
+            if read_into is not None:
+                got = read_into(r.base + off, self._scratch, n)
+                if got <= 0:
+                    break
+                mv = memoryview(self._scratch)[:got]
+            else:
+                blob = pm.read_bytes(r.base + off, n)
+                if blob is None:
+                    break
+                mv = blob
+                got = n
+            if _cy is not None and hasattr(_cy, "find_aligned_u64"):
+                hits = _cy.find_aligned_u64(mv, kp, 256)
+            else:
+                bb = bytes(mv)
+                hits, s, kb = [], 0, kp.to_bytes(8, "little")
+                while True:
+                    i = bb.find(kb, s)
+                    if i < 0:
+                        break
+                    s = i + 8
+                    if (i & 0x7) == 0:
+                        hits.append(i)
+            for i in hits:
+                obj = r.base + off + i
+                brain = pm.read_u64(obj + self._off_brain) or 0
+                if brain <= _KLASS_HI or not (_MIN_PTR <= brain <= _MAX_PTR):
+                    continue
+                if self._obj_kname(brain) == BRAIN_CLASS:
+                    self._cammgr = obj
+                    self._brain = brain
+                    return True
+            off += n
+        return False
+
     def _locate(self) -> bool:
         """定位 CameraManager 实例并取 brain_ (校验 brain_ 指向 CinemachineBrain)。"""
         # 缓存有效性: cammgr 仍是 CameraManager 且 brain_ 仍是 CinemachineBrain
@@ -113,49 +161,33 @@ class CameraReader:
             return True
         self._resolve_offsets()
         pm = self._pm
-        from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
-        idx = build_live_class_index(pm, {CAMMGR_CLASS}, time_budget_s=40)
-        kp = int(idx.get(CAMMGR_CLASS, 0) or 0)
+        # 进程级共享类索引: 一遍 GA 扫服务所有 reader + 按版本持久化 RVA 暖启动
+        from mem_probe.il2cpp.klass_index import resolve_klasses
+        kp = int(resolve_klasses(pm, {CAMMGR_CLASS}, time_budget_s=40).get(CAMMGR_CLASS, 0) or 0)
         if not kp:
             return False
         # 堆扫定位是这里唯一的重计算(扫数百 MB 找 klass 指针, >>1e5 次比对)→ 必须走
-        # cy_memscan.find_aligned_u64 (nogil/AVX2 ~16GB/s), 纯 Python blob.find 慢几十倍
-        # (实测冷定位 ~20s)。这是 CLAUDE.md "全堆扫不留 Python 内层" 的强制下放点。
+        # cy_memscan.find_aligned_u64 (nogil/AVX2 ~16GB/s), 纯 Python blob.find 慢几十倍。
+        # 只扫 private (klass 实例在托管堆, 不在 image/mapped), 并用 read_bytes_into+scratch
+        # 零拷贝; 命中 region 记为 warm hint, 失效重定位先扫它。
         try:
             from mem_probe import cy_memscan as _cy
         except Exception:
             _cy = None
+        # warm hint first
+        if self._hint_base:
+            for r in pm.iter_regions(only_readable=True, only_private=True):
+                if r.base == self._hint_base:
+                    if self._scan_region_for_cammgr(r, kp, _cy):
+                        return True
+                    break
         t0 = time.time()
-        for r in pm.iter_regions(only_readable=True):
+        for r in pm.iter_regions(only_readable=True, only_private=True):
             if time.time() - t0 > 60:
                 break
-            off, chunk = 0, 16 * 1024 * 1024
-            while off < r.size:
-                blob = pm.read_bytes(r.base + off, min(chunk, r.size - off))
-                if blob is None:
-                    break
-                if _cy is not None:
-                    hits = _cy.find_aligned_u64(blob, kp, 256)
-                else:
-                    hits, s = [], 0
-                    kb = kp.to_bytes(8, "little")
-                    while True:
-                        i = blob.find(kb, s)
-                        if i < 0:
-                            break
-                        s = i + 8
-                        if (i & 0x7) == 0:
-                            hits.append(i)
-                for i in hits:
-                    obj = r.base + off + i
-                    brain = pm.read_u64(obj + self._off_brain) or 0
-                    if brain <= _KLASS_HI or not (_MIN_PTR <= brain <= _MAX_PTR):
-                        continue
-                    if self._obj_kname(brain) == BRAIN_CLASS:
-                        self._cammgr = obj
-                        self._brain = brain
-                        return True
-                off += chunk
+            if self._scan_region_for_cammgr(r, kp, _cy):
+                self._hint_base = r.base
+                return True
         return False
 
     @staticmethod

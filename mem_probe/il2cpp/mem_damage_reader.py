@@ -31,8 +31,6 @@ from __future__ import annotations
 import time
 from typing import Dict, Optional
 
-from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
-
 try:
     from mem_probe import cy_memscan as _cy
 except Exception:  # pragma: no cover
@@ -81,6 +79,14 @@ class MemDamageReader:
         self.pm = dps_source.sr.pm
         self._klass = 0
         self._inst = 0
+        # Locate backoff: the damage table only exists once combat starts. Without
+        # a cooldown, every entity-loop tick out of combat re-ran a full private-heap
+        # sweep (the dominant idle-time CPU waste). Failed scans back off
+        # exponentially; a confirmed hit's region is remembered as a warm hint.
+        self._miss_until = 0.0
+        self._miss_backoff = 1.0
+        self._hint_base = 0
+        self._scratch: Optional[bytearray] = None
         # auto-offset: DamageDataMgr / DamageData fields by name from the dump,
         # literal fallback (the curated bundle may omit DamageDataMgr -> falls back;
         # add it to the bundle class list to activate self-heal). The ZDictionary
@@ -109,32 +115,81 @@ class MemDamageReader:
     def _resolve_klass(self) -> int:
         if self._klass and self._kname(self._klass) == "DamageDataMgr":
             return self._klass
-        idx = build_live_class_index(self.pm, {DDM_CLASS}, time_budget_s=30)
+        from mem_probe.il2cpp.klass_index import resolve_klasses
+        idx = resolve_klasses(self.pm, {DDM_CLASS}, time_budget_s=30)
         self._klass = int(idx.get(DDM_CLASS, 0) or 0)
         return self._klass
 
+    def _scan_region_for_inst(self, r, kp: int) -> int:
+        """Cython klass-sentinel scan of one region (chunked, zero-copy). Returns
+        the validated DamageDataMgr instance address or 0."""
+        read_into = getattr(self.pm, "read_bytes_into", None)
+        chunk = 16 * 1024 * 1024
+        if self._scratch is None or len(self._scratch) < min(chunk, r.size):
+            self._scratch = bytearray(min(chunk, r.size))
+        off = 0
+        while off < r.size:
+            n = min(chunk, r.size - off)
+            if read_into is not None:
+                got = read_into(r.base + off, self._scratch, n)
+                if got <= 0:
+                    break
+                mv = memoryview(self._scratch)[:got]
+            else:
+                blob = self.pm.read_bytes(r.base + off, n)
+                if not blob:
+                    break
+                mv = blob
+                got = n
+            for h in _cy.find_aligned_u64(mv, kp, 64):
+                a = r.base + off + h
+                ab = self.pm.read_bytes(a + self.off_isactive, 1)
+                if ab and ab[0] == 1 and _plaus(self.pm.read_u64(a + self.off_totalplayer)):
+                    return a
+            off += n
+        return 0
+
     def locate(self, *, force: bool = False) -> int:
-        """Return the live DamageDataMgr instance (cached, klass-sentinel revalidated)."""
+        """Return the live DamageDataMgr instance (cached, klass-sentinel revalidated).
+
+        Backs off after a miss so out-of-combat ticks (table not yet allocated) do
+        not re-sweep the heap every tick. A confirmed hit's region is the warm hint
+        for the next cold acquisition.
+        """
         if self._inst and not force:
             if self.pm.read_u64(self._inst) == self._klass and self._klass:
                 return self._inst
             self._inst = 0
+        now = time.time()
+        if not force and now < self._miss_until:
+            return 0
         kp = self._resolve_klass()
         if not kp or _cy is None:
             return 0
+        # Warm hint first: the table is large and committed; its region is stable
+        # within a session, so re-checking it before the full sweep is near-free.
+        if self._hint_base:
+            for r in self.pm.iter_regions(only_readable=True, only_private=True):
+                if r.base == self._hint_base:
+                    a = self._scan_region_for_inst(r, kp)
+                    if a:
+                        self._inst = a
+                        self._miss_backoff = 1.0
+                        return a
+                    break
         t0 = time.time()
         for r in self.pm.iter_regions(only_readable=True, only_private=True):
-            if r.size > 64 * 1024 * 1024 or (time.time() - t0) > 30:
-                continue
-            blob = self.pm.read_bytes(r.base, r.size)
-            if not blob:
-                continue
-            for h in _cy.find_aligned_u64(blob, kp, 64):
-                a = r.base + h
-                ab = self.pm.read_bytes(a + self.off_isactive, 1)
-                if ab and ab[0] == 1 and _plaus(self.pm.read_u64(a + self.off_totalplayer)):
-                    self._inst = a
-                    return a
+            if (time.time() - t0) > 30:
+                break
+            a = self._scan_region_for_inst(r, kp)
+            if a:
+                self._inst = a
+                self._hint_base = r.base
+                self._miss_backoff = 1.0
+                return a
+        # miss: back off (cap 15s) so idle ticks stop hammering the heap
+        self._miss_until = now + self._miss_backoff
+        self._miss_backoff = min(self._miss_backoff * 2.0, 15.0)
         return 0
 
     def _entry_addrs(self, zdict: int, stride: int = ENTRY_STRIDE):
@@ -156,8 +211,39 @@ class MemDamageReader:
         for i in range(min(cnt, alen)):
             yield base + i * stride
 
+    def _entries_block(self, zdict: int, stride: int = ENTRY_STRIDE) -> Optional[bytes]:
+        """Read a ZDictionary's whole entries[] slab in ONE read_bytes.
+
+        Returns the raw entry bytes (n*stride) for local decode, or None. Collapses
+        the per-entry single-RPM walk (O(entries) syscalls/tick) into one block read.
+        """
+        if not _plaus(zdict):
+            return None
+        cnt = self.pm.read_i32(zdict + ZDICT_COUNT_OFF) or 0
+        if cnt <= 0 or cnt > 100000:
+            return None
+        entries = self.pm.read_u64(zdict + ZDICT_ENTRIES_OFF)
+        if not _plaus(entries):
+            return None
+        alen = self.pm.read_u32(entries + ARRAY_LEN_OFF) or 0
+        n = min(cnt, alen)
+        if n <= 0:
+            return None
+        blob = self.pm.read_bytes(entries + ARRAY_ELEMS_OFF, n * stride)
+        if blob and len(blob) >= stride:
+            return blob[:(len(blob) // stride) * stride]
+        return None
+
     def _inner_for_total_type(self, inst: int, total_type: int) -> int:
         tpv = self.pm.read_u64(inst + self.off_totalplayer)
+        blob = self._entries_block(tpv)
+        if blob is not None:
+            import struct
+            # Entry { u32 hash; i32 next; i64 key; u64 value } stride 0x18
+            for _h, _n, key, val in struct.iter_unpack("<IiqQ", blob):
+                if key == total_type:
+                    return int(val)
+            return 0
         for e in self._entry_addrs(tpv):
             if self.pm.read_i32(e + ENTRY_KEY_OFF) == total_type:
                 return int(self.pm.read_u64(e + ENTRY_VAL_OFF) or 0)
@@ -170,6 +256,13 @@ class MemDamageReader:
             return {}
         inner = self._inner_for_total_type(inst, total_type)
         out: Dict[int, int] = {}
+        blob = self._entries_block(inner)
+        if blob is not None:
+            import struct
+            for _h, _n, uuid, total in struct.iter_unpack("<Iiqq", blob):
+                if uuid and 0 < total <= (1 << 60):
+                    out[int(uuid)] = int(total)
+            return out
         for e in self._entry_addrs(inner):
             uuid = self.pm.read_i64(e + ENTRY_KEY_OFF)
             total = self.pm.read_i64(e + ENTRY_VAL_OFF)
@@ -184,11 +277,34 @@ class MemDamageReader:
             return {}
         dmgv = self.pm.read_u64(inst + self.off_damagevalue)
         inner = 0
-        for e in self._entry_addrs(dmgv):
-            if self.pm.read_i64(e + ENTRY_KEY_OFF) == int(uuid):
-                inner = int(self.pm.read_u64(e + ENTRY_VAL_OFF) or 0)
-                break
+        blob = self._entries_block(dmgv)
+        if blob is not None:
+            import struct
+            for _h, _n, key, val in struct.iter_unpack("<IiqQ", blob):
+                if key == int(uuid):
+                    inner = int(val)
+                    break
+        else:
+            for e in self._entry_addrs(dmgv):
+                if self.pm.read_i64(e + ENTRY_KEY_OFF) == int(uuid):
+                    inner = int(self.pm.read_u64(e + ENTRY_VAL_OFF) or 0)
+                    break
         out: Dict[int, int] = {}
+        # inner is ZDictionary<int skillId, DamageData(struct)>, stride 0x30; the
+        # actualValue sits at self.off_skill_entry_actual from the entry start.
+        sblob = self._entries_block(inner, stride=SKILL_ENTRY_STRIDE)
+        if sblob is not None:
+            import struct
+            stride = SKILL_ENTRY_STRIDE
+            ko = ENTRY_KEY_OFF
+            ao = self.off_skill_entry_actual
+            for i in range(len(sblob) // stride):
+                o = i * stride
+                skill = struct.unpack_from("<i", sblob, o + ko)[0]
+                actual = struct.unpack_from("<q", sblob, o + ao)[0]
+                if skill and 0 < actual <= (1 << 60):
+                    out[int(skill)] = int(actual)
+            return out
         for e in self._entry_addrs(inner, stride=SKILL_ENTRY_STRIDE):
             skill = self.pm.read_i32(e + ENTRY_KEY_OFF)
             actual = int(self.pm.read_i64(e + self.off_skill_entry_actual) or 0)

@@ -51,7 +51,7 @@ import time
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from mem_probe.il2cpp import auto_offsets
-from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
+from mem_probe.il2cpp.klass_index import resolve_klasses
 
 try:
     from mem_probe import cy_memscan as _cy
@@ -188,7 +188,7 @@ class MemConfigTableReader:
 
     def _resolve(self, candidates) -> Tuple[str, int]:
         want = set(candidates)
-        idx = build_live_class_index(self.pm, want, time_budget_s=30)
+        idx = resolve_klasses(self.pm, want, time_budget_s=30)
         for c in candidates:
             kp = int(idx.get(c, 0) or 0)
             if kp:
@@ -381,7 +381,7 @@ class MemConfigTableReader:
         kp = self._row_klass.get(class_full_name)
         if kp is not None:
             return kp
-        idx = build_live_class_index(self.pm, {class_full_name}, time_budget_s=90)
+        idx = resolve_klasses(self.pm, {class_full_name}, time_budget_s=90)
         kp = int(idx.get(class_full_name, 0) or 0)
         self._row_klass[class_full_name] = kp
         return kp

@@ -14,6 +14,15 @@ try:  # Prefer the checked-in/root or sys.path-visible Cython extension.
 except Exception:  # pragma: no cover - fallback is for dev environments.
     _fast = None
 
+if _fast is None:  # pragma: no cover - loud once, so a missing/broken .pyd in a
+    # frozen build can't silently turn every heap sweep into a per-8-byte
+    # Python loop (orders of magnitude slower) without anyone noticing.
+    import logging
+    logging.getLogger(__name__).warning(
+        "[cy_memscan] _sao_cy_memscan extension not loadable - all memory "
+        "scans fall back to pure Python (very slow). Rebuild with "
+        "build_cython_ext.py or check the packaged .pyd.")
+
 
 def _as_bytes(buf) -> bytes:
     if isinstance(buf, bytes):
@@ -311,6 +320,65 @@ def narrow_u64_batch(packed, expected: int):
     target = int(expected) & 0xFFFFFFFFFFFFFFFF
     return [i for i in range(0, len(data) - 7, 8)
             if int.from_bytes(data[i:i + 8], "little", signed=False) == target]
+
+
+def collect_aligned_u64_in_range(buf, lo: int, hi: int, max_out: int = 1 << 20) -> List[int]:
+    """Unique 8-aligned u64 values in [lo, hi] (GA klass-pointer pre-filter).
+
+    Cython kernel preferred; numpy vectorised fallback; pure-Python last resort.
+    """
+    if _fast is not None and hasattr(_fast, "collect_aligned_u64_in_range"):
+        return list(_call_fast(_fast.collect_aligned_u64_in_range, buf,
+                               int(lo), int(hi), int(max_out)))
+    try:
+        import numpy as _np
+        data = _as_bytes(buf)
+        usable = (len(data) // 8) * 8
+        if not usable:
+            return []
+        arr = _np.frombuffer(data[:usable], dtype="<u8")
+        m = (arr >= int(lo)) & (arr <= int(hi))
+        return _np.unique(arr[m]).tolist()[:int(max_out)]
+    except Exception:
+        pass
+    data = _as_bytes(buf)
+    seen = set()
+    out: List[int] = []
+    lo_i, hi_i = int(lo), int(hi)
+    for off in range(0, (len(data) // 8) * 8, 8):
+        v = int.from_bytes(data[off:off + 8], "little", signed=False)
+        if lo_i <= v <= hi_i and v not in seen:
+            seen.add(v)
+            out.append(v)
+            if len(out) >= int(max_out):
+                break
+    return out
+
+
+def decode_i32_kv_pairs(buf, vmin: int, vmax: int) -> dict:
+    """Packed (i32 key, i32 value) pairs -> {key: value}, keeping vmin <= v < vmax.
+
+    Cython kernel preferred; numpy fallback; pure-Python last resort.
+    """
+    if _fast is not None and hasattr(_fast, "decode_i32_kv_pairs"):
+        return _call_fast(_fast.decode_i32_kv_pairs, buf, int(vmin), int(vmax))
+    data = _as_bytes(buf)
+    usable = (len(data) // 8) * 8
+    if not usable:
+        return {}
+    try:
+        import numpy as _np
+        arr = _np.frombuffer(data[:usable], dtype="<i4").reshape(-1, 2)
+        m = (arr[:, 1] >= int(vmin)) & (arr[:, 1] < int(vmax))
+        return dict(zip(arr[m, 0].tolist(), arr[m, 1].tolist()))
+    except Exception:
+        pass
+    import struct
+    out: dict = {}
+    for k, v in struct.iter_unpack("<ii", data[:usable]):
+        if int(vmin) <= v < int(vmax):
+            out[k] = v
+    return out
 
 
 def find_aligned_u64_with_anchor(buf, anchor_value: int, anchor_off: int, fp_size: int,

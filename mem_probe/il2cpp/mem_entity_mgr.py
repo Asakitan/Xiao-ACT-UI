@@ -40,6 +40,11 @@ from mem_probe.il2cpp.static_dps_source import StaticDpsSource
 from mem_probe.il2cpp.script_parser import ScriptIndex
 from mem_probe.il2cpp import auto_offsets as _ao
 
+try:
+    from mem_probe import cy_memscan as _cy
+except Exception:  # pragma: no cover
+    _cy = None
+
 
 # ────────── 常量 ──────────
 ENTITY_MGR_CLASS = "Panda.ZGame.ZEntityMgr"
@@ -145,6 +150,13 @@ class EntityMgrReader:
         self._last_uuid: int = 0
         self._last_check: float = 0.0
         self._full_si: Optional[ScriptIndex] = None
+        # Cold-locate state: a confirmed mgr's region is the warm hint for the
+        # next acquisition; a failed scan backs off so loading screens / entity-less
+        # scenes don't re-sweep the whole heap every 1s tick.
+        self._hint_base: int = 0
+        self._scratch: Optional[bytearray] = None
+        self._miss_until: float = 0.0
+        self._miss_backoff: float = 1.0
         # auto-offset: resolve ZEntityMgr/ZEntity field offsets BY NAME from the dump
         # once, with the verified literals as fallback. The inline heap scan and the
         # batched id reads then use these ints exactly like the old constants, so the
@@ -213,8 +225,8 @@ class EntityMgrReader:
         #    memory (no dump, no script.json, version-robust, onedir-safe). This is
         #    the production path for frozen clients and for new game versions.
         try:
-            from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
-            idx = build_live_class_index(sr.pm, {ENTITY_MGR_CLASS}, time_budget_s=30)
+            from mem_probe.il2cpp.klass_index import resolve_klasses
+            idx = resolve_klasses(sr.pm, {ENTITY_MGR_CLASS}, time_budget_s=30)
             kp = int(idx.get(ENTITY_MGR_CLASS, 0) or 0)
             if kp and self._klass_name(kp) == "ZEntityMgr":
                 self._mgr_klass = kp
@@ -247,10 +259,92 @@ class EntityMgrReader:
 
     # ---------- 锚点扫描 ----------
 
+    def _scan_one_region_for_mgr(self, r, klass_ptr: int, player_uuid: int):
+        """Scan one region for the ZEntityMgr instance.
+
+        Returns ``(obj, score)`` for the best klass-sentinel hit in this region
+        whose 4 dict fields are distinct heap pointers and whose entityDict_.count
+        is sane, or ``(0, -1)``. An exact playerUuid_ match returns immediately
+        with score = 1<<62 so the caller stops the whole sweep.
+
+        The klass-pointer hunt runs in the Cython AVX2 kernel over a reused scratch
+        buffer (zero-copy); only the handful of aligned hits pay the inline field
+        decode. (Was a pure-Python ``bytes.find`` walk + per-hit Python decode — the
+        single heaviest Python full-heap scan in the probe.)
+        """
+        pm = self._src.sr.pm
+        MIN_HEAP = 0x0000_0000_0010_0000
+        MAX_HEAP = 0x0000_7FFF_FFFF_FFFF
+
+        def _looks_heap(p: int) -> bool:
+            return MIN_HEAP <= p <= MAX_HEAP and (p & 0x7) == 0
+
+        read_into = getattr(pm, "read_bytes_into", None)
+        chunk = 16 * 1024 * 1024
+        span = self._scan_field_span
+        if self._scratch is None or len(self._scratch) < min(chunk, r.size):
+            self._scratch = bytearray(min(chunk, r.size))
+        best_obj = 0
+        best_score = -1
+        off = 0
+        while off < r.size:
+            n = min(chunk, r.size - off)
+            if read_into is not None:
+                got = read_into(r.base + off, self._scratch, n)
+                if got <= 0:
+                    break
+                buf = self._scratch
+            else:
+                blob = pm.read_bytes(r.base + off, n)
+                if blob is None:
+                    break
+                buf = blob
+                got = len(blob)
+            mv = memoryview(buf)[:got]
+            if _cy is not None and hasattr(_cy, "find_aligned_u64"):
+                hits = _cy.find_aligned_u64(mv, klass_ptr, 4096)
+            else:  # pragma: no cover - pure-Python last resort
+                kpb = klass_ptr.to_bytes(8, "little")
+                bb = bytes(mv)
+                hits, s = [], 0
+                while True:
+                    j = bb.find(kpb, s)
+                    if j < 0:
+                        break
+                    if (j & 7) == 0:
+                        hits.append(j)
+                    s = j + 8
+            for idx in hits:
+                if idx + span > got:
+                    continue
+                bd = int.from_bytes(mv[idx + self.off_boss_dict:idx + self.off_boss_dict + 8], "little")
+                md = int.from_bytes(mv[idx + self.off_monster_dict:idx + self.off_monster_dict + 8], "little")
+                nd = int.from_bytes(mv[idx + self.off_npc_dict:idx + self.off_npc_dict + 8], "little")
+                ed = int.from_bytes(mv[idx + self.off_entity_dict:idx + self.off_entity_dict + 8], "little")
+                if not (_looks_heap(bd) and _looks_heap(md) and _looks_heap(nd)
+                        and _looks_heap(ed) and len({bd, md, nd, ed}) == 4):
+                    continue
+                obj = r.base + off + idx
+                puid = int.from_bytes(mv[idx + self.off_player_uuid:idx + self.off_player_uuid + 8],
+                                      "little", signed=True)
+                try:
+                    ed_cnt = pm.read_i32(ed + DICT_COUNT_OFF)
+                except Exception:
+                    ed_cnt = None
+                if ed_cnt is not None and 0 <= ed_cnt <= 8192:
+                    if puid == player_uuid and player_uuid:
+                        return obj, (1 << 62)   # absolute self, stop everything
+                    if ed_cnt > best_score:
+                        best_score = ed_cnt
+                        best_obj = obj
+            off += n
+        return best_obj, best_score
+
     def _scan_for_mgr(self, player_uuid: int) -> Optional[int]:
         """单遍扫描堆: 找 *(addr)==klass_ptr 且 bd/md/nd 都是有效堆指针 + entityDict_.count 合理.
 
         早退条件: playerUuid_ 字段匹配 (绝对真身); 否则收集 best-by-count.
+        命中 region 记为 warm hint, 下次冷定位先扫它。
         """
         sr = self._src.sr
         pm = sr.pm
@@ -259,60 +353,30 @@ class EntityMgrReader:
         if not klass_ptr:
             return None
 
-        kp_bytes = klass_ptr.to_bytes(8, "little")
-        # Some game versions lay out il2cpp data + the managed heap entirely in the
-        # low 4 GB (observed klass~0x33M, mgr~0x66M, dict objects~0x7fM). A 4 GB
-        # floor wrongly rejects those, so use the same permissive bound as the rest
-        # of the probe (>= 1 MB). The 4-distinct-dict + entityDict-count gate keeps
-        # false positives out.
-        MIN_HEAP = 0x0000_0000_0010_0000
-        MAX_HEAP = 0x0000_7FFF_FFFF_FFFF
-
-        def _looks_heap(p: int) -> bool:
-            return MIN_HEAP <= p <= MAX_HEAP and (p & 0x7) == 0
-
         best_obj = 0
         best_score = -1
+        # Warm hint: re-scan the region that last held the mgr before the full sweep.
+        if self._hint_base:
+            for r in pm.iter_regions(only_readable=True, only_private=True):
+                if r.base == self._hint_base:
+                    obj, score = self._scan_one_region_for_mgr(r, klass_ptr, player_uuid)
+                    if score >= (1 << 62):
+                        self._hint_base = r.base
+                        return obj
+                    if score > best_score:
+                        best_score, best_obj = score, obj
+                    break
+            if best_obj:
+                return best_obj
 
         for r in pm.iter_regions(only_readable=True, only_private=True):
-            chunk = 16 * 1024 * 1024
-            off = 0
-            while off < r.size:
-                n = min(chunk, r.size - off)
-                blob = pm.read_bytes(r.base + off, n)
-                if blob is None:
-                    break
-                view = memoryview(blob)
-                # 找所有 klass_ptr 出现位置
-                start = 0
-                while True:
-                    idx = blob.find(kp_bytes, start)
-                    if idx < 0 or idx + self._scan_field_span > n:
-                        break
-                    if (idx & 0x7) == 0:
-                        # 内联读 6 字段 (auto-resolved offsets)
-                        bd = int.from_bytes(view[idx + self.off_boss_dict:idx + self.off_boss_dict + 8], "little")
-                        md = int.from_bytes(view[idx + self.off_monster_dict:idx + self.off_monster_dict + 8], "little")
-                        nd = int.from_bytes(view[idx + self.off_npc_dict:idx + self.off_npc_dict + 8], "little")
-                        ed = int.from_bytes(view[idx + self.off_entity_dict:idx + self.off_entity_dict + 8], "little")
-                        if (_looks_heap(bd) and _looks_heap(md) and _looks_heap(nd)
-                                and _looks_heap(ed) and len({bd, md, nd, ed}) == 4):
-                            obj = r.base + off + idx
-                            puid = int.from_bytes(view[idx + self.off_player_uuid:idx + self.off_player_uuid + 8], "little", signed=True)
-                            # entityDict_.count 校验 (跨内存读, 因为 ed 在另一块)
-                            try:
-                                ed_cnt = pm.read_i32(ed + DICT_COUNT_OFF)
-                            except Exception:
-                                ed_cnt = None
-                            if ed_cnt is not None and 0 <= ed_cnt <= 8192:
-                                if puid == player_uuid:
-                                    return obj  # 绝对真身, 早退
-                                # 否则记录最高 count
-                                if ed_cnt > best_score:
-                                    best_score = ed_cnt
-                                    best_obj = obj
-                    start = idx + 1
-                off += n
+            obj, score = self._scan_one_region_for_mgr(r, klass_ptr, player_uuid)
+            if score >= (1 << 62):
+                self._hint_base = r.base
+                return obj
+            if score > best_score:
+                best_score, best_obj = score, obj
+                self._hint_base = r.base
         return best_obj or None
 
     def locate(self, player_uuid: int, force_rescan: bool = False) -> Optional[int]:
@@ -329,16 +393,30 @@ class EntityMgrReader:
             except Exception:
                 pass
             self._mgr_addr = 0
+        # Negative-result backoff: while the mgr can't be located (loading screen /
+        # entity-less scene) a 1s entity tick was re-sweeping the whole heap every
+        # tick. Skip the scan until the cooldown elapses (cleared on success).
+        now = time.time()
+        if not force_rescan and now < self._miss_until:
+            return None
         addr = self._scan_for_mgr(player_uuid)
         if addr:
             self._mgr_addr = addr
             self._last_uuid = player_uuid
-        return addr or None
+            self._miss_backoff = 1.0
+            return addr
+        self._miss_until = now + self._miss_backoff
+        self._miss_backoff = min(self._miss_backoff * 2.0, 8.0)
+        return None
 
     # ---------- 字典读 ----------
 
     def _read_dict_entries(self, dict_addr: int, max_entries: int = 256) -> List[Tuple[int, int]]:
-        """读 .NET Dictionary<long, ref> 的 (key, value_ptr) 列表."""
+        """读 .NET Dictionary<long, ref> 的 (key, value_ptr) 列表.
+
+        entries[] 整块一次 read_bytes 进来本地解码 (struct), 取代每槽 3 笔单读 RPM —
+        每 tick 把 ~1.5k 次系统调用收成 1 次大读 + 本地循环。
+        """
         if not dict_addr:
             return []
         pm = self._src.sr.pm
@@ -357,7 +435,21 @@ class EntityMgrReader:
         if scan_n <= 0:
             return []
         base = entries_arr + ARRAY_ELEMS_OFF
+        blob = pm.read_bytes(base, scan_n * ENTRY_SIZE)
         out: List[Tuple[int, int]] = []
+        if blob and len(blob) >= ENTRY_SIZE:
+            import struct
+            usable = (len(blob) // ENTRY_SIZE) * ENTRY_SIZE
+            # Entry { i32 hashCode; i32 next; i64 key; u64 value } stride 24
+            for hash_code, _next, key, val in struct.iter_unpack("<iiqQ", blob[:usable]):
+                if len(out) >= count or len(out) >= max_entries:
+                    break
+                if hash_code < 0:           # 空槽
+                    continue
+                if val:
+                    out.append((key, val))
+            return out
+        # fallback: per-slot reads (read_bytes failed — page straddle on a huge dict)
         for i in range(scan_n):
             if len(out) >= count or len(out) >= max_entries:
                 break
@@ -366,7 +458,6 @@ class EntityMgrReader:
                 hash_code = pm.read_i32(ep + ENTRY_HASH_OFF)
             except Exception:
                 continue
-            # hashCode < 0 表示空槽 (.NET 标准)
             if hash_code is None or hash_code < 0:
                 continue
             try:

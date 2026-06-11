@@ -18,12 +18,16 @@ class FakeAnchorReader(AnchorMemoryReader):
         self._cached_regions = []
         self._cache_ts = 0.0
         self._regen_ttl = 5.0
+        self._scan_scratch = None
         self._resolved_cache = None
         self._resolved_cache_uid = 0
         self._resolved_cache_ts = 0.0
         self.max_scan_regions_mb = 0
         self.last_region_scan_bytes = 0
         self.last_region_scan_limited = False
+        # Populate the proto field-offset layout maps (CHAR_SERIALIZE etc.) from the
+        # literals — no live process / dump needed (offset(None, ...) -> literal).
+        self._init_layout(None)
 
     def _read_i64(self, addr: int):
         return self.values.get(addr)

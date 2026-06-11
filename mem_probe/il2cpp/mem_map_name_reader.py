@@ -31,6 +31,11 @@ from mem_probe.il2cpp.mem_string_pool import (
     STR_LEN_OFF, STR_CHARS_OFF, ARR_LEN_OFF, ARR_ELEMS_OFF, NATIVEARRAY_LEN_OFF,
 )
 
+try:
+    from mem_probe import cy_memscan as _cy
+except Exception:  # pragma: no cover
+    _cy = None
+
 PROXYMGR_STATIC_FIELDS_OFF = 0xB8                 # Il2CppClass.static_fields (route2)
 
 SCENE_CLS = "Bokura.SceneTableBase"
@@ -48,6 +53,8 @@ class MapNameReader:
         self._pool = StringPoolBridge(dps_source)
         self._scene_names: Dict[int, str] = {}
         self._scene_cfg = 0
+        self._scene_cfg_hint = 0          # region base that last held SceneConfigMgr
+        self._cfg_scratch = None          # reused scan buffer
         self._ready = False
 
     # ── klass/field/string resolution: delegated to the shared bridge ─────────
@@ -103,56 +110,122 @@ class MapNameReader:
     SCENECFG_SCENE_TABLE_OFF = 0xD8  # sceneTable_
     SCENECFG_FIRST_TABLE_OFF = 0x50  # monsterTable_ (first of ~18 consecutive ZTable ptrs)
 
-    def _locate_scene_cfg(self) -> int:
+    def _validate_scene_cfg(self, obj: int, sset: set) -> bool:
+        """One block read of 0x50..0xE4 + local checks (was 14 single RPMs)."""
+        if obj < 0:
+            return False
+        blob = self.pm.read_bytes(obj + 0x50, (self.SCENECFG_CUR_OFF + 4) - 0x50)
+        if not blob or len(blob) < (self.SCENECFG_CUR_OFF + 4) - 0x50:
+            return False
+        import struct
+        st = struct.unpack_from("<Q", blob, self.SCENECFG_SCENE_TABLE_OFF - 0x50)[0]
+        mt = struct.unpack_from("<Q", blob, self.SCENECFG_FIRST_TABLE_OFF - 0x50)[0]
+        if not (_plaus(st) and _plaus(mt) and st != mt):
+            return False
+        run = 0
+        for o in range(0x50, 0xE0, 8):
+            p = struct.unpack_from("<Q", blob, o - 0x50)[0]
+            if _plaus(p):
+                run += 1
+        if run < 12:
+            return False
+        cur = struct.unpack_from("<i", blob, self.SCENECFG_CUR_OFF - 0x50)[0]
+        return cur in sset
+
+    def _locate_scene_cfg(self, hint_scene_id: int = 0) -> int:
         """SceneConfigMgr singleton (klass not pointer-scannable in the GA image, so
         located structurally): an object carrying a long run of heap-pointer table
-        fields (0x50..0xD8) AND a known scene id at curSceneId_(0xE0)."""
+        fields (0x50..0xD8) AND a known scene id at curSceneId_(0xE0).
+
+        ``hint_scene_id`` (the TCP-known current scene id, when available) makes the
+        heap value-scan a single-needle search instead of an N-way set scan, and is
+        the most specific anchor; the cython kernel + a reused scratch buffer replace
+        the per-region numpy copy. A confirmed object's region is remembered so a
+        re-locate after invalidation re-scans it first.
+        """
         if self._scene_cfg and self.pm.read_i32(self._scene_cfg + self.SCENECFG_CUR_OFF) in self._scene_names:
             return self._scene_cfg
-        try:
-            import numpy as np
-        except Exception:
-            np = None
         sset = set(self._scene_names.keys())
-        if np is None or not sset:
+        if not sset:
             return 0
-        sarr = np.fromiter(sset, dtype="<u4")
         cur_off = self.SCENECFG_CUR_OFF
+        # Prefer the single TCP-known scene id as the needle; fall back to the full
+        # known-id set. The id is a u32 at curSceneId_; subtract the offset for obj.
+        needle_one = int(hint_scene_id) if (hint_scene_id and hint_scene_id in sset) else 0
+
+        def _scan_region(r) -> int:
+            read_into = getattr(self.pm, "read_bytes_into", None)
+            if self._cfg_scratch is None or len(self._cfg_scratch) < r.size:
+                self._cfg_scratch = bytearray(min(r.size, 64 * 1024 * 1024))
+            n = min(r.size, len(self._cfg_scratch))
+            if read_into is not None:
+                got = read_into(r.base, self._cfg_scratch, n)
+                if got <= 0:
+                    return 0
+                mv = memoryview(self._cfg_scratch)[:got]
+            else:
+                blob = self.pm.read_bytes(r.base, n)
+                if not blob:
+                    return 0
+                mv = blob
+                got = n
+            if _cy is not None and needle_one and hasattr(_cy, "find_aligned_u32"):
+                # 4-aligned only; curSceneId_ is at obj+0xE0 (8-aligned obj -> 0xE0
+                # is 4-aligned), so an aligned scan can't miss it.
+                hit_offs = [o for o in _cy.find_aligned_u32(mv, needle_one & 0xFFFFFFFF, 4096)]
+                cands = ((o, needle_one) for o in hit_offs)
+            elif _cy is not None and hasattr(_cy, "find_aligned_u32_in_set"):
+                cands = _cy.find_aligned_u32_in_set(mv, sset, 1 << 20)
+            else:
+                return 0
+            for item in cands:
+                i = item[0] if isinstance(item, tuple) else item
+                obj = r.base + i - cur_off
+                if self._validate_scene_cfg(obj, sset):
+                    return obj
+            return 0
+
+        # warm hint first
+        if self._scene_cfg_hint:
+            for r in self.pm.iter_regions(only_readable=True, only_private=True):
+                if r.base == self._scene_cfg_hint and r.size <= 64 * 1024 * 1024:
+                    obj = _scan_region(r)
+                    if obj:
+                        self._scene_cfg = obj
+                        return obj
+                    break
         for r in self.pm.iter_regions(only_readable=True, only_private=True):
             if r.size > 64 * 1024 * 1024:
                 continue
-            blob = self.pm.read_bytes(r.base, r.size)
-            if not blob:
-                continue
-            u = np.frombuffer(blob[:(len(blob) // 4) * 4], dtype="<u4")
-            hits = np.nonzero(np.isin(u, sarr))[0]
-            for i in hits.tolist():
-                obj = r.base + i * 4 - cur_off
-                st = self.pm.read_u64(obj + self.SCENECFG_SCENE_TABLE_OFF)
-                mt = self.pm.read_u64(obj + self.SCENECFG_FIRST_TABLE_OFF)
-                if not (_plaus(st) and _plaus(mt) and st != mt):
-                    continue
-                # confirm the long table-pointer run (most of 0x50..0xD8 are heap ptrs)
-                run = sum(1 for o in range(0x50, 0xE0, 8)
-                          if _plaus(self.pm.read_u64(obj + o)))
-                if run >= 12 and self.pm.read_i32(obj + cur_off) in sset:
-                    self._scene_cfg = obj
-                    return obj
+            obj = _scan_region(r)
+            if obj:
+                self._scene_cfg = obj
+                self._scene_cfg_hint = r.base
+                return obj
         return 0
 
-    def current_scene_id(self) -> int:
-        cfg = self._locate_scene_cfg()
+    def current_scene_id(self, hint_scene_id: int = 0) -> int:
+        cfg = self._locate_scene_cfg(hint_scene_id)
         if not cfg:
             return 0
         return int(self.pm.read_i32(cfg + self.SCENECFG_CUR_OFF) or 0)
 
-    def current_map_name(self) -> str:
-        return self.name_for_scene(self.current_scene_id())
+    def current_map_name(self, hint_scene_id: int = 0) -> str:
+        return self.name_for_scene(self.current_scene_id(hint_scene_id))
 
     # ── public ────────────────────────────────────────────────────────────────
     def build(self) -> bool:
         """One-shot heavy resolve (two heap scans). Returns True if names are ready."""
         try:
+            # Resolve every class this reader needs in ONE shared-index pass (the
+            # union), so first launch scans the GA image once instead of 3x; warm
+            # launches hit the persisted per-version RVAs. The individual
+            # resolve_klass calls below then just read the cache.
+            try:
+                from mem_probe.il2cpp.klass_index import resolve_klasses
+                resolve_klasses(self.pm, {POOL_CLS, SCENE_CLS, PROXY_CLS}, time_budget_s=90)
+            except Exception:
+                pass
             if not self._ensure_pool():
                 return False
             if not self._ensure_scene_index():

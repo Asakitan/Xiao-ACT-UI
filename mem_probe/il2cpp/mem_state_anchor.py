@@ -208,6 +208,7 @@ class AnchorMemoryReader:
         self._cached_ranked = None
         self._cache_ts = 0.0
         self._regen_ttl = 5.0
+        self._scan_scratch = None        # reused zero-copy uid-scan buffer
         self._resolved_cache: Optional[ResolvedSelf] = None
         self._resolved_cache_uid: int = 0
         self._resolved_cache_ts: float = 0.0
@@ -469,6 +470,9 @@ class AnchorMemoryReader:
             return
         emitted = 0
         needle = int(anchor.uid) & 0xFFFFFFFFFFFFFFFF
+        read_into = getattr(self.pm, "read_bytes_into", None)
+        if self._scan_scratch is None or len(self._scan_scratch) < self.UID_SCAN_CHUNK:
+            self._scan_scratch = bytearray(self.UID_SCAN_CHUNK)
         for region in self._ranked_regions():
             base = region.base
             size = region.size
@@ -477,14 +481,23 @@ class AnchorMemoryReader:
             off = 0
             while off < size:
                 n = min(self.UID_SCAN_CHUNK, size - off)
-                blob = self._read(base + off, n)
-                if blob is None:
-                    off += n
-                    continue
+                if read_into is not None:
+                    got = read_into(base + off, self._scan_scratch, n)
+                    if got <= 0:
+                        off += n
+                        continue
+                    buf = memoryview(self._scan_scratch)[:got]
+                else:
+                    blob = self._read(base + off, n)
+                    if blob is None:
+                        off += n
+                        continue
+                    buf = blob
+                    got = n
                 remaining = max_hits - emitted
                 if remaining <= 0:
                     return
-                for hit_off in _cy.find_aligned_u64(blob, needle, remaining):
+                for hit_off in _cy.find_aligned_u64(buf, needle, remaining):
                     cs_base = base + off + int(hit_off) - self.CHAR_SERIALIZE['CharId'][0]
                     if cs_base >= base:
                         yield cs_base
@@ -524,14 +537,49 @@ class AnchorMemoryReader:
         ptr_blob = self._read(arr + 0x20, count * 8)
         if not ptr_blob or len(ptr_blob) < count * 8:
             return set()
-        matched: Set[int] = set()
+        sid_off = self.SKILL_CD_INFO['SkillLevelId'][0]
+        dur_off = self.SKILL_CD_INFO['Duration'][0]
+        # Decode the element pointers locally, then read every (SkillLevelId,
+        # Duration) pair in ONE batched nogil RPM call instead of 2 single reads
+        # per element (this runs on every 2 Hz cache-hit revalidation).
+        ptrs = []
+        import struct
         for i in range(count):
-            ptr = int.from_bytes(ptr_blob[i * 8:i * 8 + 8], 'little', signed=False)
-            if not self._plausible_ptr(ptr):
-                continue
-            sid = self._read_i32(ptr + self.SKILL_CD_INFO['SkillLevelId'][0])
+            ptr = struct.unpack_from('<Q', ptr_blob, i * 8)[0]
+            if self._plausible_ptr(ptr):
+                ptrs.append(ptr)
+        if not ptrs:
+            return set()
+        matched: Set[int] = set()
+        batch = None
+        reader = getattr(self.pm, "read_u32_many", None)
+        if callable(reader):
+            try:
+                addrs = []
+                for p in ptrs:
+                    addrs.append(p + sid_off)
+                    addrs.append(p + dur_off)
+                batch = reader(addrs)
+            except Exception:
+                batch = None
+        if batch is not None and len(batch) == 2 * len(ptrs):
+            for i in range(len(ptrs)):
+                sv = batch[2 * i]
+                if sv is None:
+                    continue
+                sid = sv - 0x100000000 if sv >= 0x80000000 else sv
+                if sid in anchor_skills:
+                    dv = batch[2 * i + 1]
+                    if dv is None:
+                        continue
+                    dur = dv - 0x100000000 if dv >= 0x80000000 else dv
+                    if 0 <= dur <= 600_000:
+                        matched.add(int(sid))
+            return matched
+        for ptr in ptrs:
+            sid = self._read_i32(ptr + sid_off)
             if sid in anchor_skills:
-                dur = self._read_i32(ptr + self.SKILL_CD_INFO['Duration'][0])
+                dur = self._read_i32(ptr + dur_off)
                 if dur is None or dur < 0 or dur > 600_000:
                     continue
                 matched.add(int(sid))

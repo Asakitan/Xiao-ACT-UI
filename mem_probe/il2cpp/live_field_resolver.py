@@ -61,9 +61,11 @@ class LiveFieldResolver:
                 kp = 0
         if not kp:
             try:
-                from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
-                idx = build_live_class_index(self.pm, {class_name}, time_budget_s=self._budget)
-                kp = int(idx.get(class_name, 0) or 0)
+                # Process-wide shared index: one GA scan serves every reader and
+                # warm starts from the persisted per-version RVA cache.
+                from mem_probe.il2cpp.klass_index import resolve_klasses
+                kp = int(resolve_klasses(self.pm, {class_name},
+                                         time_budget_s=self._budget).get(class_name, 0) or 0)
             except Exception:
                 kp = 0
         self._klass[class_name] = kp

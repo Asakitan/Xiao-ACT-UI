@@ -28,6 +28,11 @@ try:
 except Exception:  # pragma: no cover
     _np = None
 
+try:
+    from mem_probe import cy_memscan as _cy
+except Exception:  # pragma: no cover
+    _cy = None
+
 CLASS_NAME_OFF = 0x10
 CLASS_NAMESPACE_OFF = 0x18
 GAME_ASSEMBLY = "GameAssembly.dll"
@@ -90,21 +95,39 @@ def build_live_class_index(pm, wanted: Set[str], *, ga_module=None,
     t0 = time.time()
     off = 0
     chunk = 32 * 1024 * 1024
+    # Zero-copy chunk feed (commit 349cade convention): RPM straight into one
+    # reused scratch buffer instead of allocating + pymem-double-copying a fresh
+    # 32 MB bytes per chunk.
+    read_into = getattr(pm, "read_bytes_into", None)
+    scratch = bytearray(min(chunk, size)) if size else None
     while off < size and len(found) < len(want) and (time.time() - t0) < time_budget_s:
         n = min(chunk, size - off)
-        blob = pm.read_bytes(base + off, n)
-        if blob is None:
-            off += n
-            continue
-        # vectorised klass-range pre-filter (numpy) or scalar fallback
-        cands = []
-        usable = (len(blob) // 8) * 8
-        if _np is not None and usable:
-            arr = _np.frombuffer(blob[:usable], dtype="<u8")
+        mv = None
+        if read_into is not None and scratch is not None:
+            got = read_into(base + off, scratch, n)
+            if got <= 0:
+                off += n
+                continue
+            mv = memoryview(scratch)[:got]
+        else:
+            blob = pm.read_bytes(base + off, n)
+            if blob is None:
+                off += n
+                continue
+            mv = memoryview(blob)
+        # klass-range pre-filter + dedup: Cython kernel (nogil), else numpy, else
+        # a pure-Python scalar walk (loud last resort — see cy_memscan warning).
+        if _cy is not None and hasattr(_cy, "collect_aligned_u64_in_range"):
+            cands = _cy.collect_aligned_u64_in_range(mv, klass_lo, klass_hi)
+        elif _np is not None:
+            usable = (len(mv) // 8) * 8
+            arr = _np.frombuffer(bytes(mv[:usable]), dtype="<u8")
             m = (arr >= klass_lo) & (arr <= klass_hi)
             cands = _np.unique(arr[m]).tolist()
         else:
             import struct
+            blob = bytes(mv)
+            usable = (len(blob) // 8) * 8
             uniq = set()
             for p in range(0, usable - 8, 8):
                 v = struct.unpack_from("<Q", blob, p)[0]
