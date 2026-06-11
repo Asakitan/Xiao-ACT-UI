@@ -2101,18 +2101,21 @@ def _payload_first_int(payload: Mapping[str, Any], keys: Iterable[str]) -> int:
     return 0
 
 
-def _short_uid(uid: Any) -> str:
-    """Last 6 digits of a UID — distinguishes unnamed entities without dumping a
-    13-digit wall of numbers. The full uid stays in the row payload for plugins."""
-    text = str(uid or "").strip()
-    return text[-6:] if len(text) > 6 else text
-
-
 def _friendly_unknown(kind_label: str, uid: Any) -> str:
-    """Readable fallback for an unresolved entity: '未知怪物·612345' instead of
-    '怪物#2403082961536'. Readable-first; the raw uid remains queryable in payload."""
-    tag = _short_uid(uid)
-    return f"{kind_label}·{tag}" if tag else kind_label
+    """Stable fallback for unresolved entities.
+
+    Action Log groups must keep the full UID visible so users can copy/search
+    the exact entity and so generated labels never masquerade as resolved names.
+    """
+    text = str(uid or "").strip()
+    if not text:
+        return kind_label
+    label = {
+        "未知怪物": "怪物",
+        "未知目标": "目标",
+        "未知参与者": "参与者",
+    }.get(kind_label, kind_label)
+    return f"{label}#{text}"
 
 
 def _is_generated_entity_label(text: Any) -> bool:

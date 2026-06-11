@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.22: ACT Action Log 兜底名称与退出清理修复.
+
+  1) `act_platform/runtime.py` 修复 Action Log 未解析怪物/目标的显示兜底。
+     未知怪物现在恢复为 `怪物#完整UID`, 方便复制搜索和跨面板定位,
+     同时仍不会写入 `name_resolution` 作为真实名字解析证据。
+
+  2) `gui_modules/sao_gui_lifecycle_mixin.py` 修复关闭流程对可选面板属性的裸访问。
+     当 Mem Scope 或部分 ACT 子面板从未初始化时, 退出清理不再因 AttributeError 中断,
+     GPU 子窗口销毁、退出叠层清理和 root.quit 会按顺序完成。
+
 ## v4.5.21: WebView2 BossRaid 云端上传桥接修复.
 
   1) `web/pywebview-shim.js` 补齐最后一个动态 BossRaid 缺口:
