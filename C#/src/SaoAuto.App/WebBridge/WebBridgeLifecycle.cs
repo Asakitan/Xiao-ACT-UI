@@ -38,6 +38,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private UpdaterBridge? _updaterBridge;
     private AutoKeyCloudBridge? _autoKeyCloudBridge;
     private BossRaidCloudBridge? _bossRaidCloudBridge;
+    private BossRaidRuntimeBridge? _bossRaidRuntimeBridge;
     private SoundBridge? _soundBridge;
     private LegacyUiBridge? _legacyUiBridge;
     private FilePickerBridge? _filePickerBridge;
@@ -237,6 +238,16 @@ public sealed class WebBridgeLifecycle : IDisposable
         _bossRaidCloudBridge = new BossRaidCloudBridge(Router, client, settings, clientFromSettings: clientFromSettings);
     }
 
+    /// <summary>S202 — attach runtime controls used by raid_editor.html.
+    /// Idempotent.</summary>
+    public void AttachBossRaidRuntime(BossRaidEngine engine)
+    {
+        if (engine is null) throw new ArgumentNullException(nameof(engine));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _bossRaidRuntimeBridge?.Dispose();
+        _bossRaidRuntimeBridge = new BossRaidRuntimeBridge(Router, engine);
+    }
+
     /// <summary>S193 — attach the sound playback bridge so the
     /// pywebview-shim's <c>sound.play</c> calls route into the
     /// in-process <see cref="ISoundPlayer"/>. Idempotent.</summary>
@@ -289,6 +300,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         _filePickerBridge?.Dispose();
         _legacyUiBridge?.Dispose();
         _soundBridge?.Dispose();
+        _bossRaidRuntimeBridge?.Dispose();
         _bossRaidCloudBridge?.Dispose();
         _autoKeyCloudBridge?.Dispose();
         _updaterBridge?.Dispose();

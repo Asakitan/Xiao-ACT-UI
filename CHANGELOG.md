@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.13: WebView2 Raid Editor 阶段推进与重置桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `raid_next_phase()` 并新增
+     `bossraid.runtime.next_phase` C# 桥接。
+     Raid Editor 按钮现在会调用真实 `BossRaidEngine.NextPhase()`, idle 状态保持
+     no-op 成功语义, 不再因为缺 API 静默失效。
+
+  2) `web/pywebview-shim.js` 补齐 `raid_reset()` 并新增
+     `bossraid.runtime.reset` C# 桥接。
+     Raid Editor Reset 现在调用真实 `BossRaidEngine.Stop()`, 并返回当前 runtime 状态。
+
 ## v4.5.12: WebView2 本地文件导入与 AutoKey 录制动作保存修复.
 
   1) `web/pywebview-shim.js` 补齐 `select_file(path)` 并新增

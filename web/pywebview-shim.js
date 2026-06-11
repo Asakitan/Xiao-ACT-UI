@@ -130,6 +130,12 @@
         get_boss_raid_state: function () {
             return call('bossraid.state.get', {}).then(normalizeOk);
         },
+        raid_next_phase: function () {
+            return call('bossraid.runtime.next_phase', {}).then(normalizeOk);
+        },
+        raid_reset: function () {
+            return call('bossraid.runtime.reset', {}).then(normalizeOk);
+        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },

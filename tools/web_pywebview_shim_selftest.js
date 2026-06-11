@@ -225,6 +225,14 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "bossraid.state.get", "get_boss_raid_state command mismatch");
 
+  await window.pywebview.api.raid_next_phase();
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.runtime.next_phase", "raid_next_phase command mismatch");
+
+  await window.pywebview.api.raid_reset();
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.runtime.reset", "raid_reset command mismatch");
+
   await window.pywebview.api.browse_dir("C:\\temp");
   last = calls[calls.length - 1];
   assert(last.name === "file.browse_dir", "browse_dir command mismatch");

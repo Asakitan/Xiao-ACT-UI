@@ -51,6 +51,8 @@ public static class BridgeCommands
     public const string UploadBossRaid = "bossraid.cloud.upload";
     public const string SetBossRaidServerUrl = "bossraid.cloud.set_server_url";
     public const string GetBossRaidState = "bossraid.state.get";
+    public const string RaidNextPhase = "bossraid.runtime.next_phase";
+    public const string RaidReset = "bossraid.runtime.reset";
 
     // Commander
     public const string OpenCommander = "commander.open";
