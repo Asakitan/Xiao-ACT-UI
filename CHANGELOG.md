@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.24: Selftest 直接运行路径修复.
+
+  1) `tools/_bootstrap.py` 补齐顶层 `tools/*_selftest.py` 的直接运行路径。
+     不再需要手动设置 `PYTHONPATH=.` 才能导入 `act_platform`、`engines`、
+     `gui_modules` 或 `config`, 避免批量自测误报 ModuleNotFoundError。
+
+  2) `tools/tablekit/_bootstrap.py` 补齐嵌套 `tools/tablekit/*_selftest.py` 的直接运行路径。
+     `live_name_crossref_selftest.py` 可从 repo 根直接运行并导入 `tools.tablekit.*`。
+
 ## v4.5.23: Web 编辑器乱码与 shim 重复 API 修复.
 
   1) `web/autokey_editor.html` 和 `web/raid_editor.html` 清理用户可见 mojibake。

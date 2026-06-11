@@ -14,6 +14,8 @@ Run from the repo root: ``python -m tools.hotkey_combo_selftest``
 
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401
+
 import re
 import os
 import unittest

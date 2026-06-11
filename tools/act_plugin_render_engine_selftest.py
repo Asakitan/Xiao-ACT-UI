@@ -8,6 +8,8 @@ bundled example plugins that exercise the new surface.
 
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401
+
 import json
 import os
 import tempfile

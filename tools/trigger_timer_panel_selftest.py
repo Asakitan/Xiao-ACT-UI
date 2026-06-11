@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401
+
 import unittest
 
 from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
