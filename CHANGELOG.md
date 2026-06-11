@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.27: Web 菜单 Profile 点击参数转义修复.
+
+  1) `web/menu.html` 修复 AutoKey 本地配置卡与云端下载按钮的 inline `onclick` 参数拼接。
+     profile id 现在统一通过 `_jsAttrArg()` 做 JSON 编码和 HTML 属性转义,
+     避免包含引号、反斜杠或特殊字符时编辑、启用、复制、导出、删除和下载动作失效。
+
+  2) `web/menu.html` 修复 BossRaid 本地配置卡与云端下载按钮的 profile id 传递。
+     本地选择/激活/编辑和云端下载都使用同一套安全参数编码, 保持复杂 ID 的完整传递。
+
 ## v4.5.26: ACT Web 点击参数转义修复.
 
   1) `web/act_combatant_drilldown.html` 修复技能行 `onclick` 的 `skill_id` 拼接。

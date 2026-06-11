@@ -65,6 +65,25 @@ def main() -> int:
     if js_frame_height != frame_height:
         raise AssertionError("openMenu() viewport clamp must match .menu-frame height")
 
+    if "onclick=\"_akActivateProfile(' + JSON.stringify(id) + ')" in html:
+        raise AssertionError("AutoKey profile onclick must HTML-escape JSON string args")
+    if "onclick=\"_akDownloadRemote(' + JSON.stringify(remoteId) + ')" in html:
+        raise AssertionError("AutoKey cloud download onclick must HTML-escape JSON string args")
+    if "onclick=\"_brSelectProfile(\\'' + p.id + '\\')" in html:
+        raise AssertionError("BossRaid profile card onclick must not single-quote raw profile ids")
+    if "_brDownloadRemote(' + JSON.stringify(remoteId) + ')" in html:
+        raise AssertionError("BossRaid cloud download onclick must HTML-escape JSON string args")
+    if "function _jsAttrArg" not in html:
+        raise AssertionError("menu.html must provide _jsAttrArg for inline handler arguments")
+    if "_akActivateProfile(' + _jsAttrArg(id) + ')" not in html:
+        raise AssertionError("AutoKey activate must use _jsAttrArg(id)")
+    if "_akDownloadRemote(' + _jsAttrArg(remoteId) + ')" not in html:
+        raise AssertionError("AutoKey cloud download must use _jsAttrArg(remoteId)")
+    if "_brSelectProfile(' + _jsAttrArg(p.id) + ')" not in html:
+        raise AssertionError("BossRaid select must use _jsAttrArg(p.id)")
+    if "_brDownloadRemote(' + _jsAttrArg(remoteId) + ')" not in html:
+        raise AssertionError("BossRaid cloud download must use _jsAttrArg(remoteId)")
+
     print(
         f"OK web menu layout: {item_count} items, "
         f"item_box={item_box_height}px, frame={frame_height}px"
