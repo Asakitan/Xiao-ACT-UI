@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.48: Web 小面板条形数值渲染修复.
+
+  1) `web/raid_editor.html` 修复实体 HP 条渲染。
+     实体当前 HP/max HP 现在先归一化为有限非负数, HP 百分比夹到 0..100,
+     避免异常实体数据生成 `NaN%`、越界宽度或异常伤害文本。
+
+  2) `web/buff_coverage.html` 修复 Buff 覆盖率与时间渲染。
+     uptime、剩余秒数、elapsed、层数和触发次数现在统一过滤非有限数,
+     避免覆盖率条宽、倒计时和计数显示 `NaN`/`Infinity`。
+
 ## v4.5.47: Commander Web 数值渲染修复.
 
   1) `web/commander.html` 修复成员 HP 小条渲染。

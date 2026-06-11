@@ -80,13 +80,27 @@
   var rowsEl = document.getElementById('rows');
   var elapsedEl = document.getElementById('elapsed');
 
+  function finiteNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    if (!isFinite(n)) n = Number(fallback || 0);
+    return isFinite(n) ? n : 0;
+  }
+  function nonNegNum(v, fallback) {
+    return Math.max(0, finiteNum(v, fallback));
+  }
+  function pct01(v) {
+    return Math.max(0, Math.min(1, finiteNum(v, 0)));
+  }
   function fmtSec(s) {
+    if (s == null) return '∞';
+    s = finiteNum(s, -1);
     if (s == null || s < 0) return '∞';
     if (s >= 60) return Math.floor(s / 60) + ':' + ('0' + Math.floor(s % 60)).slice(-2);
     return s.toFixed(s < 10 ? 1 : 0) + 's';
   }
   function fmtElapsed(ms) {
-    var s = Math.floor((ms || 0) / 1000);
+    var s = Math.floor(nonNegNum(ms, 0) / 1000);
     return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
   }
 
@@ -101,13 +115,15 @@
     var html = '';
     for (var i = 0; i < buffs.length && i < 10; i++) {
       var b = buffs[i];
-      var pct = Math.max(0, Math.min(1, b.uptime_pct == null ? 0 : b.uptime_pct));
+      var pct = pct01(b.uptime_pct);
       var pctTxt = Math.round(pct * 100) + '%';
-      var rem = (b.rem_s == null) ? -1 : b.rem_s;
+      var rem = (b.rem_s == null) ? -1 : finiteNum(b.rem_s, -1);
       var urgent = rem >= 0 && rem <= 3;
       var full = pct >= 0.85;
-      var lyr = (b.layer && b.layer > 1) ? '<span class="lyr"> ×' + b.layer + '</span>' : '';
-      var trg = (b.apply_count && b.apply_count > 1) ? ('·' + b.apply_count) : '';
+      var layer = Math.floor(nonNegNum(b.layer, 0));
+      var applyCount = Math.floor(nonNegNum(b.apply_count, 0));
+      var lyr = layer > 1 ? '<span class="lyr"> ×' + layer + '</span>' : '';
+      var trg = applyCount > 1 ? ('·' + applyCount) : '';
       var nm = (b.name || ('#' + b.id));
       html += '<div class="row' + (urgent ? ' urgent' : '') + (full ? ' full' : '') + '">'
         + '<div class="cov" style="width:' + (pct * 100).toFixed(1) + '%"></div>'

@@ -1069,7 +1069,9 @@ function updateEntities(entities) {
         var roleClass = isBoss ? 'is-boss' : 'is-enemy';
         var roleLabel = isBoss ? 'BOSS' : 'ENEMY';
         var roleBtnClass = isBoss ? 'boss' : 'enemy';
-        var hpPct = e.max_hp > 0 ? Math.round(e.hp / e.max_hp * 100) : 0;
+        var hp = _clampNum(e.hp, 0, 0, Number.MAX_SAFE_INTEGER);
+        var maxHp = _clampNum(e.max_hp, 0, 0, Number.MAX_SAFE_INTEGER);
+        var hpPct = maxHp > 0 ? _clampInt(hp / maxHp * 100, 0, 0, 100) : 0;
         var dmgStr = _fmtNum(e.damage_dealt || 0);
         var uuidText = String(e.uuid == null ? '' : e.uuid);
         var uuidArg = _jsArg(e.uuid);
@@ -1193,13 +1195,14 @@ function fadeOut() {
 
 // Helpers
 function _fmtNum(v) {
+    v = _clampNum(v, 0, 0, Number.MAX_SAFE_INTEGER);
     if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
     if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
     if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
-    return '' + v;
+    return '' + Math.round(v);
 }
 function _fmtTime(s) {
-    s = Math.max(0, Math.floor(s || 0));
+    s = _clampInt(s, 0, 0, Number.MAX_SAFE_INTEGER);
     return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
 }
 
