@@ -39,6 +39,11 @@ public sealed class BossRaidCloudBridge : IDisposable
     private readonly GameStateManager? _states;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string[] _commands;
+    private string _uploadToken = string.Empty;
+    private string _uploadExpiresAt = string.Empty;
+    private string _uploadMode = string.Empty;
+    private string _uploadIdentitySignature = string.Empty;
+    private string _uploadServerUrl = string.Empty;
     private bool _disposed;
 
     public BossRaidCloudBridge(
@@ -60,6 +65,7 @@ public sealed class BossRaidCloudBridge : IDisposable
             BridgeCommands.SearchBossRaids,
             BridgeCommands.GetBossRaid,
             BridgeCommands.DownloadBossRaidRemote,
+            BridgeCommands.RefreshBossRaidUploadAuth,
             BridgeCommands.IssueBossRaidUploadToken,
             BridgeCommands.UploadBossRaid,
             BridgeCommands.SetBossRaidServerUrl,
@@ -67,6 +73,7 @@ public sealed class BossRaidCloudBridge : IDisposable
         router.Register(BridgeCommands.SearchBossRaids, HandleSearch);
         router.Register(BridgeCommands.GetBossRaid, HandleGet);
         router.Register(BridgeCommands.DownloadBossRaidRemote, HandleDownload);
+        router.Register(BridgeCommands.RefreshBossRaidUploadAuth, HandleRefreshUploadAuth);
         router.Register(BridgeCommands.IssueBossRaidUploadToken, HandleIssueToken);
         router.Register(BridgeCommands.UploadBossRaid, HandleUpload);
         router.Register(BridgeCommands.SetBossRaidServerUrl, HandleSetServerUrl);
@@ -101,6 +108,9 @@ public sealed class BossRaidCloudBridge : IDisposable
         if (_settings is not null && reply["ok"]?.GetValue<bool>() == true)
         {
             PersistSearch(qNode, reply["data"]);
+            var results = ExtractResultsArray(reply["data"]);
+            reply["results"] = CloneArray(results);
+            reply["state"] = MenuStateBridge.BuildBossRaidState(_settings, _states);
         }
         return reply;
     }
@@ -112,7 +122,8 @@ public sealed class BossRaidCloudBridge : IDisposable
         {
             var config = BossRaidConfigStore.Load(_settings);
             var results = new List<JsonElement>();
-            if (data is JsonObject obj && obj["results"] is JsonArray arr)
+            var arr = ExtractResultsArray(data);
+            if (arr.Count > 0)
             {
                 foreach (var item in arr)
                 {
@@ -133,6 +144,18 @@ public sealed class BossRaidCloudBridge : IDisposable
         {
             // Best-effort; swallow.
         }
+    }
+
+    private static JsonArray ExtractResultsArray(JsonNode? data)
+    {
+        if (data is JsonObject obj)
+        {
+            if (obj["results"] is JsonArray results)
+                return CloneArray(results);
+            if (obj["items"] is JsonArray items)
+                return CloneArray(items);
+        }
+        return new JsonArray();
     }
 
     private static RaidRemoteQuery BuildQueryRecord(JsonObject? qNode, RaidRemoteQuery fallback)
@@ -215,6 +238,57 @@ public sealed class BossRaidCloudBridge : IDisposable
         };
     }
 
+    private JsonObject HandleRefreshUploadAuth(JsonObject? payload)
+    {
+        var force = ReadBool(payload?["force"]);
+        var identity = CurrentIdentityObject();
+        var serverUrl = CurrentServerUrl();
+        if (identity["ready"]?.GetValue<bool>() != true)
+        {
+            ClearUploadAuth();
+            var missing = string.Join(", ", identity["missing"]!.AsArray().Select(item => item?.GetValue<string>() ?? string.Empty));
+            var auth = BuildUploadAuth(string.Empty, string.Empty, $"Identity is incomplete: {missing}", string.Empty, identity, serverUrl);
+            return AuthReply(auth);
+        }
+
+        if (!force && UploadAuthValid(identity, serverUrl))
+        {
+            return AuthReply(BuildUploadAuth(_uploadToken, _uploadExpiresAt, string.Empty, _uploadMode, identity, serverUrl));
+        }
+
+        using var issueDoc = JsonDocument.Parse(new JsonObject
+        {
+            ["player_uid"] = identity["player_uid"]?.GetValue<string>() ?? string.Empty,
+            ["player_name"] = identity["player_name"]?.GetValue<string>() ?? string.Empty,
+            ["profession_id"] = identity["profession_id"]?.GetValue<int>() ?? 0,
+            ["profession_name"] = identity["profession_name"]?.GetValue<string>() ?? string.Empty,
+        }.ToJsonString());
+        var reply = InvokeWithClient((client, ct) => client.IssueUploadTokenAsync(issueDoc.RootElement.Clone(), ct));
+        if (reply["ok"]?.GetValue<bool>() != true)
+        {
+            ClearUploadAuth();
+            var error = ReadString(reply["error"]);
+            return AuthReply(BuildUploadAuth(string.Empty, string.Empty, error, string.Empty, identity, serverUrl));
+        }
+
+        var data = reply["data"] as JsonObject;
+        var token = ReadString(data?["token"]).Trim();
+        var expiresAt = ReadString(data?["expires_at"]).Trim();
+        var mode = ReadString(data?["mode"]).Trim();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            ClearUploadAuth();
+            return AuthReply(BuildUploadAuth(string.Empty, expiresAt, "Upload token is empty", mode, identity, serverUrl));
+        }
+
+        _uploadToken = token;
+        _uploadExpiresAt = expiresAt;
+        _uploadMode = mode;
+        _uploadIdentitySignature = IdentitySignature(identity);
+        _uploadServerUrl = serverUrl;
+        return AuthReply(BuildUploadAuth(token, expiresAt, string.Empty, mode, identity, serverUrl));
+    }
+
     private JsonObject HandleIssueToken(JsonObject? payload)
     {
         var body = ExtractPayloadElement(payload, "payload");
@@ -239,6 +313,7 @@ public sealed class BossRaidCloudBridge : IDisposable
         var url = ReadString(payload?["url"]).Trim();
         var config = BossRaidConfigStore.Load(_settings);
         BossRaidConfigStore.Save(_settings, config with { ServerUrl = url });
+        ClearUploadAuth();
         return new JsonObject
         {
             ["ok"] = true,
@@ -295,6 +370,126 @@ public sealed class BossRaidCloudBridge : IDisposable
             return text;
         return node.ToString();
     }
+
+    private static bool ReadBool(JsonNode? node)
+    {
+        if (node is null) return false;
+        if (node is JsonValue jsonValue)
+        {
+            if (jsonValue.TryGetValue<bool>(out var b)) return b;
+            if (jsonValue.TryGetValue<string>(out var s)
+                && bool.TryParse(s, out var parsed)) return parsed;
+        }
+        return false;
+    }
+
+    private JsonObject AuthReply(JsonObject auth)
+    {
+        var ok = auth["ready"]?.GetValue<bool>() == true;
+        var reply = new JsonObject
+        {
+            ["ok"] = ok,
+            ["message"] = auth["error"]?.GetValue<string>() ?? string.Empty,
+            ["upload_auth"] = CloneObject(auth),
+        };
+        if (_settings is not null)
+        {
+            var state = MenuStateBridge.BuildBossRaidState(_settings, _states);
+            state["upload_auth"] = CloneObject(auth);
+            reply["state"] = state;
+        }
+        return reply;
+    }
+
+    private JsonObject BuildUploadAuth(
+        string token,
+        string expiresAt,
+        string error,
+        string mode,
+        JsonObject identity,
+        string serverUrl)
+    {
+        var ready = !string.IsNullOrWhiteSpace(token) && string.IsNullOrWhiteSpace(error);
+        return new JsonObject
+        {
+            ["token"] = string.Empty,
+            ["ready"] = ready,
+            ["token_masked"] = BossRaidProfile.MaskToken(token),
+            ["expires_at"] = expiresAt ?? string.Empty,
+            ["error"] = error ?? string.Empty,
+            ["mode"] = mode ?? string.Empty,
+            ["identity"] = CloneObject(identity),
+            ["server_url"] = serverUrl,
+        };
+    }
+
+    private bool UploadAuthValid(JsonObject identity, string serverUrl)
+    {
+        if (string.IsNullOrWhiteSpace(_uploadToken)) return false;
+        if (!string.Equals(_uploadServerUrl, serverUrl, StringComparison.Ordinal)) return false;
+        if (!string.Equals(_uploadIdentitySignature, IdentitySignature(identity), StringComparison.Ordinal)) return false;
+        if (DateTimeOffset.TryParse(_uploadExpiresAt, out var expires)
+            && expires <= _clock().AddSeconds(30))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private void ClearUploadAuth()
+    {
+        _uploadToken = string.Empty;
+        _uploadExpiresAt = string.Empty;
+        _uploadMode = string.Empty;
+        _uploadIdentitySignature = string.Empty;
+        _uploadServerUrl = string.Empty;
+    }
+
+    private string CurrentServerUrl()
+    {
+        if (_settings is null)
+            return string.IsNullOrWhiteSpace(_client.BaseUrl) ? BossRaidProfile.DefaultServerUrl : _client.BaseUrl;
+        var config = BossRaidConfigStore.Load(_settings, CurrentAuthorElement());
+        return string.IsNullOrWhiteSpace(config.ServerUrl)
+            ? BossRaidProfile.DefaultServerUrl
+            : config.ServerUrl;
+    }
+
+    private JsonObject CurrentIdentityObject()
+    {
+        var author = _states is null
+            ? AuthorSnapshot.Empty
+            : AutoKeyConfigLoader.AuthorFromState(_states.Snapshot);
+        var missing = new JsonArray();
+        if (string.IsNullOrWhiteSpace(author.PlayerUid)) missing.Add("player_uid");
+        if (string.IsNullOrWhiteSpace(author.PlayerName)) missing.Add("player_name");
+        if (author.ProfessionId <= 0) missing.Add("profession_id");
+        return new JsonObject
+        {
+            ["player_uid"] = author.PlayerUid ?? string.Empty,
+            ["player_name"] = author.PlayerName ?? string.Empty,
+            ["profession_id"] = author.ProfessionId,
+            ["profession_name"] = author.ProfessionName ?? string.Empty,
+            ["source"] = _states is null ? "profile" : "packet",
+            ["ready"] = missing.Count == 0,
+            ["missing"] = missing,
+        };
+    }
+
+    private static string IdentitySignature(JsonObject identity)
+        => string.Join("|", new[]
+        {
+            identity["player_uid"]?.GetValue<string>() ?? string.Empty,
+            identity["player_name"]?.GetValue<string>() ?? string.Empty,
+            (identity["profession_id"]?.GetValue<int>() ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            identity["profession_name"]?.GetValue<string>() ?? string.Empty,
+        });
+
+    private static JsonObject CloneObject(JsonObject obj)
+        => JsonNode.Parse(obj.ToJsonString())!.AsObject();
+
+    private static JsonArray CloneArray(JsonArray array)
+        => JsonNode.Parse(array.ToJsonString())!.AsArray();
 
     private JsonElement CurrentAuthorElement()
     {

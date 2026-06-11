@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.20: WebView2 BossRaid 云端搜索与上传凭证桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `search_boss_raid_remote(query)`,
+     转发到 C# `bossraid.cloud.search`。
+     C# 搜索响应现在兼容服务端 `results/items` 两种字段, 返回顶层 `results`,
+     并回填完整 BossRaid 菜单状态以刷新云端结果列表。
+
+  2) `web/pywebview-shim.js` 补齐 `refresh_boss_raid_upload_auth(force)`,
+     C# `BossRaidCloudBridge` 新增 `bossraid.cloud.refresh_upload_auth`。
+     刷新上传凭证现在使用当前角色 identity 调 issue-token, token 仅留在 bridge 内存,
+     UI 状态只返回 masked token、过期时间、mode 和 identity。
+
 ## v4.5.19: WebView2 BossRaid 导出与远端下载桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `export_boss_raid_profile(id)`,

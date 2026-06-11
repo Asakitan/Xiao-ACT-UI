@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using SaoAuto.App.WebBridge;
 using SaoAuto.Core.Automation;
 using SaoAuto.Core.Configuration;
+using SaoAuto.Core.State;
 
 namespace SaoAuto.Tests.App;
 
@@ -76,6 +77,8 @@ public class Session183BossRaidCloudPersistTests : IDisposable
         var reply = router.Dispatch(Cmd(BridgeCommands.SearchBossRaids,
             "{\"query\":{\"q\":\"dragon\",\"page\":3,\"page_size\":50}}"));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal(3, reply.Payload["results"]!.AsArray().Count);
+        Assert.Equal(3, reply.Payload["state"]!["last_remote_search"]!["results"]!.AsArray().Count);
 
         var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
         Assert.Equal("dragon", reloaded.LastRemoteSearch.Query.Q);
@@ -83,6 +86,27 @@ public class Session183BossRaidCloudPersistTests : IDisposable
         Assert.Equal(50, reloaded.LastRemoteSearch.Query.PageSize);
         Assert.Equal(3, reloaded.LastRemoteSearch.Results.Count);
         Assert.Equal("2026-05-20T06:00:00Z", reloaded.LastRemoteSearch.FetchedAt);
+    }
+
+    [Fact]
+    public void SearchReturnsItemsAsFrontendResultsAndState()
+    {
+        var fixedNow = new DateTimeOffset(2026, 5, 20, 6, 0, 0, TimeSpan.Zero);
+        var (router, bridge, settings) = Build(
+            "{\"items\":[{\"id\":\"b1\",\"profile_name\":\"Dragon\"}]}",
+            () => fixedNow);
+        using var _ = bridge;
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SearchBossRaids,
+            "{\"query\":{\"q\":\"dragon\"}}"));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Single(payload["results"]!.AsArray());
+        Assert.Equal("Dragon", state["last_remote_search"]!["results"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
+        Assert.Single(reloaded.LastRemoteSearch.Results);
     }
 
     [Fact]
@@ -166,6 +190,49 @@ public class Session183BossRaidCloudPersistTests : IDisposable
         Assert.Equal("remote-1", saved.RemoteId);
         Assert.Equal(1, state["local_profile_count"]!.GetValue<int>());
         Assert.Equal("Remote Boss", state["profiles"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void RefreshUploadAuthIssuesTokenAndReturnsMaskedState()
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"token\":\"abcdefghijkl\",\"expires_at\":\"2026-05-21T00:00:00Z\",\"mode\":\"test\"}",
+                    Encoding.UTF8,
+                    "application/json"),
+            },
+        };
+        using var http = new HttpClient(handler);
+        using var client = new BossRaidCloudClient("http://example.com", http);
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var states = new GameStateManager();
+        states.Replace(new GameState
+        {
+            PlayerId = "u1",
+            PlayerName = "Asuna",
+            ProfessionId = 7,
+            ProfessionName = "Rapier",
+        });
+        using var bridge = new BossRaidCloudBridge(router, client, settings, states: states);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.RefreshBossRaidUploadAuth,
+            "{\"force\":true}"));
+        var payload = reply!.Payload!;
+        var auth = payload["upload_auth"]!.AsObject();
+        var stateAuth = payload["state"]!["upload_auth"]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.True(auth["ready"]!.GetValue<bool>());
+        Assert.Equal("abcd...ijkl", auth["token_masked"]!.GetValue<string>());
+        Assert.Equal(string.Empty, auth["token"]!.GetValue<string>());
+        Assert.Equal("test", auth["mode"]!.GetValue<string>());
+        Assert.Equal("u1", stateAuth["identity"]!["player_uid"]!.GetValue<string>());
     }
 
     [Fact]

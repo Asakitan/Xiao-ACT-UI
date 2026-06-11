@@ -54,6 +54,7 @@ public static class BridgeCommands
     public const string SearchBossRaids = "bossraid.cloud.search";
     public const string GetBossRaid = "bossraid.cloud.get";
     public const string DownloadBossRaidRemote = "bossraid.cloud.download";
+    public const string RefreshBossRaidUploadAuth = "bossraid.cloud.refresh_upload_auth";
     public const string IssueBossRaidUploadToken = "bossraid.cloud.issue_token";
     public const string UploadBossRaid = "bossraid.cloud.upload";
     public const string SetBossRaidServerUrl = "bossraid.cloud.set_server_url";

@@ -196,6 +196,12 @@
         download_boss_raid_remote: function (id) {
             return call('bossraid.cloud.download', { id: String(id || '') }).then(normalizeOk);
         },
+        search_boss_raid_remote: function (query) {
+            return call('bossraid.cloud.search', { query: query || {} }).then(normalizeOk);
+        },
+        refresh_boss_raid_upload_auth: function (force) {
+            return call('bossraid.cloud.refresh_upload_auth', { force: !!force }).then(normalizeOk);
+        },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {
                 actions_json: String(actionsJson || '[]')
