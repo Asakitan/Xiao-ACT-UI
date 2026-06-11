@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.32: Raid Editor 配置渲染转义修复.
+
+  1) `web/raid_editor.html` 修复阶段触发文本渲染。
+     trigger type/value 现在会在进入 phase card 前 HTML escape,
+     避免导入或异常配置让阶段列表内容截断或注入额外标签。
+
+  2) `web/raid_editor.html` 修复机制卡颜色渲染。
+     机制 `color` 现在必须通过十六进制 CSS color 白名单,
+     非法或异常值会回退到默认蓝色, 避免 inline style 被污染导致卡片渲染异常。
+
 ## v4.5.31: Commander Web 渲染安全与技能槽显示修复.
 
   1) `web/commander.html` 修复队伍成员与副本信息的 HTML 拼接。

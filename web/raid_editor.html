@@ -311,6 +311,10 @@ function _api() { return (window.pywebview && window.pywebview.api) || null; }
 function _esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function _escAttr(v) { return _esc(v).replace(/'/g, '&#39;'); }
 function _jsArg(v) { return _escAttr(JSON.stringify(String(v == null ? '' : v))); }
+function _cssColor(v) {
+    var s = String(v == null ? '' : v).trim();
+    return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(s) ? s : '#68e4ff';
+}
 
 function _badges(rec) {
     var tags = (rec && rec.tags) || [];
@@ -617,7 +621,7 @@ function _mCard(m) {
     var sub = [chips.length ? ('检测: ' + chips.join(', ')) : '未绑定检测ID',
                sum.alert_desc || '', sum.dodge_desc || ''].filter(Boolean).join(' · ');
     var midArg = _jsArg(m.id);
-    var html = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;border-left:3px solid ' + _esc(m.color || '#68e4ff') + ';">'
+    var html = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;border-left:3px solid ' + _cssColor(m.color) + ';">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
         + '<input type="checkbox"' + (m.enabled !== false ? ' checked' : '')
         + ' onchange="mechToggle(' + midArg + ', this.checked)">'
@@ -1102,7 +1106,7 @@ function updatePhases(phases, currentIdx) {
         var isCurrent = i === currentIdx;
         html += '<div class="phase-card' + (isCurrent ? ' current' : '') + '">'
             + '<div class="phase-name">' + _esc(p.name || ('P' + (i + 1))) + '</div>'
-            + '<div class="phase-trigger">' + _triggerText(p.trigger) + '</div>'
+            + '<div class="phase-trigger">' + _esc(_triggerText(p.trigger)) + '</div>'
             + (isCurrent ? '<div class="phase-btn" onclick="advancePhase()">NEXT</div>' : '')
             + '</div>';
     }

@@ -55,6 +55,8 @@ def main() -> int:
         "onclick=\"mechTest(\\'' + mid",
         "onclick=\"mechEdit(\\'' + mid",
         "onclick=\"mechDelete(\\'' + mid",
+        "border-left:3px solid ' + _esc(m.color || '#68e4ff')",
+        "'<div class=\"phase-trigger\">' + _triggerText(p.trigger) + '</div>'",
     ]
     for pattern in raid_bad_arg_patterns:
         if pattern in raid:
@@ -77,6 +79,9 @@ def main() -> int:
         "onclick=\"mechTest(' + midArg + ',[\\'tts\\'])",
         "onclick=\"mechEdit(' + midArg + ')",
         "onclick=\"mechDelete(' + midArg + ')",
+        "function _cssColor",
+        "border-left:3px solid ' + _cssColor(m.color)",
+        "'<div class=\"phase-trigger\">' + _esc(_triggerText(p.trigger)) + '</div>'",
     ]
     for snippet in raid_safe_arg_required:
         if snippet not in raid:
