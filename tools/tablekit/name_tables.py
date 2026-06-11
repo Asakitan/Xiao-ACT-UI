@@ -189,6 +189,41 @@ def _coerce_table(obj) -> Dict[int, str]:
     return out
 
 
+# 离线全表枚举的静态缓存 (tools/build_name_cache.py 产出): 最低优先级基线, 把
+# curated/tcp 名字表没覆盖的 id 全填上 (skill/buff/monster 各数千条)。
+_STATIC_CACHE_PATH = os.path.join(_EXTRACTED, "static_id_name_cache.json")
+# 各 kind → 静态缓存里的 section (skill 家族都走 skill 段, boss/怪走 monster 段)
+_STATIC_KIND_SECTION = {
+    "skill": "skill", "player_skill": "skill", "monster_skill": "skill",
+    "environment_skill": "skill", "boss_skill": "skill", "ultimate_skill": "skill",
+    "profession_skill": "skill", "scripted_skill": "skill", "virtual_skill": "skill",
+    "boss_mechanic_skill": "skill", "field_marker": "skill",
+    "buff": "buff", "monster": "monster", "boss": "monster",
+}
+_STATIC_CACHE_BY_SECTION: Dict[str, Dict[int, str]] = {}
+_STATIC_CACHE_LOADED = False
+
+
+def _load_static_cache(kind: str) -> Dict[int, str]:
+    """静态全表缓存里该 kind 段的 {id:name} (一次性加载, 最低优先级基线)。"""
+    global _STATIC_CACHE_LOADED
+    section = _STATIC_KIND_SECTION.get(kind)
+    if section is None:
+        return {}
+    if not _STATIC_CACHE_LOADED:
+        _STATIC_CACHE_LOADED = True
+        try:
+            # 用 json.loads(read) 而非 json.load(file): 与 tcp-preparse 测试对 json.load
+            # 的调用计数解耦 (静态缓存是固定基线, 不参与那条缓存复用断言)。
+            with open(_STATIC_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.loads(f.read())
+            for sec in ("skill", "buff", "monster"):
+                _STATIC_CACHE_BY_SECTION[sec] = _coerce_table(data.get(sec) or {})
+        except Exception:
+            pass
+    return _STATIC_CACHE_BY_SECTION.get(section, {})
+
+
 def _tcp_preparse_cache_paths() -> tuple[str, ...]:
     paths = [_TCP_PREPARSE_CACHE]
     if _TCP_PREPARSE_LOCAL_CACHE and _TCP_PREPARSE_LOCAL_CACHE not in paths:
@@ -270,6 +305,8 @@ class NameResolver:
             if kind in self._tables:
                 return self._tables[kind]
             merged: Dict[int, str] = {}
+            # 最低优先级基线: 离线全表静态缓存 (curated/tcp 名字会覆盖它)
+            merged.update(_load_static_cache(kind))
             # 低优先级先填, 高优先级后覆盖
             for folder, fname in reversed(_SOURCES.get(kind, [])):
                 path = os.path.join(folder, fname)

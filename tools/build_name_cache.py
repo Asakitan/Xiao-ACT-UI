@@ -1,0 +1,144 @@
+# -*- coding: utf-8 -*-
+"""build_name_cache - 离线把全配置表 (skill/buff/monster) 的 id→中文名读出来, 落本地静态
+缓存 (assets/name_tables/static_id_name_cache.json), 只读内存, 房间里/不打 boss 也能跑。
+
+名字优先级: 本地化 Name(mlid 走 StringPoolBridge) > NameDesign(原始字符串, boss 内部技能用
+这个, 如 '炎光角斗-开冲')。另解析指定 boss(MonsterTable.SkillIds/BornSkillId) 的技能名。
+
+用法:
+  python -m tools.build_name_cache                 # 全表枚举 + 写缓存
+  python -m tools.build_name_cache --boss 102800 102801   # 另输出这些 boss 的技能名
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from mem_probe.il2cpp.static_dps_source import StaticDpsSource        # noqa: E402
+from mem_probe.il2cpp import table_columns                           # noqa: E402
+from mem_probe.il2cpp.mem_config_table_reader import (               # noqa: E402
+    MemConfigTableReader, TABLE_CLASS)
+from mem_probe.il2cpp.mem_string_pool import StringPoolBridge        # noqa: E402
+
+_CACHE = os.path.join(_ROOT, "assets", "name_tables", "static_id_name_cache.json")
+# 每表用哪些列做名字 (有就按序取第一个非空)
+_NAME_COLS = {
+    "skill": ["Name", "NameDesign", "SkillLabel"],
+    "buff": ["Name", "NameDesign"],
+    "monster": ["Name"],
+}
+
+
+def _resolver(rd: MemConfigTableReader, pool: StringPoolBridge, cols: dict):
+    cmap = {k: v[0] for k, v in cols.items()}
+    mlid_cols = {k for k, (off, typ) in cols.items() if typ == "mlstring"}
+
+    def name_of(zl: int, blob: int, keys) -> str:
+        for k in keys:
+            off = cmap.get(k)
+            if off is None:
+                continue
+            if k in mlid_cols or k == "Name":
+                s = pool.resolve(rd.col_mlid(blob, off))
+            else:
+                s = rd.col_string(zl, blob, off)
+            if s:
+                return s
+        return ""
+    return name_of, cmap
+
+
+def enumerate_table(rd, pool, kind: str, log) -> dict:
+    cls = TABLE_CLASS[kind]
+    cols = table_columns.load_columns([cls], log=lambda *a: None)[cls]
+    name_of, cmap = _resolver(rd, pool, cols)
+    idc = cmap["Id"]
+    out, n, t0 = {}, 0, time.time()
+    for rp, zl, blob in rd.iter_rows(cls, limit=200000):
+        rid = rd.col_i32(blob, idc)
+        if not rid:
+            continue
+        nm = name_of(zl, blob, _NAME_COLS[kind])
+        if nm:
+            out[int(rid)] = nm
+        n += 1
+    log("[name-cache] %-8s rows=%d named=%d (%.1fs)"
+        % (kind, n, len(out), time.time() - t0))
+    return out
+
+
+def boss_skills(rd, pool, boss_ids, log) -> dict:
+    """MonsterTable[boss].SkillIds + BornSkillId → 各技能 id→名 (走已建的 skill 索引)。"""
+    mcls, scls = TABLE_CLASS["monster"], TABLE_CLASS["skill"]
+    mcols = {k: v[0] for k, v in table_columns.load_columns([mcls], log=lambda *a: None)[mcls].items()}
+    scols = table_columns.load_columns([scls], log=lambda *a: None)[scls]
+    sname, scmap = _resolver(rd, pool, scols)
+    # skill 索引 id→(zl,blob) 以便按 id 取名
+    sidx = {}
+    for rp, zl, blob in rd.iter_rows(scls, limit=200000):
+        sid = rd.col_i32(blob, scmap["Id"])
+        if sid:
+            sidx[int(sid)] = (zl, blob)
+    res = {}
+    for rp, zl, blob in rd.iter_rows(mcls, limit=200000):
+        mid = rd.col_i32(blob, mcols["Id"])
+        if int(mid or 0) not in set(boss_ids):
+            continue
+        ids = list(rd.col_i32_array(zl, blob, mcols.get("SkillIds")) or [])
+        born = rd.col_i32(blob, mcols.get("BornSkillId"))
+        if born:
+            ids.append(int(born))
+        entry = {}
+        for sid in sorted(set(int(i) for i in ids if i)):
+            zb = sidx.get(sid)
+            entry[sid] = sname(zb[0], zb[1], _NAME_COLS["skill"]) if zb else ""
+        res[int(mid)] = entry
+        log("[name-cache] boss %d: %d skills" % (mid, len(entry)))
+    return res
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--boss", type=int, nargs="*", default=[102800, 102801])
+    ap.add_argument("--out", default=_CACHE)
+    args = ap.parse_args()
+    log = lambda m: print(m, flush=True)
+
+    src = StaticDpsSource()
+    rd = MemConfigTableReader(src)
+    pool = StringPoolBridge(src)
+    t0 = time.time()
+    if not pool.build():
+        log("[name-cache] string pool 未定位 — 中止")
+        return 2
+    log("[name-cache] string pool ready (%.1fs)" % (time.time() - t0))
+
+    cache = {}
+    for kind in ("skill", "buff", "monster"):
+        cache[kind] = {str(k): v for k, v in enumerate_table(rd, pool, kind, log).items()}
+
+    bs = boss_skills(rd, pool, args.boss, log) if args.boss else {}
+    cache["boss_skills"] = {str(b): {str(k): v for k, v in d.items()} for b, d in bs.items()}
+
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=1)
+    log("[name-cache] 写入 %s (skill=%d buff=%d monster=%d)"
+        % (args.out, len(cache["skill"]), len(cache["buff"]), len(cache["monster"])))
+    for b, d in bs.items():
+        log("\n== boss %d 技能 ==" % b)
+        for sid, nm in sorted(d.items()):
+            log("  %d → %s" % (sid, nm or "(无名)"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
