@@ -102,6 +102,7 @@ def main() -> int:
         "var value = Math.max(0, Math.min(100, Number(pct) || 0));",
         "var sizeMb = (s.size || 0) / 1024 / 1024;",
         "var pct = Math.round((s.progress || 0) * 100);",
+        "var total = Number(_sessionPlayersPayload.count || rows.length || 0);",
     ]
     for pattern in menu_raw_patterns:
         if pattern in html:
@@ -118,6 +119,7 @@ def main() -> int:
         "var sizeBytes = _clampNum(s.size, 0, 0, Number.MAX_SAFE_INTEGER);",
         "var sizeMb = sizeBytes / 1024 / 1024;",
         "var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);",
+        "var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
@@ -164,6 +166,12 @@ def main() -> int:
         "Math.round(Number(condition.value || 0) * 100)",
         "var v = parseInt(val) || 0;",
         "api.set_linkage_global_cooldown(parseFloat(val) || 1.0);",
+        "var actionCount = Number(summary.action_count || ((profile.actions || []).length || 0));",
+        "var enabledCount = Number(summary.enabled_action_count || 0);",
+        "var profileProfessionId = (draft && Number(draft.profession_id || 0) > 0) ? String(draft.profession_id) : '不限制 Any';",
+        "_akSummaryItem('当前职业 ID Current Profession ID', Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--', !(Number(identity.profession_id || 0) > 0))",
+        "document.getElementById('ak-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
+        "document.getElementById('br-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
     ]
     for pattern in auto_key_raw_patterns:
         if pattern in html:
@@ -181,6 +189,13 @@ def main() -> int:
         "document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
         "var seconds = _clampNum(val, 1.0, 0, 60);",
         "api.set_linkage_global_cooldown(seconds);",
+        "var actionCount = _clampInt(summary.action_count, ((profile.actions || []).length || 0), 0, 999999);",
+        "var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);",
+        "var profileProfessionIdValue = draft ? _clampInt(draft.profession_id, 0, 0, 999999999) : 0;",
+        "var identityProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
+        "_akSummaryItem('当前职业 ID Current Profession ID', identityProfessionId > 0 ? String(identityProfessionId) : '--', !(identityProfessionId > 0))",
+        "var akProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
+        "var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
     ]
     for snippet in auto_key_safe_required:
         if snippet not in html:

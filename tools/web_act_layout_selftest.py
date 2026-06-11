@@ -296,6 +296,38 @@ def _assert_dps_hit_fx_numbers_are_normalized() -> None:
             raise AssertionError("missing safe DPS hit FX numeric snippet: " + snippet)
 
 
+def _assert_trigger_timer_numbers_are_normalized() -> None:
+    trigger_timer = _read_web("trigger_timer_manager.html")
+    for snippet in (
+        "var ruleCount = Math.max(Number(data.rule_count != null ? data.rule_count : rules.length) || 0, rules.length);",
+        "var timerCount = Number(data.timer_count != null ? data.timer_count : ((data.timers || []).length || 0)) || 0;",
+        "esc(rule.threshold)",
+        "esc(rule.cooldown_s || 0) + 's'",
+        "String(data.last_reload_ms || 0)",
+        "String((data.errors || []).length)",
+        "var count = (data.events || []).length;",
+    ):
+        if snippet in trigger_timer:
+            raise AssertionError("trigger timer manager must normalize visible numeric state: " + snippet)
+    for snippet in (
+        "function finiteNumber(value, fallback)",
+        "function clampNumber(value, fallback, lo, hi)",
+        "function clampInt(value, fallback, lo, hi)",
+        "function numericText(value, fallback, hi)",
+        "return String(Math.round(number * 100) / 100);",
+        "var timerRows = Array.isArray(data.timers) ? data.timers : [];",
+        "var ruleCount = Math.max(clampInt(data.rule_count, rules.length, 0, 999999), rules.length);",
+        "var timerCount = clampInt(data.timer_count, timerRows.length, 0, 999999);",
+        "var reloadMs = clampInt(data.last_reload_ms, 0, 0, 86400000);",
+        "var errorCount = Array.isArray(data.errors) ? clampInt(data.errors.length, 0, 0, 999999) : 0;",
+        "esc(numericText(rule.threshold, 0))",
+        "esc(numericText(rule.cooldown_s, 0, 86400)) + 's</span>",
+        "var count = Array.isArray(data.events) ? clampInt(data.events.length, 0, 0, 999999) : 0;",
+    ):
+        if snippet not in trigger_timer:
+            raise AssertionError("missing safe trigger timer numeric snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -313,6 +345,7 @@ def main() -> int:
     _assert_timeline_speed_is_normalized()
     _assert_boss_hp_additional_units_are_safe()
     _assert_dps_hit_fx_numbers_are_normalized()
+    _assert_trigger_timer_numbers_are_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

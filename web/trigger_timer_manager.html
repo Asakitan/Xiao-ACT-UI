@@ -244,6 +244,30 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         return esc(JSON.stringify(String(value == null ? '' : value)));
     }
 
+    function finiteNumber(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+
+    function clampNumber(value, fallback, lo, hi) {
+        var number = finiteNumber(value, fallback);
+        if (!isFinite(number)) number = fallback || 0;
+        if (lo != null) number = Math.max(lo, number);
+        if (hi != null) number = Math.min(hi, number);
+        return number;
+    }
+
+    function clampInt(value, fallback, lo, hi) {
+        return Math.round(clampNumber(value, fallback, lo, hi));
+    }
+
+    function numericText(value, fallback, hi) {
+        var number = clampNumber(value, fallback == null ? 0 : fallback, 0, hi == null ? 999999999 : hi);
+        if (number === Math.round(number)) return String(Math.round(number));
+        return String(Math.round(number * 100) / 100);
+    }
+
     function ruleKind(rule) {
         return rule.type === 'elapsed_s' ? 'timer' : 'trigger';
     }
@@ -262,9 +286,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             '<div class="card-top"><div><div class="name">' + esc(rule.label || rule.id) + '</div><div class="id">' + esc(rule.id || '') + '</div></div><div class="badges">' + badges.join('') + '</div></div>' +
             '<div class="meta">' +
                 '<div>Type: <span>' + esc(rule.type || '-') + '</span></div>' +
-                '<div>Threshold: <span>' + esc(rule.threshold) + '</span></div>' +
+                '<div>Threshold: <span>' + esc(numericText(rule.threshold, 0)) + '</span></div>' +
                 '<div>Match: <span>' + esc(rule.match || '-') + '</span></div>' +
-                '<div>Cooldown: <span>' + esc(rule.cooldown_s || 0) + 's</span></div>' +
+                '<div>Cooldown: <span>' + esc(numericText(rule.cooldown_s, 0, 86400)) + 's</span></div>' +
                 '<div>Once: <span>' + esc(rule.once_per_encounter ? 'encounter' : 'repeat') + '</span></div>' +
                 '<div>Severity: <span>' + esc(rule.severity || 'info') + '</span></div>' +
             '</div>' +
@@ -305,13 +329,16 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     function render(data) {
         data = data || {};
         var rules = displayRules(data);
-        var ruleCount = Math.max(Number(data.rule_count != null ? data.rule_count : rules.length) || 0, rules.length);
-        var timerCount = Number(data.timer_count != null ? data.timer_count : ((data.timers || []).length || 0)) || 0;
+        var timerRows = Array.isArray(data.timers) ? data.timers : [];
+        var ruleCount = Math.max(clampInt(data.rule_count, rules.length, 0, 999999), rules.length);
+        var timerCount = clampInt(data.timer_count, timerRows.length, 0, 999999);
+        var reloadMs = clampInt(data.last_reload_ms, 0, 0, 86400000);
+        var errorCount = Array.isArray(data.errors) ? clampInt(data.errors.length, 0, 0, 999999) : 0;
         document.getElementById('sum-rules').textContent = String(ruleCount);
         document.getElementById('sum-timers').textContent = String(timerCount);
         document.getElementById('sum-enabled').textContent = data.enabled ? 'YES' : 'NO';
-        document.getElementById('sum-reload').textContent = String(data.last_reload_ms || 0);
-        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        document.getElementById('sum-reload').textContent = String(reloadMs);
+        document.getElementById('sum-errors').textContent = String(errorCount);
         document.getElementById('trigger-count').textContent = String(ruleCount) + ' RULES';
         renderRecent(data.recent || []);
         if (!rules.length) {
@@ -354,7 +381,7 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         },
         test: function (id) {
             return apiCall('test_trigger', [id]).then(function (data) {
-                var count = (data.events || []).length;
+                var count = Array.isArray(data.events) ? clampInt(data.events.length, 0, 0, 999999) : 0;
                 showToast(data.ok === false ? (data.message || 'Test failed') : ('测试事件 ' + count + ' 个'));
                 return TriggerTimerManager.refresh();
             });

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.60: Trigger Timer 与主菜单数值状态修复.
+
+  1) `web/trigger_timer_manager.html` 修复触发器摘要和规则数值渲染。
+     规则数、计时数、重载时间、错误数、测试事件数、阈值和冷却秒数现在统一有限化,
+     避免坏状态 payload 在面板中显示 `Infinity` 或 `NaN`。
+
+  2) `web/menu.html` 修复主菜单摘要数值渲染。
+     Session Players 总数、AutoKey 动作/启用计数和职业 ID 现在使用既有夹取 helper,
+     避免异常配置或桥接状态污染可见 UI。
+
 ## v4.5.59: Raid Editor 与 DPS Web 数值状态修复.
 
   1) `web/raid_editor.html` 修复机制面板可见数值渲染。

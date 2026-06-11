@@ -4304,7 +4304,7 @@ function _renderSessionPlayers(dataJson, reveal) {
     }
     _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
     var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
-    var total = Number(_sessionPlayersPayload.count || rows.length || 0);
+    var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);
     var summary = document.getElementById('sp-summary');
     var list = document.getElementById('sp-list');
     _spRenderToken += 1;
@@ -5175,8 +5175,8 @@ function _akRenderLocal() {
     listEl.innerHTML = profiles.map(function(profile) {
         var id = String(profile.id || '');
         var summary = summaries[id] || {};
-        var actionCount = Number(summary.action_count || ((profile.actions || []).length || 0));
-        var enabledCount = Number(summary.enabled_action_count || 0);
+        var actionCount = _clampInt(summary.action_count, ((profile.actions || []).length || 0), 0, 999999);
+        var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);
         var classes = ['auto-key-profile'];
         if (String(state.active_profile_id || '') === id) classes.push('active');
         if (String(_autoKeySelectedProfileId || '') === id) classes.push('selected');
@@ -5221,11 +5221,13 @@ function _akRenderEditorIdentitySummary(draft) {
     var state = _autoKeyState || {};
     var identity = state.identity || {};
     var profileProfession = (draft && draft.profession_name) ? draft.profession_name : '任意 Any';
-    var profileProfessionId = (draft && Number(draft.profession_id || 0) > 0) ? String(draft.profession_id) : '不限制 Any';
+    var profileProfessionIdValue = draft ? _clampInt(draft.profession_id, 0, 0, 999999999) : 0;
+    var identityProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+    var profileProfessionId = profileProfessionIdValue > 0 ? String(profileProfessionIdValue) : '不限制 Any';
     summaryEl.innerHTML = [
         _akSummaryItem('当前 UID Current UID', identity.player_uid || '--', !identity.player_uid),
         _akSummaryItem('当前玩家 Current Player', identity.player_name || '--', !identity.player_name),
-        _akSummaryItem('当前职业 ID Current Profession ID', Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--', !(Number(identity.profession_id || 0) > 0)),
+        _akSummaryItem('当前职业 ID Current Profession ID', identityProfessionId > 0 ? String(identityProfessionId) : '--', !(identityProfessionId > 0)),
         _akSummaryItem('脚本职业限制 Profile Filter', profileProfession + ' / ' + profileProfessionId, false)
     ].join('');
 }
@@ -5467,7 +5469,10 @@ function _akRenderCloud() {
     if (document.getElementById('ak-search-profession-name')) document.getElementById('ak-search-profession-name').value = query.profession_name || '';
     if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = identity.player_uid || '--';
     if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = identity.player_name || '--';
-    if (document.getElementById('ak-identity-profession-id')) document.getElementById('ak-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';
+    if (document.getElementById('ak-identity-profession-id')) {
+        var akProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+        document.getElementById('ak-identity-profession-id').textContent = akProfessionId > 0 ? String(akProfessionId) : '--';
+    }
     if (document.getElementById('ak-identity-profession-name')) document.getElementById('ak-identity-profession-name').textContent = identity.profession_name || '--';
     if (uploadMetaEl) {
         var bits = [];
@@ -7034,7 +7039,10 @@ function _brRenderCloud() {
     if (document.getElementById('br-search-player-name')) document.getElementById('br-search-player-name').value = query.player_name || '';
     if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = identity.player_uid || '--';
     if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = identity.player_name || '--';
-    if (document.getElementById('br-identity-profession-id')) document.getElementById('br-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';
+    if (document.getElementById('br-identity-profession-id')) {
+        var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+        document.getElementById('br-identity-profession-id').textContent = brProfessionId > 0 ? String(brProfessionId) : '--';
+    }
     if (document.getElementById('br-identity-profession-name')) document.getElementById('br-identity-profession-name').textContent = identity.profession_name || '--';
     if (uploadMetaEl) {
         var bits = [];
