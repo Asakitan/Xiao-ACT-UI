@@ -98,6 +98,7 @@ public sealed class UiRunner
         // the host loop below, once `recognition` is in scope.
         webBridge.AttachBuffMon(_settings);
         webBridge.AttachDps(packets.ResetDps, packets.DpsSnapshotProvider, _settings);
+        webBridge.AttachHudSettings(_settings);
         // S172 — best-effort updater pipeline. Settings-gated by
         // `update_check_enabled` (default false); when off, the bridge
         // surfaces `{error:"unsupported"}` so the HUD button can grey.

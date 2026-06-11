@@ -32,6 +32,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private AutoKeyProfileBridge? _autoKeyProfileBridge;
     private BuffMonBridge? _buffMonBridge;
     private DpsBridge? _dpsBridge;
+    private HudSettingsBridge? _hudSettingsBridge;
     private RecognitionStatusBridge? _recognitionBridge;
     private UpdaterBridge? _updaterBridge;
     private AutoKeyCloudBridge? _autoKeyCloudBridge;
@@ -138,6 +139,16 @@ public sealed class WebBridgeLifecycle : IDisposable
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _dpsBridge?.Dispose();
         _dpsBridge = new DpsBridge(Router, reset, lastReport, settings, tracker ?? _dpsTracker);
+    }
+
+    /// <summary>S197 — attach real handlers for menu-backed HUD settings
+    /// such as watched skill slots and Burst alert enablement.</summary>
+    public void AttachHudSettings(SettingsManager settings)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _hudSettingsBridge?.Dispose();
+        _hudSettingsBridge = new HudSettingsBridge(Router, settings);
     }
 
     /// <summary>
@@ -249,6 +260,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         _autoKeyCloudBridge?.Dispose();
         _updaterBridge?.Dispose();
         _recognitionBridge?.Dispose();
+        _hudSettingsBridge?.Dispose();
         _dpsBridge?.Dispose();
         _buffMonBridge?.Dispose();
         _autoKeyProfileBridge?.Dispose();

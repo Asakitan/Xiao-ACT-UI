@@ -151,6 +151,17 @@ function assert(cond, message) {
   assert(last.payload.panel === "act", "set_panel_theme panel was not forwarded");
   assert(last.payload.theme === "light", "set_panel_theme theme was not forwarded");
 
+  await window.pywebview.api.set_watched_slots([3, 1, 5]);
+  last = calls[calls.length - 1];
+  assert(last.name === "settings.set_watched_slots", "set_watched_slots command mismatch");
+  assert(Array.isArray(last.payload.slots), "set_watched_slots slots should be an array");
+  assert(last.payload.slots.join(",") === "3,1,5", "set_watched_slots values were not forwarded");
+
+  await window.pywebview.api.set_burst_enabled(false);
+  last = calls[calls.length - 1];
+  assert(last.name === "settings.set_burst_enabled", "set_burst_enabled command mismatch");
+  assert(last.payload.enabled === false, "set_burst_enabled flag was not forwarded");
+
   await window.pywebview.api.toggle_mem_scope();
   last = calls[calls.length - 1];
   assert(last.name === "ui.menu_action", "toggle_mem_scope command mismatch");

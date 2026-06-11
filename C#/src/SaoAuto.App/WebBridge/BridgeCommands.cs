@@ -87,6 +87,10 @@ public static class BridgeCommands
     public const string ClosePanel = "ui.close_panel";
     public const string PanelAction = "ui.panel_action";
 
+    // HUD settings surfaced by menu.html through the pywebview shim.
+    public const string SetWatchedSlots = "settings.set_watched_slots";
+    public const string SetBurstEnabled = "settings.set_burst_enabled";
+
     // Updater
     public const string CheckUpdate = "updater.check";
     public const string DownloadUpdate = "updater.download";

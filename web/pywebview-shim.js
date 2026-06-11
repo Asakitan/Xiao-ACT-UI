@@ -74,6 +74,12 @@
         set_panel_theme: function (panel, theme) {
             return call('ui.set_panel_theme', { panel: String(panel || ''), theme: String(theme || '') });
         },
+        set_watched_slots: function (slots) {
+            return call('settings.set_watched_slots', { slots: Array.isArray(slots) ? slots : [] }).then(normalizeOk);
+        },
+        set_burst_enabled: function (enabled) {
+            return call('settings.set_burst_enabled', { enabled: !!enabled }).then(normalizeOk);
+        },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
         },

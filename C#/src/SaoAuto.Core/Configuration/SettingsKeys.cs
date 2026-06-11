@@ -10,6 +10,7 @@ public static class SettingsKeys
     public const string GameCache = "game_cache";
     public const string ProfessionSkillCache = "profession_skill_cache";
     public const string WatchedSkillSlots = "watched_skill_slots";
+    public const string BurstEnabled = "burst_enabled";
     public const string PanelThemes = "panel_themes";
     public const string MemDataSource = "mem_data_source";
     public const string CaptureDevice = "capture_device";

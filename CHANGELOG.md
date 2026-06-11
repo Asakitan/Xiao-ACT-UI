@@ -2,6 +2,26 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.1: WebView2 菜单 HUD 设置桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_watched_slots(slots)` 并新增
+     `settings.set_watched_slots` C# 桥接。
+     修复 WebView2 路径下技能槽位复选框只更新页面状态, 没有把 slots 数组保存到
+     `watched_skill_slots` 设置的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `set_burst_enabled(enabled)` 并新增
+     `settings.set_burst_enabled` C# 桥接。
+     修复 WebView2 路径下 Burst 开关的布尔参数没有写入 `burst_enabled` 设置的问题。
+
+
+
+## v4.5.0: Boss Raid 示例数据更新.
+
+  1) 插入提交 `b851259` 更新 `assets/boss_raids/13023_噩梦P3_机制示例.json`
+     并将 `APP_VERSION` 推进到 `4.5.0`。
+
+
+
 ## v4.4.58: WebView2 Alert 与 DPS 详情桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `alert_ok` 兼容入口。
