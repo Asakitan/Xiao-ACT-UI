@@ -473,6 +473,52 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         status_fn.assert_not_called()
         self.assertEqual(rendered, [{"ok": True, "cached": True}])
 
+    def test_group_render_signature_tracks_visible_metadata_and_expanded_rows(self) -> None:
+        row = {
+            "id": "row-1",
+            "time_ms": 1200,
+            "topic": "damage",
+            "source": "tcp",
+            "actor": "Kirito",
+            "target": "Boss",
+            "target_uid": 9001,
+            "label": "Starburst Stream",
+            "value": 1200,
+            "dungeon": "第一迷宫",
+            "payload": {"skill_id": 1001, "dungeon_name": "第一迷宫"},
+        }
+        group = {
+            "key": "monster:9001",
+            "name": "Boss",
+            "kind": "monster",
+            "count": 2,
+            "total_value": 1200,
+            "uid_count": 1,
+            "first_time_ms": 1000,
+            "last_time_ms": 1200,
+            "dungeons": ["第一迷宫"],
+            "rows": [row],
+        }
+        renamed = {
+            **group,
+            "name": "Boss Phase 2",
+            "last_time_ms": 1500,
+            "dungeons": ["第二迷宫"],
+        }
+        changed_detail = {
+            **group,
+            "rows": [{**row, "target": "Boss Phase 2", "label": "Vorpal Strike", "value": 1500}],
+        }
+
+        self.assertNotEqual(
+            ActionLogPanel._groups_signature([group], set()),
+            ActionLogPanel._groups_signature([renamed], set()),
+        )
+        self.assertNotEqual(
+            ActionLogPanel._groups_signature([group], {"monster:9001"}),
+            ActionLogPanel._groups_signature([changed_detail], {"monster:9001"}),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

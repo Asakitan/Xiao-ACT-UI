@@ -369,7 +369,28 @@ class ActionLogPanel:
         )
         if self._rows is None:
             return
-        sig = self._rows_signature(rows) + repr([(g.get('key'), g.get('count'), g.get('total_value')) for g in groups[:80]]) + repr(sorted(self._expanded_groups)) + repr(bool(self._show_raw_rows.get()))
+        totals = analytics.get('totals') if isinstance(analytics.get('totals'), Mapping) else {}
+        group_info = analytics.get('groups') if isinstance(analytics.get('groups'), Mapping) else {}
+        topic_groups = list(group_info.get('topics') or []) if isinstance(group_info.get('topics'), list) else []
+        top_topic = topic_groups[0].get('key') if topic_groups and isinstance(topic_groups[0], Mapping) else '-'
+        sig = repr((
+            self._rows_signature(rows),
+            self._groups_signature(groups, self._expanded_groups),
+            sorted(self._expanded_groups),
+            bool(self._show_raw_rows.get()),
+            source,
+            status.get('encounter_id') or filters.get('encounter_id'),
+            filters.get('topic'),
+            filters.get('query'),
+            cursor_ms,
+            total_rows,
+            page_index,
+            page_count,
+            self._current_offset(),
+            totals.get('value'),
+            top_topic,
+            tuple(errors),
+        ))
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
@@ -597,8 +618,61 @@ class ActionLogPanel:
         for row in rows[:80]:
             if not isinstance(row, Mapping):
                 continue
-            parts.append((row.get('id'), row.get('time_ms'), row.get('topic'), row.get('label'), row.get('value'), bool(row.get('is_cursor'))))
-        return repr(parts)
+            parts.append((
+                row.get('id'),
+                row.get('time_ms'),
+                row.get('topic'),
+                row.get('source'),
+                row.get('label'),
+                row.get('value'),
+                row.get('actor'),
+                row.get('target'),
+                bool(row.get('is_cursor')),
+            ))
+        return repr((len(rows), parts))
+
+    @staticmethod
+    def _groups_signature(groups: list[Any], expanded_groups: set[str]) -> str:
+        expanded = {str(key) for key in expanded_groups}
+        parts = []
+        for idx, group in enumerate(groups[:80]):
+            if not isinstance(group, Mapping):
+                continue
+            key = str(group.get('key') or idx)
+            row_parts = []
+            if key in expanded:
+                for row in list(group.get('rows') or [])[:8]:
+                    if not isinstance(row, Mapping):
+                        continue
+                    payload = row.get('payload') if isinstance(row.get('payload'), Mapping) else None
+                    row_parts.append((
+                        row.get('id'),
+                        row.get('time_ms'),
+                        row.get('topic'),
+                        row.get('source'),
+                        row.get('actor'),
+                        row.get('actor_uid'),
+                        row.get('target'),
+                        row.get('target_uid'),
+                        row.get('label'),
+                        row.get('value'),
+                        row.get('dungeon'),
+                        payload,
+                    ))
+            parts.append((
+                key,
+                group.get('name'),
+                group.get('kind'),
+                group.get('count'),
+                group.get('total_value'),
+                group.get('uid_count'),
+                group.get('first_time_ms'),
+                group.get('last_time_ms'),
+                tuple(group.get('dungeons') or ()),
+                bool(group.get('has_more_rows')),
+                tuple(row_parts),
+            ))
+        return repr((len(groups), parts))
 
     @staticmethod
     def _fmt(value: Any) -> str:

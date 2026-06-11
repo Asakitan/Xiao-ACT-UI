@@ -206,7 +206,7 @@ class DeathRecapPanel:
         )
         if self._rows is None:
             return
-        sig = repr([(row.get('id'), row.get('relative_ms'), row.get('kind'), row.get('amount')) for row in rows]) + repr(sorted(self._expanded_rows))
+        sig = self._render_signature(status, rows, self._expanded_rows)
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
@@ -273,6 +273,46 @@ class DeathRecapPanel:
             self._expanded_rows.add(row_id)
         self._last_rows_sig = ""
         self._render_status(self._last_status)
+
+    @staticmethod
+    def _render_signature(status: Mapping[str, Any], rows: list[Any], expanded_rows: set[str]) -> str:
+        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
+        death = status.get('death') if isinstance(status.get('death'), Mapping) else {}
+        window = status.get('window') if isinstance(status.get('window'), Mapping) else {}
+        expanded = {str(row_id) for row_id in expanded_rows}
+        row_parts = []
+        for row in rows[:120]:
+            if not isinstance(row, Mapping):
+                continue
+            row_id = str(row.get('id') or f"{row.get('kind')}:{row.get('time_ms')}:{row.get('index')}")
+            row_parts.append((
+                row_id,
+                row.get('time_ms'),
+                row.get('relative_ms'),
+                row.get('kind'),
+                row.get('topic'),
+                row.get('amount'),
+                row.get('actor'),
+                row.get('target'),
+                row.get('label'),
+                bool(row.get('is_death')),
+                row.get('payload') if row_id in expanded else None,
+            ))
+        return repr((
+            len(rows),
+            summary.get('incoming_damage'),
+            summary.get('healing'),
+            summary.get('shield'),
+            summary.get('death_events'),
+            death.get('name'),
+            death.get('entity_id'),
+            death.get('time_ms'),
+            status.get('encounter_id'),
+            window.get('before_ms'),
+            tuple(status.get('errors') or ()),
+            tuple(sorted(expanded)),
+            tuple(row_parts),
+        ))
 
     @staticmethod
     def _fmt(value: Any) -> str:

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.25: ACT 面板可见字段刷新修复.
+
+  1) `gui_modules/sao_gui_action_log.py` 补全 Action Log 渲染签名。
+     分组名称、类型、UID 数、时间范围、地牢、展开明细、RAW 行的 actor/target/source
+     以及页码/错误徽标等可见状态变化都会触发重绘, 避免同 key/count/value 时界面停在旧内容。
+
+  2) `gui_modules/sao_gui_death_recap.py` 补全 Death Recap 渲染签名。
+     summary 指标、死亡对象、窗口范围、错误徽标、行 actor/target/label 与展开 payload
+     变化时都会刷新列表和指标卡, 避免死亡回放显示不完整或旧数据残留。
+
 ## v4.5.24: Selftest 直接运行路径修复.
 
   1) `tools/_bootstrap.py` 补齐顶层 `tools/*_selftest.py` 的直接运行路径。

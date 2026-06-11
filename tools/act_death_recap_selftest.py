@@ -122,6 +122,48 @@ class ActDeathRecapRuntimeTests(unittest.TestCase):
         self.assertEqual(panel._last_request_key, ("1001", 12.5))
         status_fn.assert_called_once_with(panel.owner, limit=80, window_s=12.5, entity_id="1001")
 
+    def test_render_signature_tracks_visible_summary_death_window_and_row_fields(self) -> None:
+        row = {
+            "id": "row-1",
+            "time_ms": 95000,
+            "relative_ms": -5000,
+            "kind": "incoming_damage",
+            "amount": 1000,
+            "actor": "Boss",
+            "target": "Kirito",
+            "label": "Cleave",
+            "is_death": False,
+            "payload": {"skill": "Cleave"},
+        }
+        status = {
+            "summary": {"incoming_damage": 1000, "healing": 250, "shield": 100, "death_events": 1},
+            "death": {"name": "Kirito", "entity_id": str(SELF_UID), "time_ms": 100000},
+            "encounter_id": "enc-1",
+            "window": {"before_ms": 5000},
+            "errors": [],
+            "rows": [row],
+        }
+        changed_visible = {
+            **status,
+            "summary": {"incoming_damage": 1500, "healing": 250, "shield": 100, "death_events": 1},
+            "death": {"name": "Asuna", "entity_id": "1002", "time_ms": 100500},
+            "window": {"before_ms": 8000},
+            "rows": [{**row, "actor": "Boss Phase 2", "target": "Asuna", "label": "Fatal Cleave"}],
+        }
+        changed_payload = {
+            **status,
+            "rows": [{**row, "payload": {"skill": "Cleave", "raw": "changed"}}],
+        }
+
+        self.assertNotEqual(
+            DeathRecapPanel._render_signature(status, status["rows"], set()),
+            DeathRecapPanel._render_signature(changed_visible, changed_visible["rows"], set()),
+        )
+        self.assertNotEqual(
+            DeathRecapPanel._render_signature(status, status["rows"], {"row-1"}),
+            DeathRecapPanel._render_signature(changed_payload, changed_payload["rows"], {"row-1"}),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
