@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.30: Web 64-bit 实体 ID 保真修复.
+
+  1) `web/raid_editor.html` 修复实体 role 切换的 UUID 传参。
+     `toggleRole` 现在使用字符串 UUID 比较和调用 `set_entity_role`,
+     不再把 64-bit UUID 作为 JS 数字传递导致精度损失或目标错位。
+
+  2) `web/dps.html` 修复 DPS 列表/详情的 UID 处理。
+     列表 `data-uid`、详情点击、实时详情缓存、命中特效行定位和 `get_entity_detail`
+     统一使用字符串 UID key, 避免大 UID 被 `Number(...)` 截断。
+
 ## v4.5.29: ACT Web 管理面板点击参数转义修复.
 
   1) `web/plugin_manager.html` 修复插件卡片 action 按钮的 `plugin.id` 传参。

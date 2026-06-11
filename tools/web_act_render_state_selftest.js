@@ -51,4 +51,12 @@ assert(skillDrilldown.includes("delete this.expandedRefs[key]"), "skill drilldow
 assert(skillDrilldown.includes("this.render(status, { preserveScroll: false })"), "skill drilldown filtering/back should reset scroll");
 assert(skillDrilldown.includes("this.render(copied, { preserveScroll: true })"), "skill drilldown copy should preserve scroll");
 
+const dps = read("web/dps.html");
+assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");
+assert(!dps.includes('onclick="_openDetail(\' + Number(entity.uid || 0) + \')"'), "DPS row click must not coerce entity uid to Number");
+assert(!dps.includes("_liveDetailCache[Number(data.uid || 0)] = data"), "DPS detail cache must not key by numeric uid");
+assert(dps.includes("function _uidKey"), "DPS must provide a string uid key helper");
+assert(dps.includes("onclick=\"_openDetail(' + _jsArg(uidKey) + ')"), "DPS row click must pass uid through escaped jsArg");
+assert(dps.includes("_liveDetailCache[_uidKey(data.uid)] = data"), "DPS detail cache must key by string uid");
+
 console.log("web_act_render_state_selftest: ok");

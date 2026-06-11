@@ -1399,7 +1399,7 @@ var _viewMode = 'live';
 var _liveSnapshot = _emptySnapshot();
 var _lastReport = null;
 var _historySnapshot = null;
-var _detailUid = 0;
+var _detailUid = '';
 var _detailVisible = false;
 var _detailMode = false;
 var _liveDetailCache = {};
@@ -1462,6 +1462,23 @@ function _escHtml(s) {
     return d.innerHTML;
 }
 
+function _idText(value) {
+    return String(value == null ? '' : value);
+}
+
+function _uidKey(value) {
+    return _idText(value);
+}
+
+function _hasUid(value) {
+    var key = _uidKey(value);
+    return key !== '' && key !== '0';
+}
+
+function _jsArg(value) {
+    return _escHtml(JSON.stringify(_idText(value)));
+}
+
 function _fmtFightPoint(fp) {
     fp = Number(fp || 0);
     if (fp <= 0) return '';
@@ -1498,7 +1515,7 @@ function _actRowsDataFallback(baseData) {
     out.total_dps = Number(totals.dps || out.total_dps || 0);
     out.total_hps = Number(totals.hps || out.total_hps || 0);
     out.entities = rows.map(function(row, idx) {
-        var uid = Number(row.uid || 0);
+        var uid = _uidKey(row.uid);
         return Object.assign({}, row, {
             uid: uid,
             name: row.name || ('Player_' + uid),
@@ -1624,12 +1641,12 @@ function _captureHitFx(data) {
 
 function _applyPendingHitFx() {
     if (!_pendingHitFx) return;
-    var uid = Number(_pendingHitFx.uid || 0);
-    if (!uid) {
+    var uid = _uidKey(_pendingHitFx.uid);
+    if (!_hasUid(uid)) {
         _pendingHitFx = null;
         return;
     }
-    var row = document.querySelector('.entity-row[data-uid="' + uid + '"]');
+    var row = _findEntityRowByUid(uid);
     if (!row) return;
     var tier = _normalizeHitFxTier(_pendingHitFx.tier);
     var cls = _hitFxRowClass(tier);
@@ -1647,18 +1664,30 @@ function _applyPendingHitFx() {
 
 function _findEntity(data, uid) {
     var entities = (data && data.entities) || [];
+    var key = _uidKey(uid);
+    if (!_hasUid(key)) return null;
     for (var i = 0; i < entities.length; i++) {
-        if (Number(entities[i].uid) === Number(uid)) return entities[i];
+        if (_uidKey(entities[i].uid) === key) return entities[i];
+    }
+    return null;
+}
+
+function _findEntityRowByUid(uid) {
+    var key = _uidKey(uid);
+    if (!_hasUid(key)) return null;
+    var rows = document.querySelectorAll('.entity-row[data-uid]');
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-uid') === key) return rows[i];
     }
     return null;
 }
 
 function _pickDetailUid() {
-    if (_detailUid) return Number(_detailUid || 0);
+    if (_hasUid(_detailUid)) return _uidKey(_detailUid);
     var entities = ((_currentData() && _currentData().entities) || []).slice();
     for (var i = 0; i < entities.length; i++) {
-        if (entities[i].is_self && Number(entities[i].uid || 0)) {
-            return Number(entities[i].uid || 0);
+        if (entities[i].is_self && _hasUid(entities[i].uid)) {
+            return _uidKey(entities[i].uid);
         }
     }
     if (_currentTab === 'heal') {
@@ -1666,7 +1695,7 @@ function _pickDetailUid() {
     } else {
         entities.sort(function(a, b) { return Number(b.damage_total || 0) - Number(a.damage_total || 0); });
     }
-    return entities.length ? Number(entities[0].uid || 0) : 0;
+    return entities.length ? _uidKey(entities[0].uid) : '';
 }
 
 function _callDpsApi(name) {
@@ -1744,7 +1773,7 @@ function _latestActTriggerText() {
 
 function _switchListView() {
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     document.getElementById('detail-view').classList.remove('show');
     document.getElementById('list-view').classList.add('show');
 }
@@ -1818,8 +1847,9 @@ function _renderList() {
             : Number(entity.damage_pct || 0);
         var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;
         var rankCls = j < 3 ? ' r' + (j + 1) : '';
+        var uidKey = _uidKey(entity.uid);
         html += ''
-            + '<div class="entity-row ' + (_currentTab === 'heal' ? 'heal' : '') + (entity.is_self ? ' self' : '') + '" data-uid="' + Number(entity.uid || 0) + '" onclick="_openDetail(' + Number(entity.uid || 0) + ')">'
+            + '<div class="entity-row ' + (_currentTab === 'heal' ? 'heal' : '') + (entity.is_self ? ' self' : '') + '" data-uid="' + _escHtml(uidKey) + '" onclick="_openDetail(' + _jsArg(uidKey) + ')">'
             +   '<div class="entity-bar" style="width:' + barPct + '%"></div>'
             +   '<div class="entity-main">'
             +     '<div class="rank' + rankCls + '">' + (j + 1) + '</div>'
@@ -1948,7 +1978,7 @@ function _renderDetail() {
     if (_viewMode === 'report') {
         detail = base;
     } else {
-        detail = _liveDetailCache[_detailUid] || base;
+        detail = _liveDetailCache[_uidKey(_detailUid)] || base;
     }
     _renderDetailBase(detail);
     _renderSkillRows(detail);
@@ -1971,16 +2001,16 @@ function showLive(data) {
     _viewMode = 'live';
     _captureHitFx(_liveSnapshot);
     if (_detailVisible) {
-        if (!_detailUid) _detailUid = _pickDetailUid();
+        if (!_hasUid(_detailUid)) _detailUid = _pickDetailUid();
         _syncDetailChrome();
         _renderAll();
-        if (_detailUid && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
+        if (_hasUid(_detailUid) && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
             window.pywebview.api.get_entity_detail(_detailUid);
         }
         return;
     }
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _renderAll();
 }
 
@@ -2011,7 +2041,7 @@ function showLastReport(report) {
     _viewMode = 'report';
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     _renderAll();
@@ -2023,7 +2053,7 @@ function showHistoryReport(report) {
     _viewMode = 'history';
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     _renderAll();
@@ -2031,14 +2061,17 @@ function showHistoryReport(report) {
 
 function updateDetail(data) {
     if (!data) return;
-    _liveDetailCache[Number(data.uid || 0)] = data;
-    if (_viewMode === 'live' && _detailVisible && Number(_detailUid) === Number(data.uid || 0)) {
+    var uidKey = _uidKey(data.uid);
+    if (!_hasUid(uidKey)) return;
+    _liveDetailCache[_uidKey(data.uid)] = data;
+    if (_viewMode === 'live' && _detailVisible && _uidKey(_detailUid) === uidKey) {
         _renderDetail();
     }
 }
 
 function _openDetail(uid, keepPanelMode) {
-    _detailUid = Number(uid || 0);
+    _detailUid = _uidKey(uid);
+    if (!_hasUid(_detailUid)) return;
     _detailVisible = true;
     if (keepPanelMode) _detailMode = true;
     _syncDetailChrome();
@@ -2053,7 +2086,7 @@ function _closeDetail() {
     if (_detailMode) {
         _detailMode = false;
         _detailVisible = false;
-        _detailUid = 0;
+        _detailUid = '';
         _syncDetailChrome();
         _requestDetailWindowMode(false);
         _switchListView();
@@ -2079,7 +2112,7 @@ function _activateLive() {
     _viewMode = 'live';
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     if (window.pywebview && window.pywebview.api && window.pywebview.api.request_live_snapshot) {
@@ -2092,7 +2125,7 @@ function _activateLive() {
 function _activateReport() {
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     if (window.pywebview && window.pywebview.api && window.pywebview.api.show_last_report) {
@@ -2116,7 +2149,7 @@ function _activateReport() {
     _viewMode = 'report';
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     _renderAll();
@@ -2125,7 +2158,7 @@ function _activateReport() {
 function _activateHistory() {
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     if (window.pywebview && window.pywebview.api && window.pywebview.api.list_history) {
@@ -2165,7 +2198,7 @@ function _reset() {
     _viewMode = 'live';
     _detailMode = false;
     _detailVisible = false;
-    _detailUid = 0;
+    _detailUid = '';
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     _liveSnapshot = _emptySnapshot();
@@ -2325,7 +2358,7 @@ window.DpsMeter = {
         _detailMode = !!active;
         if (!_detailMode) {
             _detailVisible = false;
-            _detailUid = 0;
+            _detailUid = '';
         }
         _syncDetailChrome();
         _renderAll();

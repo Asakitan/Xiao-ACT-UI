@@ -1054,8 +1054,10 @@ function updateEntities(entities) {
         var roleBtnClass = isBoss ? 'boss' : 'enemy';
         var hpPct = e.max_hp > 0 ? Math.round(e.hp / e.max_hp * 100) : 0;
         var dmgStr = _fmtNum(e.damage_dealt || 0);
-        var name = e.name || ('Entity ' + (e.uuid & 0xFFFF));
-        html += '<div class="entity-card ' + roleClass + '" data-uuid="' + e.uuid + '">'
+        var uuidText = String(e.uuid == null ? '' : e.uuid);
+        var uuidArg = _jsArg(e.uuid);
+        var name = e.name || ('Entity ' + (uuidText ? uuidText.slice(-4) : ''));
+        html += '<div class="entity-card ' + roleClass + '" data-uuid="' + _esc(uuidText) + '">'
             + '<div class="entity-rank">' + (i + 1) + '</div>'
             + '<div class="entity-info">'
             + '  <div class="entity-name">' + _esc(name) + '</div>'
@@ -1066,7 +1068,7 @@ function updateEntities(entities) {
             + '  </div>'
             + '  <div class="entity-hp-bar"><div class="entity-hp-fill" style="width:' + hpPct + '%"></div></div>'
             + '</div>'
-            + '<div class="entity-role-btn ' + roleBtnClass + '" onclick="toggleRole(' + e.uuid + ')">'
+            + '<div class="entity-role-btn ' + roleBtnClass + '" onclick="toggleRole(' + uuidArg + ')">'
             + roleLabel + '</div>'
             + '</div>';
     }
@@ -1074,9 +1076,10 @@ function updateEntities(entities) {
 }
 
 function toggleRole(uuid) {
+    uuid = String(uuid == null ? '' : uuid);
     // Find current role; toggle between boss/enemy
     for (var i = 0; i < _lastEntities.length; i++) {
-        if (_lastEntities[i].uuid === uuid) {
+        if (String(_lastEntities[i].uuid == null ? '' : _lastEntities[i].uuid) === uuid) {
             var newRole = _lastEntities[i].role === 'boss' ? 'enemy' : 'boss';
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.set_entity_role(uuid, newRole);

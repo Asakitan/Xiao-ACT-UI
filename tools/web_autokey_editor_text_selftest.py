@@ -59,12 +59,20 @@ def main() -> int:
     for pattern in raid_bad_arg_patterns:
         if pattern in raid:
             raise AssertionError("Raid editor inline handler must not single-quote raw dynamic args: " + pattern)
+    if 'onclick="toggleRole(' + " + e.uuid + " + ')"' in raid:
+        raise AssertionError("Raid editor role toggle must not pass entity uuid as a raw JS number")
+    if "if (_lastEntities[i].uuid === uuid)" in raid:
+        raise AssertionError("Raid editor role toggle must compare entity uuid as a string key")
     raid_safe_arg_required = [
         "function _jsArg",
         "onclick=\"saveReaction(' + _jsArg(trig) + ',' + skillId + ',' + _jsArg(id) + ')",
         "onclick=\"mechCreateFromSkill('",
         "+ sid + ',' + _jsArg(rec.name || '') + ',' + (dur || 'null') + ')",
         "var midArg = _jsArg(m.id);",
+        "var uuidArg = _jsArg(e.uuid);",
+        "data-uuid=\"' + _esc(uuidText)",
+        "onclick=\"toggleRole(' + uuidArg + ')",
+        "if (String(_lastEntities[i].uuid == null ? '' : _lastEntities[i].uuid) === uuid)",
         "onchange=\"mechToggle(' + midArg + ', this.checked)",
         "onclick=\"mechTest(' + midArg + ',[\\'tts\\'])",
         "onclick=\"mechEdit(' + midArg + ')",
