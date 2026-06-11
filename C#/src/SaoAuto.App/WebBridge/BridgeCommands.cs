@@ -53,6 +53,7 @@ public static class BridgeCommands
     // DPS
     public const string ShowLastDpsReport = "dps.show_last_report";
     public const string ResetCombat = "dps.reset_combat";
+    public const string DpsEntityDetail = "dps.entity_detail";
 
     /// <summary>R8 / DPS-04: toggle the DPS overlay master switch. Payload
     /// <c>{enabled:boolean}</c> writes <see cref="SettingsKeys.DpsEnabled"/>;

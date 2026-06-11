@@ -27,6 +27,7 @@ namespace SaoAuto.App.WebBridge;
 public sealed class WebBridgeLifecycle : IDisposable
 {
     private readonly GameStatePublisher _publisher;
+    private readonly DpsTracker? _dpsTracker;
     private HideSeekStatusPublisher? _hideSeekPublisher;
     private AutoKeyProfileBridge? _autoKeyProfileBridge;
     private BuffMonBridge? _buffMonBridge;
@@ -60,6 +61,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     {
         if (states is null) throw new ArgumentNullException(nameof(states));
         Broadcaster = new BridgeEventBroadcaster();
+        _dpsTracker = dpsTracker;
         // R8 / DPS-02/03: pass the live DpsTracker into the publisher so it
         // can drive show-live / fade-out edges via the per-tick pump. When
         // null, the publisher falls back to the snapshot-only behaviour
@@ -130,11 +132,12 @@ public sealed class WebBridgeLifecycle : IDisposable
     public void AttachDps(
         Action? reset,
         Func<DpsSnapshot?>? lastReport,
-        SettingsManager? settings = null)
+        SettingsManager? settings = null,
+        DpsTracker? tracker = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _dpsBridge?.Dispose();
-        _dpsBridge = new DpsBridge(Router, reset, lastReport, settings);
+        _dpsBridge = new DpsBridge(Router, reset, lastReport, settings, tracker ?? _dpsTracker);
     }
 
     /// <summary>

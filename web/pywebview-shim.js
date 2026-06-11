@@ -77,6 +77,9 @@
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
         },
+        alert_ok: function () {
+            return call('ui.menu_action', { action: 'alert_ok' }).then(normalizeOk);
+        },
         context_action: function (action) {
             return call('ui.context_action', { action: String(action || '') });
         },
@@ -109,6 +112,21 @@
         },
         get_dps_enabled: function () {
             return call('dps.toggle_enabled', {}).then(normalizeOk);
+        },
+        get_entity_detail: function (uid) {
+            var numericUid = Number(uid || 0);
+            if (!isFinite(numericUid)) numericUid = 0;
+            return call('dps.entity_detail', { uid: numericUid }).then(function (detail) {
+                detail = normalizeOk(detail);
+                try {
+                    if (detail && detail.ok !== false
+                            && window.DpsMeter
+                            && typeof window.DpsMeter.updateDetail === 'function') {
+                        window.DpsMeter.updateDetail(detail);
+                    }
+                } catch (_) {}
+                return detail;
+            });
         },
         set_buffmon_enabled: function (enabled) {
             return call('buffmon.set_enabled', { enabled: !!enabled }).then(normalizeOk);

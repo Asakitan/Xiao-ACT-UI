@@ -1929,7 +1929,7 @@ function _renderSkillRows(entity) {
             + '<div class="skill-row' + (isHeal ? ' heal' : '') + '">'
             +   '<div class="skill-head">'
             +     '<span class="skill-rank' + rankCls + '">' + rank + '</span>'
-            +     '<span class="skill-name">' + _escHtml(sk.skill_name || sk.skill_id || 'Unknown Skill') + '</span>'
+            +     '<span class="skill-name">' + _escHtml(sk.skill_name || sk.name || sk.skill_id || 'Unknown Skill') + '</span>'
             +     '<span class="skill-num" style="color:' + numColor + '">' + _fmtNum(amount) + '</span>'
             +     '<span class="skill-pct">' + _pct(share) + '</span>'
             +   '</div>'

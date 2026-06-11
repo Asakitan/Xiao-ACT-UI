@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.58: WebView2 Alert 与 DPS 详情桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `alert_ok` 兼容入口。
+     修复 WebView2 路径下菜单告警 OK 按钮关闭弹窗后因为 shim 缺少 no-op API
+     而抛出 `TypeError` 的交互问题。
+
+  2) `C#/src/SaoAuto.App/WebBridge/DpsBridge.cs` 与 `web/pywebview-shim.js`
+     补齐 `get_entity_detail(uid)` 到 `dps.entity_detail` 的桥接。
+     修复 Web DPS 详情模式无法把选中实体 UID 传到 live `DpsTracker`、技能拆分长期显示为空的问题。
+     同时 `web/dps.html` 支持渲染 C# 返回的 `name` 技能名字段。
+
+
+
 ## v4.4.57: WebView2 BuffMon 与更新器 shim 桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_buffmon_enabled` / `get_buffmon_enabled`。

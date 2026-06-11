@@ -12,6 +12,13 @@ global.window = {
   bridge: {
     cmd(name, payload) {
       calls.push({ name, payload });
+      if (name === "dps.entity_detail") {
+        return Promise.resolve({
+          uid: payload.uid,
+          name: "Asuna",
+          skills: [{ skill_id: 42, name: "Slash", total: 100 }],
+        });
+      }
       return Promise.resolve({ ok: true });
     },
   },
@@ -66,6 +73,11 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "dps.reset_combat", "reset_dps command mismatch");
 
+  await window.pywebview.api.alert_ok();
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.menu_action", "alert_ok command mismatch");
+  assert(last.payload.action === "alert_ok", "alert_ok action was not forwarded");
+
   await window.pywebview.api.set_dps_enabled(false);
   last = calls[calls.length - 1];
   assert(last.name === "dps.toggle_enabled", "set_dps_enabled command mismatch");
@@ -93,11 +105,21 @@ function assert(cond, message) {
   assert(last.name === "updater.apply", "apply_update command mismatch");
 
   let dpsSnapshotApplied = false;
+  let dpsDetailApplied = false;
   window.DpsMeter = {
     showActSnapshot(payload) {
       dpsSnapshotApplied = !!payload;
     },
+    updateDetail(payload) {
+      dpsDetailApplied = payload && payload.uid === 1001 && payload.skills && payload.skills[0].name === "Slash";
+    },
   };
+  await window.pywebview.api.get_entity_detail(1001);
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.entity_detail", "get_entity_detail command mismatch");
+  assert(last.payload.uid === 1001, "get_entity_detail uid was not forwarded");
+  assert(dpsDetailApplied, "get_entity_detail should apply the returned detail when DpsMeter is present");
+
   await window.pywebview.api.request_live_snapshot();
   last = calls[calls.length - 1];
   assert(last.name === "state.snapshot", "request_live_snapshot command mismatch");
@@ -234,6 +256,9 @@ function assert(cond, message) {
   const combatantDrilldown = fs.readFileSync(path.join(root, "web/act_combatant_drilldown.html"), "utf8");
   assert(combatantDrilldown.includes("'act.skill.open'"), "combatant drilldown should use explicit act.skill.open fallback");
   assert(combatantDrilldown.includes("skill_id: String(args[1] || '')"), "combatant drilldown should forward skill_id when opening skill drilldown");
+
+  const dpsPanel = fs.readFileSync(path.join(root, "web/dps.html"), "utf8");
+  assert(dpsPanel.includes("sk.skill_name || sk.name || sk.skill_id"), "DPS detail should render C# skill name fields");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
