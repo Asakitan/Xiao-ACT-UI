@@ -10,6 +10,7 @@ import threading
 import json
 import copy
 import ctypes
+import math
 import numpy as np
 import logging
 from pathlib import Path
@@ -421,6 +422,16 @@ class SettingsManager:
 # ════════════════════════════════════════════════
 #  JS API Bridge
 # ════════════════════════════════════════════════
+def _safe_timeline_speed(value: Any, fallback: float = 1.0) -> float:
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        speed = float(fallback)
+    if not math.isfinite(speed):
+        speed = float(fallback)
+    return max(0.1, min(speed, 8.0))
+
+
 class SAOWebAPI:
     """pywebview js_api — 暴露给 JavaScript 的 Python 接口."""
 
@@ -605,7 +616,7 @@ class SAOWebAPI:
         return json.dumps(act_mem_attr_map(self._g, ent_addr=ent_addr), ensure_ascii=False)
 
     def play_timeline(self, speed=1.0):
-        return json.dumps(act_timeline_play(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
+        return json.dumps(act_timeline_play(self._g, speed=_safe_timeline_speed(speed)), ensure_ascii=False)
 
     def pause_timeline(self):
         return json.dumps(act_timeline_pause(self._g), ensure_ascii=False)
@@ -617,7 +628,7 @@ class SAOWebAPI:
         return json.dumps(act_timeline_seek(self._g, cursor_ms=int(cursor_ms or 0)), ensure_ascii=False)
 
     def set_timeline_speed(self, speed=1.0):
-        return json.dumps(act_timeline_set_speed(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
+        return json.dumps(act_timeline_set_speed(self._g, speed=_safe_timeline_speed(speed)), ensure_ascii=False)
 
     def filter_timeline(self, query=''):
         return json.dumps(act_timeline_filter(self._g, query=str(query or '')), ensure_ascii=False)

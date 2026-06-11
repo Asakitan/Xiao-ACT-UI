@@ -57,6 +57,16 @@ function assert(cond, message) {
   assert(last.name === "act.action_log.jump_to_time", "jump_action_log_time command mismatch");
   assert(last.payload.topic === "skill", "jump_action_log_time topic was not forwarded");
 
+  await window.pywebview.api.play_timeline(-99);
+  last = calls[calls.length - 1];
+  assert(last.name === "act.timeline.play", "play_timeline command mismatch");
+  assert(last.payload.speed === 0.1, "play_timeline speed was not clamped");
+
+  await window.pywebview.api.set_timeline_speed("999");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.timeline.speed", "set_timeline_speed command mismatch");
+  assert(last.payload.speed === 8, "set_timeline_speed speed was not clamped");
+
   await window.pywebview.api.exit_app();
   last = calls[calls.length - 1];
   assert(last.name === "ui.exit", "exit_app should map to ui.exit");
@@ -478,6 +488,8 @@ function assert(cond, message) {
   assert(timelineVcr.includes("timelinePayload(name, args || [])"), "timeline VCR is missing fallback payload mapping");
   assert(timelineVcr.includes("delta_ms: numericArg(args[0], 1000)"), "timeline VCR should forward step delta_ms");
   assert(timelineVcr.includes("cursor_ms: numericArg(args[0], 0)"), "timeline VCR should forward seek cursor_ms");
+  assert(timelineVcr.includes("speed: safeSpeed(args[0])"), "timeline VCR should normalize fallback speed");
+  assert(!timelineVcr.includes("Number(speed.value || 1)"), "timeline VCR should not pass raw speed input");
 
   const actionLog = fs.readFileSync(path.join(root, "web/act_action_log.html"), "utf8");
   assert(!actionLog.includes("{ args: args || [] }"), "action log still sends bare fallback args");

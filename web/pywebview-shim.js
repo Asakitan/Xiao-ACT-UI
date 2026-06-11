@@ -39,6 +39,16 @@
         return value;
     }
 
+    function finiteNumber(value, fallback) {
+        var number = Number(value);
+        if (!isFinite(number)) number = Number(fallback || 0);
+        return isFinite(number) ? number : 0;
+    }
+
+    function safeTimelineSpeed(value) {
+        return Math.max(0.1, Math.min(8, finiteNumber(value, 1)));
+    }
+
     function normalizeOk(result) {
         if (result && result.error && result.ok == null) {
             result.ok = false;
@@ -449,7 +459,7 @@
             return call('act.mem_scope.attr_map', { ent_addr: String(entAddr || '') });
         },
         play_timeline: function (speed) {
-            return call('act.timeline.play', { speed: speed || 1 });
+            return call('act.timeline.play', { speed: safeTimelineSpeed(speed) });
         },
         pause_timeline: function () {
             return call('act.timeline.pause', {});
@@ -461,7 +471,7 @@
             return call('act.timeline.seek', { cursor_ms: cursorMs || 0 });
         },
         set_timeline_speed: function (speed) {
-            return call('act.timeline.speed', { speed: speed || 1 });
+            return call('act.timeline.speed', { speed: safeTimelineSpeed(speed) });
         },
         filter_timeline: function (query) {
             return call('act.timeline.filter', { query: String(query || '') });

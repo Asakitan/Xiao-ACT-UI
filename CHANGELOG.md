@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.39: ACT Timeline VCR 速度参数修复.
+
+  1) `web/act_timeline_vcr.html` 修复播放速度输入。
+     Timeline VCR 的 play/set speed 现在统一使用 `safeSpeed()` 夹到 0.1..8x,
+     避免负速、`NaN` 或超大速度造成播放状态和显示异常。
+
+  2) `web/pywebview-shim.js` 与 `sao_webview.py` 修复 Timeline speed 桥接参数。
+     WebView2 shim 和 Python Web API 也会夹取速度参数, 防止绕过页面直接调用时
+     把异常值传进 runtime 或触发 float 转换错误。
+
 ## v4.5.38: ACT Action Log/Death Recap 数值参数修复.
 
   1) `web/act_action_log.html` 修复 cursor、offset 和分页参数规范化。

@@ -223,6 +223,25 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
             raise AssertionError("missing safe death recap numeric snippet: " + snippet)
 
 
+def _assert_timeline_speed_is_normalized() -> None:
+    timeline = _read_web("act_timeline_vcr.html")
+    for snippet in (
+        "return isFinite(n) ? n : fallback;",
+        "speed: numericArg(args[0], 1)",
+        "Number(speed.value || 1)",
+    ):
+        if snippet in timeline:
+            raise AssertionError("timeline VCR must clamp speed inputs before API calls: " + snippet)
+    for snippet in (
+        "function safeSpeed",
+        "speed: safeSpeed(args[0])",
+        "apiCall('play_timeline', [safeSpeed(speed.value)])",
+        "apiCall('set_timeline_speed', [safeSpeed(speed.value)])",
+    ):
+        if snippet not in timeline:
+            raise AssertionError("missing safe timeline speed snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -237,6 +256,7 @@ def main() -> int:
     _assert_history_indexes_are_normalized()
     _assert_graph_numbers_and_jump_topic_are_normalized()
     _assert_action_log_and_death_recap_numbers_are_normalized()
+    _assert_timeline_speed_is_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

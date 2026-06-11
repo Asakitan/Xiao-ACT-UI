@@ -123,7 +123,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
     function numericArg(value, fallback) {
         var n = Number(value);
-        return isFinite(n) ? n : fallback;
+        if (!isFinite(n)) n = Number(fallback || 0);
+        return isFinite(n) ? n : 0;
+    }
+    function safeSpeed(value) {
+        var n = numericArg(value, 1);
+        return Math.max(0.1, Math.min(8, n));
     }
     function eventTopicClass(topic) {
         topic = String(topic || '').toLowerCase();
@@ -133,11 +138,11 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function timelinePayload(name, args) {
         args = args || [];
         if (name === 'get_timeline_status') return { limit: numericArg(args[0], 80), query: String(args[1] || '') };
-        if (name === 'play_timeline') return { speed: numericArg(args[0], 1) };
+        if (name === 'play_timeline') return { speed: safeSpeed(args[0]) };
         if (name === 'pause_timeline') return {};
         if (name === 'step_timeline') return { delta_ms: numericArg(args[0], 1000) };
         if (name === 'seek_timeline') return { cursor_ms: numericArg(args[0], 0) };
-        if (name === 'set_timeline_speed') return { speed: numericArg(args[0], 1) };
+        if (name === 'set_timeline_speed') return { speed: safeSpeed(args[0]) };
         if (name === 'filter_timeline') return { query: String(args[0] || '') };
         if (name === 'toggle_timeline_vcr') return { action: 'toggle_timeline_vcr' };
         return { args: args };
@@ -178,7 +183,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : (data.playing ? 'var(--act-ok)' : 'var(--act-muted)');
         document.getElementById('sum-events').textContent = String(events.length || 0);
         document.getElementById('sum-cursor').textContent = ActTime.fmtDur(data.cursor_ms);
-        document.getElementById('sum-speed').textContent = String(data.speed || 1) + 'x';
+        document.getElementById('sum-speed').textContent = String(safeSpeed(data.speed)) + 'x';
         document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
         if (!events.length) { setListHtml('<div class="empty">暂无 ACT 时间线事件。<br/>开始识别或 replay 后会出现事件。</div>', preserveScroll); return; }
@@ -190,7 +195,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     window.TimelineVcr = {
         refresh: function (options) { options = options || {}; return apiCall('get_timeline_status', [80, query.value || '']).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Timeline failed'); return data; }); },
-        play: function () { return apiCall('play_timeline', [Number(speed.value || 1)]).then(function (data) { render(data, { preserveScroll: true }); showToast('VCR playing'); return data; }); },
+        play: function () { return apiCall('play_timeline', [safeSpeed(speed.value)]).then(function (data) { render(data, { preserveScroll: true }); showToast('VCR playing'); return data; }); },
         pause: function () { return apiCall('pause_timeline', []).then(function (data) { render(data, { preserveScroll: true }); showToast('VCR paused'); return data; }); },
         step: function (delta) { return apiCall('step_timeline', [delta || 1000]).then(function (data) { render(data, { preserveScroll: true }); return data; }); },
         seek: function (cursorMs) { return apiCall('seek_timeline', [cursorMs || 0]).then(function (data) { render(data, { preserveScroll: true }); return data; }); },
@@ -209,7 +214,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };
-    speed.addEventListener('change', function () { apiCall('set_timeline_speed', [Number(speed.value || 1)]).then(function (data) { render(data, { preserveScroll: true }); }); });
+    speed.addEventListener('change', function () { apiCall('set_timeline_speed', [safeSpeed(speed.value)]).then(function (data) { render(data, { preserveScroll: true }); }); });
     query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { apiCall('filter_timeline', [query.value || '']).then(function (data) { render(data, { preserveScroll: false }); }); }, 220); });
     setTimeout(function () { shell.classList.add('visible'); TimelineVcr.refresh(); }, 40);
 })();
