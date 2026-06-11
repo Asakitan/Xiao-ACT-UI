@@ -146,6 +146,72 @@ class DodgeContext:
         except Exception:
             return lambda: False
 
+    def lock_nearest_teammate(self) -> int:
+        """锁定最近队友(玩家)对象一次 (O(N))。抱团/分摊机制走向队友用; 之后 read_obj_pos
+        每 tick O(1) 读其活坐标(队友会动)。玩家=uuid 末16位==640; 排除自己。失败返回 0。"""
+        try:
+            import math
+            pm = self._src.sr.pm
+            mgr = self._entity_mgr().locate(0)
+            if not mgr:
+                return 0
+            me = self._player()
+            my_uuid = pm.read_i64(me + 0xC0) if me else 0
+            pp = self.get_player_pos()
+            emr = self._entity_mgr()
+            ed = pm.read_u64(mgr + 0x28) or 0       # entityDict_ (含玩家)
+            rd = self._position()
+            best, best_d = 0, 1e18
+            for key, obj in emr._read_dict_entries(ed, max_entries=128):
+                if (int(key) & 0xFFFF) != 640 or int(key) == int(my_uuid):
+                    continue                         # 只要玩家, 排除自己
+                pos = rd.read_entity_pos(obj)
+                if not pos or not any(abs(c) > 1e-4 for c in pos):
+                    continue
+                if not pp:
+                    return obj
+                dd = math.hypot(pp[0] - pos[0], pp[2] - pos[2])
+                if dd < best_d:
+                    best_d, best = dd, obj
+            return best
+        except Exception:
+            return 0
+
+    def read_zone_pos(self, zone_obj: int):
+        """zone(预警圈)世界中心 best-effort: zone 无 stateMoveComp_, 试 MoveComp 的 managed
+        坐标字段(auto-offset)。读不到返回 None(由调用方退到 DamagePos)。"""
+        try:
+            import struct
+            pm = self._src.sr.pm
+            cl = pm.read_u64(zone_obj + 0x60) or 0
+            if not cl:
+                return None
+            from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+
+            def _kn(o):
+                kp = pm.read_u64(o); np = pm.read_u64(kp + 0x10)
+                b = pm.read_bytes(np, 48); s = b.split(b"\x00", 1)[0]
+                return s.decode("ascii", "replace") if s else ""
+            for i in range(16):
+                cp = pm.read_u64(cl + 0x20 + i * 8) or 0
+                if not (0x10000 <= cp <= 0x7FFF_FFFF_FFFF) or _kn(cp) != "MoveComp":
+                    continue
+                fm = LiveFieldResolver(pm)._field_map(pm.read_u64(cp)) or {}
+                for fn in ("lastVirtualPos_", "lastStickPos_"):
+                    off = fm.get(fn)
+                    if off is None:
+                        continue
+                    b = pm.read_bytes(cp + off, 12)
+                    if b and len(b) == 12:
+                        x, y, z = struct.unpack("<fff", b)
+                        if any(abs(v) > 1e-3 for v in (x, y, z)) and \
+                                all(abs(v) < 1e6 for v in (x, y, z)):
+                            return (x, y, z)
+                return None
+            return None
+        except Exception:
+            return None
+
     def lock_danger_obj(self, direction: str, boss_base_id: int = 0) -> int:
         """进闭环前定位一次危险源实体对象地址 (O(N) 一次), 之后 read_obj_pos O(1)。
         away_boss→按 base_id 找 boss; away_nearest→最近敌对实体。失败返回 0。"""

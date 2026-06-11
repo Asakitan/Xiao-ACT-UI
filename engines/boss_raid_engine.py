@@ -203,14 +203,17 @@ def _normalize_cam_direction(raw: Any, default: str = "") -> str:
 
 
 def _normalize_dodge_direction(raw: Any) -> str:
-    """方向值: 空 / 相机相对8向 / world:dx,dz / away_point:x,z / away_boss。"""
+    """方向值: 空 / 相机相对8向 / world:dx,dz / away_point:x,z / away_boss|away_nearest /
+    自动走位 goto_teammate|goto_circle|walk_sequence / goto_point:x,z。"""
     v = _string(raw).strip()
     if not v:
         return ""
     low = v.lower()
-    if low in _CAM_DIRECTIONS or low in ("away_boss", "away_nearest"):
+    if low in _CAM_DIRECTIONS or low in (
+            "away_boss", "away_nearest",
+            "goto_teammate", "goto_circle", "walk_sequence"):
         return low
-    for pfx in ("world:", "away_point:"):
+    for pfx in ("world:", "away_point:", "goto_point:"):
         if low.startswith(pfx):
             try:
                 a, b = [float(x) for x in v[len(pfx):].split(",")[:2]]
@@ -232,10 +235,11 @@ def make_default_dodge_inline() -> Dict[str, Any]:
         "lead_ms": 300,          # fire N ms before countdown/cast end
         "cooldown_s": 3.0,
         # 定向躲避 (auto_dodge_director): 按住 WASD 把人物挪开。空=不定向。
-        "direction": "",         # ''|forward|back|left|right|forward_left|.. |world:dx,dz|away_point:x,z|away_boss|away_nearest
-        "move_ms": 600,          # WASD 按住时长 (相机相对) / 闭环出圈的超时上限
+        "direction": "",         # ''|forward|..|away_boss|away_nearest|goto_teammate|goto_point:x,z|goto_circle|walk_sequence
+        "move_ms": 600,          # WASD 按住时长 (相机相对) / 闭环出圈/走位的超时上限
         "fallback_direction": "back",  # 世界/away 模式无相机或无目标时的后备相机相对方向
         "exit_margin_m": 6.0,    # away_* 闭环精准出圈: 水平距≥此值即停 ('跑出去一点就行')
+        "arrive_m": 2.0,         # goto_*/walk_* 自动走位: 走到离目标≤此值即停
     }
 
 
@@ -266,6 +270,7 @@ def normalize_dodge(raw: Any) -> Dict[str, Any]:
         "fallback_direction": _normalize_cam_direction(
             inline_src.get("fallback_direction"), "back"),
         "exit_margin_m": _coerce_float(inline_src.get("exit_margin_m"), 6.0, 1.0, 40.0),
+        "arrive_m": _coerce_float(inline_src.get("arrive_m"), 2.0, 0.5, 30.0),
     }
     return {
         "enabled": _coerce_bool(src.get("enabled"), False),

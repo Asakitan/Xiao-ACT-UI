@@ -377,10 +377,15 @@ class _MechanicsEditorMixin:
         ('视角 ▸ ↖左前', 'forward_left'), ('视角 ▸ ↗右前', 'forward_right'),
         ('远离 ▸ 远离Boss(需进本)', 'away_boss'),
         ('远离 ▸ 远离最近威胁(需进本)', 'away_nearest'),
+        ('走向 ▸ 靠拢队友(抱团/分摊)', 'goto_teammate'),
+        ('走向 ▸ 走向编号圈', 'goto_circle'),
+        ('走向 ▸ 按序走完编号圈', 'walk_sequence'),
     )
     # 共享文案 (Tk/Web 1:1, 改一处必同步另一处)
     _DODGE_DIR_HELP = ('视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停'
-                       '(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。')
+                       '(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。'
+                       '「走向」类(靠拢队友/走编号圈)是自动走位, 需额外开「自动走位」总开关, '
+                       '读不到目标位时直接停(绝不盲走)。')
     # %s = 急停键 (master.panic_hotkey, 跟随 toggle_auto_dodge 实际绑定)
     _DODGE_DANGER = ('⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, '
                      '自行承担。随时 %s 全松键急停。')
@@ -491,6 +496,8 @@ class _MechanicsEditorMixin:
         _switch('自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
         _switch('定向移动', 'directional_dodge_enabled',
                 master.get('directional_dodge_enabled', False))
+        _switch('自动走位', 'auto_walk_enabled',
+                master.get('auto_walk_enabled', False))
         tk.Label(row, text='紧急停用: %s' % (master.get('panic_hotkey') or 'F12'),
                  bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT, padx=(4, 8))
         vol_var = _tk.StringVar(value=str(int(master.get('tts_volume') or 80)))
@@ -944,6 +951,11 @@ class _MechanicsEditorMixin:
             _field(mv2, '出圈到此距离(m)', 'exit_margin_m', inline.get('exit_margin_m', 6.0), 6)
             tk.Label(mv2, text='挪到离目标这么远即停 (越大越安全/越远离输出位)',
                      bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
+        elif cur_dir.startswith('goto') or cur_dir.startswith('walk'):  # 走向类: 到位半径
+            mv2 = _row(form)
+            _field(mv2, '到位半径(m)', 'arrive_m', inline.get('arrive_m', 2.0), 6)
+            tk.Label(mv2, text='走到离目标这么近即停 (需「自动走位」总开关; 读不到目标位直接停)',
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
         tk.Label(form, text=self._DODGE_DIR_HELP,
                  bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
                  anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
@@ -1028,6 +1040,8 @@ class _MechanicsEditorMixin:
             inline['move_ms'] = int(_num('move_ms', 600))
         if 'exit_margin_m' in v:
             inline['exit_margin_m'] = round(_num('exit_margin_m', 6.0), 1)
+        if 'arrive_m' in v:
+            inline['arrive_m'] = round(_num('arrive_m', 2.0), 1)
         dpick = v.get('dodge_direction')
         if dpick:
             dvar, dir_lbls = dpick

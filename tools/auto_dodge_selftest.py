@@ -217,6 +217,74 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue(ups)               # is_clear 触发后松键停了
         self.assertEqual(d._held, [])
 
+    def test_walk_to_moves_toward_and_stops_at_arrive(self):
+        # 玩家逐步靠近目标; 到 arrive_m 内停, 与躲避的"远离"相反(朝目标按键)
+        events = []
+        state = {"p": [0.0, 0.0, 0.0]}
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: tuple(state["p"]), gate=lambda: True)
+
+        def target():
+            state["p"][2] += 1.0       # 每读一次玩家"靠近"目标(模拟位移)
+            return (0.0, 0.0, 5.0)
+        r = d.walk_to(target, arrive_m=1.5, max_ms=2000)
+        self.assertTrue(r["fired"])
+        time.sleep(0.5)
+        downs = [k for k, dn in events if dn]
+        ups = [k for k, dn in events if not dn]
+        # 目标在 +Z, 相机前向=(0,-1)指向-Z → 朝目标(+Z)=相机后方 → 按 S
+        self.assertIn("S", downs)
+        self.assertEqual(set(downs), set(ups)) # 到位后全松开
+
+    def test_walk_to_stops_when_unreadable_no_blind_walk(self):
+        # ★安全: 读不到目标位 → 立即停, 不盲按键 (与躲避可降级纯按键不同)
+        events = []
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        d.walk_to(lambda: None, arrive_m=2.0, max_ms=2000)   # 目标恒 None
+        time.sleep(0.3)
+        self.assertEqual(events, [])           # 一个键都没按
+        self.assertEqual(d._held, [])
+
+    def test_walk_sequence_advances_by_is_arrived(self):
+        # 序列走: is_arrived 推进/收尾, arrive_m 不提前打断
+        events = []
+        prog = {"idx": 0}
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        targets = [(0.0, 0.0, 10.0), (10.0, 0.0, 0.0)]
+
+        def cur():
+            return targets[prog["idx"]] if prog["idx"] < len(targets) else None
+
+        def arrived():
+            prog["idx"] += 1               # 每 tick "进一个圈"
+            return prog["idx"] >= len(targets)
+        r = d.walk_to(cur, arrive_m=1.5, max_ms=2000, is_arrived=arrived,
+                      label="按序走完编号圈")
+        self.assertTrue(r["fired"])
+        time.sleep(0.4)
+        self.assertGreaterEqual(prog["idx"], len(targets))   # 走完了序列
+        self.assertEqual(d._held, [])
+
+    def test_walk_to_release_all_stops(self):
+        events = []
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        d.walk_to(lambda: (0.0, 0.0, 99.0), arrive_m=1.0, max_ms=3000)
+        time.sleep(0.15)
+        d.release_all()                       # F12
+        time.sleep(0.2)
+        self.assertEqual(d._held, [])         # 急停松键
+
     def test_epoch_single_flight_cancels_old_loop(self):
         # release_all (F12) 递增 epoch, 在途循环下一 tick 退出且松键
         events = []

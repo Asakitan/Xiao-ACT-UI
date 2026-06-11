@@ -35,7 +35,12 @@ _DIR_LABELS = {
     "forward_left": "左前", "forward_right": "右前",
     "back_left": "左后撤", "back_right": "右后撤",
     "away_boss": "远离Boss", "away_nearest": "远离最近威胁",
+    "goto_point": "走向指定点", "goto_teammate": "靠拢队友(抱团)",
+    "goto_circle": "走向编号圈", "walk_sequence": "按序走完编号圈",
 }
+
+# 走向类方向 (move TOWARD): 闭环走位, 与 away_*(远离)相反
+_GOTO_DIRECTIONS = ("goto_point", "goto_teammate", "goto_circle", "walk_sequence")
 
 
 def direction_label(d: str) -> str:
@@ -197,6 +202,58 @@ class AutoDodgeDirector:
         threading.Thread(target=self._run_move, args=(epoch, keys, move_ms),
                          daemon=True).start()
         return {"keys": keys, "label": label, "fired": True}
+
+    def walk_to(self, get_target_pos: Callable, *, arrive_m: float = 2.0,
+                max_ms: int = 8000, is_arrived: Optional[Callable] = None,
+                label: str = "自动走位") -> Dict:
+        """闭环走向一个世界坐标点 (与 dodge 的"远离"相反): 每 tick 读玩家位+目标位+相机
+        基 → 朝目标的 WASD, 水平距 ≤ arrive_m 或 is_arrived() 即停。
+
+        ★安全: 走位读不到位置/相机/目标时**直接停, 绝不盲按键**(盲走可能走进危险);
+        这是与躲避(可降级纯按键后撤)的关键区别。get_target_pos 返回 None → 该 tick 停。"""
+        epoch = self._next_epoch()
+        max_ms = max(200, min(15000, int(max_ms)))
+        arrive_m = max(0.5, float(arrive_m))
+        threading.Thread(target=self._run_until_arrive,
+                         args=(epoch, get_target_pos, arrive_m, max_ms, is_arrived),
+                         daemon=True).start()
+        return {"label": label, "fired": True, "epoch": epoch}
+
+    def _run_until_arrive(self, epoch: int, get_target_pos: Callable,
+                          arrive_m: float, max_ms: int,
+                          is_arrived: Optional[Callable]) -> None:
+        tick = 0.07
+        t0 = time.time()
+        try:
+            while (time.time() - t0) < max_ms / 1000.0:
+                if self._blocked() or epoch != self._epoch:
+                    break
+                if is_arrived is not None:
+                    try:
+                        if is_arrived():
+                            break              # 宿主判定已到位(如区域成员=已进圈)
+                    except Exception:
+                        pass
+                pp = self._pos_safe()
+                tp = None
+                try:
+                    tp = get_target_pos()
+                except Exception:
+                    tp = None
+                cam = self._cam_safe()
+                if not pp or not tp or not cam:
+                    break                      # ★读不到 → 停, 不盲走
+                if is_arrived is None and \
+                        math.hypot(pp[0] - tp[0], pp[2] - tp[2]) <= arrive_m:
+                    break                      # 简单走点: 到半径即停 (序列走由 is_arrived 推进)
+                keys = world_vec_to_keys(tp[0] - pp[0], tp[2] - pp[2],
+                                         cam["forward"], cam["right"])
+                if not keys:
+                    break
+                self._apply_keys(keys)
+                time.sleep(tick)
+        finally:
+            self._release_if_mine(epoch)
 
     def _cam_safe(self):
         try:

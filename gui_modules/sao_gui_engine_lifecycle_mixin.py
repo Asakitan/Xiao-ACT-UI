@@ -645,6 +645,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
                         is_clear = None
                     director.dodge(inline, danger_pos=danger0,
                                    get_danger_pos=get_danger, is_clear=is_clear)
+                elif direction.startswith('goto') or direction.startswith('walk'):
+                    self._run_auto_walk(director, ctx, inline, direction)
                 else:
                     director.dodge(inline)
             import threading as _th
@@ -656,6 +658,82 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 _go()
         except Exception as e:
             print(f'[Dodge] directional dodge failed: {e}')
+
+    def _run_auto_walk(self, director, ctx, inline, direction):
+        """自动走位(走向目标, 与躲避的远离相反)。独立总开关 auto_walk_enabled 默认关
+        (走位比躲避更激进的 bot 行为); 前台门 + F12 与躲避共用。
+
+          goto_teammate          靠拢最近队友 (抱团/分摊机制)
+          goto_point:x,z         走向固定世界坐标点
+          goto_circle            走向当前第一个编号圈
+          walk_sequence          按编号顺序走完全部编号圈 (进圈靠区域成员判定推进)
+        ★安全: 目标位置读不到 → director.walk_to 内部直接停, 绝不盲走。"""
+        try:
+            if not bool(self._get_setting('auto_walk_enabled', False)):
+                return
+            arrive_m = float(inline.get('arrive_m') or 2.0)
+            move_ms = int(inline.get('move_ms') or 8000)
+            if direction.startswith('goto_teammate'):
+                obj = ctx.lock_nearest_teammate()
+                if not obj:
+                    print('[走位] 没找到可靠队友坐标, 取消靠拢')
+                    return
+                director.walk_to(lambda _o=obj: ctx.read_obj_pos(_o),
+                                 arrive_m=max(arrive_m, 2.0), max_ms=move_ms,
+                                 label='靠拢队友')
+            elif direction.startswith('goto_point'):
+                try:
+                    x, z = [float(v) for v in direction.split(':', 1)[1].split(',')[:2]]
+                except Exception:
+                    print('[走位] goto_point 坐标解析失败:', direction)
+                    return
+                py = (ctx.get_player_pos() or (0, 0, 0))[1]
+                director.walk_to(lambda: (x, py, z), arrive_m=arrive_m,
+                                 max_ms=move_ms, label='走向指定点')
+            elif direction.startswith('goto_circle') or direction.startswith('walk_sequence'):
+                self._walk_numbered_sequence(director, ctx, inline,
+                                             single=direction.startswith('goto_circle'))
+        except Exception as e:
+            print(f'[走位] auto-walk failed: {e}')
+
+    def _walk_numbered_sequence(self, director, ctx, inline, single=False):
+        """按编号顺序走完编号圈: 一个闭环走向当前目标圈; 玩家进圈(区域成员判定)→推进到
+        下一个; 全部走完或超时即停。圈位置取自追踪器(炸圈 DamagePos 补), 未知则该 tick 停。"""
+        tracker = getattr(self, '_numbered_zone_tracker', None)
+        if tracker is None:
+            print('[走位] 编号圈追踪器未就绪(尚未遇到机制圈)')
+            return
+        try:
+            pm = self._dodge_context._src.sr.pm
+            mgr = self._dodge_context._entity_mgr().locate(0)
+            me = pm.read_u64(mgr + 0x18) if mgr else 0
+            my_uuid = pm.read_i64(me + 0xC0) if me else 0
+        except Exception:
+            my_uuid = 0
+        state = {'idx': 0}
+
+        def current_target():
+            seq = tracker.active_sequence()
+            i = state['idx']
+            if i >= len(seq):
+                return None
+            return seq[i].pos       # None(位置未知) → walk_to 停, 不盲走
+
+        def is_arrived():
+            seq = tracker.active_sequence()
+            i = state['idx']
+            if i >= len(seq):
+                return True
+            z = seq[i]
+            if my_uuid and my_uuid in z.members_now:
+                print('[走位] 已进编号圈#%d(组%d), 推进下一个' % (z.seq_in_group, z.group_id))
+                state['idx'] = i + 1
+                return single or state['idx'] >= len(seq)
+            return False
+        director.walk_to(current_target, arrive_m=float(inline.get('arrive_m') or 1.5),
+                         max_ms=int(inline.get('move_ms') or 12000),
+                         is_arrived=is_arrived,
+                         label='走向编号圈' if single else '按序走完编号圈')
 
     # ────────────────────────────────────────────
     #  SkillFX / Burst Mode Ready helpers

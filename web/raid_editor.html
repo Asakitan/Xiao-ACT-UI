@@ -513,6 +513,7 @@ function renderMechanics() {
         + _mSwitch('横幅提醒', 'banner_enabled', master.banner_enabled)
         + _mSwitch('自动躲避', 'dodge_enabled', master.dodge_enabled)
         + _mSwitch('定向移动', 'directional_dodge_enabled', master.directional_dodge_enabled)
+        + _mSwitch('自动走位', 'auto_walk_enabled', master.auto_walk_enabled)
         + '<span style="color:#9fc0d8;">紧急停用: ' + _esc(master.panic_hotkey || 'F12') + '</span>'
         + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
         + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
@@ -815,7 +816,9 @@ function _mForm(m) {
            ['left', '视角 ▸ ←向左'], ['right', '视角 ▸ →向右'],
            ['back_left', '视角 ▸ ↙左后撤'], ['back_right', '视角 ▸ ↘右后撤'],
            ['forward_left', '视角 ▸ ↖左前'], ['forward_right', '视角 ▸ ↗右前'],
-           ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)']
+           ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)'],
+           ['goto_teammate', '走向 ▸ 靠拢队友(抱团/分摊)'], ['goto_circle', '走向 ▸ 走向编号圈'],
+           ['walk_sequence', '走向 ▸ 按序走完编号圈']
           ].map(function (o) {
             return '<option value="' + o[0] + '"' + (curDir === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
           }).join('') + '</select> '
@@ -824,7 +827,15 @@ function _mForm(m) {
         html += '<div style="margin:3px 0;">' + _mInput('mf-exit', '出圈到此距离(m)', inline.exit_margin_m != null ? inline.exit_margin_m : 6, 48)
             + '<span style="font-size:9px;color:#75808d;">挪到离目标这么远即停</span></div>';
     }
-    html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。</div>'
+    if (curDir.indexOf('goto') === 0 || curDir.indexOf('walk') === 0) {
+        var walkMasterOn = !!((_mechState && _mechState.master) || {}).auto_walk_enabled;
+        if (!walkMasterOn) {
+            html += '<div style="font-size:10px;color:#ffd46f;margin:2px 0;">● 顶部「自动走位」总开关未开 — 走向类不会执行 (仅保存配置)</div>';
+        }
+        html += '<div style="margin:3px 0;">' + _mInput('mf-arrive', '到位半径(m)', inline.arrive_m != null ? inline.arrive_m : 2, 48)
+            + '<span style="font-size:9px;color:#75808d;">走到离目标这么近即停</span></div>';
+    }
+    html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。「走向」类(靠拢队友/走编号圈)是自动走位, 需额外开「自动走位」总开关, 读不到目标位时直接停(绝不盲走)。</div>'
         + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 '
         + _esc(((_mechState || {}).master || {}).panic_hotkey || 'F12') + ' 全松键急停。</div>';
     // 阶段范围
@@ -907,6 +918,7 @@ function _mCollect() {
     if (dirEl) inline.direction = String(dirEl.value || '');
     if (document.getElementById('mf-move')) inline.move_ms = Math.round(_mNum('mf-move', 600));
     if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_mNum('mf-exit', 6) * 10) / 10;
+    if (document.getElementById('mf-arrive')) inline.arrive_m = Math.round(_mNum('mf-arrive', 2) * 10) / 10;
     var ph = _mVal('mf-phase');
     d.phase_ids = ph ? [ph] : [];
     return d;

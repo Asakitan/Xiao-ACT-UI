@@ -126,6 +126,7 @@ def build_mechanics_state(settings, engine, state_mgr,
         "banner_enabled": bool(_setting("mech_banner_enabled", True)),
         "dodge_enabled": bool(linkage.get("dodge_enabled", True)),
         "directional_dodge_enabled": bool(_setting("directional_dodge_enabled", False)),
+        "auto_walk_enabled": bool(_setting("auto_walk_enabled", False)),
         "linkage_enabled": bool(linkage.get("enabled", False)),
         "panic_hotkey": _panic_hotkey(),
         "zh_voice": health.get("zh_voice"),
@@ -373,6 +374,8 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
         settings.set("mech_banner_enabled", bool(flags["banner_enabled"]))
     if "directional_dodge_enabled" in flags:
         settings.set("directional_dodge_enabled", bool(flags["directional_dodge_enabled"]))
+    if "auto_walk_enabled" in flags:
+        settings.set("auto_walk_enabled", bool(flags["auto_walk_enabled"]))
     try:
         settings.save()
     except Exception:
@@ -385,6 +388,7 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
         "banner_enabled": bool(settings.get("mech_banner_enabled", True)),
         "dodge_enabled": bool(load_linkage_config(settings).get("dodge_enabled", True)),
         "directional_dodge_enabled": bool(settings.get("directional_dodge_enabled", False)),
+        "auto_walk_enabled": bool(settings.get("auto_walk_enabled", False)),
     }
 
 
