@@ -229,15 +229,24 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
         "pageOffset = Number(page.offset || cursorState.offset || pageOffset || 0);",
         "[pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0)",
         "[Number(cursor.value || 0), pageLimit",
+        "var rows = data.rows || [];",
+        "var groups = data.grouped_rows || [];",
+        "var rows = group.rows || [];",
+        "String((data.errors || []).length)",
     ):
         if snippet in action_log:
-            raise AssertionError("action log must clamp cursor/offset/limit numeric inputs: " + snippet)
+            raise AssertionError("action log must clamp numeric inputs and guard list payloads: " + snippet)
     for snippet in (
         "return isFinite(n) ? n : fallback;",
         "[80, Number(windowInput.value || 8), entity.value || null]",
+        "var rows = data.rows || [];",
+        "var summary = data.summary || {};",
+        "var death = data.death || {};",
+        "var win = data.window || {};",
+        "String((data.errors || []).length)",
     ):
         if snippet in death_recap:
-            raise AssertionError("death recap must clamp window numeric inputs: " + snippet)
+            raise AssertionError("death recap must clamp numeric inputs and guard list payloads: " + snippet)
     for snippet in (
         "function nonNegIntArg",
         "function safePageOffset",
@@ -245,16 +254,30 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
         "pageOffset = safePageOffset(page.offset || cursorState.offset || pageOffset || 0);",
         "[pageLimit, query.value || '', topic.value || '', safeCursorMs(cursor.value)",
         "[safeCursorMs(cursor.value), pageLimit",
+        "function listItems(value)",
+        "function objectItems(value)",
+        "var rows = objectItems(data.rows);",
+        "var groups = objectItems(data.grouped_rows);",
+        "var rows = objectItems(group.rows);",
+        "var errorCount = listItems(data.errors).length;",
     ):
         if snippet not in action_log:
-            raise AssertionError("missing safe action log numeric snippet: " + snippet)
+            raise AssertionError("missing safe action log numeric/list snippet: " + snippet)
     for snippet in (
         "function positiveNumberArg",
         "function safeWindowSeconds",
         "[80, safeWindowSeconds(windowInput.value), entity.value || null]",
+        "function listItems(value)",
+        "function objectItems(value)",
+        "function objectValue(value)",
+        "var rows = objectItems(data.rows);",
+        "var summary = objectValue(data.summary);",
+        "var death = objectValue(data.death);",
+        "var win = objectValue(data.window);",
+        "var errorCount = listItems(data.errors).length;",
     ):
         if snippet not in death_recap:
-            raise AssertionError("missing safe death recap numeric snippet: " + snippet)
+            raise AssertionError("missing safe death recap numeric/list snippet: " + snippet)
 
 
 def _assert_timeline_speed_is_normalized() -> None:

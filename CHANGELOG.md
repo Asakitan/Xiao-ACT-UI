@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.79: ACT Web 列表 payload 防护修复.
+
+  1) `web/act_action_log.html` 修复 rows/grouped_rows/errors payload 形状处理。
+     Action Log Web 现在只统计和渲染真正的列表与对象行,
+     避免字符串 payload 造成表格渲染中断或错误数量。
+
+  2) `web/act_death_recap.html` 修复 rows/summary/death/window/errors payload 形状处理。
+     Death Recap Web 现在对列表与对象 payload 做显式归一,
+     避免坏 payload 造成死亡回放渲染中断或错误数量。
+
 ## v4.5.78: ACT Drilldown Tk payload 计数修复.
 
   1) `gui_modules/sao_gui_combatant_drilldown.py` 修复 skills/errors payload 计数。

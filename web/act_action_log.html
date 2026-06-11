@@ -161,6 +161,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function safeCursorMs(value) {
         return nonNegIntArg(value, 0);
     }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object'; });
+    }
     function actionLogPayload(name, args) {
         args = args || [];
         if (name === 'get_action_log_status') {
@@ -219,18 +225,21 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
     function detailRow(row) {
-        var payload = row.payload || {};
+        row = row && typeof row === 'object' ? row : {};
+        var payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
         var uid = row.target_uid || payload.target_uuid || payload.target_uid || row.actor_uid || payload.actor_uid || '';
         var dungeon = row.dungeon || payload.dungeon_name || payload.dungeon_id || '';
         return '<div class="detail-row"><div class="detail-top"><strong>' + esc(ActTime.fmtClock(row.time_ms)) + '</strong><span>' + esc(row.topic || '-') + '</span><span>' + esc(row.label || '-') + '</span><span>' + esc(row.value || '') + '</span></div><div class="detail-meta">actor=' + esc(row.actor || '-') + ' · target=' + esc(row.target || '-') + ' · uid=' + esc(uid || '-') + ' · dungeon=' + esc(dungeon || '-') + ' · source=' + esc(row.source || '-') + '</div><div class="detail-meta">' + esc(JSON.stringify(payload)) + '</div></div>';
     }
     function renderGroups(groups) {
+        groups = objectItems(groups);
         return groups.map(function (group) {
             var key = String(group.key || '');
             var open = !!expandedGroups[key];
-            var rows = group.rows || [];
+            var rows = objectItems(group.rows);
             var meta = String(group.kind || 'event').toUpperCase() + ' · ' + String(group.count || 0) + ' rows · UID ' + String(group.uid_count || 0) + ' · ' + ActTime.fmtClock(group.first_time_ms) + ' · ' + ActTime.fmtDur((group.last_time_ms || 0) - (group.first_time_ms || 0));
-            if ((group.dungeons || []).length) meta += ' · ' + String((group.dungeons || []).join('/'));
+            var dungeons = listItems(group.dungeons);
+            if (dungeons.length) meta += ' · ' + String(dungeons.join('/'));
             return '<section class="group-card ' + (open ? 'open' : '') + '" data-group="' + esc(key) + '"><button class="group-head" type="button" onclick="ActionLog.toggleGroup(\'' + jsq(key) + '\')"><span class="group-toggle">' + (open ? '▾' : '▸') + '</span><span class="group-title"><div class="group-name">' + esc(group.name || '-') + '</div><div class="group-meta">' + esc(meta) + '</div></span><span class="group-total">' + esc(group.total_value || 0) + '</span></button><div class="group-detail">' + rows.map(detailRow).join('') + (group.has_more_rows ? '<div class="detail-meta">还有更多明细，请缩小筛选或翻页查看。</div>' : '') + '</div></section>';
         }).join('');
     }
@@ -247,13 +256,14 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         data = data || {};
         options = options || {};
         var preserveScroll = options.preserveScroll !== false;
-        var rows = data.rows || [];
-        var groups = data.grouped_rows || [];
+        var rows = objectItems(data.rows);
+        var groups = objectItems(data.grouped_rows);
         var filters = data.filters || {};
         var cursorState = data.cursor || {};
         var analytics = data.analytics || {};
         var page = analytics.page || cursorState || {};
-        var topicGroups = (analytics.groups && analytics.groups.topics) || [];
+        var topicGroups = objectItems(analytics.groups && analytics.groups.topics);
+        var errorCount = listItems(data.errors).length;
         pageOffset = safePageOffset(page.offset || cursorState.offset || pageOffset || 0);
         lastCursor = cursorState || {};
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
@@ -265,7 +275,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('sum-topic').textContent = topicGroups.length ? (String(topicGroups[0].key || '-') + ' x' + String(topicGroups[0].count || 0)) : '-';
         document.getElementById('sum-cursor').textContent = ActTime.fmtClock(cursorState.time_ms);
         document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
-        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        document.getElementById('sum-errors').textContent = String(errorCount);
         if (!rows.length) { setRowsHtml('<div class="empty">暂无 ACT 行为日志。<br/>live 模式等待事件；history 模式需要 SQLite actions。</div>', preserveScroll); return; }
         if (groups.length) { setRowsHtml(renderGroups(groups), preserveScroll); return; }
         setRowsHtml('<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
