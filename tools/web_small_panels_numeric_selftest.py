@@ -11,6 +11,8 @@ RAID_EDITOR = ROOT / "web" / "raid_editor.html"
 BUFF_COVERAGE = ROOT / "web" / "buff_coverage.html"
 HP = ROOT / "web" / "hp.html"
 STAMINA = ROOT / "web" / "stamina.html"
+AUTOKEY_EDITOR = ROOT / "web" / "autokey_editor.html"
+MECH_BANNER = ROOT / "web" / "mech_banner.html"
 
 
 def _check_absent(source: str, snippet: str, message: str) -> None:
@@ -28,6 +30,8 @@ def main() -> None:
     buff = BUFF_COVERAGE.read_text(encoding="utf-8")
     hp = HP.read_text(encoding="utf-8")
     stamina = STAMINA.read_text(encoding="utf-8")
+    autokey = AUTOKEY_EDITOR.read_text(encoding="utf-8")
+    mech_banner = MECH_BANNER.read_text(encoding="utf-8")
 
     raid_forbidden = [
         (
@@ -188,6 +192,98 @@ def main() -> None:
     ]
     for snippet, message in stamina_required:
         _check_present(stamina, snippet, message)
+
+    autokey_forbidden = [
+        (
+            "var cdPct = Math.round((s.cooldown_pct || 0) * 100);",
+            "AutoKey editor cooldown bars must not render raw percentages.",
+        ),
+        (
+            "var remainStr = s.remaining_ms > 0 ? (s.remaining_ms / 1000).toFixed(1) + 's' : 'Ready';",
+            "AutoKey editor remaining time must normalize finite milliseconds.",
+        ),
+        (
+            "data-index=\"' + s.index",
+            "AutoKey editor slot click parameters must not use raw slot indices.",
+        ),
+    ]
+    for snippet, message in autokey_forbidden:
+        _check_absent(autokey, snippet, message)
+
+    autokey_required = [
+        (
+            "function _akPct(v)",
+            "AutoKey editor should expose clamped cooldown percentage rendering.",
+        ),
+        (
+            "function _akSlotIndex(v)",
+            "AutoKey editor should normalize slot indices before inline parameters.",
+        ),
+        (
+            "var cdPct = _akPct(s.cooldown_pct);",
+            "AutoKey editor cooldown bars should use _akPct().",
+        ),
+        (
+            "var remainingMs = _akNonNeg(s.remaining_ms, 0);",
+            "AutoKey editor remaining time should use finite non-negative milliseconds.",
+        ),
+        (
+            "var stateKey = /^(ready|active|cooldown|unknown|insufficient_energy)$/.test(state) ? state : 'unknown';",
+            "AutoKey editor should preserve known non-ready slot states.",
+        ),
+        (
+            ": stateKey === 'insufficient_energy' ? 'No Energy'",
+            "AutoKey editor should show a clear no-energy state.",
+        ),
+        (
+            "data-index=\"' + slotIndex + '\" onclick=\"onSlotClick(' + slotIndex + ')\"",
+            "AutoKey editor inline slot parameters should use normalized indices.",
+        ),
+    ]
+    for snippet, message in autokey_required:
+        _check_present(autokey, snippet, message)
+
+    mech_forbidden = [
+        (
+            "var frac = Math.max(0, Math.min(1, remaining / r.totalMs));",
+            "Mechanic banner progress bars must not divide by raw totalMs.",
+        ),
+        (
+            "var countdownMs = Number(e.countdown_ms != null ? e.countdown_ms",
+            "Mechanic banner countdown must normalize finite milliseconds.",
+        ),
+        (
+            "var remainingMs = Number(e.remaining_ms != null ? e.remaining_ms",
+            "Mechanic banner remaining time must normalize finite milliseconds.",
+        ),
+    ]
+    for snippet, message in mech_forbidden:
+        _check_absent(mech_banner, snippet, message)
+
+    mech_required = [
+        (
+            "function finiteNum(v, fallback)",
+            "Mechanic banner should expose finite number normalization.",
+        ),
+        (
+            "var remaining = nonNegNum(r.endsAt - performance.now(), 0);",
+            "Mechanic banner tick should normalize remaining time.",
+        ),
+        (
+            "var totalMs = Math.max(1, nonNegNum(r.totalMs, STATIC_HOLD_MS));",
+            "Mechanic banner progress should avoid zero/non-finite totalMs.",
+        ),
+        (
+            "var frac = pct01(remaining / totalMs);",
+            "Mechanic banner progress should clamp bar percentages.",
+        ),
+        (
+            "var countdownMs = nonNegNum(e.countdown_ms != null ? e.countdown_ms",
+            "Mechanic banner countdown should use nonNegNum().",
+        ),
+    ]
+    for snippet, message in mech_required:
+        _check_present(mech_banner, snippet, message)
 
     print("web_small_panels_numeric_selftest: ok")
 

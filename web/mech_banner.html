@@ -165,6 +165,17 @@ body {
     var rows = {};   // id -> {el, fill, sec, endsAt, totalMs, preWarnMs, showBar, raf}
 
     function esc(t) { return (t == null ? '' : String(t)); }
+    function finiteNum(v, fallback) {
+        if (v == null || v === '') return fallback;
+        var n = Number(v);
+        return isFinite(n) ? n : fallback;
+    }
+    function nonNegNum(v, fallback) {
+        return Math.max(0, finiteNum(v, fallback));
+    }
+    function pct01(v) {
+        return Math.max(0, Math.min(1, finiteNum(v, 0)));
+    }
 
     function removeRow(id, animate) {
         var r = rows[id];
@@ -184,13 +195,14 @@ body {
     function tickRow(id) {
         var r = rows[id];
         if (!r) return;
-        var remaining = r.endsAt - performance.now();
+        var remaining = nonNegNum(r.endsAt - performance.now(), 0);
         if (remaining <= 0) {
             removeRow(id, true);
             return;
         }
         if (r.showBar) {
-            var frac = Math.max(0, Math.min(1, remaining / r.totalMs));
+            var totalMs = Math.max(1, nonNegNum(r.totalMs, STATIC_HOLD_MS));
+            var frac = pct01(remaining / totalMs);
             r.fill.style.width = (frac * 100).toFixed(1) + '%';
             r.sec.textContent = (remaining / 1000).toFixed(1) + 's';
             if (r.preWarnMs > 0 && remaining <= r.preWarnMs) {
@@ -207,12 +219,12 @@ body {
         }
         if (!e) return;
         var id = esc(e.id || e.mechanic_id) || ('r' + Date.now());
-        var countdownMs = Number(e.countdown_ms != null ? e.countdown_ms
-                                 : (e.countdown_s || 0) * 1000) || 0;
-        var remainingMs = Number(e.remaining_ms != null ? e.remaining_ms
-                                 : countdownMs) || 0;
-        var preWarnMs = Number(e.pre_warn_ms != null ? e.pre_warn_ms
-                               : (e.pre_warn_s || 0) * 1000) || 0;
+        var countdownMs = nonNegNum(e.countdown_ms != null ? e.countdown_ms
+                                 : nonNegNum(e.countdown_s, 0) * 1000, 0);
+        var remainingMs = nonNegNum(e.remaining_ms != null ? e.remaining_ms
+                                 : countdownMs, 0);
+        var preWarnMs = nonNegNum(e.pre_warn_ms != null ? e.pre_warn_ms
+                               : nonNegNum(e.pre_warn_s, 0) * 1000, 0);
         var showBar = countdownMs > 0;
         var totalMs = showBar ? countdownMs : STATIC_HOLD_MS;
         var holdMs = showBar ? remainingMs : STATIC_HOLD_MS;

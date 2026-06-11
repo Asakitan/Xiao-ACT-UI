@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.50: Web AutoKey 与机制横幅数值渲染修复.
+
+  1) `web/autokey_editor.html` 修复技能 CD 条和槽位参数渲染。
+     cooldown_pct、remaining_ms、charge_count 和 slot index 现在先归一化,
+     避免异常槽位数据生成 `NaN%`、越界 CD 条或 raw inline click 参数。
+
+  2) `web/mech_banner.html` 修复机制横幅倒计时进度渲染。
+     countdown/remaining/pre-warn 毫秒值现在过滤非有限数并避免除以 0,
+     避免横幅进度条宽度和倒计时显示 `NaN`/`Infinity`。
+
 ## v4.5.49: Web HUD 数值条与反应标记渲染修复.
 
   1) `web/hp.html` 与 `web/stamina.html` 修复 HP/STA 条宽和文本渲染。
