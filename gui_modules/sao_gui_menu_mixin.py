@@ -93,6 +93,12 @@ def _list_count(value: Any) -> int:
     return len(value) if isinstance(value, (list, tuple)) else 0
 
 
+def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
 class SAOPlayerGUIMenuMixin:
     """Mixin providing the SAO PopUpMenu lifecycle + refresh logic.
 
@@ -191,11 +197,15 @@ class SAOPlayerGUIMenuMixin:
         update_label = self._build_update_menu_label()
         try:
             plugin_status = self._get_act_plugin_menu_status()
+            plugin_items = _mapping_items(plugin_status.get('plugins'))
+            pinned_items = plugin_status.get('pinned')
+            if not isinstance(pinned_items, (list, tuple)):
+                pinned_items = []
             plugin_sig = (
-                int(plugin_status.get('plugin_count', 0) or 0),
-                int(plugin_status.get('active_count', 0) or 0),
-                tuple(str(x) for x in (plugin_status.get('pinned') or [])),
-                tuple(int(p.get('hotkey_count') or 0) for p in (plugin_status.get('plugins') or [])),
+                _finite_int(plugin_status.get('plugin_count'), 0, lo=0),
+                _finite_int(plugin_status.get('active_count'), 0, lo=0),
+                tuple(str(x) for x in pinned_items),
+                tuple(_finite_int(p.get('hotkey_count'), 0, lo=0) for p in plugin_items),
             )
         except Exception:
             plugin_sig = (0, 0, (), ())
@@ -209,7 +219,7 @@ class SAOPlayerGUIMenuMixin:
             trigger_sig = (0, 0)
         try:
             source_status = self._get_act_data_source_menu_status()
-            source_summary = source_status.get('sources', {}).get('summary', {})
+            source_summary = _mapping(_mapping(source_status.get('sources')).get('summary'))
             source_sig = (
                 str(source_status.get('status') or ''),
                 str(source_summary.get('data_source') or ''),
@@ -628,7 +638,8 @@ class SAOPlayerGUIMenuMixin:
         # Disabled / panel-less / load-failed plugins are managed from the
         # 「插件管理面板」, not cluttered here. A row click opens that plugin's
         # detached panel window (not a toggle).
-        plugins = [p for p in (data.get('plugins') or [])
+        data = _mapping(data)
+        plugins = [p for p in _mapping_items(data.get('plugins'))
                    if p.get('active') and p.get('declares_panel')]
         if not plugins:
             items.append({'icon': '·', 'label': '无已启用面板插件 (去 Manage 启用)',
@@ -639,7 +650,7 @@ class SAOPlayerGUIMenuMixin:
             name = str(p.get('label') or pid)
             pinned = bool(p.get('pinned'))
             icon = '★' if pinned else ('●' if p.get('active') else '◈')
-            hk = int(p.get('hotkey_count') or 0)
+            hk = _finite_int(p.get('hotkey_count'), 0, lo=0)
             label = f'{name}' + (f'  ⌨{hk}' if hk else '')
             items.append({
                 'icon': icon, 'label': label,
@@ -723,7 +734,7 @@ class SAOPlayerGUIMenuMixin:
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()
-        plugins = status.get('plugins') or []
+        plugins = _mapping_items(status.get('plugins'))
         if not plugins:
             self._show_entity_alert('ACT PLUGINS', '未发现插件；可放入 plugins/<id>/plugin.json', display_time=4.0)
             return status
@@ -739,7 +750,7 @@ class SAOPlayerGUIMenuMixin:
         status = result if isinstance(result, dict) else self._get_act_plugin_menu_status()
         self._show_entity_alert(
             'ACT PLUGINS',
-            f"重载完成: {status.get('active_count', 0)}/{status.get('plugin_count', 0)} active",
+            f"重载完成: {_finite_int(status.get('active_count'), 0, lo=0)}/{_finite_int(status.get('plugin_count'), 0, lo=0)} active",
             display_time=3.2,
         )
         self._refresh_menu_if_open(force=True)
@@ -747,7 +758,7 @@ class SAOPlayerGUIMenuMixin:
 
     def _toggle_first_act_plugin_menu(self):
         status = self._get_act_plugin_menu_status()
-        plugins = status.get('plugins') or []
+        plugins = _mapping_items(status.get('plugins'))
         if not plugins:
             self._show_entity_alert('ACT PLUGINS', '未发现可切换插件', display_time=3.0)
             return status

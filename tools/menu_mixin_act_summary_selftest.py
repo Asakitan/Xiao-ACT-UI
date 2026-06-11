@@ -5,9 +5,21 @@ from __future__ import annotations
 
 import _bootstrap  # noqa: F401
 
+from contextlib import contextmanager
 import unittest
 
+import gui_modules.sao_gui_menu_mixin as menu_mixin
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin
+
+
+@contextmanager
+def _patched_module_attr(name: str, value):
+    old_value = getattr(menu_mixin, name)
+    setattr(menu_mixin, name, value)
+    try:
+        yield
+    finally:
+        setattr(menu_mixin, name, old_value)
 
 
 class _FakeSettings:
@@ -35,6 +47,7 @@ class _MenuHarness(SAOPlayerGUIMenuMixin):
         self._menu_left_stack = None
         self._session_players = {}
         self._act_statuses: dict[str, dict] = {}
+        self.alerts: list[tuple[str, str, float]] = []
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -92,6 +105,9 @@ class _MenuHarness(SAOPlayerGUIMenuMixin):
     def _get_act_skill_menu_status(self):
         return {"ok": False, "skill_id": "", "timeline_refs": []}
 
+    def _show_entity_alert(self, title: str, message: str, display_time: float = 0.0, **_kwargs) -> None:
+        self.alerts.append((title, message, display_time))
+
 
 def _labels(children: dict, menu_name: str) -> list[str]:
     return [str(item.get("label") or "") for item in children.get(menu_name, [])]
@@ -120,6 +136,41 @@ class MenuMixinActSummaryTests(unittest.TestCase):
 
         self.assertIn("ACT聚合驾驶舱: EMPTY/0/0/0", labels)
         self.assertIn("ACT图表/曲线: READY/damage/0", labels)
+
+    def test_plugin_menu_ignores_malformed_plugin_collection(self) -> None:
+        harness = _MenuHarness()
+
+        with _patched_module_attr("act_plugin_menu", lambda _self: {"plugins": "bad"}):
+            labels = [
+                str(item.get("label") or "")
+                for item in SAOPlayerGUIMenuMixin._build_plugin_menu_items(harness)
+            ]
+
+        self.assertIn("无已启用面板插件 (去 Manage 启用)", labels)
+
+    def test_plugin_menu_normalizes_malformed_hotkey_count(self) -> None:
+        harness = _MenuHarness()
+
+        def fake_plugin_menu(_self):
+            return {
+                "plugins": [
+                    {
+                        "id": "sample",
+                        "label": "Sample Plugin",
+                        "active": True,
+                        "declares_panel": True,
+                        "hotkey_count": "oops",
+                    }
+                ]
+            }
+
+        with _patched_module_attr("act_plugin_menu", fake_plugin_menu):
+            labels = [
+                str(item.get("label") or "")
+                for item in SAOPlayerGUIMenuMixin._build_plugin_menu_items(harness)
+            ]
+
+        self.assertIn("Sample Plugin", labels)
 
 
 if __name__ == "__main__":

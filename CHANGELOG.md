@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.77: Entity 插件菜单 payload 防护修复.
+
+  1) `gui_modules/sao_gui_menu_mixin.py` 修复插件菜单列表 payload 形状处理。
+     插件菜单、插件状态弹窗和首插件切换现在只消费 Mapping 插件条目,
+     避免字符串或坏条目造成菜单构建/交互中断。
+
+  2) `gui_modules/sao_gui_menu_mixin.py` 修复插件菜单数值 payload 归一化。
+     插件 hotkey_count、active_count、plugin_count 与刷新签名现在过滤非有限或畸形数值,
+     避免坏插件状态导致菜单渲染崩溃或签名异常。
+
 ## v4.5.76: Entity 菜单 ACT summary 计数修复.
 
   1) `gui_modules/sao_gui_menu_mixin.py` 修复 ACT 菜单 list payload 计数。
