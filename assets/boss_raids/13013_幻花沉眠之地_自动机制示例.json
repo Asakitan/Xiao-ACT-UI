@@ -1,0 +1,1454 @@
+{
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_13013_auto",
+  "schema_version": 2,
+  "profile_name": "幻花沉眠之地 · 自动机制示例 (全难度通用)",
+  "description": "《幻花沉眠之地》自动生成的机制示例: 含 3 个 boss 的 27 条机制, 检测全绑真实技能 id(跨3难度通用), 按技能名分类配好 TTS 播报+横幅+定向躲避方向。躲避默认关(需在机制页开「定向移动」/「自动走位」总开关, 自动WASD有账号风险自担, F12急停)。这是可用起点, 躲法/说明可再精修。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 600,
+  "enrage": {
+   "time_s": 600,
+   "anchor": "fight",
+   "phase_id": "",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "",
+  "dungeon_id": 13013,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "p1",
+    "name": "全程",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
+    },
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_10280005",
+    "name": "炎光全场aoe",
+    "kind": "raidwide",
+    "enabled": true,
+    "notes": "机制：炎光全场aoe\n躲法：全场范围伤害, 无法靠走位躲——抱团减伤或按读条机制处理。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280005
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "全场AOE · 全场范围伤害, 无法靠走",
+     "tts_text": "全场AOE",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280006",
+    "name": "炎光环形aoe",
+    "kind": "ring",
+    "enabled": true,
+    "notes": "机制：炎光环形aoe\n躲法：环形/圆形AOE, 远离圈中心出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280006
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "环形AOE · 环形/圆形AOE, 远离",
+     "tts_text": "环形AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280008",
+    "name": "炎光领地共鸣",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：炎光领地共鸣\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280008
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280009",
+    "name": "炎光连线召唤",
+    "kind": "summon",
+    "enabled": true,
+    "notes": "机制：炎光连线召唤\n躲法：召唤/连线机制, 优先处理目标或站位连线。",
+    "color": "#27ae60",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280009
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "召唤连线 · 召唤/连线机制, 优先处",
+     "tts_text": "召唤连线",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280010",
+    "name": "炎光果实",
+    "kind": "special",
+    "enabled": true,
+    "notes": "机制：炎光果实\n躲法：特殊机制, 留意地面预警圈处理。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280010
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "炎光果实 · 特殊机制, 留意地面预警",
+     "tts_text": "炎光果实",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280011",
+    "name": "炎光领地分摊",
+    "kind": "stack",
+    "enabled": true,
+    "notes": "机制：炎光领地分摊\n躲法：集合抱团一起分摊, 人越多每人吃的伤害越少。",
+    "color": "#3aa0ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280011
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "分摊抱团 · 集合抱团一起分摊, 人越",
+     "tts_text": "分摊抱团",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280012",
+    "name": "十字aoe_竖",
+    "kind": "cross",
+    "enabled": true,
+    "notes": "机制：十字aoe_竖\n躲法：十字AOE, 站到十字之间的安全缝隙。",
+    "color": "#9b59b6",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280012
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "十字AOE · 十字AOE, 站到十字之",
+     "tts_text": "十字AOE",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280013",
+    "name": "炎光致死踩塔",
+    "kind": "lethal",
+    "enabled": true,
+    "notes": "机制：炎光致死踩塔\n躲法：致死机制, 严格按读条/指引执行, 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280013
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死机制 · 致死机制, 严格按读条/",
+     "tts_text": "致死机制",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280014",
+    "name": "炎光之连线",
+    "kind": "summon",
+    "enabled": true,
+    "notes": "机制：炎光之连线\n躲法：召唤/连线机制, 优先处理目标或站位连线。",
+    "color": "#27ae60",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280014
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "召唤连线 · 召唤/连线机制, 优先处",
+     "tts_text": "召唤连线",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280015",
+    "name": "炎光之衰减",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：炎光之衰减\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280015
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280016",
+    "name": "炎光誓死守护-攻",
+    "kind": "special",
+    "enabled": true,
+    "notes": "机制：炎光誓死守护-攻\n躲法：特殊机制, 留意地面预警圈处理。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280016
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "炎光誓死守护-攻 · 特殊机制, 留意地面预警",
+     "tts_text": "炎光誓死守护-攻",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280017",
+    "name": "炎光誓死守护-守",
+    "kind": "special",
+    "enabled": true,
+    "notes": "机制：炎光誓死守护-守\n躲法：特殊机制, 留意地面预警圈处理。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280017
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "炎光誓死守护-守 · 特殊机制, 留意地面预警",
+     "tts_text": "炎光誓死守护-守",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280018",
+    "name": "炎光角斗准备",
+    "kind": "charge",
+    "enabled": true,
+    "notes": "机制：炎光角斗准备\n躲法：直线冲锋, 朝垂直方向闪避离开冲锋路径。",
+    "color": "#f39c12",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280018
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冲锋 · 直线冲锋, 朝垂直方向闪",
+     "tts_text": "冲锋",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280019",
+    "name": "炎光角斗-开冲",
+    "kind": "charge",
+    "enabled": true,
+    "notes": "机制：炎光角斗-开冲\n躲法：直线冲锋, 朝垂直方向闪避离开冲锋路径。",
+    "color": "#f39c12",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280019
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冲锋 · 直线冲锋, 朝垂直方向闪",
+     "tts_text": "冲锋",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10280020",
+    "name": "死亡计时",
+    "kind": "lethal",
+    "enabled": true,
+    "notes": "机制：死亡计时\n躲法：致死机制, 严格按读条/指引执行, 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10280020
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死机制 · 致死机制, 严格按读条/",
+     "tts_text": "致死机制",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10290106",
+    "name": "石头人压团血",
+    "kind": "raidwide",
+    "enabled": true,
+    "notes": "机制：石头人压团血\n躲法：全场范围伤害, 无法靠走位躲——抱团减伤或按读条机制处理。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290106
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "全场AOE · 全场范围伤害, 无法靠走",
+     "tts_text": "全场AOE",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10290113",
+    "name": "石头人地震波",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：石头人地震波\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290113
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300103",
+    "name": "致死",
+    "kind": "lethal",
+    "enabled": true,
+    "notes": "机制：致死\n躲法：致死机制, 严格按读条/指引执行, 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300103
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死机制 · 致死机制, 严格按读条/",
+     "tts_text": "致死机制",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300106",
+    "name": "大炎戒",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：大炎戒\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300106
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300108",
+    "name": "终焉化身",
+    "kind": "lethal",
+    "enabled": true,
+    "notes": "机制：终焉化身\n躲法：致死机制, 严格按读条/指引执行, 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300108
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死机制 · 致死机制, 严格按读条/",
+     "tts_text": "致死机制",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300112",
+    "name": "陨星",
+    "kind": "fall",
+    "enabled": true,
+    "notes": "机制：陨星\n躲法：落地/炮击AOE, 远离红色落点。",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300112
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "落点AOE · 落地/炮击AOE, 远离",
+     "tts_text": "落点AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300113",
+    "name": "大炎戒-单",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：大炎戒-单\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300113
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300114",
+    "name": "环形冲击",
+    "kind": "ring",
+    "enabled": true,
+    "notes": "机制：环形冲击\n躲法：环形/圆形AOE, 远离圈中心出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300114
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "环形AOE · 环形/圆形AOE, 远离",
+     "tts_text": "环形AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300203",
+    "name": "致死",
+    "kind": "lethal",
+    "enabled": true,
+    "notes": "机制：致死\n躲法：致死机制, 严格按读条/指引执行, 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300203
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死机制 · 致死机制, 严格按读条/",
+     "tts_text": "致死机制",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300204",
+    "name": "炎弧斩",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：炎弧斩\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300204
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300206",
+    "name": "狱炎轮回",
+    "kind": "aoe",
+    "enabled": true,
+    "notes": "机制：狱炎轮回\n躲法：范围AOE伤害, 远离/出圈。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300206
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "AOE · 范围AOE伤害, 远离/",
+     "tts_text": "AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   },
+   {
+    "id": "mech_10300211",
+    "name": "陨星",
+    "kind": "fall",
+    "enabled": true,
+    "notes": "机制：陨星\n躲法：落地/炮击AOE, 远离红色落点。",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300211
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "落点AOE · 落地/炮击AOE, 远离",
+     "tts_text": "落点AOE",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1500,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T16:27:41Z",
+  "updated_at": "2026-06-11T16:27:41Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  }
+ }
+}
