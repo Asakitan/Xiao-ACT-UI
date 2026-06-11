@@ -6437,24 +6437,46 @@ function _updateLbSize(rowCount) {
     box.style.height = (52 + 42 + 42 + 38 + rows * 40 + 56) + 'px';
 }
 
+function _lbPositiveInt(value, hi) {
+    var n = _finiteNum(value, null);
+    if (n == null || n <= 0) return null;
+    return _clampInt(n, 1, 1, hi == null ? 999999999 : hi);
+}
+
+function _lbNonNegInt(value, hi) {
+    var n = _finiteNum(value, null);
+    if (n == null) return null;
+    return _clampInt(n, 0, 0, hi == null ? Number.MAX_SAFE_INTEGER : hi);
+}
+
 function _lbStatValue(e) {
-    if (_lbCurrentSort === 'xp') return 'XP ' + e.xp;
-    if (_lbCurrentSort === 'level') return 'Lv.' + e.level;
-    if (_lbCurrentSort === 'songs_played') return e.songs_played + '曲';
+    if (_lbCurrentSort === 'xp') {
+        var xp = _lbNonNegInt(e && e.xp);
+        return 'XP ' + (xp == null ? '--' : xp);
+    }
+    if (_lbCurrentSort === 'level') {
+        var level = _lbPositiveInt(e && e.level, 999);
+        return 'Lv.' + (level == null ? '--' : level);
+    }
+    if (_lbCurrentSort === 'songs_played') {
+        var songs = _lbNonNegInt(e && e.songs_played, 999999);
+        return (songs == null ? '--' : songs) + '曲';
+    }
     if (_lbCurrentSort === 'play_time') return _fmtTime(e.play_time);
     return '—';
 }
 
 function _lbRankLabel(e) {
-    var rank = Number(e && e.rank);
-    if (Number.isFinite(rank) && rank >= 1 && rank <= 3) {
+    var rank = _lbPositiveInt(e && e.rank, 999999);
+    if (rank != null && rank >= 1 && rank <= 3) {
         return ['TOP1', 'TOP2', 'TOP3'][rank - 1];
     }
-    return '#' + String((e && e.rank) || '--');
+    return '#' + (rank == null ? '--' : String(rank));
 }
 
 function _lbLevelLabel(e) {
-    return 'Lv.' + String((e && e.level) || '--');
+    var level = _lbPositiveInt(e && e.level, 999);
+    return 'Lv.' + (level == null ? '--' : String(level));
 }
 
 function _lbApplyFilter(resetPage) {
@@ -6465,7 +6487,7 @@ function _lbApplyFilter(resetPage) {
     } else if (/^#?\d+$/.test(q)) {
         var rank = parseInt(q.replace('#', ''), 10);
         _lbFiltered = _lbEntries.slice();
-        var idx = _lbFiltered.findIndex(function(e) { return Number(e.rank) === rank; });
+        var idx = _lbFiltered.findIndex(function(e) { return _lbPositiveInt(e.rank, 999999) === rank; });
         if (idx >= 0) {
             _lbFocusRank = rank;
             _lbPageIndex = Math.floor(idx / _lbPerPage);
@@ -6487,7 +6509,7 @@ function _lbRender() {
     var list = document.getElementById('lb-list');
     var shown = _lbSelfDeviceName || '--';
     document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + shown;
-    document.getElementById('lb-self-rank').textContent = 'SELF RANK: ' + (_lbSelfRank ? ('#' + _lbSelfRank) : '--');
+    document.getElementById('lb-self-rank').textContent = 'SELF RANK: ' + (_lbSelfRank ? _lbRankLabel({ rank: _lbSelfRank }) : '--');
 
     if (!_lbFiltered || _lbFiltered.length === 0) {
         list.innerHTML = '<div class="lb-empty">未找到匹配的排名记录</div>';
@@ -6505,7 +6527,7 @@ function _lbRender() {
         var row = document.createElement('div');
         row.className = 'lb-row';
         if (e.is_self || (_lbSelfDevice && e.device_id === _lbSelfDevice)) row.className += ' lb-self';
-        if (_lbFocusRank && Number(e.rank) === Number(_lbFocusRank)) row.className += ' lb-jump';
+        if (_lbFocusRank && _lbPositiveInt(e.rank, 999999) === _lbFocusRank) row.className += ' lb-jump';
         var primaryName = _escHtml(e.player_id || e.username || e.device_name || 'Player');
         var metaBits = [];
         if (e.username && e.username !== (e.player_id || e.device_name)) metaBits.push('@' + _escHtml(e.username));
@@ -6561,6 +6583,7 @@ function closeLeaderboard() {
 }
 
 function _fmtTime(sec) {
+    sec = _clampNum(sec, 0, 0, Number.MAX_SAFE_INTEGER);
     if (sec < 60) return Math.round(sec) + 's';
     if (sec < 3600) return Math.round(sec / 60) + 'min';
     return (sec / 3600).toFixed(1) + 'h';

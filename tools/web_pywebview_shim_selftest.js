@@ -158,10 +158,10 @@ function assert(cond, message) {
   assert(last.name === "sound.set_enabled", "set_sound_enabled command mismatch");
   assert(last.payload.enabled === false, "set_sound_enabled flag was not forwarded");
 
-  await window.pywebview.api.set_sound_volume(35);
+  await window.pywebview.api.set_sound_volume("999");
   last = calls[calls.length - 1];
   assert(last.name === "sound.set_volume", "set_sound_volume command mismatch");
-  assert(last.payload.volume === 35, "set_sound_volume value was not forwarded");
+  assert(last.payload.volume === 100, "set_sound_volume value should be clamped");
 
   await window.pywebview.api.request_live_snapshot();
   last = calls[calls.length - 1];
@@ -490,6 +490,9 @@ function assert(cond, message) {
   assert(dpsPanel.includes("sk.skill_name || sk.name || sk.skill_id"), "DPS detail should render C# skill name fields");
   assert(!shim.includes("var numericUid = Number(uid || 0);"), "pywebview shim must not coerce DPS entity uid to Number");
   assert(shim.includes("var uidText = String(uid == null ? '' : uid).trim();"), "pywebview shim should preserve DPS entity uid as a string");
+  assert(!shim.includes("var volume = parseInt(volumePct, 10);"), "pywebview shim must not pass raw volume integers");
+  assert(shim.includes("var volume = Math.round(finiteNumber(volumePct, 70));"), "pywebview shim should normalize sound volume");
+  assert(shim.includes("volume = Math.max(0, Math.min(100, volume));"), "pywebview shim should clamp sound volume");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");

@@ -77,8 +77,8 @@
             return call('sound.set_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
         set_sound_volume: function (volumePct) {
-            var volume = parseInt(volumePct, 10);
-            if (!isFinite(volume)) volume = 70;
+            var volume = Math.round(finiteNumber(volumePct, 70));
+            volume = Math.max(0, Math.min(100, volume));
             return call('sound.set_volume', { volume: volume }).then(normalizeOk);
         },
         set_hit_regions: function (rects) {

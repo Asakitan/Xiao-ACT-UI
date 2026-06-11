@@ -93,6 +93,34 @@ def main() -> int:
         raise AssertionError("leaderboard stat labels must be escaped before innerHTML")
     if "function _lbRankLabel" not in html:
         raise AssertionError("menu.html must provide a safe leaderboard rank label helper")
+    leaderboard_raw_patterns = [
+        "if (_lbCurrentSort === 'xp') return 'XP ' + e.xp;",
+        "if (_lbCurrentSort === 'level') return 'Lv.' + e.level;",
+        "if (_lbCurrentSort === 'songs_played') return e.songs_played + '曲';",
+        "return '#' + String((e && e.rank) || '--');",
+        "return 'Lv.' + String((e && e.level) || '--');",
+        "Number(e.rank) === rank",
+        "Number(e.rank) === Number(_lbFocusRank)",
+    ]
+    for pattern in leaderboard_raw_patterns:
+        if pattern in html:
+            raise AssertionError("leaderboard numeric labels must use finite/clamped helpers: " + pattern)
+    leaderboard_safe_required = [
+        "function _lbPositiveInt(value, hi)",
+        "function _lbNonNegInt(value, hi)",
+        "var xp = _lbNonNegInt(e && e.xp);",
+        "var level = _lbPositiveInt(e && e.level, 999);",
+        "var songs = _lbNonNegInt(e && e.songs_played, 999999);",
+        "var rank = _lbPositiveInt(e && e.rank, 999999);",
+        "return '#' + (rank == null ? '--' : String(rank));",
+        "return 'Lv.' + (level == null ? '--' : String(level));",
+        "return _lbPositiveInt(e.rank, 999999) === rank;",
+        "if (_lbFocusRank && _lbPositiveInt(e.rank, 999999) === _lbFocusRank) row.className += ' lb-jump';",
+        "sec = _clampNum(sec, 0, 0, Number.MAX_SAFE_INTEGER);",
+    ]
+    for snippet in leaderboard_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe leaderboard numeric snippet: " + snippet)
     if "return (s || '').replace(/&/g,'&amp;')" in html:
         raise AssertionError("_escHtml must coerce non-string values and escape quotes for attribute reuse")
     menu_raw_patterns = [

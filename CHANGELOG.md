@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.62: 排行榜与音量 shim 数值修复.
+
+  1) `web/menu.html` 修复排行榜数值标签渲染。
+     rank、level、XP、曲数和演奏时长现在统一有限化/夹取,
+     搜索跳转和高亮也复用同一 rank helper, 避免坏排行 payload 污染可见 UI。
+
+  2) `web/pywebview-shim.js` 修复音量参数传递。
+     `set_sound_volume()` 现在使用有限数兜底并夹到 0..100,
+     避免直接调用 shim 时把越界音量传给桥接层。
+
 ## v4.5.61: DPS shim 与 BossRaid 运行态数值修复.
 
   1) `web/pywebview-shim.js` 修复 DPS 实体详情 UID 参数传递。
