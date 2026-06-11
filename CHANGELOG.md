@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.80: ACT Web Drilldown payload 防护修复.
+
+  1) `web/act_combatant_drilldown.html` 修复 summary/skills/incoming/outgoing payload 形状处理。
+     Combatant Drilldown Web 现在只渲染对象列表中的 skill/side rows,
+     避免字符串 payload 造成技能行或侧边列表渲染中断。
+
+  2) `web/act_skill_drilldown.html` 修复 summary/timeline_refs/filters payload 形状处理。
+     Skill Drilldown Web 现在只渲染对象 timeline refs 并归一 payload 展开内容,
+     避免坏 payload 造成 timeline 渲染中断或错误引用数量。
+
 ## v4.5.79: ACT Web 列表 payload 防护修复.
 
   1) `web/act_action_log.html` 修复 rows/grouped_rows/errors payload 形状处理。

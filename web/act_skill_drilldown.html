@@ -123,6 +123,8 @@
     function clamp01(v) { return Math.max(0, Math.min(1, finiteNum(v))); }
     function fmt(v) { const n = finiteNum(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
     function pct(v) { return (clamp01(v) * 100).toFixed(1) + '%'; }
+    function objectValue(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
+    function objectItems(v) { return Array.isArray(v) ? v.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : []; }
     window.SkillDrilldown = {
       last: null,
       expandedRefs: {},
@@ -153,10 +155,12 @@
         if (key) { if (open) { delete this.expandedRefs[key]; } else { this.expandedRefs[key] = true; } }
       },
       render(status, options) {
-        status = status || {}; this.last = status;
+        status = objectValue(status); this.last = status;
         options = options || {};
         const preserveScroll = options.preserveScroll !== false;
-        const s = status.summary || {}; const refs = status.timeline_refs || []; const filters = status.filters || {};
+        const s = objectValue(status.summary);
+        const refs = objectItems(status.timeline_refs);
+        const filters = objectValue(status.filters);
         if (status.combatant_id) document.getElementById('combatantId').value = status.combatant_id;
         if (status.skill_id) document.getElementById('skillId').value = status.skill_id;
         if (filters.query != null && document.activeElement !== document.getElementById('query')) document.getElementById('query').value = filters.query || '';
@@ -164,11 +168,16 @@
         document.getElementById('summary').innerHTML = [
           ['Skill', s.name || '-'], ['Kind', s.kind || '-'], ['Amount', fmt(s.amount)], ['Casts', fmt(status.casts)], ['Hits', fmt(status.hits)], ['Crit', pct(status.crit_rate)]
         ].map(([k,v]) => '<div class="card"><div class="label">'+esc(k)+'</div><div class="value">'+esc(v)+'</div></div>').join('');
-        this._setTimelineHtml(refs.length ? refs.map((ref, idx) => {
+        let timelineHtml = '<div class="empty">No timeline refs</div>';
+        if (refs.length) {
+          timelineHtml = refs.map((ref, idx) => {
           const key = this._refKey(ref, idx);
           const open = !!this.expandedRefs[key];
-          return '<div class="event-wrap" data-key="'+esc(key)+'" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time">'+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="'+(open ? '' : 'display:none;')+'">'+esc(JSON.stringify(ref.payload || {}))+'</pre></div>';
-        }).join('') : '<div class="empty">No timeline refs</div>', preserveScroll);
+          const payload = objectValue(ref.payload);
+          return '<div class="event-wrap" data-key="'+esc(key)+'" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time">'+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="'+(open ? '' : 'display:none;')+'">'+esc(JSON.stringify(payload))+'</pre></div>';
+          }).join('');
+        }
+        this._setTimelineHtml(timelineHtml, preserveScroll);
         document.getElementById('facts').innerHTML = [
           ['combatant', status.combatant_id || '-'], ['skill_id', status.skill_id || '-'], ['damage', fmt(s.damage)], ['heal', fmt(s.heal)], ['refs', refs.length], ['query', filters.query || '-']
         ].map(([k,v]) => '<div class="mini-row"><span>'+esc(k)+'</span><span>'+esc(v)+'</span></div>').join('');

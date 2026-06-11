@@ -120,6 +120,8 @@
     function finiteNum(v) { const n = Number(v || 0); return Number.isFinite(n) ? n : 0; }
     function nonNeg(v) { return Math.max(0, finiteNum(v)); }
     function clamp01(v) { return Math.max(0, Math.min(1, finiteNum(v))); }
+    function objectValue(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
+    function objectItems(v) { return Array.isArray(v) ? v.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : []; }
     function barPct(value, max) {
       const amount = nonNeg(value);
       if (amount <= 0) return 0;
@@ -144,8 +146,12 @@
         document.getElementById('status').textContent = 'Opened skill ' + skillId;
       },
       render(status) {
-        status = status || {}; this.last = status;
-        const s = status.summary || {}; const skills = status.skills || []; const incoming = status.incoming || []; const outgoing = status.outgoing || [];
+        status = objectValue(status); this.last = status;
+        const s = objectValue(status.summary);
+        const skills = objectItems(status.skills);
+        const incoming = objectItems(status.incoming);
+        const outgoing = objectItems(status.outgoing);
+        const filters = objectValue(status.filters);
         if (status.combatant_id) document.getElementById('combatantId').value = status.combatant_id;
         document.getElementById('encounter').textContent = 'encounter: ' + (status.encounter_id || 'unknown');
         document.getElementById('summary').innerHTML = [
@@ -159,11 +165,13 @@
           return '<div class="skill-row '+(sk.kind === 'heal' ? 'heal' : '')+'"'+click+'><div class="bar" style="width:'+w+'%"></div><div class="skill-main"><div><div class="skill-name">'+esc(sk.name)+'</div><div class="skill-extra">'+esc(sk.kind)+' · hits '+esc(sk.hits)+' · crit '+pct(sk.crit_rate)+'</div></div><div class="skill-amount">'+fmt(sk.amount)+'</div></div></div>';
         }).join('') : '<div class="empty">No skill rows</div>';
         const sideRows = [];
-        if ((status.filters || {}).focus_target) sideRows.push({ kind: 'focus', name: status.filters.focus_target, amount: '' });
-        outgoing.slice(0, 5).forEach(x => sideRows.push({ kind: x.kind || 'out', name: x.name || '-', amount: x.amount || 0 }));
-        incoming.slice(0, 5).forEach(x => sideRows.push({ kind: x.kind || 'in', name: x.name || x.topic || '-', amount: x.amount || x.value || 0 }));
+        if (filters.focus_target) sideRows.push({ kind: 'focus', name: filters.focus_target, amount: '' });
+        const outgoingRows = outgoing.slice(0, 5);
+        const incomingRows = incoming.slice(0, 5);
+        outgoingRows.forEach(function (x) { sideRows.push({ kind: x.kind || 'out', name: x.name || '-', amount: x.amount || 0 }); });
+        incomingRows.forEach(function (x) { sideRows.push({ kind: x.kind || 'in', name: x.name || x.topic || '-', amount: x.amount || x.value || 0 }); });
         document.getElementById('side').innerHTML = sideRows.length ? sideRows.map(x => '<div class="mini-row"><span>'+esc(x.kind)+'</span><span>'+esc(x.name)+'</span><span>'+esc(fmt(x.amount))+'</span></div>').join('') : '<div class="empty">No incoming/focus data</div>';
-        document.getElementById('status').textContent = (status.ok ? 'OK' : 'ERROR') + ' · ' + (status.message || '') + ' · query=' + ((status.filters || {}).query || '-');
+        document.getElementById('status').textContent = (status.ok ? 'OK' : 'ERROR') + ' · ' + (status.message || '') + ' · query=' + (filters.query || '-');
       }
     };
     window.addEventListener('load', () => { CombatantDrilldown.fadeIn(); CombatantDrilldown.refresh(); });

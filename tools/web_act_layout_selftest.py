@@ -110,9 +110,29 @@ def _assert_drilldown_numbers_are_clamped() -> None:
     if "const w = Math.round(Number(sk.amount || 0) / max * 100);" in combatant:
         raise AssertionError("combatant drilldown skill bars must clamp width to 0..100")
     for snippet in (
+        "const s = status.summary || {}; const skills = status.skills || []; const incoming = status.incoming || []; const outgoing = status.outgoing || [];",
+        "outgoing.slice(0, 5).forEach(x => sideRows.push",
+        "incoming.slice(0, 5).forEach(x => sideRows.push",
+    ):
+        if snippet in combatant:
+            raise AssertionError("combatant drilldown must guard list/object payloads: " + snippet)
+    for snippet in (
+        "const s = status.summary || {}; const refs = status.timeline_refs || []; const filters = status.filters || {};",
+        "refs.length ? refs.map((ref, idx) =>",
+        "JSON.stringify(ref.payload || {})",
+    ):
+        if snippet in skill:
+            raise AssertionError("skill drilldown must guard list/object payloads: " + snippet)
+    for snippet in (
         "function finiteNum",
         "function clamp01",
         "function barPct",
+        "function objectValue(v)",
+        "function objectItems(v)",
+        "const s = objectValue(status.summary);",
+        "const skills = objectItems(status.skills);",
+        "const incoming = objectItems(status.incoming);",
+        "const outgoing = objectItems(status.outgoing);",
         "const max = Math.max(1, ...skills.map(x => nonNeg(x.amount)));",
         "const w = barPct(sk.amount, max);",
     ):
@@ -124,6 +144,12 @@ def _assert_drilldown_numbers_are_clamped() -> None:
         "limit: safeLimit(args[3])",
         "function clamp01",
         "function pct(v)",
+        "function objectValue(v)",
+        "function objectItems(v)",
+        "const s = objectValue(status.summary);",
+        "const refs = objectItems(status.timeline_refs);",
+        "const filters = objectValue(status.filters);",
+        "const payload = objectValue(ref.payload);",
     ):
         if snippet not in skill:
             raise AssertionError("missing safe skill drilldown numeric snippet: " + snippet)
