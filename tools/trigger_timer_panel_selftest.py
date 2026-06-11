@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import _bootstrap  # noqa: F401
 
+from pathlib import Path
 import unittest
 
-from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
+from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel, _format_number
 
 
 class FakeVar:
@@ -115,6 +116,29 @@ class TriggerTimerPanelRenderTests(unittest.TestCase):
 
         self.assertEqual(panel.rendered_rules, ["damage_gate", "damage_gate"])
         self.assertEqual(panel.recent_count, 2)
+
+    def test_rule_numeric_text_filters_non_finite_values(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_trigger_timer_manager.py").read_text(encoding="utf-8")
+        panel = TriggerTimerManagerPanel.__new__(TriggerTimerManagerPanel)
+
+        self.assertNotIn("threshold={rule.get('threshold')}", source)
+        self.assertNotIn("cooldown={rule.get('cooldown_s') or 0}s", source)
+        self.assertIn("threshold = _format_number(rule.get('threshold'), 0, lo=0)", source)
+        self.assertEqual(_format_number(float("nan"), 5, lo=0), "5")
+        self.assertEqual(_format_number(float("inf"), 6, lo=0), "6")
+
+        text = panel._format_rule({
+            "id": "bad",
+            "type": "damage_total",
+            "threshold": float("nan"),
+            "cooldown_s": float("inf"),
+            "match": "",
+            "severity": "warn",
+        })
+        self.assertIn("threshold=0", text)
+        self.assertIn("cooldown=0s", text)
+        self.assertNotIn("nan", text.lower())
+        self.assertNotIn("infinity", text.lower())
 
 
 if __name__ == "__main__":

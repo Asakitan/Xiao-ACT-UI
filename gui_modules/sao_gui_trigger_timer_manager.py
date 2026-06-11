@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
@@ -31,6 +32,27 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _format_number(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> str:
+    num = _finite_float(value, default, lo=lo, hi=hi)
+    if num == int(num):
+        return str(int(num))
+    return f"{num:.2f}".rstrip('0').rstrip('.')
 
 
 class TriggerTimerManagerPanel:
@@ -301,10 +323,12 @@ class TriggerTimerManagerPanel:
             ).pack(fill='x')
 
     def _format_rule(self, rule: Mapping[str, Any]) -> str:
+        threshold = _format_number(rule.get('threshold'), 0, lo=0)
+        cooldown = _format_number(rule.get('cooldown_s'), 0, lo=0, hi=86400)
         return (
             f"id={rule.get('id') or '-'}  type={rule.get('type') or '-'}  "
-            f"threshold={rule.get('threshold')}  match={rule.get('match') or '-'}\n"
-            f"cooldown={rule.get('cooldown_s') or 0}s  "
+            f"threshold={threshold}  match={rule.get('match') or '-'}\n"
+            f"cooldown={cooldown}s  "
             f"once={'yes' if rule.get('once_per_encounter') else 'no'}  "
             f"severity={rule.get('severity') or 'info'}"
         )

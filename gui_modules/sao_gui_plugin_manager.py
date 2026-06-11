@@ -9,6 +9,7 @@ read-only except for enable/disable/reload actions.
 from __future__ import annotations
 
 import json
+import math
 import tkinter as tk
 from tkinter import filedialog
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -47,6 +48,20 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0)
+    if not math.isfinite(num):
+        num = float(default or 0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return int(num)
 
 
 class PluginManagerPanel:
@@ -252,8 +267,9 @@ class PluginManagerPanel:
                     self._panel_list.stop()
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
-        total = int(status.get('plugin_count', 0) or len(status.get('plugins') or []))
-        active = int(status.get('active_count', 0) or 0)
+        plugins = list(status.get('plugins') or [])
+        total = _finite_int(status.get('plugin_count'), len(plugins), lo=0)
+        active = _finite_int(status.get('active_count'), 0, lo=0)
         self._summary_var.set(f'{active} / {total} ACTIVE')
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
@@ -261,7 +277,6 @@ class PluginManagerPanel:
             return
         for child in list(self._list.winfo_children()):
             child.destroy()
-        plugins = list(status.get('plugins') or [])
         if not plugins:
             self._render_empty()
             return
@@ -368,13 +383,16 @@ class PluginManagerPanel:
         if plugin.get('pinned'):
             flags.append('★PINNED')
         flags.append('面板' if plugin.get('declares_panel') else '无面板')
-        hk = int(plugin.get('hotkey_count') or 0)
+        hk = _finite_int(plugin.get('hotkey_count'), 0, lo=0)
         if hk:
             flags.append(f'热键×{hk}')
+        subscriptions = _finite_int(plugin.get('subscription_count'), 0, lo=0)
+        failures = _finite_int(plugin.get('failures'), 0, lo=0)
+        event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)
         return (
             f"id={plugin.get('id') or '-'}  v{plugin.get('version') or '-'}  "
-            f"subs={plugin.get('subscription_count') or 0}  "
-            f"fail={plugin.get('failures') or 0}/{plugin.get('event_failures') or 0}\n"
+            f"subs={subscriptions}  "
+            f"fail={failures}/{event_failures}\n"
             f"{' · '.join(flags)}\n"
             f"games={games}  perms={perms}  caps={caps}\n"
             f"entry={plugin.get('entry') or '-'}"

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.54: ACT Tk 管理面板数值文本修复.
+
+  1) `gui_modules/sao_gui_plugin_manager.py` 修复插件管理器计数渲染。
+     plugin/active/hotkey/subscription/failure 计数现在过滤非有限数,
+     避免异常插件状态让摘要或 meta 文本显示 `NaN`/`Infinity` 或抛错。
+
+  2) `gui_modules/sao_gui_trigger_timer_manager.py` 修复触发器规则数值文本。
+     threshold 与 cooldown 现在统一格式化为有限非负数,
+     避免异常规则配置在 Tk 面板中显示 `NaN`/`Infinity`。
+
 ## v4.5.53: ACT Tk 钻取面板数值渲染修复.
 
   1) `gui_modules/sao_gui_combatant_drilldown.py` 修复成员钻取技能条渲染。
