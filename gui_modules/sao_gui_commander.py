@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,11 +32,104 @@ from sao_web_panel_common import (
 )
 
 
-def _fmt_time(ms: Any) -> str:
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
     try:
-        total_ms = float(ms or 0)
+        num = float(default if value is None or value == '' else value)
     except Exception:
-        return ''
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _unit_pct(value: Any, default: float = 0.0) -> float:
+    return _finite_float(value, default, lo=0.0, hi=1.0)
+
+
+def _member_signature(member: Dict[str, Any]) -> Tuple[Any, ...]:
+    slots = tuple(
+        (
+            _finite_int(slot.get('index'), 0, lo=0),
+            str(slot.get('state') or ''),
+            round(_unit_pct(slot.get('cooldown_pct')), 3),
+            _finite_int(slot.get('remaining_ms'), 0, lo=0),
+        )
+        for slot in list(member.get('skill_slots') or [])
+        if isinstance(slot, dict)
+    )
+    return (
+        str(member.get('uid') or ''),
+        str(member.get('name') or ''),
+        str(member.get('profession') or ''),
+        _finite_int(member.get('fight_point'), 0, lo=0),
+        _finite_int(member.get('level'), 0, lo=0),
+        bool(member.get('is_self')),
+        bool(member.get('is_leader')),
+        _finite_int(member.get('hp'), 0, lo=0),
+        _finite_int(member.get('max_hp'), 0, lo=0),
+        slots,
+    )
+
+
+def commander_data_signature(data: Dict[str, Any]) -> Tuple[Any, ...]:
+    members = tuple(
+        _member_signature(member)
+        for member in list((data or {}).get('members') or [])
+        if isinstance(member, dict)
+    )
+    return (
+        str((data or {}).get('team_id') or ''),
+        str((data or {}).get('leader_uid') or ''),
+        _finite_int((data or {}).get('dungeon_id'), 0, lo=0),
+        str((data or {}).get('self_uid') or ''),
+        members,
+    )
+
+
+def commander_panel_signature(active_tab: str, data: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (
+        str(active_tab or ''),
+        _finite_int((data or {}).get('dungeon_id'), 0, lo=0),
+        tuple(
+            _member_signature(member)
+            for member in list((data or {}).get('members') or [])
+            if isinstance(member, dict)
+        ),
+    )
+
+
+def _fmt_level(value: Any) -> str:
+    level = _finite_int(value, 0, lo=0)
+    return str(level) if level > 0 else '--'
+
+
+def _fmt_time(ms: Any) -> str:
+    total_ms = _finite_float(ms, 0.0, lo=0.0)
     if total_ms <= 0:
         return ''
     total_s = int(-(-total_ms // 1000))
@@ -45,10 +139,7 @@ def _fmt_time(ms: Any) -> str:
 
 
 def _fmt_fp(value: Any) -> str:
-    try:
-        fp = float(value or 0)
-    except Exception:
-        return '--'
+    fp = _finite_float(value, 0.0, lo=0.0)
     if fp <= 0:
         return '--'
     if fp >= 10_000:
@@ -205,33 +296,7 @@ class CommanderPanel:
     def _render_if_needed(self, force: bool = False) -> None:
         if self._body is None:
             return
-        signature = (
-            self._active_tab,
-            int(self._data.get('dungeon_id') or 0),
-            tuple(
-                (
-                    int(member.get('uid') or 0),
-                    str(member.get('name') or ''),
-                    str(member.get('profession') or ''),
-                    int(member.get('fight_point') or 0),
-                    int(member.get('level') or 0),
-                    bool(member.get('is_self')),
-                    bool(member.get('is_leader')),
-                    int(member.get('hp') or 0),
-                    int(member.get('max_hp') or 0),
-                    tuple(
-                        (
-                            int(slot.get('index') or 0),
-                            str(slot.get('state') or ''),
-                            round(float(slot.get('cooldown_pct') or 0.0), 3),
-                            int(slot.get('remaining_ms') or 0),
-                        )
-                        for slot in list(member.get('skill_slots') or [])
-                    ),
-                )
-                for member in list(self._data.get('members') or [])
-            ),
-        )
+        signature = commander_panel_signature(self._active_tab, self._data)
         if not force and signature == self._last_signature:
             return
         self._last_signature = signature
@@ -256,7 +321,7 @@ class CommanderPanel:
 
     def _render_boss_tab(self) -> None:
         make_section_title(self._body, 'BOSS RAID')
-        dungeon_id = self._data.get('dungeon_id')
+        dungeon_id = _finite_int(self._data.get('dungeon_id'), 0, lo=0)
         if not dungeon_id:
             self._render_empty('⚑', '未进入副本\nNot in a dungeon instance')
         else:
@@ -299,19 +364,15 @@ class CommanderPanel:
         if not compact:
             meta = tk.Frame(card, bg=PANEL_CARD)
             meta.pack(fill=tk.X, pady=(2, 0))
-            level = member.get('level') or '--'
-            tk.Label(meta, text=f'Lv.{level}', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
+            tk.Label(meta, text=f'Lv.{_fmt_level(member.get("level"))}', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
             tk.Label(meta, text=f'CP {_fmt_fp(member.get("fight_point"))}', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT, padx=(10, 0))
             if is_self:
                 tk.Label(meta, text='SELF', bg=PANEL_CARD, fg=CYAN, font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(8, 0))
 
-            try:
-                hp = float(member.get('hp') or 0)
-                hp_max = float(member.get('max_hp') or 0)
-            except Exception:
-                hp = hp_max = 0.0
+            hp = _finite_float(member.get('hp'), 0.0, lo=0.0)
+            hp_max = _finite_float(member.get('max_hp'), 0.0, lo=0.0)
             if hp_max > 0:
-                self._hp_mini_bar(card, max(0.0, min(1.0, hp / hp_max)))
+                self._hp_mini_bar(card, _unit_pct(hp / hp_max))
 
         if is_self:
             slots = list(member.get('skill_slots') or [])
@@ -319,6 +380,7 @@ class CommanderPanel:
                 self._cd_grid(card, slots)
 
     def _hp_mini_bar(self, parent: tk.Frame, pct: float) -> None:
+        pct = _unit_pct(pct)
         row = tk.Frame(parent, bg=PANEL_CARD)
         row.pack(fill=tk.X, pady=(4, 0))
         canvas = tk.Canvas(row, height=6, bg=PANEL_CARD_ALT, highlightthickness=0, bd=0)
@@ -345,9 +407,10 @@ class CommanderPanel:
             canvas = tk.Canvas(cell, width=30, height=30, bg=PANEL_CARD_ALT, highlightthickness=0, bd=0)
             canvas.place(x=1, y=1)
             if state == 'cooldown':
-                fill_height = int(30 * max(0.0, min(1.0, float(slot.get('cooldown_pct') or 0.0))))
+                fill_height = int(30 * _unit_pct(slot.get('cooldown_pct')))
                 canvas.create_rectangle(0, 30 - fill_height, 30, 30, fill='#f3af1222', outline='')
-            canvas.create_text(15, 9, text=str(slot.get('index') or idx + 1), fill=TEXT_DIM, font=panel_font(6, bold=True))
+            slot_index = _finite_int(slot.get('index'), idx + 1, lo=0) or (idx + 1)
+            canvas.create_text(15, 9, text=str(slot_index), fill=TEXT_DIM, font=panel_font(6, bold=True))
             time_text = _fmt_time(slot.get('remaining_ms') or 0) if state == 'cooldown' else '✓'
             canvas.create_text(15, 21, text=time_text, fill=READY if state == 'ready' else TEXT_MAIN, font=panel_font(6, bold=True))
 

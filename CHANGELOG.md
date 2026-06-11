@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.46: Commander Tk 数据传递与渲染修复.
+
+  1) `gui_modules/sao_gui_commander.py` 修复 Commander Tk 面板签名与渲染数值归一化。
+     成员 UID/战力/等级/HP、技能槽位、冷却百分比和剩余时间现在进入签名前统一过滤坏值,
+     避免 `NaN`/`Infinity` 或非数字字符串中断面板刷新。
+
+  2) `gui_modules/sao_gui_panels_mixin.py` 修复 Commander 数据 push 去重签名。
+     `_push_commander_data()` 现在复用面板侧安全签名 helper,
+     避免某个成员或技能槽的异常数值被吞掉后导致整次 Commander 数据不再传给面板。
+
 ## v4.5.45: Tk Live 面板签名与数值渲染修复.
 
   1) `gui_modules/sao_gui_bossraid.py` 修复 BossRaid Tk 实体列表渲染签名。

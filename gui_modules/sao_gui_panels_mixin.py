@@ -62,7 +62,7 @@ from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_action_log import ActionLogPanel
 from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
 from gui_modules.sao_gui_mem_scope import MemScopePanel
-from gui_modules.sao_gui_commander import CommanderPanel
+from gui_modules.sao_gui_commander import CommanderPanel, commander_data_signature
 from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
 from gui_modules.sao_gui_death_recap import DeathRecapPanel
@@ -407,36 +407,7 @@ class SAOPlayerGUIPanelsMixin:
             else:
                 data = {'members': [], 'team_id': 0,
                         'leader_uid': 0, 'dungeon_id': 0}
-            _members = []
-            for _m in list(data.get('members') or []):
-                _slots = tuple(
-                    (
-                        int(_s.get('index') or 0),
-                        str(_s.get('state') or ''),
-                        round(float(_s.get('cooldown_pct') or 0.0), 3),
-                        int(_s.get('remaining_ms') or 0),
-                    )
-                    for _s in list(_m.get('skill_slots') or [])
-                )
-                _members.append((
-                    int(_m.get('uid') or 0),
-                    str(_m.get('name') or ''),
-                    str(_m.get('profession') or ''),
-                    int(_m.get('fight_point') or 0),
-                    int(_m.get('level') or 0),
-                    bool(_m.get('is_self')),
-                    bool(_m.get('is_leader')),
-                    int(_m.get('hp') or 0),
-                    int(_m.get('max_hp') or 0),
-                    _slots,
-                ))
-            _sig = (
-                int(data.get('team_id') or 0),
-                int(data.get('leader_uid') or 0),
-                int(data.get('dungeon_id') or 0),
-                int(data.get('self_uid') or 0),
-                tuple(_members),
-            )
+            _sig = commander_data_signature(data)
             if _sig != self._last_commander_push_sig:
                 self._last_commander_push_sig = _sig
                 self._commander_panel.update(data)
