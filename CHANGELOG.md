@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.47: Commander Web 数值渲染修复.
+
+  1) `web/commander.html` 修复成员 HP 小条渲染。
+     HP/max HP 现在先归一化为有限非负数, 再计算 0..1 比例,
+     避免异常 Commander 数据渲染出 `NaN%` 或无效条宽。
+
+  2) `web/commander.html` 修复 Boss tab Dungeon ID 判断与显示。
+     Dungeon ID 现在必须是有限正整数才进入 ACTIVE 状态并显示,
+     避免 `Infinity`、`NaN` 或异常字符串让面板误判为已进入副本。
+
 ## v4.5.46: Commander Tk 数据传递与渲染修复.
 
   1) `gui_modules/sao_gui_commander.py` 修复 Commander Tk 面板签名与渲染数值归一化。

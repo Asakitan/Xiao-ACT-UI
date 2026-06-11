@@ -39,6 +39,22 @@ def main() -> None:
             "Commander dungeon id must be escaped before rendering.",
         ),
         (
+            "if (!_data || !_data.dungeon_id) {",
+            "Commander dungeon id must be normalized before deciding active/empty state.",
+        ),
+        (
+            "Dungeon ID: ' + esc(_data.dungeon_id)",
+            "Commander dungeon id must render the normalized finite id text.",
+        ),
+        (
+            "if (m.max_hp > 0) {",
+            "Commander HP mini bar must use normalized finite HP values.",
+        ),
+        (
+            "var hpPct = Math.max(0, Math.min(1, m.hp / m.max_hp));",
+            "Commander HP mini bar must not divide raw HP values.",
+        ),
+        (
             "var slotCls = s.state || 'ready';",
             "Commander skill slot state must be whitelisted before becoming a CSS class.",
         ),
@@ -68,6 +84,18 @@ def main() -> None:
             "Commander renderer should clamp cooldown percentages.",
         ),
         (
+            "function nonNegNum(value, fallback)",
+            "Commander renderer should normalize non-negative finite numbers.",
+        ),
+        (
+            "function hpPct01(hp, maxHp)",
+            "Commander HP renderer should clamp HP ratios through a helper.",
+        ),
+        (
+            "function dungeonIdText(value)",
+            "Commander dungeon renderer should expose normalized dungeon id text.",
+        ),
+        (
             'data-uid="\' + attr(uidText) + \'"',
             "Commander member data-uid should use escaped stable text.",
         ),
@@ -80,8 +108,20 @@ def main() -> None:
             "Commander fight power labels should use escaped formatted text.",
         ),
         (
-            "Dungeon ID: ' + esc(_data.dungeon_id)",
-            "Commander dungeon id should be escaped before rendering.",
+            "var hpPct = hpPct01(m.hp, m.max_hp);",
+            "Commander HP bar should compute ratio through hpPct01().",
+        ),
+        (
+            "if (hpPct !== null) {",
+            "Commander HP bar should render only when max HP is valid.",
+        ),
+        (
+            "var dungeonText = dungeonIdText(_data && _data.dungeon_id);",
+            "Commander boss tab should normalize dungeon id before branching.",
+        ),
+        (
+            "Dungeon ID: ' + esc(dungeonText)",
+            "Commander dungeon id should render escaped normalized text.",
         ),
         (
             "var slotCls = safeSlotState(s.state);",

@@ -371,9 +371,15 @@ function attr(s) { return esc(s); }
 
 function idText(v) { return String(v == null ? '' : v); }
 
+function nonNegNum(value, fallback) {
+    var number = Number(value);
+    if (!isFinite(number) || number < 0) number = Number(fallback || 0);
+    return (!isFinite(number) || number < 0) ? 0 : number;
+}
+
 function fmtTime(ms) {
-    ms = Number(ms || 0);
-    if (!isFinite(ms) || ms <= 0) return '';
+    ms = nonNegNum(ms, 0);
+    if (ms <= 0) return '';
     var s = Math.ceil(ms / 1000);
     if (s < 60) return s + 's';
     var m = Math.floor(s / 60);
@@ -388,15 +394,15 @@ function hpColor(pct) {
 }
 
 function fmtFightPoint(fp) {
-    fp = Number(fp || 0);
-    if (!isFinite(fp) || fp <= 0) return '--';
+    fp = nonNegNum(fp, 0);
+    if (fp <= 0) return '--';
     if (fp >= 10000) return (fp / 10000).toFixed(1) + 'w';
     return String(fp);
 }
 
 function fmtLevel(level) {
-    level = Number(level || 0);
-    if (!isFinite(level) || level <= 0) return '--';
+    level = nonNegNum(level, 0);
+    if (level <= 0) return '--';
     return String(Math.floor(level));
 }
 
@@ -409,6 +415,17 @@ function pct01(value) {
     value = Number(value || 0);
     if (!isFinite(value)) return 0;
     return Math.max(0, Math.min(1, value));
+}
+
+function hpPct01(hp, maxHp) {
+    var total = nonNegNum(maxHp, 0);
+    if (total <= 0) return null;
+    return pct01(nonNegNum(hp, 0) / total);
+}
+
+function dungeonIdText(value) {
+    var id = Math.floor(nonNegNum(value, 0));
+    return id > 0 ? String(id) : '';
 }
 
 // ═══ Render Functions ═══
@@ -445,8 +462,8 @@ function renderTeamTab() {
         html += '</div>';
 
         // HP mini bar (if HP data available)
-        if (m.max_hp > 0) {
-            var hpPct = Math.max(0, Math.min(1, m.hp / m.max_hp));
+        var hpPct = hpPct01(m.hp, m.max_hp);
+        if (hpPct !== null) {
             html += '<div class="hp-mini">';
             html += '<div class="hp-bar-bg"><div class="hp-bar-fill" style="width:' +
                     (hpPct * 100).toFixed(1) + '%;background:' + hpColor(hpPct) + '"></div></div>';
@@ -482,15 +499,16 @@ function renderBossTab() {
     // Boss raid info — placeholder for now, can be populated from boss raid profiles
     var html = '<div class="boss-section">';
     html += '<div class="team-header"><span>BOSS RAID</span><span class="line"></span></div>';
+    var dungeonText = dungeonIdText(_data && _data.dungeon_id);
 
-    if (!_data || !_data.dungeon_id) {
+    if (!dungeonText) {
         html += '<div class="empty-state">' +
             '<div class="empty-icon">⚑</div>' +
             '<div class="empty-text">未进入副本<br>Not in a dungeon instance</div>' +
             '</div>';
     } else {
         html += '<div class="boss-card">';
-        html += '<div class="boss-name">副本 Dungeon ID: ' + esc(_data.dungeon_id) + '</div>';
+        html += '<div class="boss-name">副本 Dungeon ID: ' + esc(dungeonText) + '</div>';
         html += '<div class="boss-phase">ACTIVE</div>';
         html += '</div>';
     }
