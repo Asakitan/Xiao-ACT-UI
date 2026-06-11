@@ -306,6 +306,21 @@ class MemConfigTableReader:
             return None
         return self.pm.read_i32(blob + col)
 
+    def col_u8(self, blob: int, col: Optional[int]) -> Optional[int]:
+        """单字节列 (bool / 小枚举如 IsAoe / SkillRangeType)。
+
+        ★bool/枚举列必须按 1 字节读: getter-thunk 的列偏移(table_columns auto-offset)
+        是对的, 但用 col_i32 读 4 字节会把相邻字段读进来(IsAoe 实测会读成 14592=
+        byte0+byte1<<8)。这是类型读法问题不是 offset 错。"""
+        if not blob or col is None or col < 0:
+            return None
+        b = self.pm.read_bytes(blob + col, 1)
+        return b[0] if b else None
+
+    def col_bool(self, blob: int, col: Optional[int]) -> Optional[bool]:
+        v = self.col_u8(blob, col)
+        return None if v is None else bool(v)
+
     def col_mlid(self, blob: int, col: Optional[int]) -> Optional[int]:
         """MLString columns store an mlid (resolve via StringPoolBridge)."""
         return self.col_i32(blob, col)
