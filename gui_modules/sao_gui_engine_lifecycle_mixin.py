@@ -503,6 +503,64 @@ class SAOPlayerGUIEngineLifecycleMixin:
             except Exception:
                 pass
         self._maybe_directional_dodge(action)
+        self._kick_numbered_zone_capture(action)
+
+    def get_numbered_zone_summary(self):
+        """编号圈(1/2/3)统计供面板读取: 每个圈的序号/组/命中名单/存活时长。
+        无追踪器(没遇到机制圈)时返回 []。纯读取, 不触发内存扫描。"""
+        t = getattr(self, '_numbered_zone_tracker', None)
+        return t.summary() if t is not None else []
+
+    def _kick_numbered_zone_capture(self, action):
+        """机制触发时, 在机制窗口内短时(默认12s @4Hz)采样活动区域喂编号圈追踪器:
+        按出现顺序编号 + 用区域成员(entitiesIdInZone_=服务端命中判定)做精确归属。
+        纯读取无按键, 不受躲避总开关限制(统计安全); 仅前台采样。窗口内重复触发只延长
+        截止时间不另起线程。"""
+        import time as _t
+        import threading as _th
+        try:
+            if not bool(getattr(self, '_recognition_active', False)):
+                return
+            tracker = getattr(self, '_numbered_zone_tracker', None)
+            if tracker is None:
+                from engines.numbered_zone_tracker import NumberedZoneTracker
+                tracker = NumberedZoneTracker()
+                self._numbered_zone_tracker = tracker
+            self._nz_capture_until = _t.time() + 12.0
+            if getattr(self, '_nz_capture_thread', None) is not None \
+                    and self._nz_capture_thread.is_alive():
+                return                       # 已在采样, 只延长窗口
+            ctx = getattr(self, '_dodge_context', None)
+            if ctx is None:
+                director = self._get_auto_dodge_director()   # 建 ctx (只读 mem 源)
+                ctx = getattr(self, '_dodge_context', None)
+            if ctx is None:
+                return
+            fg = getattr(getattr(self, '_auto_key_engine', None),
+                         'is_game_foreground', None)
+
+            def _loop():
+                seen = set()
+                while _t.time() < getattr(self, '_nz_capture_until', 0.0):
+                    try:
+                        if fg is None or fg():
+                            snap = ctx.snapshot_zones()
+                            now = _t.time()
+                            new = tracker.observe(snap, now=now)
+                            for z in new:
+                                seen.add(z.zone_uuid)
+                                print('[编号圈] 第%d个(组%d内#%d) uuid=%d 成员%d人'
+                                      % (z.seq, z.group_id, z.seq_in_group,
+                                         z.zone_uuid, len(z.members_now)))
+                            tracker.prune(now)
+                    except Exception:
+                        pass
+                    _t.sleep(0.25)
+            th = _th.Thread(target=_loop, daemon=True)
+            self._nz_capture_thread = th
+            th.start()
+        except Exception:
+            pass
 
     def _get_auto_dodge_director(self):
         """Lazy AutoDodgeDirector (定向躲避): 自带只读 mem 源, 相机基/玩家位/boss位

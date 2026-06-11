@@ -32,7 +32,9 @@ class ZoneReader:
         self._pm = dps_source.sr.pm
         self._zonecomp_klass = 0
         self._off_entsinzone = 0
+        self._off_group = 0
         self._off_uuid = 0
+        self._zc_fields = None
 
     def _kname(self, obj: int) -> str:
         try:
@@ -44,20 +46,33 @@ class ZoneReader:
         except Exception:
             return ""
 
+    def _zc_fmap(self, zonecomp: int) -> Dict[str, int]:
+        """活 ZoneComp 对象 klass 字段表 (auto-offset), 缓存。"""
+        if getattr(self, "_zc_fields", None) is None:
+            self._zc_fields = {}
+            try:
+                from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+                kp = self._pm.read_u64(zonecomp)
+                self._zc_fields = LiveFieldResolver(self._pm)._field_map(kp) or {}
+            except Exception:
+                self._zc_fields = {}
+        return self._zc_fields
+
     def _resolve_entsinzone_off(self, zonecomp: int) -> int:
         """从活 ZoneComp 对象的 klass 字段表解 entitiesIdInZone_ 偏移 (auto-offset)。"""
         if self._off_entsinzone:
             return self._off_entsinzone
-        try:
-            from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
-            kp = self._pm.read_u64(zonecomp)
-            lfr = LiveFieldResolver(self._pm)
-            fmap = lfr._field_map(kp)
-            off = fmap.get("entitiesIdInZone_")
-            self._off_entsinzone = int(off) if off else ZONECOMP_ENTSINZONE_OFF
-        except Exception:
-            self._off_entsinzone = ZONECOMP_ENTSINZONE_OFF
+        off = self._zc_fmap(zonecomp).get("entitiesIdInZone_")
+        self._off_entsinzone = int(off) if off else ZONECOMP_ENTSINZONE_OFF
         return self._off_entsinzone
+
+    def _resolve_group_off(self, zonecomp: int) -> int:
+        """ZoneComp.zoneGroupId_ 偏移 (auto-offset), 缓存。同批编号圈共享 group id。"""
+        if self._off_group:
+            return self._off_group
+        off = self._zc_fmap(zonecomp).get("zoneGroupId_")
+        self._off_group = int(off) if off else 0x38
+        return self._off_group
 
     def _zone_comp(self, zone_obj: int) -> int:
         cl = self._pm.read_u64(zone_obj + ENT_COMPLIST_OFF) or 0
@@ -102,6 +117,29 @@ class ZoneReader:
                     zt = self._pm.read_i32(zone + ENT_ZONETYPE_OFF)
                     out.append({"zone_uuid": int(key), "zone_obj": int(zone),
                                 "zone_type": zt, "members_n": len(members)})
+        except Exception:
+            pass
+        return out
+
+    def snapshot(self, mgr_addr: int, zone_dict_off: int = 0x90) -> List[Dict]:
+        """一次快照全部活动区域: [{zone_uuid, base_id, group_id, zone_type, members:set}]。
+        编号圈追踪器消费此快照按出现顺序编号 + 用 members 做命中归属。O(zones), 区域少。"""
+        out = []
+        try:
+            from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+            emr = EntityMgrReader(self._src)
+            d = self._pm.read_u64(mgr_addr + zone_dict_off) or 0
+            for key, zone in emr._read_dict_entries(d, max_entries=64):
+                zc = self._zone_comp(zone)
+                if not zc:
+                    continue
+                members = self._read_member_uuids(zc)
+                base_id = self._pm.read_i64(zone + 0xE0)
+                gid = self._pm.read_i32(zc + self._resolve_group_off(zc))
+                zt = self._pm.read_i32(zone + ENT_ZONETYPE_OFF)
+                out.append({"zone_uuid": int(key), "zone_obj": int(zone),
+                            "base_id": int(base_id or 0), "group_id": int(gid or 0),
+                            "zone_type": int(zt or 0), "members": set(members)})
         except Exception:
             pass
         return out

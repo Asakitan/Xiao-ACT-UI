@@ -111,6 +111,14 @@ class DodgeContext:
             self._zone_reader = ZoneReader(self._src)
         return self._zone_reader
 
+    def snapshot_zones(self):
+        """一次活动区域快照 (供编号圈追踪器)。O(zones), 区域少; 失败返回 []。"""
+        try:
+            mgr = self._entity_mgr().locate(0)
+            return self._zone().snapshot(mgr) if mgr else []
+        except Exception:
+            return []
+
     def make_zone_exit_check(self):
         """精准出圈(零误差): 用游戏自己的区域成员判定(ZoneComp.entitiesIdInZone_)。
         返回 is_clear() 回调——dodge 开始时快照玩家所在的全部区域(含 AOE 圈), 之后玩家

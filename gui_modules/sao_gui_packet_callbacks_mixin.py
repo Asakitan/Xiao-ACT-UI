@@ -312,6 +312,17 @@ class SAOPlayerGUIPacketCallbacksMixin:
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_damage_event(event)
             except Exception: pass
+        # 编号圈伤害归属(仅机制采样窗口内, 否则零开销): skill_id + 命中世界坐标
+        # DamagePos → 追踪器按目标所在圈的成员判定精确归属。
+        _nzt = getattr(self, '_numbered_zone_tracker', None)
+        if _nzt is not None and time.time() < getattr(self, '_nz_capture_until', 0.0):
+            try:
+                _nzt.observe_damage(
+                    int(event.get('skill_id', 0) or 0),
+                    int(event.get('target_uuid', 0) or 0),
+                    event.get('damage_pos'), now=time.time())
+            except Exception:
+                pass
         if _is_self_combat_target:
             self._cancel_dps_idle_reset_after()
             target_uuid = event.get('target_uuid', 0)
