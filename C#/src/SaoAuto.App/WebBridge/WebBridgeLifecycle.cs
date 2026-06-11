@@ -58,7 +58,8 @@ public sealed class WebBridgeLifecycle : IDisposable
         GameStateManager states,
         Func<DpsSnapshot?>? dpsSnapshotProvider = null,
         DpsTracker? dpsTracker = null,
-        Func<bool>? dpsEnabledProvider = null)
+        Func<bool>? dpsEnabledProvider = null,
+        Func<TimeSpan>? dpsIdleTimeoutProvider = null)
     {
         if (states is null) throw new ArgumentNullException(nameof(states));
         Broadcaster = new BridgeEventBroadcaster();
@@ -68,7 +69,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         // null, the publisher falls back to the snapshot-only behaviour
         // shipped before R8 (no edge, no fade).
         _publisher = new GameStatePublisher(
-            states, Broadcaster, dpsSnapshotProvider, dpsTracker, dpsEnabledProvider);
+            states, Broadcaster, dpsSnapshotProvider, dpsTracker, dpsEnabledProvider, dpsIdleTimeoutProvider);
         HostAdapter = new BridgeHostAdapter(Router, Broadcaster);
     }
 

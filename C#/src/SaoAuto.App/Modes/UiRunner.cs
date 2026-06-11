@@ -66,7 +66,8 @@ public sealed class UiRunner
             _states,
             packets.DpsSnapshotProvider,
             packets.DpsTracker,
-            () => _settings.Get<bool?>(SettingsKeys.DpsEnabled) ?? true);
+            () => _settings.Get<bool?>(SettingsKeys.DpsEnabled) ?? true,
+            () => ReadDpsIdleTimeout(_settings));
         webBridge.Start();
         // R8: scene-change subscriber → state.scene_changed bridge event.
         // Idempotent unsubscribe via using-scope is implicit since the
@@ -418,5 +419,12 @@ public sealed class UiRunner
         }
         log.LogWarning("HUD index not found; starting on about:blank — buttons WILL appear dead until web/panel.html is reachable");
         return null;
+    }
+
+    private static TimeSpan ReadDpsIdleTimeout(SettingsManager settings)
+    {
+        var seconds = settings.GetInt(SettingsKeys.DpsFadeTimeoutSeconds, 5);
+        if (seconds <= 0) return TimeSpan.FromDays(1);
+        return TimeSpan.FromSeconds(Math.Max(1, seconds));
     }
 }

@@ -256,10 +256,24 @@ public sealed class DpsTracker
     {
         // Finalize first so an idle-timed-out encounter rolls into LastReport
         // before we read has_live (matches Python's order at line 626-631).
-        FinalizeIfIdle(idleTimeout, reason: "idle_timeout");
+        var finalized = FinalizeIfIdle(idleTimeout, reason: "idle_timeout");
         var now = _clock();
         lock (_gate)
         {
+            if (finalized is not null)
+            {
+                var finalizedDirty = _dirty;
+                _dirty = false;
+                return new DpsPollResult(
+                    finalized,
+                    _lastReport,
+                    HasLive: false,
+                    HasReport: true,
+                    ShouldFadeOut: true,
+                    Dirty: finalizedDirty,
+                    _lastDamageTime);
+            }
+
             var snap = SnapshotLocked(includeSkills, reason: null);
             var lastDmg = _lastDamageTime;
             var sinceLastDamage = lastDmg == default ? TimeSpan.MaxValue : (now - lastDmg);

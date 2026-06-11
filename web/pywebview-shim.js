@@ -88,6 +88,14 @@
         set_burst_enabled: function (enabled) {
             return call('settings.set_burst_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
+        set_boss_bar_mode: function (mode) {
+            return call('settings.set_boss_bar_mode', { mode: String(mode || 'boss_raid') }).then(normalizeOk);
+        },
+        set_dps_fade_timeout: function (seconds) {
+            var value = parseInt(seconds, 10);
+            if (!isFinite(value)) value = 0;
+            return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
+        },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
         },

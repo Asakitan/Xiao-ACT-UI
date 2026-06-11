@@ -68,10 +68,48 @@ public class Session197HudSettingsBridgeTests : IDisposable
         var bridge = new HudSettingsBridge(router, new SettingsManager(_path));
         Assert.Contains(BridgeCommands.SetWatchedSlots, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBurstEnabled, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossBarMode, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.SetWatchedSlots, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBurstEnabled, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossBarMode, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetDpsFadeTimeout, router.RegisteredCommands);
+    }
+
+    [Fact]
+    public void BossBarModeNormalizesAndPersists()
+    {
+        var settings = new SettingsManager(_path);
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, settings);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetBossBarMode, new JsonObject
+        {
+            ["mode"] = "invalid",
+        }));
+
+        Assert.Equal("boss_raid", reply!.Payload!["mode"]!.GetValue<string>());
+        var reloaded = new SettingsManager(_path);
+        Assert.Equal("boss_raid", reloaded.GetString(SettingsKeys.BossBarMode));
+    }
+
+    [Fact]
+    public void DpsFadeTimeoutClampsAndPersists()
+    {
+        var settings = new SettingsManager(_path);
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, settings);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetDpsFadeTimeout, new JsonObject
+        {
+            ["seconds"] = -5,
+        }));
+
+        Assert.Equal(0, reply!.Payload!["seconds"]!.GetValue<int>());
+        var reloaded = new SettingsManager(_path);
+        Assert.Equal(0, reloaded.GetInt(SettingsKeys.DpsFadeTimeoutSeconds, defaultValue: 5));
     }
 }

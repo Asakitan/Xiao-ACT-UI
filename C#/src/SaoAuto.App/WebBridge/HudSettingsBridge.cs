@@ -23,9 +23,13 @@ public sealed class HudSettingsBridge : IDisposable
         {
             BridgeCommands.SetWatchedSlots,
             BridgeCommands.SetBurstEnabled,
+            BridgeCommands.SetBossBarMode,
+            BridgeCommands.SetDpsFadeTimeout,
         };
         _router.Register(BridgeCommands.SetWatchedSlots, HandleWatchedSlots);
         _router.Register(BridgeCommands.SetBurstEnabled, HandleBurstEnabled);
+        _router.Register(BridgeCommands.SetBossBarMode, HandleBossBarMode);
+        _router.Register(BridgeCommands.SetDpsFadeTimeout, HandleDpsFadeTimeout);
     }
 
     public void Dispose()
@@ -72,5 +76,64 @@ public sealed class HudSettingsBridge : IDisposable
             ["ok"] = true,
             ["enabled"] = enabled,
         };
+    }
+
+    private JsonObject HandleBossBarMode(JsonObject? payload)
+    {
+        var mode = ReadString(payload?["mode"], "boss_raid").Trim();
+        if (mode is not ("always" or "boss_raid" or "off"))
+            mode = "boss_raid";
+
+        _settings.Set(SettingsKeys.BossBarMode, mode);
+        _settings.Save();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["mode"] = mode,
+        };
+    }
+
+    private JsonObject HandleDpsFadeTimeout(JsonObject? payload)
+    {
+        var node = payload?["seconds"] ?? payload?["timeout"];
+        if (!TryGetInt(node, out var rawSeconds))
+            return new JsonObject { ["ok"] = false, ["error"] = "bad_payload" };
+
+        var seconds = Math.Max(0, rawSeconds);
+        _settings.Set(SettingsKeys.DpsFadeTimeoutSeconds, seconds);
+        _settings.Save();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["timeout"] = seconds,
+            ["seconds"] = seconds,
+        };
+    }
+
+    private static string ReadString(JsonNode? node, string fallback)
+    {
+        if (node is null) return fallback;
+        if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text))
+            return text;
+        return node.ToString();
+    }
+
+    private static bool TryGetInt(JsonNode? node, out int value)
+    {
+        value = 0;
+        if (node is not JsonValue jsonValue) return false;
+        if (jsonValue.TryGetValue<int>(out value)) return true;
+        if (jsonValue.TryGetValue<double>(out var dbl))
+        {
+            value = (int)dbl;
+            return true;
+        }
+        if (jsonValue.TryGetValue<string>(out var text)
+            && int.TryParse(text, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+        return false;
     }
 }

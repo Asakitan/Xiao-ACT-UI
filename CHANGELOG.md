@@ -2,6 +2,21 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.3: WebView2 Boss 血条与 DPS 淡出设置桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_boss_bar_mode(mode)` 并新增
+     `settings.set_boss_bar_mode` C# 桥接。
+     修复 WebView2 路径下菜单 Boss 血条模式按钮只更新前端高亮, 没有保存
+     `boss_bar_mode` 设置的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `set_dps_fade_timeout(seconds)` 并新增
+     `settings.set_dps_fade_timeout` C# 桥接。
+     修复 WebView2 路径下 DPS 淡出秒数没有写入 `dps_fade_timeout_s` 的问题。
+     同时 C# DPS overlay pump 会读取该设置, 并修复 idle finalize 后无法发出
+     `fade_out` 事件导致面板不淡出的渲染问题。
+
+
+
 ## v4.5.2: WebView2 菜单音效设置桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_sound_enabled(enabled)` 并新增

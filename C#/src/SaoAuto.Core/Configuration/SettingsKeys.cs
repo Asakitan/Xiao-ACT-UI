@@ -13,6 +13,8 @@ public static class SettingsKeys
     public const string BurstEnabled = "burst_enabled";
     public const string SoundEnabled = "sound_enabled";
     public const string SoundVolume = "sound_volume";
+    public const string BossBarMode = "boss_bar_mode";
+    public const string DpsFadeTimeoutSeconds = "dps_fade_timeout_s";
     public const string PanelThemes = "panel_themes";
     public const string MemDataSource = "mem_data_source";
     public const string CaptureDevice = "capture_device";

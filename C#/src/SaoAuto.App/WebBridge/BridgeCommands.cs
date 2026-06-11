@@ -92,6 +92,8 @@ public static class BridgeCommands
     // HUD settings surfaced by menu.html through the pywebview shim.
     public const string SetWatchedSlots = "settings.set_watched_slots";
     public const string SetBurstEnabled = "settings.set_burst_enabled";
+    public const string SetBossBarMode = "settings.set_boss_bar_mode";
+    public const string SetDpsFadeTimeout = "settings.set_dps_fade_timeout";
 
     // Updater
     public const string CheckUpdate = "updater.check";

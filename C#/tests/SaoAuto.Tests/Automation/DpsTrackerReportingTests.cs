@@ -52,6 +52,23 @@ public class DpsTrackerReportingTests
     }
 
     [Fact]
+    public void PollOverlayStateReturnsFadeOutSnapshotWhenIdleFinalizes()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var dps = new DpsTracker(() => now);
+        dps.RecordDamage(1, "self", 500, 7, true);
+        now = now.AddSeconds(10);
+
+        var poll = dps.PollOverlayState(TimeSpan.FromSeconds(5));
+
+        Assert.False(poll.HasLive);
+        Assert.True(poll.ShouldFadeOut);
+        Assert.True(poll.HasReport);
+        Assert.Equal(500, poll.Snapshot.TotalDamage);
+        Assert.Same(poll.Snapshot, dps.LastReport);
+    }
+
+    [Fact]
     public void FormatReportProducesHeaderAndPerEntityRows()
     {
         var now = DateTimeOffset.UtcNow;

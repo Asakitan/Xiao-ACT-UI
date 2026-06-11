@@ -54,11 +54,9 @@ public sealed class GameStatePublisher : IDisposable
 {
     private const string CaptureTsKey = "capture_ts";
 
-    // R8 / DPS-02 idle threshold for the per-tick pump. Mirrors Python's
-    // <c>poll_overlay_state(idle_timeout_s=15.0)</c> default at
-    // dps_tracker.py:603. After 15s without damage the overlay is told to
-    // fade out; on the next damage event has-live flips back true.
-    private static readonly TimeSpan DpsIdleTimeout = TimeSpan.FromSeconds(15.0);
+    // R8 / DPS-02 idle threshold for the per-tick pump. When the host does
+    // not provide the menu-backed setting, keep the historical C# default.
+    private static readonly TimeSpan DefaultDpsIdleTimeout = TimeSpan.FromSeconds(15.0);
 
     private readonly GameStateManager _states;
     private readonly BridgeEventBroadcaster _broadcaster;
@@ -69,6 +67,7 @@ public sealed class GameStatePublisher : IDisposable
     // it shipped before R8 (no edge, no fade-out, no toggle).
     private readonly DpsTracker? _dpsTracker;
     private readonly Func<bool>? _dpsEnabledProvider;
+    private readonly Func<TimeSpan>? _dpsIdleTimeoutProvider;
     private readonly object _gate = new();
     private IDisposable? _sub;
     private string? _lastSig;
@@ -104,13 +103,15 @@ public sealed class GameStatePublisher : IDisposable
         BridgeEventBroadcaster broadcaster,
         Func<DpsSnapshot?>? dpsSnapshotProvider = null,
         DpsTracker? dpsTracker = null,
-        Func<bool>? dpsEnabledProvider = null)
+        Func<bool>? dpsEnabledProvider = null,
+        Func<TimeSpan>? dpsIdleTimeoutProvider = null)
     {
         _states = states ?? throw new ArgumentNullException(nameof(states));
         _broadcaster = broadcaster ?? throw new ArgumentNullException(nameof(broadcaster));
         _dpsSnapshotProvider = dpsSnapshotProvider;
         _dpsTracker = dpsTracker;
         _dpsEnabledProvider = dpsEnabledProvider;
+        _dpsIdleTimeoutProvider = dpsIdleTimeoutProvider;
     }
 
     public bool IsActive => _sub is not null;
@@ -291,7 +292,7 @@ public sealed class GameStatePublisher : IDisposable
     {
         if (_dpsTracker is null) return;
         var enabled = _dpsEnabledProvider?.Invoke() ?? true;
-        var poll = _dpsTracker.PollOverlayState(DpsIdleTimeout);
+        var poll = _dpsTracker.PollOverlayState(ReadDpsIdleTimeout());
         bool emitShow = false;
         bool emitFade = false;
         bool emitHide = false;
@@ -344,5 +345,18 @@ public sealed class GameStatePublisher : IDisposable
             ["hps"] = snap.Hps,
             ["duration_s"] = snap.DurationSeconds,
         });
+    }
+
+    private TimeSpan ReadDpsIdleTimeout()
+    {
+        try
+        {
+            var timeout = _dpsIdleTimeoutProvider?.Invoke() ?? DefaultDpsIdleTimeout;
+            return timeout <= TimeSpan.Zero ? TimeSpan.FromDays(1) : timeout;
+        }
+        catch
+        {
+            return DefaultDpsIdleTimeout;
+        }
     }
 }
