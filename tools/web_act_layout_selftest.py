@@ -336,6 +336,57 @@ def _assert_timeline_speed_is_normalized() -> None:
             raise AssertionError("missing safe timeline speed snippet: " + snippet)
 
 
+def _assert_timeline_and_aggregate_lists_are_guarded() -> None:
+    timeline = _read_web("act_timeline_vcr.html")
+    aggregate = _read_web("act_aggregate.html")
+    for snippet in (
+        "data = data || {};",
+        "var events = data.events || [];",
+        "String((data.errors || []).length)",
+        "JSON.stringify(ev.payload || {})",
+    ):
+        if snippet in timeline:
+            raise AssertionError("timeline VCR must guard list/object payloads: " + snippet)
+    for snippet in (
+        "var vals = g[p[0]] || [];",
+        "(g.sources || []).forEach(function (s)",
+        "['来源', (g.sources || []).map(function (s) { return ActText.source(s); })]",
+        "(g.rows || []).slice(0, 6).forEach(function (r)",
+        "items = (items || []).filter(function (it) { return it && typeof it === 'object'; });",
+        "var pts = (item.points || []).map(function (p) { return num(p && p.value); });",
+        "html += section(gb, '按 ' + dimLabel + ' 聚合', '', dimAccent, data.groups || [], dimValueKey);",
+        "((data.errors || []).length)",
+    ):
+        if snippet in aggregate:
+            raise AssertionError("aggregate dashboard must guard list/object payloads: " + snippet)
+    for snippet in (
+        "function listItems(value)",
+        "function objectItems(value)",
+        "function objectValue(value)",
+        "data = objectValue(data);",
+        "var events = objectItems(data.events);",
+        "var errorCount = listItems(data.errors).length;",
+        "var payload = objectValue(ev.payload);",
+    ):
+        if snippet not in timeline:
+            raise AssertionError("missing safe timeline list/object snippet: " + snippet)
+    for snippet in (
+        "function listItems(value)",
+        "function objectItems(value)",
+        "function objectValue(value)",
+        "var vals = listItems(g[p[0]]);",
+        "listItems(g.sources).forEach(function (s)",
+        "['来源', listItems(g.sources).map(function (s) { return ActText.source(s); })]",
+        "objectItems(g.rows).slice(0, 6).forEach(function (r)",
+        "items = objectItems(items);",
+        "var pts = objectItems(item.points).map(function (p) { return num(p.value); });",
+        "var groups = objectItems(data.groups);",
+        "var errorCount = listItems(data.errors).length;",
+    ):
+        if snippet not in aggregate:
+            raise AssertionError("missing safe aggregate list/object snippet: " + snippet)
+
+
 def _assert_boss_hp_additional_units_are_safe() -> None:
     boss_hp = _read_web("boss_hp.html")
     for snippet in (
@@ -476,6 +527,7 @@ def main() -> int:
     _assert_graph_numbers_and_jump_topic_are_normalized()
     _assert_action_log_and_death_recap_numbers_are_normalized()
     _assert_timeline_speed_is_normalized()
+    _assert_timeline_and_aggregate_lists_are_guarded()
     _assert_boss_hp_additional_units_are_safe()
     _assert_dps_hit_fx_numbers_are_normalized()
     _assert_trigger_timer_numbers_are_normalized()

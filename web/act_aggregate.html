@@ -186,6 +186,15 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         ratio = num(ratio);
         return (Math.max(0, Math.min(1, ratio)) * 100).toFixed(1);
     }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
 
     // _fmt parity with Tk: >=1e6 -> m, >=1e3 -> k, integer -> int, else 2dp
     function fmt(value) {
@@ -218,22 +227,24 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
 
     function groupMeta(g) {
+        g = objectValue(g);
         var span = Math.max(0, num(g.duration_ms));
         if (!span) span = Math.max(0, num(g.last_time_ms) - num(g.first_time_ms));
         span = Math.min(span, 86400000);
         var bits = ['持续 ' + ActTime.fmtDur(span)];
         [['targets', '个目标'], ['monsters', '个怪物'], ['skills', '种技能'], ['actors', '名参与者'], ['dungeons', '个场景']].forEach(function (p) {
-            var vals = g[p[0]] || [];
+            var vals = listItems(g[p[0]]);
             if (vals && vals.length) bits.push(vals.length + ' ' + p[1]);
         });
         var srcs = [];
-        (g.sources || []).forEach(function (s) { var n = ActText.source(s); if (n && srcs.indexOf(n) < 0) srcs.push(n); });
+        listItems(g.sources).forEach(function (s) { var n = ActText.source(s); if (n && srcs.indexOf(n) < 0) srcs.push(n); });
         if (srcs.length) bits.push('来源 ' + srcs.join('/'));
         return bits.join(' · ');
     }
 
     // 一条代表事件 -> 人话行（类型中文、来源→目标、隐藏无意义的 0），与 Tk _readable_event_line 一致
     function readableLine(r) {
+        r = objectValue(r);
         var parts = [ActTime.fmtClock(r.time_ms), ActText.topic(r.topic)];
         var actor = String(r.actor == null ? '' : r.actor).trim();
         var target = String(r.target == null ? '' : r.target).trim();
@@ -250,8 +261,9 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
     // 完整原始事件（插件实际收到的）：payload + 原始 UID + epoch time_ms
     function rawEvent(r) {
+        r = objectValue(r);
         var out = {};
-        var p = r.payload && typeof r.payload === 'object' ? r.payload : {};
+        var p = objectValue(r.payload);
         Object.keys(p).forEach(function (k) { out[k] = p[k]; });
         ['time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid', 'skill_id', 'skill_name', 'monster_id', 'value', 'damage', 'heal', 'source'].forEach(function (k) {
             if (r[k] != null && r[k] !== '' && !(k in out)) out[k] = r[k];
@@ -260,20 +272,21 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
 
     function drawer(g, kind) {
+        g = objectValue(g);
         var html = '<div class="aca-drawer" style="--acc:' + acc(kind) + ';"><div class="aca-chips">';
-        [['参与者', g.actors || g.actor_uids], ['目标', g.targets || g.target_uids], ['技能', g.skills || g.skill_ids], ['来源', (g.sources || []).map(function (s) { return ActText.source(s); })]].forEach(function (p) {
-            var vals = (p[1] || []).slice(0, 4);
+        [['参与者', g.actors || g.actor_uids], ['目标', g.targets || g.target_uids], ['技能', g.skills || g.skill_ids], ['来源', listItems(g.sources).map(function (s) { return ActText.source(s); })]].forEach(function (p) {
+            var vals = listItems(p[1]).slice(0, 4);
             if (vals.length) html += '<div class="aca-chip">' + esc(p[0]) + ': ' + esc(vals.join(', ')) + '</div>';
         });
         html += '</div>';
-        (g.rows || []).slice(0, 6).forEach(function (r) {
+        objectItems(g.rows).slice(0, 6).forEach(function (r) {
             html += '<div class="aca-line aca-evt" onclick="event.stopPropagation();ActAggregate.toggleRaw(this)"><span class="aca-evt-caret">▸</span> ' + esc(readableLine(r)) + '<pre class="aca-raw" style="display:none;">' + esc(JSON.stringify(rawEvent(r), null, 2)) + '</pre></div>';
         });
         return html + '</div>';
     }
 
     function section(prefix, title, sub, kind, items, valueKey) {
-        items = (items || []).filter(function (it) { return it && typeof it === 'object'; });
+        items = objectItems(items);
         var maxVal = 1;
         items.forEach(function (it) { maxVal = Math.max(maxVal, num(it[valueKey] != null ? it[valueKey] : (it.damage != null ? it.damage : it.total_value))); });
         var rows = '';
@@ -306,12 +319,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
 
     function graphSection(graph) {
-        var series = (graph && graph.series) || {};
+        var series = objectValue(graph && graph.series);
         var defs = [['damage', '总伤害', 'gold'], ['heal', '治疗', 'ok'], ['event_count', '事件数', 'cyan']];
         var rows = '';
         defs.forEach(function (d) {
-            var item = series[d[0]] || {};
-            var pts = (item.points || []).map(function (p) { return num(p && p.value); });
+            var item = objectValue(series[d[0]]);
+            var pts = objectItems(item.points).map(function (p) { return num(p.value); });
             var latest = pts.length ? pts[pts.length - 1] : 0;
             var peak = pts.length ? Math.max.apply(null, pts) : 0;
             var ratio = peak > 0 ? latest / peak : 0;
@@ -343,15 +356,19 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function render(data, graph, options) {
         options = options || {};
         var preserveScroll = options.preserveScroll !== false;
+        data = objectValue(data);
+        graph = objectValue(graph);
         if (!data || !data.ok) {
             setContentHtml('<div class="empty">暂无 ACT 聚合数据<br/>NO AGGREGATE DATA</div>', preserveScroll);
             overviewSide.innerHTML = '';
             sourceMix.innerHTML = '';
             return;
         }
-        var ov = data.overview || {};
-        var counts = data.raw_counts || {};
-        var sources = Array.isArray(data.source_mix) ? data.source_mix : [];
+        var ov = objectValue(data.overview);
+        var counts = objectValue(data.raw_counts);
+        var sources = objectItems(data.source_mix);
+        var groups = objectItems(data.groups);
+        var errorCount = listItems(data.errors).length;
 
         // 6 KPI tiles (1:1 with Tk header summary)
         var html = '<div class="aca-kpis">';
@@ -375,7 +392,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var dimLabel = ({ skill: '技能', monster: '怪物 / 目标', actor: '参与者', topic: '事件类型', field: '字段 ' + (data.group_field || '?') })[gb] || '技能';
         var dimAccent = ({ skill: 'gold', monster: 'danger', actor: 'cyan', topic: 'gold', field: 'cyan' })[gb] || 'gold';
         var dimValueKey = (gb === 'skill' || gb === 'monster') ? 'damage' : 'total_value';
-        html += section(gb, '按 ' + dimLabel + ' 聚合', '', dimAccent, data.groups || [], dimValueKey);
+        html += section(gb, '按 ' + dimLabel + ' 聚合', '', dimAccent, groups, dimValueKey);
         html += graphSection(graph);
 
         setContentHtml(html, preserveScroll);
@@ -387,7 +404,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         s += '<div class="aca-ctx"><span>战斗时长</span><strong>' + fmt((ov.span_ms || 0) / 1000) + ' 秒</strong></div>';
         s += '<div class="aca-ctx"><span>已持续</span><strong>' + fmt(ov.elapsed_s) + ' 秒</strong></div>';
         s += '<div class="aca-ctx"><span>事件数</span><strong>' + (counts.rows || 0) + '</strong></div>';
-        s += '<div class="aca-ctx"><span>错误</span><strong>' + ((data.errors || []).length) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>错误</span><strong>' + errorCount + '</strong></div>';
         overviewSide.innerHTML = s;
 
         // side: source mix (LIST of {source,count} — was wrongly read as object before)

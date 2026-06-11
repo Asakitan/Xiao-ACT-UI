@@ -146,6 +146,15 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var n = numericArg(value, 1);
         return Math.max(0.1, Math.min(8, n));
     }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
     function eventTopicClass(topic) {
         topic = String(topic || '').toLowerCase();
         if (topic.indexOf('damage') >= 0 || topic.indexOf('death') >= 0) return ' damage';
@@ -191,22 +200,24 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         }
     }
     function render(data, options) {
-        data = data || {};
+        data = objectValue(data);
         options = options || {};
         var preserveScroll = options.preserveScroll !== false;
-        var events = data.events || [];
+        var events = objectItems(data.events);
+        var errorCount = listItems(data.errors).length;
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : (data.playing ? 'PLAYING' : 'READY');
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : (data.playing ? 'var(--act-ok)' : 'var(--act-muted)');
         document.getElementById('sum-events').textContent = String(events.length || 0);
         document.getElementById('sum-cursor').textContent = ActTime.fmtDur(data.cursor_ms);
         document.getElementById('sum-speed').textContent = String(safeSpeed(data.speed)) + 'x';
         document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
-        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        document.getElementById('sum-errors').textContent = String(errorCount);
         if (!events.length) { setListHtml('<div class="empty">暂无 ACT 时间线事件。<br/>开始识别或 replay 后会出现事件。</div>', preserveScroll); return; }
         setListHtml(events.map(function (ev, idx) {
             var key = eventKey(ev, idx);
             var open = !!expandedEvents[key];
-            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(ev.payload || {})) + '</pre></article>';
+            var payload = objectValue(ev.payload);
+            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
         }).join(''), preserveScroll);
     }
     window.TimelineVcr = {

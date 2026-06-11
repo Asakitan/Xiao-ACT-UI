@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.81: ACT Web Timeline/Aggregate payload 防护修复.
+
+  1) `web/act_timeline_vcr.html` 修复 events/errors payload 形状处理。
+     Timeline VCR Web 现在只渲染对象事件列表并归一事件 payload,
+     避免字符串 payload 造成时间线渲染中断或错误事件数量。
+
+  2) `web/act_aggregate.html` 修复 groups/source_mix/group rows/points/errors payload 形状处理。
+     Aggregate Web 现在对对象行与普通列表分别归一,
+     避免坏 payload 造成聚合行、drawer、趋势预览或错误数量渲染中断。
+
 ## v4.5.80: ACT Web Drilldown payload 防护修复.
 
   1) `web/act_combatant_drilldown.html` 修复 summary/skills/incoming/outgoing payload 形状处理。
