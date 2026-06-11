@@ -153,44 +153,41 @@ class DispatchTest(unittest.TestCase):
         self.assertFalse(r["fired"])
         self.assertEqual(events, [])
 
-    def test_closed_loop_stops_when_clear(self):
-        # 玩家固定在原点, 危险源固定在 (0,_,3); safe_dist=2 → 已出圈, 闭环秒退不按键
+    def test_closed_loop_no_distance_break_runs_to_time_cap(self):
+        # ★主人: 不要距离兜底。无 is_clear 时不靠距离停, 只到 move_ms 时长上限才停。
+        # 玩家原点不动, 危险固定 3m 外(旧版距离≥2会秒退); 现在应持续按键移动到 move_ms。
         events = []
         d = AutoDodgeDirector(
             lambda k, down: events.append((k, down)),
             get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
             get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
-        r = d.dodge({"direction": "away_nearest", "exit_margin_m": 2.0, "move_ms": 1000},
+        r = d.dodge({"direction": "away_nearest", "exit_margin_m": 2.0, "move_ms": 250},
                     danger_pos=(0.0, 0.0, 3.0),
                     get_danger_pos=lambda: (0.0, 0.0, 3.0))
         self.assertTrue(r["fired"])
-        time.sleep(0.3)
-        # dist=3 >= safe 2 → 一进循环就 break, 不应留下按住的键
-        downs = [k for k, dn in events if dn]
-        ups = [k for k, dn in events if not dn]
-        self.assertEqual(set(downs), set(ups))   # 按下的都松开了
+        time.sleep(0.12)
+        # move_ms 内仍在按键移动(没被距离秒停)
+        self.assertTrue([k for k, dn in events if dn])
+        time.sleep(0.3)                          # 过 move_ms 时长上限
+        self.assertEqual(d._held, [])            # 到时长上限松键停
 
-    def test_closed_loop_moves_then_releases_when_out(self):
-        # 玩家逐步远离危险源, 到 safe_dist 后停; 用可变 danger 距离模拟出圈
+    def test_closed_loop_is_clear_stops_not_distance(self):
+        # is_clear(区域/招式判据)触发即停, 与距离无关; 危险一直很近也照停
         events = []
-        state = {"d": 1.0}
+        cleared = {"v": False}
         d = AutoDodgeDirector(
             lambda k, down: events.append((k, down)),
             get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
             get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
-
-        def danger():
-            state["d"] += 1.5      # 每次读, 危险源"变远"模拟玩家撤离
-            return (0.0, 0.0, state["d"])
-        r = d.dodge({"direction": "away_boss", "exit_margin_m": 5.0, "move_ms": 2000},
-                    danger_pos=(0.0, 0.0, 1.0), get_danger_pos=danger)
+        r = d.dodge({"direction": "away_boss", "exit_margin_m": 5.0, "move_ms": 3000},
+                    danger_pos=(0.0, 0.0, 1.0), get_danger_pos=lambda: (0.0, 0.0, 1.0),
+                    is_clear=lambda: cleared["v"])
         self.assertTrue(r["fired"])
-        self.assertIn("精准出圈", r["label"])
-        time.sleep(0.6)
-        downs = [k for k, dn in events if dn]
-        ups = [k for k, dn in events if not dn]
-        self.assertTrue(downs)                 # 出圈前确实按了键移动
-        self.assertEqual(set(downs), set(ups)) # 出圈后全松开
+        time.sleep(0.2)
+        self.assertTrue([k for k, dn in events if dn])   # 触发前在移动
+        cleared["v"] = True                      # 招式结束/出圈
+        time.sleep(0.2)
+        self.assertEqual(d._held, [])            # 即停, 不等距离/超时
 
     def test_is_clear_stops_loop_precisely(self):
         # is_clear() 优先于距离: 玩家离开 AOE 圈(is_clear→True)立即停, 不靠 exit_margin

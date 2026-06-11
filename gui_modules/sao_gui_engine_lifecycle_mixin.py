@@ -637,12 +637,28 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     if obj:
                         danger0 = ctx.read_obj_pos(obj)
                         get_danger = lambda _o=obj: ctx.read_obj_pos(_o)
-                    # 零误差出圈判据: 游戏自己的区域成员(玩家离开AOE圈即停), 距离仅兜底
-                    is_clear = None
+                    # ★停止判据(主人: 不要距离兜底, 肯定错): 二者任一满足即停, 无距离 —
+                    #   ① 区域成员判定: 玩家离开 AOE 圈 (圈是 ZoneEnt 的 boss, 零误差)
+                    #   ② 招式生命周期: boss 不再出触发本次躲避的招 (圈是 ECS 的 boss,
+                    #      跟着真实出招走, 锥/线/圆都对)
+                    zone_clear = skill_ended = None
                     try:
-                        is_clear = ctx.make_zone_exit_check()
+                        zone_clear = ctx.make_zone_exit_check()
                     except Exception:
-                        is_clear = None
+                        zone_clear = None
+                    try:
+                        skill_ended = ctx.make_skill_ended_check(boss_base_id)
+                    except Exception:
+                        skill_ended = None
+
+                    def _is_clear():
+                        if zone_clear is not None and zone_clear():
+                            return True
+                        if skill_ended is not None and skill_ended():
+                            return True
+                        return False
+                    # 二者都没有(极少: 无skill_id又无区域)才退 None→exit_margin 距离最后兜底
+                    is_clear = _is_clear if (zone_clear or skill_ended) else None
                     director.dodge(inline, danger_pos=danger0,
                                    get_danger_pos=get_danger, is_clear=is_clear)
                 elif direction.startswith('goto') or direction.startswith('walk'):

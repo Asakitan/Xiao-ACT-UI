@@ -128,6 +128,46 @@ class DodgeContext:
         except Exception:
             return []
 
+    def _skill_state(self):
+        if getattr(self, "_skill_reader", None) is None:
+            from mem_probe.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
+            self._skill_reader = BossSkillStateReader(self._src)
+        return self._skill_reader
+
+    def make_skill_ended_check(self, boss_base_id: int = 0):
+        """招式生命周期判停 (主人: 距离兜底肯定错)。boss 的预警圈很多不是 ZoneEnt(在 ECS/
+        技能特效里, zone 成员判定无信号), 但 boss **正在出什么招**实时可读
+        (ZStateSkillComp.curSkillId_)。
+
+        ★用快照(不靠匹配触发id, 因 buff base_id≠状态机 curSkillId_ 两套id): dodge 开始时
+        快照 boss 当前在出的招, 返回 is_ended()——boss 这一招结束/换招/待机即视为危险过去,
+        无论圈是锥/线/圆都对。dodge 开始时 boss 待机(无招)则返回 None(退到 move_ms 时长兜底)。"""
+        try:
+            snap = self._entity_mgr().read(player_uuid=0)
+            if not snap or not snap.bosses:
+                return None
+            boss_obj = 0
+            for es in snap.bosses:
+                if not boss_base_id or int(es.config_uuid or 0) == int(boss_base_id):
+                    boss_obj = es.obj_addr
+                    break
+            boss_obj = boss_obj or snap.bosses[0].obj_addr
+            if not boss_obj:
+                return None
+            r = self._skill_state()
+            start = r.current_skill_id(boss_obj)
+            if not start:
+                return None        # boss 待机时起手 → 无活动招可跟, 退到时长兜底
+
+            def _ended():
+                try:
+                    return r.current_skill_id(boss_obj) != start
+                except Exception:
+                    return False
+            return _ended
+        except Exception:
+            return None
+
     def make_zone_exit_check(self):
         """精准出圈(零误差): 用游戏自己的区域成员判定(ZoneComp.entitiesIdInZone_)。
         返回 is_clear() 回调——dodge 开始时快照玩家所在的全部区域(含 AOE 圈), 之后玩家

@@ -314,11 +314,13 @@ class AutoDodgeDirector:
     def _run_until_clear(self, epoch: int, spec: Dict, get_danger_pos: Callable,
                          safe_dist: float, max_ms: int, fallback_keys: List[str],
                          is_clear: Optional[Callable] = None) -> None:
-        """闭环: 持续把人物往远离危险源方向挪, 出圈即停 (精准出圈)。
-        停止判据优先级: (1) is_clear() 区域成员判定=零误差(玩家离开AOE圈) > (2) 水平距
-        ≥safe_dist 距离兜底。热路径 O(1): 每 tick 只读玩家位+危险位+相机基(缓存);
-        任一读不到→降级到相机相对 fallback 纯按键(不再读内存)。"""
-        import math
+        """闭环: 持续把人物往远离危险源方向挪, 危险过去即停。
+        停止判据 (主人: **不要距离兜底, 锥/线/扇形到圆心距离无意义肯定错**):
+          (1) is_clear() —— 区域成员判定(玩家离开 ZoneEnt 圈, 零误差) 或 招式生命周期
+              (boss 这一招结束, 圈是 ECS 也对); 二者由宿主组合注入。
+          (2) max_ms 时长上限 —— 即用户每机制配的躲避时长(匹配预警/读条), 形状无关安全兜底。
+        热路径 O(1): 每 tick 只读玩家位+危险位+相机基(缓存); 任一读不到→降级到相机相对
+        fallback 纯按键(不再读内存)。"""
         tick = 0.07
         t0 = time.time()
         try:
@@ -328,7 +330,7 @@ class AutoDodgeDirector:
                 if is_clear is not None:
                     try:
                         if is_clear():
-                            break                      # 零误差: 玩家已离开 AOE 圈
+                            break                      # 离开圈 / 招式结束 = 危险过去
                     except Exception:
                         pass
                 pp = self._pos_safe()
@@ -342,9 +344,6 @@ class AutoDodgeDirector:
                     self._apply_keys(fallback_keys, epoch)   # 降级: 不读内存的纯按键后撤
                     time.sleep(tick)
                     continue
-                if is_clear is None and \
-                        math.hypot(pp[0] - dp[0], pp[2] - dp[2]) >= safe_dist:
-                    break                              # 距离兜底(无区域判定时)
                 keys = world_vec_to_keys(pp[0] - dp[0], pp[2] - dp[2],
                                          cam["forward"], cam["right"])
                 if not keys:
