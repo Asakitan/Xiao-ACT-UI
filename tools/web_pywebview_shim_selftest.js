@@ -109,6 +109,15 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "updater.apply", "apply_update command mismatch");
 
+  await window.pywebview.api.skip_update();
+  last = calls[calls.length - 1];
+  assert(last.name === "updater.skip", "skip_update command mismatch");
+
+  await window.pywebview.api.fetch_leaderboard("level");
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.fetch_leaderboard", "fetch_leaderboard command mismatch");
+  assert(last.payload.sort === "level", "fetch_leaderboard sort was not forwarded");
+
   let dpsSnapshotApplied = false;
   let dpsDetailApplied = false;
   window.DpsMeter = {

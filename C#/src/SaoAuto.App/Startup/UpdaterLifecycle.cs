@@ -24,15 +24,17 @@ public sealed class UpdaterLifecycle : IDisposable
 {
     private readonly UpdateClientLoop? _loop;
     private readonly ILogger _log;
+    private readonly SettingsManager? _settings;
     private bool _disposed;
 
     public UpdaterStateMachine StateMachine { get; }
 
-    private UpdaterLifecycle(UpdateClientLoop? loop, UpdaterStateMachine machine, ILogger log)
+    private UpdaterLifecycle(UpdateClientLoop? loop, UpdaterStateMachine machine, ILogger log, SettingsManager? settings = null)
     {
         _loop = loop;
         StateMachine = machine;
         _log = log;
+        _settings = settings;
     }
 
     public bool IsActive => _loop is not null;
@@ -61,6 +63,18 @@ public sealed class UpdaterLifecycle : IDisposable
             await _loop.ApplyAsync(latest, ct).ConfigureAwait(false);
         };
 
+    public Func<CancellationToken, Task<bool>>? Skip =>
+        _loop is null || _settings is null ? null : ct =>
+        {
+            var latest = StateMachine.Snapshot.Latest;
+            if (latest is null || string.IsNullOrWhiteSpace(latest.Version))
+                return Task.FromResult(false);
+            _settings.Set(SettingsKeys.UpdateSkippedVersion, latest.Version);
+            _settings.Save();
+            StateMachine.CheckCompleted(null, AppVersion.Version);
+            return Task.FromResult(true);
+        };
+
     public static UpdaterLifecycle Start(
         SettingsManager settings,
         ILogger? logger = null,
@@ -75,7 +89,7 @@ public sealed class UpdaterLifecycle : IDisposable
         if (!settings.GetBool(SettingsKeys.UpdateCheckEnabled, defaultValue: false))
         {
             log.LogInformation("updater disabled by settings");
-            return new UpdaterLifecycle(null, machine, log);
+            return new UpdaterLifecycle(null, machine, log, settings);
         }
 
         try
@@ -93,12 +107,12 @@ public sealed class UpdaterLifecycle : IDisposable
                     log.LogWarning(ex, "updater background poll failed to start; manual triggers still work");
                 }
             }
-            return new UpdaterLifecycle(loop, machine, log);
+            return new UpdaterLifecycle(loop, machine, log, settings);
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "updater pipeline failed to construct; continuing without it");
-            return new UpdaterLifecycle(null, machine, log);
+            return new UpdaterLifecycle(null, machine, log, settings);
         }
     }
 
@@ -120,6 +134,9 @@ public sealed class UpdaterLifecycle : IDisposable
             Target: AppVersion.UpdateTarget,
             CurrentVersion: AppVersion.Version,
             StagingDirectory: staging,
-            PollInterval: TimeSpan.FromHours(1));
+            PollInterval: TimeSpan.FromHours(1))
+        {
+            SkippedVersionProvider = () => settings.GetString(SettingsKeys.UpdateSkippedVersion, null),
+        };
     }
 }

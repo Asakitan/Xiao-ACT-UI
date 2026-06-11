@@ -47,8 +47,38 @@ public class Session172UpdaterLifecycleTests
         Assert.NotNull(life.Check);
         Assert.NotNull(life.Download);
         Assert.NotNull(life.Apply);
+        Assert.NotNull(life.Skip);
         Assert.Equal(1, clientCalls);
         Assert.Equal(1, loopCtor);
+    }
+
+    [Fact]
+    public async Task SkipPersistsLatestVersionAndClearsState()
+    {
+        var path = FreshSettingsPath();
+        var settings = new SettingsManager(path);
+        settings.Set(SettingsKeys.UpdateCheckEnabled, true);
+        using var life = UpdaterLifecycle.Start(
+            settings,
+            loopFactory: (opts, client, machine) => new UpdateClientLoop(opts, client, machine));
+        var manifest = new UpdateManifest(
+            Version: "9.9.9",
+            Channel: "stable",
+            Target: "windows-x64",
+            PackageUrl: "http://example/pkg.zip",
+            PackageSha256: "",
+            PackageSize: 1,
+            Kind: UpdatePackageKind.Full,
+            Notes: null,
+            PublishedAt: DateTimeOffset.UtcNow);
+        life.StateMachine.CheckCompleted(manifest, "1.0.0");
+
+        var skipped = await life.Skip!(CancellationToken.None);
+
+        Assert.True(skipped);
+        Assert.Equal(UpdaterStatus.NoUpdate, life.StateMachine.Snapshot.Status);
+        var reloaded = new SettingsManager(path);
+        Assert.Equal("9.9.9", reloaded.GetString(SettingsKeys.UpdateSkippedVersion));
     }
 
     [Fact]
@@ -83,6 +113,7 @@ public class Session172UpdaterLifecycleTests
         Assert.Contains(BridgeCommands.CheckUpdate, web.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.DownloadUpdate, web.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ApplyUpdate, web.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SkipUpdate, web.Router.RegisteredCommands);
     }
 
     [Fact]

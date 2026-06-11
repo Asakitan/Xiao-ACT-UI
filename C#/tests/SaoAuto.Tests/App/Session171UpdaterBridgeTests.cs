@@ -71,6 +71,42 @@ public class Session171UpdaterBridgeTests
     }
 
     [Fact]
+    public void SkipRunsDelegateSynchronouslyAndReportsResult()
+    {
+        var skipped = 0;
+        var machine = new UpdaterStateMachine();
+        var router = new BridgeRouter();
+        using var bridge = new UpdaterBridge(router, machine,
+            skip: ct =>
+            {
+                Interlocked.Increment(ref skipped);
+                machine.CheckCompleted(null, "1.0.0");
+                return Task.FromResult(true);
+            });
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SkipUpdate));
+
+        Assert.Equal(1, skipped);
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.True(reply.Payload["skipped"]!.GetValue<bool>());
+        Assert.Equal("NoUpdate", reply.Payload["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SkipWithoutDelegateReturnsUnsupported()
+    {
+        var machine = new UpdaterStateMachine();
+        var router = new BridgeRouter();
+        using var bridge = new UpdaterBridge(router, machine);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SkipUpdate));
+
+        Assert.False(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.False(reply.Payload["skipped"]!.GetValue<bool>());
+        Assert.Equal("unsupported", reply.Payload["error"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void SnapshotReflectsMachineState()
     {
         var machine = new UpdaterStateMachine();
@@ -126,11 +162,13 @@ public class Session171UpdaterBridgeTests
         Assert.Contains(BridgeCommands.CheckUpdate, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.DownloadUpdate, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ApplyUpdate, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SkipUpdate, router.RegisteredCommands);
 
         bridge.Dispose();
         Assert.DoesNotContain(BridgeCommands.CheckUpdate, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.DownloadUpdate, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.ApplyUpdate, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SkipUpdate, router.RegisteredCommands);
 
         captured.Clear();
         machine.BeginCheck();

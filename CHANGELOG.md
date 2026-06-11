@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.8: WebView2 更新跳过与排行榜兼容桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `skip_update()` 并新增 `updater.skip` C# 桥接。
+     修复 WebView2 路径下更新面板 Skip 按钮缺少 API 的问题; C# 现在会把当前
+     latest version 写入 `update_skipped_version`, 后续 updater tick 会跳过同版本。
+
+  2) `web/pywebview-shim.js` 补齐 `fetch_leaderboard(sort)` 并新增
+     `ui.fetch_leaderboard` C# ack。
+     排行榜功能已移除, 因此保持 no-op 语义, 修复 WebView2 路径下切换排行榜 tab
+     调用缺失 API 的交互问题。
+
+
+
 ## v4.5.7: WebView2 数据源设置桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_data_source(mode)` 并新增

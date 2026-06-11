@@ -34,6 +34,7 @@ public sealed class UpdaterBridge : IDisposable
     private readonly Func<CancellationToken, Task>? _check;
     private readonly Func<CancellationToken, Task>? _download;
     private readonly Func<CancellationToken, Task>? _apply;
+    private readonly Func<CancellationToken, Task<bool>>? _skip;
     private readonly Action<UpdaterState>? _stateChangedHandler;
     private bool _disposed;
 
@@ -43,7 +44,8 @@ public sealed class UpdaterBridge : IDisposable
         BridgeEventBroadcaster? broadcaster = null,
         Func<CancellationToken, Task>? check = null,
         Func<CancellationToken, Task>? download = null,
-        Func<CancellationToken, Task>? apply = null)
+        Func<CancellationToken, Task>? apply = null,
+        Func<CancellationToken, Task<bool>>? skip = null)
     {
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _machine = machine ?? throw new ArgumentNullException(nameof(machine));
@@ -51,10 +53,12 @@ public sealed class UpdaterBridge : IDisposable
         _check = check;
         _download = download;
         _apply = apply;
+        _skip = skip;
 
         router.Register(BridgeCommands.CheckUpdate, _ => HandleKick(_check));
         router.Register(BridgeCommands.DownloadUpdate, _ => HandleKick(_download));
         router.Register(BridgeCommands.ApplyUpdate, _ => HandleKick(_apply));
+        router.Register(BridgeCommands.SkipUpdate, _ => HandleSkip());
 
         if (_broadcaster is not null)
         {
@@ -74,6 +78,7 @@ public sealed class UpdaterBridge : IDisposable
         _router.Unregister(BridgeCommands.CheckUpdate);
         _router.Unregister(BridgeCommands.DownloadUpdate);
         _router.Unregister(BridgeCommands.ApplyUpdate);
+        _router.Unregister(BridgeCommands.SkipUpdate);
     }
 
     private JsonObject HandleKick(Func<CancellationToken, Task>? action)
@@ -98,6 +103,36 @@ public sealed class UpdaterBridge : IDisposable
         var ok = SnapshotToJson(_machine.Snapshot);
         ok["queued"] = true;
         return ok;
+    }
+
+    private JsonObject HandleSkip()
+    {
+        if (_skip is null)
+        {
+            var reply = SnapshotToJson(_machine.Snapshot);
+            reply["ok"] = false;
+            reply["skipped"] = false;
+            reply["error"] = "unsupported";
+            return reply;
+        }
+
+        try
+        {
+            var skipped = _skip(CancellationToken.None).GetAwaiter().GetResult();
+            var reply = SnapshotToJson(_machine.Snapshot);
+            reply["ok"] = skipped;
+            reply["skipped"] = skipped;
+            return reply;
+        }
+        catch (Exception ex)
+        {
+            var reply = SnapshotToJson(_machine.Snapshot);
+            reply["ok"] = false;
+            reply["skipped"] = false;
+            reply["error"] = "skip_failed";
+            reply["message"] = ex.Message;
+            return reply;
+        }
     }
 
     private void OnStateChanged(UpdaterState state)

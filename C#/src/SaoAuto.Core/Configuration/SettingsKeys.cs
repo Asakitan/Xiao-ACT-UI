@@ -22,6 +22,7 @@ public static class SettingsKeys
     public const string UpdateCheckEnabled = "update_check_enabled";
     public const string UpdateHost = "update_host";
     public const string UpdateAutoPoll = "update_auto_poll";
+    public const string UpdateSkippedVersion = "update_skipped_version";
     public const string Roi = "roi";
     public const string HideSeekToggleHotkey = "hide_seek_toggle_hotkey";
     // S196b — HUD horizontal offset (Python `hud_offset_x`, default 0.04 of

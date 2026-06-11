@@ -110,6 +110,8 @@ public static class BridgeCommands
     public const string CheckUpdate = "updater.check";
     public const string DownloadUpdate = "updater.download";
     public const string ApplyUpdate = "updater.apply";
+    public const string SkipUpdate = "updater.skip";
+    public const string FetchLeaderboard = "ui.fetch_leaderboard";
 
     // ACT platform commands used by pywebview-shim.js when hosted by
     // native WebView2 instead of Python pywebview.

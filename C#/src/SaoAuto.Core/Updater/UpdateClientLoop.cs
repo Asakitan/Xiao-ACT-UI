@@ -14,6 +14,7 @@ public sealed record UpdateClientLoopOptions(
     public TimeSpan InitialDelay { get; init; } = TimeSpan.Zero;
     public bool AutoDownload { get; init; } = true;
     public bool AutoApply { get; init; } = false;
+    public Func<string?>? SkippedVersionProvider { get; init; }
 }
 
 /// <summary>
@@ -105,6 +106,11 @@ public sealed class UpdateClientLoop : IDisposable
         _machine.BeginCheck();
         var latest = await _client.CheckLatestAsync(_opts.BaseUrl, _opts.Channel, _opts.Target, ct)
             .ConfigureAwait(false);
+        if (latest is not null && IsSkipped(latest))
+        {
+            _machine.CheckCompleted(null, _opts.CurrentVersion);
+            return;
+        }
         _machine.CheckCompleted(latest, _opts.CurrentVersion);
 
         if (latest is null) return;
@@ -144,6 +150,20 @@ public sealed class UpdateClientLoop : IDisposable
                 && string.Equals(_stagedVersion, latest.Version, StringComparison.OrdinalIgnoreCase)
                 && _stagedPath is not null
                 && File.Exists(_stagedPath);
+        }
+    }
+
+    private bool IsSkipped(UpdateManifest latest)
+    {
+        try
+        {
+            var skipped = _opts.SkippedVersionProvider?.Invoke();
+            return !string.IsNullOrWhiteSpace(skipped)
+                && string.Equals(skipped, latest.Version, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 

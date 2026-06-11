@@ -208,6 +208,12 @@
         apply_update: function () {
             return call('updater.apply', {}).then(normalizeOk);
         },
+        skip_update: function () {
+            return call('updater.skip', {}).then(normalizeOk);
+        },
+        fetch_leaderboard: function (sort) {
+            return call('ui.fetch_leaderboard', { sort: String(sort || 'xp') }).then(normalizeOk);
+        },
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });
         },

@@ -188,7 +188,8 @@ public sealed class WebBridgeLifecycle : IDisposable
             Broadcaster,
             lifecycle.Check,
             lifecycle.Download,
-            lifecycle.Apply);
+            lifecycle.Apply,
+            lifecycle.Skip);
     }
 
     /// <summary>

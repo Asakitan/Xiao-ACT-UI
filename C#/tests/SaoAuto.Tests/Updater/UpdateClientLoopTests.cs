@@ -85,6 +85,34 @@ public class UpdateClientLoopTests
         Assert.Null(loop.StagedVersion);
     }
 
+    [Fact]
+    public async Task TickSkipsConfiguredVersion()
+    {
+        using var ws = new TempWorkspace();
+        var manifest = NewManifest("2.0.0");
+        var zip = Encoding.UTF8.GetBytes("payload");
+        var handler = new FakeHandler(manifest, zip);
+        using var http = new HttpClient(handler);
+        var client = new HttpUpdateClient(http);
+        var machine = new UpdaterStateMachine();
+        var opts = new UpdateClientLoopOptions(
+            BaseUrl: "http://example/api/update",
+            Channel: "stable", Target: "win-x64",
+            CurrentVersion: "1.0.0",
+            StagingDirectory: ws.Root,
+            PollInterval: TimeSpan.FromMinutes(1))
+        {
+            SkippedVersionProvider = () => "2.0.0",
+        };
+        using var loop = new UpdateClientLoop(opts, client, machine);
+
+        await loop.TickAsync();
+
+        Assert.Equal(UpdaterStatus.NoUpdate, machine.Snapshot.Status);
+        Assert.Null(machine.Snapshot.Latest);
+        Assert.Equal(0, handler.DownloadCount);
+    }
+
     private static (UpdateClientLoop loop, UpdaterStateMachine machine, FakeHandler handler) BuildLoop(
         TempWorkspace ws, UpdateManifest manifest, byte[] zip,
         bool autoApply = false,

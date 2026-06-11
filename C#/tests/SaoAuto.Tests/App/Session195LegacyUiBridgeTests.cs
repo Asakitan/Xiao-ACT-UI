@@ -25,6 +25,7 @@ public class Session195LegacyUiBridgeTests
             BridgeCommands.ToggleMenu,
             BridgeCommands.ContextAction,
             BridgeCommands.MenuAction,
+            BridgeCommands.FetchLeaderboard,
             BridgeCommands.WindowDrag,
             BridgeCommands.SetCtxMenuActive,
             BridgeCommands.ClosePanel,

@@ -43,6 +43,7 @@ public sealed class LegacyUiBridge : IDisposable
             BridgeCommands.ToggleMenu,
             BridgeCommands.ContextAction,
             BridgeCommands.MenuAction,
+            BridgeCommands.FetchLeaderboard,
             BridgeCommands.WindowDrag,
             BridgeCommands.SetCtxMenuActive,
             BridgeCommands.ClosePanel,
@@ -58,6 +59,7 @@ public sealed class LegacyUiBridge : IDisposable
         router.Register(BridgeCommands.ToggleMenu, p => Ack("toggle_menu", p));
         router.Register(BridgeCommands.ContextAction, p => HandleAction("context_action", p));
         router.Register(BridgeCommands.MenuAction, p => HandleAction("menu_action", p));
+        router.Register(BridgeCommands.FetchLeaderboard, p => Ack("fetch_leaderboard", p));
         router.Register(BridgeCommands.WindowDrag, p => Ack("window_drag", p));
         router.Register(BridgeCommands.SetCtxMenuActive, p => Ack("set_ctx_menu_active", p));
         router.Register(BridgeCommands.ClosePanel, p => Ack("close_panel", p));
