@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.18: WebView2 BossRaid 运行启动/停止桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `boss_raid_start()`,
+     C# `BossRaidRuntimeBridge` 新增 `bossraid.start`。
+     WebView2 BossRaid 开始按钮现在会读取 active profile, 自动启用 BossRaid 配置,
+     启动真实 `BossRaidEngine`, 并把 `runtime.state=running` 回填到菜单状态。
+
+  2) `web/pywebview-shim.js` 补齐 `boss_raid_stop()`,
+     C# `BossRaidRuntimeBridge` 新增 `bossraid.stop`。
+     停止按钮现在会停止真实运行态，并返回 `runtime.state=idle` 供前端恢复按钮文案。
+
 ## v4.5.17: WebView2 BossRaid 本地配置保存与删除修复.
 
   1) `web/pywebview-shim.js` 补齐 `save_boss_raid_profile(profile)`,

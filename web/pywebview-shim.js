@@ -148,6 +148,12 @@
         boss_raid_reset: function () {
             return call('bossraid.runtime.reset', {}).then(normalizeOk);
         },
+        boss_raid_start: function () {
+            return call('bossraid.start', {}).then(normalizeOk);
+        },
+        boss_raid_stop: function () {
+            return call('bossraid.stop', {}).then(normalizeOk);
+        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },

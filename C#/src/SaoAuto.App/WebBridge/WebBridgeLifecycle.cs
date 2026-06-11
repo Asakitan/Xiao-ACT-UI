@@ -240,12 +240,15 @@ public sealed class WebBridgeLifecycle : IDisposable
 
     /// <summary>S202 — attach runtime controls used by raid_editor.html.
     /// Idempotent.</summary>
-    public void AttachBossRaidRuntime(BossRaidEngine engine)
+    public void AttachBossRaidRuntime(
+        BossRaidEngine engine,
+        SettingsManager? settings = null,
+        GameStateManager? states = null)
     {
         if (engine is null) throw new ArgumentNullException(nameof(engine));
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _bossRaidRuntimeBridge?.Dispose();
-        _bossRaidRuntimeBridge = new BossRaidRuntimeBridge(Router, engine);
+        _bossRaidRuntimeBridge = new BossRaidRuntimeBridge(Router, engine, settings, states);
     }
 
     /// <summary>S193 — attach the sound playback bridge so the

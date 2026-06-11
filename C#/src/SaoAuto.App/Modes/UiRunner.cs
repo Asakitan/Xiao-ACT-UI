@@ -122,7 +122,7 @@ public sealed class UiRunner
         // S183 — same persistence shape as S182's auto-key.
         webBridge.AttachBossRaidCloud(bossRaidCloud, _settings, s => BossRaidCloudClient.FromSettings(s));
         var bossRaidEngine = new BossRaidEngine();
-        webBridge.AttachBossRaidRuntime(bossRaidEngine);
+        webBridge.AttachBossRaidRuntime(bossRaidEngine, _settings, _states);
 
         // S193 — sound playback bridge for the pywebview shim.
         // Catalog points at assets/sounds (deployed by S185); player is
