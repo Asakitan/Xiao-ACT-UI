@@ -1,0 +1,721 @@
+{
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_102105_auto",
+  "schema_version": 2,
+  "profile_name": "凛·伊兹寇利基 · 机制示例 (全难度通用)",
+  "description": "《神龙枷所》凛·伊兹寇利基 机制示例: 11 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 7 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 600,
+  "enrage": {
+   "time_s": 600,
+   "anchor": "fight",
+   "phase_id": "",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "凛·伊兹寇利基",
+  "dungeon_id": 13003,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "p1",
+    "name": "全程",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
+    },
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_101403",
+    "name": "冰龙蓄力下砸",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：冰龙蓄力下砸\n躲法：Boss蓄力抬手后远离其正下方落点圈",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101403
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "下砸 · Boss蓄力抬手后远离其正下",
+     "tts_text": "下砸",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101404",
+    "name": "冰彗星风暴",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：冰彗星风暴\n躲法：彗星连续落地,看脚下红圈即时走出每个落点",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101404
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冰彗星 · 彗星连续落地,看脚下红圈即时",
+     "tts_text": "冰彗星",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101408",
+    "name": "冰霜风暴",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：冰霜风暴\n躲法：冰霜范围扩张,远离风暴中心圈外站位",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101408
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冰霜风暴 · 冰霜范围扩张,远离风暴中心圈",
+     "tts_text": "冰霜风暴",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101409",
+    "name": "雪崩",
+    "kind": "冲锋",
+    "enabled": true,
+    "notes": "机制：雪崩\n躲法：雪崩沿直线推进,垂直侧向闪开冲击路径",
+    "color": "#f39c12",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101409
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "雪崩 · 雪崩沿直线推进,垂直侧向闪开",
+     "tts_text": "雪崩",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101410",
+    "name": "零度雪域",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：零度雪域\n躲法：全场冰冻减速领域,持续输出并注意层数勿久站",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101410
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "零度雪域 · 全场冰冻减速领域,持续输出并",
+     "tts_text": "零度雪域",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101411",
+    "name": "冰霜冲击",
+    "kind": "冲锋",
+    "enabled": true,
+    "notes": "机制：冰霜冲击\n躲法：Boss锁定目标直线冲撞,提前向侧面让开直线",
+    "color": "#f39c12",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101411
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冰霜冲击 · Boss锁定目标直线冲撞,提",
+     "tts_text": "冰霜冲击",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101414",
+    "name": "冰龙幻影冲锋（召唤）",
+    "kind": "召唤",
+    "enabled": true,
+    "notes": "机制：冰龙幻影冲锋（召唤）\n躲法：召唤冰龙幻影,优先集火击杀冲锋的幻影分身",
+    "color": "#27ae60",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101414
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "幻影召唤 · 召唤冰龙幻影,优先集火击杀冲",
+     "tts_text": "幻影召唤",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101416",
+    "name": "冰龙冰封之器新",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：冰龙冰封之器新\n躲法：冰封之器需快速破坏/解控,被冻住的队友尽快救援",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101416
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冰封之器 · 冰封之器需快速破坏/解控,被",
+     "tts_text": "冰封之器",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101418",
+    "name": "锥心冰矛",
+    "kind": "点名",
+    "enabled": true,
+    "notes": "机制：锥心冰矛\n躲法：冰矛点名穿刺,被标记后拉开并避免对穿队友",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101418
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "冰矛 · 冰矛点名穿刺,被标记后拉开并",
+     "tts_text": "冰矛",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101419",
+    "name": "冰龙全团AOE",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：冰龙全团AOE\n躲法：全团范围爆发,向Boss外圈散开并备好减伤",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101419
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "全团AOE · 全团范围爆发,向Boss外圈",
+     "tts_text": "全团AOE",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_101420",
+    "name": "无尽寒冬",
+    "kind": "全场AOE",
+    "enabled": true,
+    "notes": "机制：无尽寒冬\n躲法：全场不可躲终结技,开减伤抗住并保证治疗跟上",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      101420
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "无尽寒冬 · 全场不可躲终结技,开减伤抗住",
+     "tts_text": "无尽寒冬",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T17:44:28Z",
+  "updated_at": "2026-06-11T17:44:28Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  }
+ }
+}
