@@ -323,6 +323,10 @@ def main() -> None:
             "SkillFX slot anchors must not parse raw slotIndex values.",
         ),
         (
+            "parseInt(slotIndex || 1, 10) || 1",
+            "HP burst anchor slot should not parse raw slotIndex values.",
+        ),
+        (
             "x: parseInt(payload.callout.x || _viewport.callout.x || 0, 10) || 0,",
             "SkillFX callout x must not parse raw payload values.",
         ),
@@ -337,6 +341,19 @@ def main() -> None:
     ]
     for snippet, message in skillfx_forbidden:
         _check_absent(skillfx, snippet, message)
+
+    hp_burst_required = [
+        (
+            "function _clampBurstSlot(slotIndex)",
+            "HP burst anchor should expose finite slot normalization.",
+        ),
+        (
+            "var idx = _clampBurstSlot(slotIndex) - 1;",
+            "HP burst anchor should use finite slot normalization.",
+        ),
+    ]
+    for snippet, message in hp_burst_required:
+        _check_present(hp, snippet, message)
 
     skillfx_required = [
         (

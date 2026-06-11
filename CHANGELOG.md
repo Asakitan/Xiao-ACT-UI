@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.66: DPS resize 与 HP burst 槽位参数修复.
+
+  1) `web/dps.html` 修复详情面板 resize 参数夹取。
+     resize grip 的宽高 clamp 现在复用有限数 helper,
+     避免异常鼠标/窗口值把 `NaN` 传给 `resize_dps`。
+
+  2) `web/hp.html` 修复 Burst Ready 锚点槽位解析。
+     burst slot index 现在通过有限数 helper 夹到 1..9,
+     避免坏 slot 参数导致目标锚点取错或渲染位置异常。
+
 ## v4.5.65: ACT 时间工具与聚合时长渲染修复.
 
   1) `web/act_panel_util.js` 修复共享时间格式化数值边界。

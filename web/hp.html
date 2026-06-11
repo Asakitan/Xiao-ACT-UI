@@ -1466,8 +1466,14 @@ function setBurstSkillLayout(layout) {
     });
 }
 
+function _clampBurstSlot(slotIndex) {
+    var idx = Number(slotIndex == null || slotIndex === '' ? 1 : slotIndex);
+    if (!isFinite(idx)) idx = 1;
+    return Math.max(1, Math.min(9, Math.round(idx)));
+}
+
 function _getBurstSkillAnchor(slotIndex) {
-    var idx = Math.max(1, Math.min(9, parseInt(slotIndex || 1, 10) || 1)) - 1;
+    var idx = _clampBurstSlot(slotIndex) - 1;
     var x = (_burstSkillLayout.x + _burstSkillLayout.w * _burstSlotFractions[idx]) * window.innerWidth;
     var y = (_burstSkillLayout.y + _burstSkillLayout.h * 0.52) * window.innerHeight;
     var radius = idx >= 6 ? 46 : 34;

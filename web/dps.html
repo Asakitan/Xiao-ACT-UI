@@ -2299,7 +2299,7 @@ document.getElementById('dps-tabs').addEventListener('click', function(e) {
     var maxH = 900;
 
     function clamp(v, lo, hi) {
-        return Math.max(lo, Math.min(hi, Math.round(Number(v || 0))));
+        return Math.max(lo, Math.min(hi, Math.round(_finiteNum(v, lo))));
     }
 
     grip.addEventListener('mousedown', function(e) {
