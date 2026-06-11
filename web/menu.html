@@ -6023,7 +6023,8 @@ function restoreMenuSettings(cfg) {
         document.getElementById('sound-enabled').checked = !!cfg.sound_enabled;
     }
     if (cfg.sound_volume !== undefined) {
-        document.getElementById('sound-volume').value = cfg.sound_volume;
+        var restoredVolume = _clampInt(cfg.sound_volume, 80, 0, 100);
+        document.getElementById('sound-volume').value = restoredVolume;
     }
     /* Data source */
     if (cfg.panel_themes) {
@@ -6290,7 +6291,7 @@ function _saoSetUpdaterNotes(ui, text, fallback) {
 }
 
 function _saoSetUpdaterProgress(ui, pct, visible) {
-    var value = Math.max(0, Math.min(100, Number(pct) || 0));
+    var value = _clampInt(pct, 0, 0, 100);
     ui.progress.style.display = visible ? '' : 'none';
     ui.progressText.style.display = visible ? '' : 'none';
     ui.progressText.textContent = value + '%';
@@ -6332,7 +6333,8 @@ function updateUpdaterState(data) {
     }
 
     var force = !!s.force_required;
-    var sizeMb = (s.size || 0) / 1024 / 1024;
+    var sizeBytes = _clampNum(s.size, 0, 0, Number.MAX_SAFE_INTEGER);
+    var sizeMb = sizeBytes / 1024 / 1024;
     var sizeStr = sizeMb > 0 ? sizeMb.toFixed(1) + ' MB' : '等待服务器提供包大小';
     var promptKey = (s.state || '') + ':' + (s.latest_version || '');
     if (promptKey && __SAO_UPDATER_PROMPTED !== promptKey && (s.state === 'available' || s.state === 'ready')) {
@@ -6359,7 +6361,7 @@ function updateUpdaterState(data) {
         ui.skip.style.display = force ? 'none' : '';
         _saoShowUpdaterPanel(true);
     } else if (s.state === 'downloading') {
-        var pct = Math.round((s.progress || 0) * 100);
+        var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);
         ui.headline.textContent = '正在下载更新';
         ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;
         _saoSetUpdaterBadge(ui, 'DOWNLOADING', 'active');

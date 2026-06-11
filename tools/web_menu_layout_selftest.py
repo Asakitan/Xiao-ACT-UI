@@ -98,6 +98,10 @@ def main() -> int:
     menu_raw_patterns = [
         "document.getElementById('info-xp').style.width = data.xp_pct + '%';",
         "window.pywebview.api.set_sound_volume(parseInt(this.value));",
+        "document.getElementById('sound-volume').value = cfg.sound_volume;",
+        "var value = Math.max(0, Math.min(100, Number(pct) || 0));",
+        "var sizeMb = (s.size || 0) / 1024 / 1024;",
+        "var pct = Math.round((s.progress || 0) * 100);",
     ]
     for pattern in menu_raw_patterns:
         if pattern in html:
@@ -108,6 +112,12 @@ def main() -> int:
         "var volume = _clampInt(this.value, 80, 0, 100);",
         "this.value = volume;",
         "window.pywebview.api.set_sound_volume(volume);",
+        "var restoredVolume = _clampInt(cfg.sound_volume, 80, 0, 100);",
+        "document.getElementById('sound-volume').value = restoredVolume;",
+        "var value = _clampInt(pct, 0, 0, 100);",
+        "var sizeBytes = _clampNum(s.size, 0, 0, Number.MAX_SAFE_INTEGER);",
+        "var sizeMb = sizeBytes / 1024 / 1024;",
+        "var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
