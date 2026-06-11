@@ -58,5 +58,15 @@ assert(!dps.includes("_liveDetailCache[Number(data.uid || 0)] = data"), "DPS det
 assert(dps.includes("function _uidKey"), "DPS must provide a string uid key helper");
 assert(dps.includes("onclick=\"_openDetail(' + _jsArg(uidKey) + ')"), "DPS row click must pass uid through escaped jsArg");
 assert(dps.includes("_liveDetailCache[_uidKey(data.uid)] = data"), "DPS detail cache must key by string uid");
+assert(!dps.includes("v = Number(v || 0);"), "DPS numeric formatting must not accept non-finite values");
+assert(!dps.includes("return Math.round(Number(v || 0) * 100) + '%'"), "DPS percentages must clamp to 0..100");
+assert(!dps.includes("var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;"), "DPS list bars must use clamped widths");
+assert(!dps.includes("Math.round(ratio * 100) + '%;background:"), "DPS skill bars must use clamped widths");
+assert(dps.includes("function _finiteNum"), "DPS must provide finite numeric normalization");
+assert(dps.includes("function _nonNegNum"), "DPS must clamp numeric totals/rates to non-negative finite values");
+assert(dps.includes("function _clamp01"), "DPS must clamp percentages to 0..1");
+assert(dps.includes("function _barPct"), "DPS must centralize bar width clamping");
+assert(dps.includes("var barPct = _barPct(amount, maxVal);"), "DPS list rows must render bars through _barPct");
+assert(dps.includes("style=\"width:' + _barPct(amount, maxVal) + '%;background:"), "DPS detail skill bars must render through _barPct");
 
 console.log("web_act_render_state_selftest: ok");

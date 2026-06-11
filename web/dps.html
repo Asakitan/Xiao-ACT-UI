@@ -1429,8 +1429,32 @@ function _emptySnapshot() {
     };
 }
 
+function _finiteNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+}
+
+function _nonNegNum(v, fallback) {
+    return Math.max(0, _finiteNum(v, fallback == null ? 0 : fallback));
+}
+
+function _nonNegInt(v, fallback) {
+    return Math.max(0, Math.round(_finiteNum(v, fallback == null ? 0 : fallback)));
+}
+
+function _clamp01(v, fallback) {
+    return Math.max(0, Math.min(1, _finiteNum(v, fallback == null ? 0 : fallback)));
+}
+
+function _barPct(value, maxValue) {
+    var max = _nonNegNum(maxValue, 0);
+    if (max <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round(_nonNegNum(value, 0) / max * 100)));
+}
+
 function _fmtNum(v) {
-    v = Number(v || 0);
+    v = _nonNegNum(v, 0);
     if (v >= 1000000) return (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'M';
     if (v >= 1000) return (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'K';
     return Math.round(v).toLocaleString();
@@ -1440,20 +1464,20 @@ function _fmtNum(v) {
 // total scoped to the MEM combat window). The raw total is meaningless as a per-fight figure
 // (only accrues at the Association dummy), so the badge shows DPS, matching the Tk _draw_row.
 function _memBadge(tcpAmount, entity) {
-    var mdps = Number((entity && entity.mem_dps) || 0);
+    var mdps = _nonNegNum((entity && entity.mem_dps) || 0, 0);
     if (!mdps) return '';
     return ' · <span class="mem-badge">MEM ' + _fmtNum(mdps) + '/s</span>';
 }
 
 function _fmtTime(s) {
-    s = Number(s || 0);
+    s = _nonNegNum(s, 0);
     var mm = Math.floor(s / 60);
     var ss = Math.floor(s % 60);
     return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
 }
 
 function _pct(v) {
-    return Math.round(Number(v || 0) * 100) + '%';
+    return Math.round(_clamp01(v, 0) * 100) + '%';
 }
 
 function _escHtml(s) {
@@ -1480,7 +1504,7 @@ function _jsArg(value) {
 }
 
 function _fmtFightPoint(fp) {
-    fp = Number(fp || 0);
+    fp = _nonNegNum(fp, 0);
     if (fp <= 0) return '';
     if (fp >= 1000000) return (fp / 1000000).toFixed(2) + 'M';
     if (fp >= 1000) return (fp / 1000).toFixed(fp >= 100000 ? 0 : 1) + 'K';
@@ -1490,7 +1514,7 @@ function _fmtFightPoint(fp) {
 function _buildEntitySub(entity) {
     var parts = [];
     if (entity.profession) parts.push(entity.profession);
-    var fp = Number(entity.fight_point || 0);
+    var fp = _nonNegNum(entity.fight_point || 0, 0);
     if (fp > 0) parts.push(_fmtFightPoint(fp));
     if (parts.length) return parts.join(' · ');
     return _viewMode === 'report' ? 'Last report entry' : 'Live combat entry';
@@ -1509,24 +1533,24 @@ function _actRowsDataFallback(baseData) {
     var totals = spec.totals || {};
     var out = Object.assign({}, baseData || _emptySnapshot());
     out.encounter_active = spec.mode === 'live';
-    out.elapsed_s = Number(totals.elapsed_s || out.elapsed_s || 0);
-    out.total_damage = Number(totals.damage || out.total_damage || 0);
-    out.total_heal = Number(totals.heal || out.total_heal || 0);
-    out.total_dps = Number(totals.dps || out.total_dps || 0);
-    out.total_hps = Number(totals.hps || out.total_hps || 0);
+    out.elapsed_s = _nonNegNum(totals.elapsed_s || out.elapsed_s || 0, 0);
+    out.total_damage = _nonNegNum(totals.damage || out.total_damage || 0, 0);
+    out.total_heal = _nonNegNum(totals.heal || out.total_heal || 0, 0);
+    out.total_dps = _nonNegNum(totals.dps || out.total_dps || 0, 0);
+    out.total_hps = _nonNegNum(totals.hps || out.total_hps || 0, 0);
     out.entities = rows.map(function(row, idx) {
         var uid = _uidKey(row.uid);
         return Object.assign({}, row, {
             uid: uid,
             name: row.name || ('Player_' + uid),
             profession: row.profession || '',
-            damage_total: Number(row.damage || row.damage_total || 0),
-            heal_total: Number(row.heal || row.heal_total || 0),
-            dps: Number(row.dps || 0),
-            hps: Number(row.hps || 0),
-            damage_pct: Number(row.damage_pct || 0),
+            damage_total: _nonNegNum(row.damage || row.damage_total || 0, 0),
+            heal_total: _nonNegNum(row.heal || row.heal_total || 0, 0),
+            dps: _nonNegNum(row.dps || 0, 0),
+            hps: _nonNegNum(row.hps || 0, 0),
+            damage_pct: _clamp01(row.damage_pct || 0, 0),
             is_self: !!row.is_self,
-            act_rank: Number(row.rank || (idx + 1))
+            act_rank: _nonNegInt(row.rank || (idx + 1), idx + 1)
         });
     });
     return out;
@@ -1691,9 +1715,9 @@ function _pickDetailUid() {
         }
     }
     if (_currentTab === 'heal') {
-        entities.sort(function(a, b) { return Number(b.heal_total || 0) - Number(a.heal_total || 0); });
+        entities.sort(function(a, b) { return _nonNegNum(b.heal_total || 0, 0) - _nonNegNum(a.heal_total || 0, 0); });
     } else {
-        entities.sort(function(a, b) { return Number(b.damage_total || 0) - Number(a.damage_total || 0); });
+        entities.sort(function(a, b) { return _nonNegNum(b.damage_total || 0, 0) - _nonNegNum(a.damage_total || 0, 0); });
     }
     return entities.length ? _uidKey(entities[0].uid) : '';
 }
@@ -1823,7 +1847,7 @@ function _renderList() {
     var frame = document.getElementById('list-frame');
 
     if (_currentTab === 'heal') {
-        entities.sort(function(a, b) { return Number(b.heal_total || 0) - Number(a.heal_total || 0); });
+        entities.sort(function(a, b) { return _nonNegNum(b.heal_total || 0, 0) - _nonNegNum(a.heal_total || 0, 0); });
     }
 
     if (!entities.length) {
@@ -1833,19 +1857,19 @@ function _renderList() {
 
     var maxVal = 0;
     for (var i = 0; i < entities.length; i++) {
-        var val = _currentTab === 'heal' ? Number(entities[i].heal_total || 0) : Number(entities[i].damage_total || 0);
+        var val = _currentTab === 'heal' ? _nonNegNum(entities[i].heal_total || 0, 0) : _nonNegNum(entities[i].damage_total || 0, 0);
         if (val > maxVal) maxVal = val;
     }
 
     var html = '';
     for (var j = 0; j < entities.length; j++) {
         var entity = entities[j];
-        var amount = _currentTab === 'heal' ? Number(entity.heal_total || 0) : Number(entity.damage_total || 0);
-        var rate = _currentTab === 'heal' ? Number(entity.hps || 0) : Number(entity.dps || 0);
+        var amount = _currentTab === 'heal' ? _nonNegNum(entity.heal_total || 0, 0) : _nonNegNum(entity.damage_total || 0, 0);
+        var rate = _currentTab === 'heal' ? _nonNegNum(entity.hps || 0, 0) : _nonNegNum(entity.dps || 0, 0);
         var pct = _currentTab === 'heal'
-            ? ((data.total_heal || 0) > 0 ? amount / Math.max(1, Number(data.total_heal || 0)) : 0)
-            : Number(entity.damage_pct || 0);
-        var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;
+            ? (_nonNegNum(data.total_heal || 0, 0) > 0 ? amount / Math.max(1, _nonNegNum(data.total_heal || 0, 0)) : 0)
+            : _clamp01(entity.damage_pct || 0, 0);
+        var barPct = _barPct(amount, maxVal);
         var rankCls = j < 3 ? ' r' + (j + 1) : '';
         var uidKey = _uidKey(entity.uid);
         html += ''
@@ -1877,7 +1901,7 @@ function _renderDetailBase(entity) {
 
     document.getElementById('detail-title').textContent =
         (entity.name || ('Player_' + entity.uid)) + (entity.profession ? ' · ' + entity.profession : '')
-        + (Number(entity.fight_point || 0) > 0 ? ' · ' + _fmtFightPoint(entity.fight_point) : '');
+        + (_nonNegNum(entity.fight_point || 0, 0) > 0 ? ' · ' + _fmtFightPoint(entity.fight_point) : '');
     document.getElementById('detail-badge').textContent = _viewMode === 'report' ? 'LAST REPORT DETAIL' : 'LIVE DETAIL';
 
     var stats = [
@@ -1887,7 +1911,7 @@ function _renderDetailBase(entity) {
         ['HPS', _fmtNum(entity.hps || 0), ''],
         ['Crit', _pct(entity.crit_rate || 0), ''],
         ['Max Hit', _fmtNum(entity.max_hit || 0), 'gold'],
-        ['Hits', String(entity.damage_hits || 0), ''],
+        ['Hits', String(_nonNegInt(entity.damage_hits || 0, 0)), ''],
         ['Time', _fmtTime(entity.elapsed_s || 0), '']
     ];
     var html = '';
@@ -1904,7 +1928,7 @@ function _renderDetailBase(entity) {
 // Heat gradient by relative output: low → cold blue, mid → gold, high → hot
 // red. Pure function so the Tk Entity cockpit mirrors it byte-for-byte.
 function _heatColor(ratio) {
-    ratio = Math.max(0, Math.min(1, Number(ratio) || 0));
+    ratio = _clamp01(ratio, 0);
     var cold = [60, 176, 255], mid = [255, 200, 72], hot = [255, 96, 78];
     var a, b, t;
     if (ratio < 0.5) { a = cold; b = mid; t = ratio / 0.5; }
@@ -1925,14 +1949,14 @@ function _renderSkillRows(entity) {
     }
 
     skills.sort(function(a, b) {
-        var av = Math.max(Number(a.total || 0), Number(a.heal_total || 0));
-        var bv = Math.max(Number(b.total || 0), Number(b.heal_total || 0));
+        var av = Math.max(_nonNegNum(a.total || 0, 0), _nonNegNum(a.heal_total || 0, 0));
+        var bv = Math.max(_nonNegNum(b.total || 0, 0), _nonNegNum(b.heal_total || 0, 0));
         return bv - av;
     });
 
     var maxVal = 0, sumVal = 0;
     for (var i = 0; i < skills.length; i++) {
-        var current = Math.max(Number(skills[i].total || 0), Number(skills[i].heal_total || 0));
+        var current = Math.max(_nonNegNum(skills[i].total || 0, 0), _nonNegNum(skills[i].heal_total || 0, 0));
         if (current > maxVal) maxVal = current;
         sumVal += current;
     }
@@ -1940,14 +1964,15 @@ function _renderSkillRows(entity) {
     var html = '';
     for (var j = 0; j < skills.length; j++) {
         var sk = skills[j];
-        var dmg = Number(sk.total || 0);
-        var heal = Number(sk.heal_total || 0);
+        var dmg = _nonNegNum(sk.total || 0, 0);
+        var heal = _nonNegNum(sk.heal_total || 0, 0);
         var amount = Math.max(dmg, heal);
         var isHeal = heal > dmg;
-        var hits = isHeal ? Number(sk.heal_hits || 0) : Number(sk.hits || 0);
-        var crit = !isHeal && Number(sk.hits || 0) > 0 && Number(sk.crit_rate || 0) > 0 ? ' · CRIT ' + _pct(sk.crit_rate || 0) : '';
-        var ratio = maxVal > 0 ? amount / maxVal : 0;       // bar length vs. top skill
-        var share = sumVal > 0 ? amount / sumVal : 0;        // share of total output
+        var hits = isHeal ? _nonNegInt(sk.heal_hits || 0, 0) : _nonNegInt(sk.hits || 0, 0);
+        var critRate = _clamp01(sk.crit_rate || 0, 0);
+        var crit = !isHeal && hits > 0 && critRate > 0 ? ' · CRIT ' + _pct(critRate) : '';
+        var ratio = maxVal > 0 ? _clamp01(amount / maxVal, 0) : 0;       // bar length vs. top skill
+        var share = sumVal > 0 ? _clamp01(amount / sumVal, 0) : 0;        // share of total output
         var rgb = _heatColor(ratio);
         var fill = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
         var glow = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.45)';
@@ -1964,7 +1989,7 @@ function _renderSkillRows(entity) {
             +     '<span class="skill-pct">' + _pct(share) + '</span>'
             +   '</div>'
             +   '<div class="skill-sub">' + _escHtml(sub) + '</div>'
-            +   '<div class="skill-track"><div class="skill-fill" style="width:' + Math.round(ratio * 100) + '%;background:' + fill + ';box-shadow:0 0 6px ' + glow + '"></div></div>'
+            +   '<div class="skill-track"><div class="skill-fill" style="width:' + _barPct(amount, maxVal) + '%;background:' + fill + ';box-shadow:0 0 6px ' + glow + '"></div></div>'
             + '</div>';
     }
     frame.innerHTML = html;
