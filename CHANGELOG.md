@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.63: pywebview shim 面板数值参数修复.
+
+  1) `web/pywebview-shim.js` 修复通用面板数值参数边界。
+     拖拽位移、history/report/death-recap/timeline/aggregate 的 limit、index、window、
+     cursor 和 step 参数现在统一使用有限数兜底和上下限夹取。
+
+  2) `web/pywebview-shim.js` 修复 MEM scope 搜索对齐参数。
+     `mem_search()` 的 align 参数现在夹到安全范围,
+     避免直接 shim 调用把异常对齐值传给内存搜索桥接层。
+
 ## v4.5.62: 排行榜与音量 shim 数值修复.
 
   1) `web/menu.html` 修复排行榜数值标签渲染。

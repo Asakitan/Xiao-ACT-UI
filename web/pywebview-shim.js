@@ -45,8 +45,27 @@
         return isFinite(number) ? number : 0;
     }
 
+    function clampNumber(value, fallback, lo, hi) {
+        var number = finiteNumber(value, fallback);
+        if (lo != null) number = Math.max(lo, number);
+        if (hi != null) number = Math.min(hi, number);
+        return number;
+    }
+
+    function clampInt(value, fallback, lo, hi) {
+        return Math.round(clampNumber(value, fallback, lo, hi));
+    }
+
+    function safeLimit(value, fallback, hi) {
+        return clampInt(value, fallback, 1, hi || 1000);
+    }
+
+    function safeOffset(value) {
+        return clampInt(value, 0, 0, Number.MAX_SAFE_INTEGER);
+    }
+
     function safeTimelineSpeed(value) {
-        return Math.max(0.1, Math.min(8, finiteNumber(value, 1)));
+        return clampNumber(value, 1, 0.1, 8);
     }
 
     function normalizeOk(result) {
@@ -77,8 +96,7 @@
             return call('sound.set_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
         set_sound_volume: function (volumePct) {
-            var volume = Math.round(finiteNumber(volumePct, 70));
-            volume = Math.max(0, Math.min(100, volume));
+            var volume = clampInt(volumePct, 70, 0, 100);
             return call('sound.set_volume', { volume: volume }).then(normalizeOk);
         },
         set_hit_regions: function (rects) {
@@ -115,8 +133,7 @@
             return call('settings.set_boss_bar_mode', { mode: String(mode || 'boss_raid') }).then(normalizeOk);
         },
         set_dps_fade_timeout: function (seconds) {
-            var value = Math.round(finiteNumber(seconds, 0));
-            value = Math.max(0, Math.min(120, value));
+            var value = clampInt(seconds, 0, 0, 120);
             return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
         },
         set_data_source: function (mode) {
@@ -257,7 +274,10 @@
             return call('ui.menu_action', { action: String(action || '') });
         },
         window_drag: function (dx, dy) {
-            return call('ui.window_drag', { dx: dx || 0, dy: dy || 0 });
+            return call('ui.window_drag', {
+                dx: clampInt(dx, 0, -10000, 10000),
+                dy: clampInt(dy, 0, -10000, 10000)
+            });
         },
         set_ctx_menu_active: function (active, bounds) {
             return call('ui.set_ctx_menu_active', { active: !!active, bounds: bounds || null });
@@ -314,7 +334,7 @@
             });
         },
         list_history: function (limit) {
-            return call('act.history.status', { limit: limit || 20, query: '' }).then(function (data) {
+            return call('act.history.status', { limit: safeLimit(limit, 20, 200), query: '' }).then(function (data) {
                 if (data && data.items == null && data.encounters) data.items = data.encounters;
                 return normalizeOk(data);
             });
@@ -365,10 +385,18 @@
             return call('ui.menu_action', { action: 'toggle_death_recap' });
         },
         get_death_recap_status: function (limit, window_s, entity_id) {
-            return call('act.death_recap.status', { limit: limit || 80, window_s: window_s || 8.0, entity_id: entity_id || null });
+            return call('act.death_recap.status', {
+                limit: safeLimit(limit, 80, 500),
+                window_s: clampNumber(window_s, 8.0, 0, 120),
+                entity_id: entity_id || null
+            });
         },
         copy_death_recap: function (limit, window_s, entity_id) {
-            return call('act.death_recap.copy', { limit: limit || 80, window_s: window_s || 8.0, entity_id: entity_id || null });
+            return call('act.death_recap.copy', {
+                limit: safeLimit(limit, 80, 500),
+                window_s: clampNumber(window_s, 8.0, 0, 120),
+                entity_id: entity_id || null
+            });
         },
         get_data_source_health: function () {
             return call('act.sources.health', {});
@@ -380,7 +408,7 @@
             return call('act.sources.copy', {});
         },
         get_report_export_status: function (limit, fmt) {
-            return call('act.report.status', { limit: limit || 20, fmt: String(fmt || 'json') });
+            return call('act.report.status', { limit: safeLimit(limit, 20, 200), fmt: String(fmt || 'json') });
         },
         copy_report_export: function (fmt) {
             return call('act.report.copy', { fmt: String(fmt || 'json') });
@@ -404,13 +432,13 @@
             return call('act.selective_parsing.clear', {});
         },
         get_history_status: function (limit, query) {
-            return call('act.history.status', { limit: limit || 20, query: String(query || '') });
+            return call('act.history.status', { limit: safeLimit(limit, 20, 200), query: String(query || '') });
         },
         load_history_report: function (index, show) {
-            return call('act.history.load', { index: index || 0, show: show !== false });
+            return call('act.history.load', { index: safeOffset(index), show: show !== false });
         },
         delete_history_report: function (index) {
-            return call('act.history.delete', { index: index || 0 });
+            return call('act.history.delete', { index: safeOffset(index) });
         },
         clear_history_reports: function () {
             return call('act.history.clear', {});
@@ -422,18 +450,18 @@
             return call('act.offline_import.import', { path: String(path || ''), persist: persist !== false, show: show !== false });
         },
         get_offline_import_status: function (historyLimit) {
-            return call('act.offline_import.status', { history_limit: historyLimit || 20 });
+            return call('act.offline_import.status', { history_limit: safeLimit(historyLimit, 20, 200) });
         },
         get_timeline_status: function (limit, query) {
-            return call('act.timeline.status', { limit: limit || 80, query: String(query || '') });
+            return call('act.timeline.status', { limit: safeLimit(limit, 80, 500), query: String(query || '') });
         },
         get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId, groupBy, groupField) {
             return call('act.aggregate.status', {
-                limit: limit || 1000,
+                limit: safeLimit(limit, 1000, 5000),
                 query: String(query || ''),
                 source: String(source || 'live'),
-                window_ms: windowMs || 1000,
-                top_n: topN || 20,
+                window_ms: clampInt(windowMs, 1000, 0, 86400000),
+                top_n: safeLimit(topN, 20, 500),
                 encounter_id: String(encounterId || ''),
                 group_by: String(groupBy || 'skill'),
                 group_field: String(groupField || '')
@@ -443,7 +471,7 @@
             return call('act.mem_scope.status', { query: String(query || ''), dtype: String(dtype || 'i32'), job_id: String(jobId || '') });
         },
         mem_search: function (value, dtype, align) {
-            return call('act.mem_scope.search', { value: value == null ? '' : String(value), dtype: String(dtype || 'i32'), align: align || 0 });
+            return call('act.mem_scope.search', { value: value == null ? '' : String(value), dtype: String(dtype || 'i32'), align: clampInt(align, 0, 0, 64) });
         },
         mem_search_status: function (jobId) {
             return call('act.mem_scope.search_status', { job_id: String(jobId || '') });
@@ -464,10 +492,10 @@
             return call('act.timeline.pause', {});
         },
         step_timeline: function (deltaMs) {
-            return call('act.timeline.step', { delta_ms: deltaMs || 1000 });
+            return call('act.timeline.step', { delta_ms: clampInt(deltaMs, 1000, -86400000, 86400000) });
         },
         seek_timeline: function (cursorMs) {
-            return call('act.timeline.seek', { cursor_ms: cursorMs || 0 });
+            return call('act.timeline.seek', { cursor_ms: clampInt(cursorMs, 0, 0, 86400000) });
         },
         set_timeline_speed: function (speed) {
             return call('act.timeline.speed', { speed: safeTimelineSpeed(speed) });

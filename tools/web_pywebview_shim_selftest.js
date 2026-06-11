@@ -41,6 +41,9 @@ function assert(cond, message) {
   await window.pywebview.api.get_aggregate_status(1000, "hit", "history", 500, 7, "enc-1", "field", "skill_id");
   let last = calls[calls.length - 1];
   assert(last.name === "act.aggregate.status", "aggregate command name mismatch");
+  assert(last.payload.limit === 1000, "aggregate limit was not forwarded");
+  assert(last.payload.window_ms === 500, "aggregate window_ms was not forwarded");
+  assert(last.payload.top_n === 7, "aggregate top_n was not forwarded");
   assert(last.payload.group_by === "field", "aggregate group_by was not forwarded");
   assert(last.payload.group_field === "skill_id", "aggregate group_field was not forwarded");
 
@@ -84,6 +87,11 @@ function assert(cond, message) {
   await window.pywebview.api.toggle_menu();
   last = calls[calls.length - 1];
   assert(last.name === "ui.toggle_menu", "toggle_menu command mismatch");
+
+  await window.pywebview.api.window_drag("999999", "-999999");
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.window_drag", "window_drag command mismatch");
+  assert(last.payload.dx === 10000 && last.payload.dy === -10000, "window_drag deltas should be clamped");
 
   await window.pywebview.api.show_last_dps_report();
   last = calls[calls.length - 1];
@@ -168,10 +176,10 @@ function assert(cond, message) {
   assert(last.name === "state.snapshot", "request_live_snapshot command mismatch");
   assert(dpsSnapshotApplied, "request_live_snapshot should apply the returned snapshot when DpsMeter is present");
 
-  await window.pywebview.api.list_history(7);
+  await window.pywebview.api.list_history("9999");
   last = calls[calls.length - 1];
   assert(last.name === "act.history.status", "list_history command mismatch");
-  assert(last.payload.limit === 7, "list_history limit was not forwarded");
+  assert(last.payload.limit === 200, "list_history limit should be clamped");
 
   await window.pywebview.api.export_last_report("csv");
   last = calls[calls.length - 1];
@@ -392,11 +400,11 @@ function assert(cond, message) {
   assert(last.payload.dtype === "u32", "get_mem_scope_status dtype was not forwarded");
   assert(last.payload.job_id === "job-1", "get_mem_scope_status job_id was not forwarded");
 
-  await window.pywebview.api.get_death_recap_status(55, 12.5, "1001");
+  await window.pywebview.api.get_death_recap_status("9999", "999", "1001");
   last = calls[calls.length - 1];
   assert(last.name === "act.death_recap.status", "get_death_recap_status command mismatch");
-  assert(last.payload.limit === 55, "get_death_recap_status limit was not forwarded");
-  assert(last.payload.window_s === 12.5, "get_death_recap_status window_s was not forwarded");
+  assert(last.payload.limit === 500, "get_death_recap_status limit should be clamped");
+  assert(last.payload.window_s === 120, "get_death_recap_status window_s should be clamped");
   assert(last.payload.entity_id === "1001", "get_death_recap_status entity_id was not forwarded");
 
   await window.pywebview.api.mem_search("123", "i64", 4);
@@ -491,8 +499,14 @@ function assert(cond, message) {
   assert(!shim.includes("var numericUid = Number(uid || 0);"), "pywebview shim must not coerce DPS entity uid to Number");
   assert(shim.includes("var uidText = String(uid == null ? '' : uid).trim();"), "pywebview shim should preserve DPS entity uid as a string");
   assert(!shim.includes("var volume = parseInt(volumePct, 10);"), "pywebview shim must not pass raw volume integers");
-  assert(shim.includes("var volume = Math.round(finiteNumber(volumePct, 70));"), "pywebview shim should normalize sound volume");
-  assert(shim.includes("volume = Math.max(0, Math.min(100, volume));"), "pywebview shim should clamp sound volume");
+  assert(shim.includes("function clampNumber(value, fallback, lo, hi)"), "pywebview shim should provide a numeric clamp helper");
+  assert(shim.includes("function clampInt(value, fallback, lo, hi)"), "pywebview shim should provide an integer clamp helper");
+  assert(shim.includes("function safeLimit(value, fallback, hi)"), "pywebview shim should provide a limit clamp helper");
+  assert(shim.includes("var volume = clampInt(volumePct, 70, 0, 100);"), "pywebview shim should clamp sound volume");
+  assert(!shim.includes("{ dx: dx || 0, dy: dy || 0 }"), "pywebview shim must not pass raw drag deltas");
+  assert(!shim.includes("limit: limit || 20, query: ''"), "pywebview shim must not pass raw history limits");
+  assert(!shim.includes("window_s: window_s || 8.0"), "pywebview shim must not pass raw death recap windows");
+  assert(!shim.includes("delta_ms: deltaMs || 1000"), "pywebview shim must not pass raw timeline step deltas");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
