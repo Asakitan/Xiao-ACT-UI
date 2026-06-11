@@ -574,8 +574,9 @@ function renderMechanics() {
         || '<div class="empty-state">还没有机制 — 点「新建机制」或从收件箱一键创建</div>';
     var prof = st.profile || {};
     var enr = prof.enrage || {};
+    var enrageSeconds = _clampInt(enr.time_s != null ? enr.time_s : prof.enrage_time_s, 0, 0, 86400);
     document.getElementById('mech-profile-meta').textContent =
-        '狂暴 ' + Number(enr.time_s || prof.enrage_time_s || 0) + 's · 档案: ' + (prof.name || '');
+        '狂暴 ' + enrageSeconds + 's · 档案: ' + (prof.name || '');
 }
 
 function _mSwitch(label, key, value) {
@@ -594,10 +595,11 @@ function mechMaster(flags) {
 }
 
 function _mInboxRow(rec) {
-    var sid = Number(rec.skill_id || 0);
-    var dur = rec.last_cast_duration_ms;
-    var label = (rec.name || '技能') + ' #' + sid + ' ×' + Number(rec.count || 0)
-        + (dur ? (' · ' + dur + 'ms') : '');
+    var sid = _clampInt(rec.skill_id, 0, 0, 999999999);
+    var dur = rec.last_cast_duration_ms == null ? 0 : _clampInt(rec.last_cast_duration_ms, 0, 0, 600000);
+    var count = _clampInt(rec.count, 0, 0, 999999);
+    var label = (rec.name || '技能') + ' #' + sid + ' ×' + count
+        + (dur > 0 ? (' · ' + dur + 'ms') : '');
     var mechs = (_mechState && _mechState.mechanics) || [];
     var bindSel = mechs.length
         ? '<select class="mech-input" style="max-width:110px;" onchange="if(this.value){mechBind(this.value,' + sid + ')}">'
@@ -610,7 +612,7 @@ function _mInboxRow(rec) {
         + '<span style="flex:1;font-size:10px;color:#e8f6ff;">' + _esc(label) + '</span>'
         + bindSel
         + '<div class="action-btn accent" style="padding:2px 8px;font-size:10px;" onclick="mechCreateFromSkill('
-        + sid + ',' + _jsArg(rec.name || '') + ',' + (dur || 'null') + ')">建机制</div>'
+        + sid + ',' + _jsArg(rec.name || '') + ',' + (dur > 0 ? dur : 'null') + ')">建机制</div>'
         + '</div>';
 }
 

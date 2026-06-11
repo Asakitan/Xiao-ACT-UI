@@ -1653,10 +1653,10 @@ function _clearTransientHitFx() {
 function _captureHitFx(data) {
     var fx = data && data.hit_fx;
     if (!fx) return;
-    var seq = Number(fx.seq || 0);
+    var seq = _nonNegInt(fx.seq, 0);
     if (!seq || seq <= _lastHitFxSeq) return;
     _lastHitFxSeq = seq;
-    var tsMs = Number(fx.generated_at || 0) * 1000;
+    var tsMs = _nonNegNum(fx.generated_at, 0) * 1000;
     if (tsMs > 0 && (Date.now() - tsMs) > _hitFxMaxAgeMs) return;
     if (_viewMode !== 'live') return;
     _pendingHitFx = fx;

@@ -72,7 +72,7 @@ def main() -> int:
         "function _jsArg",
         "onclick=\"saveReaction(' + _jsArg(trig) + ',' + skillId + ',' + _jsArg(id) + ')",
         "onclick=\"mechCreateFromSkill('",
-        "+ sid + ',' + _jsArg(rec.name || '') + ',' + (dur || 'null') + ')",
+        "+ sid + ',' + _jsArg(rec.name || '') + ',' + (dur > 0 ? dur : 'null') + ')",
         "var midArg = _jsArg(m.id);",
         "var uuidArg = _jsArg(e.uuid);",
         "data-uuid=\"' + _esc(uuidText)",

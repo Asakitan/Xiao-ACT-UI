@@ -280,6 +280,22 @@ def _assert_boss_hp_additional_units_are_safe() -> None:
             raise AssertionError("missing safe boss HP mini-unit snippet: " + snippet)
 
 
+def _assert_dps_hit_fx_numbers_are_normalized() -> None:
+    dps = _read_web("dps.html")
+    for snippet in (
+        "var seq = Number(fx.seq || 0);",
+        "var tsMs = Number(fx.generated_at || 0) * 1000;",
+    ):
+        if snippet in dps:
+            raise AssertionError("DPS hit FX must normalize sequence/timestamp numbers: " + snippet)
+    for snippet in (
+        "var seq = _nonNegInt(fx.seq, 0);",
+        "var tsMs = _nonNegNum(fx.generated_at, 0) * 1000;",
+    ):
+        if snippet not in dps:
+            raise AssertionError("missing safe DPS hit FX numeric snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -296,6 +312,7 @@ def main() -> int:
     _assert_action_log_and_death_recap_numbers_are_normalized()
     _assert_timeline_speed_is_normalized()
     _assert_boss_hp_additional_units_are_safe()
+    _assert_dps_hit_fx_numbers_are_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

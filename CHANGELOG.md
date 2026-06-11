@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.59: Raid Editor 与 DPS Web 数值状态修复.
+
+  1) `web/raid_editor.html` 修复机制面板可见数值渲染。
+     狂暴时间、收件箱技能 ID、观测次数和施法耗时现在统一夹取为有限整数,
+     避免坏 payload 在机制列表中显示 `NaN` 或传递非法建机制参数。
+
+  2) `web/dps.html` 修复命中特效序号/时间戳状态。
+     hit_fx seq 和 generated_at 现在使用既有非负数 helper,
+     避免 `Infinity`/`NaN` 锁死后续命中特效或触发过期判断异常。
+
 ## v4.5.58: SkillFX 与 Mem Scope Web 数值渲染修复.
 
   1) `web/skillfx.html` 修复 burst ready 定位参数渲染。

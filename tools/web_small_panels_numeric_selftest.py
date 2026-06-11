@@ -51,6 +51,18 @@ def main() -> None:
             "Raid editor fixed-time badges must normalize raw seconds.",
         ),
         (
+            "'狂暴 ' + Number(enr.time_s || prof.enrage_time_s || 0) + 's",
+            "Raid editor mechanics profile meta must normalize enrage seconds.",
+        ),
+        (
+            "var sid = Number(rec.skill_id || 0);",
+            "Raid editor mechanics inbox must normalize skill ids.",
+        ),
+        (
+            "Number(rec.count || 0)",
+            "Raid editor mechanics inbox must normalize observed counts.",
+        ),
+        (
             "return '' + v;",
             "Raid editor _fmtNum must normalize non-finite values before rendering.",
         ),
@@ -82,6 +94,22 @@ def main() -> None:
         (
             "var timeFixed = _clampInt(rec.time_fixed_s, 0, 0, 86400);",
             "Raid editor fixed-time badges should clamp seconds before rendering.",
+        ),
+        (
+            "var enrageSeconds = _clampInt(enr.time_s != null ? enr.time_s : prof.enrage_time_s, 0, 0, 86400);",
+            "Raid editor mechanics profile meta should clamp enrage seconds.",
+        ),
+        (
+            "var sid = _clampInt(rec.skill_id, 0, 0, 999999999);",
+            "Raid editor mechanics inbox should clamp skill ids.",
+        ),
+        (
+            "var dur = rec.last_cast_duration_ms == null ? 0 : _clampInt(rec.last_cast_duration_ms, 0, 0, 600000);",
+            "Raid editor mechanics inbox should clamp cast durations.",
+        ),
+        (
+            "var count = _clampInt(rec.count, 0, 0, 999999);",
+            "Raid editor mechanics inbox should clamp observed counts.",
         ),
     ]
     for snippet, message in raid_required:
