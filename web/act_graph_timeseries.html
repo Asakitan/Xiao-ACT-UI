@@ -171,11 +171,11 @@
     }
     function fallbackPayload(action, args) {
       args = args || [];
-      if (action === 'act.graph.status') return { metric: String(args[0] || ''), limit: args[1] || 120, query: String(args[2] || ''), topic: String(args[3] || ''), time_range_ms: args[4] || 0 };
-      if (action === 'act.graph.select_metric') return { metric: String(args[0] || 'damage'), limit: args[1] || 120 };
-      if (action === 'act.graph.zoom') return { time_range_ms: args[0] || 0, limit: args[1] || 120 };
-      if (action === 'act.graph.filter') return { query: String(args[0] || ''), topic: String(args[1] || ''), limit: args[2] || 120 };
-      if (action === 'act.graph.export') return { metric: String(args[0] || ''), limit: args[1] || 120, query: String(args[2] || ''), topic: String(args[3] || '') };
+      if (action === 'act.graph.status') return { metric: String(args[0] || ''), limit: safeLimit(args[1]), query: String(args[2] || ''), topic: String(args[3] || ''), time_range_ms: safeZoom(args[4]) };
+      if (action === 'act.graph.select_metric') return { metric: String(args[0] || 'damage'), limit: safeLimit(args[1]) };
+      if (action === 'act.graph.zoom') return { time_range_ms: safeZoom(args[0]), limit: safeLimit(args[1]) };
+      if (action === 'act.graph.filter') return { query: String(args[0] || ''), topic: String(args[1] || ''), limit: safeLimit(args[2]) };
+      if (action === 'act.graph.export') return { metric: String(args[0] || ''), limit: safeLimit(args[1]), query: String(args[2] || ''), topic: String(args[3] || '') };
       if (action === 'act.action_log.jump_to_time') return { cursor_ms: safeMs(args[0]), limit: 80, source: String(args[1] || 'live'), encounter_id: String(args[2] || ''), offset: 0, topic: String(args[3] || '') };
       if (action === 'ui.menu_action') return { action: String(args[0] || '') };
       return { args: args };
@@ -196,6 +196,10 @@
     function finiteNum(value, fallback) {
       const n = Number(value);
       return Number.isFinite(n) ? n : (fallback || 0);
+    }
+    function safeLimit(value) {
+      const raw = value == null || value === '' ? 120 : value;
+      return Math.max(1, Math.min(1000, Math.round(finiteNum(raw, 120))));
     }
     function safeMs(value) {
       return Math.max(0, Math.round(finiteNum(value, 0)));

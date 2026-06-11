@@ -103,6 +103,8 @@ def _assert_drilldown_numbers_are_clamped() -> None:
         raise AssertionError("combatant drilldown percentages must clamp invalid/out-of-range values")
     if raw_pct in skill:
         raise AssertionError("skill drilldown percentages must clamp invalid/out-of-range values")
+    if "limit: args[3] || 80" in skill:
+        raise AssertionError("skill drilldown fallback payload must clamp limit before bridge calls")
     if "const max = Math.max(1, ...skills.map(x => Number(x.amount || 0)));" in combatant:
         raise AssertionError("combatant drilldown skill max must ignore invalid/negative amounts")
     if "const w = Math.round(Number(sk.amount || 0) / max * 100);" in combatant:
@@ -116,7 +118,13 @@ def _assert_drilldown_numbers_are_clamped() -> None:
     ):
         if snippet not in combatant:
             raise AssertionError("missing safe combatant drilldown numeric snippet: " + snippet)
-    for snippet in ("function finiteNum", "function clamp01", "function pct(v)"):
+    for snippet in (
+        "function finiteNum",
+        "function safeLimit",
+        "limit: safeLimit(args[3])",
+        "function clamp01",
+        "function pct(v)",
+    ):
         if snippet not in skill:
             raise AssertionError("missing safe skill drilldown numeric snippet: " + snippet)
 
@@ -169,15 +177,25 @@ def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
         "Number(p.value || 0)",
         "Number(document.getElementById('zoom').value || 0)",
         "Number(ms) || 0, 'live', ''",
+        "limit: args[1] || 120",
+        "time_range_ms: args[4] || 0",
+        "time_range_ms: args[0] || 0, limit: args[1] || 120",
+        "limit: args[2] || 120",
     )
     for snippet in raw_number_snippets:
         if snippet in graph:
             raise AssertionError("graph timeseries must normalize numeric input before rendering/calling APIs: " + snippet)
     for snippet in (
         "function finiteNum",
+        "function safeLimit",
+        "const raw = value == null || value === '' ? 120 : value;",
         "function safeMs",
         "function safeZoom",
         "function normalizedPoints",
+        "limit: safeLimit(args[1])",
+        "time_range_ms: safeZoom(args[4])",
+        "return { time_range_ms: safeZoom(args[0]), limit: safeLimit(args[1]) };",
+        "limit: safeLimit(args[2])",
         "const points = normalizedPoints(rawPoints);",
         "const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;",
         "await callApi('show_action_log_at', 'act.action_log.jump_to_time', safeMs(ms), 'live', '', safeTopic(topic));",

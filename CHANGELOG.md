@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.69: ACT Drilldown 与 Graph fallback 参数修复.
+
+  1) `web/act_skill_drilldown.html` 修复 fallback limit 参数。
+     bridge fallback payload 现在夹取 `limit`,
+     避免异常调用把非有限或过大 limit 透传到 ACT skill 查询。
+
+  2) `web/act_graph_timeseries.html` 修复 Graph fallback 数值参数。
+     graph status/filter/export/zoom payload 现在夹取 limit 与时间范围,
+     避免坏 query 参数导致渲染查询范围异常。
+
 ## v4.5.68: Raid Editor 反应匹配与机制预设参数修复.
 
   1) `web/raid_editor.html` 修复 Boss reaction mapping ID 比较。

@@ -111,7 +111,7 @@
     function fallbackPayload(action, args) {
       args = args || [];
       if (action === 'act.skill.status' || action === 'act.skill.filter' || action === 'act.skill.copy') {
-        return { combatant_id: String(args[0] || ''), skill_id: String(args[1] || ''), query: String(args[2] || ''), limit: args[3] || 80 };
+        return { combatant_id: String(args[0] || ''), skill_id: String(args[1] || ''), query: String(args[2] || ''), limit: safeLimit(args[3]) };
       }
       if (action === 'act.skill.back') return {};
       if (action === 'ui.menu_action') return { action: String(args[0] || '') };
@@ -119,6 +119,7 @@
     }
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
     function finiteNum(v) { const n = Number(v || 0); return Number.isFinite(n) ? n : 0; }
+    function safeLimit(v) { const n = Number(v == null || v === '' ? 80 : v); return Math.max(1, Math.min(500, Math.round(Number.isFinite(n) ? n : 80))); }
     function clamp01(v) { return Math.max(0, Math.min(1, finiteNum(v))); }
     function fmt(v) { const n = finiteNum(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
     function pct(v) { return (clamp01(v) * 100).toFixed(1) + '%'; }
