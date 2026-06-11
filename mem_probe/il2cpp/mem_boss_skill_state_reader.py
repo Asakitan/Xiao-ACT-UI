@@ -31,6 +31,7 @@ class BossSkillStateReader:
         self._pm = dps_source.sr.pm
         self._off_skill = 0
         self._off_stage = 0
+        self._comp_cache: Dict[int, int] = {}   # ent_obj → ZStateSkillComp ptr (热路径缓存)
 
     def _kname(self, obj: int) -> str:
         try:
@@ -43,12 +44,17 @@ class BossSkillStateReader:
             return ""
 
     def _skill_comp(self, ent_obj: int) -> int:
+        # 热路径(12.5Hz)缓存 comp ptr; 失效(klass名变=池化复用)重扫
+        cached = self._comp_cache.get(ent_obj)
+        if cached and self._kname(cached) == SKILLCOMP_NAME:
+            return cached
         cl = self._pm.read_u64(ent_obj + ENT_COMPLIST_OFF) or 0
         if not (_MINP <= cl <= _MAXP):
             return 0
         for i in range(40):
             cp = self._pm.read_u64(cl + ARRAY_ELEMS_OFF + i * 8) or 0
             if _MINP <= cp <= _MAXP and self._kname(cp) == SKILLCOMP_NAME:
+                self._comp_cache[ent_obj] = cp
                 return cp
         return 0
 

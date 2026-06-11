@@ -528,6 +528,13 @@ class MemStateBridge:
                             if self._mem_is_supplement():
                                 self._boss_fast_push(boss, c)
                             skill = int(c.get("cast_skill_id") or 0)
+                            # cast_skill_id(attr)对很多boss不可靠/常空 → 用状态机 curSkillId_
+                            # 兜底(ZStateSkillComp, 实测稳定; comp ptr 缓存=O(1))。两套id可
+                            # 共存(机制各自绑)。这让"圈是ECS的boss"的出招也能被检测。
+                            if not skill:
+                                ss = self._boss_skill_state()
+                                if ss is not None:
+                                    skill = ss.current_skill_id(obj) or 0
                             actor = None
                             probe = getattr(tr, "_probe", None)
                             if probe is not None:
@@ -602,6 +609,26 @@ class MemStateBridge:
         nr = self._name_resolver()
         nm = (nr.dungeon(smid, default="") if (nr and smid) else "")
         return smid, nm
+
+    def _boss_skill_state(self):
+        """Lazy BossSkillStateReader: boss ZStateSkillComp.curSkillId_ 当 cast_skill_id
+        attr 不可靠时的兜底出招源 (comp ptr 缓存, 热路径 O(1))。无源时 None。"""
+        r = getattr(self, "_boss_skill_reader", None)
+        if r is not None:
+            return r
+        if getattr(self, "_boss_skill_reader_tried", False):
+            return None
+        self._boss_skill_reader_tried = True
+        try:
+            src = getattr(self._entity_provider, "_src", None) \
+                or getattr(self._provider, "_src", None)
+            if src is None or getattr(src, "sr", None) is None:
+                return None
+            from mem_probe.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
+            self._boss_skill_reader = BossSkillStateReader(src)
+            return self._boss_skill_reader
+        except Exception:
+            return None
 
     def _build_map_reader(self) -> None:
         try:
