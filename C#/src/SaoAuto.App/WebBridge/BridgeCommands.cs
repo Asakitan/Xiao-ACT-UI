@@ -95,6 +95,8 @@ public static class BridgeCommands
 
     // Generic file browser for legacy pywebview menu pickers.
     public const string BrowseDir = "file.browse_dir";
+    public const string SelectFolder = "file.select_folder";
+    public const string BossHpHitRegions = "ui.boss_hp_hit_regions";
 
     // HUD settings surfaced by menu.html through the pywebview shim.
     public const string SetWatchedSlots = "settings.set_watched_slots";

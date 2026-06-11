@@ -84,17 +84,33 @@ public class Session200FilePickerBridgeTests : IDisposable
     }
 
     [Fact]
+    public void SelectFolderReturnsPythonCompatibleUnsupportedMessage()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SelectFolder, new JsonObject { ["path"] = _workDir }));
+        var payload = reply!.Payload!;
+
+        Assert.False(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("Folder selection not used here", payload["message"]!.GetValue<string>());
+        Assert.Equal(_workDir, payload["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
         var bridge = new FilePickerBridge(router, () => _workDir);
 
         Assert.Contains(BridgeCommands.BrowseDir, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.BrowseDir, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
     }
 
@@ -107,6 +123,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         lifecycle.AttachFilePicker(() => _workDir);
 
         Assert.Contains(BridgeCommands.BrowseDir, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.StartAutoKeyImportPicker));
@@ -115,6 +132,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         lifecycle.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.BrowseDir, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
     }
 

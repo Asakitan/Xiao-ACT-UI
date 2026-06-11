@@ -34,6 +34,7 @@ public sealed class LegacyUiBridge : IDisposable
         _commands = new[]
         {
             BridgeCommands.SetHitRegions,
+            BridgeCommands.BossHpHitRegions,
             BridgeCommands.NotifyHpHitRegionsReady,
             BridgeCommands.ExitApplication,
             BridgeCommands.SetPanelVisible,
@@ -48,6 +49,7 @@ public sealed class LegacyUiBridge : IDisposable
             BridgeCommands.PanelAction,
         };
         router.Register(BridgeCommands.SetHitRegions, p => Ack("set_hit_regions", p));
+        router.Register(BridgeCommands.BossHpHitRegions, p => Ack("boss_hp_hit_regions", p));
         router.Register(BridgeCommands.NotifyHpHitRegionsReady, p => Ack("notify_hp_hit_regions_ready", p));
         router.Register(BridgeCommands.ExitApplication, HandleExit);
         router.Register(BridgeCommands.SetPanelVisible, p => Ack("set_panel_visible", p));

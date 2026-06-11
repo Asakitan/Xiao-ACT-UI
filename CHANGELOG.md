@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.6: WebView2 文件夹选择与 Boss HP 命中区域桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `select_folder(path)` 并新增
+     `file.select_folder` C# 桥接。
+     修复 WebView2 路径下文件选择器“使用此文件夹”按钮调用缺失 API 的问题;
+     返回结构保持 Python 版 `{ok:false,message}` 行为, 不误触发未实现的文件夹导入。
+
+  2) `web/pywebview-shim.js` 补齐 `boss_hp_hit_regions(regions)` 并新增
+     `ui.boss_hp_hit_regions` C# ack。
+     修复 WebView2 路径下 Boss HP 页面无法上报显示命中区域的问题, 保持 Boss HP
+     当前全 click-through 行为, 同时为后续命中区域接线保留参数传递。
+
+
+
 ## v4.5.5: WebView2 AutoKey 导入选择器浏览桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `browse_dir(path)` 并新增

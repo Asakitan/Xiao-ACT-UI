@@ -16,6 +16,7 @@ public class Session195LegacyUiBridgeTests
         var commands = new[]
         {
             BridgeCommands.SetHitRegions,
+            BridgeCommands.BossHpHitRegions,
             BridgeCommands.NotifyHpHitRegionsReady,
             BridgeCommands.ExitApplication,
             BridgeCommands.SetPanelVisible,

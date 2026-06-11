@@ -64,6 +64,9 @@
         set_hit_regions: function (rects) {
             return call('ui.set_hit_regions', { regions: rects });
         },
+        boss_hp_hit_regions: function (rects) {
+            return call('ui.boss_hp_hit_regions', { regions: Array.isArray(rects) ? rects : [] });
+        },
         notify_hp_hit_regions_ready: function () {
             return call('ui.notify_hp_hit_regions_ready', {});
         },
@@ -104,6 +107,9 @@
         },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
+        },
+        select_folder: function (path) {
+            return call('file.select_folder', { path: String(path || '') }).then(normalizeOk);
         },
         start_auto_key_import_picker: function (path) {
             return call('autokey.import_picker.start', { path: String(path || '') }).then(normalizeOk);

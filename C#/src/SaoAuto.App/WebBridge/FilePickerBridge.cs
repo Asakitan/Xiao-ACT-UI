@@ -23,9 +23,11 @@ public sealed class FilePickerBridge : IDisposable
         _commands = new[]
         {
             BridgeCommands.BrowseDir,
+            BridgeCommands.SelectFolder,
             BridgeCommands.StartAutoKeyImportPicker,
         };
         router.Register(BridgeCommands.BrowseDir, HandleBrowse);
+        router.Register(BridgeCommands.SelectFolder, HandleSelectFolder);
         router.Register(BridgeCommands.StartAutoKeyImportPicker, HandleStartAutoKeyImportPicker);
     }
 
@@ -65,6 +67,13 @@ public sealed class FilePickerBridge : IDisposable
         var path = string.IsNullOrWhiteSpace(requested) ? SafeRoot() : requested;
         return Browse(path);
     }
+
+    private static JsonObject HandleSelectFolder(JsonObject? payload) => new()
+    {
+        ["ok"] = false,
+        ["message"] = "Folder selection not used here",
+        ["path"] = ReadString(payload, "path"),
+    };
 
     private JsonObject Browse(string path)
     {
