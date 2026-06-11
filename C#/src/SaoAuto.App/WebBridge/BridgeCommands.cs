@@ -32,6 +32,7 @@ public static class BridgeCommands
     public const string GetAutoKeyScript = "autokey.cloud.get";
     public const string IssueAutoKeyUploadToken = "autokey.cloud.issue_token";
     public const string UploadAutoKeyScript = "autokey.cloud.upload";
+    public const string SetAutoKeyServerUrl = "autokey.cloud.set_server_url";
 
     // BossRaid
     public const string StartBossRaid = "bossraid.start";
@@ -44,6 +45,7 @@ public static class BridgeCommands
     public const string GetBossRaid = "bossraid.cloud.get";
     public const string IssueBossRaidUploadToken = "bossraid.cloud.issue_token";
     public const string UploadBossRaid = "bossraid.cloud.upload";
+    public const string SetBossRaidServerUrl = "bossraid.cloud.set_server_url";
 
     // Commander
     public const string OpenCommander = "commander.open";

@@ -2,6 +2,21 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.4: WebView2 云端服务器地址桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_auto_key_server_url(url)` 并新增
+     `autokey.cloud.set_server_url` C# 桥接。
+     修复 WebView2 路径下 Auto Key 云端服务器地址保存按钮没有把 URL 写入
+     `auto_key.server_url` 的问题; 后续云端请求会从 settings 重新创建 client,
+     立即使用新地址。
+
+  2) `web/pywebview-shim.js` 补齐 `set_boss_raid_server_url(url)` 并新增
+     `bossraid.cloud.set_server_url` C# 桥接。
+     修复 WebView2 路径下 Boss Raid 云端服务器地址保存按钮没有把 URL 写入
+     `boss_raid.server_url` 的问题; 后续云端请求同样会立即使用新地址。
+
+
+
 ## v4.5.3: WebView2 Boss 血条与 DPS 淡出设置桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_boss_bar_mode(mode)` 并新增

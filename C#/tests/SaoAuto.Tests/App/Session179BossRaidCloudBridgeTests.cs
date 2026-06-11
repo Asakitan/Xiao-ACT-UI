@@ -60,15 +60,17 @@ public class Session179BossRaidCloudBridgeTests
     }
 
     [Fact]
-    public void RegistersFourCommandsAndUnregistersOnDispose()
+    public void RegistersCommandsAndUnregistersOnDispose()
     {
         var (router, bridge, _) = Build();
         Assert.Contains(BridgeCommands.SearchBossRaids, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaid, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.IssueBossRaidUploadToken, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.UploadBossRaid, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossRaidServerUrl, router.RegisteredCommands);
         bridge.Dispose();
         Assert.DoesNotContain(BridgeCommands.SearchBossRaids, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossRaidServerUrl, router.RegisteredCommands);
     }
 
     [Fact]

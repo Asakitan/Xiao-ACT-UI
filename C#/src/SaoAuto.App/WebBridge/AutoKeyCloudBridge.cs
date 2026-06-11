@@ -34,6 +34,7 @@ public sealed class AutoKeyCloudBridge : IDisposable
     private readonly BridgeRouter _router;
     private readonly AutoKeyCloudClient _client;
     private readonly SettingsManager? _settings;
+    private readonly Func<SettingsManager, AutoKeyCloudClient>? _clientFromSettings;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string[] _commands;
     private bool _disposed;
@@ -42,11 +43,13 @@ public sealed class AutoKeyCloudBridge : IDisposable
         BridgeRouter router,
         AutoKeyCloudClient client,
         SettingsManager? settings = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<SettingsManager, AutoKeyCloudClient>? clientFromSettings = null)
     {
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _settings = settings;
+        _clientFromSettings = clientFromSettings;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _commands = new[]
         {
@@ -54,11 +57,13 @@ public sealed class AutoKeyCloudBridge : IDisposable
             BridgeCommands.GetAutoKeyScript,
             BridgeCommands.IssueAutoKeyUploadToken,
             BridgeCommands.UploadAutoKeyScript,
+            BridgeCommands.SetAutoKeyServerUrl,
         };
         router.Register(BridgeCommands.SearchAutoKeyScripts, HandleSearch);
         router.Register(BridgeCommands.GetAutoKeyScript, HandleGet);
         router.Register(BridgeCommands.IssueAutoKeyUploadToken, HandleIssueToken);
         router.Register(BridgeCommands.UploadAutoKeyScript, HandleUpload);
+        router.Register(BridgeCommands.SetAutoKeyServerUrl, HandleSetServerUrl);
     }
 
     public void Dispose()
@@ -86,7 +91,7 @@ public sealed class AutoKeyCloudBridge : IDisposable
                 };
             }
         }
-        var reply = Invoke(ct => _client.SearchScriptsAsync(query, ct));
+        var reply = InvokeWithClient((client, ct) => client.SearchScriptsAsync(query, ct));
         if (_settings is not null && reply["ok"]?.GetValue<bool>() == true)
         {
             PersistSearch(qNode, reply["data"]);
@@ -158,7 +163,7 @@ public sealed class AutoKeyCloudBridge : IDisposable
         var id = payload?["id"]?.GetValue<string>() ?? string.Empty;
         if (string.IsNullOrEmpty(id))
             return new JsonObject { ["ok"] = false, ["error"] = "missing_id" };
-        return Invoke(ct => _client.GetScriptAsync(id, ct));
+        return InvokeWithClient((client, ct) => client.GetScriptAsync(id, ct));
     }
 
     private JsonObject HandleIssueToken(JsonObject? payload)
@@ -166,7 +171,7 @@ public sealed class AutoKeyCloudBridge : IDisposable
         var body = ExtractPayloadElement(payload, "payload");
         if (body is null)
             return new JsonObject { ["ok"] = false, ["error"] = "missing_payload" };
-        return Invoke(ct => _client.IssueUploadTokenAsync(body.Value, ct));
+        return InvokeWithClient((client, ct) => client.IssueUploadTokenAsync(body.Value, ct));
     }
 
     private JsonObject HandleUpload(JsonObject? payload)
@@ -175,7 +180,22 @@ public sealed class AutoKeyCloudBridge : IDisposable
         var body = ExtractPayloadElement(payload, "profile");
         if (body is null)
             return new JsonObject { ["ok"] = false, ["error"] = "missing_profile" };
-        return Invoke(ct => _client.UploadScriptAsync(body.Value, token, ct));
+        return InvokeWithClient((client, ct) => client.UploadScriptAsync(body.Value, token, ct));
+    }
+
+    private JsonObject HandleSetServerUrl(JsonObject? payload)
+    {
+        if (_settings is null)
+            return new JsonObject { ["ok"] = false, ["error"] = "settings_unavailable" };
+        var url = ReadString(payload?["url"]).Trim();
+        var config = AutoKeyConfigLoader.Load(_settings);
+        AutoKeyConfigLoader.Save(_settings, config with { ServerUrl = url });
+        _settings.Save();
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["server_url"] = url,
+        };
     }
 
     private static JsonElement? ExtractPayloadElement(JsonObject? payload, string key)
@@ -184,6 +204,16 @@ public sealed class AutoKeyCloudBridge : IDisposable
         if (node is null) return null;
         using var doc = JsonDocument.Parse(node.ToJsonString());
         return doc.RootElement.Clone();
+    }
+
+    private JsonObject InvokeWithClient(Func<AutoKeyCloudClient, CancellationToken, Task<JsonElement>> action)
+    {
+        if (_settings is not null && _clientFromSettings is not null)
+        {
+            using var client = _clientFromSettings(_settings);
+            return Invoke(ct => action(client, ct));
+        }
+        return Invoke(ct => action(_client, ct));
     }
 
     private static JsonObject Invoke(Func<CancellationToken, Task<JsonElement>> action)
@@ -201,5 +231,13 @@ public sealed class AutoKeyCloudBridge : IDisposable
         {
             return new JsonObject { ["ok"] = false, ["error"] = ex.Message };
         }
+    }
+
+    private static string ReadString(JsonNode? node)
+    {
+        if (node is null) return string.Empty;
+        if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text))
+            return text;
+        return node.ToString();
     }
 }

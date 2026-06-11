@@ -96,6 +96,12 @@
             if (!isFinite(value)) value = 0;
             return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
         },
+        set_auto_key_server_url: function (url) {
+            return call('autokey.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
+        },
+        set_boss_raid_server_url: function (url) {
+            return call('bossraid.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
+        },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
         },

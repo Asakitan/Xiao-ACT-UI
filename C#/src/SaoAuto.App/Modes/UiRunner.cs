@@ -115,11 +115,11 @@ public sealed class UiRunner
         using var autoKeyCloud = AutoKeyCloudClient.FromSettings(_settings);
         // S182 — pass settings so successful searches persist as
         // `auto_key.last_remote_search` for editor restore on next boot.
-        webBridge.AttachAutoKeyCloud(autoKeyCloud, _settings);
+        webBridge.AttachAutoKeyCloud(autoKeyCloud, _settings, s => AutoKeyCloudClient.FromSettings(s));
 
         using var bossRaidCloud = BossRaidCloudClient.FromSettings(_settings);
         // S183 — same persistence shape as S182's auto-key.
-        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings);
+        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings, s => BossRaidCloudClient.FromSettings(s));
 
         // S193 — sound playback bridge for the pywebview shim.
         // Catalog points at assets/sounds (deployed by S185); player is

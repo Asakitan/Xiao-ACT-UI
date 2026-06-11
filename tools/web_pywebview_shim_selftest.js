@@ -182,6 +182,16 @@ function assert(cond, message) {
   assert(last.name === "settings.set_dps_fade_timeout", "set_dps_fade_timeout command mismatch");
   assert(last.payload.seconds === 12, "set_dps_fade_timeout seconds were not forwarded");
 
+  await window.pywebview.api.set_auto_key_server_url("http://ak.local/");
+  last = calls[calls.length - 1];
+  assert(last.name === "autokey.cloud.set_server_url", "set_auto_key_server_url command mismatch");
+  assert(last.payload.url === "http://ak.local/", "set_auto_key_server_url url was not forwarded");
+
+  await window.pywebview.api.set_boss_raid_server_url("http://raid.local/");
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.cloud.set_server_url", "set_boss_raid_server_url command mismatch");
+  assert(last.payload.url === "http://raid.local/", "set_boss_raid_server_url url was not forwarded");
+
   await window.pywebview.api.toggle_mem_scope();
   last = calls[calls.length - 1];
   assert(last.name === "ui.menu_action", "toggle_mem_scope command mismatch");

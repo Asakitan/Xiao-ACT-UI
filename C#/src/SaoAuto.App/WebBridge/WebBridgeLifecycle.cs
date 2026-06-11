@@ -197,12 +197,15 @@ public sealed class WebBridgeLifecycle : IDisposable
     /// <see cref="HttpClient"/> typically outlives this lifecycle).
     /// Idempotent: a second call replaces the previous attachment.
     /// </summary>
-    public void AttachAutoKeyCloud(AutoKeyCloudClient client, SettingsManager? settings = null)
+    public void AttachAutoKeyCloud(
+        AutoKeyCloudClient client,
+        SettingsManager? settings = null,
+        Func<SettingsManager, AutoKeyCloudClient>? clientFromSettings = null)
     {
         if (client is null) throw new ArgumentNullException(nameof(client));
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _autoKeyCloudBridge?.Dispose();
-        _autoKeyCloudBridge = new AutoKeyCloudBridge(Router, client, settings);
+        _autoKeyCloudBridge = new AutoKeyCloudBridge(Router, client, settings, clientFromSettings: clientFromSettings);
     }
 
     /// <summary>
@@ -210,12 +213,15 @@ public sealed class WebBridgeLifecycle : IDisposable
     /// <c>bossraid.cloud.*</c> commands route through <see cref="Router"/>.
     /// The caller owns the client's lifetime. Idempotent.
     /// </summary>
-    public void AttachBossRaidCloud(BossRaidCloudClient client, SettingsManager? settings = null)
+    public void AttachBossRaidCloud(
+        BossRaidCloudClient client,
+        SettingsManager? settings = null,
+        Func<SettingsManager, BossRaidCloudClient>? clientFromSettings = null)
     {
         if (client is null) throw new ArgumentNullException(nameof(client));
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _bossRaidCloudBridge?.Dispose();
-        _bossRaidCloudBridge = new BossRaidCloudBridge(Router, client, settings);
+        _bossRaidCloudBridge = new BossRaidCloudBridge(Router, client, settings, clientFromSettings: clientFromSettings);
     }
 
     /// <summary>S193 — attach the sound playback bridge so the

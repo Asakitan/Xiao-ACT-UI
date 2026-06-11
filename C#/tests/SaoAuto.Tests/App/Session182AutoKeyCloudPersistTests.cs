@@ -31,13 +31,17 @@ public class Session182AutoKeyCloudPersistTests : IDisposable
 
     private sealed class FakeHandler : HttpMessageHandler
     {
+        public List<HttpRequestMessage> Requests { get; } = new();
         public Func<HttpRequestMessage, HttpResponseMessage> Responder { get; set; } = _ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(Responder(request));
+        {
+            Requests.Add(request);
+            return Task.FromResult(Responder(request));
+        }
     }
 
     private (BridgeRouter router, AutoKeyCloudBridge bridge, SettingsManager settings) Build(
@@ -139,5 +143,36 @@ public class Session182AutoKeyCloudPersistTests : IDisposable
         var reloaded = AutoKeyConfigLoader.Load(new SettingsManager(settings.Path));
         Assert.True(reloaded.Enabled);
         Assert.Equal("new", reloaded.LastRemoteSearch.Query.Q);
+    }
+
+    [Fact]
+    public void SetServerUrlPersistsAndNextSearchUsesUpdatedSettings()
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"results\":[]}", Encoding.UTF8, "application/json") },
+        };
+        using var http = new HttpClient(handler);
+        using var initialClient = new AutoKeyCloudClient("http://old.example", http);
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        using var bridge = new AutoKeyCloudBridge(
+            router,
+            initialClient,
+            settings,
+            clientFromSettings: sm => AutoKeyCloudClient.FromSettings(sm, http));
+
+        var saved = router.Dispatch(Cmd(BridgeCommands.SetAutoKeyServerUrl,
+            "{\"url\":\"http://new.example/\"}"));
+        Assert.True(saved!.Payload!["ok"]!.GetValue<bool>());
+
+        router.Dispatch(Cmd(BridgeCommands.SearchAutoKeyScripts, "{\"query\":{\"q\":\"after\"}}"));
+
+        var reloaded = AutoKeyConfigLoader.Load(new SettingsManager(settings.Path));
+        Assert.Equal("http://new.example/", reloaded.ServerUrl);
+        Assert.StartsWith("http://new.example/api/scripts?", handler.Requests.Single().RequestUri!.AbsoluteUri);
     }
 }

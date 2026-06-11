@@ -30,13 +30,17 @@ public class Session183BossRaidCloudPersistTests : IDisposable
 
     private sealed class FakeHandler : HttpMessageHandler
     {
+        public List<HttpRequestMessage> Requests { get; } = new();
         public Func<HttpRequestMessage, HttpResponseMessage> Responder { get; set; } = _ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(Responder(request));
+        {
+            Requests.Add(request);
+            return Task.FromResult(Responder(request));
+        }
     }
 
     private (BridgeRouter router, BossRaidCloudBridge bridge, SettingsManager settings) Build(
@@ -136,5 +140,36 @@ public class Session183BossRaidCloudPersistTests : IDisposable
         var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
         Assert.True(reloaded.Enabled);
         Assert.Equal("after-seed", reloaded.LastRemoteSearch.Query.Q);
+    }
+
+    [Fact]
+    public void SetServerUrlPersistsAndNextSearchUsesUpdatedSettings()
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"results\":[]}", Encoding.UTF8, "application/json") },
+        };
+        using var http = new HttpClient(handler);
+        using var initialClient = new BossRaidCloudClient("http://old.example", http);
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        using var bridge = new BossRaidCloudBridge(
+            router,
+            initialClient,
+            settings,
+            clientFromSettings: sm => BossRaidCloudClient.FromSettings(sm, http));
+
+        var saved = router.Dispatch(Cmd(BridgeCommands.SetBossRaidServerUrl,
+            "{\"url\":\"http://raid-new.example/\"}"));
+        Assert.True(saved!.Payload!["ok"]!.GetValue<bool>());
+
+        router.Dispatch(Cmd(BridgeCommands.SearchBossRaids, "{\"query\":{\"q\":\"after\"}}"));
+
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        Assert.Equal("http://raid-new.example/", reloaded.ServerUrl);
+        Assert.StartsWith("http://raid-new.example/api/boss-raids?", handler.Requests.Single().RequestUri!.AbsoluteUri);
     }
 }

@@ -57,15 +57,17 @@ public class Session177AutoKeyCloudBridgeTests
     }
 
     [Fact]
-    public void RegistersFourCommandsAndUnregistersOnDispose()
+    public void RegistersCommandsAndUnregistersOnDispose()
     {
         var (router, bridge, _) = Build();
         Assert.Contains(BridgeCommands.SearchAutoKeyScripts, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetAutoKeyScript, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.IssueAutoKeyUploadToken, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.UploadAutoKeyScript, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetAutoKeyServerUrl, router.RegisteredCommands);
         bridge.Dispose();
         Assert.DoesNotContain(BridgeCommands.SearchAutoKeyScripts, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetAutoKeyServerUrl, router.RegisteredCommands);
     }
 
     [Fact]
