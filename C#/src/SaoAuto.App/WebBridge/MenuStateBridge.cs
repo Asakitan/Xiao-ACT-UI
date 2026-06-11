@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SaoAuto.Core.Automation;
@@ -15,14 +16,20 @@ public sealed class MenuStateBridge : IDisposable
     private readonly BridgeRouter _router;
     private readonly SettingsManager _settings;
     private readonly GameStateManager? _states;
+    private readonly Func<string> _bossRaidExportDirProvider;
     private readonly string[] _commands;
     private bool _disposed;
 
-    public MenuStateBridge(BridgeRouter router, SettingsManager settings, GameStateManager? states = null)
+    public MenuStateBridge(
+        BridgeRouter router,
+        SettingsManager settings,
+        GameStateManager? states = null,
+        Func<string>? bossRaidExportDirProvider = null)
     {
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _states = states;
+        _bossRaidExportDirProvider = bossRaidExportDirProvider ?? DefaultBossRaidExportDir;
         _commands = new[]
         {
             BridgeCommands.GetAutoKeyState,
@@ -32,6 +39,7 @@ public sealed class MenuStateBridge : IDisposable
             BridgeCommands.CreateBossRaidProfile,
             BridgeCommands.SaveBossRaidProfile,
             BridgeCommands.DeleteBossRaidProfile,
+            BridgeCommands.ExportBossRaid,
         };
         _router.Register(BridgeCommands.GetAutoKeyState, _ => HandleAutoKeyState());
         _router.Register(BridgeCommands.GetBossRaidState, _ => HandleBossRaidState());
@@ -40,6 +48,7 @@ public sealed class MenuStateBridge : IDisposable
         _router.Register(BridgeCommands.CreateBossRaidProfile, _ => HandleCreateBossRaidProfile());
         _router.Register(BridgeCommands.SaveBossRaidProfile, HandleSaveBossRaidProfile);
         _router.Register(BridgeCommands.DeleteBossRaidProfile, HandleDeleteBossRaidProfile);
+        _router.Register(BridgeCommands.ExportBossRaid, HandleExportBossRaid);
     }
 
     public void Dispose()
@@ -125,6 +134,31 @@ public sealed class MenuStateBridge : IDisposable
         {
             ["ok"] = true,
             ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
+
+    private JsonObject HandleExportBossRaid(JsonObject? payload)
+    {
+        var id = ReadString(payload, "id");
+        if (string.IsNullOrWhiteSpace(id))
+            id = ReadString(payload, "profile_id");
+
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var author = authorDoc.RootElement.Clone();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        var profile = string.IsNullOrWhiteSpace(id)
+            ? BossRaidProfile.ActiveProfile(config)
+            : BossRaidProfile.FindProfile(config, id);
+        profile ??= BossRaidProfile.ActiveProfile(config);
+        if (profile is null)
+            return new JsonObject { ["ok"] = false, ["message"] = "No active profile" };
+
+        var path = BossRaidProfileIo.ExportProfileToDefaultPath(profile, _bossRaidExportDirProvider());
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["path"] = path,
         };
     }
 
@@ -266,6 +300,9 @@ public sealed class MenuStateBridge : IDisposable
             ? node.ToString()
             : string.Empty;
     }
+
+    private static string DefaultBossRaidExportDir()
+        => Path.Combine(AppContext.BaseDirectory, "exports", "boss_raids");
 
     private static JsonElement? ReadProfileElement(JsonObject? payload)
     {

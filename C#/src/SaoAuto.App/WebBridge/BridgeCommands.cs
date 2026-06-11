@@ -53,6 +53,7 @@ public static class BridgeCommands
     // S179 — cloud script-share endpoints (served by BossRaidCloudBridge).
     public const string SearchBossRaids = "bossraid.cloud.search";
     public const string GetBossRaid = "bossraid.cloud.get";
+    public const string DownloadBossRaidRemote = "bossraid.cloud.download";
     public const string IssueBossRaidUploadToken = "bossraid.cloud.issue_token";
     public const string UploadBossRaid = "bossraid.cloud.upload";
     public const string SetBossRaidServerUrl = "bossraid.cloud.set_server_url";

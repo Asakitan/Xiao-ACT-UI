@@ -143,6 +143,32 @@ public class Session183BossRaidCloudPersistTests : IDisposable
     }
 
     [Fact]
+    public void DownloadRemotePersistsProfileAndReturnsMenuState()
+    {
+        var fixedNow = new DateTimeOffset(2026, 5, 20, 0, 0, 0, TimeSpan.Zero);
+        var (router, bridge, settings) = Build(
+            "{\"id\":\"remote-1\",\"profile\":{\"id\":\"remote-profile\",\"profile_name\":\"Remote Boss\",\"boss_total_hp\":900,\"phases\":[]}}",
+            () => fixedNow);
+        using var _ = bridge;
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.DownloadBossRaidRemote,
+            "{\"id\":\"remote-1\"}"));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        var saved = Assert.Single(reloaded.Profiles);
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("remote-profile", payload["profile_id"]!.GetValue<string>());
+        Assert.Equal("remote-1", payload["remote_id"]!.GetValue<string>());
+        Assert.Equal("Remote Boss", saved.ProfileName);
+        Assert.Equal("downloaded", saved.Source);
+        Assert.Equal("remote-1", saved.RemoteId);
+        Assert.Equal(1, state["local_profile_count"]!.GetValue<int>());
+        Assert.Equal("Remote Boss", state["profiles"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void SetServerUrlPersistsAndNextSearchUsesUpdatedSettings()
     {
         var router = new BridgeRouter();

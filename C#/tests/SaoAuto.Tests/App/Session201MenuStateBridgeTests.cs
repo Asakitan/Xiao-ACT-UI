@@ -294,6 +294,39 @@ public class Session201MenuStateBridgeTests : IDisposable
     }
 
     [Fact]
+    public void ExportBossRaidProfileWritesSelectedProfileToExportDirectory()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        var exportDir = Path.Combine(_workDir, "exports");
+        var profile = BossRaidProfile.MakeDefaultProfile() with
+        {
+            Id = "br-export",
+            ProfileName = "Export Boss",
+        };
+        var config = BossRaidProfile.UpsertProfile(BossRaidProfile.DefaultConfig(), profile, activate: true);
+        BossRaidConfigStore.Save(settings, config);
+        using var bridge = new MenuStateBridge(
+            router,
+            settings,
+            new GameStateManager(),
+            bossRaidExportDirProvider: () => exportDir);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.ExportBossRaid, new JsonObject
+        {
+            ["id"] = "br-export",
+        }));
+        var payload = reply!.Payload!;
+        var path = payload["path"]!.GetValue<string>();
+        var content = File.ReadAllText(path);
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.True(path.StartsWith(exportDir, StringComparison.Ordinal));
+        Assert.Contains("Export Boss", content);
+        Assert.Contains("\"profile_name\"", content);
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
@@ -307,6 +340,7 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SaveBossRaidProfile, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.DeleteBossRaidProfile, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ExportBossRaid, router.RegisteredCommands);
 
         bridge.Dispose();
 
@@ -317,6 +351,7 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SaveBossRaidProfile, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.DeleteBossRaidProfile, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.ExportBossRaid, router.RegisteredCommands);
     }
 
     [Fact]
@@ -335,6 +370,7 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SaveBossRaidProfile, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.DeleteBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ExportBossRaid, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.GetAutoKeyState));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -348,6 +384,7 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SaveBossRaidProfile, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.DeleteBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.ExportBossRaid, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]

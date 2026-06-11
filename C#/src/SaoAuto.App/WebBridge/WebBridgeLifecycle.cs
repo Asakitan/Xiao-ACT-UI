@@ -230,12 +230,18 @@ public sealed class WebBridgeLifecycle : IDisposable
     public void AttachBossRaidCloud(
         BossRaidCloudClient client,
         SettingsManager? settings = null,
-        Func<SettingsManager, BossRaidCloudClient>? clientFromSettings = null)
+        Func<SettingsManager, BossRaidCloudClient>? clientFromSettings = null,
+        GameStateManager? states = null)
     {
         if (client is null) throw new ArgumentNullException(nameof(client));
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _bossRaidCloudBridge?.Dispose();
-        _bossRaidCloudBridge = new BossRaidCloudBridge(Router, client, settings, clientFromSettings: clientFromSettings);
+        _bossRaidCloudBridge = new BossRaidCloudBridge(
+            Router,
+            client,
+            settings,
+            clientFromSettings: clientFromSettings,
+            states: states);
     }
 
     /// <summary>S202 — attach runtime controls used by raid_editor.html.

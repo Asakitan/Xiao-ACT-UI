@@ -120,7 +120,7 @@ public sealed class UiRunner
 
         using var bossRaidCloud = BossRaidCloudClient.FromSettings(_settings);
         // S183 — same persistence shape as S182's auto-key.
-        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings, s => BossRaidCloudClient.FromSettings(s));
+        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings, s => BossRaidCloudClient.FromSettings(s), _states);
         var bossRaidEngine = new BossRaidEngine();
         webBridge.AttachBossRaidRuntime(bossRaidEngine, _settings, _states);
 

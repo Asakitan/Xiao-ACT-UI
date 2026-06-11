@@ -190,6 +190,12 @@
         delete_boss_raid_profile: function (id) {
             return call('bossraid.profile.delete', { id: String(id || '') }).then(normalizeOk);
         },
+        export_boss_raid_profile: function (id) {
+            return call('bossraid.export', { id: String(id || '') }).then(normalizeOk);
+        },
+        download_boss_raid_remote: function (id) {
+            return call('bossraid.cloud.download', { id: String(id || '') }).then(normalizeOk);
+        },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {
                 actions_json: String(actionsJson || '[]')

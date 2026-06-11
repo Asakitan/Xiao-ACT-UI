@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.19: WebView2 BossRaid 导出与远端下载桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `export_boss_raid_profile(id)`,
+     C# `MenuStateBridge` 注册 `bossraid.export`。
+     BossRaid 本地配置现在能导出到 `exports/boss_raids`, 并返回导出路径给菜单提示。
+
+  2) `web/pywebview-shim.js` 补齐 `download_boss_raid_remote(id)`,
+     C# `BossRaidCloudBridge` 新增 `bossraid.cloud.download`。
+     云端下载会调用远端 get, normalize 为 `downloaded` profile, 处理重复 ID,
+     持久化到本地配置并返回完整菜单状态。
+
 ## v4.5.18: WebView2 BossRaid 运行启动/停止桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `boss_raid_start()`,

@@ -65,11 +65,13 @@ public class Session179BossRaidCloudBridgeTests
         var (router, bridge, _) = Build();
         Assert.Contains(BridgeCommands.SearchBossRaids, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaid, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.DownloadBossRaidRemote, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.IssueBossRaidUploadToken, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.UploadBossRaid, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossRaidServerUrl, router.RegisteredCommands);
         bridge.Dispose();
         Assert.DoesNotContain(BridgeCommands.SearchBossRaids, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.DownloadBossRaidRemote, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossRaidServerUrl, router.RegisteredCommands);
     }
 
@@ -184,13 +186,16 @@ public class Session179BossRaidCloudBridgeTests
 
         web.AttachBossRaidCloud(client);
         Assert.Contains(BridgeCommands.SearchBossRaids, web.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.DownloadBossRaidRemote, web.Router.RegisteredCommands);
 
         // Idempotent
         web.AttachBossRaidCloud(client);
         Assert.Contains(BridgeCommands.SearchBossRaids, web.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.DownloadBossRaidRemote, web.Router.RegisteredCommands);
 
         web.Dispose();
         Assert.DoesNotContain(BridgeCommands.SearchBossRaids, web.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.DownloadBossRaidRemote, web.Router.RegisteredCommands);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using SaoAuto.Core.Automation;
 using SaoAuto.Core.Configuration;
+using SaoAuto.Core.State;
 
 namespace SaoAuto.App.WebBridge;
 
@@ -35,6 +36,7 @@ public sealed class BossRaidCloudBridge : IDisposable
     private readonly BossRaidCloudClient _client;
     private readonly SettingsManager? _settings;
     private readonly Func<SettingsManager, BossRaidCloudClient>? _clientFromSettings;
+    private readonly GameStateManager? _states;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string[] _commands;
     private bool _disposed;
@@ -44,23 +46,27 @@ public sealed class BossRaidCloudBridge : IDisposable
         BossRaidCloudClient client,
         SettingsManager? settings = null,
         Func<DateTimeOffset>? clock = null,
-        Func<SettingsManager, BossRaidCloudClient>? clientFromSettings = null)
+        Func<SettingsManager, BossRaidCloudClient>? clientFromSettings = null,
+        GameStateManager? states = null)
     {
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _settings = settings;
         _clientFromSettings = clientFromSettings;
+        _states = states;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _commands = new[]
         {
             BridgeCommands.SearchBossRaids,
             BridgeCommands.GetBossRaid,
+            BridgeCommands.DownloadBossRaidRemote,
             BridgeCommands.IssueBossRaidUploadToken,
             BridgeCommands.UploadBossRaid,
             BridgeCommands.SetBossRaidServerUrl,
         };
         router.Register(BridgeCommands.SearchBossRaids, HandleSearch);
         router.Register(BridgeCommands.GetBossRaid, HandleGet);
+        router.Register(BridgeCommands.DownloadBossRaidRemote, HandleDownload);
         router.Register(BridgeCommands.IssueBossRaidUploadToken, HandleIssueToken);
         router.Register(BridgeCommands.UploadBossRaid, HandleUpload);
         router.Register(BridgeCommands.SetBossRaidServerUrl, HandleSetServerUrl);
@@ -158,6 +164,57 @@ public sealed class BossRaidCloudBridge : IDisposable
         return InvokeWithClient((client, ct) => client.GetAsync(id, ct));
     }
 
+    private JsonObject HandleDownload(JsonObject? payload)
+    {
+        if (_settings is null)
+            return new JsonObject { ["ok"] = false, ["error"] = "settings_unavailable" };
+
+        var id = ReadString(payload?["id"]).Trim();
+        if (string.IsNullOrWhiteSpace(id))
+            return new JsonObject { ["ok"] = false, ["error"] = "missing_id" };
+
+        var reply = InvokeWithClient((client, ct) => client.GetAsync(id, ct));
+        if (reply["ok"]?.GetValue<bool>() != true)
+            return reply;
+        if (reply["data"] is not JsonObject data)
+            return new JsonObject { ["ok"] = false, ["error"] = "bad_response" };
+
+        var profileNode = data["profile"] ?? new JsonObject();
+        JsonElement profileElement;
+        try
+        {
+            using var profileDoc = JsonDocument.Parse(profileNode.ToJsonString());
+            profileElement = profileDoc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return new JsonObject { ["ok"] = false, ["error"] = "bad_profile" };
+        }
+
+        var author = CurrentAuthorElement();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        var profile = BossRaidProfile.NormalizeProfile(profileElement, author, source: "downloaded");
+        if (string.IsNullOrWhiteSpace(profile.Id) || config.Profiles.Any(item => item.Id == profile.Id))
+            profile = profile with { Id = BossRaidProfile.NewIdFactory("boss") };
+
+        var remoteId = ReadString(data["id"]).Trim();
+        profile = profile with
+        {
+            RemoteId = string.IsNullOrWhiteSpace(remoteId) ? null : remoteId,
+            Source = "downloaded",
+            UpdatedAt = BossRaidProfile.UtcNowIsoFactory(),
+        };
+        config = BossRaidProfile.UpsertProfile(config, profile, activate: false);
+        BossRaidConfigStore.Save(_settings, config);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["profile_id"] = profile.Id,
+            ["remote_id"] = profile.RemoteId is null ? null : JsonValue.Create(profile.RemoteId),
+            ["state"] = MenuStateBridge.BuildBossRaidState(_settings, _states),
+        };
+    }
+
     private JsonObject HandleIssueToken(JsonObject? payload)
     {
         var body = ExtractPayloadElement(payload, "payload");
@@ -237,5 +294,21 @@ public sealed class BossRaidCloudBridge : IDisposable
         if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var text))
             return text;
         return node.ToString();
+    }
+
+    private JsonElement CurrentAuthorElement()
+    {
+        var author = _states is null
+            ? AuthorSnapshot.Empty
+            : AutoKeyConfigLoader.AuthorFromState(_states.Snapshot);
+        var node = new JsonObject
+        {
+            ["player_uid"] = author.PlayerUid ?? string.Empty,
+            ["player_name"] = author.PlayerName ?? string.Empty,
+            ["profession_id"] = author.ProfessionId,
+            ["profession_name"] = author.ProfessionName ?? string.Empty,
+        };
+        using var doc = JsonDocument.Parse(node.ToJsonString());
+        return doc.RootElement.Clone();
     }
 }
