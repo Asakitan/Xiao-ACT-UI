@@ -10,8 +10,9 @@ namespace SaoAuto.App.WebBridge;
 /// <summary>
 /// S200 — Minimal native file-browser bridge for legacy menu pickers.
 /// Python pywebview exposes <c>browse_dir</c> and
-/// <c>start_auto_key_import_picker</c>; without these commands, WebView2
-/// menus cannot open or navigate the AutoKey import picker.
+/// <c>start_auto_key_import_picker</c> / <c>start_boss_raid_import_picker</c>;
+/// without these commands, WebView2 menus cannot open or navigate import
+/// pickers.
 /// </summary>
 public sealed class FilePickerBridge : IDisposable
 {
@@ -39,11 +40,13 @@ public sealed class FilePickerBridge : IDisposable
             BridgeCommands.SelectFile,
             BridgeCommands.SelectFolder,
             BridgeCommands.StartAutoKeyImportPicker,
+            BridgeCommands.StartBossRaidImportPicker,
         };
         router.Register(BridgeCommands.BrowseDir, HandleBrowse);
         router.Register(BridgeCommands.SelectFile, HandleSelectFile);
         router.Register(BridgeCommands.SelectFolder, HandleSelectFolder);
         router.Register(BridgeCommands.StartAutoKeyImportPicker, HandleStartAutoKeyImportPicker);
+        router.Register(BridgeCommands.StartBossRaidImportPicker, HandleStartBossRaidImportPicker);
     }
 
     public void Dispose()
@@ -55,10 +58,16 @@ public sealed class FilePickerBridge : IDisposable
     }
 
     private JsonObject HandleStartAutoKeyImportPicker(JsonObject? payload)
+        => HandleStartImportPicker(payload, "auto_key");
+
+    private JsonObject HandleStartBossRaidImportPicker(JsonObject? payload)
+        => HandleStartImportPicker(payload, "boss_raid");
+
+    private JsonObject HandleStartImportPicker(JsonObject? payload, string consumer)
     {
         var requested = ReadString(payload, "path");
         var root = string.IsNullOrWhiteSpace(requested) ? SafeRoot() : requested;
-        _pendingConsumer = "auto_key";
+        _pendingConsumer = consumer;
         var browser = Browse(root);
         browser["mode"] = "file";
         if (browser["error"] is not null)

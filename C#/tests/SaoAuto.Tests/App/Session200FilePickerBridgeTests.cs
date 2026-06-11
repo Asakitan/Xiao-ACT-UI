@@ -70,6 +70,22 @@ public class Session200FilePickerBridgeTests : IDisposable
     }
 
     [Fact]
+    public void StartBossRaidImportPickerReturnsFileModeBrowser()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.StartBossRaidImportPicker));
+        var payload = reply!.Payload!;
+        var browser = payload["browser"]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("file", browser["mode"]!.GetValue<string>());
+        Assert.Equal(Path.GetFullPath(_workDir), browser["current"]!.GetValue<string>());
+        Assert.NotEmpty(browser["files"]!.AsArray());
+    }
+
+    [Fact]
     public void MissingPathReturnsPickerConsumableEmptyBrowser()
     {
         var router = new BridgeRouter();
@@ -109,6 +125,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SelectFile, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.StartBossRaidImportPicker, router.RegisteredCommands);
 
         bridge.Dispose();
 
@@ -116,6 +133,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SelectFile, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SelectFolder, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.StartBossRaidImportPicker, router.RegisteredCommands);
     }
 
     [Fact]
@@ -130,6 +148,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SelectFile, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.StartBossRaidImportPicker, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.StartAutoKeyImportPicker));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -140,6 +159,7 @@ public class Session200FilePickerBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SelectFile, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SelectFolder, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.StartAutoKeyImportPicker, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.StartBossRaidImportPicker, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]
@@ -230,6 +250,40 @@ public class Session200FilePickerBridgeTests : IDisposable
         var reloaded = BossRaidConfigStore.Load(new SettingsManager(settingsPath));
         Assert.Single(reloaded.Profiles);
         Assert.Equal("Imported Raid", reloaded.Profiles[0].ProfileName);
+    }
+
+    [Fact]
+    public void BossRaidImportPickerSetsPendingConsumerForSelectFile()
+    {
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var importPath = Path.Combine(_workDir, "boss-raid-pending-import.json");
+        File.WriteAllText(importPath, """
+        {
+          "schema_version": 1,
+          "profile": {
+            "profile_name": "Pending Raid",
+            "phases": [
+              { "timelines": [ { "time_s": 11.0, "label": "Spread" } ] }
+            ]
+          }
+        }
+        """);
+
+        var router = new BridgeRouter();
+        using var bridge = new FilePickerBridge(router, () => _workDir, settings, new GameStateManager());
+
+        router.Dispatch(Cmd(BridgeCommands.StartBossRaidImportPicker));
+        var reply = router.Dispatch(Cmd(BridgeCommands.SelectFile, new JsonObject
+        {
+            ["path"] = importPath,
+        }));
+        var payload = reply!.Payload!;
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("boss_raid", payload["consumer"]!.GetValue<string>());
+        Assert.Equal("Pending Raid", payload["state"]!["profiles_full"]!.AsArray()[0]!["profile_name"]!.GetValue<string>());
     }
 
     [Fact]

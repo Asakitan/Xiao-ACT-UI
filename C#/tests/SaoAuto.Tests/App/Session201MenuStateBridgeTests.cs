@@ -155,6 +155,27 @@ public class Session201MenuStateBridgeTests : IDisposable
     }
 
     [Fact]
+    public void SetBossRaidEnabledPersistsAndReturnsFreshState()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        BossRaidConfigStore.Save(settings, BossRaidProfile.DefaultConfig() with { Enabled = false });
+        using var bridge = new MenuStateBridge(router, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetBossRaidEnabled, new JsonObject
+        {
+            ["enabled"] = true,
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.True(payload["enabled"]!.GetValue<bool>());
+        Assert.True(state["enabled"]!.GetValue<bool>());
+        Assert.True(BossRaidConfigStore.Load(new SettingsManager(settings.Path)).Enabled);
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
@@ -163,11 +184,13 @@ public class Session201MenuStateBridgeTests : IDisposable
 
         Assert.Contains(BridgeCommands.GetAutoKeyState, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaidState, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.GetAutoKeyState, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.GetBossRaidState, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
     }
 
     [Fact]
@@ -181,6 +204,7 @@ public class Session201MenuStateBridgeTests : IDisposable
 
         Assert.Contains(BridgeCommands.GetAutoKeyState, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaidState, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.GetAutoKeyState));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -189,6 +213,7 @@ public class Session201MenuStateBridgeTests : IDisposable
 
         Assert.DoesNotContain(BridgeCommands.GetAutoKeyState, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.GetBossRaidState, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]

@@ -23,9 +23,15 @@ public sealed class MenuStateBridge : IDisposable
         _router = router ?? throw new ArgumentNullException(nameof(router));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _states = states;
-        _commands = new[] { BridgeCommands.GetAutoKeyState, BridgeCommands.GetBossRaidState };
+        _commands = new[]
+        {
+            BridgeCommands.GetAutoKeyState,
+            BridgeCommands.GetBossRaidState,
+            BridgeCommands.SetBossRaidEnabled,
+        };
         _router.Register(BridgeCommands.GetAutoKeyState, _ => HandleAutoKeyState());
         _router.Register(BridgeCommands.GetBossRaidState, _ => HandleBossRaidState());
+        _router.Register(BridgeCommands.SetBossRaidEnabled, HandleSetBossRaidEnabled);
     }
 
     public void Dispose()
@@ -41,6 +47,30 @@ public sealed class MenuStateBridge : IDisposable
 
     private JsonObject HandleBossRaidState()
         => new() { ["ok"] = true, ["state"] = BuildBossRaidState(_settings, _states) };
+
+    private JsonObject HandleSetBossRaidEnabled(JsonObject? payload)
+    {
+        bool enabled;
+        try
+        {
+            enabled = payload?["enabled"]?.GetValue<bool>() ?? false;
+        }
+        catch
+        {
+            return new JsonObject { ["ok"] = false, ["error"] = "bad_payload" };
+        }
+
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var config = BossRaidConfigStore.Load(_settings, authorDoc.RootElement.Clone());
+        BossRaidConfigStore.Save(_settings, config with { Enabled = enabled });
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["enabled"] = enabled,
+            ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
 
     internal static JsonObject BuildAutoKeyState(SettingsManager settings, GameStateManager? states)
     {
