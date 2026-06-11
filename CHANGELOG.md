@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.83: ACT Web Graph payload 防护修复.
+
+  1) `web/act_graph_timeseries.html` 修复 metrics payload 形状处理。
+     Graph Timeseries Web 现在只渲染对象指标列表,
+     避免字符串或坏条目造成指标查找与图例渲染中断。
+
+  2) `web/act_graph_timeseries.html` 修复 series/points payload 形状处理。
+     Graph Timeseries Web 现在归一 series bucket 后再读取 points,
+     避免坏 payload 造成趋势图和点列表渲染中断。
+
 ## v4.5.82: ACT Web Report/Offline payload 防护修复.
 
   1) `web/act_report_export.html` 修复 preview top_rows/history/storage_status payload 形状处理。

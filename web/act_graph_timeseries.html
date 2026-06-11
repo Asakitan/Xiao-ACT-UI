@@ -210,6 +210,12 @@
     function safeTopic(value) {
       return String(value == null ? '' : value);
     }
+    function objectValue(value) {
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function objectItems(value) {
+      return (Array.isArray(value) ? value : []).filter(item => item && typeof item === 'object' && !Array.isArray(item));
+    }
     function normalizedPoints(points) {
       return (Array.isArray(points) ? points : []).map(p => {
         const point = (p && typeof p === 'object') ? p : {};
@@ -220,6 +226,7 @@
       });
     }
     function drawChart(status) {
+      status = objectValue(status);
       const canvas = document.getElementById('chart');
       const ctx = canvas.getContext('2d');
       const rect = canvas.getBoundingClientRect();
@@ -241,7 +248,9 @@
       }
       const metric = status.selected_metric || 'damage';
       const stroke = metricColor(metric);
-      const rawPoints = (((status.series || {})[metric] || {}).points || []);
+      const series = objectValue(status.series);
+      const metricSeries = objectValue(series[metric]);
+      const rawPoints = metricSeries.points;
       const points = normalizedPoints(rawPoints);
       if (!points.length) {
         ctx.fillStyle = muted;
@@ -315,11 +324,14 @@
         document.getElementById('status').textContent = 'Action Log @ ' + ActTime.fmtClock(safeMs(ms));
       },
       render(status) {
-        status = status || {};
+        status = objectValue(status);
         this.last = status;
         const metric = status.selected_metric || document.getElementById('metric').value || 'damage';
-        const metricDef = (status.metrics || []).find(m => m.id === metric) || { label: metric };
-        const rawPoints = (((status.series || {})[metric] || {}).points || []);
+        const metrics = objectItems(status.metrics);
+        const metricDef = metrics.find(m => m.id === metric) || { label: metric };
+        const series = objectValue(status.series);
+        const metricSeries = objectValue(series[metric]);
+        const rawPoints = metricSeries.points;
         const points = normalizedPoints(rawPoints);
         const latest = points.length ? points[points.length - 1]._value : 0;
         document.getElementById('metric').value = metric;
@@ -330,7 +342,7 @@
         document.getElementById('pointCount').textContent = String(points.length || 0);
         document.getElementById('rangeValue').textContent = ActTime.fmtDur(status.time_range_ms);
         document.getElementById('status').textContent = status.message || 'OK';
-        document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + esc(m.label || m.id) + '</span></div>').join('');
+        document.getElementById('legend').innerHTML = metrics.map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + esc(m.label || m.id) + '</span></div>').join('');
         const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;
         document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
           const ms = p._time_ms;

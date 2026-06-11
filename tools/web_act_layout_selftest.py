@@ -228,17 +228,34 @@ def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
         if snippet in graph:
             raise AssertionError("graph timeseries must normalize numeric input before rendering/calling APIs: " + snippet)
     for snippet in (
+        "const rawPoints = (((status.series || {})[metric] || {}).points || []);",
+        "const metricDef = (status.metrics || []).find(m => m.id === metric) || { label: metric };",
+        "document.getElementById('legend').innerHTML = (status.metrics || []).map(m =>",
+        "status = status || {};",
+    ):
+        if snippet in graph:
+            raise AssertionError("graph timeseries must guard list/object payloads: " + snippet)
+    for snippet in (
         "function finiteNum",
         "function safeLimit",
         "const raw = value == null || value === '' ? 120 : value;",
         "function safeMs",
         "function safeZoom",
         "function normalizedPoints",
+        "function objectValue(value)",
+        "function objectItems(value)",
         "limit: safeLimit(args[1])",
         "time_range_ms: safeZoom(args[4])",
         "return { time_range_ms: safeZoom(args[0]), limit: safeLimit(args[1]) };",
         "limit: safeLimit(args[2])",
+        "status = objectValue(status);",
+        "const series = objectValue(status.series);",
+        "const metricSeries = objectValue(series[metric]);",
+        "const rawPoints = metricSeries.points;",
         "const points = normalizedPoints(rawPoints);",
+        "const metrics = objectItems(status.metrics);",
+        "const metricDef = metrics.find(m => m.id === metric) || { label: metric };",
+        "document.getElementById('legend').innerHTML = metrics.map(m =>",
         "const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;",
         "await callApi('show_action_log_at', 'act.action_log.jump_to_time', safeMs(ms), 'live', '', safeTopic(topic));",
         "topic: String(args[3] || '')",
