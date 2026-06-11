@@ -104,6 +104,9 @@ def main() -> int:
         "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.pre_warn_s || 0)",
         "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.duration_s || 0)",
         "'<input type=\"number\" min=\"0\" max=\"100\" value=\"' + (cond.value || 0)",
+        "_brDraftProfile.phases[pi].trigger.value = parseFloat(val) || 0;",
+        "if (type === 'float') val = parseFloat(val) || 0;",
+        "tls[ti].condition.value = parseFloat(val) || 0;",
     ]
     for pattern in boss_raid_raw_patterns:
         if pattern in html:
@@ -111,18 +114,44 @@ def main() -> int:
     boss_raid_safe_required = [
         "function _brNumText",
         "function _brNumAttr",
+        "function _clampNum",
+        "function _clampInt",
         "_escHtml(_brNumText(p.boss_total_hp, '?'))",
         "_escHtml(_brNumText(item.boss_total_hp, '?'))",
-        "value=\"' + _brNumAttr(trigger.value, 0)",
+        "value=\"' + _brNumAttr(trigger.value, 0, (trigger.type === 'hp_pct' || trigger.type === 'extinction_pct') ? 100 : null)",
         "value=\"' + _brNumAttr(tl.time_s, 0)",
         "value=\"' + _brNumAttr(tl.repeat_interval_s, 0)",
         "value=\"' + _brNumAttr(tl.pre_warn_s, 0)",
         "value=\"' + _brNumAttr(tl.duration_s, 0)",
-        "value=\"' + _brNumAttr(cond.value, 0)",
+        "value=\"' + _brNumAttr(cond.value, 0, 100)",
+        "trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);",
+        "if (type === 'float') val = _clampNum(val, 0, 0, 86400);",
+        "tls[ti].condition.value = _clampNum(val, 0, 0, 100);",
     ]
     for snippet in boss_raid_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid numeric rendering snippet: " + snippet)
+
+    auto_key_raw_patterns = [
+        "if (kind === 'int') value = parseInt(value || 0, 10) || 0;",
+        "Math.round(Number(condition.value || 0) * 100)",
+    ]
+    for pattern in auto_key_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey numeric draft/render values must use bounded helpers: " + pattern)
+    auto_key_safe_required = [
+        "function _akIntValue",
+        "_akIntValue('slot_index', condition.slot_index || 1)",
+        "_akIntValue('tick_ms', (draft.engine && draft.engine.tick_ms) || 50)",
+        "_akIntValue('slot_index', action.slot_index || 1)",
+        "_akIntValue('press_count', action.press_count || 1)",
+        "_akIntValue('post_delay_ms', action.post_delay_ms || 0)",
+        "if (kind === 'int') value = _akIntValue(fieldName, value);",
+        "var pct = _clampNum(value, 0, 0, 100);",
+    ]
+    for snippet in auto_key_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey numeric form snippet: " + snippet)
 
     print(
         f"OK web menu layout: {item_count} items, "
