@@ -175,6 +175,29 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertEqual(SkillDrilldownPanel._pct(float("inf")), "0.0%")
         self.assertEqual(SkillDrilldownPanel._pct(2), "100.0%")
 
+    def test_tk_status_counts_ignore_malformed_ref_and_error_payloads(self) -> None:
+        panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)
+        panel._combatant_var = FakeVar("")
+        panel._skill_var = FakeVar("")
+        panel._summary_var = FakeVar("")
+        panel._status_var = FakeVar("")
+        panel._rows = None
+
+        panel._render_status({
+            "ok": True,
+            "combatant_id": "1001",
+            "skill_id": "11",
+            "summary": {"name": "Slash", "amount": 1200},
+            "timeline_refs": "bad",
+            "casts": 1,
+            "hits": 2,
+            "filters": {},
+            "errors": "oops",
+        })
+
+        self.assertIn("refs=0", panel._status_var.get())
+        self.assertIn("errors=0", panel._status_var.get())
+
     def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
         panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)
         panel.owner = FakeOwner()

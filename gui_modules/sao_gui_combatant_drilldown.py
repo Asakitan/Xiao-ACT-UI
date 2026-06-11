@@ -55,6 +55,16 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
     return num
 
 
+def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, (list, tuple)) else 0
+
+
 class CombatantDrilldownPanel:
     """SAO-styled combatant detail panel for Entity/Tk."""
 
@@ -223,13 +233,13 @@ class CombatantDrilldownPanel:
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
-        skills = list(status.get('skills') or [])
+        skills = _mapping_items(status.get('skills'))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         cid = str(status.get('combatant_id') or self._combatant_var.get() or '')
         if cid and self._combatant_var.get() != cid:
             self._combatant_var.set(cid)
         self._summary_var.set(f"{summary.get('name') or cid or 'NONE'} · {len(skills)} SKILLS · {self._fmt(summary.get('damage'))} DMG")
-        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={len(status.get('errors') or [])}")
+        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={_list_count(status.get('errors'))}")
         if self._rows is None:
             return
         sig = self._signature(status)
@@ -278,11 +288,7 @@ class CombatantDrilldownPanel:
         header.pack(fill='x', pady=(0, 2), padx=4)
         for text, width in (('Skill', 34), ('Kind', 10), ('Amount', 14), ('Hits', 8), ('Crit', 8)):
             tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
-        max_amount = max(1, *[
-            _finite_int(skill.get('amount'), 0, lo=0)
-            for skill in skills
-            if isinstance(skill, Mapping)
-        ])
+        max_amount = max(1, *[_finite_int(skill.get('amount'), 0, lo=0) for skill in skills])
         for skill in skills[:40]:
             amount = _finite_int(skill.get('amount'), 0, lo=0)
             hits = _finite_int(skill.get('hits'), 0, lo=0)
@@ -339,9 +345,8 @@ class CombatantDrilldownPanel:
         rows = []
         if filters.get('focus_target'):
             rows.append(('focus', filters.get('focus_target'), ''))
-        for item in list(status.get('outgoing') or [])[:8]:
-            if isinstance(item, Mapping):
-                rows.append((item.get('kind') or 'out', item.get('name') or '-', self._fmt(item.get('amount'))))
+        for item in _mapping_items(status.get('outgoing'))[:8]:
+            rows.append((item.get('kind') or 'out', item.get('name') or '-', self._fmt(item.get('amount'))))
         if not rows:
             return
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
@@ -367,23 +372,21 @@ class CombatantDrilldownPanel:
     def _signature(status: Mapping[str, Any]) -> str:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         skills = []
-        for skill in list(status.get('skills') or [])[:40]:
-            if isinstance(skill, Mapping):
-                skills.append((
-                    skill.get('skill_id'),
-                    skill.get('base_skill_id'),
-                    skill.get('source_skill_id'),
-                    skill.get('name'),
-                    skill.get('amount'),
-                    skill.get('hits'),
-                    skill.get('kind'),
-                    skill.get('crit_rate'),
-                ))
+        for skill in _mapping_items(status.get('skills'))[:40]:
+            skills.append((
+                skill.get('skill_id'),
+                skill.get('base_skill_id'),
+                skill.get('source_skill_id'),
+                skill.get('name'),
+                skill.get('amount'),
+                skill.get('hits'),
+                skill.get('kind'),
+                skill.get('crit_rate'),
+            ))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         outgoing = []
-        for item in list(status.get('outgoing') or [])[:8]:
-            if isinstance(item, Mapping):
-                outgoing.append((item.get('kind'), item.get('name'), item.get('amount')))
+        for item in _mapping_items(status.get('outgoing'))[:8]:
+            outgoing.append((item.get('kind'), item.get('name'), item.get('amount')))
         return repr((
             status.get('combatant_id'),
             summary.get('name'),

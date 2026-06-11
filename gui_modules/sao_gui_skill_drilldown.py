@@ -57,6 +57,16 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
     return num
 
 
+def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, (list, tuple)) else 0
+
+
 class SkillDrilldownPanel:
     """SAO-styled per-skill detail panel for Entity/Tk."""
 
@@ -238,7 +248,7 @@ class SkillDrilldownPanel:
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
-        refs = list(status.get('timeline_refs') or [])
+        refs = _mapping_items(status.get('timeline_refs'))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         cid = str(status.get('combatant_id') or self._combatant_var.get() or '')
         sid = str(status.get('skill_id') or self._skill_var.get() or '')
@@ -249,7 +259,7 @@ class SkillDrilldownPanel:
         casts = _finite_int(status.get('casts'), 0, lo=0)
         hits = _finite_int(status.get('hits'), 0, lo=0)
         self._summary_var.set(f"{summary.get('name') or sid or 'NONE'} · {casts} CASTS · {hits} HITS")
-        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · refs={len(refs)} · errors={len(status.get('errors') or [])}")
+        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · refs={len(refs)} · errors={_list_count(status.get('errors'))}")
         if self._rows is None:
             return
         sig = self._signature(status)
@@ -355,7 +365,7 @@ class SkillDrilldownPanel:
             ('Casts', _finite_int(status.get('casts'), 0, lo=0)),
             ('Hits', _finite_int(status.get('hits'), 0, lo=0)),
             ('Crit', self._pct(status.get('crit_rate'))),
-            ('Refs', len(status.get('timeline_refs') or [])),
+            ('Refs', len(_mapping_items(status.get('timeline_refs')))),
         )
         grid = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=8, pady=6)
@@ -383,9 +393,8 @@ class SkillDrilldownPanel:
     def _signature(self, status: Mapping[str, Any]) -> str:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         refs = []
-        for ref in list(status.get('timeline_refs') or [])[:80]:
-            if isinstance(ref, Mapping):
-                refs.append((ref.get('id'), ref.get('time_ms'), ref.get('topic'), ref.get('label'), ref.get('value'), ref.get('payload') if str(ref.get('id')) in self._expanded_refs else None))
+        for ref in _mapping_items(status.get('timeline_refs'))[:80]:
+            refs.append((ref.get('id'), ref.get('time_ms'), ref.get('topic'), ref.get('label'), ref.get('value'), ref.get('payload') if str(ref.get('id')) in self._expanded_refs else None))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         return repr((
             status.get('combatant_id'),

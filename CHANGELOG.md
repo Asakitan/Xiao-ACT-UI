@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.78: ACT Drilldown Tk payload 计数修复.
+
+  1) `gui_modules/sao_gui_combatant_drilldown.py` 修复 skills/errors payload 计数。
+     Combatant Drilldown Tk 现在只统计真正的列表并只渲染 Mapping skill/outgoing 条目,
+     避免字符串 payload 显示错误技能数或打断行渲染。
+
+  2) `gui_modules/sao_gui_skill_drilldown.py` 修复 timeline_refs/errors payload 计数。
+     Skill Drilldown Tk 现在只统计和渲染 Mapping timeline ref 条目,
+     避免字符串 payload 显示错误引用数或打断 timeline 渲染。
+
 ## v4.5.77: Entity 插件菜单 payload 防护修复.
 
   1) `gui_modules/sao_gui_menu_mixin.py` 修复插件菜单列表 payload 形状处理。
