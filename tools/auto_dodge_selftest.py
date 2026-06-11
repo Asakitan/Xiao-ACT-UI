@@ -192,6 +192,31 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue(downs)                 # 出圈前确实按了键移动
         self.assertEqual(set(downs), set(ups)) # 出圈后全松开
 
+    def test_is_clear_stops_loop_precisely(self):
+        # is_clear() 优先于距离: 玩家离开 AOE 圈(is_clear→True)立即停, 不靠 exit_margin
+        events = []
+        state = {"in_zone": True, "ticks": 0}
+
+        def is_clear():
+            state["ticks"] += 1
+            if state["ticks"] >= 2:    # 第2 tick 起"已出圈"
+                state["in_zone"] = False
+            return not state["in_zone"]
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        # exit_margin 设很大(50m)永远到不了, 只能靠 is_clear 停 → 证明区域判定生效
+        r = d.dodge({"direction": "away_nearest", "exit_margin_m": 50.0, "move_ms": 3000},
+                    danger_pos=(0.0, 0.0, 1.0), get_danger_pos=lambda: (0.0, 0.0, 1.0),
+                    is_clear=is_clear)
+        self.assertTrue(r["fired"])
+        self.assertIn("区域判定", r["label"])
+        time.sleep(0.5)
+        ups = [k for k, dn in events if not dn]
+        self.assertTrue(ups)               # is_clear 触发后松键停了
+        self.assertEqual(d._held, [])
+
     def test_epoch_single_flight_cancels_old_loop(self):
         # release_all (F12) 递增 epoch, 在途循环下一 tick 退出且松键
         events = []

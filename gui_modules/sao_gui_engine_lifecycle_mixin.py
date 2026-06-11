@@ -579,7 +579,14 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     if obj:
                         danger0 = ctx.read_obj_pos(obj)
                         get_danger = lambda _o=obj: ctx.read_obj_pos(_o)
-                    director.dodge(inline, danger_pos=danger0, get_danger_pos=get_danger)
+                    # 零误差出圈判据: 游戏自己的区域成员(玩家离开AOE圈即停), 距离仅兜底
+                    is_clear = None
+                    try:
+                        is_clear = ctx.make_zone_exit_check()
+                    except Exception:
+                        is_clear = None
+                    director.dodge(inline, danger_pos=danger0,
+                                   get_danger_pos=get_danger, is_clear=is_clear)
                 else:
                     director.dodge(inline)
             import threading as _th

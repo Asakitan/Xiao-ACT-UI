@@ -167,12 +167,14 @@ class AutoDodgeDirector:
             self._epoch += 1
             return self._epoch
 
-    def dodge(self, spec: Dict, *, danger_pos=None, get_danger_pos=None) -> Dict:
+    def dodge(self, spec: Dict, *, danger_pos=None, get_danger_pos=None,
+             is_clear=None) -> Dict:
         """执行一次定向躲避。返回 {keys, label, fired}。非定向 spec 直接 no-op。
 
         get_danger_pos (可选): 危险源世界坐标的 O(1) 读回调 (宿主已锁定 obj)。提供且方向
-        为 away_* 时走**闭环精准出圈**——持续读玩家/危险位重算 WASD, 一旦水平距 ≥ 安全
-        距离(spec.exit_margin_m)立即松键停下('跑出去一点就行')。否则按住固定 move_ms。"""
+        为 away_* 时走**闭环精准出圈**——持续读玩家/危险位重算 WASD。
+        is_clear (可选): 零误差出圈判据回调——游戏自己的区域成员判定(玩家离开 AOE 圈即
+        True), 优先于 exit_margin 距离; 提供时距离仅作兜底。"""
         cam = self._cam_safe()
         pos = self._pos_safe()
         keys, label = resolve_dodge_keys(spec, cam_basis=cam, player_pos=pos,
@@ -188,9 +190,10 @@ class AutoDodgeDirector:
                                     (-1, 0)))
             threading.Thread(target=self._run_until_clear,
                              args=(epoch, spec, get_danger_pos, safe_dist, move_ms,
-                                   _axis_keys(fb[0], fb[1])),
+                                   _axis_keys(fb[0], fb[1]), is_clear),
                              daemon=True).start()
-            return {"keys": keys, "label": "%s·精准出圈" % label, "fired": True}
+            tag = "精准出圈(区域判定)" if is_clear is not None else "精准出圈"
+            return {"keys": keys, "label": "%s·%s" % (label, tag), "fired": True}
         threading.Thread(target=self._run_move, args=(epoch, keys, move_ms),
                          daemon=True).start()
         return {"keys": keys, "label": label, "fired": True}
@@ -234,9 +237,11 @@ class AutoDodgeDirector:
             self._release_if_mine(epoch)
 
     def _run_until_clear(self, epoch: int, spec: Dict, get_danger_pos: Callable,
-                         safe_dist: float, max_ms: int, fallback_keys: List[str]) -> None:
-        """闭环: 持续把人物往远离危险源方向挪, 水平距≥safe_dist即停 (精准出圈)。
-        热路径 O(1): 每 tick 只读玩家位(O(1)) + 危险位(宿主 O(1) 回调) + 相机基(节流缓存);
+                         safe_dist: float, max_ms: int, fallback_keys: List[str],
+                         is_clear: Optional[Callable] = None) -> None:
+        """闭环: 持续把人物往远离危险源方向挪, 出圈即停 (精准出圈)。
+        停止判据优先级: (1) is_clear() 区域成员判定=零误差(玩家离开AOE圈) > (2) 水平距
+        ≥safe_dist 距离兜底。热路径 O(1): 每 tick 只读玩家位+危险位+相机基(缓存);
         任一读不到→降级到相机相对 fallback 纯按键(不再读内存)。"""
         import math
         tick = 0.07
@@ -245,6 +250,12 @@ class AutoDodgeDirector:
             while (time.time() - t0) < max_ms / 1000.0:
                 if self._blocked() or epoch != self._epoch:
                     break
+                if is_clear is not None:
+                    try:
+                        if is_clear():
+                            break                      # 零误差: 玩家已离开 AOE 圈
+                    except Exception:
+                        pass
                 pp = self._pos_safe()
                 dp = None
                 try:
@@ -256,8 +267,9 @@ class AutoDodgeDirector:
                     self._apply_keys(fallback_keys)   # 降级: 不读内存的纯按键后撤
                     time.sleep(tick)
                     continue
-                if math.hypot(pp[0] - dp[0], pp[2] - dp[2]) >= safe_dist:
-                    break                              # 出圈了, 停 (跑出去一点就行)
+                if is_clear is None and \
+                        math.hypot(pp[0] - dp[0], pp[2] - dp[2]) >= safe_dist:
+                    break                              # 距离兜底(无区域判定时)
                 keys = world_vec_to_keys(pp[0] - dp[0], pp[2] - dp[2],
                                          cam["forward"], cam["right"])
                 if not keys:

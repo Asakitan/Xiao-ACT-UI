@@ -105,6 +105,39 @@ class DodgeContext:
         except Exception:
             return None
 
+    def _zone(self):
+        if getattr(self, "_zone_reader", None) is None:
+            from mem_probe.il2cpp.mem_zone_reader import ZoneReader
+            self._zone_reader = ZoneReader(self._src)
+        return self._zone_reader
+
+    def make_zone_exit_check(self):
+        """精准出圈(零误差): 用游戏自己的区域成员判定(ZoneComp.entitiesIdInZone_)。
+        返回 is_clear() 回调——dodge 开始时快照玩家所在的全部区域(含 AOE 圈), 之后玩家
+        从其中任一区域消失即视为'出圈'(离开了一个 AOE), 返回 True。不靠估算半径。
+        玩家定位失败/无区域时返回的 is_clear 恒 False, 让闭环退到 exit_margin 距离兜底。"""
+        try:
+            mgr = self._entity_mgr().locate(0)
+            pm = self._src.sr.pm
+            player = pm.read_u64(mgr + 0x18) if mgr else 0
+            puuid = pm.read_i64(player + 0xC0) if player else 0
+            if not mgr or not puuid:
+                return lambda: False
+            zr = self._zone()
+            start = zr.player_zone_uuids(mgr, puuid)
+            if not start:
+                return lambda: False     # 没在任何区域 → 无精确信号, 走距离兜底
+
+            def _is_clear():
+                try:
+                    cur = zr.player_zone_uuids(mgr, puuid)
+                    return bool(start - cur)   # 离开了≥1个起始区域=出了一个圈
+                except Exception:
+                    return False
+            return _is_clear
+        except Exception:
+            return lambda: False
+
     def lock_danger_obj(self, direction: str, boss_base_id: int = 0) -> int:
         """进闭环前定位一次危险源实体对象地址 (O(N) 一次), 之后 read_obj_pos O(1)。
         away_boss→按 base_id 找 boss; away_nearest→最近敌对实体。失败返回 0。"""
