@@ -335,8 +335,13 @@ function _badges(rec) {
     return '<div style="display:flex;gap:3px;flex-wrap:wrap;margin:2px 0;">' + tags.map(function (t) {
         var d = _TAG_BADGE[t] || [t, '#555a63'];
         var lbl = d[0];
-        if (t === 'hp_line' && rec.hp_line_pct != null) lbl = '血线~' + Math.round(rec.hp_line_pct * 100) + '%';
-        else if (t === 'time' && rec.time_fixed_s != null) lbl = '定时~' + Math.round(rec.time_fixed_s) + 's';
+        if (t === 'hp_line' && rec.hp_line_pct != null) {
+            var hpLinePct = _clampInt(_clampNum(rec.hp_line_pct, 0, 0, 1) * 100, 0, 0, 100);
+            lbl = '血线~' + hpLinePct + '%';
+        } else if (t === 'time' && rec.time_fixed_s != null) {
+            var timeFixed = _clampInt(rec.time_fixed_s, 0, 0, 86400);
+            lbl = '定时~' + timeFixed + 's';
+        }
         return '<span style="background:' + d[1] + ';color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;">' + _esc(lbl) + '</span>';
     }).join('') + '</div>';
 }

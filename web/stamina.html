@@ -230,10 +230,33 @@ html, body {
 </div>
 
 <script>
+function _staFinite(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+}
+
+function _staNonNeg(v, fallback) {
+    return Math.max(0, _staFinite(v, fallback));
+}
+
+function _staBarPct(current, total, fallbackPct) {
+    var cur = _staNonNeg(current, 0);
+    var max = _staNonNeg(total, 0);
+    if (max <= 0) return fallbackPct;
+    return Math.max(0, Math.min(100, Math.round(cur / max * 100)));
+}
+
+function _staCount(v) {
+    return Math.floor(_staNonNeg(v, 0));
+}
+
 function updateBars(hp, hpMax, sta, staMax) {
-    var staPct = staMax > 0 ? Math.round(sta / staMax * 100) : 100;
+    var staCurrent = _staNonNeg(sta, 0);
+    var staTotal = _staNonNeg(staMax, 0);
+    var staPct = _staBarPct(staCurrent, staTotal, 100);
     document.getElementById('sta-fill').style.width = staPct + '%';
-    document.getElementById('sta-text').textContent = Math.floor(sta) + '/' + Math.floor(staMax);
+    document.getElementById('sta-text').textContent = _staCount(staCurrent) + '/' + _staCount(staTotal);
 }
 
 var _staOffline = false;

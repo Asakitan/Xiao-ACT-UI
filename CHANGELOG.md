@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.49: Web HUD 数值条与反应标记渲染修复.
+
+  1) `web/hp.html` 与 `web/stamina.html` 修复 HP/STA 条宽和文本渲染。
+     HP/STA current/max 现在先归一化为有限非负数, 条宽统一夹到 0..100,
+     避免异常识别数据生成 `NaN%`、越界宽度或 `NaN/NaN` 文本。
+
+  2) `web/raid_editor.html` 修复反应时间线 badge 数值渲染。
+     血线百分比与定时秒数现在使用既有 clamp helper 过滤非有限数和越界值,
+     避免 badge 显示 `NaN%`、`Infinitys` 或不合理百分比。
+
 ## v4.5.48: Web 小面板条形数值渲染修复.
 
   1) `web/raid_editor.html` 修复实体 HP 条渲染。
