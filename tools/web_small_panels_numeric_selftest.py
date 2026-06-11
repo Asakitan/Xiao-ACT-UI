@@ -172,6 +172,18 @@ def main() -> None:
             "var rem = (b.rem_s == null) ? -1 : b.rem_s;",
             "Buff coverage remaining seconds must normalize finite values.",
         ),
+        (
+            "data = data || {};",
+            "Buff coverage update payload must guard non-object data.",
+        ),
+        (
+            "var buffs = data.buffs || [];",
+            "Buff coverage buffs payload must guard non-list data.",
+        ),
+        (
+            "var b = buffs[i];",
+            "Buff coverage rows must guard non-object buff entries.",
+        ),
     ]
     for snippet, message in buff_forbidden:
         _check_absent(buff, snippet, message)
@@ -200,6 +212,30 @@ def main() -> None:
         (
             "var s = Math.floor(nonNegNum(ms, 0) / 1000);",
             "Buff coverage elapsed time should use nonNegNum().",
+        ),
+        (
+            "function isObjectValue(v)",
+            "Buff coverage should expose object-shape detection.",
+        ),
+        (
+            "function objectValue(v)",
+            "Buff coverage should normalize object payloads.",
+        ),
+        (
+            "function objectItems(v)",
+            "Buff coverage should filter object-list payloads.",
+        ),
+        (
+            "data = objectValue(data);",
+            "Buff coverage should normalize update payload objects.",
+        ),
+        (
+            "var buffs = objectItems(data.buffs);",
+            "Buff coverage should normalize buff list payloads.",
+        ),
+        (
+            "var b = objectValue(buffs[i]);",
+            "Buff coverage should normalize each buff row.",
         ),
     ]
     for snippet, message in buff_required:

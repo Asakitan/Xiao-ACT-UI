@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.85: Buff Coverage payload 防护修复.
+
+  1) `web/buff_coverage.html` 修复 update payload 与 buffs 列表形状处理。
+     Buff Coverage Web 现在归一 update 数据并只消费对象列表,
+     避免字符串或坏列表造成覆盖率面板隐藏/渲染异常。
+
+  2) `web/buff_coverage.html` 修复单条 buff row 形状处理。
+     Buff Coverage Web 现在归一每条 buff 行后再读取数值与名称,
+     避免 null/坏条目打断覆盖率行渲染。
+
 ## v4.5.84: ACT Data Source Health payload 防护修复.
 
   1) `web/data_source_health.html` 修复 diagnostics/errors payload 形状处理。

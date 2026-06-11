@@ -92,6 +92,15 @@
   function pct01(v) {
     return Math.max(0, Math.min(1, finiteNum(v, 0)));
   }
+  function isObjectValue(v) {
+    return v && typeof v === 'object' && !Array.isArray(v);
+  }
+  function objectValue(v) {
+    return isObjectValue(v) ? v : {};
+  }
+  function objectItems(v) {
+    return (Array.isArray(v) ? v : []).filter(isObjectValue);
+  }
   function fmtSec(s) {
     if (s == null) return '∞';
     s = finiteNum(s, -1);
@@ -106,15 +115,15 @@
 
   // data = { elapsed_ms, buffs: [{id,name,uptime_pct,apply_count,layer,max_layer,active,rem_s}] }
   window.updateBuffCoverage = function (data) {
-    data = data || {};
-    var buffs = data.buffs || [];
+    data = objectValue(data);
+    var buffs = objectItems(data.buffs);
     if (!buffs.length) { panel.classList.remove('show'); return; }
     panel.classList.add('show');
     elapsedEl.textContent = fmtElapsed(data.elapsed_ms);
 
     var html = '';
     for (var i = 0; i < buffs.length && i < 10; i++) {
-      var b = buffs[i];
+      var b = objectValue(buffs[i]);
       var pct = pct01(b.uptime_pct);
       var pctTxt = Math.round(pct * 100) + '%';
       var rem = (b.rem_s == null) ? -1 : finiteNum(b.rem_s, -1);
