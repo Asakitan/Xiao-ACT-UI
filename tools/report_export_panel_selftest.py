@@ -73,6 +73,38 @@ class ReportExportPanelCacheTests(unittest.TestCase):
         self.assertEqual(panel._last_request_key, ("csv",))
         status_fn.assert_called_once_with(panel.owner, limit=20, fmt="csv")
 
+    def test_render_status_normalizes_malformed_preview_damage(self) -> None:
+        panel = ReportExportPanel.__new__(ReportExportPanel)
+        panel.owner = object()
+        panel._format_var = FakeVar("json")
+        panel._summary_var = FakeVar()
+        panel._status_var = FakeVar()
+        panel._rows = None
+        panel._history = None
+        panel._last_render_sig = ""
+        panel._last_history_sig = ""
+
+        panel._render_status({"ok": True, "preview": {"total_damage": "oops"}, "history": [], "errors": []})
+
+        self.assertEqual(panel._summary_var.get(), "JSON · 0 DMG")
+
+    def test_history_actions_normalize_malformed_index(self) -> None:
+        panel = ReportExportPanel.__new__(ReportExportPanel)
+        panel.owner = object()
+        panel._status_var = FakeVar()
+        panel._last_refresh_at = 1.0
+        panel._last_request_key = ("json",)
+        panel._last_history_sig = "history"
+        panel.refresh = lambda: {"ok": True}  # type: ignore[method-assign]
+
+        with mock.patch("gui_modules.sao_gui_report_export.act_history_load", return_value={"ok": True}) as load_fn:
+            panel.load_history("bad")  # type: ignore[arg-type]
+        with mock.patch("gui_modules.sao_gui_report_export.act_history_delete", return_value={"ok": True}) as delete_fn:
+            panel.delete_history("bad")  # type: ignore[arg-type]
+
+        load_fn.assert_called_once_with(panel.owner, index=0, show=True)
+        delete_fn.assert_called_once_with(panel.owner, index=0)
+
 
 if __name__ == "__main__":
     unittest.main()

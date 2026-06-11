@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from tkinter import filedialog
@@ -36,6 +37,21 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    result = int(number)
+    if lo is not None:
+        result = max(lo, result)
+    if hi is not None:
+        result = min(hi, result)
+    return result
 
 
 class ReportExportPanel:
@@ -183,8 +199,9 @@ class ReportExportPanel:
         return self._last_status
 
     def load_history(self, index: int) -> Dict[str, Any]:
+        history_index = _finite_int(index, 0, lo=0)
         try:
-            result = act_history_load(self.owner, index=int(index or 0), show=True)
+            result = act_history_load(self.owner, index=history_index, show=True)
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Loaded' if result.get('ok') else 'Load failed')))
@@ -194,8 +211,9 @@ class ReportExportPanel:
         return dict(result or {})
 
     def delete_history(self, index: int) -> Dict[str, Any]:
+        history_index = _finite_int(index, 0, lo=0)
         try:
-            result = act_history_delete(self.owner, index=int(index or 0))
+            result = act_history_delete(self.owner, index=history_index)
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Deleted' if result.get('ok') else 'Delete failed')))
@@ -380,7 +398,7 @@ class ReportExportPanel:
         history = status.get('history') or []
         errors = status.get('errors') or []
         fmt = str(status.get('selected_format') or self._format_var.get() or 'json').upper()
-        self._summary_var.set(f"{fmt} · {int(preview.get('total_damage') or 0)} DMG")
+        self._summary_var.set(f"{fmt} · {_finite_int(preview.get('total_damage'), 0, lo=0)} DMG")
         try:
             selective = act_selective_parsing_status(self.owner)
         except Exception:
@@ -488,7 +506,11 @@ class ReportExportPanel:
         for idx, item in enumerate(history[:12]):
             if not isinstance(item, Mapping):
                 continue
-            history_index = int(item.get('_history_index') if item.get('_history_index') is not None else idx)
+            history_index = _finite_int(
+                item.get('_history_index') if item.get('_history_index') is not None else idx,
+                idx,
+                lo=0,
+            )
             box = tk.Frame(self._history, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             box.pack(fill='x', pady=4)
             tk.Label(

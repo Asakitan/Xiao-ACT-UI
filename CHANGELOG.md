@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.71: ACT Tk 报表历史参数归一化修复.
+
+  1) `gui_modules/sao_gui_report_export.py` 修复 Report Export 预览与历史操作数值防护。
+     报表预览总伤害和历史载入/删除索引现在统一归一到有限非负整数,
+     避免异常 ACT payload 或手动调用导致面板渲染中断。
+
+  2) `gui_modules/sao_gui_offline_import.py` 修复 Offline Import 历史载入索引防护。
+     历史回放按钮和直接调用现在夹取到有限非负整数,
+     避免坏 `_history_index` 或外部参数阻断导入历史回放。
+
 ## v4.5.70: ACT Timeline 与历史报表 fallback 参数修复.
 
   1) `web/act_timeline_vcr.html` 修复 Timeline fallback 数值参数。

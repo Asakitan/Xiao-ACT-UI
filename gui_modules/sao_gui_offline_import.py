@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tkinter as tk
 from tkinter import filedialog
@@ -29,6 +30,21 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    result = int(number)
+    if lo is not None:
+        result = max(lo, result)
+    if hi is not None:
+        result = min(hi, result)
+    return result
 
 
 class OfflineImportPanel:
@@ -130,8 +146,9 @@ class OfflineImportPanel:
         return dict(result or {})
 
     def load_history(self, index: int) -> Dict[str, Any]:
+        history_index = _finite_int(index, 0, lo=0)
         try:
-            result = act_history_load(self.owner, index=int(index or 0), show=True)
+            result = act_history_load(self.owner, index=history_index, show=True)
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Loaded' if result.get('ok') else 'Load failed')))
@@ -279,7 +296,11 @@ class OfflineImportPanel:
         for idx, item in enumerate(encounters[:20]):
             if not isinstance(item, Mapping):
                 continue
-            history_index = int(item.get('_history_index') if item.get('_history_index') is not None else idx)
+            history_index = _finite_int(
+                item.get('_history_index') if item.get('_history_index') is not None else idx,
+                idx,
+                lo=0,
+            )
             card = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             card.pack(fill='x', pady=3, padx=4)
             label = f"{item.get('encounter_id') or '#'} · dmg={item.get('total_damage') or 0} · {item.get('completed_local_time') or ''}"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import _bootstrap  # noqa: F401
 
 import unittest
+from unittest import mock
 
 from gui_modules.sao_gui_offline_import import OfflineImportPanel
 
@@ -77,6 +78,17 @@ class OfflineImportPanelSignatureTests(unittest.TestCase):
         panel.destroy()
 
         self.assertEqual(panel._last_rows_sig, "")
+
+    def test_load_history_normalizes_malformed_index(self) -> None:
+        panel = OfflineImportPanel.__new__(OfflineImportPanel)
+        panel.owner = object()
+        panel._status_var = mock.Mock()
+        panel.refresh = lambda: {"ok": True}  # type: ignore[method-assign]
+
+        with mock.patch("gui_modules.sao_gui_offline_import.act_history_load", return_value={"ok": True}) as load_fn:
+            panel.load_history("bad")  # type: ignore[arg-type]
+
+        load_fn.assert_called_once_with(panel.owner, index=0, show=True)
 
 
 if __name__ == "__main__":
