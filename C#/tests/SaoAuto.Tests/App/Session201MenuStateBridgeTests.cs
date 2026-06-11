@@ -222,6 +222,78 @@ public class Session201MenuStateBridgeTests : IDisposable
     }
 
     [Fact]
+    public void SaveBossRaidProfilePersistsNormalizedPayloadAndPreservesCreatedAt()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        var original = BossRaidProfile.MakeDefaultProfile() with
+        {
+            Id = "br-save",
+            ProfileName = "Before",
+            CreatedAt = "2026-01-01T00:00:00Z",
+        };
+        var config = BossRaidProfile.UpsertProfile(BossRaidProfile.DefaultConfig(), original, activate: true);
+        BossRaidConfigStore.Save(settings, config);
+        using var bridge = new MenuStateBridge(router, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SaveBossRaidProfile, new JsonObject
+        {
+            ["profile"] = JsonNode.Parse("""
+            {
+              "id": "br-save",
+              "profile_name": "After",
+              "phases": [
+                {
+                  "id": "p1",
+                  "timelines": [
+                    { "id": "tl1", "time_s": 8.5, "label": "Stack" }
+                  ]
+                }
+              ]
+            }
+            """),
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        var saved = BossRaidProfile.FindProfile(reloaded, "br-save")!;
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("br-save", payload["profile_id"]!.GetValue<string>());
+        Assert.Equal("After", state["active_profile_name"]!.GetValue<string>());
+        Assert.Equal("After", saved.ProfileName);
+        Assert.Equal("2026-01-01T00:00:00Z", saved.CreatedAt);
+        Assert.Equal(8.5, saved.Phases[0].Timelines[0].TimeSeconds);
+    }
+
+    [Fact]
+    public void DeleteBossRaidProfilePersistsAndFallsBackActiveProfile()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        var alpha = BossRaidProfile.MakeDefaultProfile() with { Id = "br-a", ProfileName = "Alpha" };
+        var beta = BossRaidProfile.MakeDefaultProfile() with { Id = "br-b", ProfileName = "Beta" };
+        var config = BossRaidProfile.UpsertProfile(BossRaidProfile.DefaultConfig(), alpha, activate: true);
+        config = BossRaidProfile.UpsertProfile(config, beta);
+        BossRaidConfigStore.Save(settings, config);
+        using var bridge = new MenuStateBridge(router, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.DeleteBossRaidProfile, new JsonObject
+        {
+            ["id"] = "br-a",
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("br-b", state["active_profile_id"]!.GetValue<string>());
+        Assert.Equal("Beta", state["active_profile_name"]!.GetValue<string>());
+        Assert.Single(reloaded.Profiles);
+        Assert.Equal("br-b", reloaded.ActiveProfileId);
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
@@ -233,6 +305,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossRaidActiveProfile, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SaveBossRaidProfile, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.DeleteBossRaidProfile, router.RegisteredCommands);
 
         bridge.Dispose();
 
@@ -241,6 +315,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossRaidActiveProfile, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SaveBossRaidProfile, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.DeleteBossRaidProfile, router.RegisteredCommands);
     }
 
     [Fact]
@@ -257,6 +333,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossRaidActiveProfile, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SaveBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.DeleteBossRaidProfile, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.GetAutoKeyState));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -268,6 +346,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossRaidActiveProfile, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SaveBossRaidProfile, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.DeleteBossRaidProfile, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]

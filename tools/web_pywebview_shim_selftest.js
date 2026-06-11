@@ -289,6 +289,16 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "bossraid.profile.create", "create_boss_raid_profile command mismatch");
 
+  await window.pywebview.api.save_boss_raid_profile({ id: "raid-2", profile_name: "Raid Two" });
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.profile.save", "save_boss_raid_profile command mismatch");
+  assert(last.payload.profile.profile_name === "Raid Two", "save_boss_raid_profile payload was not forwarded");
+
+  await window.pywebview.api.delete_boss_raid_profile("raid-2");
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.profile.delete", "delete_boss_raid_profile command mismatch");
+  assert(last.payload.id === "raid-2", "delete_boss_raid_profile id was not forwarded");
+
   await window.pywebview.api.save_autokey_actions("[{\"trigger_slot\":1,\"action_slot\":3}]");
   last = calls[calls.length - 1];
   assert(last.name === "autokey.actions.save", "save_autokey_actions command mismatch");

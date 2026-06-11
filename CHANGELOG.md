@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.17: WebView2 BossRaid 本地配置保存与删除修复.
+
+  1) `web/pywebview-shim.js` 补齐 `save_boss_raid_profile(profile)`,
+     C# `MenuStateBridge` 新增 `bossraid.profile.save`。
+     BossRaid 编辑器保存现在会 normalize 并持久化 profile, 保留既有 `created_at`,
+     并返回完整菜单状态。
+
+  2) `web/pywebview-shim.js` 补齐 `delete_boss_raid_profile(id)`,
+     C# `MenuStateBridge` 新增 `bossraid.profile.delete`。
+     删除当前 active profile 时会按现有存储逻辑回落到剩余 profile。
+
 ## v4.5.16: WebView2 BossRaid 本地配置创建与激活修复.
 
   1) `web/pywebview-shim.js` 补齐 `activate_boss_raid_profile(id)`,

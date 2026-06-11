@@ -178,6 +178,12 @@
         create_boss_raid_profile: function () {
             return call('bossraid.profile.create', {}).then(normalizeOk);
         },
+        save_boss_raid_profile: function (profile) {
+            return call('bossraid.profile.save', { profile: profile || {} }).then(normalizeOk);
+        },
+        delete_boss_raid_profile: function (id) {
+            return call('bossraid.profile.delete', { id: String(id || '') }).then(normalizeOk);
+        },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {
                 actions_json: String(actionsJson || '[]')

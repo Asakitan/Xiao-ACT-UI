@@ -30,12 +30,16 @@ public sealed class MenuStateBridge : IDisposable
             BridgeCommands.SetBossRaidEnabled,
             BridgeCommands.SetBossRaidActiveProfile,
             BridgeCommands.CreateBossRaidProfile,
+            BridgeCommands.SaveBossRaidProfile,
+            BridgeCommands.DeleteBossRaidProfile,
         };
         _router.Register(BridgeCommands.GetAutoKeyState, _ => HandleAutoKeyState());
         _router.Register(BridgeCommands.GetBossRaidState, _ => HandleBossRaidState());
         _router.Register(BridgeCommands.SetBossRaidEnabled, HandleSetBossRaidEnabled);
         _router.Register(BridgeCommands.SetBossRaidActiveProfile, HandleSetBossRaidActiveProfile);
         _router.Register(BridgeCommands.CreateBossRaidProfile, _ => HandleCreateBossRaidProfile());
+        _router.Register(BridgeCommands.SaveBossRaidProfile, HandleSaveBossRaidProfile);
+        _router.Register(BridgeCommands.DeleteBossRaidProfile, HandleDeleteBossRaidProfile);
     }
 
     public void Dispose()
@@ -72,6 +76,54 @@ public sealed class MenuStateBridge : IDisposable
         {
             ["ok"] = true,
             ["enabled"] = enabled,
+            ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
+
+    private JsonObject HandleSaveBossRaidProfile(JsonObject? payload)
+    {
+        var profileElement = ReadProfileElement(payload);
+        if (profileElement is null)
+            return new JsonObject { ["ok"] = false, ["message"] = "Invalid profile payload" };
+
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var author = authorDoc.RootElement.Clone();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        var profile = BossRaidProfile.NormalizeProfile(profileElement.Value, author);
+        var existing = BossRaidProfile.FindProfile(config, profile.Id);
+        if (existing is not null && !string.IsNullOrEmpty(existing.CreatedAt))
+            profile = profile with { CreatedAt = existing.CreatedAt };
+        config = BossRaidProfile.UpsertProfile(
+            config,
+            profile,
+            activate: string.Equals(config.ActiveProfileId, profile.Id, StringComparison.Ordinal));
+        BossRaidConfigStore.Save(_settings, config);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["profile_id"] = profile.Id,
+            ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
+
+    private JsonObject HandleDeleteBossRaidProfile(JsonObject? payload)
+    {
+        var id = ReadString(payload, "id");
+        if (string.IsNullOrWhiteSpace(id))
+            id = ReadString(payload, "profile_id");
+        if (string.IsNullOrWhiteSpace(id))
+            return new JsonObject { ["ok"] = false, ["message"] = "Profile not found" };
+
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var author = authorDoc.RootElement.Clone();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        config = BossRaidProfile.DeleteProfile(config, id);
+        BossRaidConfigStore.Save(_settings, config);
+        return new JsonObject
+        {
+            ["ok"] = true,
             ["state"] = BuildBossRaidState(_settings, _states),
         };
     }
@@ -213,6 +265,39 @@ public sealed class MenuStateBridge : IDisposable
         return payload.TryGetPropertyValue(key, out var node) && node is not null
             ? node.ToString()
             : string.Empty;
+    }
+
+    private static JsonElement? ReadProfileElement(JsonObject? payload)
+    {
+        if (payload is null) return null;
+        JsonNode? node = payload;
+        if (payload.TryGetPropertyValue("profile", out var profileNode) && profileNode is not null)
+            node = profileNode;
+        try
+        {
+            if (node is JsonValue value)
+            {
+                try
+                {
+                    var raw = value.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        using var stringDoc = JsonDocument.Parse(raw);
+                        return stringDoc.RootElement.Clone();
+                    }
+                }
+                catch
+                {
+                    // Fall through to node.ToJsonString().
+                }
+            }
+            using var doc = JsonDocument.Parse(node.ToJsonString());
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static JsonObject AutoKeyUploadAuth(JsonObject identity) => new()

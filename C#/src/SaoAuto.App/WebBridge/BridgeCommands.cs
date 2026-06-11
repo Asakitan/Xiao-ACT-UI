@@ -48,6 +48,8 @@ public static class BridgeCommands
     public const string StartBossRaidImportPicker = "bossraid.import_picker.start";
     public const string SetBossRaidActiveProfile = "bossraid.profile.set_active";
     public const string CreateBossRaidProfile = "bossraid.profile.create";
+    public const string SaveBossRaidProfile = "bossraid.profile.save";
+    public const string DeleteBossRaidProfile = "bossraid.profile.delete";
     // S179 — cloud script-share endpoints (served by BossRaidCloudBridge).
     public const string SearchBossRaids = "bossraid.cloud.search";
     public const string GetBossRaid = "bossraid.cloud.get";
