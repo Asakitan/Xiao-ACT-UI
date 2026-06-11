@@ -93,6 +93,36 @@ def main() -> int:
         raise AssertionError("leaderboard stat labels must be escaped before innerHTML")
     if "function _lbRankLabel" not in html:
         raise AssertionError("menu.html must provide a safe leaderboard rank label helper")
+    if "return (s || '').replace(/&/g,'&amp;')" in html:
+        raise AssertionError("_escHtml must coerce non-string values and escape quotes for attribute reuse")
+    boss_raid_raw_patterns = [
+        "'<div class=\"boss-raid-card-meta\">HP: ' + (p.boss_total_hp || '?')",
+        "' · HP: ' + (item.boss_total_hp || '?')",
+        "'<div class=\"boss-raid-field\"><label>触发值 Value</label><input type=\"number\" min=\"0\" value=\"' + (trigger.value || 0)",
+        "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.time_s || 0)",
+        "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.repeat_interval_s || 0)",
+        "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.pre_warn_s || 0)",
+        "'<input type=\"number\" min=\"0\" step=\"1\" value=\"' + (tl.duration_s || 0)",
+        "'<input type=\"number\" min=\"0\" max=\"100\" value=\"' + (cond.value || 0)",
+    ]
+    for pattern in boss_raid_raw_patterns:
+        if pattern in html:
+            raise AssertionError("BossRaid numeric metadata/input values must be normalized before rendering: " + pattern)
+    boss_raid_safe_required = [
+        "function _brNumText",
+        "function _brNumAttr",
+        "_escHtml(_brNumText(p.boss_total_hp, '?'))",
+        "_escHtml(_brNumText(item.boss_total_hp, '?'))",
+        "value=\"' + _brNumAttr(trigger.value, 0)",
+        "value=\"' + _brNumAttr(tl.time_s, 0)",
+        "value=\"' + _brNumAttr(tl.repeat_interval_s, 0)",
+        "value=\"' + _brNumAttr(tl.pre_warn_s, 0)",
+        "value=\"' + _brNumAttr(tl.duration_s, 0)",
+        "value=\"' + _brNumAttr(cond.value, 0)",
+    ]
+    for snippet in boss_raid_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe BossRaid numeric rendering snippet: " + snippet)
 
     print(
         f"OK web menu layout: {item_count} items, "

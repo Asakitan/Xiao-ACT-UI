@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.33: BossRaid 菜单数字渲染与转义修复.
+
+  1) `web/menu.html` 增强 `_escHtml()`。
+     该 helper 现在会先转字符串并转义引号, 避免数字字段调用时报错,
+     也避免被复用于 input/value 或 data 属性时漏掉引号转义。
+
+  2) `web/menu.html` 修复 BossRaid 本地/云端卡片与编辑器数字字段渲染。
+     HP、Enrage、阶段/时间线计数以及阶段/时间线 number input 的 value
+     现在会先做有限数字规范化和属性转义, 避免导入或云端异常数据破坏卡片和输入框。
+
 ## v4.5.32: Raid Editor 配置渲染转义修复.
 
   1) `web/raid_editor.html` 修复阶段触发文本渲染。
