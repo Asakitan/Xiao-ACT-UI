@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.57: BuffMon 数值渲染与输入解析修复.
+
+  1) `gui_modules/sao_gui_buffmon.py` 修复 BuffMon row 渲染数值处理。
+     rem_s/layer/count/apply_count/uptime_pct 与 row signature 现在过滤非有限数,
+     避免坏 row 让整帧 buff overlay 渲染失败或显示非法进度。
+
+  2) `gui_modules/sao_gui_buffmon.py` 修复 self/boss buff payload 解析。
+     buff id/uuid/begin/duration/layer/count/server offset 与 uptime 统计现在使用有限数兜底,
+     避免单个异常 buff 包中断整批缓存更新。
+
 ## v4.5.56: ACT Action Log Tk 数值渲染修复.
 
   1) `gui_modules/sao_gui_action_log.py` 修复分页/摘要数值渲染。

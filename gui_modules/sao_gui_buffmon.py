@@ -79,6 +79,29 @@ def _default_filter_mode() -> str:
         return 'ultimate'
 
 
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(default if value is None or value == '' else value)
+    except Exception:
+        number = float(default or 0.0)
+    if not math.isfinite(number):
+        number = float(default or 0.0)
+    if lo is not None:
+        number = max(float(lo), number)
+    if hi is not None:
+        number = min(float(hi), number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    number = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        number = max(int(lo), number)
+    if hi is not None:
+        number = min(int(hi), number)
+    return number
+
+
 # ─────────────────────────────────────────
 #  奥义 / 幻想 buff 过滤器
 # ─────────────────────────────────────────
@@ -116,11 +139,9 @@ def is_ultimate_buff(name: str, buff_id: int = 0) -> bool:
     判定优先级: ① buff_id 命中游戏真实大招技能ID集 (权威, 名字缺失也能识别)
     → ② buff 名命中完整关键词集。
     """
-    try:
-        if buff_id and int(buff_id) in _ultimate_skill_id_set():
-            return True
-    except (TypeError, ValueError):
-        pass
+    buff_id = _finite_int(buff_id, 0, lo=0)
+    if buff_id and buff_id in _ultimate_skill_id_set():
+        return True
     if not name:
         return False
     for kw in ULTIMATE_KEYWORDS:
@@ -399,6 +420,7 @@ class _BuffPanelBase:
     #  Row formatting helpers
     # ─────────────────────────────────────
     def _fmt_seconds(self, rem_s: float) -> str:
+        rem_s = _finite_float(rem_s, -1.0)
         if rem_s < 0:
             return '∞'
         if rem_s >= 60:
@@ -588,10 +610,10 @@ class _BuffPanelBase:
 
     def _draw_row(self, draw: ImageDraw.ImageDraw, img: Image.Image,
                    row: dict, sx: int, ry: int, sw: int):
-        rem_s = row.get('rem_s', -1.0)
+        rem_s = _finite_float(row.get('rem_s'), -1.0)
         name = str(row.get('name', '') or '')
-        layer = int(row.get('layer', 0) or 0)
-        count = int(row.get('count', 0) or 0)
+        layer = _finite_int(row.get('layer'), 0, lo=0)
+        count = _finite_int(row.get('count'), 0, lo=0)
 
         rx0 = sx + self.PAD_X
         rx1 = sx + sw - self.PAD_X
@@ -631,7 +653,7 @@ class _BuffPanelBase:
         )
 
         # 名字 (左) — ×层数 · 触发次数
-        applies = int(row.get('apply_count', 0) or 0)
+        applies = _finite_int(row.get('apply_count'), 0, lo=0)
         if layer > 1:
             name = f'{name} ×{layer}'
         elif count > 1:
@@ -669,7 +691,7 @@ class _BuffPanelBase:
             pass
 
         # ACT 本场 uptime 覆盖率: 行底边细条 (self buff 才有; -1 = 无数据)
-        up = row.get('uptime_pct', -1.0)
+        up = _finite_float(row.get('uptime_pct'), -1.0, lo=-1.0, hi=1.0)
         if up >= 0.0:
             pct = max(0.0, min(1.0, up))
             bar_y = ry1 - 1
@@ -740,8 +762,8 @@ class _BuffPanelBase:
         """变化 signature — 只在 rows 内容/秒数(整数)变时重画 base_img。"""
         return tuple(
             (r.get('id'), r.get('uuid'),
-             int(r.get('rem_s', -1) * 10),
-             r.get('layer'), r.get('count'),
+             int(_finite_float(r.get('rem_s'), -1.0) * 10),
+             _finite_int(r.get('layer'), 0, lo=0), _finite_int(r.get('count'), 0, lo=0),
              r.get('name'))
             for r in rows
         )
@@ -935,17 +957,21 @@ class SelfBuffOverlay(_BuffPanelBase):
         if not isinstance(raw_buffs, list):
             raw_buffs = []
         try:
-            self._server_offset_ms = float(server_offset_ms or 0.0)
+            self._server_offset_ms = _finite_float(server_offset_ms, 0.0)
         except Exception:
             self._server_offset_ms = 0.0
 
         # ACT 本场 buff 覆盖率 map: {buff_id: {uptime_pct, apply_count, max_layer}}
         if uptime is not None:
             try:
-                self._uptime_map = {
-                    int(u.get('buff_id', 0) or 0): u
-                    for u in (uptime.get('buffs') or [])
-                }
+                uptime_map = {}
+                for u in (uptime.get('buffs') or []):
+                    if not isinstance(u, dict):
+                        continue
+                    ubid = _finite_int(u.get('buff_id'), 0, lo=0)
+                    if ubid > 0:
+                        uptime_map[ubid] = u
+                self._uptime_map = uptime_map
             except Exception:
                 self._uptime_map = {}
 
@@ -958,18 +984,18 @@ class SelfBuffOverlay(_BuffPanelBase):
         for b in raw_buffs:
             if not isinstance(b, dict):
                 continue
-            bid = int(b.get('id', 0) or b.get('buff_id', 0) or 0)
+            bid = _finite_int(b.get('id') or b.get('buff_id'), 0, lo=0)
             if bid <= 0:
                 continue
-            uuid = int(b.get('uuid', 0) or b.get('buff_uuid', 0) or 0)
+            uuid = _finite_int(b.get('uuid') or b.get('buff_uuid'), 0, lo=0)
             self._buff_cache[(bid, uuid)] = dict(b)
 
         # 立即清理已过期的 (按 begin+duration vs server_now)
         now_ms = time.time() * 1000.0 + self._server_offset_ms
         expired_keys = []
         for k, v in self._buff_cache.items():
-            begin = int(v.get('begin_ms', 0) or v.get('begin_time', 0) or 0)
-            duration = int(v.get('duration_ms', 0) or v.get('duration', 0) or 0)
+            begin = _finite_int(v.get('begin_ms') or v.get('begin_time'), 0, lo=0)
+            duration = _finite_int(v.get('duration_ms') or v.get('duration'), 0, lo=0)
             if duration > 0 and begin > 0:
                 if (begin + duration) <= now_ms:
                     expired_keys.append(k)
@@ -990,8 +1016,8 @@ class SelfBuffOverlay(_BuffPanelBase):
         for key, b in self._buff_cache.items():
             name = str(b.get('name', '') or '')
             bid, uuid = key
-            begin = int(b.get('begin_ms', 0) or b.get('begin_time', 0) or 0)
-            duration = int(b.get('duration_ms', 0) or b.get('duration', 0) or 0)
+            begin = _finite_int(b.get('begin_ms') or b.get('begin_time'), 0, lo=0)
+            duration = _finite_int(b.get('duration_ms') or b.get('duration'), 0, lo=0)
             if duration > 0 and begin > 0:
                 rem_ms = (begin + duration) - now_ms
                 if rem_ms <= 0:
@@ -1012,10 +1038,10 @@ class SelfBuffOverlay(_BuffPanelBase):
                 'uuid': uuid,
                 'name': name,
                 'rem_s': rem_s,
-                'layer': int(b.get('layer', 0) or 0),
-                'count': int(b.get('count', 0) or 0),
-                'uptime_pct': float(_ur.get('uptime_pct', -1.0)) if _ur else -1.0,
-                'apply_count': int(_ur.get('apply_count', 0)) if _ur else 0,
+                'layer': _finite_int(b.get('layer'), 0, lo=0),
+                'count': _finite_int(b.get('count'), 0, lo=0),
+                'uptime_pct': _finite_float(_ur.get('uptime_pct'), -1.0, lo=-1.0, hi=1.0) if _ur else -1.0,
+                'apply_count': _finite_int(_ur.get('apply_count'), 0, lo=0) if _ur else 0,
                 'sort_key': rem_s if rem_s >= 0 else 1e9,
             })
         # 过期清理
@@ -1091,7 +1117,7 @@ class BossBuffOverlay(_BuffPanelBase):
     def update_target(self, uuid: int, name: str, raw_buffs: list,
                        server_offset_ms: float = 0.0):
         try:
-            uuid = int(uuid or 0)
+            uuid = _finite_int(uuid, 0, lo=0)
         except Exception:
             uuid = 0
         # 切目标 → 缓存清零
@@ -1101,7 +1127,7 @@ class BossBuffOverlay(_BuffPanelBase):
         if name:  # 只在非空时覆盖, 避免被空值清掉
             self._target_name = str(name)
         try:
-            self._server_offset_ms = float(server_offset_ms or 0.0)
+            self._server_offset_ms = _finite_float(server_offset_ms, 0.0)
         except Exception:
             self._server_offset_ms = 0.0
 
@@ -1115,18 +1141,18 @@ class BossBuffOverlay(_BuffPanelBase):
             for b in raw_buffs:
                 if not isinstance(b, dict):
                     continue
-                bid = int(b.get('id', 0) or b.get('buff_id', 0) or 0)
+                bid = _finite_int(b.get('id') or b.get('buff_id'), 0, lo=0)
                 if bid <= 0:
                     continue
-                buuid = int(b.get('uuid', 0) or b.get('buff_uuid', 0) or 0)
+                buuid = _finite_int(b.get('uuid') or b.get('buff_uuid'), 0, lo=0)
                 self._buff_cache[(bid, buuid)] = dict(b)
 
         # 过期清理
         now_ms = time.time() * 1000.0 + self._server_offset_ms
         expired = []
         for k, v in self._buff_cache.items():
-            begin = int(v.get('begin_ms', 0) or v.get('begin_time', 0) or 0)
-            duration = int(v.get('duration_ms', 0) or v.get('duration', 0) or 0)
+            begin = _finite_int(v.get('begin_ms') or v.get('begin_time'), 0, lo=0)
+            duration = _finite_int(v.get('duration_ms') or v.get('duration'), 0, lo=0)
             if duration > 0 and begin > 0 and (begin + duration) <= now_ms:
                 expired.append(k)
         for k in expired:
@@ -1152,8 +1178,8 @@ class BossBuffOverlay(_BuffPanelBase):
             name = str(b.get('name', '') or '')
             if not name:
                 name = f'Buff #{bid}'
-            begin = int(b.get('begin_ms', 0) or b.get('begin_time', 0) or 0)
-            duration = int(b.get('duration_ms', 0) or b.get('duration', 0) or 0)
+            begin = _finite_int(b.get('begin_ms') or b.get('begin_time'), 0, lo=0)
+            duration = _finite_int(b.get('duration_ms') or b.get('duration'), 0, lo=0)
             if duration > 0 and begin > 0:
                 rem_ms = (begin + duration) - now_ms
                 if rem_ms <= 0:
@@ -1167,8 +1193,8 @@ class BossBuffOverlay(_BuffPanelBase):
                 'uuid': buuid,
                 'name': name,
                 'rem_s': rem_s,
-                'layer': int(b.get('layer', 0) or 0),
-                'count': int(b.get('count', 0) or 0),
+                'layer': _finite_int(b.get('layer'), 0, lo=0),
+                'count': _finite_int(b.get('count'), 0, lo=0),
                 'sort_key': rem_s if rem_s >= 0 else 1e9,
             })
         for k in expired:
