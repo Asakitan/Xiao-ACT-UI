@@ -162,6 +162,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         return isFinite(number) ? number : fallback;
     }
 
+    function safeHistoryIndex(value, fallback) {
+        var number = Number(value);
+        if (!isFinite(number) || number < 0) number = Number(fallback || 0);
+        if (!isFinite(number) || number < 0) number = 0;
+        return Math.floor(number);
+    }
+
     function reportPayload(name, args) {
         args = args || [];
         if (name === 'get_report_export_status') return { limit: numericArg(args[0], 20), fmt: String(args[1] || 'json') };
@@ -172,8 +179,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         if (name === 'get_selective_parsing_status' || name === 'clear_selective_parsing') return {};
         if (name === 'update_selective_parsing') return { policy: args[0] || {} };
         if (name === 'get_history_status') return { limit: numericArg(args[0], 20), query: String(args[1] || '') };
-        if (name === 'load_history_report') return { index: numericArg(args[0], 0), show: args[1] !== false };
-        if (name === 'delete_history_report') return { index: numericArg(args[0], 0) };
+        if (name === 'load_history_report') return { index: safeHistoryIndex(args[0], 0), show: args[1] !== false };
+        if (name === 'delete_history_report') return { index: safeHistoryIndex(args[0], 0) };
         if (name === 'clear_history_reports' || name === 'choose_offline_import_file') return {};
         if (name === 'import_offline_report') {
             return { path: String(args[0] || ''), persist: args[1] !== false, show: args[2] !== false };
@@ -239,7 +246,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             return;
         }
         historyList.innerHTML = items.slice(0, 12).map(function (item, idx) {
-            var historyIndex = Number.isFinite(Number(item._history_index)) ? Number(item._history_index) : idx;
+            var historyIndex = safeHistoryIndex(item._history_index, idx);
             return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(item.total_damage || 0) + ' · dps=' + esc(item.total_dps || 0) + '<br/><small>' + esc((item.elapsed_s || 0) + 's') + '</small><div class="history-actions"><button type="button" onclick="ReportExport.loadHistory(' + historyIndex + ')">载入</button><button type="button" onclick="ReportExport.deleteHistory(' + historyIndex + ')">删除</button></div></div>';
         }).join('');
     }
@@ -318,14 +325,14 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             });
         },
         loadHistory: function (index) {
-            return apiCall('load_history_report', [index || 0, true]).then(function (payload) {
+            return apiCall('load_history_report', [safeHistoryIndex(index, 0), true]).then(function (payload) {
                 showToast(payload.ok ? '历史报告已载入' : (payload.message || '载入失败'));
                 return ReportExport.refresh();
             });
         },
         deleteHistory: function (index) {
             if (!confirm('删除这条历史报告？')) return Promise.resolve();
-            return apiCall('delete_history_report', [index || 0]).then(function (payload) {
+            return apiCall('delete_history_report', [safeHistoryIndex(index, 0)]).then(function (payload) {
                 showToast(payload.ok ? '历史报告已删除' : (payload.message || '删除失败'));
                 return ReportExport.refresh();
             });

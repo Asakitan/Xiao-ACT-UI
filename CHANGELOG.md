@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.36: ACT 历史报告索引传参修复.
+
+  1) `web/act_offline_import.html` 修复离线导入历史加载索引。
+     历史按钮和 `loadHistory()` API 调用现在统一使用有限非负整数索引,
+     避免 `NaN`、`Infinity` 或负数进入历史加载接口。
+
+  2) `web/act_report_export.html` 修复报告历史载入/删除索引。
+     历史行、bridge payload 以及直接 pywebview 调用都会通过
+     `safeHistoryIndex()`, 保证载入/删除操作传递稳定索引。
+
 ## v4.5.35: ACT Web 动态样式渲染修复.
 
   1) `web/act_timeline_vcr.html` 修复事件 topic class 渲染。

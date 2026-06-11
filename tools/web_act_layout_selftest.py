@@ -138,6 +138,26 @@ def _assert_act_dynamic_classes_and_widths_are_safe() -> None:
         raise AssertionError("aggregate bars must render width through pctWidth(ratio)")
 
 
+def _assert_history_indexes_are_normalized() -> None:
+    offline = _read_web("act_offline_import.html")
+    report = _read_web("act_report_export.html")
+    if "OfflineImport.loadHistory(' + Number(index) + ')" in offline:
+        raise AssertionError("offline import history onclick must not pass raw Number(index)")
+    if "Number(index || 0)" in offline:
+        raise AssertionError("offline import loadHistory must normalize history index before API call")
+    if "Number.isFinite(Number(item._history_index)) ? Number(item._history_index) : idx" in report:
+        raise AssertionError("report export history index must clamp finite non-negative integers")
+    for label, source in (("offline import", offline), ("report export", report)):
+        if "function safeHistoryIndex" not in source:
+            raise AssertionError(f"{label} must provide safeHistoryIndex")
+    if "OfflineImport.loadHistory(' + safeHistoryIndex(index, i) + ')" not in offline:
+        raise AssertionError("offline import history onclick must use safeHistoryIndex")
+    if "load_history_report', [safeHistoryIndex(index, 0), true]" not in offline:
+        raise AssertionError("offline import loadHistory API call must use safeHistoryIndex")
+    if "var historyIndex = safeHistoryIndex(item._history_index, idx);" not in report:
+        raise AssertionError("report export history rows must use safeHistoryIndex")
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -149,6 +169,7 @@ def main() -> int:
     _assert_inline_js_args_are_escaped()
     _assert_drilldown_numbers_are_clamped()
     _assert_act_dynamic_classes_and_widths_are_safe()
+    _assert_history_indexes_are_normalized()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 
