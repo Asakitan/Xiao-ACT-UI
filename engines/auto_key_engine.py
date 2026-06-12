@@ -605,6 +605,7 @@ class AutoKeyEngine:
         self._next_loop_at = 0.0
         self._ready_since: Dict[Tuple[str, str], float] = {}
         self._last_fire_at: Dict[Tuple[str, str], float] = {}
+        self._inject_fail_log_at = 0.0
         self._status_lock = threading.Lock()
         self._status: Dict[str, Any] = {
             "active": False,
@@ -980,12 +981,14 @@ class AutoKeyEngine:
             return False
         return self._conditions_match(action, gs, slot_map)
 
-    def _send_vk(self, vk: int, key_up: bool = False):
+    def _send_vk(self, vk: int, key_up: bool = False) -> bool:
         extra = ctypes.c_ulong(0)
         ki = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=KEYEVENTF_KEYUP if key_up else 0,
                         time=0, dwExtraInfo=ctypes.pointer(extra))
         event = INPUT(type=INPUT_KEYBOARD, ki=ki)
-        ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+        # SendInput 返回成功插入的事件数, 0 = 被拦/失败 — 不能当成功吞掉
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+        return int(sent or 0) == 1
 
     def _resolve_vk(self, key_name: str) -> int:
         key_name = _string(key_name).upper()
@@ -1001,19 +1004,29 @@ class AutoKeyEngine:
         press_count = _coerce_int(action.get("press_count"), 1, 1, 20)
         interval = _coerce_int(action.get("press_interval_ms"), 40, 0, 10_000) / 1000.0
         hold_s = _coerce_int(action.get("hold_ms"), 80, 0, 10_000) / 1000.0
+        inject_fail = 0
         for idx in range(press_count):
-            self._send_vk(vk, key_up=False)
+            if not self._send_vk(vk, key_up=False):
+                inject_fail += 1
             time.sleep(hold_s if press_mode == "hold" and hold_s > 0 else 0.015)
-            self._send_vk(vk, key_up=True)
+            if not self._send_vk(vk, key_up=True):
+                inject_fail += 1
             if idx < press_count - 1 and interval > 0:
                 time.sleep(interval)
         action_key = (profile.get("id", ""), action.get("id", ""))
         self._last_fire_at[action_key] = now
+        reason = "fired"
+        if inject_fail:
+            reason = f"inject-fail x{inject_fail}"
+            if (now - self._inject_fail_log_at) >= 60.0:
+                self._inject_fail_log_at = now
+                print(f"[AutoKey] SendInput 注入失败 {inject_fail} 次 "
+                      f"(key={action.get('key')}) — 按键没到游戏, 检查权限/输入拦截")
         self._set_status(
             last_action_id=action.get("id", ""),
             last_action_label=action.get("label", ""),
             last_fire_at=now,
-            last_reason="fired",
+            last_reason=reason,
         )
 
     # ── Burst-ready actions (from visual editor) ──

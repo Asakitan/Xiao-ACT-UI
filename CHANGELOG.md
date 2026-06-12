@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.107: 菜单快捷键标签跟随改键 + AutoKey 注入失败可见.
+
+  1) web 菜单 F5/F6 快捷键标签不再硬编码 — `_sync_menu_settings` 下发
+    `hotkey_labels`(走 `_resolved_hotkey` 的 {**DEFAULT_HOTKEYS,**saved}
+    合并), menu.html restoreMenuSettings 按 data-action 刷新 .shortcut;
+    用户在 settings.json 改键后菜单标签不再撒谎(Tk 端本就读配置)。
+
+  2) `engines/auto_key_engine.py` SendInput 返回值不再吞 — 注入失败
+    (被拦/0 事件插入)时 last_reason 报 "inject-fail xN"(菜单状态行
+    直接可见)并 60s 限频打日志; 此前注入全失败状态仍标 "fired",
+    用户以为自动按键在工作而按键根本没到游戏。
+
 ## v4.6.106: 数据源/Boss血条端点诚实返回 + Tk 数据源切换失败反馈.
 
   1) `sao_webview.py` `set_data_source` / `set_boss_bar_mode` 补诚实

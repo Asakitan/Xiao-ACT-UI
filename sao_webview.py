@@ -10001,6 +10001,11 @@ class SAOWebViewGUI:
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             cfg['report_export_visible'] = bool(self._report_export_visible)
             cfg['offline_import_visible'] = bool(self._offline_import_visible)
+            # 菜单快捷键标签跟随用户改键 — 不留硬编码键名
+            cfg['hotkey_labels'] = {
+                'toggle_recognition': self._resolved_hotkey('toggle_recognition', 'F5'),
+                'toggle_auto_script': self._resolved_hotkey('toggle_auto_script', 'F6'),
+            }
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
         except Exception:
             pass
