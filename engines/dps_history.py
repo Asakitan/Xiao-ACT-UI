@@ -892,6 +892,7 @@ class DpsHistoryStore:
             try:
                 conn = sqlite3.connect(self._sqlite_path)
                 conn.row_factory = sqlite3.Row
+                pending: List[tuple] = []  # payload 缺 entities 的 (row_id, item)
                 for row in conn.execute(
                     "SELECT id, payload_json, archived_at FROM encounters ORDER BY completed_at DESC, id DESC LIMIT ?",
                     (cap,),
@@ -903,30 +904,39 @@ class DpsHistoryStore:
                     if not isinstance(item, dict):
                         item = {}
                     if not isinstance(item.get("entities"), list):
-                        entities = []
-                        for combatant in conn.execute(
-                            "SELECT uid, name, profession, damage_total, heal_total, damage_taken, dps, hps, damage_pct, is_self, fight_point "
-                            "FROM combatants WHERE encounter_row_id=? ORDER BY rank ASC, id ASC",
-                            (int(row["id"] or 0),),
-                        ):
-                            entities.append({
-                                "uid": _coerce_int(combatant["uid"]),
-                                "name": str(combatant["name"] or ""),
-                                "profession": str(combatant["profession"] or ""),
-                                "damage_total": _coerce_int(combatant["damage_total"]),
-                                "heal_total": _coerce_int(combatant["heal_total"]),
-                                "damage_taken": _coerce_int(combatant["damage_taken"]),
-                                "dps": _coerce_int(combatant["dps"]),
-                                "hps": _coerce_int(combatant["hps"]),
-                                "damage_pct": _coerce_float(combatant["damage_pct"]),
-                                "is_self": bool(combatant["is_self"]),
-                                "fight_point": _coerce_int(combatant["fight_point"]),
-                            })
-                        item["entities"] = entities
+                        item["entities"] = []
+                        pending.append((int(row["id"] or 0), item))
                     item.setdefault("_sqlite_schema_version", DPS_HISTORY_SQLITE_SCHEMA_VERSION)
                     item.setdefault("_sqlite_row_id", _coerce_int(row["id"]))
                     item.setdefault("_sqlite_archived_at", str(row["archived_at"] or ""))
                     rows.append(item)
+                # 批取 combatants — 旧实现每行一查 (N+1), 整页 100 行就是 101 查
+                for chunk_start in range(0, len(pending), 400):
+                    chunk = pending[chunk_start:chunk_start + 400]
+                    by_row = {rid: item for rid, item in chunk}
+                    placeholders = ",".join("?" * len(by_row))
+                    for combatant in conn.execute(
+                        "SELECT encounter_row_id, uid, name, profession, damage_total, heal_total, damage_taken, dps, hps, damage_pct, is_self, fight_point "
+                        f"FROM combatants WHERE encounter_row_id IN ({placeholders}) "
+                        "ORDER BY encounter_row_id, rank ASC, id ASC",
+                        tuple(by_row.keys()),
+                    ):
+                        target = by_row.get(_coerce_int(combatant["encounter_row_id"]))
+                        if target is None:
+                            continue
+                        target["entities"].append({
+                            "uid": _coerce_int(combatant["uid"]),
+                            "name": str(combatant["name"] or ""),
+                            "profession": str(combatant["profession"] or ""),
+                            "damage_total": _coerce_int(combatant["damage_total"]),
+                            "heal_total": _coerce_int(combatant["heal_total"]),
+                            "damage_taken": _coerce_int(combatant["damage_taken"]),
+                            "dps": _coerce_int(combatant["dps"]),
+                            "hps": _coerce_int(combatant["hps"]),
+                            "damage_pct": _coerce_float(combatant["damage_pct"]),
+                            "is_self": bool(combatant["is_self"]),
+                            "fight_point": _coerce_int(combatant["fight_point"]),
+                        })
                 self._last_sqlite_error = ""
             except Exception as exc:
                 self._last_sqlite_error = str(exc)

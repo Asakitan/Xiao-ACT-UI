@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.110: 历史报告 N+1 批取 + SkillFX FBO 缓存上限.
+
+  1) `engines/dps_history.py` `list_sqlite_reports` 对 payload 缺
+    entities 的旧 schema 行改单查批取 — 此前每行一查 combatants
+    (N+1, 整页 100 行 = 101 查), 现 IN 子句 400/块一次取回按
+    encounter_row_id 回填, 排序语义不变(rank ASC, id ASC)。
+
+  2) `render/skillfx_pipeline.py` `_get_fbo` 缓存加 16 键上限 —
+    面板反复 resize 时旧尺寸 FBO+纹理不再命中却永驻显存;
+    超限按插入序淘汰并释放 color_attachments(与 release()/
+    gpu_compositor _LRU_CAP=16 同款姿势)。
+
 ## v4.6.109: sqlite_status 写代缓存 + popup HUD 层失败可见.
 
   1) `engines/dps_history.py` `sqlite_status` 按写代缓存 — 此前

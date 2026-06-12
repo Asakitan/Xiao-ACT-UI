@@ -101,6 +101,8 @@ class SkillFXShaderPipeline:
         self._vbo = ctx.buffer(quad.tobytes())
         self._vao = ctx.vertex_array(self._prog, [(self._vbo, '2f', 'in_pos')])
 
+    _FBO_CAP = 16  # 尺寸键上限 — 反复 resize 时防 FBO/纹理显存无界累积
+
     def _get_fbo(self, w: int, h: int):
         key = (int(w), int(h))
         fbo = self._fbo_cache.get(key)
@@ -111,6 +113,15 @@ class SkillFXShaderPipeline:
         tex.filter = (0x2600, 0x2600)  # GL_NEAREST
         fbo = ctx.framebuffer(color_attachments=[tex])
         self._fbo_cache[key] = fbo
+        while len(self._fbo_cache) > self._FBO_CAP:
+            old_key = next(iter(self._fbo_cache))
+            old = self._fbo_cache.pop(old_key)
+            try:
+                for att in old.color_attachments:
+                    att.release()
+                old.release()
+            except Exception:
+                pass
         return fbo
 
     def render(self, width: int, height: int,
