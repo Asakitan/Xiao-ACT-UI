@@ -480,8 +480,22 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         """Persist a setting to cfg_settings and save."""
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             self._cfg_settings_ref.set(key, value)
-            try: self._cfg_settings_ref.save()
-            except Exception: pass
+            try:
+                self._cfg_settings_ref.save()
+                self._setting_save_fail_at = 0.0
+            except Exception as exc:
+                # 设置在本会话内已生效, 只是没写进磁盘; 持续失败 (磁盘满/权限)
+                # 时 60s 内只提示一次, 恢复成功后重新armed。
+                now = time.monotonic()
+                if now - getattr(self, '_setting_save_fail_at', 0.0) >= 60.0:
+                    self._setting_save_fail_at = now
+                    print(f'[SAO] settings save failed: {exc}')
+                    try:
+                        self._show_entity_alert(
+                            '设置保存失败', f'{exc} — 本次修改重启后会丢失',
+                            display_time=5.0)
+                    except Exception:
+                        pass
 
     def _get_setting(self, key: str, default=None):
         """Read a setting."""
