@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.33: ACT Action Log Web 可见数值显示防护修复.
+
+  1) `web/act_action_log.html` 修复分组卡片 count 与 total 显示。
+     group count、uid_count 与 total_value 现在通过有限数值 formatter 渲染,
+     避免异常 payload 显示为 `Infinity rows`、`NaN` 或原始坏文本。
+
+  2) `web/act_action_log.html` 修复 summary/page/topic count 显示。
+     total rows、page index/page count 与 topic count 现在保留 0 值并过滤非有限值,
+     避免分页和汇总区域出现不可读计数。
+
 ## v4.6.32: ACT Aggregate Web count 显示防护修复.
 
   1) `web/act_aggregate.html` 修复聚合行与趋势 badge 的 count 显示。

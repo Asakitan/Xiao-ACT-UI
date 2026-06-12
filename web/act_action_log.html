@@ -152,6 +152,21 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function nonNegIntArg(value, fallback) {
         return Math.max(0, Math.floor(finiteNumberArg(value, fallback || 0)));
     }
+    function countText(value) {
+        return String(nonNegIntArg(value, 0));
+    }
+    function valueText(value) {
+        return String(finiteNumberArg(value, 0));
+    }
+    function firstCountText() {
+        for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value == null || value === '') continue;
+            var n = Number(value);
+            if (isFinite(n)) return countText(n);
+        }
+        return '0';
+    }
     function positiveIntArg(value, fallback) {
         return Math.max(1, nonNegIntArg(value, fallback || 1));
     }
@@ -237,10 +252,10 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             var key = String(group.key || '');
             var open = !!expandedGroups[key];
             var rows = objectItems(group.rows);
-            var meta = String(group.kind || 'event').toUpperCase() + ' · ' + String(group.count || 0) + ' rows · UID ' + String(group.uid_count || 0) + ' · ' + ActTime.fmtClock(group.first_time_ms) + ' · ' + ActTime.fmtDur((group.last_time_ms || 0) - (group.first_time_ms || 0));
+            var meta = String(group.kind || 'event').toUpperCase() + ' · ' + countText(group.count) + ' rows · UID ' + countText(group.uid_count) + ' · ' + ActTime.fmtClock(group.first_time_ms) + ' · ' + ActTime.fmtDur((group.last_time_ms || 0) - (group.first_time_ms || 0));
             var dungeons = listItems(group.dungeons);
             if (dungeons.length) meta += ' · ' + String(dungeons.join('/'));
-            return '<section class="group-card ' + (open ? 'open' : '') + '" data-group="' + esc(key) + '"><button class="group-head" type="button" onclick="ActionLog.toggleGroup(\'' + jsq(key) + '\')"><span class="group-toggle">' + (open ? '▾' : '▸') + '</span><span class="group-title"><div class="group-name">' + esc(group.name || '-') + '</div><div class="group-meta">' + esc(meta) + '</div></span><span class="group-total">' + esc(group.total_value || 0) + '</span></button><div class="group-detail">' + rows.map(detailRow).join('') + (group.has_more_rows ? '<div class="detail-meta">还有更多明细，请缩小筛选或翻页查看。</div>' : '') + '</div></section>';
+            return '<section class="group-card ' + (open ? 'open' : '') + '" data-group="' + esc(key) + '"><button class="group-head" type="button" onclick="ActionLog.toggleGroup(\'' + jsq(key) + '\')"><span class="group-toggle">' + (open ? '▾' : '▸') + '</span><span class="group-title"><div class="group-name">' + esc(group.name || '-') + '</div><div class="group-meta">' + esc(meta) + '</div></span><span class="group-total">' + esc(valueText(group.total_value)) + '</span></button><div class="group-detail">' + rows.map(detailRow).join('') + (group.has_more_rows ? '<div class="detail-meta">还有更多明细，请缩小筛选或翻页查看。</div>' : '') + '</div></section>';
         }).join('');
     }
     function setRowsHtml(html, preserveScroll) {
@@ -269,10 +284,10 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : 'var(--act-muted)';
         document.getElementById('sum-id').textContent = data.encounter_id || data.source || 'live';
-        document.getElementById('sum-rows').textContent = String(rows.length || 0);
-        document.getElementById('sum-total').textContent = String(analytics.total_rows || page.total_rows || cursorState.total_row_count || rows.length || 0);
-        document.getElementById('sum-page').textContent = String(page.page_index || cursorState.page_index || 0) + '/' + String(page.page_count || cursorState.page_count || 0);
-        document.getElementById('sum-topic').textContent = topicGroups.length ? (String(topicGroups[0].key || '-') + ' x' + String(topicGroups[0].count || 0)) : '-';
+        document.getElementById('sum-rows').textContent = countText(rows.length);
+        document.getElementById('sum-total').textContent = firstCountText(analytics.total_rows, page.total_rows, cursorState.total_row_count, rows.length);
+        document.getElementById('sum-page').textContent = firstCountText(page.page_index, cursorState.page_index) + '/' + firstCountText(page.page_count, cursorState.page_count);
+        document.getElementById('sum-topic').textContent = topicGroups.length ? (String(topicGroups[0].key || '-') + ' x' + countText(topicGroups[0].count)) : '-';
         document.getElementById('sum-cursor').textContent = ActTime.fmtClock(cursorState.time_ms);
         document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
         document.getElementById('sum-errors').textContent = String(errorCount);

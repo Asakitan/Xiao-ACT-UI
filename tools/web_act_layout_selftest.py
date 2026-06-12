@@ -341,6 +341,28 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
         if snippet not in action_log:
             raise AssertionError("missing safe action log numeric/list snippet: " + snippet)
     for snippet in (
+        "String(group.count || 0) + ' rows",
+        "String(group.uid_count || 0)",
+        "esc(group.total_value || 0)",
+        "String(analytics.total_rows || page.total_rows || cursorState.total_row_count || rows.length || 0)",
+        "String(page.page_index || cursorState.page_index || 0) + '/'",
+        "String(topicGroups[0].count || 0)",
+    ):
+        if snippet in action_log:
+            raise AssertionError("action log visible numeric counts must use finite display guards: " + snippet)
+    for snippet in (
+        "function countText(value)",
+        "function firstCountText()",
+        "function valueText(value)",
+        "countText(group.count) + ' rows · UID ' + countText(group.uid_count)",
+        "esc(valueText(group.total_value))",
+        "firstCountText(analytics.total_rows, page.total_rows, cursorState.total_row_count, rows.length)",
+        "firstCountText(page.page_index, cursorState.page_index) + '/'",
+        "countText(topicGroups[0].count)",
+    ):
+        if snippet not in action_log:
+            raise AssertionError("missing safe action log visible numeric snippet: " + snippet)
+    for snippet in (
         "function positiveNumberArg",
         "function safeWindowSeconds",
         "[80, safeWindowSeconds(windowInput.value), entity.value || null]",
