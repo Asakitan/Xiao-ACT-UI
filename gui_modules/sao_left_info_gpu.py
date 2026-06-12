@@ -13,6 +13,7 @@ heavy ``AsyncFrameWorker`` lane. Presentation goes through
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -53,6 +54,54 @@ def _pil_font(path: str, size: int):
 
 def gpu_left_info_enabled() -> bool:
     return require_entity_gpu('LeftInfoGpuPainter', _gow)
+
+
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _pair_ints(value: Any) -> Tuple[int, int]:
+    try:
+        first = value[0]
+        second = value[1]
+    except Exception:
+        first = 0
+        second = 0
+    return (
+        _finite_int(first, 0, lo=0),
+        _finite_int(second, 0, lo=0),
+    )
 
 
 class _LeftInfoSnapshot:
@@ -233,12 +282,12 @@ class _SessionPlayersSnapshot:
             (str(name or '--'), str(uid or '--'), str(power or '--'), bool(is_self))
             for name, uid, power, is_self in (rows or ())
         )
-        self.total = max(0, int(total or 0))
+        self.total = _finite_int(total, 0, lo=0)
         self.self_uid = str(self_uid or '')
-        self.first_index = max(0, int(first_index or 0))
-        self.w = max(1, int(w or 1))
-        self.h = max(1, int(h or 1))
-        self.reveal = max(0.0, min(1.0, float(reveal if reveal is not None else 1.0)))
+        self.first_index = _finite_int(first_index, 0, lo=0)
+        self.w = _finite_int(w, 1, lo=1)
+        self.h = _finite_int(h, 1, lo=1)
+        self.reveal = _finite_float(reveal, 1.0, lo=0.0, hi=1.0)
 
 
 class _SessionPlayersRenderer:
@@ -674,17 +723,17 @@ class _PlayerPanelSnapshot:
     def __init__(self, username, level, level_extra, season_exp, hp, sta,
                  shift_mode, top_w, top_h, bottom_w, bottom_h, scan_phase):
         self.username = str(username)
-        self.level = int(level)
-        self.level_extra = int(level_extra)
-        self.season_exp = int(season_exp)
-        self.hp = (int(hp[0]), int(hp[1]))
-        self.sta = (int(sta[0]), int(sta[1]))
+        self.level = _finite_int(level, 0, lo=0)
+        self.level_extra = _finite_int(level_extra, 0, lo=0)
+        self.season_exp = _finite_int(season_exp, 0, lo=0)
+        self.hp = _pair_ints(hp)
+        self.sta = _pair_ints(sta)
         self.shift_mode = str(shift_mode or '普通模式')
-        self.top_w = int(top_w)
-        self.top_h = int(top_h)
-        self.bottom_w = int(bottom_w)
-        self.bottom_h = int(bottom_h)
-        self.scan_phase = float(scan_phase)
+        self.top_w = _finite_int(top_w, 1, lo=1)
+        self.top_h = _finite_int(top_h, 1, lo=1)
+        self.bottom_w = _finite_int(bottom_w, 1, lo=1)
+        self.bottom_h = _finite_int(bottom_h, 1, lo=1)
+        self.scan_phase = _finite_float(scan_phase, 0.0, lo=0.0, hi=1.0)
 
 
 class PlayerPanelGpuPainter:

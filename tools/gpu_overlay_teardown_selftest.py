@@ -17,6 +17,7 @@ from gui_modules.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
 from gui_modules.sao_left_info_gpu import (
     LeftInfoGpuPainter, PlayerPanelGpuPainter, SessionPlayersGpuPainter,
+    _PlayerPanelSnapshot, _SessionPlayersSnapshot,
 )
 from gui_modules.sao_menu_bar_gpu import MenuBarGpuPainter
 
@@ -152,6 +153,48 @@ class GpuOverlayTeardownTests(unittest.TestCase):
 
         self.assertIn("presenter.release", order)
         self.assertEqual(obj._presenter, None)
+
+    def test_session_players_snapshot_tolerates_bad_numeric_fields(self) -> None:
+        snap = _SessionPlayersSnapshot(
+            rows=[("Alice", "1", "bad", True)],
+            total="inf",
+            self_uid=123,
+            first_index="bad",
+            w="nan",
+            h=None,
+            reveal="bad",
+        )
+
+        self.assertEqual(snap.total, 0)
+        self.assertEqual(snap.first_index, 0)
+        self.assertEqual(snap.w, 1)
+        self.assertEqual(snap.h, 1)
+        self.assertEqual(snap.reveal, 1.0)
+        self.assertEqual(snap.rows[0], ("Alice", "1", "bad", True))
+
+    def test_player_panel_snapshot_tolerates_bad_numeric_fields(self) -> None:
+        snap = _PlayerPanelSnapshot(
+            username="Kirito",
+            level="nan",
+            level_extra="bad",
+            season_exp=float("inf"),
+            hp=("bad", float("inf")),
+            sta=(None, "bad"),
+            shift_mode="burst",
+            top_w="bad",
+            top_h=float("nan"),
+            bottom_w=-5,
+            bottom_h=None,
+            scan_phase=float("inf"),
+        )
+
+        self.assertEqual(snap.level, 0)
+        self.assertEqual(snap.level_extra, 0)
+        self.assertEqual(snap.season_exp, 0)
+        self.assertEqual(snap.hp, (0, 0))
+        self.assertEqual(snap.sta, (0, 0))
+        self.assertEqual((snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h), (1, 1, 1, 1))
+        self.assertEqual(snap.scan_phase, 0.0)
 
 
 if __name__ == "__main__":

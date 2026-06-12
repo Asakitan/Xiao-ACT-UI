@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.7: GPU snapshot 数值防护修复.
+
+  1) `gui_modules/sao_left_info_gpu.py` 修复 Session Players GPU snapshot 数值归一。
+     会话玩家 GPU 面板现在容忍坏 `total`、分页、尺寸与 reveal 参数,
+     避免异常 payload 让列表面板本帧不刷新。
+
+  2) `gui_modules/sao_left_info_gpu.py` 修复 Player Panel GPU snapshot 数值归一。
+     玩家信息 GPU 面板现在容忍坏等级、经验、HP/STA、尺寸与 scan phase,
+     避免异常 live 值打断玩家面板渲染。
+
 ## v4.6.6: BuffMon 缓存签名渲染修复.
 
   1) `gui_modules/sao_gui_buffmon.py` 修复 self buff 覆盖率与触发次数缓存签名。
