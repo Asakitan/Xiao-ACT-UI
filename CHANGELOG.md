@@ -2,6 +2,13 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.91: 设置保存失败不再静默.
+
+  1) Tk 与 WebView 两套 UI 的 `_set_setting` 在 settings.json 写盘失败
+    (磁盘满/权限)时提示「设置保存失败 — 修改重启后会丢失」(Tk entity
+    alert / Web SAO.showToast), 持续失败 60s 内只提示一次, 恢复后重新
+    armed; 设置在本会话内仍生效, 持久化行为不变。
+
 ## v4.6.90: Tk Mem Scope/技能钻取剪贴板失败反馈补齐 Web 端 1:1.
 
   1) `gui_modules/sao_gui_mem_scope.py` 搜索结果地址复制失败不再静默
