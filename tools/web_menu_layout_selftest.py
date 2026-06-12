@@ -355,6 +355,9 @@ def main() -> int:
         "Promise.resolve(window.pywebview.api.skip_update())",
         "            window.pywebview.api.toggle_menu();",
         "window.pywebview.api.get_panel_themes().then(function(themes) {",
+        "window.pywebview.api.exit_app();",
+        "window.pywebview.api.menu_action('exit');",
+        "window.pywebview.api.alert_ok();",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -386,6 +389,11 @@ def main() -> int:
         "return window.pywebview.api.toggle_menu();",
         "}).catch(function() {\n        closeMenu();",
         "return window.pywebview.api.get_panel_themes();",
+        "function _callMenuBridgeQuiet(methodName, args, onFail)",
+        "function _requestExitApplication()",
+        "_callMenuBridgeQuiet('exit_app', [], fallbackExit)",
+        "if (!_callMenuBridgeQuiet('menu_action', ['exit'], failExit)) {",
+        "_callMenuBridgeQuiet('alert_ok');",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:

@@ -4710,16 +4710,48 @@ function closeMenu() {
 }
 
 var _exitPending = false;
+function _callMenuBridgeQuiet(methodName, args, onFail) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api[methodName]) {
+        if (onFail) onFail();
+        return false;
+    }
+    try {
+        Promise.resolve(api[methodName].apply(api, args || [])).catch(function(err) {
+            if (onFail) onFail(err);
+        });
+        return true;
+    } catch (err) {
+        if (onFail) onFail(err);
+        return false;
+    }
+}
+function _requestExitApplication() {
+    var fallbackStarted = false;
+    var exitFailed = false;
+    function failExit() {
+        if (exitFailed) return;
+        exitFailed = true;
+        _exitPending = false;
+        showToast('EXIT FAILED', 3200);
+    }
+    function fallbackExit() {
+        if (fallbackStarted) return;
+        fallbackStarted = true;
+        if (!_callMenuBridgeQuiet('menu_action', ['exit'], failExit)) {
+            failExit();
+        }
+    }
+    if (!_callMenuBridgeQuiet('exit_app', [], fallbackExit)) {
+        fallbackExit();
+    }
+}
 function exitApplication() {
     if (_exitPending) return;
     _exitPending = true;
     closeMenu();
     setTimeout(function() {
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.exit_app) {
-            window.pywebview.api.exit_app();
-        } else if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.menu_action('exit');
-        }
+        _requestExitApplication();
     }, 560);
 }
 function _toggleMenuViaBridgeOrClose() {
@@ -6572,9 +6604,7 @@ function closeAlert() {
 document.getElementById('alert-close').addEventListener('click', closeAlert);
 document.getElementById('alert-ok').addEventListener('click', function() {
     closeAlert();
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.alert_ok();
-    }
+    _callMenuBridgeQuiet('alert_ok');
 });
 
 /* ═══ Toast ═══ */

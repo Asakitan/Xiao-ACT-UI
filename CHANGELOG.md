@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.72: Web menu exit/alert bridge fallback 修复.
+
+  1) `web/menu.html` 修复退出命令 bridge 失败后卡 pending 的问题。
+     `exit_app` 现在通过安静 bridge helper 调用,
+     失败时回退到 `menu_action('exit')`, 全部失败则重置 pending 并提示。
+
+  2) `web/menu.html` 修复 Alert OK 回执的 fire-and-forget 异常。
+     `alert_ok` 现在通过同一个 helper 调用,
+     API 缺失、同步异常和 Promise reject 都不会留下未处理异常。
+
 ## v4.6.71: Web menu close/theme bridge fallback 修复.
 
   1) `web/menu.html` 修复 Web menu close/toggle bridge 失败兜底。
