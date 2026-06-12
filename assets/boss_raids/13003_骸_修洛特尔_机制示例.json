@@ -108,7 +108,9 @@
      "skill_ids": [
       10240104
      ],
-     "buff_ids": [],
+     "buff_ids": [
+      882230
+     ],
      "source": "self",
      "boss_base_id": 0,
      "hp_pct": 0.0,
@@ -169,7 +171,9 @@
      "skill_ids": [
       10240105
      ],
-     "buff_ids": [],
+     "buff_ids": [
+      882231
+     ],
      "source": "self",
      "boss_base_id": 0,
      "hp_pct": 0.0,
@@ -657,7 +661,9 @@
      "skill_ids": [
       10240116
      ],
-     "buff_ids": [],
+     "buff_ids": [
+      882216
+     ],
      "source": "self",
      "boss_base_id": 0,
      "hp_pct": 0.0,
@@ -718,7 +724,11 @@
      "skill_ids": [
       10240117
      ],
-     "buff_ids": [],
+     "buff_ids": [
+      882213,
+      882214,
+      882215
+     ],
      "source": "self",
      "boss_base_id": 0,
      "hp_pct": 0.0,
@@ -779,7 +789,9 @@
      "skill_ids": [
       10240118
      ],
-     "buff_ids": [],
+     "buff_ids": [
+      882218
+     ],
      "source": "self",
      "boss_base_id": 0,
      "hp_pct": 0.0,
