@@ -310,8 +310,8 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
 
     function refresh() {
         var a = api();
-        if (!a || !a.get_mem_scope_status) { statusPill.textContent = 'NO API'; return; }
-        Promise.resolve(a.get_mem_scope_status(queryInput.value || '', dtypeSelect.value || 'i32', jobId))
+        if (!a || !a.get_mem_scope_status) { statusPill.textContent = 'NO API'; return Promise.resolve(null); }
+        return Promise.resolve(a.get_mem_scope_status(queryInput.value || '', dtypeSelect.value || 'i32', jobId))
             .then(function (j) { return JSON.parse(j); })
             .then(function (data) {
                 lastData = data;
@@ -319,19 +319,21 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
                     lastData = window.PluginHooks.tap('mem_scope', lastData, function (p) { lastData = p; render(p); });
                 }
                 render(lastData);
-            }).catch(function () { statusPill.textContent = 'API ERROR'; });
+                return lastData;
+            }).catch(function () { statusPill.textContent = 'API ERROR'; return null; });
     }
 
     function startPoll() {
         stopPoll();
         pollTimer = setInterval(function () {
             var a = api();
-            if (!jobId || !a || !a.mem_search_status) { stopPoll(); return; }
-            Promise.resolve(a.mem_search_status(jobId)).then(function (j) {
-                var js = JSON.parse(j);
-                refresh();
-                if (js.done) stopPoll();
-            }).catch(function () { stopPoll(); toast('搜索状态轮询失败, 已停止刷新'); });
+            if (!jobId || !a || !a.get_mem_scope_status) { stopPoll(); return; }
+            // 搜索任务状态随 get_mem_scope_status 的 search 字段一起返回, 每 tick 一次拉取即可
+            refresh().then(function (data) {
+                if (!data) { stopPoll(); toast('搜索状态轮询失败, 已停止刷新'); return; }
+                var js = data.search || {};
+                if (!data.search || js.done) stopPoll();
+            });
         }, 500);
     }
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }

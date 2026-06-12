@@ -2,7 +2,7 @@
 
 面向《星痕共鸣》的 Windows 外部 HUD / ACT 战斗分析工具。提供 SAO 风格的透明覆盖界面、DPS/HPS 统计、Boss 战辅助与自动按键，数据以 TCP 抓包为主、视觉识别与只读内存为辅。
 
-- 当前版本：`4.6.94`（以 `config.py` 的 `APP_VERSION` 为准）
+- 当前版本：`4.6.95`（以 `config.py` 的 `APP_VERSION` 为准）
 - 运行平台：Windows 10 / 11
 - 两套 UI：`webview`（pywebview + WebView2）与 `entity`（Tk / 原生窗口）
 

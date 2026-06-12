@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.95: BuffMon compose 签名去 id() + Mem Scope 搜索轮询减半.
+
+  1) `gui_modules/sao_gui_buffmon.py` GPU compose 签名从 `id(base_img)` 改为
+    base 重建代数 `_cached_seq`, 消除与 v4.6.94 同类的地址复用碰撞隐患
+    (碰撞会让真实新帧被当旧帧跳过合成)。
+
+  2) `web/mem_scope.html` 搜索期间轮询从每 tick 两次 API (`mem_search_status`
+    + `get_mem_scope_status`) 减为一次: 任务状态直接读 `get_mem_scope_status`
+    返回的 `search` 字段, 渲染行为与停表条件不变。
+
 ## v4.6.94: GPU presenter 帧去重改单调序号, 消除 id() 复用碰撞.
 
   1) `render/gpu_overlay_window.py` BgraPresenter 纹理上传去重不再比较

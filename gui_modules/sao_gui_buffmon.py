@@ -238,6 +238,9 @@ class _BuffPanelBase:
         self._cached_base: Optional[Image.Image] = None
         self._cached_total_h = 0
         self._cached_sig: Tuple = ()
+        # base_img 重建代数; compose 签名用它而不是 id(base_img) —
+        # 释放后的地址复用会让 id() 撞车, 把真实新帧当成旧帧跳过。
+        self._cached_seq = 0
 
         # ── GPU presenter 路径 (优先) ──
         self._gpu_enabled = _gpu_buffmon_enabled()
@@ -821,6 +824,7 @@ class _BuffPanelBase:
                 self._cached_base = base_img
                 self._cached_total_h = total_h
                 self._cached_sig = sig
+                self._cached_seq += 1
             else:
                 base_img = self._cached_base
                 total_h = self._cached_total_h
@@ -900,7 +904,7 @@ class _BuffPanelBase:
             return
 
         # 仅在内容/alpha 显著变化时重新合成 (alpha 量化到 16 级)
-        sig = (id(base_img), x, y, alpha >> 4)
+        sig = (self._cached_seq, x, y, alpha >> 4)
         if sig == self._gpu_last_compose_sig:
             return
         self._gpu_last_compose_sig = sig
