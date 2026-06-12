@@ -605,6 +605,32 @@ function assert(cond, message) {
   assert(menu.includes("_pdPanelCards"), "menu detached plugin panel should keep panel cards across polls");
   assert(!menu.includes("body.innerHTML = '';"), "menu detached plugin panel still clears all cards on each poll");
   assert(menu.includes("entry.renderSig === renderSig"), "menu detached plugin panel should skip unchanged specs");
+  for (const snippet of [
+    "var panels = ((data && data.panels) || []).filter(function (p) {",
+    "var spec = (r && r.spec) || { nodes: [] };",
+    "var hks = ((data && data.hotkeys) || []).filter(function (h) { return h.plugin_id === _pdPlugin; });",
+    "var occupied = (data && data.occupied) || {};",
+    "(plugins || []).forEach(function (it) {",
+    "var plugins = (data && data.plugins) || [];",
+    "var plugins = ((data && data.plugins) || []).filter(function (p) {",
+  ]) {
+    assert(!menu.includes(snippet), "menu plugin surfaces still trust malformed payloads: " + snippet);
+  }
+  for (const snippet of [
+    "function _pluginIsObjectValue(value)",
+    "function _pluginObjectValue(value)",
+    "function _pluginListItems(value)",
+    "function _pluginObjectItems(value)",
+    "var panels = _pluginObjectItems(_pluginObjectValue(data).panels).filter(function (p) {",
+    "var spec = _pluginObjectValue(_pluginObjectValue(r).spec);",
+    "var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return h.plugin_id === _pdPlugin; });",
+    "var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);",
+    "plugins = _pluginObjectItems(plugins);",
+    "var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins);",
+    "var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins).filter(function (p) {",
+  ]) {
+    assert(menu.includes(snippet), "menu plugin surfaces are missing guarded payload handling: " + snippet);
+  }
 
   console.log("web_pywebview_shim_selftest: ok");
 })().catch((err) => {

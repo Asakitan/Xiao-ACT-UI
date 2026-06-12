@@ -7641,6 +7641,20 @@ setTimeout(function() {
     var _pdPlugin = '';
     var _pdTimer = null;
     var _pdPanelCards = Object.create(null);
+    function _pluginIsObjectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value);
+    }
+    function _pluginObjectValue(value) {
+        return _pluginIsObjectValue(value) ? value : {};
+    }
+    function _pluginListItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function _pluginObjectItems(value) {
+        return _pluginListItems(value).filter(function (item) {
+            return _pluginIsObjectValue(item);
+        });
+    }
     window.showPluginDetached = function (pluginId) {
         var nextPlugin = String(pluginId || '');
         if (_pdPlugin !== nextPlugin) {
@@ -7725,7 +7739,7 @@ setTimeout(function() {
         var mySeq = ++_pdSeq;
         Promise.resolve(a.get_plugin_ui_panels()).then(parse).then(function (data) {
             if (mySeq !== _pdSeq) return;
-            var panels = ((data && data.panels) || []).filter(function (p) {
+            var panels = _pluginObjectItems(_pluginObjectValue(data).panels).filter(function (p) {
                 return p.plugin_id === _pdPlugin && p.available;
             });
             if (title) title.textContent = (panels[0] && panels[0].title) || _pdPlugin;
@@ -7742,7 +7756,7 @@ setTimeout(function() {
                 seen[key] = true;
                 Promise.resolve(a.render_ui_panel(key, '')).then(parse).then(function (r) {
                     if (mySeq !== _pdSeq || !entry.card.isConnected) return;
-                    var spec = (r && r.spec) || { nodes: [] };
+                    var spec = _pluginObjectValue(_pluginObjectValue(r).spec);
                     var renderSig = (renderSpec ? 'hook:' : 'text:') + pdSig(spec);
                     if (entry.renderSig === renderSig) return;
                     entry.renderSig = renderSig;
@@ -7763,9 +7777,9 @@ setTimeout(function() {
         var hkBox = document.getElementById('pd-hotkeys');
         if (!a || !hkBox || !a.get_plugin_hotkeys) { if (hkBox) hkBox.innerHTML = ''; return; }
         Promise.resolve(a.get_plugin_hotkeys()).then(parse).then(function (data) {
-            var hks = ((data && data.hotkeys) || []).filter(function (h) { return h.plugin_id === _pdPlugin; });
+            var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return h.plugin_id === _pdPlugin; });
             if (!hks.length) { hkBox.innerHTML = ''; return; }
-            var occupied = (data && data.occupied) || {};
+            var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);
             // 可选键位: 纯 F 键 + CTRL/ALT 组合 (Tk sao_gui_plugin_manager._HK_CHOICES 与此 1:1)。
             var GROUPS = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
             var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
@@ -7810,8 +7824,9 @@ setTimeout(function() {
     });
     // Shared plugin row builder (pinned-first list with toggle + pin buttons).
     function buildPluginRows(plugins) {
+        plugins = _pluginObjectItems(plugins);
         var html = '';
-        (plugins || []).forEach(function (it) {
+        plugins.forEach(function (it) {
             var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
             var flags = (it.pinned ? '★' : '') + (it.declares_panel ? ' ▣' : '')
                 + ((it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '');
@@ -7835,7 +7850,7 @@ setTimeout(function() {
         var a = api();
         if (!a || !a.get_plugin_menu) { list.innerHTML = '<div class="ppm-empty">插件接口不可用</div>'; return; }
         fetchPluginMenu().then(function (data) {
-            var plugins = (data && data.plugins) || [];
+            var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins);
             var html = '<div class="ppm-row ppm-manage" data-manage="1">⚙ 插件管理面板 Manage</div><div class="ppm-sep"></div>';
             list.innerHTML = plugins.length ? (html + buildPluginRows(plugins))
                 : (html + '<div class="ppm-empty">未发现插件 No plugins</div>');
@@ -7848,7 +7863,7 @@ setTimeout(function() {
         var list = document.getElementById('plugins-cat-list');
         if (!list) return;
         fetchPluginMenu().then(function (data) {
-            var plugins = ((data && data.plugins) || []).filter(function (p) {
+            var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins).filter(function (p) {
                 return p.active && p.declares_panel;  // active = loaded + running
             });
             if (!plugins.length) {

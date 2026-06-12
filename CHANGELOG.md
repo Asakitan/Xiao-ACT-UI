@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.5: Menu plugin payload 防护修复.
+
+  1) `web/menu.html` 修复 detached plugin panel payload 形状处理。
+     主菜单插件面板现在归一 `panels` 列表与 `render_ui_panel` 返回 spec,
+     避免坏插件面板 payload 打断浮层渲染或保留过期卡片。
+
+  2) `web/menu.html` 修复插件 popup/category/hotkey payload 形状处理。
+     主菜单插件入口现在归一 `plugins`、`hotkeys` 与 `occupied` payload,
+     避免坏插件菜单数据打断插件列表和快捷键下拉渲染。
+
 ## v4.6.4: DPS Web payload 防护修复.
 
   1) `web/dps.html` 修复实体列表与报告入口 payload 形状处理。
