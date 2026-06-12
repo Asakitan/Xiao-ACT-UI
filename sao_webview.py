@@ -4520,14 +4520,17 @@ class SAOWebViewGUI:
 
         # Mechanic banner — 顶部居中机制提醒堆叠条 (倒计时进度条), 纯覆盖层鼠标穿透
         mech_banner_url = _web_file_uri('mech_banner.html')
+        # 行宽是 CSS-px(DIP, 560)。窗口尺寸也按 DIP 给, 不再二次除 DPI —
+        # 否则高 DPI 下窗口被缩到 ~400 DIP, 560 行被裁切。只有 x/y(由物理坐标来)需转 DIP。
         mech_banner_w = 600
         mech_banner_h = 3 * 64 + 2 * 8 + 12
+        _mb_mon_w = self._to_webview_px(_sw)
         self.mech_banner_win = webview.create_window(
             'SAO MechBanner', mech_banner_url,
-            width=self._to_webview_px(mech_banner_w),
-            height=self._to_webview_px(mech_banner_h),
-            x=self._to_webview_px(monitor_left + max(0, int((_sw - mech_banner_w) / 2))),
-            y=self._to_webview_px(monitor_top + max(0, int(_sh * 0.08))),
+            width=mech_banner_w,
+            height=mech_banner_h,
+            x=self._to_webview_px(monitor_left) + max(0, (_mb_mon_w - mech_banner_w) // 2),
+            y=self._to_webview_px(monitor_top) + max(0, int(self._to_webview_px(_sh) * 0.08)),
             frameless=True,
             easy_drag=False,
             transparent=True,

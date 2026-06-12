@@ -71,18 +71,58 @@ class MechBannerOverlay:
         self.root = root
         self.settings = settings
         self._rows: list = []          # [{id, name, text, color, ends_at, total_s, ...}]
-        self._lock = threading.Lock()
+        # 线程安全靠 root.after 把所有变更编进 Tk 线程 (无显式锁)
         self._anim_id = None
         self._win = None
         self._hwnd = None
         self._visible = False
 
-        self._sw = _user32.GetSystemMetrics(0)
-        self._sh = _user32.GetSystemMetrics(1)
         self._canvas_w = ROW_W
         self._canvas_h = MAX_ROWS * ROW_H + (MAX_ROWS - 1) * ROW_GAP
-        self._x = max(0, (self._sw - self._canvas_w) // 2)
-        self._y = max(0, int(self._sh * 0.08))
+        self._resolve_monitor_geometry()
+
+    def _resolve_monitor_geometry(self):
+        """把横幅摆到游戏所在显示器顶部居中 (多屏: 跟随游戏窗口, 非恒主屏)。
+        机制横幅在战斗中触发, 游戏几乎总是前台窗口 → 用游戏/前台窗口定位,
+        失败回退主屏 GetSystemMetrics。"""
+        left = top = None
+        right = bottom = None
+        try:
+            hwnd = 0
+            try:
+                from engines.auto_key_engine import GAME_PROCESS_NAMES  # noqa: F401
+                found = _user32.GetForegroundWindow()
+                if found:
+                    hwnd = found
+            except Exception:
+                hwnd = _user32.GetForegroundWindow()
+            if hwnd:
+                MONITOR_DEFAULTTONEAREST = 2
+                hmon = _user32.MonitorFromWindow(ctypes.c_void_p(hwnd),
+                                                 MONITOR_DEFAULTTONEAREST)
+                if hmon:
+                    class _RECT(ctypes.Structure):
+                        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                    class _MI(ctypes.Structure):
+                        _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _RECT),
+                                    ("rcWork", _RECT), ("dwFlags", ctypes.c_ulong)]
+                    mi = _MI()
+                    mi.cbSize = ctypes.sizeof(_MI)
+                    if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                        left, top = mi.rcMonitor.left, mi.rcMonitor.top
+                        right, bottom = mi.rcMonitor.right, mi.rcMonitor.bottom
+        except Exception:
+            left = None
+        if left is None:
+            left, top = 0, 0
+            right = _user32.GetSystemMetrics(0)
+            bottom = _user32.GetSystemMetrics(1)
+        sw, sh = max(1, right - left), max(1, bottom - top)
+        self._sw, self._sh = sw, sh
+        self._x = left + max(0, (sw - self._canvas_w) // 2)
+        self._y = top + max(0, int(sh * 0.08))
 
     # ── public API (线程安全) ──
 
@@ -160,13 +200,24 @@ class MechBannerOverlay:
         except Exception:
             pre_warn_s = 0.0
         total = countdown_s if countdown_s > 0 else STATIC_HOLD_S
+        # 中途推入(remaining < countdown)时进度条从剩余比例起 — 与 Web 端对齐
+        try:
+            if entry.get('remaining_ms') is not None:
+                remaining = max(0.0, float(entry.get('remaining_ms') or 0) / 1000.0)
+            elif entry.get('remaining_s') is not None:
+                remaining = max(0.0, float(entry.get('remaining_s') or 0))
+            else:
+                remaining = total
+        except Exception:
+            remaining = total
+        remaining = min(remaining, total) if total > 0 else total
         row = {
             'id': str(entry.get('id') or entry.get('mechanic_id') or f'r{int(now * 1000)}'),
             'name': str(entry.get('name') or '机制'),
             'text': str(entry.get('text') or entry.get('banner_text') or ''),
             'color': _parse_color(entry.get('color')),
             'started_at': now,
-            'ends_at': now + total,
+            'ends_at': now + (remaining if countdown_s > 0 else total),
             'total_s': total,
             'show_bar': countdown_s > 0,
             'pre_warn_s': pre_warn_s,
@@ -176,7 +227,12 @@ class MechBannerOverlay:
         self._rows = [r for r in self._rows if r['id'] != row['id']]
         self._rows.insert(0, row)
         if len(self._rows) > MAX_ROWS:
-            self._rows = self._rows[:MAX_ROWS]
+            # 淡出中的行(已到点)先被逐出, 别挤掉仍在倒计时的活行 — 与 Web 端只数活行对齐
+            live = [r for r in self._rows if r['ends_at'] > now]
+            fading = [r for r in self._rows if r['ends_at'] <= now]
+            self._rows = (live[:MAX_ROWS] if len(live) >= MAX_ROWS
+                          else live + fading[:MAX_ROWS - len(live)])
+        self._resolve_monitor_geometry()   # 每次新行重定位 — 游戏可能换了显示器
         self._ensure_window()
         if self._anim_id is None:
             self._tick()
@@ -214,6 +270,12 @@ class MechBannerOverlay:
         while _tracked_text_width(label, font, spacing) > max_w and size > 13:
             size -= 1
             font = _load_font('cjk', size)
+        # 缩到下限仍超宽则省略号截断 — 别压到右侧秒数 (与 Web ellipsis 对齐)
+        if _tracked_text_width(label, font, spacing) > max_w and len(label) > 1:
+            while len(label) > 1 and \
+                    _tracked_text_width(label + '…', font, spacing) > max_w:
+                label = label[:-1]
+            label += '…'
         _draw_tracked(d, (18, (ROW_H - size) / 2 - 7), label,
                       fill=TEXT_MAIN, font=font, spacing=spacing)
         row['chrome'] = img

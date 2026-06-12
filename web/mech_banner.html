@@ -68,7 +68,7 @@ body {
 .mech-row {
     pointer-events: none;
     position: relative;
-    width: 560px;
+    width: min(560px, calc(100vw - 4px));   /* 高DPI下窗口变窄也不裁切 */
     height: 64px;
     background: var(--row-bg);
     border-top: 2px solid var(--row-topline);
@@ -102,7 +102,7 @@ body {
     left: 18px;
     top: 50%;
     transform: translateY(-58%);
-    max-width: 410px;
+    max-width: calc(100% - 130px);   /* 文案预算与 Tk(ROW_W-130) 对齐, 不压秒数 */
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -136,7 +136,11 @@ body {
 .mech-bar-fill {
     height: 100%;
     width: 100%;
-    background: linear-gradient(90deg, rgb(104, 228, 255), rgb(243, 175, 18));
+    /* 渐变锚定整条轨道宽(528=560-16-16), 随填充收窄右缘色滑向青色 — 与 Tk 同 */
+    background-image: linear-gradient(90deg, rgb(104, 228, 255), rgb(243, 175, 18));
+    background-size: 528px 100%;
+    background-repeat: no-repeat;
+    background-position: left center;
 }
 
 .mech-row.warn .mech-sec { color: var(--sec-warn); }
@@ -145,11 +149,12 @@ body {
     content: '';
     position: absolute;
     inset: 0;
+    /* 全周期 0.667s 三角(0.333s×往返)、α 0.108→0.18 — 与 Tk 脉冲节奏/幅度对齐 */
     background: rgba(220, 40, 30, 0.18);
-    animation: mech-pulse 0.66s ease-in-out infinite alternate;
+    animation: mech-pulse 0.333s linear infinite alternate;
 }
 @keyframes mech-pulse {
-    from { opacity: 0.55; }
+    from { opacity: 0.6; }
     to { opacity: 1; }
 }
 </style>
@@ -165,6 +170,11 @@ body {
     var rows = {};   // id -> {el, fill, sec, endsAt, totalMs, preWarnMs, showBar, raf}
 
     function esc(t) { return (t == null ? '' : String(t)); }
+    function normColor(v) {
+        // 只认 #RGB / #RRGGBB, 否则回退青色 — 与 Tk _parse_color 同, 杜绝 url()/命名色注入
+        var s = String(v == null ? '' : v).trim();
+        return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s) ? s : '#68e4ff';
+    }
     function finiteNum(v, fallback) {
         if (v == null || v === '') return fallback;
         var n = Number(v);
@@ -241,7 +251,7 @@ body {
 
         var el = document.createElement('div');
         el.className = 'mech-row';
-        var color = esc(e.color) || '#68e4ff';
+        var color = normColor(e.color);
         var label = esc(e.text || e.banner_text) || esc(e.name) || '机制';
         el.innerHTML =
             '<div class="mech-colorbar"></div>' +
