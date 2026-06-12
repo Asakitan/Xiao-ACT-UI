@@ -3395,10 +3395,10 @@ class DpsOverlay:
     def _on_drag_move(self, ev) -> None:
         try:
             if self._list_drag_active:
-                dy = int(ev.y_root) - self._list_drag_start_y
+                dy = _safe_int(getattr(ev, 'y_root', 0)) - _safe_int(self._list_drag_start_y)
                 # 反向: 向上拖 = 向下滚 (内容向上移)
                 rows_delta = -dy / float(self.ROW_H + self.ROW_MARGIN)
-                target_offset = int(round(self._list_drag_start_offset + rows_delta))
+                target_offset = int(round(_safe_int(self._list_drag_start_offset) + rows_delta))
                 max_off = self._max_scroll_offset()
                 target_offset = max(0, min(max_off, target_offset))
                 cur = self._current_scroll_offset()
@@ -3407,21 +3407,29 @@ class DpsOverlay:
                 self._drag_moved = True
                 return
             if self._resize_active:
-                dx = int(ev.x_root) - self._resize_start_root[0]
-                dy = int(ev.y_root) - self._resize_start_root[1]
+                root_x = _safe_int(getattr(ev, 'x_root', 0))
+                root_y = _safe_int(getattr(ev, 'y_root', 0))
+                start_root_x = _safe_int((self._resize_start_root or (0, 0))[0])
+                start_root_y = _safe_int((self._resize_start_root or (0, 0))[1])
+                dx = root_x - start_root_x
+                dy = root_y - start_root_y
                 if not self._drag_moved and \
                    abs(dx) < self.CLICK_DRAG_THRESHOLD and \
                    abs(dy) < self.CLICK_DRAG_THRESHOLD:
                     return
                 self._drag_moved = True
-                old_size = (int(self._detail_w), int(self._detail_h))
+                old_w = _safe_int(self._detail_w, default=self.DETAIL_DEFAULT_W)
+                old_h = _safe_int(self._detail_h, default=self.DETAIL_DEFAULT_H)
+                old_size = (old_w, old_h)
+                start_w = _safe_int((self._resize_start_size or old_size)[0], default=old_w)
+                start_h = _safe_int((self._resize_start_size or old_size)[1], default=old_h)
                 self._detail_w = max(
                     self.DETAIL_MIN_W,
-                    min(self.DETAIL_MAX_W, self._resize_start_size[0] + dx),
+                    min(self.DETAIL_MAX_W, start_w + dx),
                 )
                 self._detail_h = max(
                     self.DETAIL_MIN_H,
-                    min(self.DETAIL_MAX_H, self._resize_start_size[1] + dy),
+                    min(self.DETAIL_MAX_H, start_h + dy),
                 )
                 if old_size != (int(self._detail_w), int(self._detail_h)):
                     self._shell_cache = None
@@ -3516,8 +3524,8 @@ class DpsOverlay:
         web/dps.html .skill-frame overflow:auto); otherwise it scrolls the
         entity list. ev.delta > 0 = scroll up, < 0 = scroll down on Windows.
         """
-        delta = getattr(ev, 'delta', 0)
-        if delta == 0:
+        delta = _safe_float(getattr(ev, 'delta', 0))
+        if abs(delta) <= 1e-9:
             return
         direction = -1 if delta > 0 else 1
         if self._detail_visible:

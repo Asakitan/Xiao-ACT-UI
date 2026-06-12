@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.24: DPS wheel 与 resize 拖拽数值防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复鼠标滚轮 delta 归一。
+     字符串或小数字符串 delta 现在仍能触发列表/详情滚动,
+     避免输入封装层格式变化打断滚轮交互。
+
+  2) `gui_modules/sao_gui_dps.py` 修复 detail resize 拖拽状态归一。
+     坏或小数字符串 resize 起点/尺寸现在会归一后继续计算,
+     避免详情窗口拖拽缩放因为运行态格式异常失效。
+
 ## v4.6.23: DPS dirty signature 与 GPU 事件数值防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 compose signature 数值归一。

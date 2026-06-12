@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
 
@@ -415,6 +416,38 @@ class DpsOverlayPayloadTests(unittest.TestCase):
         ev = panel._gpu_event(object(), "bad-local-y", delta="bad-delta")
 
         self.assertEqual((ev.x, ev.y, ev.x_root, ev.y_root, ev.delta), (0, 0, 0, 0, 0))
+
+    def test_mouse_wheel_string_delta_still_scrolls(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._detail_visible = False
+        seen = []
+        panel._scroll = lambda direction: seen.append(direction)  # type: ignore[method-assign]
+
+        panel._on_mouse_wheel(SimpleNamespace(delta="120.0"))
+
+        self.assertEqual(seen, [-1])
+
+    def test_resize_drag_decimal_state_updates_detail_size(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._list_drag_active = False
+        panel._resize_active = True
+        panel._drag_moved = False
+        panel._resize_start_root = ("10.0", "20.0")
+        panel._resize_start_size = ("640.0", "500.0")
+        panel._detail_w = "640.0"
+        panel._detail_h = "500.0"
+        panel._shell_cache = None
+        panel._last_compose_sig = None
+        panel._gpu_managed = False
+        panel._gpu_window = None
+        panel._win = None
+        panel._visible = False
+
+        panel._on_drag_move(SimpleNamespace(x_root="70.0", y_root="80.0"))
+
+        self.assertEqual(panel._detail_w, 700)
+        self.assertEqual(panel._detail_h, 560)
+        self.assertTrue(panel._drag_moved)
 
 
 if __name__ == "__main__":
