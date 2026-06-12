@@ -303,7 +303,18 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('sum-id').textContent = payload.encounter_id || '--';
         document.getElementById('sum-format').textContent = (payload.selected_format || fmt()).toUpperCase();
         document.getElementById('sum-count').textContent = firstCountText(storage.count, historyItems.length);
-        document.getElementById('sum-storage').textContent = storage.available ? 'READY' : 'N/A';
+        // sqlite/archive 出错时不能继续装 READY (DB 锁死/损坏 → 空历史 + READY 误导)
+        var storageErr = String(objectValue(storage.sqlite).last_error || objectValue(storage.archive).last_error || '');
+        var storageEl = document.getElementById('sum-storage');
+        if (storageErr) {
+            storageEl.textContent = 'ERROR';
+            storageEl.style.color = 'var(--act-danger)';
+            storageEl.title = storageErr;
+        } else {
+            storageEl.textContent = storage.available ? 'READY' : 'N/A';
+            storageEl.style.color = '';
+            storageEl.title = '';
+        }
         apiCall('get_selective_parsing_status', []).then(function (selective) {
             var node = document.getElementById('sum-selective');
             if (node) node.textContent = selective && selective.enabled ? String(selective.mode || 'ON').toUpperCase() : 'ALL';

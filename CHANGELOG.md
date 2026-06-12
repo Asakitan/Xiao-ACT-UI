@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.111: 历史库异常双端透出 + schema 单次 ensure.
+
+  1) 历史库(sqlite/archive)出错不再装 READY — web report_export
+    Storage 行出 ERROR(红色, title 带错误详情), Tk 状态行追加
+    「历史库异常: …」; 此前 DB 锁死/损坏时双端都显示 READY/OK +
+    空历史, 用户无从分辨"没数据"和"库坏了"。
+
+  2) `engines/dps_history.py` `_ensure_sqlite_schema_locked` 每进程
+    每路径只跑一次(17 条 DDL + meta 写, 此前读路径每次轮询都重跑,
+    含一次 meta 表写入); `_sqlite_connect_locked` 发现文件被删时
+    复位守卫, 重建库不受影响。
+
 ## v4.6.110: 历史报告 N+1 批取 + SkillFX FBO 缓存上限.
 
   1) `engines/dps_history.py` `list_sqlite_reports` 对 payload 缺

@@ -416,10 +416,17 @@ class ReportExportPanel:
         except Exception:
             selective = {}
         selective_hint = ' · Selective ON' if selective.get('enabled') else ''
+        # 历史库异常透出 — 与 web 端 Storage=ERROR 对偶, 否则 DB 锁死时
+        # 用户只看到空历史 + OK
+        storage = status.get('storage_status') if isinstance(status.get('storage_status'), Mapping) else {}
+        sqlite_info = storage.get('sqlite') if isinstance(storage.get('sqlite'), Mapping) else {}
+        archive_info = storage.get('archive') if isinstance(storage.get('archive'), Mapping) else {}
+        storage_err = str(sqlite_info.get('last_error') or archive_info.get('last_error') or '')
+        storage_hint = f' · 历史库异常: {storage_err[:60]}' if storage_err else ''
         if status.get('path'):
-            self._status_var.set(f"Exported: {status.get('path')}")
+            self._status_var.set(f"Exported: {status.get('path')}" + storage_hint)
         else:
-            self._status_var.set(str(status.get('message') or ('OK' if status.get('ok') else f'errors={len(errors)}')) + selective_hint)
+            self._status_var.set(str(status.get('message') or ('OK' if status.get('ok') else f'errors={len(errors)}')) + selective_hint + storage_hint)
         render_sig = json.dumps({
             'preview': preview,
             'errors': errors,

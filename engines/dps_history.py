@@ -419,6 +419,9 @@ class DpsHistoryStore:
         # 都跑 6 个 COUNT(*) 全表扫 + ensure_schema 不可取
         self._sqlite_write_gen = 0
         self._sqlite_status_cache: Optional[tuple] = None
+        # schema 每进程每路径只 ensure 一次 (17 条 DDL + meta 写,
+        # 此前读路径每次轮询都重跑); 文件被删重建时复位
+        self._sqlite_schema_ensured_for: Optional[str] = None
         self._load()
 
     @property
@@ -488,6 +491,9 @@ class DpsHistoryStore:
     def _sqlite_connect_locked(self):
         if not self._sqlite_path:
             return None
+        if not os.path.isfile(self._sqlite_path):
+            # 文件被外部删除 — 下次 ensure 重建全套表
+            self._sqlite_schema_ensured_for = None
         sqlite_dir = os.path.dirname(self._sqlite_path)
         if sqlite_dir:
             os.makedirs(sqlite_dir, exist_ok=True)
@@ -497,6 +503,8 @@ class DpsHistoryStore:
         return conn
 
     def _ensure_sqlite_schema_locked(self, conn) -> None:
+        if self._sqlite_schema_ensured_for == self._sqlite_path:
+            return
         conn.execute(
             "CREATE TABLE IF NOT EXISTS meta ("
             "key TEXT PRIMARY KEY, "
@@ -612,6 +620,7 @@ class DpsHistoryStore:
             "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
             ("schema_version", str(DPS_HISTORY_SQLITE_SCHEMA_VERSION)),
         )
+        self._sqlite_schema_ensured_for = self._sqlite_path
 
     def _append_sqlite_action_rows_locked(self, conn, encounter_row_id: int, report: Dict[str, Any]) -> None:
         events = _list_from_report(report, "actions", "events", "action_log")
