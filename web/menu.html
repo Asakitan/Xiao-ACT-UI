@@ -5499,11 +5499,11 @@ function _akPopulateEditorFields() {
         _akRenderEditorIdentitySummary(null);
         return;
     }
-    document.getElementById('ak-profile-name').value = draft.profile_name || '';
-    document.getElementById('ak-profile-profession-name').value = draft.profession_name || '';
+    document.getElementById('ak-profile-name').value = _profileText(draft.profile_name, '');
+    document.getElementById('ak-profile-profession-name').value = _profileText(draft.profession_name, '');
     document.getElementById('ak-profile-profession-id').value = _akIntValue('profession_id', draft.profession_id);
     document.getElementById('ak-engine-tick-ms').value = _akIntValue('tick_ms', draft.engine && draft.engine.tick_ms);
-    document.getElementById('ak-profile-description').value = draft.description || '';
+    document.getElementById('ak-profile-description').value = _profileText(draft.description, '');
     document.getElementById('ak-engine-require-foreground').checked = !(draft.engine && draft.engine.require_foreground === false);
     document.getElementById('ak-engine-pause-on-death').checked = !(draft.engine && draft.engine.pause_on_death === false);
     _akRenderEditorIdentitySummary(draft);
@@ -5514,20 +5514,22 @@ function _akRenderActionList() {
     var listEl = document.getElementById('auto-key-action-list');
     if (!listEl) return;
     var draft = _autoKeyDraftProfile;
-    if (!draft || !Array.isArray(draft.actions) || !draft.actions.length) {
+    var actions = draft ? _profileEntries(draft.actions).map(_profileEntry) : [];
+    if (draft) draft.actions = actions;
+    if (!draft || !actions.length) {
         listEl.innerHTML = '<div class="auto-key-empty">还没有动作。先新增一个动作并绑定到技能槽。<br>No actions yet. Add one and bind it to a skill slot.</div>';
         return;
     }
-    listEl.innerHTML = draft.actions.map(function(action, index) {
+    listEl.innerHTML = actions.map(function(action, index) {
         var conditions = _akGetActionConditions(index);
-        var jsonText = String(action._conditions_text || JSON.stringify(action.conditions || [], null, 2));
+        var jsonText = _profileText(action._conditions_text, JSON.stringify(_profileEntries(action.conditions), null, 2));
         var jsonStatus = action._conditions_error ?
             '<div class="auto-key-json-status auto-key-status-error">JSON 未应用 / JSON not applied: ' + _escHtml(action._conditions_error) + '</div>' :
             '<div class="auto-key-json-status">条件卡片会自动同步到高级 JSON。修改高级 JSON 后，离开输入框时会尝试应用。</div>';
         return '' +
             '<div class="auto-key-action-card">' +
                 '<div class="auto-key-card-head">' +
-                    '<div class="auto-key-card-title">动作 Action ' + (index + 1) + ': ' + _escHtml(action.label || ('动作 Action ' + (index + 1))) + '</div>' +
+                    '<div class="auto-key-card-title">动作 Action ' + (index + 1) + ': ' + _escHtml(_profileText(action.label, '动作 Action ' + (index + 1))) + '</div>' +
                     '<div class="auto-key-card-actions">' +
                         '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', -1); return false;">上移 Up</button>' +
                         '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', 1); return false;">下移 Down</button>' +
@@ -5544,9 +5546,9 @@ function _akRenderActionList() {
                     '<button class="auto-key-btn" type="button" onclick="_akAddCondition(' + index + '); return false;">新增条件 Add Condition</button>' +
                 '</div>' +
                 '<div class="auto-key-grid compact">' +
-                    '<div class="auto-key-field"><label>名称 Label</label><input type="text" value="' + _escHtml(action.label || '') + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>名称 Label</label><input type="text" value="' + _escHtml(_profileText(action.label, '')) + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
                     '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(_akIntValue('slot_index', action.slot_index))) + '" oninput="_akDraftActionField(' + index + ', \'slot_index\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>按键 Key</label><input type="text" value="' + _escHtml(String(action.key || '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>按键 Key</label><input type="text" value="' + _escHtml(_profileText(action.key, '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
                     '<div class="auto-key-field"><label>按下模式 Press Mode</label><select onchange="_akDraftActionField(' + index + ', \'press_mode\', this.value)"><option value="tap"' + (action.press_mode === 'tap' ? ' selected' : '') + '>点击 Tap</option><option value="hold"' + (action.press_mode === 'hold' ? ' selected' : '') + '>按住 Hold</option></select></div>' +
                     '<div class="auto-key-field"><label>次数 Press Count</label><input type="number" min="1" max="20" value="' + _escHtml(String(_akIntValue('press_count', action.press_count))) + '" oninput="_akDraftActionField(' + index + ', \'press_count\', this.value, \'int\')" /></div>' +
                     '<div class="auto-key-field"><label>间隔毫秒 Press Interval MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('press_interval_ms', action.press_interval_ms))) + '" oninput="_akDraftActionField(' + index + ', \'press_interval_ms\', this.value, \'int\')" /></div>' +
@@ -6987,11 +6989,12 @@ function _brRenderEditorSummary(profile) {
             '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value muted">--</span></div>';
         return;
     }
+    var safeProfile = _profileEntry(profile);
     el.innerHTML = '' +
-        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">配置 ID</span><span class="boss-raid-summary-value">' + _escHtml(profile.id || '--') + '</span></div>' +
-        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value">' + _escHtml(profile.source || 'local') + '</span></div>' +
-        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value">' + _escHtml(profile.remote_id || '--') + '</span></div>' +
-        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value">' + _escHtml(profile.updated_at || '--') + '</span></div>';
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">配置 ID</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.id, '--')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.source, 'local')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.remote_id, '--')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.updated_at, '--')) + '</span></div>';
 }
 
 function _brRenderEditorFields() {
@@ -7016,12 +7019,12 @@ function _brRenderEditorFields() {
         _brRenderEditorSummary(null);
         return;
     }
-    if (nameEl) nameEl.value = p.profile_name || '';
+    if (nameEl) nameEl.value = _profileText(p.profile_name, '');
     if (hpEl) hpEl.value = _brNumText(p.boss_total_hp, 0);
     if (enrageEl) enrageEl.value = _brNumText(p.enrage_time_s, 600, 86400);
-    if (descEl) descEl.value = p.description || '';
+    if (descEl) descEl.value = _profileText(p.description, '');
     if (simpleEl) simpleEl.checked = p.simple_mode !== false;
-    if (targetEl) targetEl.value = p.target_name_pattern || '';
+    if (targetEl) targetEl.value = _profileText(p.target_name_pattern, '');
     _brRenderEditorSummary(p);
     _brRenderPhases();
 }
@@ -7215,7 +7218,7 @@ function _brRenderRuntime() {
         var damageValue = _clampInt(rt.total_damage, 0, 0, Number.MAX_SAFE_INTEGER);
         var hpPct = _clampNum(rt.boss_hp_est_pct, 0, 0, 1);
         var enrageSeconds = _clampInt(rt.enrage_remaining_s, 0, 0, 86400);
-        text += ' | ' + (rt.phase_name || 'P?');
+        text += ' | ' + _profileText(rt.phase_name, 'P?');
         text += ' | ' + elapsedSeconds + 's';
         text += ' | DPS: ' + dpsValue;
         text += ' | DMG: ' + damageValue;

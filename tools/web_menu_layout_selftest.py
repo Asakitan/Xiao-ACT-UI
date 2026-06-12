@@ -554,6 +554,65 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid editor phase/timeline snippet: " + snippet)
 
+    auto_key_editor_text_raw_patterns = [
+        "document.getElementById('ak-profile-name').value = draft.profile_name || '';",
+        "document.getElementById('ak-profile-profession-name').value = draft.profession_name || '';",
+        "document.getElementById('ak-profile-description').value = draft.description || '';",
+        "if (!draft || !Array.isArray(draft.actions) || !draft.actions.length) {",
+        "listEl.innerHTML = draft.actions.map(function(action, index) {",
+        "var jsonText = String(action._conditions_text || JSON.stringify(action.conditions || [], null, 2));",
+        "_escHtml(action.label || ('动作 Action ' + (index + 1)))",
+        "_escHtml(action.label || '')",
+        "_escHtml(String(action.key || ''))",
+    ]
+    for pattern in auto_key_editor_text_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey editor text/action payloads must guard entries and preserve zero text: " + pattern)
+    auto_key_editor_text_safe_required = [
+        "document.getElementById('ak-profile-name').value = _profileText(draft.profile_name, '');",
+        "document.getElementById('ak-profile-profession-name').value = _profileText(draft.profession_name, '');",
+        "document.getElementById('ak-profile-description').value = _profileText(draft.description, '');",
+        "var actions = draft ? _profileEntries(draft.actions).map(_profileEntry) : [];",
+        "if (draft) draft.actions = actions;",
+        "if (!draft || !actions.length) {",
+        "listEl.innerHTML = actions.map(function(action, index) {",
+        "var jsonText = _profileText(action._conditions_text, JSON.stringify(_profileEntries(action.conditions), null, 2));",
+        "_escHtml(_profileText(action.label, '动作 Action ' + (index + 1)))",
+        "_escHtml(_profileText(action.label, ''))",
+        "_escHtml(_profileText(action.key, ''))",
+    ]
+    for snippet in auto_key_editor_text_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey editor text/action snippet: " + snippet)
+
+    boss_raid_editor_text_raw_patterns = [
+        "_escHtml(profile.id || '--')",
+        "_escHtml(profile.source || 'local')",
+        "_escHtml(profile.remote_id || '--')",
+        "_escHtml(profile.updated_at || '--')",
+        "if (nameEl) nameEl.value = p.profile_name || '';",
+        "if (descEl) descEl.value = p.description || '';",
+        "if (targetEl) targetEl.value = p.target_name_pattern || '';",
+        "text += ' | ' + (rt.phase_name || 'P?');",
+    ]
+    for pattern in boss_raid_editor_text_raw_patterns:
+        if pattern in html:
+            raise AssertionError("BossRaid editor/runtime text values must preserve zero text: " + pattern)
+    boss_raid_editor_text_safe_required = [
+        "var safeProfile = _profileEntry(profile);",
+        "_escHtml(_profileText(safeProfile.id, '--'))",
+        "_escHtml(_profileText(safeProfile.source, 'local'))",
+        "_escHtml(_profileText(safeProfile.remote_id, '--'))",
+        "_escHtml(_profileText(safeProfile.updated_at, '--'))",
+        "if (nameEl) nameEl.value = _profileText(p.profile_name, '');",
+        "if (descEl) descEl.value = _profileText(p.description, '');",
+        "if (targetEl) targetEl.value = _profileText(p.target_name_pattern, '');",
+        "text += ' | ' + _profileText(rt.phase_name, 'P?');",
+    ]
+    for snippet in boss_raid_editor_text_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe BossRaid editor/runtime text snippet: " + snippet)
+
     menu_response_raw_patterns = [
         "window.pywebview.api.show_last_dps_report().then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "api.get_linkage_state().then(function(raw) {\n        var resp = typeof raw === 'string' ? JSON.parse(raw) : raw;",

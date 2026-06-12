@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.49: Web menu editor text fallback 修复.
+
+  1) `web/menu.html` 修复 AutoKey editor profile/action 文本渲染。
+     profile 字段与 action entries 现在会先做 entry/array 防护,
+     action label/key 和 conditions JSON 的合法 `0` 文本也会保留显示。
+
+  2) `web/menu.html` 修复 BossRaid editor/runtime 文本渲染。
+     summary、editor fields 与 runtime phase name 现在使用安全文本 helper,
+     避免合法 `0` 被渲染为空、local 或占位符。
+
 ## v4.6.48: Web menu BossRaid startup/editor payload 防护修复.
 
   1) `web/menu.html` 修复 BossRaid startup state response 解析。
