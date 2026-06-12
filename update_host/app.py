@@ -29,6 +29,7 @@ manifest 文件: <RELEASE_DIR>/<channel>/<target>/manifest.json
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -643,7 +644,8 @@ def _authorize_publish_request(request: Request) -> None:
     if not local_api_key:
         local_api_key = _bind_publish_api_key(api_key)
         _PUBLISH_API_KEY = local_api_key
-    if not local_api_key or api_key != local_api_key:
+    # 常数时间比较 — 防 API key 时序侧信道
+    if not local_api_key or not hmac.compare_digest(str(api_key), str(local_api_key)):
         raise HTTPException(status_code=401, detail="invalid or missing API key")
 
 

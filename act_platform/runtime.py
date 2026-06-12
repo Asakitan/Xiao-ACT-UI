@@ -2665,14 +2665,42 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
             else:
                 errors.append("SQLite action history query API is unavailable")
         rows = [_action_log_history_row(action, idx) for idx, action in enumerate(raw_actions) if isinstance(action, Mapping)]
+        rows = _filter_action_log_rows(rows, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
     else:
+        # live 行是 (retained, 取段跨度, 过滤参数) 的纯函数 — 同 aggregate/
+        # timeline 的新鲜度缓存; 无新事件时跳过 recent_events 深拷贝 +
+        # 逐事件 compact + 过滤(query 非空时每行一次 json.dumps)。
+        # is_cursor 由 _mark_action_log_cursor 对当前页逐行全量重写, 共享
+        # dict 自纠正, 缓存安全。
+        text_q = str(filters.get("query") or "")
+        text_t = str(filters.get("topic") or "")
+        span = min(row_offset + row_limit, 1000)
+        _bus = None
+        _rows_key = None
         try:
-            raw_events = ensure_act_event_bus(owner).recent_events(min(row_offset + row_limit, 1000))
+            _bus = ensure_act_event_bus(owner)
+            _rows_key = (_bus.retained, span, text_q.strip().lower(), text_t.strip().lower())
         except Exception as exc:
-            raw_events = []
             errors.append(str(exc))
-        rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
-    rows = _filter_action_log_rows(rows, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
+        rows = None
+        if _rows_key is not None:
+            _cached = getattr(owner, "_act_action_log_rows_cache", None)
+            if _cached is not None and _cached[0] == _rows_key:
+                rows = _cached[1]
+        if rows is None:
+            raw_events: list = []
+            if _bus is not None:
+                try:
+                    raw_events = _bus.recent_events(span)
+                except Exception as exc:
+                    errors.append(str(exc))
+            rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+            rows = _filter_action_log_rows(rows, query=text_q, topic=text_t)
+            if _rows_key is not None and not errors:
+                try:
+                    setattr(owner, "_act_action_log_rows_cache", (_rows_key, rows))
+                except Exception:
+                    pass
     total_rows = len(rows)
     if total_rows and row_offset >= total_rows:
         row_offset = ((total_rows - 1) // row_limit) * row_limit

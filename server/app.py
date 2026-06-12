@@ -588,7 +588,8 @@ def upload_script(payload: UploadScriptPayload, x_sao_upload_token: Optional[str
     if signed_identity is None:
         legacy = _legacy_upload_token()
         if legacy:
-            if provided_token != legacy:
+            # 常数时间比较 — 与签名令牌路径的 compare_digest 同款, 防时序侧信道
+            if not hmac.compare_digest(str(provided_token or ""), str(legacy)):
                 raise HTTPException(status_code=401, detail="Invalid upload token")
         elif _upload_secret():
             raise HTTPException(status_code=401, detail="Invalid upload token")
@@ -731,7 +732,8 @@ def upload_boss_raid(payload: UploadBossRaidPayload,
     if signed_identity is None:
         legacy = _legacy_upload_token()
         if legacy:
-            if provided_token != legacy:
+            # 常数时间比较 — 与签名令牌路径的 compare_digest 同款, 防时序侧信道
+            if not hmac.compare_digest(str(provided_token or ""), str(legacy)):
                 raise HTTPException(status_code=401, detail="Invalid upload token")
         elif _upload_secret():
             raise HTTPException(status_code=401, detail="Invalid upload token")

@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.112: 令牌常数时间比较 + action_log live 行新鲜度缓存.
+
+  1) `server/app.py`(两处 legacy 上传令牌) + `update_host/app.py`
+    (publish API key) 改 `hmac.compare_digest` 常数时间比较 —
+    与签名令牌路径既有姿势一致, 防时序侧信道; 自托管低风险,
+    顺手补齐。
+
+  2) `act_platform/runtime.py` `act_action_log_status` live 分支补
+    aggregate/timeline 同款 retained 缓存 — 键含取段跨度+query+topic,
+    无新事件时跳过 recent_events 深拷贝 + 逐事件 compact + 过滤
+    (query 非空时每行一次 json.dumps); is_cursor 当前页逐行全量重写
+    自纠正, 共享 dict 缓存安全; history 分支过滤位置随重构内移,
+    语义不变。
+
 ## v4.6.111: 历史库异常双端透出 + schema 单次 ensure.
 
   1) 历史库(sqlite/archive)出错不再装 READY — web report_export
