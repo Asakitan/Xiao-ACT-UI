@@ -501,6 +501,7 @@ def main() -> int:
     boss_raid_api_raw_patterns = [
         "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "results.forEach(function(item) {\n            var data = (typeof item === 'string') ? JSON.parse(item) : item;",
+        "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = (typeof result === 'string') ? JSON.parse(result) : result;",
     ]
     for pattern in boss_raid_api_raw_patterns:
         if pattern in html:
@@ -516,11 +517,42 @@ def main() -> int:
         "var rows = Array.isArray(results) ? results : [];",
         "rows.forEach(function(item) {",
         "var data = _brParseApiResult(item);",
+        "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = _brParseApiResult(result);",
         "data.message || data.error || data.detail",
     ]
     for snippet in boss_raid_api_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid API response snippet: " + snippet)
+
+    boss_raid_editor_payload_raw_patterns = [
+        "var phases = _brDraftProfile.phases || [];",
+        "var timelines = phase.timelines || [];",
+        "'<span class=\"br-phase-name\">' + _escHtml(phase.name || 'P' + (pi+1)) + '</span>'",
+        "'<input type=\"text\" value=\"' + _escHtml(tl.label || '') + '\" placeholder=\"标签 Label\"",
+    ]
+    for pattern in boss_raid_editor_payload_raw_patterns:
+        if pattern in html:
+            raise AssertionError("BossRaid editor phase/timeline payloads must guard arrays and preserve zero text: " + pattern)
+    boss_raid_editor_payload_safe_required = [
+        "function _brEditorPhases()",
+        "var phases = _profileEntries(_brDraftProfile.phases).map(function(rawPhase) {",
+        "phase.trigger = _profileEntry(phase.trigger);",
+        "phase.timelines = _profileEntries(phase.timelines).map(function(rawTl) {",
+        "_brDraftProfile.phases = phases;",
+        "var phases = _brEditorPhases();",
+        "container.innerHTML = phases.map(function(phase, pi) {",
+        "var trigger = phase.trigger;",
+        "var timelines = phase.timelines;",
+        "timelines.map(function(rawTl, ti) {",
+        "var tl = _profileEntry(rawTl);",
+        "tl.condition = _profileEntry(tl.condition);",
+        "var cond = _profileEntry(tl.condition);",
+        "_escHtml(_profileText(phase.name, 'P' + (pi+1)))",
+        "_escHtml(_profileText(tl.label, ''))",
+    ]
+    for snippet in boss_raid_editor_payload_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe BossRaid editor phase/timeline snippet: " + snippet)
 
     menu_response_raw_patterns = [
         "window.pywebview.api.show_last_dps_report().then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",

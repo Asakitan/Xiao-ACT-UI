@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.48: Web menu BossRaid startup/editor payload 防护修复.
+
+  1) `web/menu.html` 修复 BossRaid startup state response 解析。
+     菜单启动拉取 BossRaid state 时复用安全 parser,
+     malformed response 不再以 JSON SyntaxError 打断初始化。
+
+  2) `web/menu.html` 修复 BossRaid editor phase/timeline 渲染。
+     阶段与时间线 payload 现在会先做数组和 entry 防护,
+     避免异常 phases/timelines 破坏编辑器渲染, 合法 `0` 名称/标签也会保留显示。
+
 ## v4.6.47: Web menu DPS/Linkage response 防护修复.
 
   1) `web/menu.html` 修复 DPS last report response 解析。

@@ -7026,28 +7026,44 @@ function _brRenderEditorFields() {
     _brRenderPhases();
 }
 
+function _brEditorPhases() {
+    if (!_brDraftProfile) return [];
+    var phases = _profileEntries(_brDraftProfile.phases).map(function(rawPhase) {
+        var phase = _profileEntry(rawPhase);
+        phase.trigger = _profileEntry(phase.trigger);
+        phase.timelines = _profileEntries(phase.timelines).map(function(rawTl) {
+            var tl = _profileEntry(rawTl);
+            tl.condition = _profileEntry(tl.condition);
+            return tl;
+        });
+        return phase;
+    });
+    _brDraftProfile.phases = phases;
+    return phases;
+}
+
 function _brRenderPhases() {
     var container = document.getElementById('br-phases-container');
     if (!container || !_brDraftProfile) return;
-    var phases = _brDraftProfile.phases || [];
+    var phases = _brEditorPhases();
     var noValueTriggers = { manual: 1, breaking: 1, overdrive: 1, shield_broken: 1 };
     if (!phases.length) {
         container.innerHTML = '<div class="boss-raid-empty compact">还没有阶段。点击上面的“新增阶段”开始配置。<br>No phases yet. Click "Add Phase" to start building the timeline.</div>';
         return;
     }
     container.innerHTML = phases.map(function(phase, pi) {
-        var trigger = phase.trigger || {};
-        var timelines = phase.timelines || [];
+        var trigger = phase.trigger;
+        var timelines = phase.timelines;
         return '<div class="br-phase-card">' +
             '<div class="br-phase-head">' +
-                '<span class="br-phase-name">' + _escHtml(phase.name || 'P' + (pi+1)) + '</span>' +
+                '<span class="br-phase-name">' + _escHtml(_profileText(phase.name, 'P' + (pi+1))) + '</span>' +
                 '<div style="display:flex;gap:4px;">' +
                     '<button class="boss-raid-btn" type="button" onclick="_brAddTimeline(' + pi + '); return false;">+ 时间点</button>' +
                     (phases.length > 1 ? '<button class="boss-raid-btn danger" type="button" onclick="_brRemovePhase(' + pi + '); return false;">删除</button>' : '') +
                 '</div>' +
             '</div>' +
             '<div class="boss-raid-grid compact">' +
-                '<div class="boss-raid-field"><label>阶段名 Name</label><input type="text" value="' + _escHtml(phase.name || '') + '" oninput="_brDraftPhaseField(' + pi + ', \'name\', this.value)" /></div>' +
+                '<div class="boss-raid-field"><label>阶段名 Name</label><input type="text" value="' + _escHtml(_profileText(phase.name, '')) + '" oninput="_brDraftPhaseField(' + pi + ', \'name\', this.value)" /></div>' +
                 '<div class="boss-raid-field"><label>触发 Trigger</label><select onchange="_brDraftTriggerType(' + pi + ', this.value)">' +
                     '<option value="manual"' + (trigger.type === 'manual' ? ' selected' : '') + '>手动 Manual</option>' +
                     '<option value="time"' + (trigger.type === 'time' ? ' selected' : '') + '>时间(秒) Time</option>' +
@@ -7063,11 +7079,12 @@ function _brRenderPhases() {
                 (!(trigger.type in noValueTriggers) ? '<div class="boss-raid-field"><label>触发值 Value</label><input type="number" min="0" value="' + _brNumAttr(trigger.value, 0, (trigger.type === 'hp_pct' || trigger.type === 'extinction_pct') ? 100 : null) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>' : '') +
             '</div>' +
             '<div class="br-phase-tl-list">' +
-                (timelines.length ? timelines.map(function(tl, ti) {
-                    var cond = tl.condition || {};
+                (timelines.length ? timelines.map(function(rawTl, ti) {
+                    var tl = _profileEntry(rawTl);
+                    var cond = _profileEntry(tl.condition);
                     return '<div class="br-tl-row">' +
                         '<input type="number" min="0" step="1" value="' + _brNumAttr(tl.time_s, 0) + '" title="秒 Seconds" placeholder="秒" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'time_s\',this.value,\'float\')" />' +
-                        '<input type="text" value="' + _escHtml(tl.label || '') + '" placeholder="标签 Label" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'label\',this.value)" />' +
+                        '<input type="text" value="' + _escHtml(_profileText(tl.label, '')) + '" placeholder="标签 Label" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'label\',this.value)" />' +
                         '<select onchange="_brDraftTlField(' + pi + ',' + ti + ',\'alert_type\',this.value)">' +
                             '<option value="both"' + (tl.alert_type === 'both' ? ' selected' : '') + '>声+视</option>' +
                             '<option value="sound"' + (tl.alert_type === 'sound' ? ' selected' : '') + '>声</option>' +
@@ -7101,28 +7118,30 @@ function _brDraftField(fieldName, value, kind) {
 }
 
 function _brDraftPhaseField(pi, field, val) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    _brDraftProfile.phases[pi][field] = val;
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi][field] = val;
     _brDraftDirty = true;
 }
 function _brDraftTriggerType(pi, val) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    _brDraftProfile.phases[pi].trigger = _brDraftProfile.phases[pi].trigger || {};
-    _brDraftProfile.phases[pi].trigger.type = val;
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].trigger.type = val;
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brDraftTriggerValue(pi, val) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    _brDraftProfile.phases[pi].trigger = _brDraftProfile.phases[pi].trigger || {};
-    var trig = _brDraftProfile.phases[pi].trigger;
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var trig = phases[pi].trigger;
     var pctLike = trig.type === 'hp_pct' || trig.type === 'extinction_pct';
     trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);
     _brDraftDirty = true;
 }
 function _brDraftTlField(pi, ti, field, val, type) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    var tls = _brDraftProfile.phases[pi].timelines || [];
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
     if (!tls[ti]) return;
     if (type === 'float') val = _clampNum(val, 0, 0, 86400);
     tls[ti][field] = val;
@@ -7131,46 +7150,48 @@ function _brDraftTlField(pi, ti, field, val, type) {
 
 function _brAddPhase() {
     if (!_brDraftProfile) return;
-    _brDraftProfile.phases = _brDraftProfile.phases || [];
-    var idx = _brDraftProfile.phases.length + 1;
-    _brDraftProfile.phases.push({ id: 'phase_new_' + Date.now(), name: 'P' + idx, trigger: { type: 'manual', value: 0 }, timelines: [] });
+    var phases = _brEditorPhases();
+    var idx = phases.length + 1;
+    phases.push({ id: 'phase_new_' + Date.now(), name: 'P' + idx, trigger: { type: 'manual', value: 0 }, timelines: [] });
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brRemovePhase(pi) {
-    if (!_brDraftProfile || !_brDraftProfile.phases) return;
-    _brDraftProfile.phases.splice(pi, 1);
+    var phases = _brEditorPhases();
+    if (!phases.length) return;
+    phases.splice(pi, 1);
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brAddTimeline(pi) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    _brDraftProfile.phases[pi].timelines = _brDraftProfile.phases[pi].timelines || [];
-    _brDraftProfile.phases[pi].timelines.push({ id: 'tl_new_' + Date.now(), time_s: 30, label: 'Alert', alert_type: 'both', repeat_interval_s: 0, pre_warn_s: 0, duration_s: 0, condition: { type: 'always' } });
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].timelines.push({ id: 'tl_new_' + Date.now(), time_s: 30, label: 'Alert', alert_type: 'both', repeat_interval_s: 0, pre_warn_s: 0, duration_s: 0, condition: { type: 'always' } });
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brRemoveTimeline(pi, ti) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    _brDraftProfile.phases[pi].timelines.splice(ti, 1);
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].timelines.splice(ti, 1);
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brDraftTlCondType(pi, ti, val) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    var tls = _brDraftProfile.phases[pi].timelines || [];
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
     if (!tls[ti]) return;
-    tls[ti].condition = tls[ti].condition || {};
     tls[ti].condition.type = val;
     if (val === 'hp_pct' && !tls[ti].condition.value) tls[ti].condition.value = 50;
     _brDraftDirty = true;
     _brRenderPhases();
 }
 function _brDraftTlCondValue(pi, ti, val) {
-    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
-    var tls = _brDraftProfile.phases[pi].timelines || [];
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
     if (!tls[ti]) return;
-    tls[ti].condition = tls[ti].condition || {};
     tls[ti].condition.value = _clampNum(val, 0, 0, 100);
     _brDraftDirty = true;
 }
@@ -7735,7 +7756,7 @@ setTimeout(function() {
     }
     if (window.pywebview && window.pywebview.api && window.pywebview.api.get_boss_raid_state) {
         window.pywebview.api.get_boss_raid_state().then(function(result) {
-            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            var data = _brParseApiResult(result);
             if (data && data.ok !== false && data.state) {
                 _syncBossRaidState(data.state);
             }
