@@ -296,6 +296,115 @@ def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any
     )
 
 
+def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: str = "normal") -> tk.Button:
+    """聚合按钮：点击弹出条目菜单，把同排过密的相似动作收进一个父按钮。
+
+    ``items`` 为 ``(label, command)`` 序列；条目为 ``'-'``（或 label 为 '-'）时
+    插入分隔线。菜单配色走面板调色板，主题切换无需重建。
+    """
+    btn = action_button(parent, f'{text} ▾', None, kind=kind)
+    menu = tk.Menu(
+        btn, tearoff=0,
+        bg=_pc('control_bg', '#fafbfb'), fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+        activebackground=_accent(kind), activeforeground=_pc('active_fg', '#ffffff'),
+        relief='flat', bd=0, font=FONT_BODY,
+    )
+    for entry in items or []:
+        if entry == '-' or (isinstance(entry, (tuple, list)) and entry and entry[0] == '-'):
+            menu.add_separator()
+            continue
+        try:
+            label, command = entry
+        except Exception:
+            continue
+        menu.add_command(label=str(label), command=command)
+
+    def _pop() -> None:
+        try:
+            x = btn.winfo_rootx()
+            y = btn.winfo_rooty() + btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    btn.configure(command=_pop, cursor='hand2')
+    btn._sao_dropdown_menu = menu  # type: ignore[attr-defined]  # keep a live ref
+    return btn
+
+
+def attach_tooltip(widget: tk.Misc, text: str, *, delay_ms: int = 450) -> None:
+    """悬停延迟弹出的轻量提示气泡——解释 Cursor ms / Window s 这类不直观字段。
+
+    Web 端等价做法是控件上的 ``title`` 属性，文案保持两边一致。
+    """
+    tip_text = str(text or '').strip()
+    if not tip_text:
+        return
+    state: dict[str, Any] = {'after': None, 'tip': None}
+
+    def _show() -> None:
+        state['after'] = None
+        if state['tip'] is not None:
+            return
+        try:
+            tip = tk.Toplevel(widget)
+            tip.overrideredirect(True)
+            tip.attributes('-topmost', True)
+            bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+            tk.Label(
+                tip, text=tip_text, bg=bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+                font=FONT_SMALL, justify='left', wraplength=320, padx=SP_SM, pady=SP_XS,
+                highlightthickness=1, highlightbackground=_pc('border', ui._SAO_PANEL_BORDER),
+            ).pack()
+            tip.geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + widget.winfo_height() + 4}")
+            state['tip'] = tip
+        except Exception:
+            state['tip'] = None
+
+    def _cancel() -> None:
+        pending = state['after']
+        state['after'] = None
+        if pending is not None:
+            try:
+                widget.after_cancel(pending)
+            except Exception:
+                pass
+
+    def _hide(_e: Any = None) -> None:
+        _cancel()
+        tip = state['tip']
+        state['tip'] = None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+
+    def _enter(_e: Any) -> None:
+        _cancel()
+        try:
+            state['after'] = widget.after(delay_ms, _show)
+        except Exception:
+            state['after'] = None
+
+    widget.bind('<Enter>', _enter, add='+')
+    widget.bind('<Leave>', _hide, add='+')
+    widget.bind('<Button-1>', _hide, add='+')
+
+
+def more_indicator(parent: tk.Misc, hidden_count: int, *, noun: str = "条") -> tk.Label:
+    """列表截断提示：'… 还有 N 条'。让用户知道没看到的不是全部。"""
+    count = _finite_int(hidden_count, 0, lo=0)
+    return tk.Label(
+        parent, text=f'… 还有 {count} {noun}',
+        bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG), fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG),
+        font=FONT_SMALL, anchor='w', padx=SP_SM, pady=2,
+    )
+
+
 def metric_tile(parent: tk.Misc, label: str, value: Any, *, sub: str = "", accent: str = "gold") -> tk.Frame:
     color = _accent(accent)
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)

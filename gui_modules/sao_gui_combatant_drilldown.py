@@ -14,6 +14,7 @@ from act_platform.runtime import (
     act_combatant_drilldown_focus_target,
     act_combatant_drilldown_status,
 )
+from gui_modules.sao_panel_components import more_indicator
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -29,6 +30,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    _theme_color,
 )
 
 
@@ -289,15 +291,21 @@ class CombatantDrilldownPanel:
         for text, width in (('Skill', 34), ('Kind', 10), ('Amount', 14), ('Hits', 8), ('Crit', 8)):
             tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
         max_amount = max(1, *[_finite_int(skill.get('amount'), 0, lo=0) for skill in skills])
-        for skill in skills[:40]:
+        for idx, skill in enumerate(skills[:40]):
             amount = _finite_int(skill.get('amount'), 0, lo=0)
             hits = _finite_int(skill.get('hits'), 0, lo=0)
-            row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+            is_heal = skill.get('kind') == 'heal'
+            if is_heal:
+                color = _theme_color('ok_soft', '#e6f6ea')
+            elif idx % 2:
+                color = _theme_color('card_bg_alt', _SAO_PANEL_HEADER_BG)
+            else:
+                color = _SAO_PANEL_BODY_BG
+            row = tk.Frame(self._rows, bg=color, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             row.pack(fill='x', pady=2, padx=4)
             row.configure(cursor='hand2')
-            color = '#e8fff4' if skill.get('kind') == 'heal' else _SAO_PANEL_BODY_BG
             bar_width = max(4, min(160, int(160 * amount / max_amount)))
-            tk.Frame(row, bg=('#2ebf86' if skill.get('kind') == 'heal' else _SAO_PANEL_GOLD), width=bar_width, height=3).pack(fill='x', anchor='w')
+            tk.Frame(row, bg=(_theme_color('ok', '#2ebf86') if is_heal else _SAO_PANEL_GOLD), width=bar_width, height=3).pack(fill='x', anchor='w')
             values = (
                 (str(skill.get('name') or '-'), 34, _SAO_PANEL_VALUE_FG),
                 (str(skill.get('kind') or '-'), 10, _SAO_PANEL_LABEL_FG),
@@ -312,6 +320,9 @@ class CombatantDrilldownPanel:
                 label.pack(side='left', padx=3, pady=5)
                 label.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
             row.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
+        hidden = len(skills) - 40
+        if hidden > 0:
+            more_indicator(self._rows, hidden, noun='个技能').pack(fill='x', padx=4, pady=(2, 0))
 
     def _open_skill(self, skill: Mapping[str, Any]) -> None:
         sid = str(skill.get('skill_id') or skill.get('base_skill_id') or skill.get('source_skill_id') or '')

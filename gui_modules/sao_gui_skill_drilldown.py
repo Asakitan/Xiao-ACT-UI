@@ -15,7 +15,7 @@ from act_platform.runtime import (
     act_skill_drilldown_filter,
     act_skill_drilldown_status,
 )
-from gui_modules.sao_panel_components import fmt_clock
+from gui_modules.sao_panel_components import fmt_clock, more_indicator
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -31,6 +31,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    _theme_color,
 )
 
 
@@ -313,9 +314,14 @@ class SkillDrilldownPanel:
             return
         for idx, ref in enumerate(refs[:80]):
             ref_id = str(ref.get('id') or f"ref:{idx}:{ref.get('time_ms')}")
-            row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+            expanded = ref_id in self._expanded_refs
+            row_bg = _theme_color('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else _SAO_PANEL_BODY_BG
+            row = tk.Frame(self._rows, bg=row_bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             row.pack(fill='x', pady=2, padx=4)
             row.configure(cursor='hand2')
+            caret = tk.Label(row, text=('▾' if expanded else '▸'), bg=row_bg, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9), cursor='hand2')
+            caret.pack(side='left', padx=(4, 0), pady=5)
+            caret.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
             values = (
                 (fmt_clock(ref.get('time_ms')), 12, _SAO_PANEL_GOLD),
                 (str(ref.get('topic') or '-'), 12, _SAO_PANEL_LABEL_FG),
@@ -323,12 +329,15 @@ class SkillDrilldownPanel:
                 (self._fmt(ref.get('value')), 14, _SAO_PANEL_VALUE_FG),
             )
             for text, width, fg in values:
-                label = tk.Label(row, text=text, width=width, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=fg, font=('Segoe UI', 9), cursor='hand2')
+                label = tk.Label(row, text=text, width=width, anchor='w', bg=row_bg, fg=fg, font=('Segoe UI', 9), cursor='hand2')
                 label.pack(side='left', padx=3, pady=5)
                 label.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
             row.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
-            if ref_id in self._expanded_refs:
+            if expanded:
                 self._render_ref_payload(ref)
+        hidden = len(refs) - 80
+        if hidden > 0:
+            more_indicator(self._rows, hidden).pack(fill='x', padx=4, pady=(2, 0))
 
     def _toggle_ref(self, ref_id: str) -> None:
         if ref_id in self._expanded_refs:

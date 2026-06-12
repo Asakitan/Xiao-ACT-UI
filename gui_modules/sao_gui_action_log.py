@@ -21,6 +21,7 @@ from gui_modules.sao_panel_components import (
     SP_LG,
     action_button,
     aggregate_row,
+    attach_tooltip,
     detail_row,
     empty_state,
     fmt_clock,
@@ -46,6 +47,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    _theme_color,
 )
 
 
@@ -314,25 +316,38 @@ class ActionLogPanel:
         ):
             action_button(toolbar, label, cmd, kind='cyan' if '复制' in label else 'gold').pack(side='right', padx=(6, 0))
 
+        # 筛选行：来源 / 搜索 / 类型 / 战斗 ID + 过滤（原 10+ 控件单行拆成两行分组）
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='Source', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        control.pack(fill='x', padx=12, pady=(0, 4))
+        tk.Label(control, text='来源', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self._refresh_from_start()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.Label(control, text='类型', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._topic_var, '', 'damage', 'skill', 'boss', 'trigger', command=lambda _v: self.filter_topic()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Encounter', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._encounter_var, width=14).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Cursor ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._cursor_var, width=8).pack(side='left', padx=(6, 6))
-        tk.Button(control, text='跳转 Jump', command=self.jump_to_time).pack(side='left', padx=(0, 8))
-        tk.Button(control, text='过滤 Filter', command=self.filter_topic).pack(side='left', padx=(0, 8))
-        tk.Button(control, text='上一页 Prev', command=self.previous_page).pack(side='left', padx=(0, 6))
-        tk.Button(control, text='下一页 Next', command=self.next_page).pack(side='left')
-        tk.Checkbutton(
-            control,
-            text='RAW rows',
+        enc_label = tk.Label(control, text='战斗 ID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9))
+        enc_label.pack(side='left')
+        enc_entry = tk.Entry(control, textvariable=self._encounter_var, width=14)
+        enc_entry.pack(side='left', padx=(6, 8))
+        for w in (enc_label, enc_entry):
+            attach_tooltip(w, '按战斗 (encounter) ID 过滤日志；留空显示全部')
+        action_button(control, '过滤 Filter', self.filter_topic, kind='cyan').pack(side='left', padx=(0, 8))
+
+        # 导航行：游标跳转 / 翻页 / RAW 行模式
+        nav = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        nav.pack(fill='x', padx=12, pady=(0, 8))
+        cursor_label = tk.Label(nav, text='游标 ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9))
+        cursor_label.pack(side='left')
+        cursor_entry = tk.Entry(nav, textvariable=self._cursor_var, width=10)
+        cursor_entry.pack(side='left', padx=(6, 6))
+        for w in (cursor_label, cursor_entry):
+            attach_tooltip(w, '跳转到该时间点 (epoch 毫秒)；跳转后日志定位到此游标')
+        action_button(nav, '跳转 Jump', self.jump_to_time, kind='gold').pack(side='left', padx=(0, 12))
+        action_button(nav, '上一页 Prev', self.previous_page).pack(side='left', padx=(0, 6))
+        action_button(nav, '下一页 Next', self.next_page).pack(side='left')
+        raw_check = tk.Checkbutton(
+            nav,
+            text='RAW 行',
             variable=self._show_raw_rows,
             command=self._toggle_raw_rows,
             bg=_SAO_PANEL_BODY_BG,
@@ -341,7 +356,9 @@ class ActionLogPanel:
             activebackground=_SAO_PANEL_BODY_BG,
             activeforeground=_SAO_PANEL_GOLD,
             font=('Segoe UI', 9),
-        ).pack(side='left', padx=(10, 0))
+        )
+        raw_check.pack(side='left', padx=(12, 0))
+        attach_tooltip(raw_check, '显示未聚合的原始事件行（默认按动作聚合展示）')
 
         tk.Label(
             body,
@@ -623,7 +640,8 @@ class ActionLogPanel:
         parent = parent or self._rows
         if parent is None:
             return
-        bg = '#2b2a1a' if row.get('is_cursor') else _SAO_PANEL_BODY_BG
+        # 游标行用主题 warn_soft 淡金底（旧 '#2b2a1a' 深橄榄色在浅色主题下是黑块）
+        bg = _theme_color('warn_soft', '#fff8e5') if row.get('is_cursor') else _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         card.pack(fill='x', pady=3, padx=4)
         top = tk.Frame(card, bg=bg)

@@ -28,10 +28,14 @@
     .sub { color: var(--act-muted); font-size: var(--fs-body); margin-top: var(--sp-1); }
     .controls {
       display: grid;
-      grid-template-columns: 132px 132px 1fr 104px 86px 86px;
+      grid-template-columns: 132px 132px 1fr 104px 86px 86px 64px;
       gap: var(--sp-2);
       align-items: center;
       margin-bottom: var(--sp-3);
+    }
+    .raw-toggle {
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+      font-size: 12px; color: var(--act-muted); cursor: pointer; user-select: none;
     }
     select, input, button { padding: 8px 10px; outline: none; font-size: var(--fs-body); }
     button { cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -122,6 +126,7 @@
       </select>
       <button onclick="GraphTimeseries.refresh()">Refresh</button>
       <button onclick="GraphTimeseries.exportJson()">Export</button>
+      <label class="raw-toggle" title="点位摘要显示 raw row id（与 Tk 端 RAW points 一致）"><input id="rawPoints" type="checkbox" onchange="GraphTimeseries.last && GraphTimeseries.render(GraphTimeseries.last)" />RAW</label>
     </div>
     <div class="layout">
       <div class="chart-wrap">
@@ -352,9 +357,14 @@
         document.getElementById('status').textContent = status.message || 'OK';
         document.getElementById('legend').innerHTML = metrics.map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + esc(m.label || m.id) + '</span></div>').join('');
         const t0 = points.length ? Math.min.apply(null, points.map(p => p._time_ms)) : 0;
+        const rawEl = document.getElementById('rawPoints');
+        const rawMode = !!(rawEl && rawEl.checked);
         document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
           const ms = p._time_ms;
-          return '<div class="row" title="' + esc(ActTime.fmtRel(ms, t0)) + '" onclick="GraphTimeseries.openLog(' + ms + ',' + jsArg(p.topic || '') + ')"><span>' + esc(ActTime.fmtClock(ms)) + '</span><span>' + esc(p.topic || '') + '</span><span>' + esc(fmt(p._value)) + '</span></div>';
+          const rowId = String(p.row_id || '-');
+          const valCell = rawMode ? rowId : fmt(p._value);
+          const hint = ActTime.fmtRel(ms, t0) + (rawMode ? (' · row=' + rowId) : '');
+          return '<div class="row" title="' + esc(hint) + '" onclick="GraphTimeseries.openLog(' + ms + ',' + jsArg(p.topic || '') + ')"><span>' + esc(ActTime.fmtClock(ms)) + '</span><span>' + esc(p.topic || '') + '</span><span>' + esc(valCell) + '</span></div>';
         }).join('');
         drawChart(status);
       }

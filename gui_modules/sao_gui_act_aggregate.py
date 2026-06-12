@@ -21,6 +21,7 @@ from gui_modules.sao_panel_components import (
     SP_LG,
     action_button,
     aggregate_row,
+    attach_tooltip,
     detail_row,
     empty_state,
     fmt_clock,
@@ -169,10 +170,30 @@ class ActAggregatePanel:
         return status
 
     def filter(self) -> Dict[str, Any]:
+        self._cancel_pending_filter()
         self._last_refresh_at = 0.0
         self._last_request_key = ()
         self._last_sig = ""
         return self.refresh()
+
+    def _cancel_pending_filter(self) -> None:
+        pending = getattr(self, '_filter_after_id', None)
+        self._filter_after_id = None
+        if pending is not None and self._win is not None:
+            try:
+                self._win.after_cancel(pending)
+            except Exception:
+                pass
+
+    def _schedule_filter(self) -> None:
+        """搜索输入防抖：停止键入 300ms 后自动过滤（与 Web 端行为一致）。"""
+        if self._win is None:
+            return
+        self._cancel_pending_filter()
+        try:
+            self._filter_after_id = self._win.after(300, self.filter)
+        except Exception:
+            self._filter_after_id = None
 
     def copy_json(self) -> Dict[str, Any]:
         text = json.dumps(self._last_status or self.refresh(), ensure_ascii=False, indent=2, default=str)
@@ -226,9 +247,16 @@ class ActAggregatePanel:
         control.pack(fill='x', padx=14, pady=(0, 8))
         tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
-        tk.Entry(control, textvariable=self._group_field_var, width=14).pack(side='left', padx=(0, 8))
+        field_entry = tk.Entry(control, textvariable=self._group_field_var, width=14)
+        field_entry.pack(side='left', padx=(0, 8))
+        attach_tooltip(field_entry, '自定义字段维度：聚合维度选「自定义字段」时按此 payload 字段名分组')
+        field_entry.bind('<Return>', lambda _e: self.filter())
         tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
+        query_entry = tk.Entry(control, textvariable=self._query_var, width=18)
+        query_entry.pack(side='left', padx=(6, 8))
+        # 输入即过滤（300ms 防抖，对齐 Web 端 onChange 自动刷新），回车立即生效
+        query_entry.bind('<KeyRelease>', lambda _e: self._schedule_filter())
+        query_entry.bind('<Return>', lambda _e: self.filter())
         tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
         action_button(control, '过滤 Filter', self.filter, kind='cyan').pack(side='left')
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=14, pady=(0, 6))

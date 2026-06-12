@@ -116,10 +116,15 @@ body.closing .alert-shell {
 }
 
 .alert-title span {
-    max-width: 260px;
+    max-width: 344px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* 长标题换行成至多两行（68px 标题区容得下），仍超出才省略——与 Tk 端一致 */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    text-align: center;
+    line-height: 24px;
     font-family: var(--font-ui);
     font-weight: 800;
     font-size: 18px;

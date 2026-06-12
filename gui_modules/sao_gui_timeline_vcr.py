@@ -22,6 +22,7 @@ from act_platform.runtime import (
 from gui_modules.sao_panel_components import (
     action_button,
     aggregate_row,
+    attach_tooltip,
     empty_state,
     fmt_clock,
     fmt_dur,
@@ -158,7 +159,27 @@ class TimelineVcrPanel:
         return self._apply_result(act_timeline_set_speed(self.owner, speed=speed), f'SPEED {speed:g}x')
 
     def apply_filter(self) -> Dict[str, Any]:
+        self._cancel_pending_filter()
         return self._apply_result(act_timeline_filter(self.owner, query=self._query_var.get()), 'FILTER APPLIED')
+
+    def _cancel_pending_filter(self) -> None:
+        pending = getattr(self, '_filter_after_id', None)
+        self._filter_after_id = None
+        if pending is not None and self._win is not None:
+            try:
+                self._win.after_cancel(pending)
+            except Exception:
+                pass
+
+    def _schedule_filter(self) -> None:
+        """输入防抖：停止键入 300ms 后自动应用筛选（与 Web 端即时搜索一致）。"""
+        if self._win is None:
+            return
+        self._cancel_pending_filter()
+        try:
+            self._filter_after_id = self._win.after(300, self.apply_filter)
+        except Exception:
+            self._filter_after_id = None
 
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
         self._last_status = dict(result or {})
@@ -220,18 +241,24 @@ class TimelineVcrPanel:
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='Filter', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=22).pack(side='left', padx=(6, 6))
-        tk.Button(control, text='应用 Filter', command=self.apply_filter).pack(side='left', padx=(0, 10))
-        tk.Label(control, text='Speed', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._speed_var, width=5).pack(side='left', padx=(6, 6))
-        tk.Button(control, text='设置 Speed', command=self.set_speed).pack(side='left', padx=(0, 10))
-        for label, cmd in (
-            ('-1s', self.step_back),
-            ('+1s', self.step_forward),
-            ('0ms', self.seek_zero),
+        tk.Label(control, text='筛选', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        query_entry = tk.Entry(control, textvariable=self._query_var, width=22)
+        query_entry.pack(side='left', padx=(6, 10))
+        # 输入即筛选（300ms 防抖，对齐 Web 端即时搜索），回车立即生效
+        query_entry.bind('<KeyRelease>', lambda _e: self._schedule_filter())
+        query_entry.bind('<Return>', lambda _e: self.apply_filter())
+        # 倍速换成预设下拉，选中即生效（对齐 Web 端 0.5x/1x/2x/4x select）
+        tk.Label(control, text='倍速', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.OptionMenu(control, self._speed_var, '0.5', '1.0', '2.0', '4.0',
+                      command=lambda _v: self.set_speed()).pack(side='left', padx=(6, 10))
+        for label, cmd, tip in (
+            ('-1s', self.step_back, '后退 1 秒'),
+            ('+1s', self.step_forward, '前进 1 秒'),
+            ('0ms', self.seek_zero, '回到时间线起点'),
         ):
-            tk.Button(control, text=label, command=cmd).pack(side='left', padx=(4, 0))
+            btn = action_button(control, label, cmd)
+            btn.pack(side='left', padx=(4, 0))
+            attach_tooltip(btn, tip)
 
         tk.Label(
             body,

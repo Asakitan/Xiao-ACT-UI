@@ -657,6 +657,23 @@ body{padding:10px}
     background:rgba(239,104,78,0.92);
     border-color:rgba(239,104,78,0.82);
 }
+/* 更多▾ 聚合菜单：EXPORT / RESET 收进父按钮，减薄头部按钮排 */
+.more-wrap{position:relative;}
+.more-menu{
+    position:absolute;
+    top:calc(100% + 4px);
+    right:0;
+    z-index:40;
+    display:none;
+    flex-direction:column;
+    gap:4px;
+    min-width:138px;
+    padding:5px;
+    border:1px solid var(--btn-border);
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+}
+.more-menu.open{display:flex;}
+.more-menu .sao-btn{width:100%;text-align:left;clip-path:none;}
 .sao-btn.disabled,
 .sao-btn:disabled{
     opacity:0.42;
@@ -1360,8 +1377,13 @@ body{padding:10px}
             <button class="sao-btn detail-toggle" id="btn-detail" type="button" onclick="_toggleDetailMode()">DETAIL</button>
             <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">REPORT</button>
             <button class="sao-btn" id="btn-history" type="button" onclick="_activateHistory()">HISTORY</button>
-            <button class="sao-btn" id="btn-export" type="button" onclick="_exportReport()">EXPORT</button>
-            <button class="sao-btn danger" id="btn-reset" type="button" onclick="_reset()">RESET</button>
+            <div class="more-wrap" id="more-wrap">
+                <button class="sao-btn" id="btn-more" type="button" onclick="_toggleMoreMenu()">MORE ▾</button>
+                <div class="more-menu" id="more-menu">
+                    <button class="sao-btn" id="btn-export" type="button" onclick="_moreExport()">EXPORT</button>
+                    <button class="sao-btn danger" id="btn-reset" type="button" onclick="_moreReset()">RESET</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -2229,6 +2251,46 @@ function _activateHistory() {
         });
     }
 }
+
+var _moreResetArmTimer = null;
+
+function _toggleMoreMenu(forceClose) {
+    var menu = document.getElementById('more-menu');
+    if (!menu) return;
+    if (forceClose === true) { menu.classList.remove('open'); _disarmMoreReset(); return; }
+    if (menu.classList.toggle('open') === false) _disarmMoreReset();
+}
+
+function _disarmMoreReset() {
+    clearTimeout(_moreResetArmTimer);
+    _moreResetArmTimer = null;
+    var btn = document.getElementById('btn-reset');
+    if (btn) btn.textContent = 'RESET';
+}
+
+function _moreExport() {
+    _toggleMoreMenu(true);
+    _exportReport();
+}
+
+function _moreReset() {
+    // 两段式确认：第一次点击进入 CONFIRM? 态，3 秒内再点才真正重置
+    var btn = document.getElementById('btn-reset');
+    if (!btn) { _reset(); return; }
+    if (_moreResetArmTimer) {
+        _disarmMoreReset();
+        _toggleMoreMenu(true);
+        _reset();
+        return;
+    }
+    btn.textContent = 'CONFIRM?';
+    _moreResetArmTimer = setTimeout(_disarmMoreReset, 3000);
+}
+
+document.addEventListener('click', function (e) {
+    var wrap = document.getElementById('more-wrap');
+    if (wrap && !wrap.contains(e.target)) _toggleMoreMenu(true);
+});
 
 function _exportReport() {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.export_last_report) {

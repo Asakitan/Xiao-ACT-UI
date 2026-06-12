@@ -307,13 +307,16 @@ class AlertOverlay:
         draw = ImageDraw.Draw(img)
 
         # Title text: font-weight 800, 18px, letter-spacing 1px
+        # 长标题按像素宽换行成至多两行（68px 标题区容得下），仅在两行仍放不下时
+        # 行尾省略——避免「向北边圈外躲避并待命」这类长文案被硬截断丢信息。
         font_title = _load_font('cjk', 18)
-        if len(title) > 30:
-            title = title[:29] + '…'
-        tw = _tracked_text_width(title, font_title, 1.0)
-        tx = ox + (W - tw) / 2
-        ty = oy + (self.TITLE_H - 18) / 2
-        _draw_tracked(draw, (tx, ty), title, fill=self.TITLE_COLOR, font=font_title, spacing=1.0)
+        title_lines = self._wrap_title_lines(title, font_title, W - 48, max_lines=2)
+        title_line_h = 24
+        ty0 = oy + (self.TITLE_H - title_line_h * len(title_lines)) / 2
+        for i, line in enumerate(title_lines):
+            tw = _tracked_text_width(line, font_title, 1.0)
+            tx = ox + (W - tw) / 2
+            _draw_tracked(draw, (tx, ty0 + i * title_line_h), line, fill=self.TITLE_COLOR, font=font_title, spacing=1.0)
 
         # Body text: 14px, centered, pre-line
         font_body = _load_font('cjk', 14)
@@ -332,6 +335,32 @@ class AlertOverlay:
 
         # Crop to final size with shadow padding preserved
         return img
+
+    @staticmethod
+    def _wrap_title_lines(text, font, max_w, max_lines=2):
+        """标题按像素宽逐字断行（CJK 友好），超出 max_lines 时末行省略。"""
+        text = str(text or '')
+        lines = []
+        current = ''
+        overflow = False
+        for ch in text:
+            if current and _tracked_text_width(current + ch, font, 1.0) > max_w:
+                lines.append(current)
+                current = ch
+                if len(lines) == max_lines:
+                    overflow = True
+                    break
+            else:
+                current += ch
+        if not overflow:
+            if current or not lines:
+                lines.append(current)
+            return lines
+        last = lines[-1]
+        while last and _tracked_text_width(last + '…', font, 1.0) > max_w:
+            last = last[:-1]
+        lines[-1] = last + '…'
+        return lines
 
     def _scale_frame(self, entry, scale, opacity):
         base = entry['base_img']

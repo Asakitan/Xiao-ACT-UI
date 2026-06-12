@@ -46,6 +46,9 @@ input#query { width: 170px; }
 .group-detail { display: none; border-top: 1px solid var(--act-edge-soft); padding: 6px 8px 10px; }
 .group-card.open .group-detail { display: block; }
 .detail-row { border: 1px solid var(--act-edge-soft); border-radius: var(--r-sm); padding: 7px 8px; margin-top: 6px; background: var(--act-card-bg); }
+.detail-row:nth-child(even) { background: var(--act-card-bg-2); }
+.table tr.cursor td { background: color-mix(in srgb, var(--act-gold) 16%, var(--act-card-bg)); border-left: 3px solid var(--act-gold); }
+.raw-toggle { display: flex; align-items: center; gap: 6px; font-size: var(--fs-body); color: var(--act-muted); cursor: pointer; user-select: none; }
 .detail-top { display: flex; flex-wrap: wrap; gap: 10px; color: var(--act-text); font-size: var(--fs-body); }
 .detail-meta { margin-top: 4px; color: var(--act-muted); font-size: var(--fs-meta); line-height: 1.45; user-select: text; }
 .topic { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .08em; }
@@ -111,6 +114,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             <button type="button" onclick="ActionLog.jump()">跳转 Jump</button>
             <button type="button" onclick="ActionLog.copy()">复制 Copy JSON</button>
             <div class="pager"><button type="button" onclick="ActionLog.prev()">上一页 Prev</button><button type="button" onclick="ActionLog.next()">下一页 Next</button></div>
+            <label class="raw-toggle" title="显示未聚合的原始事件行（默认按动作聚合展示）"><input id="raw-rows" type="checkbox" onchange="ActionLog.toggleRaw()" />RAW 行</label>
             <div class="side-title">STATUS</div>
             <div class="row"><span>Encounter</span><strong id="sum-id">live</strong></div>
             <div class="row"><span>Rows</span><strong id="sum-rows">0</strong></div>
@@ -137,9 +141,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var encounter = document.getElementById('encounter');
     var toastTimer = null;
     var searchTimer = null;
+    var rawRows = document.getElementById('raw-rows');
+    function rawRowsMode() { return !!(rawRows && rawRows.checked); }
     var pageLimit = 80;
     var pageOffset = 0;
     var lastCursor = {};
+    var lastData = null;
     var expandedGroups = {};
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function jsq(value) { return esc(String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
@@ -269,6 +276,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function render(data, options) {
         data = data || {};
+        lastData = data;
         options = options || {};
         var preserveScroll = options.preserveScroll !== false;
         var rows = objectItems(data.rows);
@@ -292,7 +300,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
         document.getElementById('sum-errors').textContent = String(errorCount);
         if (!rows.length) { setRowsHtml('<div class="empty">暂无 ACT 行为日志。<br/>live 模式等待事件；history 模式需要 SQLite actions。</div>', preserveScroll); return; }
-        if (groups.length) { setRowsHtml(renderGroups(groups), preserveScroll); return; }
+        if (groups.length && !rawRowsMode()) { setRowsHtml(renderGroups(groups), preserveScroll); return; }
         setRowsHtml('<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
             return '<tr class="' + (row.is_cursor ? 'cursor' : '') + '"><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="topic">' + esc(row.topic || '-') + '</span></td><td>' + esc(row.label || '-') + '</td><td>' + esc(row.value || '') + '</td><td>' + esc(row.source || '-') + '</td><td><div class="payload">actor=' + esc(row.actor || '-') + ' · target=' + esc(row.target || '-') + '</div></td></tr>';
         }).join('') + '</tbody></table>', preserveScroll);
@@ -305,7 +313,9 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { data = data || {}; render(data, { preserveScroll: true }); if (!data.text) { showToast(data.ok === false ? (data.message || 'Action log copy failed') : 'Action log copy payload empty'); return data; } return Promise.resolve().then(function () { if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard unavailable'); return navigator.clipboard.writeText(data.text); }).then(function () { showToast('Action log copied'); return data; }).catch(function () { showToast('Action log copy failed'); return data; }); }); },
         prev: function () { pageOffset = safePageOffset(pageOffset - pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
         next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset = safePageOffset(pageOffset + pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
-        toggleGroup: function (key) { expandedGroups[String(key || '')] = !expandedGroups[String(key || '')]; return ActionLog.refresh(); },
+        // 折叠/RAW 只是本地视图状态：直接用缓存数据重渲染，不再走一次后端 API 往返
+        toggleGroup: function (key) { expandedGroups[String(key || '')] = !expandedGroups[String(key || '')]; if (lastData) { render(lastData); return Promise.resolve(lastData); } return ActionLog.refresh(); },
+        toggleRaw: function () { if (lastData) { render(lastData); return Promise.resolve(lastData); } return ActionLog.refresh(); },
         close: function () { apiCall('toggle_action_log'); },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }

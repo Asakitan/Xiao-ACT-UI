@@ -20,6 +20,7 @@ from act_platform.runtime import (
     act_mini_parse_copy,
     act_selective_parsing_status,
 )
+from gui_modules import sao_panel_components as components
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -309,32 +310,22 @@ class ReportExportPanel:
             fg=_SAO_PANEL_GOLD,
             font=('Segoe UI', 10, 'bold'),
         ).pack(side='left', padx=(12, 0))
-        for label, cmd in (
-            ('刷新 Refresh', self.refresh),
-            ('导入 Import', self.import_offline_file),
-            ('导出 JSON', self.export_json),
-            ('导出 CSV', self.export_csv),
-            ('导出 HTML', self.export_html),
-            ('导出 XML', self.export_xml),
-            ('导出 XML.GZ', self.export_xml_gzip),
-            ('导出 XML.ZIP', self.export_xml_zip),
-            ('Mini Copy', self.copy_mini_parse),
-            ('复制 Copy', self.copy_snapshot),
-            ('关闭 Close', self.hide),
-        ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+        components.action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
+        components.dropdown_button(toolbar, '复制 Copy', (
+            ('复制报告 Copy Report', self.copy_snapshot),
+            ('复制 Mini-Parse', self.copy_mini_parse),
+        ), kind='cyan').pack(side='right', padx=(6, 0))
+        components.dropdown_button(toolbar, '导出 Export', (
+            ('JSON', self.export_json),
+            ('CSV', self.export_csv),
+            ('HTML', self.export_html),
+            '-',
+            ('XML', self.export_xml),
+            ('XML.GZ', self.export_xml_gzip),
+            ('XML.ZIP', self.export_xml_zip),
+        ), kind='gold').pack(side='right', padx=(6, 0))
+        components.action_button(toolbar, '导入 Import', self.import_offline_file).pack(side='right', padx=(6, 0))
+        components.action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
 
         tk.Label(
             body,
@@ -371,23 +362,44 @@ class ReportExportPanel:
             fg=_SAO_PANEL_GOLD,
             font=('Segoe UI', 10, 'bold'),
         ).pack(fill='x', pady=(2, 8))
-        tk.Button(
-            right,
-            text='清空历史 Clear All',
-            command=self.clear_history,
-            bg=_SAO_PANEL_HEADER_BG,
-            fg=_SAO_PANEL_HEADER_FG,
-            activebackground=_SAO_PANEL_ACCENT,
-            activeforeground='white',
-            relief='flat',
-            bd=0,
-            padx=8,
-            pady=4,
-        ).pack(fill='x', pady=(0, 8))
+        clear_btn = components.action_button(right, '清空历史 Clear All', None, kind='danger')
+        clear_btn.pack(fill='x', pady=(0, 8))
+        self._wire_clear_confirm(clear_btn)
         self._history = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._history.pack(fill='both', expand=True)
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
+
+    def _wire_clear_confirm(self, btn: tk.Button) -> None:
+        """两段式确认：第一次点击进入「确认清空?」态，3 秒内再点才真正清空。"""
+        state = {'armed': False, 'after': None}
+
+        def _disarm() -> None:
+            state['armed'] = False
+            state['after'] = None
+            try:
+                btn.configure(text='清空历史 Clear All')
+            except Exception:
+                pass
+
+        def _click() -> None:
+            if state['armed']:
+                if state['after'] is not None:
+                    try:
+                        btn.after_cancel(state['after'])
+                    except Exception:
+                        pass
+                _disarm()
+                self.clear_history()
+                return
+            state['armed'] = True
+            try:
+                btn.configure(text='确认清空? Confirm')
+                state['after'] = btn.after(3000, _disarm)
+            except Exception:
+                _disarm()
+
+        btn.configure(command=_click)
 
     def _reset_render_cache(self) -> None:
         self._last_render_sig = ""
@@ -526,23 +538,12 @@ class ReportExportPanel:
             ).pack(fill='x')
             actions = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
             actions.pack(fill='x', padx=6, pady=(0, 6))
-            for label, command in (
-                ('载入 Load', lambda i=history_index: self.load_history(i)),
-                ('删除 Delete', lambda i=history_index: self.delete_history(i)),
+            for label, command, kind in (
+                ('载入 Load', lambda i=history_index: self.load_history(i), 'cyan'),
+                ('删除 Delete', lambda i=history_index: self.delete_history(i), 'danger'),
             ):
-                tk.Button(
-                    actions,
-                    text=label,
-                    command=command,
-                    bg=_SAO_PANEL_HEADER_BG,
-                    fg=_SAO_PANEL_HEADER_FG,
-                    activebackground=_SAO_PANEL_ACCENT,
-                    activeforeground='white',
-                    relief='flat',
-                    bd=0,
-                    padx=6,
-                    pady=3,
-                ).pack(side='left', fill='x', expand=True, padx=(0, 4))
+                components.action_button(actions, label, command, kind=kind).pack(
+                    side='left', fill='x', expand=True, padx=(0, 4))
 
     def _empty_box(self, message: str) -> None:
         if self._rows is None:
