@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.115: report_export 指标卡暗色残留 + Tk commander 长名防挤防裁.
+
+  1) `gui_modules/sao_gui_report_export.py` 指标卡(Damage/DPS/Heal/
+    Duration)修复 — 与 v4.6.114 action_log 同 bug 类: 硬编码 '#07111c'
+    近黑底配浅底灰 LABEL_FG; 改主题常量。两类对比度残留(深底浅灰字/
+    浅底白字)已 grep 全量排查穷尽, plugin_manager/trigger_timer/
+    aggregate/skill_drilldown 的暗盒是亮字自洽搭配(刻意)不动。
+
+  2) `gui_modules/sao_gui_commander.py` 成员卡长名修复 — 名字 Label
+    先 pack(LEFT,expand) 会把后 pack 的职业徽章/队长星整个挤出卡片
+    (pack 后包者只分剩余空间); 徽章改先 pack, 名字按像素预算
+    `_tk_ellipsize`(tkfont.measure)省略号截断, 与 web 端 batch 241
+    的 .member-name ellipsis 对偶。
+
 ## v4.6.114: action_log 明细盒暗色残留修复 + Tk 裸按钮统一.
 
   1) `gui_modules/sao_gui_action_log.py` 组展开明细盒修复 — 硬编码

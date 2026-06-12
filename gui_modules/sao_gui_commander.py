@@ -32,6 +32,29 @@ from sao_web_panel_common import (
 )
 
 
+_ELLIPSIS_FONT_CACHE: Dict[Any, Any] = {}
+
+
+def _tk_ellipsize(text: str, font_spec: Any, max_px: int) -> str:
+    """按像素预算给 Tk Label 文本加省略号 (Tk 无原生 ellipsis)。"""
+    if max_px <= 0 or not text:
+        return text
+    try:
+        import tkinter.font as tkfont
+        key = tuple(font_spec) if isinstance(font_spec, (list, tuple)) else str(font_spec)
+        font_obj = _ELLIPSIS_FONT_CACHE.get(key)
+        if font_obj is None:
+            font_obj = tkfont.Font(font=font_spec)
+            _ELLIPSIS_FONT_CACHE[key] = font_obj
+        if font_obj.measure(text) <= max_px:
+            return text
+        while text and font_obj.measure(text + '…') > max_px:
+            text = text[:-1]
+        return (text + '…') if text else '…'
+    except Exception:
+        return text
+
+
 def _finite_float(
     value: Any,
     default: float = 0.0,
@@ -359,12 +382,21 @@ class CommanderPanel:
         top = tk.Frame(card, bg=PANEL_CARD)
         top.pack(fill=tk.X)
         name = str(member.get('name') or f'UID:{member.get("uid") or 0}')
-        tk.Label(top, text=name, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(10 if compact else 11, bold=True)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # 徽章先 pack(RIGHT) — pack 后包者只分剩余空间, 否则长名把
+        # 职业徽章/队长星整个挤出卡片; 名字再按剩余像素预算省略号截断
+        # (web 端 .member-name 同款 ellipsis, batch 241)
         profession = str(member.get('profession') or '')
         if profession:
             tk.Label(top, text=profession, bg=PANEL_HEADER_ALT, fg=TEXT_MAIN, font=panel_font(8), padx=5, pady=1).pack(side=tk.RIGHT)
         if is_leader:
             tk.Label(top, text='★', bg=PANEL_CARD, fg=GOLD_STRONG, font=panel_font(9, bold=True)).pack(side=tk.RIGHT, padx=(0, 4))
+        name_font = panel_font(10 if compact else 11, bold=True)
+        try:
+            body_w = int(self._body.winfo_width() or 0)
+        except Exception:
+            body_w = 0
+        name = _tk_ellipsize(name, name_font, max(90, (body_w or 300) - 130))
+        tk.Label(top, text=name, bg=PANEL_CARD, fg=TEXT_MAIN, font=name_font).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         if not compact:
             meta = tk.Frame(card, bg=PANEL_CARD)

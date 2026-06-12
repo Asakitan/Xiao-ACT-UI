@@ -471,10 +471,12 @@ class ReportExportPanel:
             ('Heal', preview.get('total_heal') or 0),
             ('Duration', f"{preview.get('elapsed_s') or 0}s"),
         ):
-            cell = tk.Frame(metrics, bg='#07111c', highlightthickness=1, highlightbackground=_SAO_PANEL_SEP)
+            # 指标卡用主题常量 — 旧硬编码 '#07111c' 近黑底是扁平化前残留,
+            # 浅色 LABEL_FG 灰字打上去对比度不足 (web 端 .metric 走变量, 无此问题)
+            cell = tk.Frame(metrics, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_SEP)
             cell.pack(side='left', fill='x', expand=True, padx=(0, 6))
-            tk.Label(cell, text=label, bg='#07111c', fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), pady=3).pack(fill='x')
-            tk.Label(cell, text=str(value), bg='#07111c', fg=_SAO_PANEL_GOLD, font=('Segoe UI', 11, 'bold'), pady=4).pack(fill='x')
+            tk.Label(cell, text=label, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), pady=3).pack(fill='x')
+            tk.Label(cell, text=str(value), bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 11, 'bold'), pady=4).pack(fill='x')
         rows = list(preview.get('top_rows') or [])
         if not rows:
             self._empty_box('暂无战斗成员数据 / No combatants')
