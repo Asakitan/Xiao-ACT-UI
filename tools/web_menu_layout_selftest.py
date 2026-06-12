@@ -745,6 +745,8 @@ def main() -> int:
             raise AssertionError("missing safe AutoKey/BossRaid profile selection/export snippet: " + snippet)
 
     boss_raid_api_raw_patterns = [
+        "var promise = fn.apply(window.pywebview.api, args || []);\n    if (!promise || typeof promise.then !== 'function') return;",
+        "api[method].apply(api, args || []).then(function(result) {",
         "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "results.forEach(function(item) {\n            var data = (typeof item === 'string') ? JSON.parse(item) : item;",
         "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = (typeof result === 'string') ? JSON.parse(result) : result;",
@@ -761,6 +763,8 @@ def main() -> int:
         "var parsed = JSON.parse(result);",
         "return _brApiObject(parsed) ? parsed : { ok: false, message: String(result) };",
         "return _brApiObject(result) ? result : { ok: false, message: String(result) };",
+        "request = Promise.resolve(fn.apply(window.pywebview.api, args || []));",
+        "request = Promise.resolve(api[method].apply(api, args || []));",
         "var data = _brParseApiResult(result);",
         "function _loadInitialAutoKeyState()",
         "return api.get_auto_key_state();",

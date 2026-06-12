@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.74: Web menu AutoKey/BossRaid API helper fallback 修复.
+
+  1) `web/menu.html` 修复 AutoKey 通用 API helper 的同步异常与非 Promise 返回处理。
+     `_akCallApi` 现在会把 bridge 返回值统一进入 Promise/解析链,
+     同步 throw 会显示 `AUTO KEYS` 错误, 普通对象或字符串返回不再被静默丢弃。
+
+  2) `web/menu.html` 修复 BossRaid 通用 API helper 的同步异常与非 Promise 返回处理。
+     `_brCallApi` 现在会把 bridge 返回值统一进入 Promise/解析链,
+     同步 throw 会显示 `BOSS RAID` 错误, 普通对象或字符串返回不再卡在裸 `.then`。
+
 ## v4.6.73: Web menu cloud server bridge fallback 修复.
 
   1) `web/menu.html` 修复 AutoKey server URL 保存的 bridge 失败反馈。

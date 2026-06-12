@@ -5446,9 +5446,14 @@ function _akCallApi(methodName, args, onOk) {
         return;
     }
     var fn = window.pywebview.api[methodName];
-    var promise = fn.apply(window.pywebview.api, args || []);
-    if (!promise || typeof promise.then !== 'function') return;
-    promise.then(function(result) {
+    var request;
+    try {
+        request = Promise.resolve(fn.apply(window.pywebview.api, args || []));
+    } catch (err) {
+        showAlert('AUTO KEYS', String(err || '未知错误 / Unknown error'), true);
+        return;
+    }
+    request.then(function(result) {
         var data = _akParseApiResult(result);
         if (data && data.state) {
             _syncAutoKeyState(data.state);
@@ -7267,7 +7272,14 @@ function _brCallApi(method, args, onOk) {
         showAlert('BOSS RAID', 'pywebview API 不可用 / API unavailable: ' + method, true);
         return;
     }
-    api[method].apply(api, args || []).then(function(result) {
+    var request;
+    try {
+        request = Promise.resolve(api[method].apply(api, args || []));
+    } catch (err) {
+        showAlert('BOSS RAID', String(err || 'API error'), true);
+        return;
+    }
+    request.then(function(result) {
         var data = _brParseApiResult(result);
         if (data && data.ok !== false) {
             if (data.state) _syncBossRaidState(data.state);
