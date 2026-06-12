@@ -415,6 +415,10 @@ class DpsHistoryStore:
         self._items: List[Dict[str, Any]] = []
         self._last_archive_error = ""
         self._last_sqlite_error = ""
+        # sqlite_status 缓存: 写代失效 (本进程是唯一写者) — 每次 UI 轮询
+        # 都跑 6 个 COUNT(*) 全表扫 + ensure_schema 不可取
+        self._sqlite_write_gen = 0
+        self._sqlite_status_cache: Optional[tuple] = None
         self._load()
 
     @property
@@ -758,8 +762,10 @@ class DpsHistoryStore:
             self._append_sqlite_source_metadata_locked(conn, encounter_row_id, raw)
             conn.commit()
             self._last_sqlite_error = ""
+            self._sqlite_write_gen += 1
         except Exception as exc:
             self._last_sqlite_error = str(exc)
+            self._sqlite_write_gen += 1
             try:
                 if conn is not None:
                     conn.rollback()
@@ -1002,6 +1008,11 @@ class DpsHistoryStore:
         schema_version = 0
         with self._lock:
             exists = bool(self._sqlite_path and os.path.isfile(self._sqlite_path))
+            # 写代缓存命中 — 没有新写入时直接复用上次统计
+            cache_key = (self._sqlite_write_gen, str(self._sqlite_path or ""), exists)
+            if self._sqlite_status_cache is not None \
+                    and self._sqlite_status_cache[0] == cache_key:
+                return dict(self._sqlite_status_cache[1])
             if exists:
                 conn = None
                 try:
@@ -1029,7 +1040,7 @@ class DpsHistoryStore:
                             conn.close()
                     except Exception:
                         pass
-            return {
+            status = {
                 "available": bool(self._sqlite_path),
                 "path": str(self._sqlite_path or ""),
                 "exists": exists,
@@ -1042,6 +1053,10 @@ class DpsHistoryStore:
                 "source_metadata_count": source_metadata_count,
                 "last_error": self._last_sqlite_error,
             }
+            # 出错时不缓存 — 锁竞争/损坏是暂态, 下次轮询重试
+            if not self._last_sqlite_error:
+                self._sqlite_status_cache = (cache_key, dict(status))
+            return status
 
     def export_report(self, report: Optional[Dict[str, Any]] = None,
                       fmt: str = "json") -> Optional[str]:

@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.109: sqlite_status 写代缓存 + popup HUD 层失败可见.
+
+  1) `engines/dps_history.py` `sqlite_status` 按写代缓存 — 此前
+    每次 UI 轮询(history browser / report export)都开新连接 +
+    ensure_schema + commit + 6 个 COUNT(*) 全表扫; 本进程是唯一
+    写者(sqlite 追加型, 无 DELETE), `_sqlite_write_gen` 在
+    `_append_sqlite_locked` 递增即失效; 出错结果不缓存(锁竞争是
+    暂态), 命中返回副本防调用方改坏缓存。
+
+  2) `ui_gpu/composer.py` popup HUD 层(括弓/轨道/扫描线)合成失败
+    不再无声 — 裸 except 60Hz 静默丢层改 60s 限频日志,
+    用户丢视觉特性时日志有迹可循, 帧本身仍优雅降级。
+
 ## v4.6.108: buffmon shell 部件缓存 + DPS 文字阴影缓存.
 
   1) `gui_modules/sao_gui_buffmon.py` `_draw_shell` 拆出 `_shell_parts`

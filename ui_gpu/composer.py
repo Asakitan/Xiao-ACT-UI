@@ -5,6 +5,8 @@ Produces premultiplied BGRA bytes ready for ``BgraPresenter``.
 
 from __future__ import annotations
 
+import time
+
 from PIL import Image
 
 from . import menu_bar_layout, child_bar_layout, hud_layout
@@ -20,6 +22,8 @@ GAP_MENU_CHILD = 25                     # px between menu column and child colum
 
 MENU_X = HUD_PAD
 CHILD_X = HUD_PAD + menu_bar_layout.WIDTH + GAP_MENU_CHILD
+
+_HUD_FAIL_LOG_AT = 0.0  # HUD 层合成失败的 60s 限频日志哨兵
 
 
 def content_shift(state) -> tuple[int, int]:
@@ -83,8 +87,13 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
         # if we paste the sprite at (HUD_PAD + ox, HUD_PAD + oy).
         px, py = HUD_PAD + ox + dx, HUD_PAD + oy + dy
         frame.alpha_composite(hud_img, (max(0, px), max(0, py)))
-    except Exception:
-        pass
+    except Exception as exc:
+        # HUD 层缺席不该无声 — 60s 限频报一次, 其余帧继续静默降级
+        global _HUD_FAIL_LOG_AT
+        now = time.monotonic()
+        if now - _HUD_FAIL_LOG_AT >= 60.0:
+            _HUD_FAIL_LOG_AT = now
+            print(f'[GPU] popup HUD layer compose failed (degraded frame): {exc}')
 
     # 2) Menu bar column
     menu_img = menu_bar_layout.compose(state)
