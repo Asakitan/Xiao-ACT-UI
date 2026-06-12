@@ -419,9 +419,14 @@ function preClose() {
 }
 
 document.getElementById('panel-close').addEventListener('click', function() {
+    var a = window.pywebview && window.pywebview.api;
+    if (!a || !a.close_panel) { _panelNotice('面板接口不可用', true); return; }
     preClose();
     setTimeout(function() {
-        if (window.pywebview && window.pywebview.api) window.pywebview.api.close_panel();
+        Promise.resolve(a.close_panel()).catch(function () {
+            document.body.classList.remove('closing');
+            _panelNotice('关闭失败: 接口异常', true);
+        });
     }, 120);
 });
 

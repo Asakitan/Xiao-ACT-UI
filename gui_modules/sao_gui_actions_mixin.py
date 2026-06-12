@@ -315,14 +315,20 @@ class SAOPlayerGUIActionsMixin:
         normalized = list(actions or [])
         self._set_setting('autokey_burst_actions', normalized)
         if self._auto_key_engine:
+            apply_err = None
             try:
                 self._auto_key_engine.set_burst_actions(normalized)
-            except Exception:
-                pass
+            except Exception as exc:
+                apply_err = exc
             try:
                 self._auto_key_engine.invalidate()
-            except Exception:
-                pass
+            except Exception as exc:
+                if apply_err is None:
+                    apply_err = exc
+            if apply_err is not None:
+                self._show_entity_alert(
+                    'BURST SKILLS', f'已保存, 但引擎应用失败: {apply_err}',
+                    display_time=4.0)
 
     # ── BossRaid config helpers ──
     def _boss_raid_settings_ref(self):

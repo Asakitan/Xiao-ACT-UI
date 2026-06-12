@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.89: 钢琴面板关闭卡死态与 Tk 爆发动作引擎应用反馈.
+
+  1) `web/panel.html` 关闭按钮在 `close_panel` 接口缺失时直接提示而不进入
+    closing 动画; 调用异常时回退 closing 态并提示, 面板不再卡在隐藏态。
+
+  2) `gui_modules/sao_gui_actions_mixin.py` Tk AutoKey 面板保存爆发动作时,
+    引擎 set_burst_actions/invalidate 失败不再静默, 提示「已保存, 但引擎
+    应用失败」; 配置持久化行为不变。
+
 ## v4.6.88: AutoKey SAVE 与钢琴面板按钮诚实反馈.
 
   1) `web/autokey_editor.html` SAVE 按钮现在显示保存结果(已保存 N 条/失败原因),
