@@ -74,22 +74,8 @@ def _ensure_pb():
     except ImportError:
         pass
 
-    return _pb
-
-
-    try:
-        from google.protobuf import descriptor_pb2, descriptor_pool, symbol_database
-        from google.protobuf import reflection, descriptor
-        import google.protobuf.descriptor as _desc
-
-
-        proto_path = os.path.join(os.path.dirname(__file__), 'proto', 'star_resonance.proto')
-        if os.path.exists(proto_path):
-
-
-            pass
-    except ImportError:
-        pass
+    if _pb is not None:
+        return _pb
 
     logger.info('[Parser] using built-in mini protobuf decoder')
     return None

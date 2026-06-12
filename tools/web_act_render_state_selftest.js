@@ -50,6 +50,12 @@ assert(skillDrilldown.includes("this.expandedRefs[key] = true"), "skill drilldow
 assert(skillDrilldown.includes("delete this.expandedRefs[key]"), "skill drilldown must clear closed refs");
 assert(skillDrilldown.includes("this.render(status, { preserveScroll: false })"), "skill drilldown filtering/back should reset scroll");
 assert(skillDrilldown.includes("this.render(copied, { preserveScroll: true })"), "skill drilldown copy should preserve scroll");
+assert(skillDrilldown.includes("clipboardOk = true"), "skill drilldown copy must track clipboard success");
+assert(skillDrilldown.includes("clipboard copy failed"), "skill drilldown copy must report clipboard failure");
+
+const graphTimeseries = read("web/act_graph_timeseries.html");
+assert(graphTimeseries.includes("copied = true"), "graph export must track clipboard success");
+assert(graphTimeseries.includes("clipboard copy failed"), "graph export must report clipboard failure instead of false success");
 
 const dps = read("web/dps.html");
 assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");

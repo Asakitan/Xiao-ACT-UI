@@ -310,8 +310,11 @@
         const topic = document.getElementById('topic').value;
         const exported = await callApi('export_graph_timeseries', 'act.graph.export', metric, 120, query, topic);
         const text = exported.text || JSON.stringify(exported, null, 2);
-        try { await navigator.clipboard.writeText(text); } catch (_) {}
-        document.getElementById('status').textContent = 'Exported graph JSON (' + text.length + ' chars)';
+        var copied = false;
+        try { await navigator.clipboard.writeText(text); copied = true; } catch (_) {}
+        document.getElementById('status').textContent = copied
+          ? 'Exported graph JSON (' + text.length + ' chars)'
+          : 'Export generated (' + text.length + ' chars), but clipboard copy failed';
       },
       async close() {
         this.fadeOut();

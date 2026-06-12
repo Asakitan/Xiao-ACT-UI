@@ -144,7 +144,14 @@
       },
       async refresh(options) { options = options || {}; const status = await callApi('get_skill_drilldown_status', 'act.skill.status', this._cid(), this._sid(), this._query(), 80); this.render(status, { preserveScroll: options.preserveScroll !== false }); },
       async filter() { const status = await callApi('filter_skill_drilldown', 'act.skill.filter', this._cid(), this._sid(), this._query(), 80); this.render(status, { preserveScroll: false }); },
-      async copy() { const copied = await callApi('copy_skill_drilldown', 'act.skill.copy', this._cid(), this._sid(), this._query(), 80); this.render(copied, { preserveScroll: true }); try { await navigator.clipboard.writeText(copied.text || JSON.stringify(copied)); } catch (_) {} },
+      async copy() {
+        const copied = await callApi('copy_skill_drilldown', 'act.skill.copy', this._cid(), this._sid(), this._query(), 80);
+        this.render(copied, { preserveScroll: true });
+        const text = copied.text || JSON.stringify(copied);
+        var clipboardOk = false;
+        try { await navigator.clipboard.writeText(text); clipboardOk = true; } catch (_) {}
+        if (!clipboardOk) document.getElementById('status').textContent = 'Copy payload ready, but clipboard copy failed';
+      },
       async back() { const status = await callApi('back_skill_drilldown', 'act.skill.back'); document.getElementById('combatantId').value = ''; document.getElementById('skillId').value = ''; this.render(status, { preserveScroll: false }); },
       async close() { this.fadeOut(); await callApi('toggle_skill_drilldown', 'ui.menu_action', 'toggle_skill_drilldown'); },
       toggleRef(el) {

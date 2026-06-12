@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.82: protobuf fallback 诊断恢复 + ACT Web 复制失败不再假报成功.
+
+  1) `packet_parser/helpers.py` `_ensure_pb` 移除早退后的不可达 fallback
+    骨架, 在缺少编译 proto 时会明确记录使用内置 mini protobuf decoder,
+    避免抓包解析环境缺依赖时无诊断可查。
+
+  2) `web/act_graph_timeseries.html` 与 `web/act_skill_drilldown.html`
+    现在区分后端导出/复制 payload 成功与浏览器 clipboard 写入成功。
+    剪贴板不可用或拒绝时状态栏显示 copy failed, 不再误导用户以为已复制。
+
 ## v4.6.81: 技能槽权威映射接管推断标记 + Web 插件签名回退稳定.
 
   1) `packet_parser/parser.py` 现在在 ProfessionList 或职业槽位缓存提供权威
