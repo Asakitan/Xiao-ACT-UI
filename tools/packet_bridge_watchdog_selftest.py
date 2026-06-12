@@ -12,6 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from net import packet_bridge
+from packet_parser import PacketParser, PlayerData
 
 
 class _FakeThread:
@@ -87,6 +88,34 @@ class PacketBridgeWatchdogTests(unittest.TestCase):
             bridge._maybe_recover_capture_idle(40.0)
         self.assertEqual(cap.stop_count, 1)
         self.assertEqual(cap.start_count, 1)
+
+
+class SkillSlotAuthorityTests(unittest.TestCase):
+    def test_cached_profession_slots_clear_inferred_marker_even_when_same_map(self) -> None:
+        parser = PacketParser.__new__(PacketParser)
+        parser._profession_skill_cache = {1: {1: 10101, 2: 20201}}
+        player = PlayerData(42)
+        player.profession_id = 1
+        player.skill_slot_map = {1: 10101, 2: 20201}
+        player._inferred_skill_count = 2
+
+        changed = parser._apply_cached_profession_slots(player)
+
+        self.assertTrue(changed)
+        self.assertEqual(player.skill_slot_map, {1: 10101, 2: 20201})
+        self.assertEqual(player._inferred_skill_count, 0)
+
+    def test_authoritative_profession_slots_clear_inferred_marker_on_replace(self) -> None:
+        parser = PacketParser.__new__(PacketParser)
+        player = PlayerData(42)
+        player.skill_slot_map = {1: 10101}
+        player._inferred_skill_count = 1
+
+        changed = parser._set_authoritative_skill_slots(player, {1: 30301, 2: 40401})
+
+        self.assertTrue(changed)
+        self.assertEqual(player.skill_slot_map, {1: 30301, 2: 40401})
+        self.assertEqual(player._inferred_skill_count, 0)
 
 
 if __name__ == "__main__":

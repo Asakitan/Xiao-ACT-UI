@@ -327,9 +327,36 @@
         }[c] || "#73d7ff";
     }
 
+    var _specSignatureFallbackWarned = false;
+
+    function fallbackSignature(value, depth) {
+        if (value == null) return "null";
+        var t = typeof value;
+        if (t !== "object") return t + ":" + String(value).slice(0, 80);
+        if (depth <= 0) return Array.isArray(value) ? "[array]" : "[object]";
+        if (Array.isArray(value)) {
+            return "array(" + value.length + "):[" + value.slice(0, 32).map(function (item) {
+                return fallbackSignature(item, depth - 1);
+            }).join("|") + "]";
+        }
+        var keys = Object.keys(value).sort().slice(0, 32);
+        return "object{" + keys.map(function (key) {
+            var part;
+            try { part = fallbackSignature(value[key], depth - 1); }
+            catch (_) { part = "[unreadable]"; }
+            return key + ":" + part;
+        }).join("|") + "}";
+    }
+
     function specSignature(value) {
         try { return JSON.stringify(value || {}); }
-        catch (_) { return String(Date.now()); }
+        catch (err) {
+            if (!_specSignatureFallbackWarned && window.console && console.warn) {
+                _specSignatureFallbackWarned = true;
+                console.warn("[PluginLayer] non-serializable render spec; using stable fallback signature", err);
+            }
+            return "[nonjson]" + fallbackSignature(value || {}, 3);
+        }
     }
 
     function hasRenderableSpec(spec) {

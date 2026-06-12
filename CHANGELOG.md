@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.81: 技能槽权威映射接管推断标记 + Web 插件签名回退稳定.
+
+  1) `packet_parser/parser.py` 现在在 ProfessionList 或职业槽位缓存提供权威
+    `skill_slot_map` 时同步清除 `_inferred_skill_count`, 避免先由 CD 推断出的
+    技能槽在后续场景切换/重推时仍被当作推断缓存清掉或重复合并。
+
+  2) `web/plugin_layer.js` 的 `specSignature` 在遇到不可 JSON 序列化的插件
+    render spec 时改用稳定浅层签名, 不再返回 `Date.now()` 导致每次轮询都
+    重建 DOM、打断输入焦点或产生额外重排; 同时仅首次输出诊断 warning。
+
 ## v4.6.80: Timeline VCR 失败不再假报成功 + overlay 推送错误去重记录.
 
   1) `gui_modules/sao_gui_timeline_vcr.py` `_apply_result` 现在检查返回的

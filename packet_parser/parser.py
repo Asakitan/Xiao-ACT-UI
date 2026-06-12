@@ -635,10 +635,20 @@ class PacketParser:
         if profession_id <= 0:
             return False
         cached_slot_map = self._profession_skill_cache.get(profession_id) or {}
-        if not cached_slot_map or cached_slot_map == player.skill_slot_map:
+        if not cached_slot_map:
             return False
-        player.skill_slot_map = dict(cached_slot_map)
-        return True
+        return self._set_authoritative_skill_slots(player, cached_slot_map)
+
+    def _set_authoritative_skill_slots(self, player: PlayerData, slot_skill_map: Dict[int, int]) -> bool:
+        """Apply ProfessionList-derived slots and clear any inference marker."""
+        next_map = dict(slot_skill_map or {})
+        changed = next_map != player.skill_slot_map
+        if changed:
+            player.skill_slot_map = next_map
+        if getattr(player, '_inferred_skill_count', 0) > 0:
+            player._inferred_skill_count = 0
+            changed = True
+        return changed
 
     def _try_detect_profession(self, player: PlayerData, skill_level_id: int) -> bool:
         """Auto-detect profession from observed skill IDs when SyncContainerData was missed.
@@ -1994,8 +2004,7 @@ class PacketParser:
                 self._profession_skill_cache[pid] = dict(slot_skill_map)
             elif pid > 0 and not slot_skill_map:
                 slot_skill_map = self._profession_skill_cache.get(pid) or {}
-            if slot_skill_map != player.skill_slot_map:
-                player.skill_slot_map = dict(slot_skill_map)
+            if self._set_authoritative_skill_slots(player, slot_skill_map):
                 changed = True
             merged_skill_info = dict(getattr(player, 'skill_level_info_map', {}) or {})
             merged_skill_info.update(skill_level_info_map)
