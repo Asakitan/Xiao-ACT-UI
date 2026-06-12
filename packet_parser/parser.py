@@ -2088,7 +2088,10 @@ class PacketParser:
             player.extended_data['SCENE_DATA'] = scene
             logger.info(f'[Parser] CharSerialize SceneData(pb2): {scene} uid={uid}')
 
-        # BuffDBInfo (field 6) — active buffs on self
+        # BuffDBInfo (field 6) — character buff DATABASE dump (talents/passives/
+        # food etc., no BuffUuid/CreateTime). NOT the live combat buff bar — do
+        # not write it into player.buff_list, or the buff monitor floods with
+        # permanent ∞ entries. The live bar comes from BuffInfoSync only.
         if char.HasField('BuffInfo'):
             bi = char.BuffInfo
             buffs = []
@@ -2100,10 +2103,11 @@ class PacketParser:
                     'layer': buf_data.Layer,
                     'duration': buf_data.Duration,
                 })
-            player.buff_list = buffs
-            player.extended_data['BUFF_DB_INFO'] = {'buff_count': len(buffs)}
-            changed = True
-            logger.info(f'[Parser] CharSerialize BuffDBInfo(pb2): {len(buffs)} buffs uid={uid}')
+            player.extended_data['BUFF_DB_INFO'] = {
+                'buff_count': len(buffs),
+                'buffs': buffs,
+            }
+            logger.info(f'[Parser] CharSerialize BuffDBInfo(pb2): {len(buffs)} DB buffs uid={uid} (not fed to buff_list)')
 
         # EquipList (field 12) — equipped items
         if char.HasField('Equip'):

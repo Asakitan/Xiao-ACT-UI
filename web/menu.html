@@ -3980,6 +3980,7 @@ html, body {
                         <div class="mode-btn" id="theme-skillfx" onclick="_toggleTheme('skillfx')" style="cursor:pointer;text-align:center;padding:3px 6px;">SkillFX: Dark</div>
                         <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Dark</div>
                         <div class="mode-btn" id="theme-act" onclick="_toggleTheme('act')" style="cursor:pointer;text-align:center;padding:3px 6px;">ACT: Dark</div>
+                        <div class="mode-btn" id="theme-buffmon" onclick="_toggleTheme('buffmon')" style="cursor:pointer;text-align:center;padding:3px 6px;">BuffMon: Dark</div>
                     </div>
                 </li>
             </ul>
@@ -6378,8 +6379,8 @@ document.getElementById('ak-engine-pause-on-death').addEventListener('change', f
 
 /* ═══ Panel Theme toggles ═══ */
 var _panelThemes = {};
-var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'];
-var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true };
+var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act', 'buffmon'];
+var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true, buffmon: true };
 var _themeRequestSeq = 0;
 
 function _themePanelName(panel) {

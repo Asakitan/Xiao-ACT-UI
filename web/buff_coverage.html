@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>SAO Buff Coverage</title>
 <style>
+  /* dark (默认) — 与 Tk _BuffPanelBase._PALETTES['dark'] 1:1 */
   :root {
     --cyan: #46e0d8;
     --cyan-deep: #2bb7c8;
@@ -13,6 +14,23 @@
     --bg: rgba(16, 22, 28, 0.82);
     --row: rgba(34, 46, 56, 0.66);
     --row-urgent: rgba(120, 54, 40, 0.78);
+    --edge: rgba(70, 224, 216, 0.30);
+    --row-edge: rgba(70, 224, 216, 0.14);
+    --urgent-sec: #ff8a6a;
+  }
+  /* light — 与 Tk _PALETTES['light'] (cream hi-tech) 1:1 */
+  html.theme-light {
+    --cyan: #16a9d6;
+    --cyan-deep: #3282aa;
+    --gold: #dea620;
+    --ink: #5a5c64;
+    --ink-dim: #8c878a;
+    --bg: rgba(248, 250, 251, 0.94);
+    --row: rgba(248, 247, 244, 0.78);
+    --row-urgent: rgba(244, 168, 152, 0.90);
+    --edge: rgba(128, 190, 220, 0.85);
+    --row-edge: rgba(156, 178, 194, 0.66);
+    --urgent-sec: #8c1e14;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -25,13 +43,14 @@
   #panel {
     position: absolute; left: 6px; right: 6px; bottom: 6px;
     background: var(--bg);
-    border: 1px solid rgba(70, 224, 216, 0.30);
+    border: 1px solid var(--edge);
     border-radius: 10px;
     padding: 8px 9px 9px;
     box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
     opacity: 0; transform: translateY(8px);
     transition: opacity .22s ease, transform .22s ease;
   }
+  html.theme-light #panel { box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18); }
   #panel.show { opacity: 1; transform: translateY(0); }
   .hd {
     display: flex; align-items: baseline; gap: 7px;
@@ -45,7 +64,7 @@
     display: flex; align-items: center; gap: 8px;
     height: 26px; margin-top: 4px; padding: 0 9px;
     background: var(--row);
-    border: 1px solid rgba(70, 224, 216, 0.14);
+    border: 1px solid var(--row-edge);
     border-radius: 6px;
     overflow: hidden;
   }
@@ -64,7 +83,7 @@
   .row .pct { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--cyan); width: 34px; text-align: right; }
   .row .trg { flex: 0 0 auto; font-size: 10px; color: var(--ink-dim); width: 26px; text-align: right; }
   .row .sec { flex: 0 0 auto; font-size: 12px; font-weight: 700; color: var(--gold); width: 42px; text-align: right; }
-  .row.urgent .sec { color: #ff8a6a; }
+  .row.urgent .sec { color: var(--urgent-sec); }
   .row .sec.perm { color: var(--ink-dim); font-weight: 400; }
   #empty { font-size: 11px; color: var(--ink-dim); text-align: center; padding: 6px 0; }
 </style>
@@ -150,6 +169,26 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+
+  // 主题: 宿主 set_panel_theme('buffmon') 推送 + 启动时从 api 拉初始值,
+  // light/dark 变量与 Tk _BuffPanelBase._PALETTES 1:1。
+  window._applyPanelTheme = function (theme) {
+    document.documentElement.classList.toggle(
+      'theme-light', String(theme || '').toLowerCase() === 'light');
+  };
+  function initTheme() {
+    try {
+      var api = window.pywebview && window.pywebview.api;
+      if (api && api.get_panel_themes) {
+        Promise.resolve(api.get_panel_themes()).then(function (themes) {
+          themes = objectValue(typeof themes === 'string' ? JSON.parse(themes) : themes);
+          window._applyPanelTheme(themes.buffmon || 'dark');
+        }).catch(function () {});
+      }
+    } catch (_) {}
+  }
+  window.addEventListener('pywebviewready', initTheme);
+  setTimeout(initTheme, 400);
 })();
 </script>
 </body>

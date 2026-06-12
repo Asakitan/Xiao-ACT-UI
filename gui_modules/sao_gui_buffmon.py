@@ -173,32 +173,92 @@ class _BuffPanelBase:
     SLIDE_OFFSET = 12     # 滑入 / 滑出 的水平像素
     SHELL_CUT = 14        # shell 切角 (右上 + 左下) — 比 DPS 主面板小一点更精致
 
-    # ── 调色 (复刻 DpsOverlay v2.2.0 cream hi-tech 主面板) ──
-    PANEL_BG_A = (250, 252, 253, 245)
-    PANEL_BG_B = (220, 224, 229, 245)
-    PANEL_EDGE = (128, 190, 220, 255)
-    INNER_HIGHLIGHT = (255, 255, 255, 255)
-    PANEL_LINE = (255, 255, 255, 255)
-    SHELL_SHEEN_CYAN = (104, 228, 255, 28)
-    SHELL_SHEEN_SHADOW = (42, 52, 64, 22)
-    SCAN_LINE = (104, 228, 255, 18)
+    # ── 调色 — light/dark 双主题, 与 web/buff_coverage.html 的 CSS 变量 1:1 ──
+    # light = cream hi-tech 主面板系 (复刻 DpsOverlay v2.2.0);
+    # dark  = 深蓝黑系 (对齐 buff_coverage.html 暗色变量 + panel 家族 dark 调色)。
+    # 主题键 = settings panel_themes['buffmon'], 经 _apply_theme() 切换。
+    _PALETTES = {
+        'light': {
+            'PANEL_BG_A': (250, 252, 253, 245),
+            'PANEL_BG_B': (220, 224, 229, 245),
+            'PANEL_EDGE': (128, 190, 220, 255),
+            'INNER_HIGHLIGHT': (255, 255, 255, 255),
+            'PANEL_LINE': (255, 255, 255, 255),
+            'SHELL_SHEEN_CYAN': (104, 228, 255, 28),
+            'SHELL_SHEEN_SHADOW': (42, 52, 64, 22),
+            'SCAN_LINE': (104, 228, 255, 18),
+            'HEADER_TEXT': (104, 138, 162, 255),
+            'HEADER_TICK': (104, 228, 255, 90),
+            'HEADER_SEP': (255, 255, 255, 200),
+            'TEXT_MAIN': (90, 92, 100, 255),
+            'TEXT_MUTED': (140, 135, 138, 255),
+            'GOLD': (222, 166, 32, 255),
+            'CYAN_DEEP': (50, 130, 170, 255),
+            'ROW_BG': (248, 247, 244, 200),
+            'ROW_BORDER': (156, 178, 194, 200),
+            'ROW_BG_URGENT': (244, 168, 152, 230),
+            'ROW_BG_CRITICAL': (240, 110, 90, 240),
+            'ROW_TEXT_URGENT': (140, 30, 20, 255),
+            'ROW_TOP_SHEEN': (255, 255, 255, 90),
+            'BADGE_FILL': (255, 255, 255, 80),
+            'UPTIME_TRACK': (255, 255, 255, 34),
+        },
+        'dark': {
+            'PANEL_BG_A': (24, 32, 42, 245),
+            'PANEL_BG_B': (12, 16, 22, 245),
+            'PANEL_EDGE': (70, 160, 200, 255),
+            'INNER_HIGHLIGHT': (255, 255, 255, 36),
+            'PANEL_LINE': (255, 255, 255, 40),
+            'SHELL_SHEEN_CYAN': (104, 228, 255, 22),
+            'SHELL_SHEEN_SHADOW': (0, 0, 0, 30),
+            'SCAN_LINE': (104, 228, 255, 12),
+            'HEADER_TEXT': (140, 180, 205, 255),
+            'HEADER_TICK': (104, 228, 255, 90),
+            'HEADER_SEP': (255, 255, 255, 50),
+            'TEXT_MAIN': (232, 240, 244, 255),     # web --ink
+            'TEXT_MUTED': (159, 179, 191, 255),    # web --ink-dim
+            'GOLD': (255, 207, 90, 255),           # web --gold
+            'CYAN_DEEP': (110, 200, 230, 255),
+            'ROW_BG': (34, 46, 56, 200),           # web --row
+            'ROW_BORDER': (70, 224, 216, 48),
+            'ROW_BG_URGENT': (120, 54, 40, 230),   # web --row-urgent
+            'ROW_BG_CRITICAL': (150, 44, 30, 240),
+            'ROW_TEXT_URGENT': (255, 138, 106, 255),  # web .urgent .sec
+            'ROW_TOP_SHEEN': (255, 255, 255, 28),
+            'BADGE_FILL': (255, 255, 255, 18),
+            'UPTIME_TRACK': (255, 255, 255, 26),
+        },
+    }
+    # 角标亮点两主题共用 (青/金 accent 在深浅底上都成立)
     CORNER_CYAN = (104, 228, 255, 255)
     CORNER_GOLD = (222, 190, 80, 255)
     CORNER_CYAN_ACCENT = (104, 228, 255, 120)
     CORNER_GOLD_ACCENT = (222, 190, 80, 120)
 
-    HEADER_TEXT = (104, 138, 162, 255)
-    HEADER_TICK = (104, 228, 255, 90)
-    TEXT_MAIN = (90, 92, 100, 255)
-    TEXT_MUTED = (140, 135, 138, 255)
-    GOLD = (222, 166, 32, 255)
-    CYAN_DEEP = (50, 130, 170, 255)
-
-    ROW_BG = (248, 247, 244, 200)
-    ROW_BORDER = (156, 178, 194, 200)
-    ROW_BG_URGENT = (244, 168, 152, 230)
-    ROW_BG_CRITICAL = (240, 110, 90, 240)
-    ROW_TEXT_URGENT = (140, 30, 20, 255)
+    # 类级默认 = light (实例化后由 _apply_theme 按 settings 覆盖为实际主题)
+    PANEL_BG_A = _PALETTES['light']['PANEL_BG_A']
+    PANEL_BG_B = _PALETTES['light']['PANEL_BG_B']
+    PANEL_EDGE = _PALETTES['light']['PANEL_EDGE']
+    INNER_HIGHLIGHT = _PALETTES['light']['INNER_HIGHLIGHT']
+    PANEL_LINE = _PALETTES['light']['PANEL_LINE']
+    SHELL_SHEEN_CYAN = _PALETTES['light']['SHELL_SHEEN_CYAN']
+    SHELL_SHEEN_SHADOW = _PALETTES['light']['SHELL_SHEEN_SHADOW']
+    SCAN_LINE = _PALETTES['light']['SCAN_LINE']
+    HEADER_TEXT = _PALETTES['light']['HEADER_TEXT']
+    HEADER_TICK = _PALETTES['light']['HEADER_TICK']
+    HEADER_SEP = _PALETTES['light']['HEADER_SEP']
+    TEXT_MAIN = _PALETTES['light']['TEXT_MAIN']
+    TEXT_MUTED = _PALETTES['light']['TEXT_MUTED']
+    GOLD = _PALETTES['light']['GOLD']
+    CYAN_DEEP = _PALETTES['light']['CYAN_DEEP']
+    ROW_BG = _PALETTES['light']['ROW_BG']
+    ROW_BORDER = _PALETTES['light']['ROW_BORDER']
+    ROW_BG_URGENT = _PALETTES['light']['ROW_BG_URGENT']
+    ROW_BG_CRITICAL = _PALETTES['light']['ROW_BG_CRITICAL']
+    ROW_TEXT_URGENT = _PALETTES['light']['ROW_TEXT_URGENT']
+    ROW_TOP_SHEEN = _PALETTES['light']['ROW_TOP_SHEEN']
+    BADGE_FILL = _PALETTES['light']['BADGE_FILL']
+    UPTIME_TRACK = _PALETTES['light']['UPTIME_TRACK']
 
     # ── 阈值 ──
     URGENT_LT = 3.0
@@ -267,7 +327,34 @@ class _BuffPanelBase:
                 f'BuffMon {self._name} requires GPU worker support; no ULW fallback is available'
             ) from e
 
+        # 主题: settings panel_themes['buffmon'] (默认 dark, 与 Web 端/面板家族一致)
+        self._theme = 'dark'
+        self._apply_theme(self._initial_theme())
+
         self._schedule_tick()
+
+    # ─────────────────────────────────────
+    #  Theme (light/dark, 与 web/buff_coverage.html 1:1)
+    # ─────────────────────────────────────
+    def _initial_theme(self) -> str:
+        try:
+            cfg = self.settings
+            themes = (cfg.get('panel_themes', {}) if cfg is not None else {}) or {}
+            return 'light' if str(themes.get('buffmon', 'dark')).lower() == 'light' else 'dark'
+        except Exception:
+            return 'dark'
+
+    def _apply_theme(self, theme: str):
+        """切换 light/dark 调色板并失效所有渲染缓存 (菜单皮肤切换入口)。"""
+        theme = 'light' if str(theme or '').lower() == 'light' else 'dark'
+        palette = self._PALETTES.get(theme) or self._PALETTES['dark']
+        for attr, value in palette.items():
+            setattr(self, attr, value)
+        self._theme = theme
+        self._cached_base = None
+        self._cached_sig = ()
+        self._cached_seq += 1
+        self._gpu_last_compose_sig = ()
 
     # ─────────────────────────────────────
     #  Window — legacy ULW (inactive; scheduled for removal)
@@ -583,7 +670,7 @@ class _BuffPanelBase:
             by0 = sy + 9
             draw.rounded_rectangle(
                 (bx0, by0, bx0 + bw, by0 + bh - 1),
-                radius=2, fill=(255, 255, 255, 80), outline=self.BADGE_COLOR,
+                radius=2, fill=self.BADGE_FILL, outline=self.BADGE_COLOR,
             )
             draw.text((bx0 + 6, by0 + 1), self.BADGE_LABEL,
                       fill=self.BADGE_COLOR, font=font_badge)
@@ -592,7 +679,7 @@ class _BuffPanelBase:
         line_y = sy + self.PAD_TOP - 6
         draw.line(
             (sx + self.PAD_X - 2, line_y, sx + sw - self.PAD_X + 2, line_y),
-            fill=(255, 255, 255, 200), width=1,
+            fill=self.HEADER_SEP, width=1,
         )
         draw.line(
             (sx + self.PAD_X - 2, line_y + 1, sx + sw - self.PAD_X + 2, line_y + 1),
@@ -652,7 +739,7 @@ class _BuffPanelBase:
         # 顶部细青色 highlight (web .entity-row::after top sheen)
         draw.line(
             (rx0 + self.PILL_BEVEL + 1, ry + 1, rx1 - 1, ry + 1),
-            fill=(255, 255, 255, 90), width=1,
+            fill=self.ROW_TOP_SHEEN, width=1,
         )
 
         # 名字 (左) — ×层数 · 触发次数
@@ -701,7 +788,7 @@ class _BuffPanelBase:
             bar_x0 = rx0 + 8
             bar_x1 = rx1 - 8
             full_w = max(1, bar_x1 - bar_x0)
-            draw.line((bar_x0, bar_y, bar_x1, bar_y), fill=(255, 255, 255, 34), width=2)
+            draw.line((bar_x0, bar_y, bar_x1, bar_y), fill=self.UPTIME_TRACK, width=2)
             fill_w = int(full_w * pct)
             if fill_w > 0:
                 draw.line((bar_x0, bar_y, bar_x0 + fill_w, bar_y),

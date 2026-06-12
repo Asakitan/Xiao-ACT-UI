@@ -528,6 +528,7 @@ class SAOPlayerGUIMenuMixin:
             'skillfx': ('✦', 'SkillFX'),
             'alert': ('!', 'Alert'),
             'act': ('▣', 'ACT'),
+            'buffmon': ('✦', 'BuffMon'),
         }
         skin_items = []
         skin_items.append({'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')})

@@ -1115,19 +1115,20 @@ class SAOWebAPI:
                 'skillfx': 'dark',
                 'alert': 'dark',
                 'act': 'dark',
+                'buffmon': 'dark',
             }
             themes = dict(cfg.get('panel_themes', {}) or {})
             defaults.update({k: v for k, v in themes.items() if v in ('light', 'dark')})
             return defaults
         except Exception:
-            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark', 'act': 'dark'}
+            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark', 'act': 'dark', 'buffmon': 'dark'}
 
     def set_panel_theme(self, panel: str, theme: str):
         """从 JS 端设置面板主题并保存."""
         try:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
-            if panel not in {'dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'}:
+            if panel not in {'dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act', 'buffmon'}:
                 return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)
             if theme not in {'light', 'dark'}:
                 theme = 'dark'
@@ -1136,6 +1137,15 @@ class SAOWebAPI:
             themes[panel] = theme
             cfg.set('panel_themes', themes)
             cfg.save()
+            # buffmon: GPU overlay 对 (self/boss) 也吃同一主题键 (若本进程持有)
+            if panel == 'buffmon':
+                for attr in ('_self_buff_overlay', '_boss_buff_overlay'):
+                    ov = getattr(self._g, attr, None)
+                    if ov is not None and hasattr(ov, '_apply_theme'):
+                        try:
+                            ov._apply_theme(theme)
+                        except Exception:
+                            pass
             # 即时推送到对应 webview 面板窗口
             _win_map = {
                 'dps': getattr(self._g, 'dps_win', None),
@@ -1143,6 +1153,7 @@ class SAOWebAPI:
                 'bosshp': getattr(self._g, 'boss_hp_win', None),
                 'skillfx': getattr(self._g, 'skillfx_win', None),
                 'alert': getattr(self._g, 'alert_win', None),
+                'buffmon': getattr(self._g, 'buff_coverage_win', None),
             }
             _act_wins = (
                 getattr(self._g, 'plugin_manager_win', None),

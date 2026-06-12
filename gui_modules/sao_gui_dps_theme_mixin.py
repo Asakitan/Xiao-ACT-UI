@@ -100,6 +100,16 @@ class SAOPlayerGUIDpsThemeMixin:
             except Exception as e:
                 print(f'[THEME] apply_to_act_panels FAILED: err={e}')
             return
+        if key == 'buffmon':
+            # buffmon 是一对 overlay (self/boss), 共用一个主题键
+            for attr in ('_self_buff_overlay', '_boss_buff_overlay'):
+                ov = getattr(self, attr, None)
+                if ov is not None and hasattr(ov, '_apply_theme'):
+                    try:
+                        ov._apply_theme(theme)
+                    except Exception as e:
+                        print(f'[THEME] apply_to_buffmon FAILED: attr={attr} err={e}')
+            return
         attr = self._THEME_OVERLAY_MAP.get(key, '')
         ov = getattr(self, attr, None)
         if ov is not None and hasattr(ov, '_apply_theme'):

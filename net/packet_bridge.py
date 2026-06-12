@@ -1846,6 +1846,12 @@ class PacketBridge:
                     bid = int(b.get('buff_id', 0) or 0)
                     if bid <= 0:
                         continue
+                    # 只放行真实战斗 buff 实例: BuffInfoSync 条目必带 BuffUuid +
+                    # CreateTime; 两者皆空的是 DB/被动类条目 (CharSerialize 全量库),
+                    # 不属于玩家身上的实时 buff 栏, 放进去会堆出一排永久 ∞ 行。
+                    if (int(b.get('buff_uuid', 0) or 0) <= 0
+                            and int(b.get('begin_time', 0) or 0) <= 0):
+                        continue
                     packed.append({
                         'id': bid,
                         'uuid': int(b.get('buff_uuid', 0) or 0),

@@ -500,6 +500,7 @@ class SAOPlayerGUIPanelsMixin:
         'skillfx': '_skillfx_overlay',
         'alert':   '_alert_overlay',
         'act':     '',
+        'buffmon': '',   # self/boss 一对 overlay, theme mixin 内特例分发
     }
 
     _ACT_PANEL_ATTRS = (
