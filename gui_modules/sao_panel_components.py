@@ -495,6 +495,34 @@ def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool 
     return row
 
 
+def keep_canvas_scroll(canvas: Optional[tk.Canvas], inner: Optional[tk.Misc]) -> None:
+    """全量重建前调用: 记录滚动分数, 本轮事件处理结束后还原。
+    web setContentHtml(preserveScroll) 的 Tk 对偶 — 不调用的面板
+    每次签名刷新滚动都会跳回顶部。after_idle 在重建完成后触发,
+    单插入点覆盖渲染函数的全部 return 路径。"""
+    if canvas is None or inner is None:
+        return
+    try:
+        y0 = canvas.yview()[0]
+    except Exception:
+        return
+    if y0 <= 0.0:
+        return
+
+    def _restore() -> None:
+        try:
+            inner.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox('all'))
+            canvas.yview_moveto(y0)
+        except Exception:
+            pass
+
+    try:
+        canvas.after_idle(_restore)
+    except Exception:
+        pass
+
+
 def empty_state(parent: tk.Misc, title: str, detail: str = "") -> tk.Frame:
     body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
     box = tk.Frame(parent, bg=body_bg, highlightthickness=1, highlightbackground=_pc('sep', ui._SAO_PANEL_SEP))

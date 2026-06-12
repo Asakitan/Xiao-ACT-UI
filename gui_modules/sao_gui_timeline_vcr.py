@@ -26,6 +26,7 @@ from gui_modules.sao_panel_components import (
     empty_state,
     fmt_clock,
     fmt_dur,
+    keep_canvas_scroll,
     metric_tile,
     section_card,
     source_cn,
@@ -280,6 +281,7 @@ class TimelineVcrPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
 
@@ -299,6 +301,7 @@ class TimelineVcrPanel:
         if sig == self._last_events_sig:
             return
         self._last_events_sig = sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._events)
         for child in list(self._events.winfo_children()):
             child.destroy()
         self._render_metrics(status, events)

@@ -26,6 +26,7 @@ from gui_modules.sao_panel_components import (
     empty_state,
     fmt_clock,
     fmt_dur,
+    keep_canvas_scroll,
     metric_tile,
     readable_event_line,
     section_card,
@@ -380,6 +381,7 @@ class ActionLogPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
@@ -429,6 +431,7 @@ class ActionLogPanel:
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
         self._render_metrics(status, rows, groups, analytics, cursor, source)

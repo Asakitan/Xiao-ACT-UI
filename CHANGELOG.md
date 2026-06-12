@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.117: Tk 面板滚动保留模式化(第一批 4 面板).
+
+  1) `gui_modules/sao_panel_components.py` 新共享组件
+    `keep_canvas_scroll(canvas, inner)` — 全量重建前记滚动分数,
+    after_idle 在重建完成后还原(单插入点覆盖渲染函数全部 return
+    路径); web setContentHtml(preserveScroll) 的 Tk 对偶。
+
+  2) 第一批接线 4 个实时刷新面板: action_log / timeline_vcr /
+    skill_drilldown / combatant_drilldown — 此前战斗中每次签名刷新
+    滚动都跳回顶部(11 个带滚动条的 Tk 面板全都没还原, aggregate
+    在 v4.6.116 单独修过); 其余 7 面板下批接线。
+
 ## v4.6.116: aggregate raw 视图解析名键修正 + Tk 滚动位置保留.
 
   1) aggregate 展开 raw 事件视图(双端)补 'skill'/'monster' 键 —
