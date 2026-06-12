@@ -700,6 +700,12 @@ function mechBind(mid, sid) {
     var a = _api();
     if (!a || !a.bind_mechanic_skill) return;
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
+    // 绑进正在编辑的机制时草稿也要进账, 否则「保存」会用旧草稿覆盖掉刚绑的技能
+    if (_mechEditing === mid && _mechDraft) {
+        var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
+        var ids = det.skill_ids = _idList(det.skill_ids);
+        if (ids.indexOf(sid) < 0) ids.push(sid);
+    }
     _mechReply(a.bind_mechanic_skill(mid, sid));
 }
 
@@ -773,6 +779,9 @@ function mechEdit(mid) {
 function mechDelete(mid) {
     var a = _api();
     if (!a || !a.delete_mechanic) return;
+    var m = _mFind(mid);
+    var nm = (m && m.name) ? m.name : mid;
+    if (!window.confirm('删除机制「' + nm + '」? 此操作不可撤销。')) return;
     if (_mechEditing === mid) { _mechEditing = null; _mechDraft = null; }
     _mechReply(a.delete_mechanic(mid));
 }
@@ -945,16 +954,21 @@ function _mForm(m) {
     if (!dirMasterOn) {
         html += '<div style="font-size:10px;color:#ffd46f;margin:2px 0;">● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)</div>';
     }
-    html += '<div style="margin:3px 0;">方向 <select id="mf-dir" class="mech-input"' + dis + '>'
-        + [['', '不移动'], ['back', '视角 ▸ ↓向后撤'], ['forward', '视角 ▸ ↑向前'],
+    var dirOpts = [['', '不移动'], ['back', '视角 ▸ ↓向后撤'], ['forward', '视角 ▸ ↑向前'],
            ['left', '视角 ▸ ←向左'], ['right', '视角 ▸ →向右'],
            ['back_left', '视角 ▸ ↙左后撤'], ['back_right', '视角 ▸ ↘右后撤'],
            ['forward_left', '视角 ▸ ↖左前'], ['forward_right', '视角 ▸ ↗右前'],
            ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)'],
            ['goto_teammate', '走向 ▸ 靠拢队友(抱团/分摊)'], ['goto_circle', '走向 ▸ 走向编号圈'],
-           ['walk_sequence', '走向 ▸ 按序走完编号圈']
-          ].map(function (o) {
-            return '<option value="' + o[0] + '"' + (curDir === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+           ['walk_sequence', '走向 ▸ 按序走完编号圈']];
+    if (curDir && !dirOpts.some(function (o) { return o[0] === curDir; })) {
+        // 参数化方向(goto_point:x,z / world:dx,dz / away_point:x,z)以自定义项保留,
+        // 否则一次保存就被静默清成「不移动」
+        dirOpts.push([curDir, '自定义 ▸ ' + curDir]);
+    }
+    html += '<div style="margin:3px 0;">方向 <select id="mf-dir" class="mech-input"' + dis + '>'
+        + dirOpts.map(function (o) {
+            return '<option value="' + _esc(o[0]) + '"' + (curDir === o[0] ? ' selected' : '') + '>' + _esc(o[1]) + '</option>';
           }).join('') + '</select> '
         + _mInput('mf-move', '超时ms', inline.move_ms != null ? inline.move_ms : 600, 52) + '</div>';
     if (curDir.indexOf('away') === 0) {
@@ -977,8 +991,10 @@ function _mForm(m) {
     var pids = _listItems(d.phase_ids);
     html += '<div style="margin:5px 0;">阶段范围 <select id="mf-phase" class="mech-input">'
         + '<option value=""' + (!pids.length ? ' selected' : '') + '>全部阶段</option>'
+        // 多阶段绑定经单选下拉保存会被截断成一个 — 提供保持项守住原列表
+        + (pids.length > 1 ? '<option value="__multi__" selected>保持多阶段绑定(' + pids.length + '个)</option>' : '')
         + phases.map(function (p) {
-            return '<option value="' + _esc(p.id) + '"' + (pids.indexOf(p.id) >= 0 ? ' selected' : '') + '>' + _esc(p.name || p.id) + '</option>';
+            return '<option value="' + _esc(p.id) + '"' + (pids.length === 1 && pids.indexOf(p.id) >= 0 ? ' selected' : '') + '>' + _esc(p.name || p.id) + '</option>';
         }).join('') + '</select></div>';
     html += '<div style="display:flex;justify-content:flex-end;gap:6px;margin-top:4px;">'
         + '<div class="action-btn" style="padding:2px 10px;font-size:10px;" onclick="mechCancelEdit()">取消</div>'
@@ -1054,7 +1070,7 @@ function _mCollect() {
     if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_clampNum(_mNum('mf-exit', 6), 6, 1, 40) * 10) / 10;
     if (document.getElementById('mf-arrive')) inline.arrive_m = Math.round(_clampNum(_mNum('mf-arrive', 2), 2, 0.5, 30) * 10) / 10;
     var ph = _mVal('mf-phase');
-    d.phase_ids = ph ? [ph] : [];
+    if (ph !== '__multi__') d.phase_ids = ph ? [ph] : [];   // __multi__ = 保持原多阶段绑定
     return d;
 }
 
@@ -1261,7 +1277,7 @@ function _triggerText(trigger) {
     var t = trigger.type || 'manual';
     var v = trigger.value || 0;
     switch(t) {
-        case 'manual': return 'Manual (F8)';
+        case 'manual': return 'Manual (' + (_raidHotkeys.next_phase || 'F8') + ')';
         case 'time': return v + 's elapsed';
         case 'hp_pct': return 'HP >= ' + v + '%';
         case 'dps_total': return 'DMG >= ' + _fmtNum(v);
@@ -1292,8 +1308,10 @@ function updateStatus(status) {
 }
 
 // Full state push (status + phases)
+var _raidHotkeys = {};
 function updateFull(data) {
     data = _objectValue(data);
+    if (_isObjectValue(data.hotkeys)) _raidHotkeys = data.hotkeys;
     if (_isObjectValue(data.status)) updateStatus(data.status);
     if (Array.isArray(data.phases)) updatePhases(data.phases, _clampInt(_objectValue(data.status).phase_idx, 0, 0, 999));
 }

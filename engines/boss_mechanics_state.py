@@ -13,6 +13,7 @@ from engines.boss_raid_engine import (
     normalize_mechanic,
     make_default_mechanic,
     save_boss_raid_config,
+    _utc_now_iso,
 )
 from engines.boss_autokey_linkage import (
     load_linkage_config,
@@ -85,10 +86,16 @@ def mechanic_summary(mech: Dict[str, Any],
                 if _s(inline.get("press_mode")) == "hold" else "轻点"
             parts.append("%s %s" % (_s(inline.get("action_key")), mode))
         dodge_desc = " ".join(parts)
+    if not alert.get("enabled", True):
+        alert_desc = "提醒:关"
+    else:
+        atype = _s(alert.get("alert_type")) or "both"
+        label = {"both": "TTS·横幅", "sound": "TTS", "visual": "横幅"}.get(atype, "TTS·横幅")
+        alert_desc = "%s %.0fs/预警%.0fs" % (
+            label, float(alert.get("countdown_s") or 0), float(alert.get("pre_warn_s") or 0))
     return {
         "bound_count": len(skill_ids),
-        "alert_desc": "TTS·横幅 %.0fs/预警%.0fs" % (
-            float(alert.get("countdown_s") or 0), float(alert.get("pre_warn_s") or 0)),
+        "alert_desc": alert_desc,
         "dodge_desc": dodge_desc or "躲避:关",
     }
 
@@ -283,6 +290,7 @@ def upsert_mechanic(settings, mechanic: Any,
     else:
         mechanics.append(mech)
     profile["mechanics"] = mechanics
+    profile["updated_at"] = _utc_now_iso()
     return save_boss_raid_config(settings, config)
 
 
@@ -295,6 +303,7 @@ def delete_mechanic(settings, mechanic_id: str,
     mid = _s(mechanic_id)
     profile["mechanics"] = [m for m in (profile.get("mechanics") or [])
                             if _s(m.get("id")) != mid]
+    profile["updated_at"] = _utc_now_iso()
     return save_boss_raid_config(settings, config)
 
 
@@ -328,6 +337,7 @@ def bind_skill_to_mechanic(settings, mechanic_id: str, skill_id: Any,
         if sid > 0 and sid not in ids:
             ids.append(sid)
             det["skill_ids"] = sorted(ids)
+        profile["updated_at"] = _utc_now_iso()
         break
     return save_boss_raid_config(settings, config)
 
@@ -346,6 +356,7 @@ def unbind_skill_from_mechanic(settings, mechanic_id: str, skill_id: Any,
         det = mech.setdefault("detect", {})
         det["skill_ids"] = [x for x in (det.get("skill_ids") or []) if _i(x) != sid]
         det["buff_ids"] = [x for x in (det.get("buff_ids") or []) if _i(x) != sid]
+        profile["updated_at"] = _utc_now_iso()
         break
     return save_boss_raid_config(settings, config)
 

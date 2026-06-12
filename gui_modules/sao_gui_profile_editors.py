@@ -1157,6 +1157,10 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             })
         self._draft['phases'] = phases
 
+    def _mech_profile_id(self) -> str:
+        # 机制区块跟随当前选中档案, 不是激活档案
+        return str(self._selected_id or '')
+
     def _select_profile(self, profile_id: str) -> None:
         self._selected_id = str(profile_id or '')
         profile = find_boss_raid_profile(self._cfg, self._selected_id)

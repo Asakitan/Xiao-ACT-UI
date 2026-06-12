@@ -552,7 +552,8 @@ def normalize_profile(raw: Any, author_snapshot: Optional[Dict[str, Any]] = None
         "source": profile_source,
         "remote_id": _string(base.get("remote_id")) or None,
         "created_at": _string(base.get("created_at")) or default["created_at"],
-        "updated_at": _utc_now_iso(),
+        # 保留原 updated_at — 全量 normalize 不算"修改"; 真改动点(upsert/机制增删绑)负责盖章
+        "updated_at": _string(base.get("updated_at")) or _utc_now_iso(),
         "author_snapshot": author,
     }
 
@@ -637,6 +638,7 @@ def active_profile(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def upsert_profile(config: Dict[str, Any], profile: Dict[str, Any],
                     activate: bool = False) -> Dict[str, Any]:
+    profile["updated_at"] = _utc_now_iso()
     profiles = list(config.get("profiles", []) or [])
     replaced = False
     for idx, existing in enumerate(profiles):

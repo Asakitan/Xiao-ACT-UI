@@ -1996,15 +1996,33 @@ class SAOWebAPI:
             kinds = json.loads(kinds_json) if isinstance(kinds_json, str) else (kinds_json or [])
             kinds = [str(k) for k in kinds]
             result = {'ok': True}
+            msgs = []
+            tts_fb = {'played': 'TTS已播', 'queued': 'TTS排队中',
+                      'synthesizing': 'TTS合成中(首次稍候再试)',
+                      'disabled': 'TTS未启用或静音', 'error': 'TTS失败'}
             controller = getattr(self._g, '_mech_alert_controller', None)
-            if controller is not None and ({'tts', 'banner'} & set(kinds)):
-                result.update(controller.test_mechanic(mech, kinds))
+            if {'tts', 'banner'} & set(kinds):
+                if controller is None:
+                    msgs.append('提醒控制器未就绪')
+                else:
+                    result.update(controller.test_mechanic(mech, kinds))
+                    if 'tts' in kinds:
+                        msgs.append(tts_fb.get(result.get('tts'),
+                                               str(result.get('tts') or 'TTS无结果')))
+                    if 'banner' in kinds:
+                        msgs.append('横幅已显示' if result.get('banner') else '横幅未显示')
             if 'dodge' in kinds:
                 linkage = getattr(self._g, '_boss_autokey_linkage', None)
                 inline = ((mech.get('dodge') or {}).get('inline')
                           if isinstance(mech, dict) else None)
-                if linkage is not None and isinstance(inline, dict):
-                    result['dodge'] = bool(linkage.fire_mapping_test(inline))
+                if linkage is None or not isinstance(inline, dict):
+                    msgs.append('按键联动不可用')
+                else:
+                    fired = bool(linkage.fire_mapping_test(inline))
+                    result['dodge'] = fired
+                    msgs.append('按键已发到当前前台窗口' if fired
+                                else '按键未配置(无键/无序列)')
+            result['message'] = ' · '.join(msgs)
             return json.dumps(result, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -7298,6 +7316,20 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _resolved_hotkey(self, action: str, fallback: str) -> str:
+        """热键标签按 {**DEFAULT_HOTKEYS, **saved} 解析 — 标签跟随用户改键不漂移。"""
+        try:
+            from config import DEFAULT_HOTKEYS
+            saved = (self._cfg_settings_ref.get('hotkeys', {})
+                     if getattr(self, '_cfg_settings_ref', None) else {})
+            merged = {**DEFAULT_HOTKEYS, **(saved if isinstance(saved, dict) else {})}
+            v = merged.get(action)
+            if isinstance(v, dict):
+                v = v.get('key') or v.get('name')
+            return str(v or fallback).upper()
+        except Exception:
+            return fallback
+
     def _push_raid_editor_full(self):
         """Push full state (entities + status) to the raid editor."""
         if not self._raid_editor_visible:
@@ -7307,7 +7339,8 @@ class SAOWebViewGUI:
             if engine:
                 status = engine.get_status()   # include_entities=True, JS updateStatus 消费 status.entities
                 # JS RaidEditor.updateFull 契约是嵌套 {status, phases} — 平铺会被整体忽略
-                payload = {'status': status, 'phases': engine.get_profile_phases()}
+                payload = {'status': status, 'phases': engine.get_profile_phases(),
+                           'hotkeys': {'next_phase': self._resolved_hotkey('boss_raid_next_phase', 'F8')}}
                 self._eval_raid_editor(
                     f'RaidEditor.updateFull({json.dumps(payload, ensure_ascii=False)})')
         except Exception:

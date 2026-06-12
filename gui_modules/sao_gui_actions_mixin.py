@@ -103,57 +103,85 @@ class SAOPlayerGUIActionsMixin:
         """机制编辑器回调集 (简单面板 + 详细面板共用同一契约)。"""
         from engines import boss_mechanics_state as bms
 
-        def _load(scene_key=None, boss_base_id=None):
+        def _load(scene_key=None, boss_base_id=None, profile_id=None):
             return bms.build_mechanics_state(
                 self._cfg_settings_ref,
                 getattr(self, '_boss_raid_engine', None),
                 getattr(self, '_state_mgr', None),
-                scene_key=scene_key, boss_base_id=boss_base_id)
+                scene_key=scene_key, boss_base_id=boss_base_id,
+                profile_id=profile_id)
 
         def _hot_apply():
             bms.hot_apply_to_engine(self._cfg_settings_ref,
                                     getattr(self, '_boss_raid_engine', None))
 
-        def _save_mech(mech):
-            cfg = bms.upsert_mechanic(self._cfg_settings_ref, mech)
+        def _save_mech(mech, profile_id=None):
+            cfg = bms.upsert_mechanic(self._cfg_settings_ref, mech,
+                                      profile_id=profile_id)
             self._presynthesize_active_profile()
             _hot_apply()
             return cfg
 
-        def _delete_mech(mid):
-            cfg = bms.delete_mechanic(self._cfg_settings_ref, mid)
+        def _delete_mech(mid, profile_id=None):
+            cfg = bms.delete_mechanic(self._cfg_settings_ref, mid,
+                                      profile_id=profile_id)
             _hot_apply()
             return cfg
 
-        def _create_from_skill(sid, nm='', dur=None):
-            cfg = bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur)
+        def _create_from_skill(sid, nm='', dur=None, profile_id=None):
+            cfg = bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur,
+                                                 profile_id=profile_id)
             _hot_apply()
             return cfg
 
-        def _bind(mid, sid):
-            cfg = bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid)
+        def _bind(mid, sid, profile_id=None):
+            cfg = bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid,
+                                             profile_id=profile_id)
             _hot_apply()
             return cfg
 
-        def _unbind(mid, sid):
-            cfg = bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid)
+        def _unbind(mid, sid, profile_id=None):
+            cfg = bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid,
+                                                 profile_id=profile_id)
             _hot_apply()
             return cfg
+
+        _TTS_FEEDBACK = {'played': 'TTS已播', 'queued': 'TTS排队中',
+                         'synthesizing': 'TTS合成中(首次稍候再试)',
+                         'disabled': 'TTS未启用或静音', 'error': 'TTS失败'}
 
         def _test(mech, kinds):
+            # 每种试发都给出可见结果 — 沉默的失败表现为「点了没反应」
             kinds = tuple(kinds or ())
+            msgs = []
             controller = getattr(self, '_mech_alert_controller', None)
-            if controller is not None and ({'tts', 'banner'} & set(kinds)):
-                controller.test_mechanic(mech, kinds)
+            if {'tts', 'banner'} & set(kinds):
+                if controller is None:
+                    msgs.append('提醒控制器未就绪')
+                else:
+                    res = controller.test_mechanic(mech, kinds) or {}
+                    if 'tts' in kinds:
+                        msgs.append(_TTS_FEEDBACK.get(res.get('tts'),
+                                                      str(res.get('tts') or 'TTS无结果')))
+                    if 'banner' in kinds:
+                        msgs.append('横幅已显示' if res.get('banner') else '横幅未显示')
             if 'dodge' in kinds:
                 linkage = getattr(self, '_boss_autokey_linkage', None)
                 inline = ((mech.get('dodge') or {}).get('inline')
                           if isinstance(mech, dict) else None)
-                if linkage is not None and isinstance(inline, dict):
-                    if linkage.fire_mapping_test(inline) and self._alert_overlay:
-                        self._alert_overlay.show_alert(
-                            '按键试发', '按键将发送到当前前台窗口')
-            return {'ok': True}
+                if linkage is None or not isinstance(inline, dict):
+                    msgs.append('按键联动不可用')
+                elif linkage.fire_mapping_test(inline):
+                    msgs.append('按键已发到当前前台窗口')
+                else:
+                    msgs.append('按键未配置(无键/无序列)')
+            msg = ' · '.join(msgs)
+            if msg and self._alert_overlay:
+                try:
+                    self._alert_overlay.show_alert('机制试发', msg)
+                except Exception:
+                    pass
+            return {'ok': True, 'message': msg}
 
         return {
             'load': _load,

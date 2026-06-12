@@ -93,13 +93,22 @@ def _fmt_time(seconds: Any) -> str:
     return f'{total // 60}:{total % 60:02d}'
 
 
+def _next_phase_key() -> str:
+    """手动切阶段热键标签 — 取默认表, 不硬编码键名 (默认表改了标签跟着走)。"""
+    try:
+        from config import DEFAULT_HOTKEYS
+        return str(DEFAULT_HOTKEYS.get('boss_raid_next_phase') or 'F8').upper()
+    except Exception:
+        return 'F8'
+
+
 def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
     if not isinstance(trigger, dict):
         return 'Manual'
     trigger_type = str(trigger.get('type') or 'manual')
     value = trigger.get('value') or 0
     if trigger_type == 'manual':
-        return 'Manual (F8)'
+        return 'Manual (%s)' % _next_phase_key()
     if trigger_type == 'time':
         return f'{_finite_int(value, 0, lo=0)}s elapsed'
     if trigger_type == 'hp_pct':
@@ -456,10 +465,23 @@ class _MechanicsEditorMixin:
     def _mech_bump(self) -> None:
         self._mech_rev += 1
 
+    # 这些操作支持档案定位; 不传 = 激活档案
+    _MECH_PROFILE_OPS = ('load', 'save_mech', 'delete_mech',
+                         'create_from_skill', 'bind', 'unbind')
+
+    def _mech_profile_id(self) -> str:
+        """机制操作的目标档案 id; 空=激活档案。详细面板覆写为当前选中档案,
+        否则「选了A档编辑, 实际改的是B档」。"""
+        return ''
+
     def _mech_call(self, name: str, *args, **kw):
         fn = self._mech_api.get(name)
         if not fn:
             return None
+        if name in self._MECH_PROFILE_OPS:
+            pid = self._mech_profile_id()
+            if pid:
+                kw.setdefault('profile_id', pid)
         try:
             return fn(*args, **kw)
         except Exception:
@@ -489,9 +511,13 @@ class _MechanicsEditorMixin:
             return
         inbox = list(st.get('inbox') or [])
         if inbox:
-            make_section_title(container, '未绑定技能收件箱')
+            make_section_title(container, '未绑定技能收件箱 (%d)' % len(inbox))
             for rec in inbox[:6]:
                 self._render_mech_inbox_row(rec)
+            if len(inbox) > 6:
+                tk.Label(container, text='… 还有 %d 条未显示 (按观测次数排序)' % (len(inbox) - 6),
+                         bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(8),
+                         anchor='w').pack(fill=tk.X, pady=(0, 3))
         make_section_title(container, '机制列表 (%d)' % len(st.get('mechanics') or []))
         for mech in st.get('mechanics') or []:
             self._render_mech_card(mech)
@@ -544,11 +570,14 @@ class _MechanicsEditorMixin:
         vol_var = _tk.StringVar(value=str(int(master.get('tts_volume') or 80)))
         tk.Label(row, text='音量', bg=PANEL_CARD, fg=TEXT_MUTED,
                  font=panel_font(8)).pack(side=tk.LEFT, padx=(6, 0))
-        _tk.Spinbox(row, from_=0, to=100, width=4, textvariable=vol_var,
-                    font=panel_font(8),
-                    command=lambda: self._mech_call('set_master',
-                                                    {'tts_volume': vol_var.get()})
-                    ).pack(side=tk.LEFT, padx=(2, 0))
+        _vol_commit = lambda *_a: self._mech_call('set_master',
+                                                  {'tts_volume': vol_var.get()})
+        vol_sb = _tk.Spinbox(row, from_=0, to=100, width=4, textvariable=vol_var,
+                             font=panel_font(8), command=_vol_commit)
+        # 手输数值也要提交 — 只挂 command 的话只有点箭头才保存
+        vol_sb.bind('<Return>', _vol_commit)
+        vol_sb.bind('<FocusOut>', _vol_commit)
+        vol_sb.pack(side=tk.LEFT, padx=(2, 0))
         # 高级行: 自动化, 默认关 + 风险徽章 + 醒目急停
         tk.Label(row2, text='自动', bg=PANEL_CARD, fg=TEXT_MUTED,
                  font=panel_font(8)).pack(side=tk.LEFT, padx=(0, 4))
@@ -592,6 +621,13 @@ class _MechanicsEditorMixin:
                     if self._mech_editing:
                         self._mech_collect_draft()
                     self._mech_call('bind', mid, _sid)
+                    # 绑进正在编辑的机制时草稿也要进账, 否则点「保存」会用
+                    # 不含新绑定的草稿覆盖掉刚写入的技能id
+                    if self._mech_editing == mid and isinstance(self._mech_draft, dict):
+                        ids = (self._mech_draft.setdefault('detect', {})
+                               .setdefault('skill_ids', []))
+                        if _sid not in ids:
+                            ids.append(_sid)
                     self._mech_bump()
                     self._mx_rerender()
             om = _tk.OptionMenu(card, var, *mech_opts.keys(), command=_bind)
@@ -698,8 +734,9 @@ class _MechanicsEditorMixin:
         # 进入新机制的编辑态: 从返回配置里找到刚插入的 id
         try:
             profiles = list((cfg or {}).get('profiles') or [])
-            active_id = (cfg or {}).get('active_profile_id')
-            prof = next((p for p in profiles if p.get('id') == active_id), None)
+            # 详细面板域定到选中档案 — 回查新 id 也要找同一个档案
+            target_id = self._mech_profile_id() or (cfg or {}).get('active_profile_id')
+            prof = next((p for p in profiles if p.get('id') == target_id), None)
             mechs = list((prof or {}).get('mechanics') or [])
             if mechs:
                 self._mech_editing = str(mechs[-1].get('id'))
@@ -717,6 +754,21 @@ class _MechanicsEditorMixin:
         self._mx_rerender()
 
     def _mech_delete(self, mid: str) -> None:
+        name = next((str(m.get('name') or mid)
+                     for m in (self._mech_state.get('mechanics') or [])
+                     if str(m.get('id')) == str(mid)), str(mid))
+        try:
+            from sao_theme.dialogs import SAODialog
+            win = getattr(self, '_win', None)
+            if win is not None and win.winfo_exists():
+                SAODialog.ask(win, '删除机制', '删除机制「%s」? 此操作不可撤销。' % name,
+                              on_ok=lambda: self._mech_delete_confirmed(mid))
+                return
+        except Exception:
+            pass
+        self._mech_delete_confirmed(mid)
+
+    def _mech_delete_confirmed(self, mid: str) -> None:
         if self._mech_editing and self._mech_editing != mid:
             self._mech_collect_draft()
         self._mech_call('delete_mech', mid)
@@ -992,15 +1044,20 @@ class _MechanicsEditorMixin:
                      anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
         mv = _row(form)
         cur_dir = str(inline.get('direction') or '')
-        dir_lbls = {lbl: val for lbl, val in self._DODGE_DIRECTIONS}
-        cur_dir_lbl = next((lbl for lbl, val in self._DODGE_DIRECTIONS if val == cur_dir),
+        directions = list(self._DODGE_DIRECTIONS)
+        if cur_dir and cur_dir not in {val for _l, val in directions}:
+            # 参数化方向(goto_point:x,z / world:dx,dz / away_point:x,z)没有固定下拉项,
+            # 以自定义项保留 — 否则一次保存就被静默清成「不移动」
+            directions.append(('自定义 ▸ ' + cur_dir, cur_dir))
+        dir_lbls = {lbl: val for lbl, val in directions}
+        cur_dir_lbl = next((lbl for lbl, val in directions if val == cur_dir),
                            '不移动')
         dvar = _tk.StringVar(value=cur_dir_lbl)
         v['dodge_direction'] = (dvar, dir_lbls)
         st = 'normal' if dir_master_on else 'disabled'
         tk.Label(mv, text='方向', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
                  font=panel_font(8)).pack(side=tk.LEFT)
-        dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in self._DODGE_DIRECTIONS])
+        dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in directions])
         dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
                      highlightthickness=0, state=st)
         dmenu.pack(side=tk.LEFT, padx=(2, 8))
@@ -1038,7 +1095,11 @@ class _MechanicsEditorMixin:
             ph_opts[p.get('name') or p.get('id')] = p.get('id')
         cur_pids = list(draft.get('phase_ids') or [])
         cur_lbl = '全部阶段'
-        if cur_pids:
+        if len(cur_pids) > 1:
+            # 多阶段绑定经单选下拉保存会被截断成一个 — 保持项守住原列表
+            cur_lbl = '保持多阶段绑定(%d个)' % len(cur_pids)
+            ph_opts[cur_lbl] = '__multi__'
+        elif cur_pids:
             cur_lbl = next((lbl for lbl, pid in ph_opts.items() if pid and pid in cur_pids),
                            '全部阶段')
         phvar = _tk.StringVar(value=cur_lbl)
@@ -1150,7 +1211,8 @@ class _MechanicsEditorMixin:
         if pick:
             phvar, ph_opts = pick
             pid = ph_opts.get(phvar.get() or '全部阶段', '')
-            draft['phase_ids'] = [pid] if pid else []
+            if pid != '__multi__':   # __multi__ = 保持原多阶段绑定不动
+                draft['phase_ids'] = [pid] if pid else []
         return draft
 
     def _mech_save_form(self) -> None:
