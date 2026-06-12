@@ -358,6 +358,8 @@ def main() -> int:
         "window.pywebview.api.exit_app();",
         "window.pywebview.api.menu_action('exit');",
         "window.pywebview.api.alert_ok();",
+        "Promise.all([\n        window.pywebview.api.set_auto_key_server_url(serverUrl)",
+        "Promise.all([\n        window.pywebview.api.set_boss_raid_server_url(serverUrl)",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -394,6 +396,8 @@ def main() -> int:
         "_callMenuBridgeQuiet('exit_app', [], fallbackExit)",
         "if (!_callMenuBridgeQuiet('menu_action', ['exit'], failExit)) {",
         "_callMenuBridgeQuiet('alert_ok');",
+        "_callMenuSettingApi('set_auto_key_server_url', [serverUrl], 'AUTO KEYS', function(data) {",
+        "_callMenuSettingApi('set_boss_raid_server_url', [serverUrl], 'BOSS RAID', function(data) {",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:
@@ -758,9 +762,6 @@ def main() -> int:
         "return _brApiObject(parsed) ? parsed : { ok: false, message: String(result) };",
         "return _brApiObject(result) ? result : { ok: false, message: String(result) };",
         "var data = _brParseApiResult(result);",
-        "var rows = Array.isArray(results) ? results : [];",
-        "rows.forEach(function(item) {",
-        "var data = _brParseApiResult(item);",
         "function _loadInitialAutoKeyState()",
         "return api.get_auto_key_state();",
         "showToast(_menuApiMessage(data, 'AUTO KEY STATE LOAD FAILED'), 3200);",

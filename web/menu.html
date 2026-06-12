@@ -6267,25 +6267,14 @@ function _akImportProfile() {
 }
 
 function _akSaveCloudSettings(afterSave) {
-    if (!window.pywebview || !window.pywebview.api) return;
     var serverUrl = _cloudInputText('ak-server-url');
-    Promise.all([
-        window.pywebview.api.set_auto_key_server_url(serverUrl)
-    ]).then(function(results) {
-        var lastState = null;
-        results.forEach(function(item) {
-            var data = _akParseApiResult(item);
-            if (!data.ok) throw new Error(data.message || 'Save settings failed');
-            if (data.state) lastState = data.state;
-        });
-        if (lastState) _syncAutoKeyState(lastState);
+    _callMenuSettingApi('set_auto_key_server_url', [serverUrl], 'AUTO KEYS', function(data) {
+        if (data && data.state) _syncAutoKeyState(data.state);
         if (afterSave) {
             afterSave();
         } else {
             showToast('SERVER SETTINGS SAVED');
         }
-    }).catch(function(err) {
-        showAlert('AUTO KEYS', String(err || '无法保存云端设置 / Unable to save cloud settings'), true);
     });
 }
 
@@ -7845,26 +7834,14 @@ function _brDeleteProfile() {
 }
 
 function _brSaveCloudSettings(afterSave) {
-    if (!window.pywebview || !window.pywebview.api) return;
     var serverUrl = _cloudInputText('br-server-url');
-    Promise.all([
-        window.pywebview.api.set_boss_raid_server_url(serverUrl)
-    ]).then(function(results) {
-        var lastState = null;
-        var rows = Array.isArray(results) ? results : [];
-        rows.forEach(function(item) {
-            var data = _brParseApiResult(item);
-            if (!data || data.ok === false) throw new Error((data && (data.message || data.error || data.detail)) || 'Save settings failed');
-            if (data.state) lastState = data.state;
-        });
-        if (lastState) _syncBossRaidState(lastState);
+    _callMenuSettingApi('set_boss_raid_server_url', [serverUrl], 'BOSS RAID', function(data) {
+        if (data && data.state) _syncBossRaidState(data.state);
         if (afterSave) {
             afterSave();
         } else {
             showToast('SERVER SETTINGS SAVED');
         }
-    }).catch(function(err) {
-        showAlert('BOSS RAID', String(err || '无法保存云端设置 / Unable to save cloud settings'), true);
     });
 }
 

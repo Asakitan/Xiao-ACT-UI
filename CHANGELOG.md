@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.73: Web menu cloud server bridge fallback 修复.
+
+  1) `web/menu.html` 修复 AutoKey server URL 保存的 bridge 失败反馈。
+     保存服务器地址现在通过标准 helper 调用 `set_auto_key_server_url`,
+     API 缺失、同步异常、失败返回和 Promise reject 都会显示错误。
+
+  2) `web/menu.html` 修复 BossRaid server URL 保存的 bridge 失败反馈。
+     保存服务器地址现在通过标准 helper 调用 `set_boss_raid_server_url`,
+     成功后同步 state, 失败时不再因为裸 `Promise.all` 静默中断。
+
 ## v4.6.72: Web menu exit/alert bridge fallback 修复.
 
   1) `web/menu.html` 修复退出命令 bridge 失败后卡 pending 的问题。
