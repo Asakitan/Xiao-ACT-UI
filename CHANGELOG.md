@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.106: 数据源/Boss血条端点诚实返回 + Tk 数据源切换失败反馈.
+
+  1) `sao_webview.py` `set_data_source` / `set_boss_bar_mode` 补诚实
+    JSON 返回 — menu.html 早就实现了 data.mode 回读 + 失败回滚回调,
+    但 Python 端从不返回(shim 把 None 当成功), 引擎重启失败只 print
+    就被吞; 现在 ok:False 会触发 menu 既有的回滚 + 红色 alert,
+    set_boss_bar_mode 同时补 _sync_menu_settings 推送。
+
+  2) `gui_modules/sao_gui_panels_mixin.py` `_cycle_mem_data_source`
+    引擎重启包 try/except — 失败时 Tk 端此前完全静默(设置已写但引擎
+    挂了用户毫不知情), 现弹 entity alert 报错, 与 web 端反馈对偶。
+
 ## v4.6.105: timeline/graph 状态生产者补 retained 新鲜度缓存.
 
   1) `act_platform/runtime.py` `act_timeline_status` 补 aggregate 同款

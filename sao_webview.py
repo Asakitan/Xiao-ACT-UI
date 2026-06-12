@@ -2068,6 +2068,8 @@ class SAOWebAPI:
         if mode not in ('always', 'boss_raid', 'off'):
             mode = 'boss_raid'
         self._g._set_setting('boss_bar_mode', mode)
+        self._g._sync_menu_settings()
+        return json.dumps({'ok': True, 'mode': mode}, ensure_ascii=False)
 
     def get_boss_bar_mode(self):
         """Return current boss bar display mode."""
@@ -2177,7 +2179,11 @@ class SAOWebAPI:
             self._g._reconfigure_data_engines(restart_packet=True)
         except Exception as e:
             print(f'[SAO-WV] set_data_source failed: {e}')
+            self._g._sync_menu_info()
+            # ok:False 触发 menu 端既有的回滚回调 + 红色 alert
+            return json.dumps({'ok': False, 'mode': normalized, 'message': str(e)}, ensure_ascii=False)
         self._g._sync_menu_info()
+        return json.dumps({'ok': True, 'mode': normalized}, ensure_ascii=False)
 
     def set_component_source(self, component, mode):
         """Persist per-component packet/vision source choices from the menu."""

@@ -599,10 +599,16 @@ class SAOPlayerGUIPanelsMixin:
         cur = self._get_mem_data_source()
         nxt = modes[(modes.index(cur) + 1) % len(modes)]
         self._set_setting('mem_data_source', nxt)
-        self._reconfigure_data_engines()
+        labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
+        try:
+            self._reconfigure_data_engines()
+        except Exception as exc:
+            self._update_status_panel()
+            self._refresh_menu_if_open()
+            self._show_entity_alert('DATA SOURCE', f'切到 {labels.get(nxt, nxt.upper())} 后引擎重启失败: {exc}', display_time=4.0)
+            return
         self._update_status_panel()
         self._refresh_menu_if_open()
-        labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
         self._show_entity_alert('DATA SOURCE', f'已切换到 {labels.get(nxt, nxt.upper())}', display_time=2.4)
 
     # ══════════════════════════════════════════════
