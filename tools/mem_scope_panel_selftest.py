@@ -94,6 +94,29 @@ class MemScopePanelSignatureTests(unittest.TestCase):
 
         self.assertNotEqual(panel._signature(base), panel._signature(changed))
 
+    def test_copy_addr_reports_clipboard_failure(self) -> None:
+        class _Var:
+            def __init__(self) -> None:
+                self.value = ""
+
+            def set(self, value) -> None:
+                self.value = value
+
+        class _BadClipboardRoot:
+            def clipboard_clear(self):
+                raise RuntimeError("no clipboard")
+
+            def clipboard_append(self, _text):
+                raise RuntimeError("no clipboard")
+
+        panel = _panel()
+        panel._status_var = _Var()
+        panel.root = _BadClipboardRoot()
+
+        panel._copy_addr("0x1234")
+
+        self.assertTrue(panel._status_var.value.startswith("复制失败"))
+
     def test_destroy_resets_render_signature(self) -> None:
         panel = _panel()
         panel._win = None

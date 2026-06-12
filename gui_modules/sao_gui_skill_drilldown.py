@@ -169,7 +169,7 @@ class SkillDrilldownPanel:
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text)
             except Exception:
-                pass
+                self._status_var.set('Copy payload ready, but clipboard copy failed')
         return result
 
     def back(self) -> Dict[str, Any]:

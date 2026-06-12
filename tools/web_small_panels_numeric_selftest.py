@@ -530,7 +530,11 @@ def main() -> None:
             "Raid editor mechanic catalog rows should skip malformed binding IDs.",
         ),
         (
-            "onclick=\"mechDraftAddSkill(' + hid + ')\">绑定",
+            "var fn = isBuff ? 'mechDraftAddBuff' : 'mechDraftAddSkill';",
+            "Raid editor mechanic catalog bindings should route buff/skill binders.",
+        ),
+        (
+            "onclick=\"' + fn + '(' + hid + ')\">绑定",
             "Raid editor mechanic catalog bindings should pass normalized IDs.",
         ),
     ]

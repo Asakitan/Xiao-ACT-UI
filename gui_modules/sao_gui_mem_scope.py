@@ -442,8 +442,8 @@ class MemScopePanel:
             self.root.clipboard_clear()
             self.root.clipboard_append(addr)
             self._status_var.set(f"已复制 {addr}")
-        except Exception:
-            pass
+        except Exception as exc:
+            self._status_var.set(f"复制失败: {exc}")
 
     # ── small render helpers ───────────────────────────────────────────────────
     def _kv(self, parent: tk.Misc, label: Any, value: Any) -> None:

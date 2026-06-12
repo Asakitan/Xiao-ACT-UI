@@ -198,6 +198,29 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertIn("refs=0", panel._status_var.get())
         self.assertIn("errors=0", panel._status_var.get())
 
+    def test_tk_copy_reports_clipboard_failure(self) -> None:
+        class _BadClipboardRoot:
+            def clipboard_clear(self):
+                raise RuntimeError("no clipboard")
+
+            def clipboard_append(self, _text):
+                raise RuntimeError("no clipboard")
+
+        panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)
+        panel.owner = FakeOwner()
+        panel._combatant_var = FakeVar("1001")
+        panel._skill_var = FakeVar("11")
+        panel._query_var = FakeVar("")
+        panel._status_var = FakeVar("")
+        panel._render_status = lambda status: None
+        panel.root = _BadClipboardRoot()
+
+        with mock.patch("gui_modules.sao_gui_skill_drilldown.act_skill_drilldown_copy", return_value={"ok": True, "text": "payload"}):
+            result = panel.copy()
+
+        self.assertEqual(result["text"], "payload")
+        self.assertEqual(panel._status_var.get(), "Copy payload ready, but clipboard copy failed")
+
     def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
         panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)
         panel.owner = FakeOwner()

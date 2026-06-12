@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.90: Tk Mem Scope/技能钻取剪贴板失败反馈补齐 Web 端 1:1.
+
+  1) `gui_modules/sao_gui_mem_scope.py` 搜索结果地址复制失败不再静默
+    (`except: pass`), 状态栏显示「复制失败: 原因」, 对齐 v4.6.85 的
+    `web/mem_scope.html` 地址复制失败反馈。
+
+  2) `gui_modules/sao_gui_skill_drilldown.py` 技能钻取「复制 Copy」剪贴板
+    写入失败时状态栏显示 `Copy payload ready, but clipboard copy failed`,
+    对齐 v4.6.82 的 `web/act_skill_drilldown.html` 同款提示。
+
+  另: `tools/web_small_panels_numeric_selftest.py` 机制目录绑定断言更新为
+    buff/技能双绑定形态(`fn` 动态分发), 与 raid_editor.html 现状一致;
+    该自测自 30a955d 起为红, 验证门恢复绿。
+
 ## v4.6.89: 钢琴面板关闭卡死态与 Tk 爆发动作引擎应用反馈.
 
   1) `web/panel.html` 关闭按钮在 `close_panel` 接口缺失时直接提示而不进入
