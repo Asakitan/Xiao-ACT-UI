@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.21: DPS hit FX 与 UID 参数归一修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 hit FX seq/uid 参数归一。
+     `hit_fx.seq` 与 `hit_fx.uid` 传入小数字符串时仍能触发面板和行级闪光,
+     避免上游 JSON 数值格式变化导致命中特效丢失。
+
+  2) `gui_modules/sao_gui_dps.py` 修复 self/detail UID 参数归一。
+     `set_self_uid()`、详情打开/选择/update 现在容忍小数字符串 UID,
+     避免 self 高亮或详情请求因为等价 UID 格式未归一而丢失。
+
 ## v4.6.20: DPS 布局设置与滚动状态防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 DPS 布局设置逐项归一。

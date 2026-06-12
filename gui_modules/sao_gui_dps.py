@@ -952,10 +952,7 @@ class DpsOverlay:
         self._schedule_tick(immediate=True)
 
     def set_self_uid(self, uid: int) -> None:
-        try:
-            self._self_uid = int(uid or 0)
-        except Exception:
-            self._self_uid = 0
+        self._self_uid = _safe_int(uid)
         for uid_, row in self._rows.items():
             row.is_self = (uid_ == self._self_uid)
 
@@ -1004,10 +1001,7 @@ class DpsOverlay:
     # ── Detail view (parity with web/dps.html _openDetail/_closeDetail) ──
 
     def open_detail(self, uid: int) -> None:
-        try:
-            uid = int(uid or 0)
-        except Exception:
-            uid = 0
+        uid = _safe_int(uid)
         if uid <= 0:
             return
         self._detail_uid = uid
@@ -1026,47 +1020,33 @@ class DpsOverlay:
 
     def _pick_detail_uid(self) -> int:
         """Pick the most useful entity for the panel-wide detail mode."""
-        try:
-            if self._detail_uid:
-                return int(self._detail_uid)
-        except Exception:
-            pass
+        detail_uid = _safe_int(self._detail_uid)
+        if detail_uid > 0:
+            return detail_uid
         if self._view_mode == 'report':
             entities = self._report_entities()
             for ent in entities:
-                try:
-                    uid = int(ent.get('uid') or 0)
-                    if bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid):
-                        return uid
-                except Exception:
-                    pass
+                uid = _safe_int(ent.get('uid'))
+                if uid > 0 and (bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid)):
+                    return uid
             for ent in entities:
-                try:
-                    uid = int(ent.get('uid') or 0)
-                    if uid > 0:
-                        return uid
-                except Exception:
-                    pass
+                uid = _safe_int(ent.get('uid'))
+                if uid > 0:
+                    return uid
             return 0
         if self._self_uid and self._self_uid in self._rows:
-            return int(self._self_uid)
+            return _safe_int(self._self_uid)
         rows = self._build_view_rows()
         if rows:
-            try:
-                return int(rows[0].get('uid') or 0)
-            except Exception:
-                return 0
+            return _safe_int(rows[0].get('uid'))
         return 0
 
     def enter_detail_mode(self, uid: int = 0) -> None:
-        try:
-            uid = int(uid or 0)
-        except Exception:
-            uid = 0
+        uid = _safe_int(uid)
         if uid <= 0:
             uid = self._pick_detail_uid()
         self._detail_mode = True
-        self._detail_uid = max(0, int(uid or 0))
+        self._detail_uid = max(0, _safe_int(uid))
         self._detail_visible = True
         self._skill_scroll_disp = 0.0
         self._skill_scroll_target = 0.0
@@ -1108,10 +1088,7 @@ class DpsOverlay:
         """Push fresh per-entity skill breakdown (called by controller)."""
         if not isinstance(data, dict):
             return
-        try:
-            uid = int(data.get('uid') or 0)
-        except Exception:
-            uid = 0
+        uid = _safe_int(data.get('uid'))
         if uid <= 0:
             return
         self._live_detail_cache[uid] = dict(data)
@@ -1208,19 +1185,13 @@ class DpsOverlay:
 
         fx = snapshot.get('hit_fx')
         if isinstance(fx, dict):
-            try:
-                seq = int(fx.get('seq') or 0)
-            except Exception:
-                seq = 0
+            seq = _safe_int(fx.get('seq'))
             if seq and seq > self._last_fx_seq:
                 self._last_fx_seq = seq
                 tier = _tier_of(fx.get('tier'))
                 self._panel_fx_tier = tier
                 self._panel_fx_start = time.time()
-                try:
-                    fx_uid = int(fx.get('uid') or 0)
-                except Exception:
-                    fx_uid = 0
+                fx_uid = _safe_int(fx.get('uid'))
                 row = self._rows.get(fx_uid)
                 if row:
                     row.fx_tier = tier

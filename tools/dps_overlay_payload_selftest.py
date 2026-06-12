@@ -309,6 +309,34 @@ class DpsOverlayPayloadTests(unittest.TestCase):
         panel._scroll_skills(1)
         self.assertEqual(panel._skill_scroll_target, 0.0)
 
+    def test_hit_fx_decimal_string_ids_reach_panel_and_row(self) -> None:
+        panel = DpsOverlay(root=None, settings=None)
+        panel._visible = True
+        panel._gpu_managed = True
+        panel._win = object()
+        panel._registered = True
+
+        panel._ingest_live_snapshot({
+            "encounter_active": True,
+            "entities": [{"uid": 11, "name": "Kirito", "damage_total": 100}],
+            "hit_fx": {"seq": "2.0", "uid": "11.0", "tier": "mega"},
+        })
+
+        self.assertEqual(panel._last_fx_seq, 2)
+        self.assertEqual(panel._panel_fx_tier, "mega")
+        self.assertEqual(panel._rows[11].fx_tier, "mega")
+
+    def test_decimal_string_self_uid_marks_existing_row(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        row = _RowState(11)
+        panel._rows = {11: row}
+        panel._self_uid = 0
+
+        panel.set_self_uid("11.0")
+
+        self.assertEqual(panel._self_uid, 11)
+        self.assertTrue(row.is_self)
+
 
 if __name__ == "__main__":
     unittest.main()
