@@ -207,6 +207,14 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
     function listItems(value) { return Array.isArray(value) ? value : []; }
     function isObjectValue(value) { return value && typeof value === 'object' && !Array.isArray(value); }
     function objectValue(value) { return isObjectValue(value) ? value : {}; }
+    function finiteNum(value, fallback) {
+        var n = Number(value);
+        if (!Number.isFinite(n)) n = Number(fallback || 0);
+        return Number.isFinite(n) ? n : 0;
+    }
+    function metricText(value, suffix) {
+        return String(finiteNum(value, 0)) + (suffix || '');
+    }
     function diagnosticItem(item, level) {
         if (isObjectValue(item)) return item;
         return { level: level || 'info', message: item };
@@ -281,7 +289,7 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
             '<div>Alive: <span>' + esc(!!source.alive) + '</span></div>' +
             '<div>Error: <span>' + esc(source.error_msg || source.last_error || '-') + '</span></div>' +
             '<div>Requested: <span>' + esc(source.requested_mode || '-') + '</span></div>' +
-            '<div>Uptime: <span>' + esc(source.uptime_s || 0) + 's</span></div>' +
+            '<div>Uptime: <span>' + esc(finiteNum(source.uptime_s, 0)) + 's</span></div>' +
             '<div>Parser: <span>' + esc(parserId) + '</span></div>' +
             '<div>Parser mode: <span>' + esc(parserMode) + '</span></div>' +
             '<div>Parser requested: <span>' + esc(requestedParser) + '</span></div>' +
@@ -322,8 +330,8 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         document.getElementById('sum-status').textContent = status;
         document.getElementById('sum-mode').textContent = payload.requested_mode || '--';
         document.getElementById('sum-source').textContent = summary.data_source || '--';
-        document.getElementById('sum-latency').textContent = (payload.latency_ms || 0) + ' ms';
-        document.getElementById('sum-event').textContent = (payload.last_event_ms || 0) + ' ms';
+        document.getElementById('sum-latency').textContent = metricText(payload.latency_ms, ' ms');
+        document.getElementById('sum-event').textContent = metricText(payload.last_event_ms, ' ms');
         document.getElementById('sum-errors').textContent = String(errorCount);
         var cards = [];
         if (isObjectValue(sources.packet)) cards.push(renderSource('packet', sources.packet));

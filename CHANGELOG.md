@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.31: ACT Data Source Health 数值显示防护修复.
+
+  1) `web/data_source_health.html` 修复运行时 summary 延迟数值显示。
+     latency 与 last-event 现在通过有限数值 fallback 渲染,
+     避免非有限 payload 显示为 `Infinity ms` 或 `NaN ms`。
+
+  2) `web/data_source_health.html` 修复 source uptime 数值显示。
+     数据源卡片 uptime 现在归一为有限数值后再拼接单位,
+     避免异常 source payload 生成不可读的运行时文本。
+
 ## v4.6.30: ACT Graph Web 点列与数值显示防护修复.
 
   1) `web/act_graph_timeseries.html` 修复 timeseries points 条目归一。

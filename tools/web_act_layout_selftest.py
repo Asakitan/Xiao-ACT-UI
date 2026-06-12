@@ -520,6 +520,9 @@ def _assert_data_source_health_payloads_are_guarded() -> None:
         "var summary = sources.summary || {};",
         "String((payload.errors || []).length)",
         "if (sources.packet) cards.push",
+        "esc(source.uptime_s || 0) + 's'",
+        "(payload.latency_ms || 0) + ' ms'",
+        "(payload.last_event_ms || 0) + ' ms'",
     ):
         if snippet in health:
             raise AssertionError("data source health must guard payload shapes: " + snippet)
@@ -541,6 +544,11 @@ def _assert_data_source_health_payloads_are_guarded() -> None:
         "var summary = objectValue(sources.summary);",
         "var errorCount = listItems(payload.errors).length;",
         "if (isObjectValue(sources.packet)) cards.push(renderSource('packet', sources.packet));",
+        "function finiteNum(value, fallback)",
+        "function metricText(value, suffix)",
+        "esc(finiteNum(source.uptime_s, 0)) + 's</span></div>'",
+        "metricText(payload.latency_ms, ' ms')",
+        "metricText(payload.last_event_ms, ' ms')",
     ):
         if snippet not in health:
             raise AssertionError("missing safe data source health snippet: " + snippet)
