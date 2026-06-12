@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.102: 更新下载写盘限频 + 插件面板轮询隐藏门.
+
+  1) `updater/sao_updater.py` `_set_state` 对 progress-only 更新限频 1s
+    写盘 — 下载回调每 64KB 一次, 原先大包下载期间重写 update_state.json
+    数百次; 状态/错误等其他字段变化仍即时落盘, UI 进度读内存不受影响。
+
+  2) `web/plugin_manager.html` 1Hz 插件面板轮询加 document.hidden 门,
+    窗口隐藏时不再空转 API 往返(与 v4.6.96 menu 分离面板同模式)。
+
 ## v4.6.101: Tk DPS 头部 MORE 聚合补齐 Web 端 1:1.
 
   1) `gui_modules/sao_gui_dps.py` 头部按钮排 EXPORT/RESET 收进「MORE ▾」

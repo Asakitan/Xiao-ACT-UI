@@ -707,7 +707,7 @@ button.close {
     PluginManager._panelsActive = false;
     PluginManager._panelCards = Object.create(null);
     PluginManager._panelSeq = 0;
-    setInterval(function () { if (PluginManager._panelsActive) PluginManager.renderPanels(); }, 1000);
+    setInterval(function () { if (PluginManager._panelsActive && !document.hidden) PluginManager.renderPanels(); }, 1000);
     window.addEventListener('pywebviewready', function () { PluginManager.refresh(); });
     setTimeout(function () {
         PluginManager.fadeIn();

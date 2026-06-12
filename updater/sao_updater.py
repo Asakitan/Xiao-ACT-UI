@@ -420,6 +420,7 @@ class UpdateManager:
         self._lock = threading.RLock()
         self._listeners: list = []
         self._worker: Optional[threading.Thread] = None
+        self._last_state_save = 0.0
         try:
             saved = _load_state()
             if saved.get("skipped_version"):
@@ -455,7 +456,14 @@ class UpdateManager:
             for k, v in kwargs.items():
                 if hasattr(self.status, k):
                     setattr(self.status, k, v)
-            _save_state(self.status)
+            # 下载回调每 64KB 触发一次 progress-only 更新, 全量写盘会在大包
+            # 下载期间重写 update_state.json 数百次; 限频 1s, 状态/错误等
+            # 其他字段变化仍即时落盘。UI 进度读内存 snapshot 不受影响。
+            now = time.time()
+            progress_only = bool(kwargs) and set(kwargs) <= {"progress"}
+            if not progress_only or (now - self._last_state_save) >= 1.0:
+                _save_state(self.status)
+                self._last_state_save = now
         self._notify()
 
     # ---- API ----
