@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.38: Web menu AutoKey/BossRaid 表单值防护修复.
+
+  1) `web/menu.html` 修复 AutoKey 文本型条件值渲染。
+     profession/player-name match value 现在保留合法 `0`,
+     避免 `condition.value || ''` 把用户配置显示为空。
+
+  2) `web/menu.html` 修复 BossRaid 编辑器数值输入 hydration。
+     boss_total_hp 与 enrage_time_s 现在通过 `_brNumText()` 归一,
+     避免异常 profile payload 写入 `Infinity`、`NaN` 或原始坏数值。
+
 ## v4.6.37: Web menu 插件 hotkey count 显示防护修复.
 
   1) `web/menu.html` 修复插件弹窗列表 hotkey count 显示。

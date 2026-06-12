@@ -5299,6 +5299,10 @@ function _akSlotStateOptions(selected) {
     }).join('');
 }
 
+function _akTextValue(value) {
+    return value == null ? '' : String(value);
+}
+
 function _akRenderConditionFields(index, condIndex, condition) {
     var type = String(condition.type || 'hp_pct_gte');
     if (type === 'slot_state_is') {
@@ -5315,7 +5319,7 @@ function _akRenderConditionFields(index, condIndex, condition) {
     }
     if (type === 'profession_is' || type === 'player_name_is') {
         return '' +
-            '<div class="auto-key-field span-2"><label>匹配值 Match Value</label><input type="text" value="' + _escHtml(String(condition.value || '')) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value)" /></div>';
+            '<div class="auto-key-field span-2"><label>匹配值 Match Value</label><input type="text" value="' + _escHtml(_akTextValue(condition.value)) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value)" /></div>';
     }
     return '' +
         '<div class="auto-key-field"><label>阈值 Threshold (%)</label><input type="number" min="0" max="100" value="' + _escHtml(String(Math.round(_clampNum(condition.value || 0, 0, 0, 1) * 100))) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'pct\')" /></div>';
@@ -6834,8 +6838,8 @@ function _brRenderEditorFields() {
         return;
     }
     if (nameEl) nameEl.value = p.profile_name || '';
-    if (hpEl) hpEl.value = p.boss_total_hp || 0;
-    if (enrageEl) enrageEl.value = p.enrage_time_s || 600;
+    if (hpEl) hpEl.value = _brNumText(p.boss_total_hp, 0);
+    if (enrageEl) enrageEl.value = _brNumText(p.enrage_time_s, 600, 86400);
     if (descEl) descEl.value = p.description || '';
     if (simpleEl) simpleEl.checked = p.simple_mode !== false;
     if (targetEl) targetEl.value = p.target_name_pattern || '';

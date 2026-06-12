@@ -176,6 +176,8 @@ def main() -> int:
         "text += ' | DMG: ' + (rt.total_damage || 0);",
         "if ((rt.boss_hp_est_pct || 0) > 0) {",
         "Math.floor(rt.enrage_remaining_s) + 's'",
+        "hpEl.value = p.boss_total_hp || 0;",
+        "enrageEl.value = p.enrage_time_s || 600;",
         "_brDraftProfile.phases[pi].trigger.value = parseFloat(val) || 0;",
         "if (type === 'float') val = parseFloat(val) || 0;",
         "tls[ti].condition.value = parseFloat(val) || 0;",
@@ -201,6 +203,8 @@ def main() -> int:
         "var damageValue = _clampInt(rt.total_damage, 0, 0, Number.MAX_SAFE_INTEGER);",
         "var hpPct = _clampNum(rt.boss_hp_est_pct, 0, 0, 1);",
         "var enrageSeconds = _clampInt(rt.enrage_remaining_s, 0, 0, 86400);",
+        "hpEl.value = _brNumText(p.boss_total_hp, 0);",
+        "enrageEl.value = _brNumText(p.enrage_time_s, 600, 86400);",
         "trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);",
         "if (type === 'float') val = _clampNum(val, 0, 0, 86400);",
         "tls[ti].condition.value = _clampNum(val, 0, 0, 100);",
@@ -237,6 +241,7 @@ def main() -> int:
         "_akSummaryItem('当前职业 ID Current Profession ID', Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--', !(Number(identity.profession_id || 0) > 0))",
         "document.getElementById('ak-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
         "document.getElementById('br-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
+        "_escHtml(String(condition.value || ''))",
     ]
     for pattern in auto_key_raw_patterns:
         if pattern in html:
@@ -261,6 +266,8 @@ def main() -> int:
         "_akSummaryItem('当前职业 ID Current Profession ID', identityProfessionId > 0 ? String(identityProfessionId) : '--', !(identityProfessionId > 0))",
         "var akProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
         "var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
+        "function _akTextValue(value)",
+        "_escHtml(_akTextValue(condition.value))",
     ]
     for snippet in auto_key_safe_required:
         if snippet not in html:
