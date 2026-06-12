@@ -2,6 +2,14 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.86: Mem Scope 搜索/收敛缺 API 与未搜索反馈.
+
+  1) `web/mem_scope.html` 搜索按钮在 `mem_search` API 不可用时会将状态置为
+    `NO API` 并提示 `搜索 API 不可用`, 不再点击后静默无反馈。
+
+  2) `web/mem_scope.html` 收敛按钮在尚未完成搜索时提示 `请先完成一次搜索`,
+    在 `mem_narrow` API 不可用时提示 `收敛 API 不可用`。
+
 ## v4.6.85: Mem Scope 地址复制与 attr 按钮反馈修正.
 
   1) `web/mem_scope.html` 搜索结果地址复制现在会等待 clipboard 写入结果,

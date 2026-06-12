@@ -339,7 +339,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     function doSearch() {
         var a = api(); var value = (queryInput.value || '').trim();
         if (!value) { toast('请输入搜索值'); return; }
-        if (!a || !a.mem_search) return;
+        if (!a || !a.mem_search) { statusPill.textContent = 'NO API'; toast('搜索 API 不可用'); return; }
         Promise.resolve(a.mem_search(value, dtypeSelect.value || 'i32', 0)).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) { jobId = res.job_id || ''; startPoll(); refresh(); }
@@ -348,7 +348,9 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function doNarrow() {
-        var a = api(); if (!jobId || !a || !a.mem_narrow) return;
+        var a = api();
+        if (!jobId) { toast('请先完成一次搜索'); return; }
+        if (!a || !a.mem_narrow) { statusPill.textContent = 'NO API'; toast('收敛 API 不可用'); return; }
         Promise.resolve(a.mem_narrow(jobId, (queryInput.value || '').trim())).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) { startPoll(); refresh(); } else { toast('收敛失败: ' + (res.hint || res.reason)); }

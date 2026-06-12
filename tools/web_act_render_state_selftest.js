@@ -77,6 +77,9 @@ const memScope = read("web/mem_scope.html");
 assert(memScope.includes("function fallbackCopyText(text)"), "mem scope address copy must provide clipboard fallback");
 assert(memScope.includes("复制失败"), "mem scope address copy must report clipboard failure");
 assert(memScope.includes("attr_map API 不可用"), "mem scope attr button must report missing attr API");
+assert(memScope.includes("搜索 API 不可用"), "mem scope search must report missing search API");
+assert(memScope.includes("请先完成一次搜索"), "mem scope narrow must report missing search job");
+assert(memScope.includes("收敛 API 不可用"), "mem scope narrow must report missing narrow API");
 
 const dps = read("web/dps.html");
 assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");
