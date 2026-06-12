@@ -209,6 +209,23 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid numeric rendering snippet: " + snippet)
 
+    plugin_menu_raw_patterns = [
+        "((it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '')",
+        "var hk = (it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '';",
+    ]
+    for pattern in plugin_menu_raw_patterns:
+        if pattern in html:
+            raise AssertionError("plugin menu hotkey counts must be normalized before rendering: " + pattern)
+    plugin_menu_safe_required = [
+        "function _pluginCountNumber(value)",
+        "function _pluginCountText(value)",
+        "var hkCount = _pluginCountNumber(it.hotkey_count);",
+        "hkCount ? ' ⌨' + _pluginCountText(hkCount) : ''",
+    ]
+    for snippet in plugin_menu_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe plugin menu hotkey count snippet: " + snippet)
+
     auto_key_raw_patterns = [
         "if (kind === 'int') value = parseInt(value || 0, 10) || 0;",
         "Math.round(Number(condition.value || 0) * 100)",

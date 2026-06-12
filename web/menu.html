@@ -7655,6 +7655,12 @@ setTimeout(function() {
             return _pluginIsObjectValue(item);
         });
     }
+    function _pluginCountNumber(value) {
+        return Math.max(0, Math.floor(_finiteNum(value, 0)));
+    }
+    function _pluginCountText(value) {
+        return String(_pluginCountNumber(value));
+    }
     window.showPluginDetached = function (pluginId) {
         var nextPlugin = String(pluginId || '');
         if (_pdPlugin !== nextPlugin) {
@@ -7828,8 +7834,9 @@ setTimeout(function() {
         var html = '';
         plugins.forEach(function (it) {
             var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
+            var hkCount = _pluginCountNumber(it.hotkey_count);
             var flags = (it.pinned ? '★' : '') + (it.declares_panel ? ' ▣' : '')
-                + ((it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '');
+                + (hkCount ? ' ⌨' + _pluginCountText(hkCount) : '');
             html += '<div class="ppm-row">'
                 + '<span class="ppm-name">' + esc(it.label) + ' <small>' + st + ' ' + flags + '</small></span>'
                 + '<button class="ppm-btn" data-pin="' + esc(it.id) + '" data-pinned="' + (it.pinned ? 1 : 0) + '">'
@@ -7872,7 +7879,8 @@ setTimeout(function() {
             }
             var html = '';
             plugins.forEach(function (it) {
-                var hk = (it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '';
+                var hkCount = _pluginCountNumber(it.hotkey_count);
+                var hk = hkCount ? ' ⌨' + _pluginCountText(hkCount) : '';
                 html += '<div class="ppm-row ppm-open" data-open="' + esc(it.id) + '" style="cursor:pointer;">'
                     + '<span class="ppm-name">' + (it.pinned ? '★ ' : '') + esc(it.label) + hk + '</span>'
                     + '<span class="ppm-arrow" style="opacity:.6;">▸</span></div>';

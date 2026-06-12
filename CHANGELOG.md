@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.37: Web menu 插件 hotkey count 显示防护修复.
+
+  1) `web/menu.html` 修复插件弹窗列表 hotkey count 显示。
+     插件 popup 行现在会把 `hotkey_count` 归一为有限非负整数,
+     避免异常插件 payload 在主菜单弹窗中显示 `Infinity`、`NaN` 或原始坏文本。
+
+  2) `web/menu.html` 修复插件分类列表 hotkey count 显示。
+     插件 category 行现在复用同一 hotkey count formatter,
+     避免面板入口列表出现不可读快捷键计数。
+
 ## v4.6.36: Plugin Manager Web count 显示防护修复.
 
   1) `web/plugin_manager.html` 修复插件卡片 badge 与 subscription count 显示。
