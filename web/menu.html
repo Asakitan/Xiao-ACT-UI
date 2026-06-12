@@ -5091,8 +5091,8 @@ document.querySelectorAll('.child-menu li').forEach(function(li) {
             });
             return;
         }
-        if (action && window.pywebview && window.pywebview.api) {
-            window.pywebview.api.menu_action(action);
+        if (action) {
+            _callMenuSettingApi('menu_action', [action], 'MENU');
         }
     });
 });
@@ -8517,28 +8517,27 @@ setTimeout(function() {
         var t = e.target;
         if (t.id === 'plugin-popup-overlay' || t.id === 'ppm-close') { window.hidePluginPopup(); return; }
         if (t.getAttribute && t.getAttribute('data-manage')) {
-            var a1 = api();
-            if (a1 && a1.menu_action) a1.menu_action('toggle_plugin_manager');
-            window.hidePluginPopup();
+            _callMenuSettingApi('menu_action', ['toggle_plugin_manager'], 'PLUGINS', function() {
+                window.hidePluginPopup();
+            });
             return;
         }
         if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-pin')) {
-            var a3 = api();
             var pid = t.getAttribute('data-pin');
             var pinned = t.getAttribute('data-pinned') === '1';
-            if (a3 && a3.pin_plugin) {
-                Promise.resolve(a3.pin_plugin(pid, !pinned)).then(function () { window.renderPluginPopup(); });
-            }
+            _callMenuSettingApi('pin_plugin', [pid, !pinned], 'PLUGINS', function() {
+                window.renderPluginPopup();
+                showToast(pinned ? 'PLUGIN UNPINNED' : 'PLUGIN PINNED');
+            });
             return;
         }
         if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-id')) {
-            var a2 = api();
             var id = t.getAttribute('data-id');
             var en = t.getAttribute('data-en') === '1';
-            if (a2) {
-                Promise.resolve(en ? a2.disable_plugin(id) : a2.enable_plugin(id))
-                    .then(function () { window.renderPluginPopup(); });
-            }
+            _callMenuSettingApi(en ? 'disable_plugin' : 'enable_plugin', [id], 'PLUGINS', function() {
+                window.renderPluginPopup();
+                showToast(en ? 'PLUGIN DISABLED' : 'PLUGIN ENABLED');
+            });
         }
     });
 })();

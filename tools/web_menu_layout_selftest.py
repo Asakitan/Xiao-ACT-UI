@@ -343,6 +343,10 @@ def main() -> int:
         "Promise.resolve(ar.reload_plugins('')).then(function () {",
         "window.pywebview.api.toggle_raid_editor();",
         "window.pywebview.api.toggle_autokey_editor();",
+        "window.pywebview.api.menu_action(action);",
+        "if (a1 && a1.menu_action) a1.menu_action('toggle_plugin_manager');",
+        "Promise.resolve(a3.pin_plugin(pid, !pinned)).then(function () { window.renderPluginPopup(); });",
+        "Promise.resolve(en ? a2.disable_plugin(id) : a2.enable_plugin(id))",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -356,6 +360,12 @@ def main() -> int:
         "showToast('PLUGINS RELOADED');",
         "_callMenuSettingApi('toggle_raid_editor', [], 'BOSS RAID', function() {",
         "_callMenuSettingApi('toggle_autokey_editor', [], 'AUTO KEYS', function() {",
+        "_callMenuSettingApi('menu_action', [action], 'MENU');",
+        "_callMenuSettingApi('menu_action', ['toggle_plugin_manager'], 'PLUGINS', function() {",
+        "_callMenuSettingApi('pin_plugin', [pid, !pinned], 'PLUGINS', function() {",
+        "showToast(pinned ? 'PLUGIN UNPINNED' : 'PLUGIN PINNED');",
+        "_callMenuSettingApi(en ? 'disable_plugin' : 'enable_plugin', [id], 'PLUGINS', function() {",
+        "showToast(en ? 'PLUGIN DISABLED' : 'PLUGIN ENABLED');",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:

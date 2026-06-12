@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.67: Web menu action/plugin popup bridge 响应修复.
+
+  1) `web/menu.html` 修复 child-menu 通用 `menu_action` 静默失败。
+     普通菜单动作现在通过标准 bridge helper 调用,
+     API 缺失、失败返回、同步异常和 Promise reject 会显示错误。
+
+  2) `web/menu.html` 修复插件弹窗管理、置顶和启禁用按钮的失败反馈。
+     这些按钮现在统一处理 bridge 失败, 成功后刷新弹窗或关闭弹窗,
+     并对置顶、取消置顶、启用和禁用显示明确 toast。
+
 ## v4.6.66: Web menu plugin/editor bridge 响应修复.
 
   1) `web/menu.html` 修复插件全部重载的 bridge 失败反馈。
