@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.18: DPS detail-view 数值防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复详情实体查找 uid 归一。
+     最近战报详情现在会跳过坏 `uid` 记录继续查找有效实体,
+     避免一条异常记录阻断详情页打开。
+
+  2) `gui_modules/sao_gui_dps.py` 修复详情统计卡与技能列表数值归一。
+     坏 fight point、crit、hits、耗时与技能 total/heal/hit 字段不再打断详情渲染,
+     异常技能条目会被忽略或回退为安全默认值。
+
 ## v4.6.17: DPS overlay payload 数值防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 live snapshot 与实体行数值归一。

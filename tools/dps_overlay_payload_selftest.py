@@ -156,6 +156,73 @@ class DpsOverlayPayloadTests(unittest.TestCase):
 
         self.assertEqual(panel._row_click_regions, [])
 
+    def test_detail_report_bad_uid_does_not_block_valid_entity(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._view_mode = "report"
+        panel._detail_uid = 42
+        panel._last_report = {
+            "entities": [
+                {"uid": "bad-uid", "name": "Broken"},
+                {"uid": 42, "name": "Valid Detail"},
+            ],
+        }
+
+        entity = panel._get_detail_entity()
+
+        self.assertIsNotNone(entity)
+        self.assertEqual(entity["name"], "Valid Detail")
+
+    def test_detail_view_bad_stats_and_skills_do_not_abort_render(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._view_mode = "report"
+        panel._detail_mode = False
+        panel._detail_uid = 42
+        panel._skill_scroll_target = 0.0
+        panel._skill_scroll_disp = 0.0
+        panel._skill_content_h = 0
+        panel._skill_view_h = 0
+        panel._skill_max_scroll = 0.0
+        panel._last_report = {
+            "entities": [
+                {
+                    "uid": 42,
+                    "name": "Bad Detail",
+                    "profession": "Sword",
+                    "fight_point": "bad-fp",
+                    "damage_total": object(),
+                    "dps": "nan",
+                    "heal_total": "bad-heal",
+                    "hps": float("inf"),
+                    "crit_rate": "bad-crit",
+                    "max_hit": object(),
+                    "damage_hits": "bad-hits",
+                    "elapsed_s": "bad-time",
+                    "skills": [
+                        {
+                            "skill_name": "Broken Skill",
+                            "total": "bad-total",
+                            "heal_total": object(),
+                            "hits": "bad-hit-count",
+                            "heal_hits": "bad-heal-hits",
+                            "crit_rate": "bad-skill-crit",
+                        },
+                        {
+                            "skill_name": "Valid Skill",
+                            "total": 300,
+                            "hits": 3,
+                            "crit_rate": 0.25,
+                        },
+                    ],
+                },
+            ],
+        }
+
+        img = Image.new("RGBA", (620, 360), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img, "RGBA")
+        panel._draw_detail_view(draw, img, 0, 0, 620, 360)
+
+        self.assertGreaterEqual(panel._skill_content_h, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

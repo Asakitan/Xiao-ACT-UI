@@ -2422,10 +2422,11 @@ class DpsOverlay:
         x_left = sx + self.HEADER_PAD_X
         x_right = sx + sw - self.HEADER_PAD_X
         if self._view_mode == 'report' and self._has_report_data():
-            completed = str((self._last_report or {}).get('completed_local_time') or _fmt_time((self._last_report or {}).get('elapsed_s') or 0))
+            completed = str((self._last_report or {}).get('completed_local_time')
+                            or _fmt_time(_safe_float((self._last_report or {}).get('elapsed_s'))))
             left = f'COMPLETED {completed}'
-            total_val = _fmt_num(float((self._last_report or {}).get('total_damage') or 0))
-            heal_val = _fmt_num(float((self._last_report or {}).get('total_heal') or 0))
+            total_val = _fmt_num(_safe_float((self._last_report or {}).get('total_damage')))
+            heal_val = _fmt_num(_safe_float((self._last_report or {}).get('total_heal')))
         else:
             left = f'ELAPSED {_fmt_time(self._disp_elapsed)}'
             total_val = _fmt_num(self._disp_total_damage)
@@ -2440,12 +2441,12 @@ class DpsOverlay:
     # --------  Detail view  --------
 
     def _get_detail_entity(self) -> Optional[dict]:
-        uid = int(self._detail_uid or 0)
+        uid = _safe_int(self._detail_uid)
         if uid <= 0:
             return None
         if self._view_mode == 'report':
             for ent in self._report_entities():
-                if int(ent.get('uid') or 0) == uid:
+                if _safe_int(ent.get('uid')) == uid:
                     return ent
             return None
         # Live mode: prefer cached skill breakdown, fall back to row.
@@ -2516,7 +2517,7 @@ class DpsOverlay:
             prof = str(entity.get('profession') or '')
             if prof:
                 title = f'{title} · {prof}'
-            fp = int(entity.get('fight_point') or 0)
+            fp = _safe_int(entity.get('fight_point'))
             if fp > 0:
                 title = f'{title} · {_fmt_fp(fp)}'
         else:
@@ -2559,14 +2560,14 @@ class DpsOverlay:
         rows = (8 + cols - 1) // cols
         grid_h = rows * card_h + (rows - 1) * card_gap
         stats = [
-            ('DAMAGE', _fmt_num(entity.get('damage_total') or 0), self.GOLD),
-            ('DPS', _fmt_num(entity.get('dps') or 0), self.TEXT_MAIN),
-            ('HEALING', _fmt_num(entity.get('heal_total') or 0), self.STAT_HEAL_GREEN),
-            ('HPS', _fmt_num(entity.get('hps') or 0), self.TEXT_MAIN),
-            ('CRIT', f"{int(round(float(entity.get('crit_rate') or 0) * 100))}%", self.TEXT_MAIN),
-            ('MAX HIT', _fmt_num(entity.get('max_hit') or 0), self.GOLD),
-            ('HITS', str(int(entity.get('damage_hits') or 0)), self.TEXT_MAIN),
-            ('TIME', _fmt_time(float(entity.get('elapsed_s') or 0)), self.TEXT_MAIN),
+            ('DAMAGE', _fmt_num(_safe_float(entity.get('damage_total'))), self.GOLD),
+            ('DPS', _fmt_num(_safe_float(entity.get('dps'))), self.TEXT_MAIN),
+            ('HEALING', _fmt_num(_safe_float(entity.get('heal_total'))), self.STAT_HEAL_GREEN),
+            ('HPS', _fmt_num(_safe_float(entity.get('hps'))), self.TEXT_MAIN),
+            ('CRIT', f"{int(round(_safe_float(entity.get('crit_rate')) * 100))}%", self.TEXT_MAIN),
+            ('MAX HIT', _fmt_num(_safe_float(entity.get('max_hit'))), self.GOLD),
+            ('HITS', str(_safe_int(entity.get('damage_hits'))), self.TEXT_MAIN),
+            ('TIME', _fmt_time(_safe_float(entity.get('elapsed_s'))), self.TEXT_MAIN),
         ]
         lbl_font = _load_font('sao', 8)
         val_font = _load_font('sao', 13)
@@ -2604,7 +2605,11 @@ class DpsOverlay:
             self._skill_view_h = 0
             self._skill_max_scroll = 0.0
             return
-        skills = entity.get('skills') or []
+        skills_raw = entity.get('skills') or []
+        if isinstance(skills_raw, (list, tuple)):
+            skills = [sk for sk in skills_raw if isinstance(sk, dict)]
+        else:
+            skills = []
         if not skills:
             self._skill_content_h = 0
             self._skill_view_h = 0
@@ -2619,11 +2624,11 @@ class DpsOverlay:
         # Sort by max(damage_total, heal_total) like the webview
         skills_sorted = sorted(
             list(skills),
-            key=lambda s: max(float(s.get('total') or 0),
-                              float(s.get('heal_total') or 0)),
+            key=lambda s: max(_safe_float(s.get('total')),
+                              _safe_float(s.get('heal_total'))),
             reverse=True,
         )
-        amounts = [max(float(s.get('total') or 0), float(s.get('heal_total') or 0))
+        amounts = [max(_safe_float(s.get('total')), _safe_float(s.get('heal_total')))
                    for s in skills_sorted]
         max_val = max(amounts, default=0.0) or 1.0   # bar length basis
         sum_val = sum(amounts) or 1.0                 # share-of-total basis
@@ -2668,13 +2673,14 @@ class DpsOverlay:
         for i, sk in enumerate(skills_sorted):
             ry = i * step                              # content-local top (>=0)
             rank = i + 1
-            dmg = float(sk.get('total') or 0)
-            heal = float(sk.get('heal_total') or 0)
+            dmg = _safe_float(sk.get('total'))
+            heal = _safe_float(sk.get('heal_total'))
             amount = max(dmg, heal)
             is_heal = heal > dmg
-            hits = int(sk.get('heal_hits' if is_heal else 'hits') or 0)
-            crit = (float(sk.get('crit_rate') or 0)
-                    if not is_heal and int(sk.get('hits') or 0) > 0 else 0)
+            hits = _safe_int(sk.get('heal_hits' if is_heal else 'hits'))
+            raw_damage_hits = _safe_int(sk.get('hits'))
+            crit = (_safe_float(sk.get('crit_rate'))
+                    if not is_heal and raw_damage_hits > 0 else 0.0)
             ratio = amount / max_val if max_val > 0 else 0    # bar length
             share = amount / sum_val if sum_val > 0 else 0     # share of total
             heat = self._heat_color(ratio)
