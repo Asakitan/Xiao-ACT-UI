@@ -4,7 +4,12 @@ state dict (仿 build_boss_reactions_state 模式)。编辑目标=当前激活�
 mechanics[]；总开关聚合 TTS / 横幅 / 自动躲避三组设置。"""
 
 import copy
+import threading
 from typing import Any, Dict, List, Optional
+
+# 所有 mechanics 写操作 load→modify→save 序列化, 防双窗口/pywebview 多线程并发互覆盖。
+# RLock: create_mechanic_from_skill 内嵌 upsert_mechanic。
+_MUTATE_LOCK = threading.RLock()
 
 from engines.boss_raid_engine import (
     active_profile,
@@ -41,6 +46,8 @@ def _i(v: Any, default: int = 0) -> int:
 # 编辑器技能库搜索覆盖的离线名字表 kind (system_skill 含离线枚举的 raid boss 技能)
 _CATALOG_KINDS = ("system_skill", "boss_skill", "boss_mechanic_skill",
                   "monster_skill", "ultimate_skill", "scripted_skill", "skill")
+# buff 表 (点名/分摊/标记类机制全是 buff, 检测走 detect.buff_ids)
+_CATALOG_BUFF_KINDS = ("buff",)
 
 
 def _target_profile(config: Dict[str, Any],
@@ -277,34 +284,36 @@ def build_mechanics_state(settings, engine, state_mgr,
 def upsert_mechanic(settings, mechanic: Any,
                     profile_id: Optional[str] = None) -> Dict[str, Any]:
     """新增/更新一条机制 (按 id), 落到目标档案并持久化。返回归一化配置。"""
-    config = load_boss_raid_config(settings)
-    profile = _target_profile(config, profile_id)
-    if not profile:
-        return config
-    mech = normalize_mechanic(mechanic)
-    mechanics = list(profile.get("mechanics") or [])
-    for idx, existing in enumerate(mechanics):
-        if _s(existing.get("id")) == mech["id"]:
-            mechanics[idx] = mech
-            break
-    else:
-        mechanics.append(mech)
-    profile["mechanics"] = mechanics
-    profile["updated_at"] = _utc_now_iso()
-    return save_boss_raid_config(settings, config)
+    with _MUTATE_LOCK:
+        config = load_boss_raid_config(settings)
+        profile = _target_profile(config, profile_id)
+        if not profile:
+            return config
+        mech = normalize_mechanic(mechanic)
+        mechanics = list(profile.get("mechanics") or [])
+        for idx, existing in enumerate(mechanics):
+            if _s(existing.get("id")) == mech["id"]:
+                mechanics[idx] = mech
+                break
+        else:
+            mechanics.append(mech)
+        profile["mechanics"] = mechanics
+        profile["updated_at"] = _utc_now_iso()
+        return save_boss_raid_config(settings, config)
 
 
 def delete_mechanic(settings, mechanic_id: str,
                     profile_id: Optional[str] = None) -> Dict[str, Any]:
-    config = load_boss_raid_config(settings)
-    profile = _target_profile(config, profile_id)
-    if not profile:
-        return config
-    mid = _s(mechanic_id)
-    profile["mechanics"] = [m for m in (profile.get("mechanics") or [])
-                            if _s(m.get("id")) != mid]
-    profile["updated_at"] = _utc_now_iso()
-    return save_boss_raid_config(settings, config)
+    with _MUTATE_LOCK:
+        config = load_boss_raid_config(settings)
+        profile = _target_profile(config, profile_id)
+        if not profile:
+            return config
+        mid = _s(mechanic_id)
+        profile["mechanics"] = [m for m in (profile.get("mechanics") or [])
+                                if _s(m.get("id")) != mid]
+        profile["updated_at"] = _utc_now_iso()
+        return save_boss_raid_config(settings, config)
 
 
 def create_mechanic_from_skill(settings, skill_id: Any, skill_name: str = "",
@@ -323,42 +332,44 @@ def create_mechanic_from_skill(settings, skill_id: Any, skill_name: str = "",
 
 def bind_skill_to_mechanic(settings, mechanic_id: str, skill_id: Any,
                            profile_id: Optional[str] = None) -> Dict[str, Any]:
-    config = load_boss_raid_config(settings)
-    profile = _target_profile(config, profile_id)
-    if not profile:
-        return config
-    sid = _i(skill_id)
-    mid = _s(mechanic_id)
-    for mech in profile.get("mechanics") or []:
-        if _s(mech.get("id")) != mid:
-            continue
-        det = mech.setdefault("detect", {})
-        ids = list(det.get("skill_ids") or [])
-        if sid > 0 and sid not in ids:
-            ids.append(sid)
-            det["skill_ids"] = sorted(ids)
-        profile["updated_at"] = _utc_now_iso()
-        break
-    return save_boss_raid_config(settings, config)
+    with _MUTATE_LOCK:
+        config = load_boss_raid_config(settings)
+        profile = _target_profile(config, profile_id)
+        if not profile:
+            return config
+        sid = _i(skill_id)
+        mid = _s(mechanic_id)
+        for mech in profile.get("mechanics") or []:
+            if _s(mech.get("id")) != mid:
+                continue
+            det = mech.setdefault("detect", {})
+            ids = list(det.get("skill_ids") or [])
+            if sid > 0 and sid not in ids:
+                ids.append(sid)
+                det["skill_ids"] = sorted(ids)
+            profile["updated_at"] = _utc_now_iso()
+            break
+        return save_boss_raid_config(settings, config)
 
 
 def unbind_skill_from_mechanic(settings, mechanic_id: str, skill_id: Any,
                                profile_id: Optional[str] = None) -> Dict[str, Any]:
-    config = load_boss_raid_config(settings)
-    profile = _target_profile(config, profile_id)
-    if not profile:
-        return config
-    sid = _i(skill_id)
-    mid = _s(mechanic_id)
-    for mech in profile.get("mechanics") or []:
-        if _s(mech.get("id")) != mid:
-            continue
-        det = mech.setdefault("detect", {})
-        det["skill_ids"] = [x for x in (det.get("skill_ids") or []) if _i(x) != sid]
-        det["buff_ids"] = [x for x in (det.get("buff_ids") or []) if _i(x) != sid]
-        profile["updated_at"] = _utc_now_iso()
-        break
-    return save_boss_raid_config(settings, config)
+    with _MUTATE_LOCK:
+        config = load_boss_raid_config(settings)
+        profile = _target_profile(config, profile_id)
+        if not profile:
+            return config
+        sid = _i(skill_id)
+        mid = _s(mechanic_id)
+        for mech in profile.get("mechanics") or []:
+            if _s(mech.get("id")) != mid:
+                continue
+            det = mech.setdefault("detect", {})
+            det["skill_ids"] = [x for x in (det.get("skill_ids") or []) if _i(x) != sid]
+            det["buff_ids"] = [x for x in (det.get("buff_ids") or []) if _i(x) != sid]
+            profile["updated_at"] = _utc_now_iso()
+            break
+        return save_boss_raid_config(settings, config)
 
 
 def hot_apply_to_engine(settings, engine, profile_id: Optional[str] = None) -> bool:
@@ -409,7 +420,8 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
 
 
 def search_skill_catalog(query: str, limit: int = 30) -> List[Dict[str, Any]]:
-    """离线技能库子串搜索 (名字或 id 前缀)；从不整表外发。"""
+    """离线技能/buff 库子串搜索 (名字或 id 前缀)；从不整表外发。
+    buff 结果带 is_buff=True → UI 绑到 detect.buff_ids (点名机制全是 buff)。"""
     q = _s(query)
     if not q:
         return []
@@ -420,7 +432,9 @@ def search_skill_catalog(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     seen = set()
     q_lower = q.lower()
     q_is_num = q.isdigit()
-    for kind in _CATALOG_KINDS:
+    # 技能表在前(命中优先), buff 表在后 — buff 名最多, 限额避免淹没技能
+    for kind in _CATALOG_KINDS + _CATALOG_BUFF_KINDS:
+        is_buff = kind in _CATALOG_BUFF_KINDS
         try:
             table = nm.kind_map(kind) or {}
         except Exception:
@@ -437,7 +451,7 @@ def search_skill_catalog(query: str, limit: int = 30) -> List[Dict[str, Any]]:
             if not hit:
                 continue
             seen.add(sid_i)
-            results.append({"id": sid_i, "name": name_s, "kind": kind})
+            results.append({"id": sid_i, "name": name_s, "kind": kind, "is_buff": is_buff})
             if len(results) >= max(1, int(limit)):
                 return results
     return results

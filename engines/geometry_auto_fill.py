@@ -42,13 +42,18 @@ def _set_geometry(mech: dict, shape: str, radius: float, inner: float = 0.0,
 def fill_by_skill_id(profile: dict, skill_id: int, *, shape: str, radius: float,
                      inner: float = 0.0, angle: float = 0.0, width: float = 0.0,
                      center: str = "boss", source: str = "runtime") -> int:
-    """运行时时间关联结果: 把几何精确填进 detect.skill_ids 含 skill_id 的机制。返回填的条数。"""
+    """运行时时间关联结果: 把几何精确填进 detect.skill_ids 含 skill_id 的机制。返回填的条数。
+    不覆盖用户手填(source=='manual') — 显式手填优先于自动测量。"""
     n = 0
     for m in (profile or {}).get("mechanics", []) or []:
         ids = ((m.get("detect") or {}).get("skill_ids")) or []
-        if int(skill_id) in [int(i) for i in ids]:
-            _set_geometry(m, shape, radius, inner, angle, width, center, source)
-            n += 1
+        if int(skill_id) not in [int(i) for i in ids]:
+            continue
+        cur = (((m.get("dodge") or {}).get("inline") or {}).get("geometry") or {})
+        if cur.get("source") == "manual":
+            continue
+        _set_geometry(m, shape, radius, inner, angle, width, center, source)
+        n += 1
     return n
 
 

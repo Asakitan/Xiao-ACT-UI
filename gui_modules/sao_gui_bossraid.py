@@ -429,6 +429,16 @@ class _MechanicsEditorMixin:
         ('走向 ▸ 走向编号圈', 'goto_circle'),
         ('走向 ▸ 按序走完编号圈', 'walk_sequence'),
     )
+    # 几何形状下拉 (标签 → shape 值); 空=不填, 用招式生命周期判停
+    _GEOMETRY_SHAPES = (
+        ('无 (招式生命周期判停)', ''),
+        ('圆 circle (整圈)', 'circle'),
+        ('环 ring (内安全/外危险)', 'ring'),
+        ('扇形 sector', 'sector'),
+        ('锥形 cone (吐息)', 'cone'),
+        ('直线 line', 'line'),
+        ('十字 cross', 'cross'),
+    )
     # 共享文案 (Tk/Web 1:1, 改一处必同步另一处)
     _DODGE_DIR_HELP = ('视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停'
                        '(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。'
@@ -919,7 +929,7 @@ class _MechanicsEditorMixin:
                            lambda: _add_manual_to('buff_ids', buff_var),
                            width=4).pack(side=tk.LEFT)
         search_row = _row(form)
-        search_var = _field(search_row, '技能库', 'catalog_q', '', 12)
+        search_var = _field(search_row, '技能/Buff库', 'catalog_q', '', 12)
 
         def _do_search():
             self._mech_collect_draft()
@@ -929,16 +939,18 @@ class _MechanicsEditorMixin:
         make_action_button(search_row, '搜索', _do_search, width=4).pack(side=tk.LEFT)
         for hit in self._mech_catalog_results:
             hit_row = _row(form)
-            tk.Label(hit_row, text='%s #%d (%s)' % (hit.get('name'), int(hit.get('id') or 0),
-                                                    hit.get('kind') or ''),
-                     bg=PANEL_CARD_ALT, fg=TEXT_MAIN, font=panel_font(8),
+            # buff 结果绑到 buff_ids (点名/分摊类机制全是 buff), 技能结果绑到 skill_ids
+            is_buff = bool(hit.get('is_buff'))
+            tag = 'Buff' if is_buff else (hit.get('kind') or '技能')
+            tk.Label(hit_row, text='%s #%d (%s)' % (hit.get('name'), int(hit.get('id') or 0), tag),
+                     bg=PANEL_CARD_ALT, fg=CYAN if is_buff else TEXT_MAIN, font=panel_font(8),
                      anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True)
             make_action_button(
                 hit_row, '绑定',
-                lambda _sid=int(hit.get('id') or 0): (
+                lambda _sid=int(hit.get('id') or 0), _k=('buff_ids' if is_buff else 'skill_ids'): (
                     self._mech_collect_draft(),
-                    det.__setitem__('skill_ids',
-                                    sorted(set(list(det.get('skill_ids') or []) + [_sid]))),
+                    det.__setitem__(_k,
+                                    sorted(set(list(det.get(_k) or []) + [_sid]))),
                     self._mx_rerender()),
                 kind='accent', width=4).pack(side=tk.RIGHT)
 
@@ -1093,6 +1105,29 @@ class _MechanicsEditorMixin:
                  bg=PANEL_CARD_ALT, fg=DANGER, font=panel_font(8),
                  anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
 
+        # 几何范围 (精准出圈; 留空=用招式生命周期判停)
+        make_section_title(form, '几何范围 (圈/扇形, 选填)')
+        geom = inline.get('geometry') or {}
+        gsrc = str(geom.get('source') or '')
+        gv = _row(form)
+        gshape_lbls = dict(self._GEOMETRY_SHAPES)
+        cur_shape = str(geom.get('shape') or '')
+        cur_shape_lbl = next((l for l, val in self._GEOMETRY_SHAPES if val == cur_shape), '无')
+        gvar = _tk.StringVar(value=cur_shape_lbl)
+        v['geometry_shape'] = (gvar, gshape_lbls)
+        tk.Label(gv, text='形状', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        gmenu = _tk.OptionMenu(gv, gvar, *[l for l, _ in self._GEOMETRY_SHAPES])
+        gmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        gmenu.pack(side=tk.LEFT, padx=(2, 8))
+        _field(gv, '半径m', 'geom_radius', geom.get('radius', 0.0), 5)
+        _field(gv, '内径m', 'geom_inner', geom.get('inner', 0.0), 5)
+        src_lbl = {'manual': '手填(优先, 不被自动覆盖)', 'runtime': '进本实测(自动)',
+                   'reverse': '逆向/领域(自动)'}.get(gsrc, '未填')
+        tk.Label(form, text='当前来源: %s · 填了半径=按精确范围出圈; 留空=招式生命周期判停' % src_lbl,
+                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
+
         # 阶段范围
         ph_row = _row(form)
         phases = list(self._mech_state.get('phases') or [])
@@ -1178,6 +1213,29 @@ class _MechanicsEditorMixin:
         if dpick:
             dvar, dir_lbls = dpick
             inline['direction'] = dir_lbls.get(dvar.get() or '不移动', '')
+        gpick = v.get('geometry_shape')
+        if gpick:
+            gvar, gshape_lbls = gpick
+            shape = gshape_lbls.get(gvar.get() or '无 (招式生命周期判停)', '')
+            radius = _num('geom_radius', 0.0)
+            inner = _num('geom_inner', 0.0)
+            prev = (inline.get('geometry') or {})
+            if shape or radius > 0:
+                # 手填几何标 source=manual → 优先, 不被自动填覆盖
+                changed = (shape != prev.get('shape') or
+                           abs(radius - float(prev.get('radius') or 0)) > 1e-6 or
+                           abs(inner - float(prev.get('inner') or 0)) > 1e-6)
+                src = 'manual' if (changed or prev.get('source') == 'manual') \
+                    else (prev.get('source') or 'manual')
+                inline['geometry'] = {
+                    'shape': shape, 'radius': round(radius, 1), 'inner': round(inner, 1),
+                    'angle': float(prev.get('angle') or 0.0),
+                    'width': float(prev.get('width') or 0.0),
+                    'center': str(prev.get('center') or 'boss'), 'source': src}
+            elif prev:
+                inline['geometry'] = {'shape': '', 'radius': 0.0, 'inner': 0.0,
+                                      'angle': 0.0, 'width': 0.0, 'center': 'boss',
+                                      'source': ''}
         preset = _sv('dodge_preset', '无')
         if preset == '轻点按键':
             inline['press_mode'] = 'tap'

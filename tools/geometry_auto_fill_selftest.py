@@ -81,6 +81,15 @@ class GeometryAutoFillTest(unittest.TestCase):
         auto_fill_from_fields(prof, fields, min_score=0.4)
         self.assertEqual(prof["mechanics"][0]["dodge"]["inline"]["geometry"]["radius"], 7.0)  # 保留运行时
 
+    def test_runtime_fill_skips_manual(self):
+        # 手填(source=manual)优先, 运行时精确填也不覆盖
+        prof = _profile([_mech(10240117, "虚蚀龙-虚雾喷洒")])
+        prof["mechanics"][0]["dodge"]["inline"]["geometry"] = {
+            "shape": "circle", "radius": 9.0, "source": "manual"}
+        n = fill_by_skill_id(prof, 10240117, shape="circle", radius=5.0)
+        self.assertEqual(n, 0)
+        self.assertEqual(prof["mechanics"][0]["dodge"]["inline"]["geometry"]["radius"], 9.0)
+
 
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(GeometryAutoFillTest)

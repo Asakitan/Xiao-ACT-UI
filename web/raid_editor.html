@@ -901,14 +901,19 @@ function _mForm(m) {
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManual()">添加</span> '
         + _mInput('mf-manual-buff', 'BuffID', '', 70)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManualBuff()">添加</span> '
-        + _mInput('mf-q', '技能库', '', 90)
+        + _mInput('mf-q', '技能/Buff库', '', 90)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechCatalogSearch()">搜索</span>';
     html += _objectItems(_mechCatalog).map(function (h) {
         var hid = _idNum(h.id, null);
         if (hid == null) return '';
+        // buff 结果绑到 buff_ids (点名/分摊类机制全是 buff), 技能结果绑到 skill_ids
+        var isBuff = !!h.is_buff;
+        var tag = isBuff ? 'Buff' : (h.kind || '技能');
+        var fn = isBuff ? 'mechDraftAddBuff' : 'mechDraftAddSkill';
         return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">'
-            + '<span style="flex:1;color:#e8f6ff;">' + _esc(h.name + ' #' + hid + ' (' + (h.kind || '') + ')') + '</span>'
-            + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddSkill(' + hid + ')">绑定</span></div>';
+            + '<span style="flex:1;color:' + (isBuff ? '#8fdcff' : '#e8f6ff') + ';">'
+            + _esc(h.name + ' #' + hid + ' (' + tag + ')') + '</span>'
+            + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="' + fn + '(' + hid + ')">绑定</span></div>';
     }).join('');
     // 提醒
     html += '<div class="phase-header" style="font-size:10px;">提醒</div>'
@@ -986,6 +991,24 @@ function _mForm(m) {
     html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。「走向」类(靠拢队友/走编号圈)是自动走位, 需额外开「自动走位」总开关, 读不到目标位时直接停(绝不盲走)。</div>'
         + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 '
         + _esc(_objectValue(_objectValue(_mechState).master).panic_hotkey || 'F12') + ' 全松键急停。</div>';
+    // 几何范围 (精准出圈; 留空=招式生命周期判停) — 与 Tk _GEOMETRY_SHAPES 1:1
+    var geom = _objectValue(inline.geometry);
+    var gsrc = String(geom.source || '');
+    var gShapes = [['', '无 (招式生命周期判停)'], ['circle', '圆 circle (整圈)'],
+        ['ring', '环 ring (内安全/外危险)'], ['sector', '扇形 sector'],
+        ['cone', '锥形 cone (吐息)'], ['line', '直线 line'], ['cross', '十字 cross']];
+    var curShape = String(geom.shape || '');
+    html += '<div class="phase-header" style="font-size:10px;">几何范围 (圈/扇形, 选填)</div>'
+        + '<div style="margin:3px 0;">形状 <select id="mf-geom-shape" class="mech-input">'
+        + gShapes.map(function (o) {
+            return '<option value="' + o[0] + '"' + (curShape === o[0] ? ' selected' : '') + '>' + _esc(o[1]) + '</option>';
+          }).join('') + '</select> '
+        + _mInput('mf-geom-r', '半径m', geom.radius != null ? geom.radius : 0, 44)
+        + _mInput('mf-geom-i', '内径m', geom.inner != null ? geom.inner : 0, 44) + '</div>';
+    var srcLbl = ({manual: '手填(优先, 不被自动覆盖)', runtime: '进本实测(自动)',
+                   reverse: '逆向/领域(自动)'})[gsrc] || '未填';
+    html += '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">当前来源: ' + _esc(srcLbl)
+        + ' · 填了半径=按精确范围出圈; 留空=招式生命周期判停</div>';
     // 阶段范围
     var phases = _objectItems(_objectValue(_mechState).phases);
     var pids = _listItems(d.phase_ids);
@@ -1066,6 +1089,27 @@ function _mCollect() {
     }
     var dirEl = document.getElementById('mf-dir');
     if (dirEl) inline.direction = String(dirEl.value || '');
+    var gShapeEl = document.getElementById('mf-geom-shape');
+    if (gShapeEl) {
+        var gShape = String(gShapeEl.value || '');
+        var gR = Math.round(_clampNum(_mNum('mf-geom-r', 0), 0, 0, 100) * 10) / 10;
+        var gI = Math.round(_clampNum(_mNum('mf-geom-i', 0), 0, 0, 100) * 10) / 10;
+        var prevG = _objectValue(inline.geometry);
+        if (gShape || gR > 0) {
+            // 手填几何标 source=manual → 优先, 不被自动填覆盖
+            var changed = gShape !== (prevG.shape || '') ||
+                Math.abs(gR - (Number(prevG.radius) || 0)) > 1e-6 ||
+                Math.abs(gI - (Number(prevG.inner) || 0)) > 1e-6;
+            var src = (changed || prevG.source === 'manual') ? 'manual'
+                : (prevG.source || 'manual');
+            inline.geometry = { shape: gShape, radius: gR, inner: gI,
+                angle: Number(prevG.angle) || 0, width: Number(prevG.width) || 0,
+                center: String(prevG.center || 'boss'), source: src };
+        } else if (prevG && Object.keys(prevG).length) {
+            inline.geometry = { shape: '', radius: 0, inner: 0, angle: 0, width: 0,
+                center: 'boss', source: '' };
+        }
+    }
     if (document.getElementById('mf-move')) inline.move_ms = _clampInt(_mNum('mf-move', 600), 600, 80, 6000);
     if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_clampNum(_mNum('mf-exit', 6), 6, 1, 40) * 10) / 10;
     if (document.getElementById('mf-arrive')) inline.arrive_m = Math.round(_clampNum(_mNum('mf-arrive', 2), 2, 0.5, 30) * 10) / 10;
