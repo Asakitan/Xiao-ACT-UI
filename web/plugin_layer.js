@@ -103,6 +103,19 @@
         });
     }
 
+    function finiteNumber(value, fallback, lo, hi) {
+        var number = Number(value);
+        if (!isFinite(number)) number = Number(fallback || 0);
+        if (!isFinite(number)) number = 0;
+        if (lo != null) number = Math.max(Number(lo), number);
+        if (hi != null) number = Math.min(Number(hi), number);
+        return number;
+    }
+
+    function finiteInt(value, fallback, lo, hi) {
+        return Math.round(finiteNumber(value, fallback, lo, hi));
+    }
+
     // ── spec -> DOM ──────────────────────────────────────────────────────────
     function el(tag, cls, html) {
         var e = document.createElement(tag);
@@ -152,7 +165,7 @@
             }
             var track = el("div", "splg-bar");
             var fill = el("div", "splg-fill");
-            fill.style.width = (Math.max(0, Math.min(1, +node.pct || 0)) * 100).toFixed(1) + "%";
+            fill.style.width = (finiteNumber(node.pct, 0, 0, 1) * 100).toFixed(1) + "%";
             fill.style.background = barColor(node.color);
             track.appendChild(fill);
             wrap.appendChild(track);
@@ -160,7 +173,11 @@
         }
         if (t === "badge") return el("span", "splg-badge splg-bg-" + (node.style || "muted"), esc(node.text));
         if (t === "divider") return el("div", "splg-divider");
-        if (t === "spacer") { var s = el("div", "splg-spacer"); s.style.height = (+node.size || 8) + "px"; return s; }
+        if (t === "spacer") {
+            var s = el("div", "splg-spacer");
+            s.style.height = finiteInt(node.size, 8, 0, 64) + "px";
+            return s;
+        }
         if (t === "button") {
             var b = el("button", "splg-btn splg-btn-" + (node.style || "default"), esc(node.label || node.action));
             if (node.disabled) b.disabled = true;
@@ -174,7 +191,8 @@
             inp.setAttribute("data-splg-id", node.id || "");
             if (node.value != null) inp.value = node.value;
             if (node.placeholder) inp.placeholder = node.placeholder;
-            if (node.width) inp.style.width = node.width + "px";
+            var inputWidth = finiteInt(node.width, 0, 0, 2000);
+            if (inputWidth > 0) inp.style.width = inputWidth + "px";
             return inp;
         }
         if (t === "table") return renderTable(node);
@@ -199,7 +217,8 @@
 
     function renderCanvas(node) {
         node = objectValue(node);
-        var w = +node.width || 1, h = +node.height || 1;
+        var w = finiteInt(node.width, 1, 1, 4096);
+        var h = finiteInt(node.height, 1, 1, 4096);
         var wrap = el("div", "splg-canvaswrap");
         var cnv = document.createElement("canvas");
         cnv.width = w; cnv.height = h;
@@ -211,24 +230,40 @@
             var k = op.op, fill, outline;
             if (k === "rect") {
                 fill = canvasColor(op.fill, ""); outline = canvasColor(op.outline, "");
-                if (fill) { ctx.fillStyle = fill; ctx.fillRect(op.x, op.y, op.w, op.h); }
-                if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = op.width || 1; ctx.strokeRect(op.x, op.y, op.w, op.h); }
+                var x = finiteInt(op.x, 0), y = finiteInt(op.y, 0);
+                var rw = finiteInt(op.w, 0, 0), rh = finiteInt(op.h, 0, 0);
+                if (fill) { ctx.fillStyle = fill; ctx.fillRect(x, y, rw, rh); }
+                if (outline) {
+                    ctx.strokeStyle = outline;
+                    ctx.lineWidth = finiteInt(op.width, 1, 0, 20);
+                    ctx.strokeRect(x, y, rw, rh);
+                }
             } else if (k === "oval") {
                 fill = canvasColor(op.fill, ""); outline = canvasColor(op.outline, "");
+                var ox = finiteInt(op.x, 0), oy = finiteInt(op.y, 0);
+                var ow = finiteInt(op.w, 0, 0), oh = finiteInt(op.h, 0, 0);
                 ctx.beginPath();
-                ctx.ellipse(op.x + op.w / 2, op.y + op.h / 2, Math.max(0, op.w / 2), Math.max(0, op.h / 2), 0, 0, 2 * Math.PI);
+                ctx.ellipse(ox + ow / 2, oy + oh / 2, Math.max(0, ow / 2), Math.max(0, oh / 2), 0, 0, 2 * Math.PI);
                 if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-                if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = op.width || 1; ctx.stroke(); }
+                if (outline) {
+                    ctx.strokeStyle = outline;
+                    ctx.lineWidth = finiteInt(op.width, 1, 0, 20);
+                    ctx.stroke();
+                }
             } else if (k === "line") {
-                ctx.strokeStyle = canvasColor(op.fill, "#e8f6ff"); ctx.lineWidth = op.width || 1;
-                ctx.beginPath(); ctx.moveTo(op.x1, op.y1); ctx.lineTo(op.x2, op.y2); ctx.stroke();
+                ctx.strokeStyle = canvasColor(op.fill, "#e8f6ff");
+                ctx.lineWidth = finiteInt(op.width, 1, 1, 20);
+                ctx.beginPath();
+                ctx.moveTo(finiteInt(op.x1, 0), finiteInt(op.y1, 0));
+                ctx.lineTo(finiteInt(op.x2, 0), finiteInt(op.y2, 0));
+                ctx.stroke();
             } else if (k === "text") {
                 ctx.fillStyle = canvasColor(op.fill, "#e8f6ff");
-                ctx.font = (op.bold ? "bold " : "") + (op.size || 10) + "px 'Segoe UI',sans-serif";
+                ctx.font = (op.bold ? "bold " : "") + finiteInt(op.size, 10, 6, 48) + "px 'Segoe UI',sans-serif";
                 var a = op.anchor || "nw";
                 ctx.textAlign = a.indexOf("e") >= 0 ? "right" : ((a === "n" || a === "s" || a === "center") ? "center" : "left");
                 ctx.textBaseline = a.indexOf("s") >= 0 ? "bottom" : ((a === "center" || a === "w" || a === "e") ? "middle" : "top");
-                ctx.fillText(String(op.text || ""), op.x, op.y);
+                ctx.fillText(String(op.text || ""), finiteInt(op.x, 0), finiteInt(op.y, 0));
             }
         });
         wrap.appendChild(cnv);

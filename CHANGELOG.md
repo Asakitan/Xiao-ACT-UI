@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.27: Web plugin layer 尺寸与 canvas 数值防护修复.
+
+  1) `web/plugin_layer.js` 修复插件 UI bar/spacer/input 尺寸归一。
+     异常或非有限 pct/size/width payload 现在会 clamp 到安全范围,
+     避免插件控件出现 `Infinitypx`、`badpx` 或撑破面板的样式。
+
+  2) `web/plugin_layer.js` 修复插件 canvas 尺寸与绘图参数归一。
+     canvas 宽高、rect/oval/line/text 坐标、尺寸、线宽和字号现在会安全取整并 clamp,
+     避免异常插件 spec 导致 canvas 渲染不全或绘图 API 收到非有限数值。
+
 ## v4.6.26: Web panel speed 与 BPM 数值渲染防护修复.
 
   1) `web/panel.html` 修复 control/status speed 文本格式化。

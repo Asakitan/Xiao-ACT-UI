@@ -500,6 +500,41 @@ function assert(cond, message) {
   assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
   assert(pluginLayer.includes(".splg-tablewrap{max-width:100%;overflow-x:auto;"), "plugin layer table wrapper should scroll wide plugin tables");
   for (const snippet of [
+    "fill.style.width = (Math.max(0, Math.min(1, +node.pct || 0))",
+    "s.style.height = (+node.size || 8) + \"px\"",
+    "if (node.width) inp.style.width = node.width + \"px\";",
+    "var w = +node.width || 1, h = +node.height || 1;",
+    "ctx.fillRect(op.x, op.y, op.w, op.h);",
+    "ctx.strokeRect(op.x, op.y, op.w, op.h);",
+    "op.x + op.w / 2",
+    "ctx.lineWidth = op.width || 1;",
+    "ctx.moveTo(op.x1, op.y1); ctx.lineTo(op.x2, op.y2);",
+    "(op.size || 10) + \"px",
+    "ctx.fillText(String(op.text || \"\"), op.x, op.y);",
+  ]) {
+    assert(!pluginLayer.includes(snippet), "plugin layer must not render raw numeric plugin UI values: " + snippet);
+  }
+  for (const snippet of [
+    "function finiteNumber(value, fallback, lo, hi)",
+    "function finiteInt(value, fallback, lo, hi)",
+    "finiteNumber(node.pct, 0, 0, 1)",
+    "finiteInt(node.size, 8, 0, 64)",
+    "var inputWidth = finiteInt(node.width, 0, 0, 2000);",
+    "var w = finiteInt(node.width, 1, 1, 4096);",
+    "var h = finiteInt(node.height, 1, 1, 4096);",
+    "var x = finiteInt(op.x, 0), y = finiteInt(op.y, 0);",
+    "var rw = finiteInt(op.w, 0, 0), rh = finiteInt(op.h, 0, 0);",
+    "var ox = finiteInt(op.x, 0), oy = finiteInt(op.y, 0);",
+    "var ow = finiteInt(op.w, 0, 0), oh = finiteInt(op.h, 0, 0);",
+    "ctx.lineWidth = finiteInt(op.width, 1, 1, 20);",
+    "ctx.moveTo(finiteInt(op.x1, 0), finiteInt(op.y1, 0));",
+    "ctx.lineTo(finiteInt(op.x2, 0), finiteInt(op.y2, 0));",
+    "finiteInt(op.size, 10, 6, 48)",
+    "ctx.fillText(String(op.text || \"\"), finiteInt(op.x, 0), finiteInt(op.y, 0));",
+  ]) {
+    assert(pluginLayer.includes(snippet), "plugin layer is missing numeric plugin UI guards: " + snippet);
+  }
+  for (const snippet of [
     "(node.children || []).forEach(function (c) {",
     "(node.ops || []).forEach(function (op) {",
     "var cols = node.columns || [];",
