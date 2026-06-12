@@ -445,6 +445,12 @@ function renderTeamTab() {
     var data = objectValue(_data);
     var members = objectItems(data.members);
     if (!members.length) {
+        if (String(data.status || '') === 'backend_not_ready') {
+            return '<div class="empty-state">' +
+                '<div class="empty-icon">⌛</div>' +
+                '<div class="empty-text">数据源未就绪 — 启动识别后显示队伍<br>Data source starting — team appears once capture is running</div>' +
+                '</div>';
+        }
         return '<div class="empty-state">' +
             '<div class="empty-icon">⚔</div>' +
             '<div class="empty-text">暂无队伍信息<br>No team data — join a party to see members</div>' +

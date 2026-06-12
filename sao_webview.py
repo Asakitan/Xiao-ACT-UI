@@ -7468,7 +7468,9 @@ class SAOWebViewGUI:
             if bridge:
                 data = bridge.get_commander_data()
             else:
-                data = {'members': [], 'team_id': 0, 'leader_uid': 0, 'dungeon_id': 0}
+                # status 让面板能区分「没队伍」和「数据源还没起来」
+                data = {'members': [], 'team_id': 0, 'leader_uid': 0,
+                        'dungeon_id': 0, 'status': 'backend_not_ready'}
             self._eval_commander(
                 f'Commander.update({json.dumps(data, ensure_ascii=False)})')
         except Exception:

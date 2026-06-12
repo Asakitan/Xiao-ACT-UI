@@ -107,6 +107,7 @@ def commander_data_signature(data: Dict[str, Any]) -> Tuple[Any, ...]:
         str((data or {}).get('leader_uid') or ''),
         _finite_int((data or {}).get('dungeon_id'), 0, lo=0),
         str((data or {}).get('self_uid') or ''),
+        str((data or {}).get('status') or ''),
         members,
     )
 
@@ -115,6 +116,7 @@ def commander_panel_signature(active_tab: str, data: Dict[str, Any]) -> Tuple[An
     return (
         str(active_tab or ''),
         _finite_int((data or {}).get('dungeon_id'), 0, lo=0),
+        str((data or {}).get('status') or ''),
         tuple(
             _member_signature(member)
             for member in list((data or {}).get('members') or [])
@@ -314,7 +316,10 @@ class CommanderPanel:
         members = list(self._data.get('members') or [])
         make_section_title(self._body, 'PARTY')
         if not members:
-            self._render_empty('⚔', '暂无队伍信息\nNo team data — join a party to see members')
+            if str(self._data.get('status') or '') == 'backend_not_ready':
+                self._render_empty('⌛', '数据源未就绪 — 启动识别后显示队伍\nData source starting — team appears once capture is running')
+            else:
+                self._render_empty('⚔', '暂无队伍信息\nNo team data — join a party to see members')
             return
         for member in members:
             self._member_card(member, compact=False)

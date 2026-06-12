@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.98: Commander 空态区分「无队伍」与「数据源未就绪」.
+
+  1) 数据源(packet bridge)未起来时 Commander 后端 fallback 带
+    `status: backend_not_ready`, Tk 与 Web 面板显示「⌛ 数据源未就绪 —
+    启动识别后显示队伍」; 数据源正常但确实没队伍时仍显示原「⚔ 暂无队伍
+    信息」。冷启动先开面板不再误以为没队伍。
+
+  2) `commander_data_signature`/`commander_panel_signature` 白名单补
+    `status` 字段 — 否则「未就绪→真没队伍」转变签名不变, 面板会卡在旧
+    空态不重渲。
+
 ## v4.6.97: Graph 导出 ok:false 假成功修正 + Commander 推送失败可诊断.
 
   1) Graph/Timeseries 导出(Tk `gui_modules/sao_gui_graph_timeseries.py` +

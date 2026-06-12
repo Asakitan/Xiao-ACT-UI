@@ -422,8 +422,10 @@ class SAOPlayerGUIPanelsMixin:
             if bridge and hasattr(bridge, 'get_commander_data'):
                 data = bridge.get_commander_data()
             else:
+                # status 让面板能区分「没队伍」和「数据源还没起来」
                 data = {'members': [], 'team_id': 0,
-                        'leader_uid': 0, 'dungeon_id': 0}
+                        'leader_uid': 0, 'dungeon_id': 0,
+                        'status': 'backend_not_ready'}
             _sig = commander_data_signature(data)
             if _sig != self._last_commander_push_sig:
                 self._last_commander_push_sig = _sig
