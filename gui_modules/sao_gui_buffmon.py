@@ -296,6 +296,8 @@ class _BuffPanelBase:
 
         # 缓存 base_img (不含动画) — 仅在 row 内容/秒数变化时重画
         self._cached_base: Optional[Image.Image] = None
+        # shell 部件单槽缓存 — 键 (sw, sh, theme), 见 _shell_parts
+        self._shell_parts_cache = None
         self._cached_total_h = 0
         self._cached_sig: Tuple = ()
         # base_img 重建代数; compose 签名用它而不是 id(base_img) —
@@ -545,7 +547,15 @@ class _BuffPanelBase:
             (x0, y1 - c),
         ]
 
-    def _draw_shell(self, img: Image.Image, sx: int, sy: int, sw: int, sh: int):
+    def _shell_parts(self, sw: int, sh: int) -> dict:
+        """渐变/mask/sheen/scan/底线是 (尺寸, 主题) 的纯函数 — 单槽缓存。
+        base 重建在倒计时期间高达 10Hz (签名含 0.1s 秒数桶), 高斯模糊 +
+        numpy 渐变 + 逐像素底线循环不该每次重算。部件用 tile 本地坐标,
+        贴回时带 (sx, sy) 偏移, 输出逐像素等价。"""
+        key = (sw, sh, self._theme)
+        cached = getattr(self, '_shell_parts_cache', None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         # 1) Vertical gradient
         grad = np.zeros((sh, 1, 4), dtype=np.uint8)
         ys = np.linspace(0, 1, sh)
@@ -556,11 +566,9 @@ class _BuffPanelBase:
         grad_img = Image.fromarray(grad, 'RGBA').resize((sw, sh))
 
         # 2) Polygon mask — webview cut-corner shape
-        local_poly = [(p[0] - sx, p[1] - sy) for p in
-                      self._shell_polygon(sx, sy, sw, sh)]
+        local_poly = self._shell_polygon(0, 0, sw, sh)
         mask = Image.new('L', (sw, sh), 0)
         ImageDraw.Draw(mask).polygon(local_poly, fill=255)
-        img.paste(grad_img, (sx, sy), mask)
 
         # 3) 顶部青光 sheen (clipped by polygon)
         sheen = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
@@ -572,7 +580,6 @@ class _BuffPanelBase:
         sheen = _gpu_blur(sheen, 3)
         sheen_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sheen_masked.paste(sheen, (0, 0), mask)
-        img.alpha_composite(sheen_masked, (sx, sy))
 
         # 4) 微扫描线 (4px 间隔, web 风格)
         scan = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
@@ -581,22 +588,12 @@ class _BuffPanelBase:
             sd_scan.line((0, y, sw, y), fill=self.SCAN_LINE)
         scan_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         scan_masked.paste(scan, (0, 0), mask)
-        img.alpha_composite(scan_masked, (sx, sy))
-
-        # 5) 边框 — cyan polygon + 内侧 1px 白色 highlight
-        draw = ImageDraw.Draw(img, 'RGBA')
-        outer_poly = self._shell_polygon(sx, sy, sw, sh)
-        draw.line(outer_poly + [outer_poly[0]],
-                  fill=self.PANEL_EDGE, width=1)
-        inner_poly = self._shell_polygon(sx, sy, sw, sh, inset=1)
-        draw.line(inner_poly + [inner_poly[0]],
-                  fill=self.INNER_HIGHLIGHT, width=1)
 
         # 6) 底部 cyan→gold 渐变线 — SAO 招牌
-        line_y = sy + sh - 2
-        line_x0 = sx + self.SHELL_CUT + 2
-        line_x1 = sx + sw - 3
+        line_x0 = self.SHELL_CUT + 2
+        line_x1 = sw - 3
         line_w = max(0, line_x1 - line_x0)
+        grad_line = None
         if line_w > 4:
             arr = np.zeros((1, line_w, 4), dtype=np.uint8)
             for i in range(line_w):
@@ -615,7 +612,29 @@ class _BuffPanelBase:
                     a = int(200 * (1.0 - (t - 0.70) / 0.30))
                     arr[0, i] = (243, 175, 18, max(0, a))
             grad_line = Image.fromarray(arr, 'RGBA')
-            img.alpha_composite(grad_line, (line_x0, line_y))
+        parts = {'grad': grad_img, 'mask': mask, 'sheen': sheen_masked,
+                 'scan': scan_masked, 'grad_line': grad_line}
+        self._shell_parts_cache = (key, parts)
+        return parts
+
+    def _draw_shell(self, img: Image.Image, sx: int, sy: int, sw: int, sh: int):
+        parts = self._shell_parts(sw, sh)
+        img.paste(parts['grad'], (sx, sy), parts['mask'])
+        img.alpha_composite(parts['sheen'], (sx, sy))
+        img.alpha_composite(parts['scan'], (sx, sy))
+
+        # 5) 边框 — cyan polygon + 内侧 1px 白色 highlight (廉价线段, 现画)
+        draw = ImageDraw.Draw(img, 'RGBA')
+        outer_poly = self._shell_polygon(sx, sy, sw, sh)
+        draw.line(outer_poly + [outer_poly[0]],
+                  fill=self.PANEL_EDGE, width=1)
+        inner_poly = self._shell_polygon(sx, sy, sw, sh, inset=1)
+        draw.line(inner_poly + [inner_poly[0]],
+                  fill=self.INNER_HIGHLIGHT, width=1)
+
+        if parts['grad_line'] is not None:
+            img.alpha_composite(parts['grad_line'],
+                                (sx + self.SHELL_CUT + 2, sy + sh - 2))
 
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
                        sx: int, sy: int, sw: int, sh: int):

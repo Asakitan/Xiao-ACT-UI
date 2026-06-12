@@ -2896,26 +2896,37 @@ class DpsOverlay:
             draw.text((int(round(x + acc)), y), ch, fill=fill, font=font)
             acc += _glyph_w_dps(draw, ch, font) + spacing
 
-    @staticmethod
-    def _draw_text_shadow(draw, text, font, color, blur, x, y, spacing):
-        from PIL import Image as _Img, ImageFilter as _IF, ImageDraw as _ID
-        acc = 0.0
-        widths = []
-        for ch in text:
-            cw = _glyph_w_dps(draw, ch, font)
-            widths.append(cw)
-            acc += cw + spacing
-        tw = int(round(acc)) + blur * 4
-        th = (font.size or 14) + blur * 4
-        tmp = _Img.new('RGBA', (tw, th), (0, 0, 0, 0))
-        td = _ID.Draw(tmp, 'RGBA')
-        ox = blur * 2
-        oy = blur * 2
-        a = 0.0
-        for ch, cw in zip(text, widths):
-            td.text((int(round(ox + a)), oy), ch, fill=color, font=font)
-            a += cw + spacing
-        tmp = tmp.filter(_IF.GaussianBlur(blur))
+    def _draw_text_shadow(self, draw, text, font, color, blur, x, y, spacing):
+        # 阴影位图是 (文本, 字体, 颜色, blur, 间距) 的纯函数且与 x/y 无关 —
+        # 缓存复用, 免每次 compose 重画字形 + 高斯模糊
+        key = (text, getattr(font, 'path', None), getattr(font, 'size', None),
+               color, blur, spacing)
+        cache = getattr(self, '_text_shadow_cache', None)
+        if cache is None:
+            cache = self._text_shadow_cache = {}
+        tmp = cache.get(key)
+        if tmp is None:
+            from PIL import Image as _Img, ImageFilter as _IF, ImageDraw as _ID
+            acc = 0.0
+            widths = []
+            for ch in text:
+                cw = _glyph_w_dps(draw, ch, font)
+                widths.append(cw)
+                acc += cw + spacing
+            tw = int(round(acc)) + blur * 4
+            th = (font.size or 14) + blur * 4
+            tmp = _Img.new('RGBA', (tw, th), (0, 0, 0, 0))
+            td = _ID.Draw(tmp, 'RGBA')
+            ox = blur * 2
+            oy = blur * 2
+            a = 0.0
+            for ch, cw in zip(text, widths):
+                td.text((int(round(ox + a)), oy), ch, fill=color, font=font)
+                a += cw + spacing
+            tmp = tmp.filter(_IF.GaussianBlur(blur))
+            if len(cache) > 64:
+                cache.clear()
+            cache[key] = tmp
         draw._image.alpha_composite(tmp, (int(round(x)) - blur * 2, y - blur * 2))
 
     def _draw_tracked_centered(self, draw: ImageDraw.ImageDraw, text: str,

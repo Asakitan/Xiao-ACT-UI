@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.108: buffmon shell 部件缓存 + DPS 文字阴影缓存.
+
+  1) `gui_modules/sao_gui_buffmon.py` `_draw_shell` 拆出 `_shell_parts`
+    单槽缓存(键 = 尺寸 + 主题) — base 重建在 buff 倒计时期间高达 10Hz
+    (签名含 0.1s 秒数桶), 此前每次都重算高斯模糊 sheen + numpy 渐变 +
+    扫描线 + 底部渐变线逐像素 Python 循环; 部件 tile 本地坐标贴回带偏移,
+    输出逐像素等价(冒烟: 命中==未命中, 主题键失效正确)。
+
+  2) `gui_modules/sao_gui_dps.py` `_draw_text_shadow` 阴影位图按
+    (文本, 字体, 颜色, blur, 间距) 缓存复用(上限 64 防膨胀) —
+    阴影与 x/y 无关, 此前每次 compose 都重画字形 + 高斯模糊。
+
 ## v4.6.107: 菜单快捷键标签跟随改键 + AutoKey 注入失败可见.
 
   1) web 菜单 F5/F6 快捷键标签不再硬编码 — `_sync_menu_settings` 下发
