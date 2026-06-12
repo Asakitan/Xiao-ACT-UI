@@ -5137,7 +5137,7 @@ function _akProfilesFull() {
 }
 
 function _akFindProfile(profileId) {
-    var id = String(profileId || '');
+    var id = _profileText(profileId, '');
     if (!id) return null;
     var profiles = _akProfilesFull();
     for (var i = 0; i < profiles.length; i++) {
@@ -5178,14 +5178,14 @@ function _akPrepareDraft(profile) {
 
 function _akLoadDraftFromState(profileId, force) {
     _akEnsureSelectedProfile();
-    var chosenId = String(profileId || _autoKeySelectedProfileId || '');
+    var chosenId = _profileText(profileId, _autoKeySelectedProfileId);
     var profile = _akFindProfile(chosenId);
     if (!profile) {
         _autoKeyDraftProfile = null;
         return;
     }
     _autoKeySelectedProfileId = _profileText(profile.id, '');
-    if (!force && _autoKeyDraftDirty && _autoKeyDraftProfile && String(_autoKeyDraftProfile.id || '') === _autoKeySelectedProfileId) {
+    if (!force && _autoKeyDraftDirty && _autoKeyDraftProfile && _profileText(_autoKeyDraftProfile.id, '') === _autoKeySelectedProfileId) {
         return;
     }
     _autoKeyDraftProfile = _akPrepareDraft(profile);
@@ -5262,8 +5262,8 @@ function _akRenderLocal() {
         var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);
         var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);
         var classes = ['auto-key-profile'];
-        if (String(state.active_profile_id || '') === id) classes.push('active');
-        if (String(_autoKeySelectedProfileId || '') === id) classes.push('selected');
+        if (_profileText(state.active_profile_id, '') === id) classes.push('active');
+        if (_profileText(_autoKeySelectedProfileId, '') === id) classes.push('selected');
         return '' +
             '<div class="' + classes.join(' ') + '">' +
                 '<div class="auto-key-card-head">' +
@@ -5274,7 +5274,7 @@ function _akRenderLocal() {
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml(_profileText(profile.profession_name, '任意 Any').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill ' + (_profileText(state.active_profile_id, '') === id ? 'active' : '') + '">' + _escHtml(_profileText(profile.profession_name, '任意 Any').toUpperCase()) + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(_profileText(profile.source, 'local').toUpperCase()) + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(actionCount + ' 动作 Actions / ' + enabledCount + ' 已启用 On') + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(_profileText(profile.updated_at, '')) + '</span>' +
@@ -5696,7 +5696,7 @@ function _syncAutoKeyState(state) {
 }
 
 function _akSelectProfile(profileId, tabName) {
-    _autoKeySelectedProfileId = String(profileId || '');
+    _autoKeySelectedProfileId = _profileText(profileId, '');
     _akLoadDraftFromState(_autoKeySelectedProfileId, true);
     if (tabName) _autoKeyTab = _menuTabName(tabName);
     _renderAutoKeyUI();
@@ -5821,7 +5821,7 @@ function _akCopyProfile(profileId) {
 
 function _akDeleteProfile(profileId) {
     if (!window.confirm('Delete this auto key profile?')) return;
-    if (String(_autoKeySelectedProfileId || '') === String(profileId || '')) {
+    if (_profileText(_autoKeySelectedProfileId, '') === _profileText(profileId, '')) {
         _autoKeyDraftProfile = null;
         _autoKeyDraftDirty = false;
     }
@@ -5838,7 +5838,7 @@ function _akActivateProfile(profileId) {
 
 function _akExportProfile(profileId) {
     _akCallApi('export_auto_key_profile', [profileId], function(data) {
-        showAlert('AUTO KEYS', '已导出到 / Exported to:\n' + (data.path || ''), true);
+        showAlert('AUTO KEYS', '已导出到 / Exported to:\n' + _profileText(data && data.path, ''), true);
     });
 }
 
@@ -5908,7 +5908,7 @@ function _akSaveDraft() {
         var payload = _akSerializeDraft();
         _akCallApi('save_auto_key_profile', [payload], function() {
             _autoKeyDraftDirty = false;
-            _autoKeySelectedProfileId = String(payload.id || _autoKeySelectedProfileId || '');
+            _autoKeySelectedProfileId = _profileText(payload.id, _autoKeySelectedProfileId);
             _akLoadDraftFromState(_autoKeySelectedProfileId, true);
             _renderAutoKeyUI();
             showToast('PROFILE SAVED');
@@ -6898,18 +6898,18 @@ function _brFindProfile(id) {
     var profiles = _brProfilesFull();
     return profiles.find(function(rawProfile) {
         var p = _profileEntry(rawProfile);
-        return _profileText(p.id, '') === String(id);
+        return _profileText(p.id, '') === _profileText(id, '');
     }) || null;
 }
 
 function _brLoadDraftFromState(profileId, force) {
-    var targetId = String(profileId || _brSelectedProfileId || ((_bossRaidState && _bossRaidState.active_profile_id) || ''));
+    var targetId = _profileText(profileId, _profileText(_brSelectedProfileId, _profileText(_bossRaidState && _bossRaidState.active_profile_id, '')));
     var profile = _brFindProfile(targetId);
     if (!profile) {
         if (force) _brDraftProfile = null;
         return;
     }
-    if (!force && _brDraftProfile && String(_brDraftProfile.id || '') === String(profile.id || '')) {
+    if (!force && _brDraftProfile && _profileText(_brDraftProfile.id, '') === _profileText(profile.id, '')) {
         return;
     }
     _brDraftProfile = JSON.parse(JSON.stringify(profile));
@@ -6944,7 +6944,7 @@ function _brRenderLocal() {
     var list = document.getElementById('boss-raid-profile-list');
     if (!list) return;
     var profiles = _brProfiles();
-    var activeId = (_bossRaidState && _bossRaidState.active_profile_id) || '';
+    var activeId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
     if (!profiles.length) {
         list.innerHTML = '<div style="padding:12px;color:rgba(86,92,98,0.68);font-size:12px;">暂无配置 No profiles yet</div>';
         return;
@@ -6969,7 +6969,7 @@ function _brRenderLocal() {
 }
 
 function _brSelectProfile(id) {
-    _brSelectedProfileId = String(id || '');
+    _brSelectedProfileId = _profileText(id, '');
     if (_brTab === 'editor' && !_brDraftDirty) {
         _brLoadDraftFromState(_brSelectedProfileId, true);
     }
@@ -6978,14 +6978,14 @@ function _brSelectProfile(id) {
 }
 
 function _brActivateProfile(id) {
-    _brSelectedProfileId = String(id || '');
+    _brSelectedProfileId = _profileText(id, '');
     _brCallApi('activate_boss_raid_profile', [id], function() {
         showToast('BOSS RAID ACTIVATED');
     });
 }
 
 function _brEditProfile(id) {
-    _brSelectedProfileId = String(id || '');
+    _brSelectedProfileId = _profileText(id, '');
     _brLoadDraftFromState(_brSelectedProfileId, true);
     _brSetTab('editor');
 }
@@ -7358,7 +7358,7 @@ function _brCreateProfile() {
     _brDraftDirty = false;
     _brCallApi('create_boss_raid_profile', [], function(data) {
         showToast('BOSS RAID CREATED');
-        _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || '');
+        _brSelectedProfileId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
         _brLoadDraftFromState(_brSelectedProfileId, true);
         _brSetTab('editor');
     });
@@ -7386,7 +7386,7 @@ function _brSaveProfile() {
     var payload = _brSerializeDraft();
     _brCallApi('save_boss_raid_profile', [payload], function() {
         _brDraftDirty = false;
-        _brSelectedProfileId = String(payload.id || _brSelectedProfileId || '');
+        _brSelectedProfileId = _profileText(payload.id, _brSelectedProfileId);
         _brLoadDraftFromState(_brSelectedProfileId, true);
         showToast('BOSS RAID SAVED');
     });
@@ -7398,14 +7398,14 @@ function _brExportProfile() {
         return;
     }
     _brCallApi('export_boss_raid_profile', [_brDraftProfile.id], function(data) {
-        showAlert('BOSS RAID', '已导出到 / Exported to:\n' + (data.path || ''), true);
+        showAlert('BOSS RAID', '已导出到 / Exported to:\n' + _profileText(data && data.path, ''), true);
     });
 }
 function _brDeleteProfile() {
     if (!_brDraftProfile) return;
     if (!window.confirm('Delete this boss raid profile?')) return;
     _brCallApi('delete_boss_raid_profile', [_brDraftProfile.id], function() {
-        _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || '');
+        _brSelectedProfileId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
         _brLoadDraftFromState(_brSelectedProfileId, true);
         _brSetTab('local');
         showToast('BOSS RAID DELETED');

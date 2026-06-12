@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.53: Web menu profile selection id 防护修复.
+
+  1) `web/menu.html` 修复 AutoKey profile 选择/保存/导出 ID fallback。
+     本地列表 active/selected、选择、删除、保存后选中与导出 path 显示
+     现在保留合法 `0`, 避免有效 profile 被当成空选择。
+
+  2) `web/menu.html` 修复 BossRaid profile 选择/保存/导出 ID fallback。
+     查找、加载、激活/编辑、创建/删除后的选中 ID 与导出 path 显示
+     现在统一使用安全文本 helper, 避免数字/字符串 ID 被错误清空。
+
 ## v4.6.52: Web menu cloud settings 参数传递修复.
 
   1) `web/menu.html` 修复 AutoKey/BossRaid cloud 表单回填与读取。

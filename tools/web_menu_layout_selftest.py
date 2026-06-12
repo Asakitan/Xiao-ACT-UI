@@ -576,7 +576,7 @@ def main() -> int:
         "var profiles = _brProfilesFull();",
         "var p = _profileEntry(rawProfile);",
         "return _profileText(p.id, '') === _brSelectedProfileId;",
-        "return _profileText(p.id, '') === String(id);",
+        "return _profileText(p.id, '') === _profileText(id, '');",
         "var profiles = _brProfiles();",
         "list.innerHTML = profiles.map(function(rawProfile) {",
         "var id = _profileText(p.id, '');",
@@ -587,6 +587,51 @@ def main() -> int:
     for snippet in profile_payload_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey/BossRaid local profile payload snippet: " + snippet)
+
+    profile_selection_raw_patterns = [
+        "var id = String(profileId || '');",
+        "var chosenId = String(profileId || _autoKeySelectedProfileId || '');",
+        "String(_autoKeyDraftProfile.id || '') === _autoKeySelectedProfileId",
+        "String(state.active_profile_id || '') === id",
+        "String(_autoKeySelectedProfileId || '') === id",
+        "_autoKeySelectedProfileId = String(profileId || '');",
+        "if (String(_autoKeySelectedProfileId || '') === String(profileId || ''))",
+        "_autoKeySelectedProfileId = String(payload.id || _autoKeySelectedProfileId || '');",
+        "showAlert('AUTO KEYS', '已导出到 / Exported to:\\n' + (data.path || ''), true);",
+        "return _profileText(p.id, '') === String(id);",
+        "var targetId = String(profileId || _brSelectedProfileId || ((_bossRaidState && _bossRaidState.active_profile_id) || ''));",
+        "String(_brDraftProfile.id || '') === String(profile.id || '')",
+        "var activeId = (_bossRaidState && _bossRaidState.active_profile_id) || '';",
+        "_brSelectedProfileId = String(id || '');",
+        "_brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || '');",
+        "_brSelectedProfileId = String(payload.id || _brSelectedProfileId || '');",
+        "showAlert('BOSS RAID', '已导出到 / Exported to:\\n' + (data.path || ''), true);",
+    ]
+    for pattern in profile_selection_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey/BossRaid profile selection/export ids must preserve zero text: " + pattern)
+    profile_selection_safe_required = [
+        "var id = _profileText(profileId, '');",
+        "var chosenId = _profileText(profileId, _autoKeySelectedProfileId);",
+        "_profileText(_autoKeyDraftProfile.id, '') === _autoKeySelectedProfileId",
+        "_profileText(state.active_profile_id, '') === id",
+        "_profileText(_autoKeySelectedProfileId, '') === id",
+        "_autoKeySelectedProfileId = _profileText(profileId, '');",
+        "if (_profileText(_autoKeySelectedProfileId, '') === _profileText(profileId, ''))",
+        "_autoKeySelectedProfileId = _profileText(payload.id, _autoKeySelectedProfileId);",
+        "showAlert('AUTO KEYS', '已导出到 / Exported to:\\n' + _profileText(data && data.path, ''), true);",
+        "return _profileText(p.id, '') === _profileText(id, '');",
+        "var targetId = _profileText(profileId, _profileText(_brSelectedProfileId, _profileText(_bossRaidState && _bossRaidState.active_profile_id, '')));",
+        "_profileText(_brDraftProfile.id, '') === _profileText(profile.id, '')",
+        "var activeId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');",
+        "_brSelectedProfileId = _profileText(id, '');",
+        "_brSelectedProfileId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');",
+        "_brSelectedProfileId = _profileText(payload.id, _brSelectedProfileId);",
+        "showAlert('BOSS RAID', '已导出到 / Exported to:\\n' + _profileText(data && data.path, ''), true);",
+    ]
+    for snippet in profile_selection_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey/BossRaid profile selection/export snippet: " + snippet)
 
     boss_raid_api_raw_patterns = [
         "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
