@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.78: 更新失败回滚真实生效 + Mem Scope 操作失败反馈.
+
+  1) `update_apply.py` 修复更新中途失败时回滚空转的问题。
+     `_apply_zip_package` 原先把备份/新建清单存在局部变量、仅在成功时返回,
+     中途抛异常 (如目标文件被锁) 时调用方拿空列表回滚 = 实际不回滚、应用半更新。
+     现在清单由调用方传入共享, 部分进度在异常后仍可回滚;
+     已用临时 zip + 强制失败用例验证部分备份记录保留。
+
+  2) `web/mem_scope.html` 搜索/收敛/attr_map 读取/状态轮询的 Promise
+     catch 不再静默吞错, 失败时 toast 提示, 轮询停止时告知用户。
+
 ## v4.6.77: 内存源依赖透传失败可见化 + 插件卸载清除启用残留.
 
   1) `net/packet_bridge.py` `set_dps_tracker`/`set_boss_raid_engine` 向 mem source

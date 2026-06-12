@@ -287,7 +287,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
                 var attrs = res.attrs || {};
                 toast(addr + ' attr_map: ' + Object.keys(attrs).length + ' 项');
             } else { toast(addr + ': ' + (res.hint || res.reason)); }
-        }).catch(function () {});
+        }).catch(function () { toast(addr + ': attr_map 读取失败'); });
     }
 
     function refresh() {
@@ -313,7 +313,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
                 var js = JSON.parse(j);
                 refresh();
                 if (js.done) stopPoll();
-            }).catch(function () { stopPoll(); });
+            }).catch(function () { stopPoll(); toast('搜索状态轮询失败, 已停止刷新'); });
         }, 500);
     }
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
@@ -326,7 +326,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
             var res = JSON.parse(j);
             if (res.ok) { jobId = res.job_id || ''; startPoll(); refresh(); }
             else { toast('搜索失败: ' + (res.hint || res.reason)); }
-        }).catch(function () {});
+        }).catch(function () { toast('搜索请求失败'); });
     }
 
     function doNarrow() {
@@ -334,7 +334,7 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         Promise.resolve(a.mem_narrow(jobId, (queryInput.value || '').trim())).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) { startPoll(); refresh(); } else { toast('收敛失败: ' + (res.hint || res.reason)); }
-        }).catch(function () {});
+        }).catch(function () { toast('收敛请求失败'); });
     }
 
     function doClear() {

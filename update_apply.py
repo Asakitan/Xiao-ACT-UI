@@ -452,15 +452,23 @@ def _apply_zip_package(
     version: str,
     package_type: str,
     progress_cb: Optional[Callable[[Dict[str, object]], None]] = None,
+    backed_up: Optional[List[Tuple[str, str]]] = None,
+    created_files: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[Tuple[str, str]], List[str], Optional[Tuple[str, str]]]:
-    """应用 zip 更新包，返回 (已应用列表, 备份列表, 新建文件列表, 延迟自替换文件)。"""
+    """应用 zip 更新包，返回 (已应用列表, 备份列表, 新建文件列表, 延迟自替换文件)。
+
+    ``backed_up``/``created_files`` 可由调用方传入共享列表: 中途抛异常时
+    已完成的备份/新建记录仍保留在调用方手里, 回滚才能覆盖部分进度。
+    """
     allow_top_level_exe = package_type == "full-package"
     backup_root = os.path.join(base, "backup", version)
     if allow_top_level_exe:
         backup_root = os.path.join(backup_root, "__full__")
     applied: List[str] = []
-    backed_up: List[Tuple[str, str]] = []
-    created_files: List[str] = []
+    if backed_up is None:
+        backed_up = []
+    if created_files is None:
+        created_files = []
     staged_self_update: Optional[Tuple[str, str]] = None
     self_rel = _get_self_rel(base)
 
@@ -798,6 +806,8 @@ def run_apply_flow(
             version=version or "unknown",
             package_type=package_type,
             progress_cb=progress_cb,
+            backed_up=backed_up,
+            created_files=created_files,
         )
         _log(f"applied {len(applied)} files for {package_type} v{version}", base)
     except Exception as e:
