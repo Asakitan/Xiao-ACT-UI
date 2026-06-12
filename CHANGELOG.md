@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.30: ACT Graph Web 点列与数值显示防护修复.
+
+  1) `web/act_graph_timeseries.html` 修复 timeseries points 条目归一。
+     图表与最近点列表现在只渲染对象 point 条目,
+     避免异常数组项生成 0ms/0 值幽灵点。
+
+  2) `web/act_graph_timeseries.html` 修复图表数值格式化回退。
+     `fmt()` 现在用有限数值 fallback,
+     避免非有限值显示为 `Infinity` 或原始坏 payload 文本。
+
 ## v4.6.29: Commander Web payload shape 防护修复.
 
   1) `web/commander.html` 修复成员列表 payload 归一。

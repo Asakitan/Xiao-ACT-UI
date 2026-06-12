@@ -252,6 +252,9 @@ def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
         "time_range_ms: args[4] || 0",
         "time_range_ms: args[0] || 0, limit: args[1] || 120",
         "limit: args[2] || 120",
+        "return String(value || '0');",
+        "return (Array.isArray(points) ? points : []).map(p => {",
+        "const point = (p && typeof p === 'object') ? p : {};",
     )
     for snippet in raw_number_snippets:
         if snippet in graph:
@@ -273,6 +276,8 @@ def _assert_graph_numbers_and_jump_topic_are_normalized() -> None:
         "function normalizedPoints",
         "function objectValue(value)",
         "function objectItems(value)",
+        "const n = finiteNum(value, 0);",
+        "return objectItems(points).map(point => {",
         "limit: safeLimit(args[1])",
         "time_range_ms: safeZoom(args[4])",
         "return { time_range_ms: safeZoom(args[0]), limit: safeLimit(args[1]) };",

@@ -187,8 +187,7 @@
       return esc(JSON.stringify(String(value == null ? '' : value)));
     }
     function fmt(value) {
-      const n = Number(value || 0);
-      if (!Number.isFinite(n)) return String(value || '0');
+      const n = finiteNum(value, 0);
       if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(2) + 'm';
       if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'k';
       return n.toFixed(n % 1 ? 2 : 0);
@@ -217,8 +216,7 @@
       return (Array.isArray(value) ? value : []).filter(item => item && typeof item === 'object' && !Array.isArray(item));
     }
     function normalizedPoints(points) {
-      return (Array.isArray(points) ? points : []).map(p => {
-        const point = (p && typeof p === 'object') ? p : {};
+      return objectItems(points).map(point => {
         return Object.assign({}, point, {
           _time_ms: safeMs(point.time_ms),
           _value: finiteNum(point.value, 0),
