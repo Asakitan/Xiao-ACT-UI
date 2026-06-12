@@ -164,7 +164,10 @@ class TimelineVcrPanel:
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
         self._last_request_key = ()
-        self._status_var.set(message)
+        if isinstance(result, Mapping) and result.get('ok') is False:
+            self._status_var.set(str(result.get('message') or f'{message} FAILED'))
+        else:
+            self._status_var.set(message)
         self._render_status(self._last_status)
         return self._last_status
 

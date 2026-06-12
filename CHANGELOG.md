@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.80: Timeline VCR 失败不再假报成功 + overlay 推送错误去重记录.
+
+  1) `gui_modules/sao_gui_timeline_vcr.py` `_apply_result` 现在检查返回的
+     `ok` 标志, 失败时状态栏显示后端 message 而不是固定的
+     PLAYING/FILTER APPLIED 等成功文案; 与 Web 端 status pill 的
+     ERROR 行为对齐 (双 UI 1:1)。
+
+  2) `gui_modules/sao_gui_state_mixin.py` `_push_packet_overlays` 异常
+     从"只记第一个错误就永久沉默"改为按不同错误消息去重各记一次
+     (上限 20 条), 后续不同根因不再被吞。
+
 ## v4.6.79: Web DPS 面板脏签名守卫 + 抓包消费错误计数可观测.
 
   1) `web/dps.html` 新增 `_setHtml` 脏签名守卫并收口全部 7 个 innerHTML

@@ -887,8 +887,13 @@ class SAOPlayerGUIStateMixin:
                 try:
                     self._push_packet_overlays(gs)
                 except Exception as _e_pp:
-                    if not getattr(self, '_pp_err_logged', False):
-                        self._pp_err_logged = True
+                    # 按不同错误消息各记一次 (上限 20 条防膨胀), 每 tick 路径不能全量打
+                    _seen = getattr(self, '_pp_err_seen', None)
+                    if _seen is None:
+                        _seen = self._pp_err_seen = set()
+                    _key = f'{type(_e_pp).__name__}: {_e_pp}'
+                    if _key not in _seen and len(_seen) < 20:
+                        _seen.add(_key)
                         print(f'[SAO Entity] _push_packet_overlays error: {_e_pp}')
                         import traceback as _tb
                         _tb.print_exc()
