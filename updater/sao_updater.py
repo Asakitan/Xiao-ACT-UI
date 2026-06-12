@@ -309,22 +309,27 @@ def _http_download(
     expected_sha256: str = "",
     timeout: float = DOWNLOAD_TIMEOUT,
     progress_cb: Optional[Callable[[float], None]] = None,
+    expected_size: int = 0,
 ) -> Optional[str]:
     """下载到 dst_path. 返回错误字符串, None 表示成功."""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     sha = hashlib.sha256()
     tmp_path = dst_path + ".part"
+    total = 0
     try:
         try:
             os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         except Exception:
             pass
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            total = 0
             try:
                 content_length = int(resp.headers.get("Content-Length") or 0)
             except Exception:
                 content_length = 0
+            if content_length <= 0:
+                # 服务器走 chunked 编码不给 Content-Length 时用 manifest size
+                # 兜底, 否则进度回调一次都不发, 进度条停在 0%。
+                content_length = max(0, int(expected_size or 0))
             with open(tmp_path, "wb") as out:
                 while True:
                     chunk = resp.read(64 * 1024)
@@ -358,14 +363,14 @@ def _http_download(
                 os.remove(tmp_path)
         except Exception:
             pass
-        return f"下载失败: {e}"
+        return f"下载失败: {type(e).__name__}: {e} (已收 {total / 1048576:.1f} MB)"
     except Exception as e:
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except Exception:
             pass
-        return f"下载异常: {e}"
+        return f"下载异常: {type(e).__name__}: {e} (已收 {total / 1048576:.1f} MB)"
 
 
 def _save_state(status: UpdateStatus):
@@ -595,7 +600,8 @@ class UpdateManager:
         def _progress(p: float):
             self._set_state(progress=p)
 
-        err = _http_download(manifest.download_url, dst, manifest.sha256, progress_cb=_progress)
+        err = _http_download(manifest.download_url, dst, manifest.sha256, progress_cb=_progress,
+                             expected_size=int(getattr(manifest, 'size', 0) or 0))
         if err:
             self._set_state(state=STATE_ERROR, error=err, progress=0.0)
             return
@@ -643,10 +649,29 @@ def get_manager() -> UpdateManager:
 
 
 def has_pending_update() -> bool:
-    """检查 staging 中是否存在待应用的更新包."""
+    """检查 staging 中是否存在待应用的更新包.
+
+    pending.json 在包下载+SHA 校验成功后才写, 但包文件可能事后被磁盘清理/
+    杀软删除或截断 — 那种残局不能再报「更新就绪」, 否则退出时 update.exe
+    解包报错。这里只读校验, 不动残留文件。
+    """
     try:
         meta_path = os.path.join(RUNTIME_STAGING_DIR, "pending.json")
-        return os.path.exists(meta_path)
+        if not os.path.exists(meta_path):
+            return False
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f) or {}
+        except Exception:
+            return False
+        pkg = str(meta.get("package_path") or "").strip()
+        if not pkg or not os.path.isfile(pkg):
+            return False
+        if pkg.lower().endswith(".zip"):
+            import zipfile
+            if not zipfile.is_zipfile(pkg):
+                return False
+        return True
     except Exception:
         return False
 

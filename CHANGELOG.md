@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.99: 更新下载进度兜底与残损更新包防误报.
+
+  1) `updater/sao_updater.py` 下载进度在服务器不给 Content-Length(chunked)
+    时回退用 manifest size 计算, 进度条不再全程停 0%; 下载失败报错带异常
+    类型与已收字节数(如「下载失败: TimeoutError: … (已收 28.5 MB)」),
+    便于判断是否值得重试。
+
+  2) `has_pending_update()` 改为只读校验 pending.json 可解析、包文件存在
+    且 zip 头有效 — 包被磁盘清理/杀软删除/截断后不再误报「更新就绪」,
+    避免退出时 update.exe 解包报错; 不动残留文件。
+
 ## v4.6.98: Commander 空态区分「无队伍」与「数据源未就绪」.
 
   1) 数据源(packet bridge)未起来时 Commander 后端 fallback 带
