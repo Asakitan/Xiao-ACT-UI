@@ -1336,13 +1336,15 @@ function mechDraftRemoveBuff(bid) {
 function mechCatalogSearch() {
     var q = _mVal('mf-q');
     var a = _api();
-    if (!q || !a || !a.search_skill_catalog) return;
+    if (!q) { _mechNotice('请输入技能/Buff关键词', true); return; }
+    if (!a || !a.search_skill_catalog) { _mechNotice('技能/Buff库接口不可用', true); return; }
     _mCollect();
     Promise.resolve(a.search_skill_catalog(q, 10)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         _mechCatalog = (r && r.ok) ? _objectItems(r.results) : [];
+        if (r && !r.ok) _mechNotice(r.message || '搜索失败', true);
         renderMechanics();
-    }).catch(function () {});
+    }).catch(function () { _mechNotice('搜索失败: 接口异常', true); });
 }
 function _dashSequence(key, count, interval) {
     key = String(key || 'SHIFT').trim().toUpperCase() || 'SHIFT';
@@ -1386,15 +1388,23 @@ function mechSeqRemove(i) {
 function mechFormTest(kinds) {
     var m = _mCollect();
     var a = _api();
-    if (m && a && a.test_mechanic) {
-        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).catch(function () {});
+    if (!m) return;
+    if (!a || !a.test_mechanic) { _mechNotice('试发接口不可用', true); return; }
+    if ((kinds || []).indexOf('dodge') >= 0) {
+        _mechNotice('按键试发: 将发送到当前前台窗口', true);
     }
+    Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && !r.ok) _mechNotice(r.message || '试发失败', true);
+        else if (r && r.message) _mechNotice(r.message, false);
+    }).catch(function () { _mechNotice('试发失败: 接口异常', true); });
 }
 function mechCancelEdit() { _mechEditing = null; _mechDraft = null; _mechCatalog = []; renderMechanics(); }
 function mechSaveForm() {
     var m = _mCollect();
     var a = _api();
-    if (!m || !a || !a.save_mechanic) return;
+    if (!m) return;
+    if (!a || !a.save_mechanic) { _mechNotice('机制保存接口不可用', true); return; }
     var m2 = JSON.parse(JSON.stringify(m));
     delete m2.summary; delete m2.skill_names;
     var dodge = m2.dodge = _objectValue(m2.dodge);
