@@ -840,6 +840,56 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey runtime status text snippet: " + snippet)
 
+    theme_settings_raw_patterns = [
+        "var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');",
+        "var t = String(themes[p] || '').toLowerCase();",
+        "function _applyMenuTheme(theme) {\n    document.documentElement.classList.toggle('theme-dark', theme === 'dark');",
+        "function _toggleTheme(panel) {\n    var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');",
+        "window.pywebview.api.set_panel_theme(panel, next);",
+        "_panelThemes[p] = theme;\n        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {\n            window.pywebview.api.set_panel_theme(p, theme);",
+    ]
+    for pattern in theme_settings_raw_patterns:
+        if pattern in html:
+            raise AssertionError("panel theme settings must normalize panel/theme values before UI or API propagation: " + pattern)
+    theme_settings_safe_required = [
+        "function _themePanelName(panel)",
+        "function _themeValue(value, fallback)",
+        "return _themePanels.indexOf(key) >= 0 ? key : '';",
+        "return (key === 'light' || key === 'dark') ? key : fallback;",
+        "var t = _themeValue(_panelThemes[p], _themeDefault(p));",
+        "var t = _themeValue(themes[p], _themeDefault(p));",
+        "document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');",
+        "var panelName = _themePanelName(panel);",
+        "if (!panelName) return;",
+        "window.pywebview.api.set_panel_theme(panelName, next);",
+        "var themeName = _themeValue(theme, 'dark');",
+        "_panelThemes[p] = themeName;",
+        "window.pywebview.api.set_panel_theme(p, themeName);",
+    ]
+    for snippet in theme_settings_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe panel theme settings snippet: " + snippet)
+
+    info_update_raw_patterns = [
+        "function updateInfo(data) {\n    if (data.username) document.getElementById('info-username').textContent = data.username;",
+        "if (data.profession) document.getElementById('info-profession').textContent = data.profession;",
+        "if (data.des) document.getElementById('info-des').textContent = data.des;",
+        "if (data.file) document.getElementById('current-file').textContent = '♪ ' + data.file;",
+    ]
+    for pattern in info_update_raw_patterns:
+        if pattern in html:
+            raise AssertionError("info panel updates must guard payload shape and preserve zero text: " + pattern)
+    info_update_safe_required = [
+        "function updateInfo(data) {\n    data = _profileEntry(data);",
+        "if (data.username !== undefined) document.getElementById('info-username').textContent = _profileText(data.username, '');",
+        "if (data.profession !== undefined) document.getElementById('info-profession').textContent = _profileText(data.profession, '');",
+        "if (data.des !== undefined) document.getElementById('info-des').textContent = _profileText(data.des, '');",
+        "if (data.file !== undefined) document.getElementById('current-file').textContent = '♪ ' + _profileText(data.file, '');",
+    ]
+    for snippet in info_update_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe info panel update snippet: " + snippet)
+
     boss_raid_editor_text_raw_patterns = [
         "_escHtml(profile.id || '--')",
         "_escHtml(profile.source || 'local')",

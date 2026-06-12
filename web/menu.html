@@ -6116,12 +6116,26 @@ var _panelThemes = {};
 var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'];
 var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true };
 
+function _themePanelName(panel) {
+    var key = _profileText(panel, '');
+    return _themePanels.indexOf(key) >= 0 ? key : '';
+}
+
+function _themeDefault(panel) {
+    return _themeDefaultDark[panel] ? 'dark' : 'light';
+}
+
+function _themeValue(value, fallback) {
+    var key = _profileText(value, fallback || 'dark').toLowerCase();
+    return (key === 'light' || key === 'dark') ? key : fallback;
+}
+
 function _refreshThemeButtons() {
     var allLight = true, allDark = true;
     _themePanels.forEach(function(p) {
         var el = document.getElementById('theme-' + p);
         if (!el) return;
-        var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
+        var t = _themeValue(_panelThemes[p], _themeDefault(p));
         el.textContent = el.textContent.split(':')[0] + ': ' + t.toUpperCase();
         el.classList.toggle('active', t === 'dark');
         if (t !== 'light') allLight = false;
@@ -6137,7 +6151,7 @@ function _menuThemeFromPanels() {
     var lightCount = 0;
     var darkCount = 0;
     _themePanels.forEach(function(p) {
-        var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
+        var t = _themeValue(_panelThemes[p], _themeDefault(p));
         if (t === 'light') lightCount += 1;
         if (t === 'dark') darkCount += 1;
     });
@@ -6145,15 +6159,15 @@ function _menuThemeFromPanels() {
 }
 
 function _applyMenuTheme(theme) {
-    document.documentElement.classList.toggle('theme-dark', theme === 'dark');
+    document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');
 }
 
 function _syncPanelThemes(themes) {
     if (themes && typeof themes === 'object') {
         var next = {};
         _themePanels.forEach(function(p) {
-            var t = String(themes[p] || '').toLowerCase();
-            next[p] = (t === 'light' || t === 'dark') ? t : (_themeDefaultDark[p] ? 'dark' : 'light');
+            var t = _themeValue(themes[p], _themeDefault(p));
+            next[p] = t;
         });
         _panelThemes = next;
     }
@@ -6162,20 +6176,23 @@ function _syncPanelThemes(themes) {
 }
 
 function _toggleTheme(panel) {
-    var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');
+    var panelName = _themePanelName(panel);
+    if (!panelName) return;
+    var cur = _themeValue(_panelThemes[panelName], _themeDefault(panelName));
     var next = cur === 'light' ? 'dark' : 'light';
-    _panelThemes[panel] = next;
+    _panelThemes[panelName] = next;
     if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
-        window.pywebview.api.set_panel_theme(panel, next);
+        window.pywebview.api.set_panel_theme(panelName, next);
     }
     _syncPanelThemes(_panelThemes);
 }
 
 function _setAllThemes(theme) {
+    var themeName = _themeValue(theme, 'dark');
     _themePanels.forEach(function(p) {
-        _panelThemes[p] = theme;
+        _panelThemes[p] = themeName;
         if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
-            window.pywebview.api.set_panel_theme(p, theme);
+            window.pywebview.api.set_panel_theme(p, themeName);
         }
     });
     _syncPanelThemes(_panelThemes);
@@ -6311,17 +6328,18 @@ function showToast(msg, duration) {
 
 /* ═══ API: update info panel ═══ */
 function updateInfo(data) {
-    if (data.username) document.getElementById('info-username').textContent = data.username;
+    data = _profileEntry(data);
+    if (data.username !== undefined) document.getElementById('info-username').textContent = _profileText(data.username, '');
     if (data.level !== undefined) document.getElementById('info-level').textContent = 'Lv.' + data.level;
     if (data.xp_pct !== undefined) {
         var xpPct = _clampNum(data.xp_pct, 0, 0, 100);
         document.getElementById('info-xp').style.width = xpPct + '%';
     }
-    if (data.profession) document.getElementById('info-profession').textContent = data.profession;
+    if (data.profession !== undefined) document.getElementById('info-profession').textContent = _profileText(data.profession, '');
     if (data.hp !== undefined) document.getElementById('info-hp').textContent = data.hp;
     if (data.sta !== undefined) document.getElementById('info-sta').textContent = data.sta;
-    if (data.des) document.getElementById('info-des').textContent = data.des;
-    if (data.file) document.getElementById('current-file').textContent = '♪ ' + data.file;
+    if (data.des !== undefined) document.getElementById('info-des').textContent = _profileText(data.des, '');
+    if (data.file !== undefined) document.getElementById('current-file').textContent = '♪ ' + _profileText(data.file, '');
 }
 
 /* ═══ API: update toggle badges ═══ */

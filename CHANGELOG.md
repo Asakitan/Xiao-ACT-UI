@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.57: Web menu theme/info fallback 修复.
+
+  1) `web/menu.html` 修复 panel theme 设置参数归一。
+     theme panel 和 theme value 现在通过 allowlist 归一后再更新 UI/调用后端,
+     避免异常 panel/theme 值破坏按钮状态或传给 `set_panel_theme`。
+
+  2) `web/menu.html` 修复 info panel 文本 fallback。
+     username、profession、description 和 current file 现在保留合法 `0`,
+     且 updateInfo 会先防护 payload shape, 避免空 payload 打断菜单刷新。
+
 ## v4.6.56: Web menu AutoKey condition value/text 修复.
 
   1) `web/menu.html` 修复 AutoKey condition value 归一。
