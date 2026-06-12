@@ -177,6 +177,20 @@ def test_available_popup_still_surfaces() -> None:
     assert owner.alerts[0][0] == "SYSTEM UPDATE"
 
 
+def test_update_popup_tolerates_bad_display_time() -> None:
+    owner = _PopupOwner()
+    owner._build_update_popup_payload = lambda _snapshot=None: {
+        "key": "available:bad-time",
+        "title": "SYSTEM UPDATE",
+        "message": "bad display time",
+        "display_time": "bad",
+    }
+
+    owner._maybe_show_update_popup(SimpleNamespace())
+
+    assert owner.alerts == [("SYSTEM UPDATE", "bad display time", 5.0)]
+
+
 def test_manual_check_waits_for_menu_close() -> None:
     owner = _FlowOwner()
     owner._check_for_updates_interactive()
@@ -313,6 +327,7 @@ def test_update_check_retries_transient_fetch_once() -> None:
 def main() -> int:
     test_error_popup_is_suppressed()
     test_available_popup_still_surfaces()
+    test_update_popup_tolerates_bad_display_time()
     test_manual_check_waits_for_menu_close()
     test_latest_manual_check_has_no_checking_dialog()
     test_latest_manual_result_waits_for_menu_overlay_destroy()

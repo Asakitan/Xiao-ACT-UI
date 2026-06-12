@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.16: BossRaid 摘要与更新弹窗数值防护修复.
+
+  1) `gui_modules/sao_gui_bossraid.py` 修复 Boss 反应摘要计数归一。
+     从内存导入的 `skill_count` / `mechanic_count` / `hp_line_count`
+     与持续时间坏值不再打断 BossRaid 面板摘要渲染。
+
+  2) `gui_modules/sao_gui_status_updater_mixin.py` 修复更新弹窗时长归一。
+     坏 `display_time` 现在回退到安全默认值并限制最小显示时间,
+     避免异常更新 payload 打断重要更新提醒。
+
 ## v4.6.15: Tk shared panel 搜索与来源徽标数值防护修复.
 
   1) `gui_modules/sao_gui_mem_scope.py` 修复 Mem Scope 搜索状态数值归一。

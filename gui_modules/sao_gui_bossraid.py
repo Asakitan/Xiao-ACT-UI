@@ -289,12 +289,14 @@ class _BossReactionsEditorMixin:
     def _render_boss_summary(self, summary: Dict[str, Any]) -> None:
         if not summary:
             return
-        parts = ['技能 %d' % int(summary.get('skill_count') or 0),
-                 '机制 %d' % int(summary.get('mechanic_count') or 0)]
-        if int(summary.get('hp_line_count') or 0):
-            parts.append('血线 %d' % int(summary['hp_line_count']))
-        if summary.get('approx_duration_ms'):
-            parts.append('时长~%dms' % int(summary['approx_duration_ms']))
+        parts = ['技能 %d' % _finite_int(summary.get('skill_count'), 0, lo=0),
+                 '机制 %d' % _finite_int(summary.get('mechanic_count'), 0, lo=0)]
+        hp_line_count = _finite_int(summary.get('hp_line_count'), 0, lo=0)
+        if hp_line_count:
+            parts.append('血线 %d' % hp_line_count)
+        approx_duration_ms = _finite_int(summary.get('approx_duration_ms'), 0, lo=0)
+        if approx_duration_ms:
+            parts.append('时长~%dms' % approx_duration_ms)
         tk.Label(self._rx_container, text=' · '.join(parts), bg=PANEL_BG, fg=TEXT_DIM,
                  font=panel_font(8), anchor='w').pack(fill=tk.X, pady=(0, 4))
 

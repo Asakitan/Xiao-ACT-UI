@@ -64,6 +64,7 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import math
 import time
 import tkinter as tk
 from typing import Any, Callable, Dict, Optional
@@ -80,6 +81,21 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT, _SAO_PANEL_GOLD, _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None,
+                  hi: Optional[float] = None) -> float:
+    try:
+        number = float(default if value is None or value == '' else value)
+    except Exception:
+        number = float(default or 0.0)
+    if not math.isfinite(number):
+        number = float(default or 0.0)
+    if lo is not None:
+        number = max(float(lo), number)
+    if hi is not None:
+        number = min(float(hi), number)
+    return number
 
 
 class SAOPlayerGUIStatusUpdaterMixin:
@@ -489,7 +505,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         self._show_entity_alert(
             str(payload.get('title') or 'SYSTEM UPDATE'),
             str(payload.get('message') or ''),
-            display_time=float(payload.get('display_time') or 5.0),
+            display_time=_finite_float(payload.get('display_time'), 5.0, lo=0.5),
         )
 
     def _start_update_download(self):

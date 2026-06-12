@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 import _bootstrap  # noqa: F401
 
@@ -58,6 +59,25 @@ class TkLivePanelSignatureTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotIn("nan", repr(first).lower())
         self.assertNotIn("inf", repr(first).lower())
+
+    def test_bossraid_memory_summary_tolerates_bad_counts(self) -> None:
+        class _Widget:
+            def pack(self, *args, **kwargs):
+                return None
+
+        panel = self._bossraid_panel()
+        panel._rx_container = _Widget()
+
+        with (
+            mock.patch("gui_modules.sao_gui_bossraid.tk.Label", return_value=_Widget()),
+            mock.patch("gui_modules.sao_gui_bossraid.panel_font", return_value=("Segoe UI", 8)),
+        ):
+            panel._render_boss_summary({
+                "skill_count": "bad",
+                "mechanic_count": float("nan"),
+                "hp_line_count": "bad",
+                "approx_duration_ms": "bad",
+            })
 
     def test_autokey_slot_normalization_clamps_non_finite_numbers(self) -> None:
         panel = AutoKeyPanel.__new__(AutoKeyPanel)
