@@ -201,6 +201,20 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         return result || {};
     }
 
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+
+    function objectItems(value) {
+        return listItems(value).filter(function (item) {
+            return item && typeof item === 'object' && !Array.isArray(item);
+        });
+    }
+
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') {
@@ -273,6 +287,7 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     }
 
     function renderRule(rule) {
+        rule = objectValue(rule);
         var enabled = !!rule.enabled;
         var kind = ruleKind(rule);
         var idArg = jsArg(rule.id);
@@ -298,22 +313,23 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     }
 
     function renderRecent(events) {
-        if (!events || !events.length) {
+        events = objectItems(events);
+        if (!events.length) {
             recentList.textContent = '暂无事件';
             return;
         }
-        recentList.innerHTML = events.slice(0, 12).map(function (ev) {
+        var recentRows = events.slice(0, 12);
+        recentList.innerHTML = recentRows.map(function (ev) {
             return '<div class="recent-item"><strong>' + esc(ev.label || ev.rule_id || ev.id) + '</strong><br/>' + esc(ev.message || '') + '<br/><small>' + esc(ev.trigger_type || ev.type || '') + '</small></div>';
         }).join('');
     }
 
     function displayRules(data) {
+        data = objectValue(data);
         var merged = [];
         var seen = {};
-        [data && data.triggers, data && data.timers].forEach(function (source) {
-            if (!Array.isArray(source)) return;
+        [objectItems(data.triggers), objectItems(data.timers)].forEach(function (source) {
             source.forEach(function (rule) {
-                if (!rule || typeof rule !== 'object') return;
                 var key = String(rule.id || '');
                 if (!key) {
                     try { key = JSON.stringify(rule); } catch (_) { key = String(merged.length); }
@@ -327,20 +343,20 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     }
 
     function render(data) {
-        data = data || {};
+        data = objectValue(data);
         var rules = displayRules(data);
-        var timerRows = Array.isArray(data.timers) ? data.timers : [];
+        var timerRows = objectItems(data.timers);
         var ruleCount = Math.max(clampInt(data.rule_count, rules.length, 0, 999999), rules.length);
         var timerCount = clampInt(data.timer_count, timerRows.length, 0, 999999);
         var reloadMs = clampInt(data.last_reload_ms, 0, 0, 86400000);
-        var errorCount = Array.isArray(data.errors) ? clampInt(data.errors.length, 0, 0, 999999) : 0;
+        var errorCount = clampInt(listItems(data.errors).length, 0, 0, 999999);
         document.getElementById('sum-rules').textContent = String(ruleCount);
         document.getElementById('sum-timers').textContent = String(timerCount);
         document.getElementById('sum-enabled').textContent = data.enabled ? 'YES' : 'NO';
         document.getElementById('sum-reload').textContent = String(reloadMs);
         document.getElementById('sum-errors').textContent = String(errorCount);
         document.getElementById('trigger-count').textContent = String(ruleCount) + ' RULES';
-        renderRecent(data.recent || []);
+        renderRecent(data.recent);
         if (!rules.length) {
             list.innerHTML = '<div class="empty">未配置 ACT 触发器。<br/>在 settings.json 中添加 act_trigger_rules 后刷新。</div>';
             return;

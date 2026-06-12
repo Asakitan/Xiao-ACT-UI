@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.1: Trigger Timer Manager payload 防护修复.
+
+  1) `web/trigger_timer_manager.html` 修复 recent 事件列表 payload 形状处理。
+     Trigger Timer Manager Web 现在只渲染对象事件行,
+     避免字符串或坏事件 payload 打断最近事件列表渲染。
+
+  2) `web/trigger_timer_manager.html` 修复 status/rules/timers payload 形状处理。
+     Trigger Timer Manager Web 现在归一状态对象、规则列表、计时器列表与错误列表,
+     避免坏 status payload 打断摘要和规则卡片渲染。
+
 ## v4.5.91: Plugin Manager payload 防护修复.
 
   1) `web/plugin_manager.html` 修复插件管理列表 payload 形状处理。

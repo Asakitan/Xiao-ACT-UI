@@ -600,27 +600,40 @@ def _assert_dps_hit_fx_numbers_are_normalized() -> None:
 def _assert_trigger_timer_numbers_are_normalized() -> None:
     trigger_timer = _read_web("trigger_timer_manager.html")
     for snippet in (
+        "if (!events || !events.length)",
+        "recentList.innerHTML = events.slice(0, 12).map(function (ev) {",
+        "[data && data.triggers, data && data.timers].forEach(function (source) {",
+        "data = data || {};",
         "var ruleCount = Math.max(Number(data.rule_count != null ? data.rule_count : rules.length) || 0, rules.length);",
         "var timerCount = Number(data.timer_count != null ? data.timer_count : ((data.timers || []).length || 0)) || 0;",
         "esc(rule.threshold)",
         "esc(rule.cooldown_s || 0) + 's'",
         "String(data.last_reload_ms || 0)",
         "String((data.errors || []).length)",
+        "renderRecent(data.recent || []);",
         "var count = (data.events || []).length;",
     ):
         if snippet in trigger_timer:
             raise AssertionError("trigger timer manager must normalize visible numeric state: " + snippet)
     for snippet in (
+        "function objectValue(value)",
+        "function listItems(value)",
+        "function objectItems(value)",
         "function finiteNumber(value, fallback)",
         "function clampNumber(value, fallback, lo, hi)",
         "function clampInt(value, fallback, lo, hi)",
         "function numericText(value, fallback, hi)",
         "return String(Math.round(number * 100) / 100);",
-        "var timerRows = Array.isArray(data.timers) ? data.timers : [];",
+        "rule = objectValue(rule);",
+        "events = objectItems(events);",
+        "[objectItems(data.triggers), objectItems(data.timers)].forEach(function (source) {",
+        "data = objectValue(data);",
+        "var timerRows = objectItems(data.timers);",
         "var ruleCount = Math.max(clampInt(data.rule_count, rules.length, 0, 999999), rules.length);",
         "var timerCount = clampInt(data.timer_count, timerRows.length, 0, 999999);",
         "var reloadMs = clampInt(data.last_reload_ms, 0, 0, 86400000);",
-        "var errorCount = Array.isArray(data.errors) ? clampInt(data.errors.length, 0, 0, 999999) : 0;",
+        "var errorCount = clampInt(listItems(data.errors).length, 0, 0, 999999);",
+        "renderRecent(data.recent);",
         "esc(numericText(rule.threshold, 0))",
         "esc(numericText(rule.cooldown_s, 0, 86400)) + 's</span>",
         "var count = Array.isArray(data.events) ? clampInt(data.events.length, 0, 0, 999999) : 0;",

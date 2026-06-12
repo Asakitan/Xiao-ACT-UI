@@ -5,6 +5,7 @@ linkage mechanic trigger + inline dodge dispatch."""
 from __future__ import annotations
 
 import os
+import json
 import sys
 import time
 import unittest
@@ -63,6 +64,20 @@ def _profile(mechanics, **kw):
          "mechanics": mechanics}
     p.update(kw)
     return p
+
+
+def _load_example_profile_by_id(profile_id):
+    root = os.path.join(_ROOT, "assets", "boss_raids")
+    for name in sorted(os.listdir(root)):
+        if not (name.startswith("13023_") and name.endswith("_机制示例.json")):
+            continue
+        path = os.path.join(root, name)
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        profile = payload.get("profile") or {}
+        if profile.get("id") == profile_id:
+            return profile
+    raise AssertionError("missing boss raid example profile: %s" % profile_id)
 
 
 def _cast(skill_id, base_id=90001, dur=3000, edge="start"):
@@ -329,12 +344,9 @@ class MechanicsTest(unittest.TestCase):
     # ── 拆箱即用示例档案 ──
 
     def test_example_profile_out_of_box(self):
-        import json
-        path = os.path.join(_ROOT, "assets", "boss_raids",
-                            "13023_噩梦P3_机制示例.json")
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        prof = normalize_profile(payload["profile"])
+        prof = normalize_profile(
+            _load_example_profile_by_id("boss_example_13023_nm_p3")
+        )
         mechs = prof.get("mechanics") or []
         self.assertEqual(len(mechs), 16)
         for m in mechs:
