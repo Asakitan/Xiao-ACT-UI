@@ -718,7 +718,11 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._sync_draft_from_widgets()
         normalized = normalize_auto_key_profile(self._draft,
                                                author_snapshot=self._author_fn())
-        path = export_auto_key_profile(normalized)
+        try:
+            path = export_auto_key_profile(normalized)
+        except Exception as exc:
+            self._set_status(f'Export failed: {exc}', ok=False)
+            return
         self._set_status(f'Exported: {path}')
 
     def _import_profile(self) -> None:
@@ -1248,7 +1252,11 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._adopt_store_mechanics(self._load() or {})
         normalized = normalize_boss_raid_profile(
             self._draft, author_snapshot=self._author_fn())
-        path = export_boss_raid_profile(normalized)
+        try:
+            path = export_boss_raid_profile(normalized)
+        except Exception as exc:
+            self._set_status(f'Export failed: {exc}', ok=False)
+            return
         self._set_status(f'Exported: {path}')
 
     def _import_profile(self) -> None:

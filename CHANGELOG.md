@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.92: Tk 配置编辑器导出失败反馈.
+
+  1) `gui_modules/sao_gui_profile_editors.py` AutoKey 编辑器「导出」失败
+    (磁盘满/权限/路径异常)不再让 Tk 回调裸抛、界面零反馈, 状态栏显示
+    「Export failed: 原因」(红色), 与导入失败反馈同款。
+
+  2) 同文件 BossRaid 编辑器「导出」同样补上失败反馈; 两处导出成功路径
+    与导出文件内容均不变。新增 `tools/profile_editor_export_selftest.py`
+    静态守卫。
+
 ## v4.6.91: 设置保存失败不再静默.
 
   1) Tk 与 WebView 两套 UI 的 `_set_setting` 在 settings.json 写盘失败
