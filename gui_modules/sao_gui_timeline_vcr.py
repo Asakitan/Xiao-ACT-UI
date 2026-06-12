@@ -225,13 +225,6 @@ class TimelineVcrPanel:
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'VCR').pack(side='left')
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
-        ).pack(side='left', padx=(12, 0))
         for label, cmd in (
             ('刷新 Refresh', self.refresh),
             ('播放 Play', self.play),
@@ -239,6 +232,14 @@ class TimelineVcrPanel:
             ('关闭 Close', self.hide),
         ):
             action_button(toolbar, label, cmd, kind='cyan' if '播放' in label else 'gold').pack(side='right', padx=(6, 0))
+        # 按钮先 pack — 窄窗下 summary 不挤按钮
+        tk.Label(
+            toolbar,
+            textvariable=self._summary_var,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))

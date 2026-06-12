@@ -303,13 +303,6 @@ class ReportExportPanel:
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'REPORT SDK').pack(side='left')
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
-        ).pack(side='left', padx=(12, 0))
         components.action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
         components.dropdown_button(toolbar, '复制 Copy', (
             ('复制报告 Copy Report', self.copy_snapshot),
@@ -326,6 +319,14 @@ class ReportExportPanel:
         ), kind='gold').pack(side='right', padx=(6, 0))
         components.action_button(toolbar, '导入 Import', self.import_offline_file).pack(side='right', padx=(6, 0))
         components.action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
+        tk.Label(
+            toolbar,
+            textvariable=self._summary_var,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(side='left', padx=(12, 0))
 
         tk.Label(
             body,

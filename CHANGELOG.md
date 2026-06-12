@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.119: ACT 面板工具条按钮防挤横扫(7 面板).
+
+  1) Tk pack 挤出坑横扫 — 工具条 summary 标签先 pack(LEFT) 时,
+    长文本会把后 pack 的右侧按钮挤出窗口(pack 后包者只分剩余空间);
+    combatant/skill drilldown 与 death_recap 的 summary 内插未截断
+    玩家/技能/实体名, 实际可触发; aggregate/action_log/timeline_vcr/
+    report_export 窄窗下同理。7 面板统一改按钮先 pack、标签后 pack
+    (长文本自然裁切, 按钮永不丢); web 端 .value 卡片已有 ellipsis,
+    双端行为等价。与 v4.6.115 commander 成员卡同 bug 类。
+
 ## v4.6.118: Tk 面板滚动保留收尾(剩余 7 面板, 全覆盖).
 
   1) keep_canvas_scroll 接线剩余 7 面板: death_recap / mem_scope /
