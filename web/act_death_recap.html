@@ -202,7 +202,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     window.DeathRecap = {
         refresh: function () { return apiCall('get_death_recap_status', [80, safeWindowSeconds(windowInput.value), entity.value || null]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Death recap failed'); return data; }); },
-        copy: function () { return apiCall('copy_death_recap', [80, safeWindowSeconds(windowInput.value), entity.value || null]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Death recap copied'); return data; }); },
+        copy: function () { return apiCall('copy_death_recap', [80, safeWindowSeconds(windowInput.value), entity.value || null]).then(function (data) { data = data || {}; render(data); if (!data.text) { showToast(data.ok === false ? (data.message || 'Death recap copy failed') : 'Death recap copy payload empty'); return data; } return Promise.resolve().then(function () { if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard unavailable'); return navigator.clipboard.writeText(data.text); }).then(function () { showToast('Death recap copied'); return data; }).catch(function () { showToast('Death recap copy failed'); return data; }); }); },
         close: function () { apiCall('toggle_death_recap'); },
         toggleRow: function (tr) { var d = tr.nextElementSibling; if (d && d.classList.contains('detail')) d.style.display = (d.style.display === 'none' ? '' : 'none'); },
         fadeIn: function () { shell.classList.add('visible'); },

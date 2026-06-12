@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.83: ACT 行为日志/死亡回放复制失败状态修正.
+
+  1) `web/act_action_log.html` 复制行为日志时现在等待浏览器 clipboard
+    写入结果。剪贴板不可用、被拒绝或 payload 为空时会显示失败/空内容提示,
+    不再立即弹出 copied 成功提示。
+
+  2) `web/act_death_recap.html` 死亡回放复制同样等待 clipboard 写入结果,
+    避免 WebView2 剪贴板失败时误导用户以为已复制。
+
 ## v4.6.82: protobuf fallback 诊断恢复 + ACT Web 复制失败不再假报成功.
 
   1) `packet_parser/helpers.py` `_ensure_pb` 移除早退后的不可达 fallback

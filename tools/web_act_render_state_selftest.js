@@ -57,6 +57,13 @@ const graphTimeseries = read("web/act_graph_timeseries.html");
 assert(graphTimeseries.includes("copied = true"), "graph export must track clipboard success");
 assert(graphTimeseries.includes("clipboard copy failed"), "graph export must report clipboard failure instead of false success");
 
+assert(actionLog.includes("Action log copy failed"), "action log copy must report clipboard failure");
+assert(actionLog.includes("return navigator.clipboard.writeText(data.text)"), "action log copy must await clipboard write");
+
+const deathRecap = read("web/act_death_recap.html");
+assert(deathRecap.includes("Death recap copy failed"), "death recap copy must report clipboard failure");
+assert(deathRecap.includes("return navigator.clipboard.writeText(data.text)"), "death recap copy must await clipboard write");
+
 const dps = read("web/dps.html");
 assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");
 assert(!dps.includes('onclick="_openDetail(\' + Number(entity.uid || 0) + \')"'), "DPS row click must not coerce entity uid to Number");
