@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.51: Web menu plugin popup id/text 防护修复.
+
+  1) `web/menu.html` 修复 plugin popup/detached id 传递。
+     plugin、panel 与 hotkey id 现在会统一保留合法 `0` 文本并归一比较,
+     避免跨桥返回数字/字符串 ID 时漏渲染面板或热键。
+
+  2) `web/menu.html` 修复 plugin popup label/hotkey fallback。
+     插件标题、热键标签和占用者文本现在使用安全 fallback,
+     且占用检测改为 key-exists 判断, 避免 owner 为 `0` 时显示成可用。
+
 ## v4.6.50: Web menu updater class/text 防护修复.
 
   1) `web/menu.html` 修复 updater badge class token 归一。

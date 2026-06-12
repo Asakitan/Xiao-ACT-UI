@@ -7877,6 +7877,21 @@ setTimeout(function() {
             return _pluginIsObjectValue(item);
         });
     }
+    var _pluginOwn = Object.prototype.hasOwnProperty;
+    function _pluginText(value, fallback) {
+        if (value == null || value === '') return fallback == null ? '' : String(fallback);
+        return String(value);
+    }
+    function _pluginFirstText(values, fallback) {
+        values = Array.isArray(values) ? values : [];
+        for (var i = 0; i < values.length; i++) {
+            if (values[i] != null && values[i] !== '') return String(values[i]);
+        }
+        return _pluginText(fallback, '');
+    }
+    function _pluginId(value) {
+        return _pluginText(value, '');
+    }
     function _pluginCountNumber(value) {
         return Math.max(0, Math.floor(_finiteNum(value, 0)));
     }
@@ -7884,7 +7899,7 @@ setTimeout(function() {
         return String(_pluginCountNumber(value));
     }
     window.showPluginDetached = function (pluginId) {
-        var nextPlugin = String(pluginId || '');
+        var nextPlugin = _pluginId(pluginId);
         if (_pdPlugin !== nextPlugin) {
             _pdPlugin = nextPlugin;
             resetDetachedPanelCards();
@@ -7919,7 +7934,8 @@ setTimeout(function() {
         try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
     }
     function pdPanelKey(panel) {
-        return String(panel && (panel.id || panel.panel_id) || '');
+        panel = _pluginObjectValue(panel);
+        return _pluginFirstText([panel.id, panel.panel_id], '');
     }
     function resetDetachedPanelCards(emptyHtml) {
         var body = document.getElementById('pd-body');
@@ -7968,9 +7984,9 @@ setTimeout(function() {
         Promise.resolve(a.get_plugin_ui_panels()).then(parse).then(function (data) {
             if (mySeq !== _pdSeq) return;
             var panels = _pluginObjectItems(_pluginObjectValue(data).panels).filter(function (p) {
-                return p.plugin_id === _pdPlugin && p.available;
+                return _pluginId(p.plugin_id) === _pdPlugin && p.available;
             });
-            if (title) title.textContent = (panels[0] && panels[0].title) || _pdPlugin;
+            if (title) title.textContent = _pluginFirstText([panels[0] && panels[0].title, _pdPlugin], 'Plugin');
             if (!panels.length) { resetDetachedPanelCards('<div class="ppm-empty">插件未提供面板或未激活</div>'); return; }
             if (body.__pdEmptyHtml) {
                 body.textContent = '';
@@ -8005,34 +8021,34 @@ setTimeout(function() {
         var hkBox = document.getElementById('pd-hotkeys');
         if (!a || !hkBox || !a.get_plugin_hotkeys) { if (hkBox) hkBox.innerHTML = ''; return; }
         Promise.resolve(a.get_plugin_hotkeys()).then(parse).then(function (data) {
-            var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return h.plugin_id === _pdPlugin; });
+            var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return _pluginId(h.plugin_id) === _pdPlugin; });
             if (!hks.length) { hkBox.innerHTML = ''; return; }
             var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);
             // 可选键位: 纯 F 键 + CTRL/ALT 组合 (Tk sao_gui_plugin_manager._HK_CHOICES 与此 1:1)。
             var GROUPS = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
             var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
             hks.forEach(function (h) {
-                var cur = String(h.current_key || '').toUpperCase();
+                var cur = _pluginText(h.current_key, '').toUpperCase();
                 // 「默认」项: 声明默认键被别的动作占走时置灰 (set_hotkey 的
                 // 清除分支会拒绝)。
-                var dk = String(h.default_key || '').toUpperCase();
-                var dTaken = dk && occupied[dk] && dk !== cur;
+                var dk = _pluginText(h.default_key, '').toUpperCase();
+                var dTaken = dk && _pluginOwn.call(occupied, dk) && dk !== cur;
                 var opts = '<option value=""' + (dTaken ? ' disabled' : '') + '>默认 Default'
-                    + (dTaken ? ' (' + dk + ' · ' + esc(String(occupied[dk])) + ')' : '') + '</option>';
+                    + (dTaken ? ' (' + dk + ' · ' + esc(_pluginText(occupied[dk], '')) + ')' : '') + '</option>';
                 GROUPS.forEach(function (g) {
                     opts += '<optgroup label="' + g[1] + '">';
                     for (var i = 1; i <= 12; i++) {
                         var k = g[0] + 'F' + i;
                         // 被占用的键置灰并标注归属 (动作自身现值豁免)。
-                        var taken = occupied[k] && k !== cur;
+                        var taken = _pluginOwn.call(occupied, k) && k !== cur;
                         opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '')
                             + (taken ? ' disabled' : '') + '>' + k
-                            + (taken ? ' · ' + esc(String(occupied[k])) : '') + '</option>';
+                            + (taken ? ' · ' + esc(_pluginText(occupied[k], '')) : '') + '</option>';
                     }
                     opts += '</optgroup>';
                 });
-                html += '<div class="pd-hk-row"><span>' + esc(h.label || h.hotkey_id) + '</span>'
-                    + '<select data-action="' + esc(h.action) + '">' + opts + '</select></div>';
+                html += '<div class="pd-hk-row"><span>' + esc(_pluginFirstText([h.label, h.hotkey_id, h.action], 'Hotkey')) + '</span>'
+                    + '<select data-action="' + esc(_pluginText(h.action, '')) + '">' + opts + '</select></div>';
             });
             hkBox.innerHTML = html;
         });
@@ -8055,15 +8071,17 @@ setTimeout(function() {
         plugins = _pluginObjectItems(plugins);
         var html = '';
         plugins.forEach(function (it) {
+            var id = _pluginId(it.id);
+            var label = _pluginFirstText([it.label, it.name, id], 'Plugin');
             var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
             var hkCount = _pluginCountNumber(it.hotkey_count);
             var flags = (it.pinned ? '★' : '') + (it.declares_panel ? ' ▣' : '')
                 + (hkCount ? ' ⌨' + _pluginCountText(hkCount) : '');
             html += '<div class="ppm-row">'
-                + '<span class="ppm-name">' + esc(it.label) + ' <small>' + st + ' ' + flags + '</small></span>'
-                + '<button class="ppm-btn" data-pin="' + esc(it.id) + '" data-pinned="' + (it.pinned ? 1 : 0) + '">'
+                + '<span class="ppm-name">' + esc(label) + ' <small>' + st + ' ' + flags + '</small></span>'
+                + '<button class="ppm-btn" data-pin="' + esc(id) + '" data-pinned="' + (it.pinned ? 1 : 0) + '">'
                 + (it.pinned ? '取消置顶' : '置顶') + '</button>'
-                + '<button class="ppm-btn" data-id="' + esc(it.id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
+                + '<button class="ppm-btn" data-id="' + esc(id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
                 + (it.enabled ? '禁用' : '启用') + '</button></div>';
         });
         return html;
@@ -8101,10 +8119,12 @@ setTimeout(function() {
             }
             var html = '';
             plugins.forEach(function (it) {
+                var id = _pluginId(it.id);
+                var label = _pluginFirstText([it.label, it.name, id], 'Plugin');
                 var hkCount = _pluginCountNumber(it.hotkey_count);
                 var hk = hkCount ? ' ⌨' + _pluginCountText(hkCount) : '';
-                html += '<div class="ppm-row ppm-open" data-open="' + esc(it.id) + '" style="cursor:pointer;">'
-                    + '<span class="ppm-name">' + (it.pinned ? '★ ' : '') + esc(it.label) + hk + '</span>'
+                html += '<div class="ppm-row ppm-open" data-open="' + esc(id) + '" style="cursor:pointer;">'
+                    + '<span class="ppm-name">' + (it.pinned ? '★ ' : '') + esc(label) + hk + '</span>'
                     + '<span class="ppm-arrow" style="opacity:.6;">▸</span></div>';
             });
             list.innerHTML = html;

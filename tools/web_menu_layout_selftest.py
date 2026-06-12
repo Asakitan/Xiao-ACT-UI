@@ -292,6 +292,57 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe plugin menu hotkey count snippet: " + snippet)
 
+    plugin_popup_identity_raw_patterns = [
+        "var nextPlugin = String(pluginId || '');",
+        "return String(panel && (panel.id || panel.panel_id) || '');",
+        "return p.plugin_id === _pdPlugin && p.available;",
+        "return h.plugin_id === _pdPlugin;",
+        "if (title) title.textContent = (panels[0] && panels[0].title) || _pdPlugin;",
+    ]
+    for pattern in plugin_popup_identity_raw_patterns:
+        if pattern in html:
+            raise AssertionError("plugin popup/detached ids must preserve zero text and normalize bridge ids: " + pattern)
+    plugin_popup_identity_safe_required = [
+        "function _pluginText(value, fallback)",
+        "function _pluginFirstText(values, fallback)",
+        "function _pluginId(value)",
+        "var nextPlugin = _pluginId(pluginId);",
+        "return _pluginFirstText([panel.id, panel.panel_id], '');",
+        "return _pluginId(p.plugin_id) === _pdPlugin && p.available;",
+        "return _pluginId(h.plugin_id) === _pdPlugin;",
+        "if (title) title.textContent = _pluginFirstText([panels[0] && panels[0].title, _pdPlugin], 'Plugin');",
+    ]
+    for snippet in plugin_popup_identity_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe plugin popup/detached id snippet: " + snippet)
+
+    plugin_popup_text_raw_patterns = [
+        "var cur = String(h.current_key || '').toUpperCase();",
+        "var dk = String(h.default_key || '').toUpperCase();",
+        "var dTaken = dk && occupied[dk] && dk !== cur;",
+        "var taken = occupied[k] && k !== cur;",
+        "esc(h.label || h.hotkey_id)",
+        "esc(it.label) + ' <small>'",
+        "(it.pinned ? '★ ' : '') + esc(it.label) + hk",
+    ]
+    for pattern in plugin_popup_text_raw_patterns:
+        if pattern in html:
+            raise AssertionError("plugin popup labels/hotkey occupancy must preserve zero text and explicit occupied keys: " + pattern)
+    plugin_popup_text_safe_required = [
+        "var _pluginOwn = Object.prototype.hasOwnProperty;",
+        "var cur = _pluginText(h.current_key, '').toUpperCase();",
+        "var dk = _pluginText(h.default_key, '').toUpperCase();",
+        "var dTaken = dk && _pluginOwn.call(occupied, dk) && dk !== cur;",
+        "var taken = _pluginOwn.call(occupied, k) && k !== cur;",
+        "esc(_pluginFirstText([h.label, h.hotkey_id, h.action], 'Hotkey'))",
+        "var label = _pluginFirstText([it.label, it.name, id], 'Plugin');",
+        "esc(label) + ' <small>'",
+        "(it.pinned ? '★ ' : '') + esc(label) + hk",
+    ]
+    for snippet in plugin_popup_text_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe plugin popup text/hotkey snippet: " + snippet)
+
     auto_key_raw_patterns = [
         "if (kind === 'int') value = parseInt(value || 0, 10) || 0;",
         "Math.round(Number(condition.value || 0) * 100)",
