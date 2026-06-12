@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.104: ACT 事件总线热路径降本 + DPS 打击特效去冗余合成.
+
+  1) `act_platform/event_bus.py` `_recent` 改 deque(maxlen) — 旧 list
+    切片淘汰在缓冲打满后(默认 200, runtime 可上千)每次 publish 都持锁
+    整段拷贝; 留存 deepcopy 移到锁外(发布频次=战斗事件频次),
+    `recent_events` 改为锁内浅引用快照+锁外克隆, 大 limit(最高 1000)
+    读取不再持锁 deepcopy 上百条。订阅者各自克隆的防变异语义不变。
+
+  2) `gui_modules/sao_gui_dps.py` `_overlay_panel_flash` 删掉无效的
+    mask + Image.composite 步骤 — overlay 圆角矩形外像素本就全透明,
+    再套同形状 mask 结果逐像素相同; 特效期间每帧(60Hz)省 2 块
+    全面板分配 + 一次 composite。
+
 ## v4.6.103: Tk combatant drilldown 补渲 incoming + buffmon 行渲染降配额.
 
   1) `gui_modules/sao_gui_combatant_drilldown.py` 侧栏补渲后端一直在发的

@@ -3042,13 +3042,10 @@ class DpsOverlay:
             (0, 0, sw - 1, sh - 1), radius=6,
             outline=(tint[0], tint[1], tint[2], ring_a), width=2,
         )
-        mask = Image.new('L', (sw, sh), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, sw - 1, sh - 1), radius=6, fill=255,
-        )
-        img.alpha_composite(Image.composite(
-            overlay, Image.new('RGBA', (sw, sh), (0, 0, 0, 0)), mask),
-            (sx, sy))
+        # 圆角矩形外的 overlay 像素本就全透明, 直接合成即可 —
+        # 再套一层同形状 mask + Image.composite 结果逐像素相同, 纯浪费
+        # (特效期间每帧省 2 块全面板分配 + 一次 composite)。
+        img.alpha_composite(overlay, (sx, sy))
 
     def _resize_hit_rect(self, w: int = 0, h: int = 0) -> Tuple[int, int, int, int]:
         if not w or not h:

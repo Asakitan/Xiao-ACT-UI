@@ -11,8 +11,10 @@ import copy
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from itertools import islice
+from typing import Any, Callable, Deque, Dict, List, Mapping, Optional
 
 from .events import clone_event, is_event_envelope, make_event
 
@@ -41,8 +43,10 @@ class EventBus:
         self._lock = threading.RLock()
         self._subscriptions: Dict[str, List[Subscription]] = {}
         self._by_token: Dict[str, Subscription] = {}
-        self._recent: List[dict[str, Any]] = []
         self._max_recent = max(1, int(max_recent or 200))
+        # deque(maxlen) 让淘汰是 O(1) — 旧实现 list 切片在缓冲打满后
+        # 每次 publish 都持锁整段拷贝一遍。
+        self._recent: Deque[dict[str, Any]] = deque(maxlen=self._max_recent)
         self._slow_callback_ms = max(0.0, float(slow_callback_ms or 0.0))
         # Ephemeral topics are delivered to subscribers but NOT retained in the
         # `_recent` ring. ``act_snapshot`` is the canonical case: it is a large
@@ -116,13 +120,16 @@ class EventBus:
                 confidence=confidence,
             )
 
+        # 留存克隆在锁外做 — deepcopy 是 publish 里最贵的一步, 不该挡住
+        # 其他发布者/读者 (_ephemeral_topics 初始化后只读, 无锁读安全)。
+        retained_clone = clone_event(envelope) \
+            if topic not in self._ephemeral_topics else None
+
         with self._lock:
             self._published += 1
-            if topic not in self._ephemeral_topics:
+            if retained_clone is not None:
                 self._retained += 1
-                self._recent.append(clone_event(envelope))
-                if len(self._recent) > self._max_recent:
-                    self._recent = self._recent[-self._max_recent:]
+                self._recent.append(retained_clone)
             callbacks = list(self._subscriptions.get(topic, ())) + list(self._subscriptions.get("*", ()))
 
         for sub in callbacks:
@@ -149,7 +156,12 @@ class EventBus:
     def recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
         cap = max(0, int(limit or 20))
         with self._lock:
-            return [clone_event(item) for item in self._recent[-cap:]][::-1]
+            n = len(self._recent)
+            take = min(cap, n)
+            items = list(islice(self._recent, n - take, n)) if take else []
+        # 克隆在锁外做: 存入后条目不再被改写, 浅引用快照足以保证一致性,
+        # 避免读大 limit 时持锁 deepcopy 上百条。
+        return [clone_event(item) for item in items][::-1]
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
