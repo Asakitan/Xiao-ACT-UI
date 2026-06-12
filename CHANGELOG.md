@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.94: GPU presenter 帧去重改单调序号, 消除 id() 复用碰撞.
+
+  1) `render/gpu_overlay_window.py` BgraPresenter 纹理上传去重不再比较
+    bytes 对象 id(): 同尺寸帧缓冲高频释放/重分配时地址复用会与上次上传
+    的 id 碰撞, 静默跳过真实新帧(面板显示陈旧帧)。改为帧以
+    (bytes, w, h, seq) 单元组交接 + 单调 seq 去重, 渲染线程也不再可能
+    读到半更新的 bytes/宽高组合; alpha-only fade tick 跳上传的优化保持。
+
+  2) `gui_modules/sao_gui_fisheye_mixin.py` _FisheyeTexturePresenter 同款
+    id() 去重改为单元组快照 + 单调 seq。新增
+    `tools/gpu_presenter_dedupe_selftest.py` (13 项)。
+
 ## v4.6.93: Boss 反应保存与资料编辑打开失败反馈.
 
   1) `gui_modules/sao_gui_bossraid.py` 反应行「保存」失败或保存接口缺失

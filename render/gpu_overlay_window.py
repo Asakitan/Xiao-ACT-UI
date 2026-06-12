@@ -1327,11 +1327,16 @@ class BgraPresenter:
         self._frame_h = 0
         self._dirty = False
         self._alpha = 1.0
-        # v2.3.12: id of the bytes object last uploaded to the GPU texture.
-        # Used to dedup glTexSubImage2D when alpha-only ticks trigger a
-        # redraw without changing frame content.
-        self._last_uploaded_id = 0
-        self._frame_dirty_id = 0
+        # v2.3.12/v4.6.93: dedup glTexSubImage2D when alpha-only ticks
+        # trigger a redraw without changing frame content. The staged
+        # frame travels as one (bytes, w, h, seq) tuple so the render
+        # thread never sees a half-updated combination, and a monotonic
+        # seq (bumped per distinct bytes object) replaces id() identity —
+        # freed-bytes address reuse could collide with the last uploaded
+        # id and silently skip a real frame.
+        self._frame_snap: Optional[tuple] = None
+        self._frame_seq = 0
+        self._uploaded_seq = -1
         # v2.3.13: pump-driven time-based fade. Eliminates Tk after(16)
         # for fade animation — the GLFW pump (which runs independently
         # of Tk's main after queue) drives alpha smoothly even when
@@ -1375,22 +1380,22 @@ class BgraPresenter:
         Safe to call from any thread, but typically called from the
         same thread as ``render`` (Tk main).
         """
-        # v2.3.12: only mark dirty if the frame actually changed.
-        # This prevents alpha-only fade ticks (which also call
+        # v2.3.12: only bump the upload seq if the frame actually
+        # changed. This prevents alpha-only fade ticks (which also call
         # request_redraw) from re-uploading identical bytes.
-        prev_id = id(self._frame_bytes) if self._frame_bytes is not None else 0
-        new_id = id(bgra) if bgra is not None else 0
+        if bgra is not self._frame_bytes:
+            self._frame_seq += 1
         self._frame_bytes = bgra
         self._frame_w = int(w)
         self._frame_h = int(h)
-        if new_id != prev_id:
-            self._frame_dirty_id = new_id
+        self._frame_snap = (bgra, int(w), int(h), self._frame_seq)
         self._dirty = True
 
     def clear(self) -> None:
         """Stage a transparent frame (drops the cached bytes; next
         ``render`` will just clear to (0,0,0,0))."""
         self._frame_bytes = None
+        self._frame_snap = None
         self._dirty = True
 
     def render(self, ctx: Any, _t: float) -> None:
@@ -1419,9 +1424,8 @@ class BgraPresenter:
                 self._alpha = self._fade_from + (self._fade_to - self._fade_from) * k
                 # Keep dirty so pump re-renders next tick to advance fade.
                 self._dirty = True
-        bgra = self._frame_bytes
-        w = self._frame_w
-        h = self._frame_h
+        snap = self._frame_snap
+        bgra, w, h, seq = snap if snap is not None else (None, 0, 0, -1)
         if self._prog is None:
             self._prog = ctx.program(
                 vertex_shader=_BGRA_VS, fragment_shader=_BGRA_FS)
@@ -1449,17 +1453,16 @@ class BgraPresenter:
                 self._tex = ctx.texture((w, h), 4, bgra)
                 self._tex_w = w
                 self._tex_h = h
-                self._last_uploaded_id = id(bgra)
+                self._uploaded_seq = seq
             else:
-                # v2.3.12: skip glTexSubImage2D upload when the same
-                # bytes object is already on the GPU. Alpha-only ticks
+                # v2.3.12: skip glTexSubImage2D upload when the staged
+                # frame is already on the GPU. Alpha-only ticks
                 # (fisheye fade, menu fade) re-render but keep frame
                 # identity, saving ~200–800 KB CPU→GPU copy per panel.
-                cur_id = id(bgra)
-                if cur_id != getattr(self, '_last_uploaded_id', 0):
+                if seq != getattr(self, '_uploaded_seq', -1):
                     try:
                         self._tex.write(bgra)
-                        self._last_uploaded_id = cur_id
+                        self._uploaded_seq = seq
                     except Exception:
                         try:
                             self._tex.release()
@@ -1468,7 +1471,7 @@ class BgraPresenter:
                         self._tex = ctx.texture((w, h), 4, bgra)
                         self._tex_w = w
                         self._tex_h = h
-                        self._last_uploaded_id = cur_id
+                        self._uploaded_seq = seq
             self._tex.use(location=0)
             self._vao.render(_moderngl.TRIANGLE_STRIP)  # type: ignore[union-attr]
         # If no frame staged: ctx.clear in GpuOverlayWindow already
@@ -1486,4 +1489,5 @@ class BgraPresenter:
                 pass
             setattr(self, obj_name, None)
         self._frame_bytes = None
+        self._frame_snap = None
 

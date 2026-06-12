@@ -640,7 +640,12 @@ class SAOPlayerGUIFisheyeMixin:
                     self._rgb = None
                     self._w = 0
                     self._h = 0
-                    self._last_uploaded_id = 0
+                    # 帧以 (bytes, w, h, seq) 单元组交接, 渲染线程不会读到
+                    # 半更新组合; 单调 seq 替代 id() 身份比较 (释放后的
+                    # bytes 地址被复用时 id 碰撞会静默跳过真实新帧)。
+                    self._frame_snap = None
+                    self._frame_seq = 0
+                    self._uploaded_seq = -1
                     self._alpha = 1.0
                     self._fade_active = False
                     self._fade_t0 = 0.0
@@ -650,9 +655,12 @@ class SAOPlayerGUIFisheyeMixin:
                     self._fade_done_cb = None
 
                 def set_frame(self, rgb_bytes, w, h):
+                    if rgb_bytes is not self._rgb:
+                        self._frame_seq += 1
                     self._rgb = rgb_bytes
                     self._w = int(w)
                     self._h = int(h)
+                    self._frame_snap = (rgb_bytes, int(w), int(h), self._frame_seq)
 
                 def set_alpha(self, alpha):
                     self._fade_active = False
@@ -768,22 +776,23 @@ class SAOPlayerGUIFisheyeMixin:
                         self._prog['u_time'].value = float(t)
                     except Exception:
                         pass
-                    rgb = self._rgb
-                    if rgb is not None and self._w > 0 and self._h > 0:
-                        if self._tex is None or self._tex_w != self._w or self._tex_h != self._h:
+                    snap = self._frame_snap
+                    rgb, fw, fh, seq = snap if snap is not None else (None, 0, 0, -1)
+                    if rgb is not None and fw > 0 and fh > 0:
+                        if self._tex is None or self._tex_w != fw or self._tex_h != fh:
                             if self._tex is not None:
                                 try:
                                     self._tex.release()
                                 except Exception:
                                     pass
-                            self._tex = ctx.texture((self._w, self._h), 3, rgb)
+                            self._tex = ctx.texture((fw, fh), 3, rgb)
                             self._tex.filter = (_gow._moderngl.LINEAR, _gow._moderngl.LINEAR)
-                            self._tex_w = self._w
-                            self._tex_h = self._h
-                            self._last_uploaded_id = id(rgb)
-                        elif id(rgb) != self._last_uploaded_id:
+                            self._tex_w = fw
+                            self._tex_h = fh
+                            self._uploaded_seq = seq
+                        elif seq != self._uploaded_seq:
                             self._tex.write(rgb)
-                            self._last_uploaded_id = id(rgb)
+                            self._uploaded_seq = seq
                     if self._tex is not None:
                         self._tex.use(location=0)
                         self._vao.render(_gow._moderngl.TRIANGLE_STRIP)
@@ -798,6 +807,7 @@ class SAOPlayerGUIFisheyeMixin:
                                 pass
                             setattr(self, name, None)
                     self._rgb = None
+                    self._frame_snap = None
 
             presenter = _FisheyeTexturePresenter()
             gpu_win = _gow.GpuOverlayWindow(
