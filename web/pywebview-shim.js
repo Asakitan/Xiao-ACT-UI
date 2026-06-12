@@ -69,6 +69,15 @@
     }
 
     function normalizeOk(result) {
+        if (result === true || result === null || result === undefined || result === '') {
+            return { ok: true };
+        }
+        if (result === false) {
+            return { ok: false };
+        }
+        if (!result || typeof result !== 'object') {
+            return { ok: true, value: result };
+        }
         if (result && result.error && result.ok == null) {
             result.ok = false;
             result.message = result.message || String(result.error);
@@ -121,7 +130,7 @@
             return call('ui.get_panel_themes', {});
         },
         set_panel_theme: function (panel, theme) {
-            return call('ui.set_panel_theme', { panel: String(panel || ''), theme: String(theme || '') });
+            return call('ui.set_panel_theme', { panel: String(panel || ''), theme: String(theme || '') }).then(normalizeOk);
         },
         set_watched_slots: function (slots) {
             return call('settings.set_watched_slots', { slots: Array.isArray(slots) ? slots : [] }).then(normalizeOk);

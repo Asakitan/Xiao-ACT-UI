@@ -4979,6 +4979,39 @@ function _slotId(value) {
     n = Math.round(n);
     return (n >= 1 && n <= 9) ? n : null;
 }
+var _watchedSlotsConfirmed = [];
+var _watchedSlotsRequestSeq = 0;
+function _watchedSlotsList() {
+    var slots = [];
+    document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
+        var slot = _slotId(el.getAttribute('data-slot'));
+        if (slot != null && slots.indexOf(slot) < 0) slots.push(slot);
+    });
+    return slots;
+}
+function _syncWatchedSlots(slots, commit) {
+    var restoredSlots = {};
+    var normalized = [];
+    if (Array.isArray(slots)) {
+        slots.forEach(function(slotValue) {
+            var slot = _slotId(slotValue);
+            if (slot != null && !restoredSlots[slot]) {
+                restoredSlots[slot] = true;
+                normalized.push(slot);
+            }
+        });
+    }
+    document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
+        var slot = _slotId(el.getAttribute('data-slot'));
+        if (slot != null && restoredSlots[slot]) {
+            el.classList.add('active');
+        } else {
+            el.classList.remove('active');
+        }
+    });
+    if (commit !== false) _watchedSlotsConfirmed = normalized.slice();
+    return normalized;
+}
 function _brNumText(value, fallback, hi) {
     var fallbackText = String(fallback == null ? 0 : fallback);
     var n = _clampNum(value, null, 0, hi == null ? null : hi);
@@ -5044,21 +5077,25 @@ document.querySelectorAll('.child-menu li').forEach(function(li) {
 document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
     el.addEventListener('click', function(e) {
         e.stopPropagation();
+        var previousSlots = _watchedSlotsConfirmed.slice();
         this.classList.toggle('active');
         playSound('snd-click');
-        _saveWatchedSlots();
+        _saveWatchedSlots(previousSlots);
     });
 });
-function _saveWatchedSlots() {
-    var slots = [];
-    document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
-        var slot = _slotId(el.getAttribute('data-slot'));
-        if (slot != null) slots.push(slot);
+function _saveWatchedSlots(previousSlots) {
+    var slots = _watchedSlotsList();
+    var requestSeq = ++_watchedSlotsRequestSeq;
+    _callMenuSettingApi('set_watched_slots', [slots], 'BURST SLOTS', function(data) {
+        if (requestSeq !== _watchedSlotsRequestSeq) return;
+        _syncWatchedSlots(data && Array.isArray(data.slots) ? data.slots : slots);
+    }, function() {
+        if (requestSeq !== _watchedSlotsRequestSeq) return false;
+        _watchedSlotsRequestSeq += 1;
+        _syncWatchedSlots(Array.isArray(previousSlots) ? previousSlots : _watchedSlotsConfirmed);
     });
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_watched_slots) {
-        window.pywebview.api.set_watched_slots(slots);
-    }
 }
+_syncWatchedSlots(_watchedSlotsList());
 /* Burst enabled toggle */
 document.getElementById('burst-enabled').addEventListener('change', function(e) {
     e.stopPropagation();
@@ -6256,6 +6293,7 @@ document.getElementById('ak-engine-pause-on-death').addEventListener('change', f
 var _panelThemes = {};
 var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'];
 var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true };
+var _themeRequestSeq = 0;
 
 function _themePanelName(panel) {
     var key = _profileText(panel, '');
@@ -6269,6 +6307,24 @@ function _themeDefault(panel) {
 function _themeValue(value, fallback) {
     var key = _profileText(value, fallback || 'dark').toLowerCase();
     return (key === 'light' || key === 'dark') ? key : fallback;
+}
+function _panelThemesSnapshot() {
+    var snap = {};
+    _themePanels.forEach(function(p) {
+        snap[p] = _themeValue(_panelThemes[p], _themeDefault(p));
+    });
+    return snap;
+}
+function _applyPanelThemeAck(data, fallbackPanel, fallbackTheme) {
+    if (data && data.panel_themes && typeof data.panel_themes === 'object') {
+        _syncPanelThemes(data.panel_themes);
+        return;
+    }
+    var panelName = _themePanelName(data && data.panel !== undefined ? data.panel : fallbackPanel);
+    if (panelName) {
+        _panelThemes[panelName] = _themeValue(data && data.theme !== undefined ? data.theme : fallbackTheme, _themeDefault(panelName));
+    }
+    _syncPanelThemes(_panelThemes);
 }
 
 function _refreshThemeButtons() {
@@ -6321,22 +6377,42 @@ function _toggleTheme(panel) {
     if (!panelName) return;
     var cur = _themeValue(_panelThemes[panelName], _themeDefault(panelName));
     var next = cur === 'light' ? 'dark' : 'light';
+    var previousThemes = _panelThemesSnapshot();
+    var requestSeq = ++_themeRequestSeq;
     _panelThemes[panelName] = next;
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
-        window.pywebview.api.set_panel_theme(panelName, next);
-    }
     _syncPanelThemes(_panelThemes);
+    _callMenuSettingApi('set_panel_theme', [panelName, next], 'PANEL THEME', function(data) {
+        if (requestSeq !== _themeRequestSeq) return;
+        _applyPanelThemeAck(data, panelName, next);
+    }, function() {
+        if (requestSeq !== _themeRequestSeq) return false;
+        _themeRequestSeq += 1;
+        _syncPanelThemes(previousThemes);
+    });
 }
 
 function _setAllThemes(theme) {
     var themeName = _themeValue(theme, 'dark');
+    var previousThemes = _panelThemesSnapshot();
+    var requestSeq = ++_themeRequestSeq;
+    var failed = false;
+    var pending = _themePanels.length;
     _themePanels.forEach(function(p) {
         _panelThemes[p] = themeName;
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
-            window.pywebview.api.set_panel_theme(p, themeName);
-        }
     });
     _syncPanelThemes(_panelThemes);
+    _themePanels.forEach(function(p) {
+        _callMenuSettingApi('set_panel_theme', [p, themeName], 'PANEL THEME', function(data) {
+            if (failed || requestSeq !== _themeRequestSeq) return;
+            pending -= 1;
+            if (pending <= 0) _syncPanelThemes(_panelThemes);
+        }, function() {
+            if (failed || requestSeq !== _themeRequestSeq) return false;
+            failed = true;
+            _themeRequestSeq += 1;
+            _syncPanelThemes(previousThemes);
+        });
+    });
 }
 
 function _initPanelThemes() {
@@ -6353,19 +6429,7 @@ function restoreMenuSettings(cfg) {
     if (!cfg) return;
     /* Watched slots */
     if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
-        var restoredSlots = {};
-        cfg.watched_slots.forEach(function(slotValue) {
-            var slot = _slotId(slotValue);
-            if (slot != null) restoredSlots[slot] = true;
-        });
-        document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
-            var slot = _slotId(el.getAttribute('data-slot'));
-            if (slot != null && restoredSlots[slot]) {
-                el.classList.add('active');
-            } else {
-                el.classList.remove('active');
-            }
-        });
+        _syncWatchedSlots(cfg.watched_slots);
     }
     /* Burst enabled */
     if (cfg.burst_enabled !== undefined) {

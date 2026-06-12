@@ -19,6 +19,9 @@ global.window = {
           skills: [{ skill_id: 42, name: "Slash", total: 100 }],
         });
       }
+      if (name === "ui.set_panel_theme") {
+        return Promise.resolve(true);
+      }
       return Promise.resolve({ ok: true });
     },
   },
@@ -203,11 +206,12 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "ui.get_panel_themes", "get_panel_themes command mismatch");
 
-  await window.pywebview.api.set_panel_theme("act", "light");
+  const themeResult = await window.pywebview.api.set_panel_theme("act", "light");
   last = calls[calls.length - 1];
   assert(last.name === "ui.set_panel_theme", "set_panel_theme command mismatch");
   assert(last.payload.panel === "act", "set_panel_theme panel was not forwarded");
   assert(last.payload.theme === "light", "set_panel_theme theme was not forwarded");
+  assert(themeResult.ok === true, "set_panel_theme should normalize legacy boolean ack");
 
   await window.pywebview.api.set_watched_slots([3, 1, 5]);
   last = calls[calls.length - 1];

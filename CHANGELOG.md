@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.63: Web menu slots/theme bridge 响应修复.
+
+  1) `web/menu.html` 与 `sao_webview.py` 修复 watched slots bridge 响应处理。
+     技能槽勾选现在会等待 `set_watched_slots` ack, 成功时按后端 slots 重画,
+     失败时回滚到上一确认槽位; Python bridge 也会过滤 1..9 并返回结构化结果。
+
+  2) `web/menu.html` 与 `sao_webview.py` 修复 panel theme bridge 响应处理。
+     单面板主题切换现在会消费后端 panel/theme/panel_themes,
+     全量主题切换失败时会恢复整组主题; Python 与 WebView2 shim 均返回/归一标准 ack。
+
 ## v4.6.62: Web menu burst/sound bridge 响应修复.
 
   1) `web/menu.html` 修复 burst/sound 控件 bridge 失败时的交互回滚。

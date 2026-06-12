@@ -136,6 +136,7 @@ def main() -> int:
         "slots.push(parseInt(el.getAttribute('data-slot')));",
         "var slot = parseInt(el.getAttribute('data-slot'));",
         "cfg.watched_slots.indexOf(slot) >= 0",
+        "window.pywebview.api.set_watched_slots(slots);",
         "if (fadeEl) fadeEl.value = cfg.dps_fade_timeout_s;",
         "if (cfg.boss_bar_mode) {\n        _setBossBarModeUI(cfg.boss_bar_mode);",
         "btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);",
@@ -168,12 +169,15 @@ def main() -> int:
         "var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);",
         "var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);",
         "function _slotId(value)",
-        "var slot = _slotId(el.getAttribute('data-slot'));",
-        "if (slot != null) slots.push(slot);",
-        "var restoredSlots = {};",
-        "cfg.watched_slots.forEach(function(slotValue) {",
-        "if (slot != null) restoredSlots[slot] = true;",
-        "if (slot != null && restoredSlots[slot]) {",
+        "function _watchedSlotsList()",
+        "function _syncWatchedSlots(slots, commit)",
+        "var _watchedSlotsRequestSeq = 0;",
+        "var previousSlots = _watchedSlotsConfirmed.slice();",
+        "_saveWatchedSlots(previousSlots);",
+        "_callMenuSettingApi('set_watched_slots', [slots], 'BURST SLOTS', function(data) {",
+        "_syncWatchedSlots(data && Array.isArray(data.slots) ? data.slots : slots);",
+        "_syncWatchedSlots(_watchedSlotsList());",
+        "_syncWatchedSlots(cfg.watched_slots);",
         "var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);",
         "if (fadeEl) fadeEl.value = restoredFadeTimeout;",
         "function _bossBarModeValue(value)",
@@ -884,7 +888,9 @@ def main() -> int:
         "function _applyMenuTheme(theme) {\n    document.documentElement.classList.toggle('theme-dark', theme === 'dark');",
         "function _toggleTheme(panel) {\n    var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');",
         "window.pywebview.api.set_panel_theme(panel, next);",
+        "window.pywebview.api.set_panel_theme(panelName, next);",
         "_panelThemes[p] = theme;\n        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {\n            window.pywebview.api.set_panel_theme(p, theme);",
+        "window.pywebview.api.set_panel_theme(p, themeName);",
     ]
     for pattern in theme_settings_raw_patterns:
         if pattern in html:
@@ -894,15 +900,22 @@ def main() -> int:
         "function _themeValue(value, fallback)",
         "return _themePanels.indexOf(key) >= 0 ? key : '';",
         "return (key === 'light' || key === 'dark') ? key : fallback;",
+        "var _themeRequestSeq = 0;",
+        "function _panelThemesSnapshot()",
+        "function _applyPanelThemeAck(data, fallbackPanel, fallbackTheme)",
         "var t = _themeValue(_panelThemes[p], _themeDefault(p));",
         "var t = _themeValue(themes[p], _themeDefault(p));",
         "document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');",
         "var panelName = _themePanelName(panel);",
         "if (!panelName) return;",
-        "window.pywebview.api.set_panel_theme(panelName, next);",
+        "_callMenuSettingApi('set_panel_theme', [panelName, next], 'PANEL THEME', function(data) {",
+        "_syncPanelThemes(previousThemes);",
         "var themeName = _themeValue(theme, 'dark');",
+        "var pending = _themePanels.length;",
         "_panelThemes[p] = themeName;",
-        "window.pywebview.api.set_panel_theme(p, themeName);",
+        "_callMenuSettingApi('set_panel_theme', [p, themeName], 'PANEL THEME', function(data) {",
+        "pending -= 1;",
+        "failed = true;",
     ]
     for snippet in theme_settings_safe_required:
         if snippet not in html:
@@ -998,6 +1011,27 @@ def main() -> int:
     for snippet in sound_burst_bridge_safe_required:
         if snippet not in webview_py:
             raise AssertionError("missing Python WebView sound/burst bridge snippet: " + snippet)
+
+    slots_theme_bridge_raw_patterns = [
+        "slots = [int(x) for x in slots if isinstance(x, (int, float))]",
+        "self._g._set_setting('watched_skill_slots', slots)",
+        "return False\n            if theme not in {'light', 'dark'}:",
+    ]
+    for pattern in slots_theme_bridge_raw_patterns:
+        if pattern in webview_py:
+            raise AssertionError("Python WebView slots/theme bridge must return structured ack and normalize values: " + pattern)
+    slots_theme_bridge_safe_required = [
+        "def _watched_slot_ids(slots: Any) -> List[int]:",
+        "normalized: List[int] = []",
+        "if 1 <= slot <= 9 and slot not in seen:",
+        "normalized = _watched_slot_ids(slots)",
+        "return json.dumps({'ok': True, 'slots': normalized}, ensure_ascii=False)",
+        "return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)",
+        "return json.dumps({'ok': True, 'panel': panel, 'theme': theme, 'panel_themes': themes}, ensure_ascii=False)",
+    ]
+    for snippet in slots_theme_bridge_safe_required:
+        if snippet not in webview_py:
+            raise AssertionError("missing Python WebView slots/theme bridge snippet: " + snippet)
 
     source_bridge_raw_patterns = [
         "def set_component_source(self, component, mode):\n        \"\"\"Legacy no-op: per-component source switching is no longer exposed.\"\"\"",

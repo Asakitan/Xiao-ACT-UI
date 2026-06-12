@@ -230,6 +230,27 @@ def _sound_volume_value(volume_pct: Any) -> int:
     return max(0, min(100, int(value)))
 
 
+def _watched_slot_ids(slots: Any) -> List[int]:
+    if isinstance(slots, str):
+        try:
+            slots = json.loads(slots)
+        except Exception:
+            slots = []
+    if not isinstance(slots, (list, tuple, set)):
+        slots = []
+    normalized: List[int] = []
+    seen = set()
+    for raw in slots:
+        try:
+            slot = int(float(raw))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= slot <= 9 and slot not in seen:
+            seen.add(slot)
+            normalized.append(slot)
+    return normalized
+
+
 def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
@@ -1107,7 +1128,7 @@ class SAOWebAPI:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
             if panel not in {'dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'}:
-                return False
+                return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)
             if theme not in {'light', 'dark'}:
                 theme = 'dark'
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
@@ -1145,9 +1166,9 @@ class SAOWebAPI:
                         w.evaluate_js(f'window._applyPanelTheme&&window._applyPanelTheme("{theme}")')
                     except Exception:
                         pass
-            return True
-        except Exception:
-            return False
+            return json.dumps({'ok': True, 'panel': panel, 'theme': theme, 'panel_themes': themes}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
     def window_drag(self, dx, dy):
         """HP 窗口固定, 不允许拖拽 — 此方法保留但不执行."""
@@ -1239,16 +1260,13 @@ class SAOWebAPI:
     # ── Skill Effects settings ──
     def set_watched_slots(self, slots):
         """Set which skill slots to watch for Burst Mode Ready."""
-        if isinstance(slots, str):
-            try:
-                slots = json.loads(slots)
-            except Exception:
-                slots = []
-        if not isinstance(slots, list):
-            slots = []
-        slots = [int(x) for x in slots if isinstance(x, (int, float))]
-        self._g._set_setting('watched_skill_slots', slots)
-        self._g._reset_burst_tracking()
+        normalized = _watched_slot_ids(slots)
+        try:
+            self._g._set_setting('watched_skill_slots', normalized)
+            self._g._reset_burst_tracking()
+            return json.dumps({'ok': True, 'slots': normalized}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'slots': normalized, 'message': str(e)}, ensure_ascii=False)
 
     def set_burst_enabled(self, enabled):
         """Enable/disable Burst Mode Ready alerts."""
