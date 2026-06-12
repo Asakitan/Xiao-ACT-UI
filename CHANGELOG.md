@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.42: Web menu picker/leaderboard payload 防护修复.
+
+  1) `web/menu.html` 修复 File Picker payload 渲染。
+     browser payload 现在会安全解析并校验 dirs/files shape,
+     malformed entries 不再中断 picker, `0` 路径/名称也会保留显示。
+
+  2) `web/menu.html` 修复 Leaderboard sort 参数传播。
+     sort 现在归一到 xp/level/songs_played/play_time,
+     避免异常 bridge payload 破坏 tab selector 或让榜单统计列渲染为空。
+
 ## v4.6.41: Web menu Session/Leaderboard payload 渲染修复.
 
   1) `web/menu.html` 修复 Session Players 行渲染。

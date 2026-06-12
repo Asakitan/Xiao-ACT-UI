@@ -163,6 +163,46 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe menu runtime value snippet: " + snippet)
 
+    file_picker_raw_patterns = [
+        "function showFilePicker(dataJson) {\n    var data = (typeof dataJson === 'string') ? JSON.parse(dataJson) : dataJson;",
+        "_pickerMode = data.mode || 'file';",
+        "_pickerCurrentDir = data.current || '';",
+        "if (data.parent) {",
+        "_pickerBrowse(data.parent);",
+        "(data.dirs || []).forEach(function(d) {",
+        "(data.files || []).forEach(function(f) {",
+        "var infoStr = f.size ? '<span class=\"item-info\">' + _fmtSize(f.size) + '</span>' : '';",
+        "window.pywebview.api.select_file(f.path).then",
+        "if (!(data.parent) && !(data.dirs||[]).length && !(data.files||[]).length) {",
+        "var d = (typeof result === 'string') ? JSON.parse(result) : result;",
+        "d.mode = _pickerMode;",
+    ]
+    for pattern in file_picker_raw_patterns:
+        if pattern in html:
+            raise AssertionError("File Picker payload rendering must validate payload shape and preserve zero text: " + pattern)
+    file_picker_safe_required = [
+        "function _pickerPayload(dataJson)",
+        "function _pickerModeValue(value)",
+        "function _pickerEntry(entry)",
+        "function _pickerEntryText(value)",
+        "var data = _pickerPayload(dataJson);",
+        "_pickerMode = _pickerModeValue(data.mode);",
+        "_pickerCurrentDir = _pickerEntryText(data.current);",
+        "var parentPath = _pickerEntryText(data.parent);",
+        "var dirs = Array.isArray(data.dirs) ? data.dirs : [];",
+        "var files = Array.isArray(data.files) ? data.files : [];",
+        "var d = _pickerEntry(rawDir);",
+        "var f = _pickerEntry(rawFile);",
+        "var sizeBytes = _clampNum(f.size, 0, 0, Number.MAX_SAFE_INTEGER);",
+        "var infoStr = sizeBytes > 0 ? '<span class=\"item-info\">' + _fmtSize(sizeBytes) + '</span>' : '';",
+        "if (!parentPath && !dirs.length && !files.length) {",
+        "var d = _pickerPayload(result);",
+        "d.mode = _pickerModeValue(_pickerMode);",
+    ]
+    for snippet in file_picker_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe File Picker payload snippet: " + snippet)
+
     session_players_raw_patterns = [
         "var name = row.name || '--';",
         "_escHtml(row.name || '')",
@@ -375,6 +415,27 @@ def main() -> int:
     for snippet in leaderboard_payload_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe Leaderboard payload/text snippet: " + snippet)
+
+    leaderboard_sort_raw_patterns = [
+        "_lbCurrentSort = data.sort || _lbCurrentSort;",
+        "var activeTab = document.querySelector('.lb-tab[data-sort=\"' + _lbCurrentSort + '\"]');",
+        "_lbCurrentSort = tab.getAttribute('data-sort');",
+    ]
+    for pattern in leaderboard_sort_raw_patterns:
+        if pattern in html:
+            raise AssertionError("Leaderboard sort keys must be normalized before state/query-selector use: " + pattern)
+    leaderboard_sort_safe_required = [
+        "function _lbSortKey(value, fallback)",
+        "var allowed = { xp: true, level: true, songs_played: true, play_time: true };",
+        "return allowed[key] ? key : fallback;",
+        "_lbCurrentSort = _lbSortKey(data.sort, _lbCurrentSort);",
+        "var activeTab = document.querySelector('.lb-tab[data-sort=\"' + _lbSortKey(_lbCurrentSort, 'xp') + '\"]');",
+        "_lbCurrentSort = _lbSortKey(tab.getAttribute('data-sort'), _lbCurrentSort);",
+        "window.pywebview.api.fetch_leaderboard(_lbCurrentSort);",
+    ]
+    for snippet in leaderboard_sort_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe Leaderboard sort snippet: " + snippet)
 
     print(
         f"OK web menu layout: {item_count} items, "

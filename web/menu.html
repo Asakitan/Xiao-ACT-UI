@@ -4768,10 +4768,34 @@ var _pickerMode = 'file';
 var _pickerConsumer = '';
 var _pickerCurrentDir = '';
 
+function _pickerPayload(dataJson) {
+    if (typeof dataJson === 'string') {
+        try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }
+    }
+    return (dataJson && typeof dataJson === 'object') ? dataJson : {};
+}
+
+function _pickerModeValue(value) {
+    return value === 'folder' ? 'folder' : 'file';
+}
+
+function _pickerEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+
+function _pickerEntryText(value) {
+    if (value == null) return '';
+    var text = String(value);
+    return text ? text : '';
+}
+
 function showFilePicker(dataJson) {
-    var data = (typeof dataJson === 'string') ? JSON.parse(dataJson) : dataJson;
-    _pickerMode = data.mode || 'file';
-    _pickerCurrentDir = data.current || '';
+    var data = _pickerPayload(dataJson);
+    _pickerMode = _pickerModeValue(data.mode);
+    _pickerCurrentDir = _pickerEntryText(data.current);
+    var parentPath = _pickerEntryText(data.parent);
+    var dirs = Array.isArray(data.dirs) ? data.dirs : [];
+    var files = Array.isArray(data.files) ? data.files : [];
     document.getElementById('picker-title').textContent = _pickerMode === 'folder' ? '选择文件夹' : '选择文件';
     document.getElementById('picker-path').textContent = _pickerCurrentDir;
     document.getElementById('filepicker-box').className =
@@ -4780,39 +4804,42 @@ function showFilePicker(dataJson) {
     var list = document.getElementById('picker-list');
     list.innerHTML = '';
 
-    if (data.parent) {
+    if (parentPath) {
         var upEl = document.createElement('div');
         upEl.className = 'picker-item is-up';
         upEl.innerHTML = '<i class="menu-glyph mi-up"></i><span class="item-name">.. 上级目录</span>';
         upEl.addEventListener('click', function() {
             playSound('snd-click');
-            _pickerBrowse(data.parent);
+            _pickerBrowse(parentPath);
         });
         list.appendChild(upEl);
     }
 
-    (data.dirs || []).forEach(function(d) {
+    dirs.forEach(function(rawDir) {
+        var d = _pickerEntry(rawDir);
         var el = document.createElement('div');
         el.className = 'picker-item is-dir';
-        el.innerHTML = '<i class="menu-glyph mi-dir"></i><span class="item-name">' + _escHtml(d.name) + '</span>';
+        el.innerHTML = '<i class="menu-glyph mi-dir"></i><span class="item-name">' + _escHtml(_pickerEntryText(d.name)) + '</span>';
         el.addEventListener('click', function() {
             playSound('snd-click');
-            _pickerBrowse(d.path);
+            _pickerBrowse(_pickerEntryText(d.path));
         });
         list.appendChild(el);
     });
 
-    (data.files || []).forEach(function(f) {
+    files.forEach(function(rawFile) {
+        var f = _pickerEntry(rawFile);
         var el = document.createElement('div');
         el.className = 'picker-item';
-        var infoStr = f.size ? '<span class="item-info">' + _fmtSize(f.size) + '</span>' : '';
-        el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(f.name) + '</span>' + infoStr;
+        var sizeBytes = _clampNum(f.size, 0, 0, Number.MAX_SAFE_INTEGER);
+        var infoStr = sizeBytes > 0 ? '<span class="item-info">' + _fmtSize(sizeBytes) + '</span>' : '';
+        el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(_pickerEntryText(f.name)) + '</span>' + infoStr;
         el.addEventListener('click', function() {
             var consumer = _pickerConsumer || 'auto_key';
             playSound('snd-click');
             closeFilePicker();
             if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.select_file(f.path).then(function(result) {
+                window.pywebview.api.select_file(_pickerEntryText(f.path)).then(function(result) {
                     var data = _akParseApiResult(result);
                     if (data && data.state) {
                         if (consumer === 'boss_raid') {
@@ -4832,7 +4859,7 @@ function showFilePicker(dataJson) {
         list.appendChild(el);
     });
 
-    if (!(data.parent) && !(data.dirs||[]).length && !(data.files||[]).length) {
+    if (!parentPath && !dirs.length && !files.length) {
         list.innerHTML = '<div class="picker-empty">暂无 MIDI 文件</div>';
     }
 
@@ -4848,8 +4875,8 @@ function closeFilePicker() {
 function _pickerBrowse(path) {
     if (!window.pywebview || !window.pywebview.api) return;
     window.pywebview.api.browse_dir(path).then(function(result) {
-        var d = (typeof result === 'string') ? JSON.parse(result) : result;
-        d.mode = _pickerMode;
+        var d = _pickerPayload(result);
+        d.mode = _pickerModeValue(_pickerMode);
         showFilePicker(d);
     });
 }
@@ -6481,6 +6508,14 @@ function _lbFirstText(values, fallback) {
     return fallback;
 }
 
+function _lbSortKey(value, fallback) {
+    var key = String(value == null ? '' : value);
+    var allowed = { xp: true, level: true, songs_played: true, play_time: true };
+    fallback = String(fallback == null ? 'xp' : fallback);
+    fallback = allowed[fallback] ? fallback : 'xp';
+    return allowed[key] ? key : fallback;
+}
+
 function _updateLbSize(rowCount) {
     var box = document.querySelector('#lb-dialog .lb-box');
     var rows = Math.max(1, Math.min(_lbPerPage, rowCount || 1));
@@ -6599,7 +6634,7 @@ function _lbRender() {
 
 function showLeaderboard(dataJson) {
     var data = _lbPayload(dataJson);
-    _lbCurrentSort = data.sort || _lbCurrentSort;
+    _lbCurrentSort = _lbSortKey(data.sort, _lbCurrentSort);
     _lbEntries = Array.isArray(data.entries) ? data.entries.map(function(e) { return (e && typeof e === 'object') ? e : {}; }) : [];
     _lbSelfDevice = _lbText(data.self_device, '');
     _lbSelfDeviceName = _lbFirstText([data.self_player_id, data.self_device_name], '');
@@ -6613,7 +6648,7 @@ function showLeaderboard(dataJson) {
         }
     });
     document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
-    var activeTab = document.querySelector('.lb-tab[data-sort="' + _lbCurrentSort + '"]');
+    var activeTab = document.querySelector('.lb-tab[data-sort="' + _lbSortKey(_lbCurrentSort, 'xp') + '"]');
     if (activeTab) activeTab.classList.add('active');
 
     if (_lbEntries.length === 0) {
@@ -6678,7 +6713,7 @@ document.getElementById('lb-tabs').querySelectorAll('.lb-tab').forEach(function(
     tab.addEventListener('click', function() {
         document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
         tab.classList.add('active');
-        _lbCurrentSort = tab.getAttribute('data-sort');
+        _lbCurrentSort = _lbSortKey(tab.getAttribute('data-sort'), _lbCurrentSort);
         document.getElementById('lb-list').innerHTML = '<div class="lb-loading">加载中...</div>';
         playSound('snd-click');
         if (window.pywebview && window.pywebview.api) {
