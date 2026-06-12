@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.32: ACT Aggregate Web count 显示防护修复.
+
+  1) `web/act_aggregate.html` 修复聚合行与趋势 badge 的 count 显示。
+     group count 与 graph row_count 现在归一为有限非负整数,
+     避免异常 payload 显示为 `Infinityx`、`NaN` 或原始坏文本。
+
+  2) `web/act_aggregate.html` 修复 KPI 与 source mix count 显示。
+     raw_counts 与 source_mix count 现在通过统一 count formatter 渲染,
+     避免侧栏、徽章和概览卡片出现不可读计数。
+
 ## v4.6.31: ACT Data Source Health 数值显示防护修复.
 
   1) `web/data_source_health.html` 修复运行时 summary 延迟数值显示。

@@ -208,6 +208,9 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var s = fmt(value), m = /^(-?[\d.]+)([km])$/.exec(s);
         return m ? esc(m[1]) + '<span class="unit">' + m[2] + '</span>' : esc(s);
     }
+    function countText(value) {
+        return String(Math.max(0, Math.round(num(value))));
+    }
 
     function showToast(msg) {
         toast.textContent = msg;
@@ -302,7 +305,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                     + '<div class="aca-row-top">'
                     + '<span class="aca-caret">' + (isOpen ? '▾' : '▸') + '</span>'
                     + '<span class="aca-row-title">' + esc(g.name || g.key || '-') + '</span>'
-                    + '<span class="aca-row-value">' + fmtHtml(val) + ' · ' + (g.count || 0) + 'x</span>'
+                    + '<span class="aca-row-value">' + fmtHtml(val) + ' · ' + countText(g.count) + 'x</span>'
                     + '</div>'
                     + '<div class="aca-row-meta">' + esc(groupMeta(g)) + '</div>'
                     + '<div class="aca-bar"><div class="aca-fill" style="width:' + pctWidth(ratio) + '%;"></div></div>'
@@ -339,7 +342,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         return '<div class="aca-section" data-section-key="graph" style="--acc:' + acc('cyan') + ';">'
             + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
             + '<div class="aca-sec-titles"><div class="aca-sec-title">趋势预览 / TREND</div></div>'
-            + '<div class="aca-sec-badge">' + (graph && graph.row_count || 0) + '</div></div>'
+            + '<div class="aca-sec-badge">' + countText(graph && graph.row_count) + '</div></div>'
             + '<div class="aca-sec-body' + (sectionCollapsed ? ' collapsed' : '') + '">' + rows + '</div></div>';
     }
 
@@ -372,19 +375,19 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
         // 6 KPI tiles (1:1 with Tk header summary)
         var html = '<div class="aca-kpis">';
-        html += tile('总伤害', fmtHtml(ov.damage), (counts.rows || 0) + ' 次事件', 'gold');
+        html += tile('总伤害', fmtHtml(ov.damage), countText(counts.rows) + ' 次事件', 'gold');
         html += tile('每秒伤害 DPS', fmtHtml(ov.dps), '持续 ' + fmt(ov.elapsed_s) + ' 秒', 'cyan');
         html += tile('治疗 / 每秒治疗', fmtHtml(ov.heal) + ' / ' + fmtHtml(ov.hps), '辅助治疗', 'ok');
-        html += tile('技能种类', String(counts.skills || 0), '种技能', 'gold');
-        html += tile('怪物数', String(counts.monsters || 0), '个目标', 'danger');
-        html += tile('地牢 / 场景', String(counts.dungeons || 0), ov.dungeon_name || '当前', 'cyan');
+        html += tile('技能种类', countText(counts.skills), '种技能', 'gold');
+        html += tile('怪物数', countText(counts.monsters), '个目标', 'danger');
+        html += tile('地牢 / 场景', countText(counts.dungeons), ov.dungeon_name || '当前', 'cyan');
         html += '</div>';
 
         // badges row: MODE / SPAN / source chips
         html += '<div class="aca-badges">';
         html += badge('模式 ' + (ov.mode || 'live'), 'cyan');
         html += badge('战斗时长 ' + fmt((ov.span_ms || 0) / 1000) + ' 秒', 'gold');
-        sources.forEach(function (s) { html += badge(ActText.source(s.source) + ' · ' + (s.count || 0), 'cyan'); });
+        sources.forEach(function (s) { html += badge(ActText.source(s.source) + ' · ' + countText(s.count), 'cyan'); });
         html += '</div>';
 
         // 工作台：只显示当前选中的聚合维度（工具栏可切换"按什么聚合"）。场景/日志噪声已移除。
@@ -403,13 +406,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         s += '<div class="aca-ctx"><span>数据源</span><strong>' + esc(ActText.source(data.source || 'live')) + '</strong></div>';
         s += '<div class="aca-ctx"><span>战斗时长</span><strong>' + fmt((ov.span_ms || 0) / 1000) + ' 秒</strong></div>';
         s += '<div class="aca-ctx"><span>已持续</span><strong>' + fmt(ov.elapsed_s) + ' 秒</strong></div>';
-        s += '<div class="aca-ctx"><span>事件数</span><strong>' + (counts.rows || 0) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>事件数</span><strong>' + countText(counts.rows) + '</strong></div>';
         s += '<div class="aca-ctx"><span>错误</span><strong>' + errorCount + '</strong></div>';
         overviewSide.innerHTML = s;
 
         // side: source mix (LIST of {source,count} — was wrongly read as object before)
         var mix = '';
-        sources.forEach(function (it) { mix += '<div class="aca-ctx"><span>' + esc(ActText.source(it.source)) + '</span><strong>' + (it.count || 0) + '</strong></div>'; });
+        sources.forEach(function (it) { mix += '<div class="aca-ctx"><span>' + esc(ActText.source(it.source)) + '</span><strong>' + countText(it.count) + '</strong></div>'; });
         sourceMix.innerHTML = mix || '<div class="aca-ctx"><span>No sources</span><strong>-</strong></div>';
     }
 

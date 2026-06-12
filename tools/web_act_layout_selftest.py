@@ -436,6 +436,31 @@ def _assert_timeline_and_aggregate_lists_are_guarded() -> None:
     ):
         if snippet not in aggregate:
             raise AssertionError("missing safe aggregate list/object snippet: " + snippet)
+    for snippet in (
+        "(counts.rows || 0) + ' 次事件'",
+        "String(counts.skills || 0)",
+        "String(counts.monsters || 0)",
+        "String(counts.dungeons || 0)",
+        "(g.count || 0) + 'x'",
+        "(graph && graph.row_count || 0)",
+        "(s.count || 0)",
+        "(it.count || 0)",
+    ):
+        if snippet in aggregate:
+            raise AssertionError("aggregate numeric counts must use finite display guards: " + snippet)
+    for snippet in (
+        "function countText(value)",
+        "countText(counts.rows) + ' 次事件'",
+        "countText(counts.skills)",
+        "countText(counts.monsters)",
+        "countText(counts.dungeons)",
+        "countText(g.count) + 'x</span>'",
+        "countText(graph && graph.row_count)",
+        "countText(s.count)",
+        "countText(it.count)",
+    ):
+        if snippet not in aggregate:
+            raise AssertionError("missing safe aggregate count snippet: " + snippet)
 
 
 def _assert_report_and_offline_lists_are_guarded() -> None:
