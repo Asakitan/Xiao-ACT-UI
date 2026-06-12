@@ -498,6 +498,30 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey/BossRaid local profile payload snippet: " + snippet)
 
+    boss_raid_api_raw_patterns = [
+        "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
+        "results.forEach(function(item) {\n            var data = (typeof item === 'string') ? JSON.parse(item) : item;",
+    ]
+    for pattern in boss_raid_api_raw_patterns:
+        if pattern in html:
+            raise AssertionError("BossRaid API responses must use safe parsing before state sync or user alerts: " + pattern)
+    boss_raid_api_safe_required = [
+        "function _brApiObject(value)",
+        "return !!(value && typeof value === 'object' && !Array.isArray(value));",
+        "function _brParseApiResult(result)",
+        "var parsed = JSON.parse(result);",
+        "return _brApiObject(parsed) ? parsed : { ok: false, message: String(result) };",
+        "return _brApiObject(result) ? result : { ok: false, message: String(result) };",
+        "var data = _brParseApiResult(result);",
+        "var rows = Array.isArray(results) ? results : [];",
+        "rows.forEach(function(item) {",
+        "var data = _brParseApiResult(item);",
+        "data.message || data.error || data.detail",
+    ]
+    for snippet in boss_raid_api_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe BossRaid API response snippet: " + snippet)
+
     linkage_raw_patterns = [
         "_linkageMappings = s.mappings || [];",
         "if (_linkageMappings.length === 0) {",

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.46: Web menu BossRaid API response 防护修复.
+
+  1) `web/menu.html` 修复 BossRaid bridge API response 解析。
+     BossRaid bridge 回调现在会安全处理字符串、空值和非对象响应,
+     malformed API response 不再以 JSON SyntaxError 打断流程或显示晦涩错误。
+
+  2) `web/menu.html` 修复 BossRaid cloud settings 多结果解析。
+     保存云端设置时会校验 Promise 结果数组并逐项安全解析,
+     避免异常 response 破坏设置保存状态同步或错误提示。
+
 ## v4.6.45: Web menu local profile payload 渲染修复.
 
   1) `web/menu.html` 修复 AutoKey 本地 profile payload 渲染。

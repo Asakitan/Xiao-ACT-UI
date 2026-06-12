@@ -6784,6 +6784,25 @@ var _brDraftProfile = null;
 var _brDraftDirty = false;
 var _brTab = 'local';
 
+function _brApiObject(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function _brParseApiResult(result) {
+    if (result === null || typeof result === 'undefined' || result === '') {
+        return { ok: false, message: 'Empty API response' };
+    }
+    if (typeof result === 'string') {
+        try {
+            var parsed = JSON.parse(result);
+            return _brApiObject(parsed) ? parsed : { ok: false, message: String(result) };
+        } catch (e) {
+            return { ok: false, message: result };
+        }
+    }
+    return _brApiObject(result) ? result : { ok: false, message: String(result) };
+}
+
 function _syncBossRaidState(state) {
     var safeState = _profileEntry(state);
     _bossRaidState = safeState;
@@ -6807,7 +6826,7 @@ function _brCallApi(method, args, onOk) {
         return;
     }
     api[method].apply(api, args || []).then(function(result) {
-        var data = (typeof result === 'string') ? JSON.parse(result) : result;
+        var data = _brParseApiResult(result);
         if (data && data.ok !== false) {
             if (data.state) _syncBossRaidState(data.state);
             if (onOk) onOk(data);
@@ -7341,9 +7360,10 @@ function _brSaveCloudSettings(afterSave) {
         window.pywebview.api.set_boss_raid_server_url(serverUrl)
     ]).then(function(results) {
         var lastState = null;
-        results.forEach(function(item) {
-            var data = (typeof item === 'string') ? JSON.parse(item) : item;
-            if (!data || data.ok === false) throw new Error((data && (data.message || data.error)) || 'Save settings failed');
+        var rows = Array.isArray(results) ? results : [];
+        rows.forEach(function(item) {
+            var data = _brParseApiResult(item);
+            if (!data || data.ok === false) throw new Error((data && (data.message || data.error || data.detail)) || 'Save settings failed');
             if (data.state) lastState = data.state;
         });
         if (lastState) _syncBossRaidState(lastState);
