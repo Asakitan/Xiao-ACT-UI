@@ -642,6 +642,10 @@ class DpsOverlay:
         self._minimized = False
         self._panel_notice: str = ''
         self._panel_notice_until: float = 0.0
+        # MORE ▾ 聚合态 (与 web/dps.html 头部 MORE 菜单 1:1): 展开后追加
+        # EXPORT/RESET 两钮, RESET 二段确认到期自动回退。
+        self._more_open = False
+        self._reset_armed_until: float = 0.0
         # Detail view state (parity with web/dps.html _openDetail/_closeDetail)
         self._detail_visible = False
         self._detail_uid = 0
@@ -2056,7 +2060,7 @@ class DpsOverlay:
         history_ok = report_ok or callable(self._list_history_cb)
         detail_label = 'NORMAL' if self._detail_mode else 'DETAIL'
         minimize_label = 'RESTORE' if self._minimized else 'MIN'
-        return [
+        specs = [
             ('minimize', minimize_label, bool(self._minimized), 'normal', True),
             ('live', 'LIVE', self._view_mode == 'live' and not self._detail_mode,
              'live', True),
@@ -2064,9 +2068,15 @@ class DpsOverlay:
             ('report', 'REPORT', self._view_mode == 'report' and not self._detail_mode,
              'normal', report_ok),
             ('history', 'HISTORY', False, 'normal', history_ok),
-            ('export', 'EXPORT', False, 'normal', history_ok),
-            ('reset', 'RESET', False, 'danger', True),
+            ('more', 'MORE ▴' if self._more_open else 'MORE ▾',
+             bool(self._more_open), 'normal', True),
         ]
+        if self._more_open:
+            reset_armed = time.time() < self._reset_armed_until
+            specs.append(('export', 'EXPORT', False, 'normal', history_ok))
+            specs.append(('reset', 'CONFIRM?' if reset_armed else 'RESET',
+                          reset_armed, 'danger', True))
+        return specs
 
     def _button_layout_sizes(self, draw: ImageDraw.ImageDraw, font,
                              available_w: int) -> Tuple[List[int], int]:
@@ -3290,10 +3300,23 @@ class DpsOverlay:
                         self._notify_no_report()
                 elif name == 'history':
                     self._activate_history()
+                elif name == 'more':
+                    self._more_open = not self._more_open
+                    if not self._more_open:
+                        self._reset_armed_until = 0.0
+                    self._last_compose_sig = None
+                    self._schedule_tick(immediate=True)
                 elif name == 'export':
                     self._activate_export()
                 elif name == 'reset':
-                    self._activate_reset()
+                    if time.time() < self._reset_armed_until:
+                        self._reset_armed_until = 0.0
+                        self._more_open = False
+                        self._activate_reset()
+                    else:
+                        self._reset_armed_until = time.time() + 3.0
+                        self._last_compose_sig = None
+                        self._schedule_tick(immediate=True)
                 return
         if self._minimized and not self._detail_mode:
             return

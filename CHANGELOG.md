@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.101: Tk DPS 头部 MORE 聚合补齐 Web 端 1:1.
+
+  1) `gui_modules/sao_gui_dps.py` 头部按钮排 EXPORT/RESET 收进「MORE ▾」
+    (点开内联展开, 再点收起), 与 38bafcf 的 web/dps.html MORE 菜单对齐;
+    按钮 7→6 平铺。
+
+  2) Tk RESET 同步获得二段确认: 第一次点击变「CONFIRM?」, 3 秒内再点才
+    真正重置, 超时自动回退 — 消除 Tk 端单击误触清空战斗数据的风险。
+
 ## v4.6.100: STA 离线诊断提示 + HP 面板右键菜单失败日志.
 
   1) `vision/recognition.py` STA 识别转 OFFLINE 时, 若 ROI 尺寸明显偏小
