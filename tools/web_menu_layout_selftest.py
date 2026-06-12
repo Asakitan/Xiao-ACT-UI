@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MENU_HTML = ROOT / "web" / "menu.html"
+SAO_WEBVIEW = ROOT / "sao_webview.py"
+HUD_SETTINGS_BRIDGE = ROOT / "C#" / "src" / "SaoAuto.App" / "WebBridge" / "HudSettingsBridge.cs"
 ITEM_SIZE_PX = 54
 ITEM_GAP_PX = 15
 FRAME_MARGIN_PX = 6
@@ -889,6 +891,84 @@ def main() -> int:
     for snippet in info_update_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe info panel update snippet: " + snippet)
+
+    source_settings_raw_patterns = [
+        "skills: 'vision',",
+        "var component = this.getAttribute('data-component');\n        var mode = this.getAttribute('data-mode');\n        if (!component || !mode) return;",
+        "var mode = this.getAttribute('data-mode') || 'tcp';",
+        "if (cfg.data_source_map) {\n        Object.keys(_dataSourceMap).forEach(function(key) {\n            if (cfg.data_source_map[key]) {\n                _dataSourceMap[key] = cfg.data_source_map[key];",
+    ]
+    for pattern in source_settings_raw_patterns:
+        if pattern in html:
+            raise AssertionError("data source settings must normalize values before UI or API propagation: " + pattern)
+    source_settings_safe_required = [
+        "var _sourceComponents = ['hp', 'level', 'stamina', 'skills', 'identity'];",
+        "skills: 'packet',",
+        "function _sourceComponentName(value)",
+        "function _sourceMode(value, fallback)",
+        "function _componentSourceValue(component, value)",
+        "function _syncDataSourceMap(map)",
+        "function _memSourceValue(value)",
+        "var component = _sourceComponentName(this.getAttribute('data-component'));",
+        "var mode = _componentSourceValue(component, this.getAttribute('data-mode'));",
+        "window.pywebview.api.set_component_source(component, mode);",
+        "var mode = _memSourceValue(this.getAttribute('data-mode'));",
+        "_memDataSource = _memSourceValue(cfg.mem_data_source);",
+        "_syncDataSourceMap(cfg.data_source_map);",
+        "var legacyMode = _sourceMode(cfg.data_source, 'packet');",
+        "_syncDataSourceMap(legacyMap);",
+    ]
+    for snippet in source_settings_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe data source settings snippet: " + snippet)
+
+    webview_py = SAO_WEBVIEW.read_text(encoding="utf-8")
+    source_bridge_raw_patterns = [
+        "def set_component_source(self, component, mode):\n        \"\"\"Legacy no-op: per-component source switching is no longer exposed.\"\"\"",
+        "'mem_data_source': str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').lower(),\n            }\n            try:\n                cfg['panel_themes']",
+    ]
+    for pattern in source_bridge_raw_patterns:
+        if pattern in webview_py:
+            raise AssertionError("Python WebView source bridge must persist and sync data_source_map: " + pattern)
+    source_bridge_safe_required = [
+        "DATA_SOURCE_COMPONENTS,",
+        "DEFAULT_DATA_SOURCE_MAP,",
+        "normalize_source_map,",
+        "normalize_source_mode,",
+        "mode_name = normalize_source_mode(mode, DEFAULT_DATA_SOURCE_MAP.get(component_name, 'packet'))",
+        "ref.set('data_source_map', dict(source_map))",
+        "ref.set('data_source', 'mixed')",
+        "self._g._reconfigure_data_engines(restart_packet=False)",
+        "'data_source_map': dict(source_map),",
+        "cfg['data_source_map'] = ref.get_data_source_map()",
+        "cfg['data_source_map'] = normalize_source_map(",
+    ]
+    for snippet in source_bridge_safe_required:
+        if snippet not in webview_py:
+            raise AssertionError("missing Python WebView source bridge snippet: " + snippet)
+
+    hud_bridge = HUD_SETTINGS_BRIDGE.read_text(encoding="utf-8")
+    hud_bridge_raw_patterns = [
+        "private static JsonObject HandleComponentSource(JsonObject? payload)",
+        "[\"legacy_noop\"] = true,",
+    ]
+    for pattern in hud_bridge_raw_patterns:
+        if pattern in hud_bridge:
+            raise AssertionError("C# HUD settings bridge must persist component sources: " + pattern)
+    hud_bridge_safe_required = [
+        "private JsonObject HandleComponentSource(JsonObject? payload)",
+        "private static readonly string[] SourceComponents",
+        "private static readonly IReadOnlyDictionary<string, string> DefaultSourceMap",
+        "var sourceMap = NormalizeDataSourceMap(_settings.Get<JsonObject?>(SettingsKeys.DataSourceMap));",
+        "_settings.Set(SettingsKeys.DataSourceMap, SourceMapToJson(sourceMap));",
+        "_settings.Set(SettingsKeys.DataSource, \"mixed\");",
+        "[\"data_source_map\"] = SourceMapToJson(sourceMap),",
+        "private static string NormalizeSourceComponent(string component)",
+        "private static string NormalizeComponentSourceMode(string component, string mode)",
+    ]
+    for snippet in hud_bridge_safe_required:
+        if snippet not in hud_bridge:
+            raise AssertionError("missing C# HUD settings source bridge snippet: " + snippet)
 
     boss_raid_editor_text_raw_patterns = [
         "_escHtml(profile.id || '--')",

@@ -155,10 +155,14 @@ from act_platform.runtime import (
     enrich_action_log_event,
 )
 from config import (
+    DATA_SOURCE_COMPONENTS,
     DEFAULT_HOTKEYS,
+    DEFAULT_DATA_SOURCE_MAP,
     HOTKEY_MOD_ALL_VKS,
     get_skill_slot_rects,
     hotkey_mods_down,
+    normalize_source_map,
+    normalize_source_mode,
     parse_hotkey,
     select_hotkey_match,
     WEB_DIR,
@@ -2084,8 +2088,65 @@ class SAOWebAPI:
         self._g._sync_menu_info()
 
     def set_component_source(self, component, mode):
-        """Legacy no-op: per-component source switching is no longer exposed."""
-        self._g._sync_menu_info()
+        """Persist per-component packet/vision source choices from the menu."""
+        component_name = str(component or '').strip().lower()
+        if component_name not in DATA_SOURCE_COMPONENTS:
+            self._g._sync_menu_settings()
+            return json.dumps({
+                'ok': False,
+                'error': 'bad_component',
+                'component': component_name,
+            }, ensure_ascii=False)
+
+        mode_name = normalize_source_mode(mode, DEFAULT_DATA_SOURCE_MAP.get(component_name, 'packet'))
+        if component_name == 'stamina':
+            mode_name = 'vision'
+        elif component_name == 'skills':
+            mode_name = 'packet'
+
+        source_map = {}
+        try:
+            ref = getattr(self._g, '_cfg_settings_ref', None) or getattr(self._g, 'settings', None)
+            if ref is None:
+                raise RuntimeError('settings unavailable')
+            if hasattr(ref, 'set_component_source') and hasattr(ref, 'get_data_source_map'):
+                ref.set_component_source(component_name, mode_name)
+                source_map = ref.get_data_source_map()
+            else:
+                raw_map = ref.get('data_source_map', {}) if hasattr(ref, 'get') else {}
+                legacy_mode = ref.get('data_source', 'packet') if hasattr(ref, 'get') else 'packet'
+                source_map = normalize_source_map(raw_map, legacy_mode)
+                source_map[component_name] = mode_name
+                source_map = normalize_source_map(source_map, 'packet')
+                if hasattr(ref, 'set'):
+                    ref.set('data_source_map', dict(source_map))
+                    ref.set('data_source', 'mixed')
+            if hasattr(ref, 'save'):
+                try:
+                    ref.save()
+                except Exception:
+                    pass
+            try:
+                self._g._reconfigure_data_engines(restart_packet=False)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f'[SAO-WV] set_component_source failed: {e}')
+            self._g._sync_menu_settings()
+            return json.dumps({
+                'ok': False,
+                'error': str(e),
+                'component': component_name,
+                'mode': mode_name,
+            }, ensure_ascii=False)
+
+        self._g._sync_menu_settings()
+        return json.dumps({
+            'ok': True,
+            'component': component_name,
+            'mode': mode_name,
+            'data_source_map': dict(source_map),
+        }, ensure_ascii=False)
 
     def browse_dir(self, path: str) -> str:
         """文件选择器: 返回目录内容 JSON"""
@@ -9749,6 +9810,17 @@ class SAOWebViewGUI:
                 'sound_volume': get_sound_volume(),
                 'mem_data_source': str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').lower(),
             }
+            try:
+                ref = getattr(self, '_cfg_settings_ref', None)
+                if ref is not None and hasattr(ref, 'get_data_source_map'):
+                    cfg['data_source_map'] = ref.get_data_source_map()
+                else:
+                    cfg['data_source_map'] = normalize_source_map(
+                        self._get_setting('data_source_map', {}),
+                        self._get_setting('data_source', 'packet'),
+                    )
+            except Exception:
+                cfg['data_source_map'] = dict(DEFAULT_DATA_SOURCE_MAP)
             try:
                 cfg['panel_themes'] = self._api.get_panel_themes()
             except Exception:

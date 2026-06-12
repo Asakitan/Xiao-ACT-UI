@@ -684,7 +684,7 @@ function assert(cond, message) {
     "function _pluginObjectItems(value)",
     "var panels = _pluginObjectItems(_pluginObjectValue(data).panels).filter(function (p) {",
     "var spec = _pluginObjectValue(_pluginObjectValue(r).spec);",
-    "var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return h.plugin_id === _pdPlugin; });",
+    "var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return _pluginId(h.plugin_id) === _pdPlugin; });",
     "var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);",
     "plugins = _pluginObjectItems(plugins);",
     "var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins);",

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.58: Web menu data source 参数传递修复.
+
+  1) `web/menu.html` 修复 data source 设置归一。
+     组件源和内存源按钮现在先通过 allowlist/默认值归一再更新 UI 与调用 bridge,
+     避免异常配置让按钮无选中、summary 不一致或把无效参数传给后端。
+
+  2) Python/C# WebView bridge 修复 component source 持久化。
+     `set_component_source()` 不再是 no-op, 会保存标准化后的 `data_source_map`,
+     菜单同步也会回传当前 map, 避免用户切换 HP/LEVEL/STA/SKILL/NAME 来源后丢失。
+
 ## v4.6.57: Web menu theme/info fallback 修复.
 
   1) `web/menu.html` 修复 panel theme 设置参数归一。

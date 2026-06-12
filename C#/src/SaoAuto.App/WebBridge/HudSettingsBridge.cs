@@ -15,6 +15,23 @@ public sealed class HudSettingsBridge : IDisposable
     private readonly SettingsManager _settings;
     private readonly string[] _commands;
     private bool _disposed;
+    private static readonly string[] SourceComponents =
+    {
+        "hp",
+        "level",
+        "stamina",
+        "skills",
+        "identity",
+    };
+    private static readonly IReadOnlyDictionary<string, string> DefaultSourceMap =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["hp"] = "packet",
+            ["level"] = "packet",
+            ["stamina"] = "vision",
+            ["skills"] = "packet",
+            ["identity"] = "packet",
+        };
 
     public HudSettingsBridge(BridgeRouter router, SettingsManager settings)
     {
@@ -130,16 +147,36 @@ public sealed class HudSettingsBridge : IDisposable
         };
     }
 
-    private static JsonObject HandleComponentSource(JsonObject? payload)
+    private JsonObject HandleComponentSource(JsonObject? payload)
     {
-        var component = ReadString(payload?["component"], string.Empty).Trim();
-        var mode = ReadString(payload?["mode"], string.Empty).Trim().ToLowerInvariant();
+        var component = NormalizeSourceComponent(ReadString(payload?["component"], string.Empty));
+        if (string.IsNullOrEmpty(component))
+        {
+            return new JsonObject
+            {
+                ["ok"] = false,
+                ["error"] = "bad_component",
+                ["component"] = component,
+            };
+        }
+
+        var sourceMap = NormalizeDataSourceMap(_settings.Get<JsonObject?>(SettingsKeys.DataSourceMap));
+        var mode = NormalizeComponentSourceMode(component, ReadString(payload?["mode"], sourceMap[component]));
+        sourceMap[component] = mode;
+        sourceMap["stamina"] = "vision";
+        sourceMap["skills"] = "packet";
+
+        _settings.Set(SettingsKeys.DataSourceMap, SourceMapToJson(sourceMap));
+        _settings.Set(SettingsKeys.DataSource, "mixed");
+        _settings.Save();
+
         return new JsonObject
         {
             ["ok"] = true,
             ["component"] = component,
             ["mode"] = mode,
-            ["legacy_noop"] = true,
+            ["data_source_map"] = SourceMapToJson(sourceMap),
+            ["live_reconfigured"] = false,
         };
     }
 
@@ -163,6 +200,67 @@ public sealed class HudSettingsBridge : IDisposable
     {
         var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
         return normalized is "tcp" or "memory" or "hybrid" or "auto" ? normalized : "hybrid";
+    }
+
+    private static string NormalizeSourceComponent(string component)
+    {
+        var normalized = (component ?? string.Empty).Trim().ToLowerInvariant();
+        return Array.IndexOf(SourceComponents, normalized) >= 0 ? normalized : string.Empty;
+    }
+
+    private static string NormalizeComponentSourceMode(string component, string mode)
+    {
+        var normalized = NormalizePacketVisionMode(mode, DefaultSourceMap[component]);
+        return component switch
+        {
+            "stamina" => "vision",
+            "skills" => "packet",
+            _ => normalized,
+        };
+    }
+
+    private static string NormalizePacketVisionMode(string mode, string fallback)
+    {
+        var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "ocr" or "vision" or "screen" or "screen_vision" => "vision",
+            "packet" or "network" or "network_capture" => "packet",
+            _ => fallback,
+        };
+    }
+
+    private static Dictionary<string, string> NormalizeDataSourceMap(JsonObject? rawMap)
+    {
+        var sourceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in DefaultSourceMap)
+            sourceMap[pair.Key] = pair.Value;
+
+        if (rawMap is not null)
+        {
+            foreach (var pair in rawMap)
+            {
+                var component = NormalizeSourceComponent(pair.Key);
+                if (string.IsNullOrEmpty(component)) continue;
+                sourceMap[component] = NormalizeComponentSourceMode(
+                    component,
+                    ReadString(pair.Value, sourceMap[component]));
+            }
+        }
+
+        sourceMap["stamina"] = "vision";
+        sourceMap["skills"] = "packet";
+        return sourceMap;
+    }
+
+    private static JsonObject SourceMapToJson(IReadOnlyDictionary<string, string> sourceMap)
+    {
+        var node = new JsonObject();
+        foreach (var component in SourceComponents)
+            node[component] = sourceMap.TryGetValue(component, out var mode)
+                ? NormalizeComponentSourceMode(component, mode)
+                : DefaultSourceMap[component];
+        return node;
     }
 
     private static JsonArray? ParseActions(JsonObject? payload)

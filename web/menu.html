@@ -4178,19 +4178,65 @@ var _memDataSource = 'hybrid';
 
 var currentActive = 'userInfo';
 var menuOpen = false;
+var _sourceComponents = ['hp', 'level', 'stamina', 'skills', 'identity'];
+var _sourceDefaults = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'packet',
+    identity: 'packet'
+};
 var _dataSourceMap = {
     hp: 'packet',
     level: 'packet',
     stamina: 'vision',
-    skills: 'vision',
+    skills: 'packet',
     identity: 'packet'
 };
 
+function _sourceComponentName(value) {
+    var key = String(value || '').trim().toLowerCase();
+    return _sourceComponents.indexOf(key) >= 0 ? key : '';
+}
+
+function _sourceMode(value, fallback) {
+    var text = String(value || '').trim().toLowerCase();
+    if (text === 'ocr' || text === 'vision' || text === 'screen' || text === 'screen_vision') return 'vision';
+    if (text === 'packet' || text === 'network' || text === 'network_capture') return 'packet';
+    return fallback || 'packet';
+}
+
+function _componentDefault(component) {
+    var key = _sourceComponentName(component);
+    return key ? _sourceDefaults[key] : 'packet';
+}
+
+function _componentSourceValue(component, value) {
+    var key = _sourceComponentName(component);
+    if (!key) return '';
+    if (key === 'stamina') return 'vision';
+    if (key === 'skills') return 'packet';
+    return _sourceMode(value, _componentDefault(key));
+}
+
+function _syncDataSourceMap(map) {
+    var source = (map && typeof map === 'object') ? map : {};
+    _sourceComponents.forEach(function(key) {
+        _dataSourceMap[key] = _componentSourceValue(key, source[key]);
+    });
+}
+
+function _memSourceValue(value) {
+    var mode = String(value || '').trim().toLowerCase();
+    return ['tcp', 'memory', 'hybrid', 'auto'].indexOf(mode) >= 0 ? mode : 'hybrid';
+}
+
 function _sourceLabel(mode) {
-    return mode === 'vision' ? 'VISION' : 'NETWORK';
+    return _sourceMode(mode, 'packet') === 'vision' ? 'VISION' : 'NETWORK';
 }
 
 function _memSourceLabel(mode) {
+    mode = _memSourceValue(mode);
     if (mode === 'memory') return 'MEM';
     if (mode === 'hybrid') return 'HYBRID';
     if (mode === 'auto') return 'AUTO';
@@ -4198,20 +4244,22 @@ function _memSourceLabel(mode) {
 }
 
 function _syncMemSourceButtons() {
+    _memDataSource = _memSourceValue(_memDataSource);
     document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
-        btn.classList.toggle('active', btn.getAttribute('data-mode') === _memDataSource);
+        btn.classList.toggle('active', _memSourceValue(btn.getAttribute('data-mode')) === _memDataSource);
     });
 }
 
 function _syncSourceButtons() {
     document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
-        var component = btn.getAttribute('data-component');
-        var mode = btn.getAttribute('data-mode');
-        btn.classList.toggle('active', _dataSourceMap[component] === mode);
+        var component = _sourceComponentName(btn.getAttribute('data-component'));
+        var mode = _sourceMode(btn.getAttribute('data-mode'), 'packet');
+        btn.classList.toggle('active', component && _componentSourceValue(component, _dataSourceMap[component]) === mode);
     });
 }
 
 function _updateSourceSummary() {
+    _syncDataSourceMap(_dataSourceMap);
     var summary = [
         'DATA: ' + _memSourceLabel(_memDataSource),
         'HP: ' + _sourceLabel(_dataSourceMap.hp),
@@ -5040,8 +5088,8 @@ document.getElementById('source-close').addEventListener('click', function(e) {
 document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var component = this.getAttribute('data-component');
-        var mode = this.getAttribute('data-mode');
+        var component = _sourceComponentName(this.getAttribute('data-component'));
+        var mode = _componentSourceValue(component, this.getAttribute('data-mode'));
         if (!component || !mode) return;
         playSound('snd-click');
         _dataSourceMap[component] = mode;
@@ -5055,7 +5103,7 @@ document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
 document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var mode = this.getAttribute('data-mode') || 'tcp';
+        var mode = _memSourceValue(this.getAttribute('data-mode'));
         playSound('snd-click');
         _memDataSource = mode;
         _syncMemSourceButtons();
@@ -6242,21 +6290,18 @@ function restoreMenuSettings(cfg) {
     if (cfg.panel_themes) {
         _syncPanelThemes(cfg.panel_themes);
     }
-    if (cfg.mem_data_source) {
-        _memDataSource = String(cfg.mem_data_source).toLowerCase();
-        if (['tcp', 'memory', 'hybrid', 'auto'].indexOf(_memDataSource) < 0) _memDataSource = 'hybrid';
+    if (cfg.mem_data_source !== undefined) {
+        _memDataSource = _memSourceValue(cfg.mem_data_source);
     }
-    if (cfg.data_source_map) {
-        Object.keys(_dataSourceMap).forEach(function(key) {
-            if (cfg.data_source_map[key]) {
-                _dataSourceMap[key] = cfg.data_source_map[key];
-            }
+    if (cfg.data_source_map && typeof cfg.data_source_map === 'object') {
+        _syncDataSourceMap(cfg.data_source_map);
+    } else if (cfg.data_source !== undefined) {
+        var legacyMode = _sourceMode(cfg.data_source, 'packet');
+        var legacyMap = {};
+        _sourceComponents.forEach(function(key) {
+            legacyMap[key] = legacyMode;
         });
-    } else if (cfg.data_source) {
-        var fallbackMode = cfg.data_source === 'packet' ? 'packet' : 'vision';
-        Object.keys(_dataSourceMap).forEach(function(key) {
-            _dataSourceMap[key] = fallbackMode;
-        });
+        _syncDataSourceMap(legacyMap);
     }
     _syncSourceButtons();
     _syncMemSourceButtons();

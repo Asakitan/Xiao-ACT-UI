@@ -139,7 +139,33 @@ public class Session197HudSettingsBridgeTests : IDisposable
     }
 
     [Fact]
-    public void ComponentSourceReturnsLegacyNoopAck()
+    public void ComponentSourceNormalizesAndPersists()
+    {
+        var settings = new SettingsManager(_path);
+        var router = new BridgeRouter();
+        using var bridge = new HudSettingsBridge(router, settings);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetComponentSource, new JsonObject
+        {
+            ["component"] = "level",
+            ["mode"] = "screen",
+        }));
+
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal("level", reply.Payload["component"]!.GetValue<string>());
+        Assert.Equal("vision", reply.Payload["mode"]!.GetValue<string>());
+        Assert.False(reply.Payload["live_reconfigured"]!.GetValue<bool>());
+
+        var reloaded = new SettingsManager(_path);
+        var saved = reloaded.Get<JsonObject>(SettingsKeys.DataSourceMap)!;
+        Assert.Equal("vision", saved["level"]!.GetValue<string>());
+        Assert.Equal("vision", saved["stamina"]!.GetValue<string>());
+        Assert.Equal("packet", saved["skills"]!.GetValue<string>());
+        Assert.Equal("mixed", reloaded.GetString(SettingsKeys.DataSource));
+    }
+
+    [Fact]
+    public void ComponentSourceRejectsUnknownComponent()
     {
         var router = new BridgeRouter();
         using var bridge = new HudSettingsBridge(router, new SettingsManager(_path));
@@ -150,10 +176,10 @@ public class Session197HudSettingsBridgeTests : IDisposable
             ["mode"] = "packet",
         }));
 
-        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
-        Assert.Equal("boss", reply.Payload["component"]!.GetValue<string>());
-        Assert.Equal("packet", reply.Payload["mode"]!.GetValue<string>());
-        Assert.True(reply.Payload["legacy_noop"]!.GetValue<bool>());
+        Assert.False(reply!.Payload!["ok"]!.GetValue<bool>());
+        Assert.Equal("bad_component", reply.Payload["error"]!.GetValue<string>());
+        var reloaded = new SettingsManager(_path);
+        Assert.Null(reloaded.Get<JsonObject?>(SettingsKeys.DataSourceMap));
     }
 
     [Fact]
