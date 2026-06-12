@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.118: Tk 面板滚动保留收尾(剩余 7 面板, 全覆盖).
+
+  1) keep_canvas_scroll 接线剩余 7 面板: death_recap / mem_scope /
+    offline_import / trigger_timer_manager / data_source_health(左列表,
+    右诊断区无滚动) / report_export(左预览区, 右历史区无滚动) /
+    plugin_manager(管理列表 + 分离插件窗口热键区两处)。
+
+  2) 至此 11 个带滚动条的 Tk 面板全部具备重建滚动保留,
+    与 web 端 setContentHtml(preserveScroll) 全面对偶。
+
 ## v4.6.117: Tk 面板滚动保留模式化(第一批 4 面板).
 
   1) `gui_modules/sao_panel_components.py` 新共享组件

@@ -15,6 +15,7 @@ from act_platform.runtime import (
     act_trigger_status,
     act_trigger_test,
 )
+from gui_modules.sao_panel_components import keep_canvas_scroll
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -193,6 +194,7 @@ class TriggerTimerManagerPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._last_render_sig = ""
 
@@ -211,6 +213,7 @@ class TriggerTimerManagerPanel:
         if render_sig == self._last_render_sig:
             return
         self._last_render_sig = render_sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
         for child in list(self._list.winfo_children()):
             child.destroy()
         if not rules:

@@ -14,6 +14,7 @@ from act_platform.runtime import (
     act_offline_import_file,
     act_offline_import_status,
 )
+from gui_modules.sao_panel_components import keep_canvas_scroll
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -239,6 +240,7 @@ class OfflineImportPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
 
@@ -260,6 +262,7 @@ class OfflineImportPanel:
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
         self._render_import_preview(last)

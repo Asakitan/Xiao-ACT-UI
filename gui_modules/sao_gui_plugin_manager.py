@@ -30,6 +30,7 @@ from act_platform.runtime import (
 )
 from gui_modules import sao_panel_ui as _panel_ui
 from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
+from gui_modules.sao_panel_components import keep_canvas_scroll
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -227,6 +228,7 @@ class PluginManagerPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
         scroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
+        self._canvas = canvas
 
         # ── Panels tab: auto-redrawing plugin UI panels ──
         self._panels_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -275,6 +277,7 @@ class PluginManagerPanel:
         self._status_var.set(str(message))
         if self._list is None:
             return
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
         for child in list(self._list.winfo_children()):
             child.destroy()
         if not plugins:
@@ -673,6 +676,8 @@ class PluginDetachedPanel:
         canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
         scroll.pack(side='right', fill='y', padx=(0, 10), pady=10)
 
+        self._detached_canvas = canvas
+        self._detached_inner = inner
         self._panel_host = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
         self._panel_host.pack(fill='x')
         self._hotkey_host = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
@@ -767,6 +772,8 @@ class PluginDetachedPanel:
         host = self._hotkey_host
         if host is None:
             return
+        keep_canvas_scroll(getattr(self, '_detached_canvas', None),
+                           getattr(self, '_detached_inner', None))
         for child in list(host.winfo_children()):
             child.destroy()
         try:

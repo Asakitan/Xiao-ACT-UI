@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_death_recap_copy, act_death_recap_status
 from gui_modules.sao_panel_components import (
+    keep_canvas_scroll,
     action_button,
     aggregate_row,
     empty_state,
@@ -217,6 +218,7 @@ class DeathRecapPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
@@ -235,6 +237,7 @@ class DeathRecapPanel:
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
         self._render_metrics(status, rows, summary, death)

@@ -10,6 +10,7 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_data_source_diagnose, act_data_source_health
+from gui_modules.sao_panel_components import keep_canvas_scroll
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -221,6 +222,7 @@ class DataSourceHealthPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
 
         tk.Label(
             right,
@@ -252,6 +254,7 @@ class DataSourceHealthPanel:
                 self._render_diagnostics(status)
                 return
             self._last_sources_sig = sources_sig
+            keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
             for child in list(self._list.winfo_children()):
                 child.destroy()
             rendered = False

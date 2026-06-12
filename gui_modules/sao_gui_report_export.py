@@ -353,6 +353,7 @@ class ReportExportPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
 
         tk.Label(
             right,
@@ -434,6 +435,7 @@ class ReportExportPanel:
         }, ensure_ascii=False, sort_keys=True, default=str)
         if self._rows is not None and render_sig != self._last_render_sig:
             self._last_render_sig = render_sig
+            components.keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
             for child in list(self._rows.winfo_children()):
                 child.destroy()
             self._render_preview(preview, errors)

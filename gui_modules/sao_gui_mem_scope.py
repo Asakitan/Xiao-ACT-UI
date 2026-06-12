@@ -26,6 +26,7 @@ from act_platform.runtime import (
     act_render_apply_hooks,
 )
 from gui_modules.sao_panel_components import (
+    keep_canvas_scroll,
     SP_SM,
     SP_MD,
     action_button,
@@ -282,6 +283,7 @@ class MemScopePanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
 
@@ -301,6 +303,7 @@ class MemScopePanel:
         if sig == self._last_sig:
             return
         self._last_sig = sig
+        keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
 
