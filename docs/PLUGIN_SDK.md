@@ -1,8 +1,10 @@
-# ACT Python Plugin SDK
+# ACT Python 插件 SDK
 
-SAO Auto exposes a small in-process Python plugin layer for ACT-style extensions. Plugins are loaded from `plugins/<plugin_id>/` and `user_plugins/<plugin_id>/`.
+> 当前版本：`4.6.74`（review-chain Batch 202）。本文与 `docs/ACT_PLATFORM.md`、`docs/ACT_UI_PARITY_SDK.md` 配套阅读。
 
-## Directory layout
+SAO Auto 提供一个进程内的 Python 插件层，用于 ACT 风格扩展。插件从 `plugins/<plugin_id>/` 与 `user_plugins/<plugin_id>/` 加载。
+
+## 目录结构
 
 ```text
 plugins/
@@ -14,7 +16,7 @@ plugins/
     plugin.py
 ```
 
-`user_plugins/` has the same layout and is intended for user-installed plugins.
+`user_plugins/` 与 `plugins/` 结构相同，用于用户安装的插件。
 
 ## `plugin.json`
 
@@ -32,22 +34,22 @@ plugins/
 }
 ```
 
-Fields:
+字段说明：
 
-- `id`: stable plugin id. It must match the folder name for predictable UI display.
-- `name`: display name.
-- `version`: plugin version.
-- `entry`: Python file inside the plugin folder. Defaults to `plugin.py`.
-- `enabled`: whether the plugin should load automatically.
-- `subscriptions`: optional documentation for topics the plugin listens to.
-- `capabilities`: optional ACT capability IDs or metadata objects exposed by this plugin.
-- `permissions`: optional declaration for audit/UI review. Use `"engine_access"` when a trusted in-process plugin intentionally touches `ctx.engine`/`ctx.owner`; this is not a sandbox boundary.
+- `id`：稳定的插件 id。建议与文件夹同名，方便 UI 显示。
+- `name`：显示名。
+- `version`：插件版本。
+- `entry`：插件文件夹内的 Python 入口文件，默认 `plugin.py`。
+- `enabled`：是否在启动时自动加载。
+- `subscriptions`：可选，文档化插件订阅的主题。
+- `capabilities`：可选，插件暴露的 ACT capability id 或元数据对象。
+- `permissions`：可选，用于审计/UI 评审的声明。受信任的进程内插件如果有意访问 `ctx.engine`/`ctx.owner`，建议声明 `"engine_access"`；这不是沙箱边界。
 
-The loader rejects entry paths that escape the plugin directory.
+加载器会拒绝逃逸出插件目录的入口路径。
 
-## Lifecycle hooks
+## 生命周期钩子
 
-All hooks are optional:
+所有钩子均为可选：
 
 ```python
 _ctx = None
@@ -74,123 +76,123 @@ def on_unload():
         _ctx.log("unloaded")
 ```
 
-`on_load(ctx)` receives a `PluginContext`. Register event subscriptions from this hook.
+`on_load(ctx)` 收到一个 `PluginContext`。请在该钩子中注册事件订阅。
 
 ## `PluginContext`
 
-`ctx` provides:
+`ctx` 提供：
 
-- `ctx.log(message)`: write to the plugin status log.
-- `ctx.subscribe(topic, callback)`: subscribe to ACT events and return an unsubscribe token.
-- `ctx.on(topic, callback=None)`: subscribe directly or use decorator form: `@ctx.on("damage")`.
-- `ctx.subscribe_once(topic, callback)`: handle the next event for a topic, then auto-unsubscribe.
-- `ctx.unsubscribe(token)`: remove a previous subscription token.
-- `ctx.on_damage(callback)`, `ctx.on_heal(callback)`, `ctx.on_skill(callback)`, `ctx.on_boss(callback)`, `ctx.on_snapshot(callback)`, `ctx.on_encounter_finalized(callback)`: common topic shortcuts.
-- `ctx.emit(topic, payload=None)`: publish a canonical ACT event from the plugin.
-- `ctx.get_snapshot()`: read a shallow owner snapshot when available.
-- `ctx.snapshot_value("a.b.c", default=None)`: read a dotted path from the snapshot.
-- `ctx.recent_events(limit=20, topic="")`: inspect recent ACT events, optionally filtered by topic.
-- `ctx.get_setting(key, default=None)`: read an owner setting.
-- `ctx.setting(key, default=None)`: shorthand for `get_setting`.
-- `ctx.set_setting(key, value)`: write an owner setting.
-- `ctx.set_defaults(mapping)`: initialize missing plugin settings without overwriting user values.
-- `ctx.register_parser_adapter(id, metadata=None, handler=None)`: declare a parser/game adapter extension.
-- `ctx.register_exporter(id, metadata=None, handler=None)`: declare an exporter extension.
-- `ctx.register_formatter(id, metadata=None, handler=None)`: declare a Mini-Parse/clipboard formatter extension.
-- `ctx.register_trigger_type(id, metadata=None, handler=None)`: declare a plugin trigger type.
-- `ctx.register_report_view(id, metadata=None, handler=None)`: declare a plugin report/detail view.
-- `ctx.register_timer(id, metadata=None, handler=None)`: declare a timer preset/provider extension.
-- `ctx.owner`: return the live WebView/Entity owner object when this in-process plugin is attached to a UI runtime.
-- `ctx.engine`: high-freedom trusted bridge for direct project engine access.
-- `ctx.get_engine(name, default=None)`: read a named engine handle if available.
-- `ctx.require_engine(name)`: read a named engine handle or raise a clear error.
-- `ctx.call_engine(name, method, *args, **kwargs)`: call a method on a named engine handle.
-- `ctx.call_runtime(action, *args, **kwargs)`: call a shared `act_platform.runtime` action against `ctx.owner`.
+- `ctx.log(message)`：写入插件状态日志。
+- `ctx.subscribe(topic, callback)`：订阅 ACT 事件，返回取消订阅的 token。
+- `ctx.on(topic, callback=None)`：直接订阅或装饰器形式：`@ctx.on("damage")`。
+- `ctx.subscribe_once(topic, callback)`：处理某主题的下一次事件后自动取消订阅。
+- `ctx.unsubscribe(token)`：移除先前的订阅 token。
+- `ctx.on_damage(callback)`、`ctx.on_heal(callback)`、`ctx.on_skill(callback)`、`ctx.on_boss(callback)`、`ctx.on_snapshot(callback)`、`ctx.on_encounter_finalized(callback)`：常用主题的 shortcut。
+- `ctx.emit(topic, payload=None)`：从插件发布一条规范化 ACT 事件。
+- `ctx.get_snapshot()`：在可用时读取浅层 owner snapshot。
+- `ctx.snapshot_value("a.b.c", default=None)`：从 snapshot 读取点路径。
+- `ctx.recent_events(limit=20, topic="")`：检视最近 ACT 事件，可选按 topic 过滤。
+- `ctx.get_setting(key, default=None)`：读取 owner 设置。
+- `ctx.setting(key, default=None)`：`get_setting` 的简写。
+- `ctx.set_setting(key, value)`：写入 owner 设置。
+- `ctx.set_defaults(mapping)`：在不覆盖用户值的前提下初始化缺失的插件设置。
+- `ctx.register_parser_adapter(id, metadata=None, handler=None)`：声明解析器/游戏适配器扩展。
+- `ctx.register_exporter(id, metadata=None, handler=None)`：声明导出器扩展。
+- `ctx.register_formatter(id, metadata=None, handler=None)`：声明 Mini-Parse/剪贴板 formatter 扩展。
+- `ctx.register_trigger_type(id, metadata=None, handler=None)`：声明插件触发器类型。
+- `ctx.register_report_view(id, metadata=None, handler=None)`：声明插件报告/明细视图。
+- `ctx.register_timer(id, metadata=None, handler=None)`：声明计时器预设/provider 扩展。
+- `ctx.owner`：当此进程内插件挂在 UI runtime 上时，返回活跃的 WebView/Entity owner。
+- `ctx.engine`：受信任的高自由度桥，用于直接访问项目引擎。
+- `ctx.get_engine(name, default=None)`：按名读取引擎句柄。
+- `ctx.require_engine(name)`：按名读取引擎句柄，若不可用则抛出明确错误。
+- `ctx.call_engine(name, method, *args, **kwargs)`：调用具名引擎句柄上的方法。
+- `ctx.call_runtime(action, *args, **kwargs)`：针对 `ctx.owner` 调用共享 `act_platform.runtime` 动作。
 
-Callbacks receive one argument: a canonical ACT event envelope.
+回调接收一个参数：规范化的 ACT 事件信封。
 
-Live Star Resonance packet events for `skill`, `dungeon`, `monster`, and `boss` include a stable combat semantic payload at `event["payload"]["combat_fact"]` when the built-in parser can derive it. Useful keys include `skill_id`, `skill_name`, `skill_role`, `dungeon_id`, `dungeon_name`, `monster_id`, `mechanics`, `boss_mechanic_key`, `boss_mechanic_label`, and `trigger_family`. ACT snapshots also expose shortcuts at `render_spec.context.last_skill_id`, `last_skill_name`, `last_skill_role`, `last_boss_mechanic_key`, `last_boss_mechanic_label`, and `last_boss_trigger_family`.
+实时 Star Resonance 包事件 `skill`、`dungeon`、`monster`、`boss` 在内置解析器能够派生时，会带有稳定的战斗语义 payload，挂在 `event["payload"]["combat_fact"]`。常用键包括 `skill_id`、`skill_name`、`skill_role`、`dungeon_id`、`dungeon_name`、`monster_id`、`mechanics`、`boss_mechanic_key`、`boss_mechanic_label`、`trigger_family`。ACT snapshot 还会在 `render_spec.context` 暴露 `last_skill_id`、`last_skill_name`、`last_skill_role`、`last_boss_mechanic_key`、`last_boss_mechanic_label`、`last_boss_trigger_family` 等 shortcut。
 
-AutoKey profile conditions can use the same semantic facts through condition types `dungeon_is`, `last_skill_is`, `boss_mechanic_is`, and `boss_mechanic_family_is`. Values may match ids, names, or keys depending on the condition; for example `boss_mechanic_is=shield_broken` or `boss_mechanic_family_is=shield`.
+AutoKey profile 条件可以使用相同的语义事实，条件类型包括 `dungeon_is`、`last_skill_is`、`boss_mechanic_is`、`boss_mechanic_family_is`。值可能是 id、名字或键，取决于具体条件，例如 `boss_mechanic_is=shield_broken` 或 `boss_mechanic_family_is=shield`。
 
-Decorator style keeps external plugins compact:
-
-```python
-def on_load(ctx):
-  ctx.set_defaults({"damage_threshold": 100000})
-
-  @ctx.on("damage")
-  def log_big_hit(event):
-    damage = int((event.get("payload") or {}).get("damage") or 0)
-    if damage >= ctx.setting("damage_threshold", 100000):
-      ctx.log(f"big hit: {damage}")
-
-  ctx.on_encounter_finalized(lambda event: ctx.log("encounter finalized"))
-```
-
-## Trusted engine access
-
-In-process plugins are trusted Python code. They run in the same interpreter as SAO Auto and can import project modules directly, so the SDK exposes an explicit high-freedom bridge instead of forcing plugins to guess private owner attributes.
-
-Use this API for user-installed power plugins, diagnostics, custom report panels, automated testing helpers, or advanced integrations that need real project internals. Keep event callbacks fast: long-running work should move to a worker thread/process or a process-isolated parser adapter.
+装饰器风格让外部插件保持紧凑：
 
 ```python
 def on_load(ctx):
-  ctx.log("available engines: " + ",".join(ctx.engine.available()))
+    ctx.set_defaults({"damage_threshold": 100000})
 
-  tracker = ctx.require_engine("dps_tracker")
-  history = ctx.get_engine("history_store")
-  report_status = ctx.call_runtime("report_status")
+    @ctx.on("damage")
+    def log_big_hit(event):
+        damage = int((event.get("payload") or {}).get("damage") or 0)
+        if damage >= ctx.setting("damage_threshold", 100000):
+            ctx.log(f"big hit: {damage}")
 
-  ctx.register_report_view("engine_diagnostics", {
-    "title": "Engine diagnostics",
-    "route": "plugin://my_plugin/engine_diagnostics",
-    "payload_fields": ["handles", "report_status"],
-  }, handler=lambda payload: {
-    "ok": True,
-    "handles": ctx.engine.handles(),
-    "report_status": report_status,
-    "tracker_type": type(tracker).__name__,
-    "history_type": type(history).__name__ if history else "missing",
-  })
+    ctx.on_encounter_finalized(lambda event: ctx.log("encounter finalized"))
 ```
 
-Named handles currently include:
+## 受信任的引擎访问
 
-| Handle | Typical owner attribute(s) | Purpose |
+进程内插件是受信任的 Python 代码，与 SAO Auto 跑在同一个解释器中，可以直接 import 项目模块。SDK 因此显式提供高自由度桥，避免插件去猜测私有的 owner 属性。
+
+请将这个 API 用于用户安装的高权限插件、诊断、自定义报告面板、自动化测试辅助或需要真实项目内部状态的高级集成。事件回调要保持轻量；耗时工作应迁移到 worker 线程/进程或进程隔离的解析器适配器。
+
+```python
+def on_load(ctx):
+    ctx.log("available engines: " + ",".join(ctx.engine.available()))
+
+    tracker = ctx.require_engine("dps_tracker")
+    history = ctx.get_engine("history_store")
+    report_status = ctx.call_runtime("report_status")
+
+    ctx.register_report_view("engine_diagnostics", {
+        "title": "Engine diagnostics",
+        "route": "plugin://my_plugin/engine_diagnostics",
+        "payload_fields": ["handles", "report_status"],
+    }, handler=lambda payload: {
+        "ok": True,
+        "handles": ctx.engine.handles(),
+        "report_status": report_status,
+        "tracker_type": type(tracker).__name__,
+        "history_type": type(history).__name__ if history else "missing",
+    })
+```
+
+当前提供的具名句柄：
+
+| 句柄 | 典型 owner 属性 | 用途 |
 | --- | --- | --- |
-| `owner` | current owner object | Full UI/runtime owner object. |
-| `event_bus` | plugin manager event bus | Publish/subscribe canonical ACT events. |
-| `plugin_manager` | current plugin manager | Discovery, status, extension invocation. |
-| `settings` | owner settings object | Read/write shared settings. |
-| `game_state` | `_game_state`, `game_state` | Live game/session state. |
-| `state_manager` | `_state_mgr`, `state_mgr` | GUI/runtime state manager. |
-| `dps_tracker` | `_dps_tracker`, `dps_tracker` | Live DPS/encounter tracker. |
-| `history_store` | `_dps_history_store`, `dps_history_store` | ACT report history/import/export store. |
-| `encounter_manager` | `_encounter_mgr`, `encounter_mgr` | Encounter lifecycle manager. |
-| `trigger_engine` | `_act_trigger_engine`, `act_trigger_engine` | ACT trigger/timer engine. |
-| `packet_bridge` | `_packet_engine`, `_packet_bridge` | Live packet capture/parser bridge. |
-| `memory_bridge` | `_mem_bridge`, `mem_bridge` | Memory/TCP bridge integration. |
-| `auto_key_engine` | `_auto_key_engine`, `auto_key_engine` | Auto-key runtime integration. |
-| `boss_raid_engine` | `_boss_raid_engine`, `boss_raid_engine` | Boss/raid helper integration. |
+| `owner` | 当前 owner 对象 | 完整 UI/runtime owner。 |
+| `event_bus` | 插件管理器事件总线 | 发布/订阅规范化 ACT 事件。 |
+| `plugin_manager` | 当前插件管理器 | 发现、状态、扩展调用。 |
+| `settings` | owner 设置对象 | 读写共享设置。 |
+| `game_state` | `_game_state`、`game_state` | 实时游戏/会话状态。 |
+| `state_manager` | `_state_mgr`、`state_mgr` | GUI/runtime 状态管理器。 |
+| `dps_tracker` | `_dps_tracker`、`dps_tracker` | 实时 DPS/encounter tracker。 |
+| `history_store` | `_dps_history_store`、`dps_history_store` | ACT 报告历史/导入/导出存储。 |
+| `encounter_manager` | `_encounter_mgr`、`encounter_mgr` | 战斗生命周期管理。 |
+| `trigger_engine` | `_act_trigger_engine`、`act_trigger_engine` | ACT 触发器/计时器引擎。 |
+| `packet_bridge` | `_packet_engine`、`_packet_bridge` | 实时抓包/解析器桥。 |
+| `memory_bridge` | `_mem_bridge`、`mem_bridge` | 内存/TCP 桥集成。 |
+| `auto_key_engine` | `_auto_key_engine`、`auto_key_engine` | Auto-key runtime 集成。 |
+| `boss_raid_engine` | `_boss_raid_engine`、`boss_raid_engine` | Boss/raid helper 集成。 |
 
-`ctx.engine` helpers:
+`ctx.engine` 帮助函数：
 
-- `ctx.engine.handles()`: return availability/type metadata for all documented handles.
-- `ctx.engine.available()`: list currently available handle names.
-- `ctx.engine.get(name, default=None)` / `ctx.engine.require(name)`: read a handle.
-- `ctx.engine.owner_attr(name, default=None)` / `ctx.engine.set_owner_attr(name, value)`: inspect or edit owner attributes.
-- `ctx.engine.call_owner(method, *args, **kwargs)`: call a method on the owner.
-- `ctx.engine.call(engine_name, method, *args, **kwargs)`: call a method on a named engine.
-- `ctx.engine.runtime(action, *args, **kwargs)`: call shared ACT runtime helpers such as `plugin_status`, `report_status`, `report_export`, `history_status`, `offline_import_file`, `trigger_status`, `timeline_status`, `action_log_status`, `death_recap_status`, `graph_timeseries_status`, `combatant_drilldown_status`, `skill_drilldown_status`, and `data_source_health`.
-- `ctx.engine.import_module("engines.combat_analytics")`: import project modules from a plugin.
-- `ctx.engine.snapshot()`: read the same owner snapshot as `ctx.get_snapshot()`.
+- `ctx.engine.handles()`：返回所有文档化句柄的可用性/类型元数据。
+- `ctx.engine.available()`：列出当前可用的句柄名。
+- `ctx.engine.get(name, default=None)` / `ctx.engine.require(name)`：读取句柄。
+- `ctx.engine.owner_attr(name, default=None)` / `ctx.engine.set_owner_attr(name, value)`：检视或编辑 owner 属性。
+- `ctx.engine.call_owner(method, *args, **kwargs)`：在 owner 上调用方法。
+- `ctx.engine.call(engine_name, method, *args, **kwargs)`：在具名引擎上调用方法。
+- `ctx.engine.runtime(action, *args, **kwargs)`：调用共享 ACT runtime helper，例如 `plugin_status`、`report_status`、`report_export`、`history_status`、`offline_import_file`、`trigger_status`、`timeline_status`、`action_log_status`、`death_recap_status`、`graph_timeseries_status`、`combatant_drilldown_status`、`skill_drilldown_status`、`data_source_health`。
+- `ctx.engine.import_module("engines.combat_analytics")`：从插件导入项目模块。
+- `ctx.engine.snapshot()`：读取与 `ctx.get_snapshot()` 相同的 owner snapshot。
 
-Process-isolated parser adapters do not receive direct engine handles. They communicate by JSON payload only, which keeps untrusted or heavy parsing code away from UI/runtime objects.
+进程隔离的解析器适配器不会获得直接的引擎句柄。它们只通过 JSON payload 通信，把不可信或重型解析代码与 UI/runtime 对象隔离。
 
-## Event envelope
+## 事件信封
 
-Every event is a dict with this shape:
+每个事件都是这种结构的 dict：
 
 ```json
 {
@@ -202,7 +204,7 @@ Every event is a dict with this shape:
 }
 ```
 
-Known topics include:
+已知主题包括：
 
 - `act_snapshot`
 - `combat_event`
@@ -216,11 +218,11 @@ Known topics include:
 - `replay_finished`
 - `ui_action`
 
-Unknown topics are allowed, but public plugins should prefer the known list for UI parity and future compatibility.
+允许未知主题，但公共插件应优先使用已知列表，以便保证 UI 对等与未来兼容性。
 
-## Capability metadata
+## Capability 元数据
 
-Plugins may declare ACT capabilities in `plugin.json` so the manager UI and future parity routers can show what the plugin contributes:
+插件可以在 `plugin.json` 中声明 ACT 能力，让管理器 UI 与未来的对等路由能展示插件贡献了什么：
 
 ```json
 {
@@ -232,157 +234,158 @@ Plugins may declare ACT capabilities in `plugin.json` so the manager UI and futu
 }
 ```
 
-Supported object keys are `id`/`capability_id`, `title`, `description`, `route`, `render_hint`, `actions`, and `payload_fields`. Unknown or invalid capability entries are ignored.
+支持的对象键：`id`/`capability_id`、`title`、`description`、`route`、`render_hint`、`actions`、`payload_fields`。未知或无效 capability 条目将被忽略。
 
-## Extension registry
+## 扩展注册表
 
-Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, Mini-Parse formatters, trigger types, report views, or timers. Handlers are kept in-process and are intentionally omitted from JSON status.
+插件可以在 `on_load(ctx)` 中注册扩展元数据。这些声明会通过插件状态暴露给 WebView 与 Entity 管理器，展示哪个插件贡献了 parser adapter、exporter、Mini-Parse formatter、trigger type、report view 或 timer。处理函数保持进程内运行，按设计不出现在 JSON 状态中。
 
 ```python
 def on_load(ctx):
-  ctx.register_parser_adapter("star_fixture", {
-    "title": "Star fixture parser",
-    "display_name": "Star fixture parser",
-    "game_id": "star_resonance",
-    "game_ids": ["star_resonance"],
-    "supported_locales": ["zh-CN"],
-    "source_kinds": ["fixture", "packet"],
-    "priority": 5,
-  })
+    ctx.register_parser_adapter("star_fixture", {
+        "title": "Star fixture parser",
+        "display_name": "Star fixture parser",
+        "game_id": "star_resonance",
+        "game_ids": ["star_resonance"],
+        "supported_locales": ["zh-CN"],
+        "source_kinds": ["fixture", "packet"],
+        "priority": 5,
+    })
 
-  ctx.register_exporter("summary_json", {
-    "title": "Summary JSON",
-    "formats": ["json"],
-    "payload_fields": ["total_damage"],
-  })
+    ctx.register_exporter("summary_json", {
+        "title": "Summary JSON",
+        "formats": ["json"],
+        "payload_fields": ["total_damage"],
+    })
 
-  ctx.register_formatter("chat_summary", {
-    "title": "Chat summary",
-    "formatter": "text",
-    "payload_fields": ["preview", "history"],
-  }, handler=lambda payload: {
-    "text": " | ".join(
-      f"#{idx + 1} {row.get('name')} {row.get('damage', 0)}"
-      for idx, row in enumerate((payload.get("preview") or {}).get("top_rows") or [])
-    ) or "No combatants"
-  })
+    ctx.register_formatter("chat_summary", {
+        "title": "Chat summary",
+        "formatter": "text",
+        "payload_fields": ["preview", "history"],
+    }, handler=lambda payload: {
+        "text": " | ".join(
+            f"#{idx + 1} {row.get('name')} {row.get('damage', 0)}"
+            for idx, row in enumerate((payload.get("preview") or {}).get("top_rows") or [])
+        ) or "No combatants"
+    })
 
-  ctx.register_trigger_type("burst_gate", {
-    "label": "Burst gate",
-    "schema": {"field": "string", "match": "string"},
-    "time_budget_ms": 25,
-  }, handler=lambda payload: {
-    "matched": (payload.get("render_spec", {}).get("totals", {}).get("damage", 0) >= payload.get("rule", {}).get("threshold", 0)),
-    "message": "Burst gate matched",
-    "severity": "warn",
-  })
+    ctx.register_trigger_type("burst_gate", {
+        "label": "Burst gate",
+        "schema": {"field": "string", "match": "string"},
+        "time_budget_ms": 25,
+    }, handler=lambda payload: {
+        "matched": (payload.get("render_spec", {}).get("totals", {}).get("damage", 0) >= payload.get("rule", {}).get("threshold", 0)),
+        "message": "Burst gate matched",
+        "severity": "warn",
+    })
 
-  ctx.register_report_view("compact_report", {
-    "route": "plugin://my_plugin/compact",
-    "actions": ["open", "copy"],
-  })
+    ctx.register_report_view("compact_report", {
+        "route": "plugin://my_plugin/compact",
+        "actions": ["open", "copy"],
+    })
 
-  ctx.register_timer("burst_window", {
-    "duration_s": 12,
-    "scope": "encounter",
-  })
+    ctx.register_timer("burst_window", {
+        "duration_s": 12,
+        "scope": "encounter",
+    })
 ```
 
-Extension ids must already be safe ids: lowercase letters/numbers plus `_`, `-`, or `.`. Registered metadata is removed automatically when the plugin unloads.
+扩展 id 必须是安全 id：小写字母/数字加 `_`、`-` 或 `.`。插件卸载时已注册的元数据会自动移除。
 
-## Mini-Parse formatter handlers
+## Mini-Parse formatter handler
 
-Formatter handlers registered with `ctx.register_formatter(id, metadata, handler=...)` can be invoked by `act_mini_parse_preview(owner, formatter_id="<id>")` and `act_mini_parse_copy(owner, formatter_id="<id>")`.
+通过 `ctx.register_formatter(id, metadata, handler=...)` 注册的 formatter handler 可被 `act_mini_parse_preview(owner, formatter_id="<id>")` 与 `act_mini_parse_copy(owner, formatter_id="<id>")` 调用。
 
-The handler receives a copied payload:
+handler 接收复制后的 payload：
 
 ```python
 {
-  "encounter_id": "...",
-  "preview": {...},  # same top_rows/totals preview used by report export
-  "history": [...],
-  "report": {...},
-  "status": {...},
+    "encounter_id": "...",
+    "preview": {...},  # 与报告导出相同的 top_rows/totals 预览
+    "history": [...],
+    "report": {...},
+    "status": {...},
 }
 ```
 
-Return a string or a dictionary with `text`/`value`. Keep formatter handlers deterministic and fast; built-in formatter ids `summary_table`, `chat_ranking`, and `json` remain available even when no plugin manager is loaded.
+返回字符串或带 `text`/`value` 的 dict。formatter handler 应保持确定性与轻量；即使没有插件管理器加载，内置 formatter id `summary_table`、`chat_ranking`、`json` 仍然可用。
 
-## Trigger handlers
+## Trigger handler
 
-Trigger handlers registered with `ctx.register_trigger_type(id, metadata, handler=...)` can be used by ACT trigger rules with `type: "plugin_trigger"` and `plugin_trigger_type: "<id>"`.
+通过 `ctx.register_trigger_type(id, metadata, handler=...)` 注册的触发器 handler 可被 ACT 触发器规则使用，规则类型为 `type: "plugin_trigger"`，并指定 `plugin_trigger_type: "<id>"`。
 
-The handler receives one copied payload:
+handler 接收一份复制后的 payload：
 
 ```python
 {
-  "rule": {...},          # normalized trigger rule
-  "render_spec": {...},   # current ACT render payload
-  "snapshot": {...},      # full ACT snapshot root
+    "rule": {...},          # 归一化触发器规则
+    "render_spec": {...},   # 当前 ACT 渲染 payload
+    "snapshot": {...},      # 完整 ACT snapshot 根
 }
 ```
 
-Return `True` to match, `False` to ignore, or a dictionary such as:
+返回 `True` 表示匹配，`False` 表示忽略，或返回 dict，例如：
 
 ```python
 {"matched": True, "message": "Burst window", "severity": "warn"}
 ```
 
-`PluginManager.invoke_extension(...)` records exceptions and elapsed time. If a handler exceeds `time_budget_ms` or `max_runtime_ms`, the call is treated as failed and contributes to the plugin failure counter. In-process Python cannot forcibly stop already-running code, so handlers must stay small and deterministic.
+`PluginManager.invoke_extension(...)` 会记录异常与耗时。如果 handler 超过 `time_budget_ms` 或 `max_runtime_ms`，调用会被视作失败并计入插件失败计数。进程内 Python 不能强制终止已运行的代码，所以 handler 必须小且确定。
 
-## Parser adapters
+## 解析器适配器
 
-The first-party parser adapter contract lives in `act_platform.adapters`. The built-in Star Resonance TCP parser is exposed as `star_resonance_tcp` with:
+一方解析器适配器契约位于 `act_platform.adapters`。内置 Star Resonance TCP 解析器以 `star_resonance_tcp` 暴露：
 
-- `game_id`: `star_resonance`
-- `source_kinds`: `["packet"]`
-- `supported_locales`: `["zh-CN"]`
-- runtime methods: `start()`, `stop()`, `parse_packet(frame)`, `normalize_event(topic, payload)`, and `health()`
+- `game_id`：`star_resonance`
+- `source_kinds`：`["packet"]`
+- `supported_locales`：`["zh-CN"]`
+- 运行时方法：`start()`、`stop()`、`parse_packet(frame)`、`normalize_event(topic, payload)`、`health()`
 
-Plugin parser adapters declare equivalent metadata through `ctx.register_parser_adapter(...)`. Passing a handler makes the adapter invokable through `act_platform.adapters.PluginParserAdapter`, which routes calls through `PluginManager.invoke_extension("parser_adapters", ...)` with deep-copied payloads, elapsed-time measurement, exception isolation, and the extension time budget by default.
+插件解析器适配器通过 `ctx.register_parser_adapter(...)` 声明等价的元数据。传入 handler 后该适配器可由 `act_platform.adapters.PluginParserAdapter` 调用，由 `PluginManager.invoke_extension("parser_adapters", ...)` 路由，附带深拷贝 payload、耗时测量、异常隔离，默认使用扩展时间预算。
 
-For multi-game parser authoring, start with a synthetic adapter template rather than a guessed real protocol:
+多游戏解析器作者建议先用 fixture 模板，而不是猜测真实协议：
 
 ```python
 def parser_handler(payload):
-  op = payload.get("operation")
-  if op in {"start", "stop"}:
-    return {"ok": True}
-  if op == "parse_log_line":
-    line = payload.get("line") or ""
-    # Parse only documented fixture text here. Do not infer production fields
-    # without real samples/schemas from the target game.
-    if "DAMAGE" in line:
-      return {"events": [{"topic": "damage", "payload": {"damage": 1, "actor": "fixture"}}]}
-  return {"events": []}
+    op = payload.get("operation")
+    if op in {"start", "stop"}:
+        return {"ok": True}
+    if op == "parse_log_line":
+        line = payload.get("line") or ""
+        # 这里只解析文档化的 fixture 文本。
+        # 在没有目标游戏的真实样本/schema 之前，不要推断生产字段。
+        if "DAMAGE" in line:
+            return {"events": [{"topic": "damage", "payload": {"damage": 1, "actor": "fixture"}}]}
+    return {"events": []}
+
 
 def on_load(ctx):
-  ctx.register_parser_adapter("fixture_game_log", {
-    "title": "Fixture game log parser",
-    "game_id": "fixture_game",
-    "game_ids": ["fixture_game"],
-    "supported_locales": ["en-US"],
-    "source_kinds": ["log", "fixture"],
-    "isolation": "process",
-    "time_budget_ms": 1000,
-  }, handler=parser_handler)
+    ctx.register_parser_adapter("fixture_game_log", {
+        "title": "Fixture game log parser",
+        "game_id": "fixture_game",
+        "game_ids": ["fixture_game"],
+        "supported_locales": ["en-US"],
+        "source_kinds": ["log", "fixture"],
+        "isolation": "process",
+        "time_budget_ms": 1000,
+    }, handler=parser_handler)
 ```
 
-Real third-party adapters need representative packet/log/report samples or authoritative schemas before they can be marked production-ready.
+真实的第三方适配器需要代表性的包/日志/报告样本或权威 schema 才能视为生产可用。
 
-Parser adapters can opt into subprocess isolation by adding `"isolation": "process"` to their metadata. In that mode `PluginParserAdapter` invokes `python -m act_platform.parser_worker`, reloads the plugin entry in the worker process, calls the registered parser handler through JSON stdin/stdout, and kills the worker if it exceeds the adapter time budget. Process-isolated adapters default to a 1000 ms budget when metadata does not provide `time_budget_ms` or `max_runtime_ms`. `parse_packet` frames cross the process boundary as base64-encoded bytes and are decoded before the handler receives them. This gives stronger containment for untrusted or heavy parser code, with higher per-call startup overhead than the default in-process path.
+解析器适配器可在元数据中加上 `"isolation": "process"` 启用子进程隔离。该模式下 `PluginParserAdapter` 调用 `python -m act_platform.parser_worker`，在 worker 进程中重新加载插件入口，通过 JSON stdin/stdout 调用注册的 parser handler；超出适配器时间预算时 worker 会被强杀。process-isolated 适配器在元数据未提供 `time_budget_ms` 或 `max_runtime_ms` 时默认使用 1000 ms 预算。`parse_packet` 帧以 base64 字节形式跨越进程边界，并在 handler 收到前解码。该模式对不可信或重型解析代码提供更强的隔离，代价是更高的单次启动开销。
 
-The handler receives an `operation` field plus operation-specific data:
+handler 收到一个 `operation` 字段加上对应数据：
 
-- `start` / `stop`: lifecycle calls.
-- `parse_packet`: `frame` bytes and `frame_len`.
-- `parse_log_line`: `line` text; return an event dict, a list of event dicts, or `{ "events": [...] }`.
-- `import_file`: `path`; return import metadata/events.
-- `normalize_event`: `topic`, `payload`, `source_kind`, `confidence`, and `observed_at`; return a canonical event dict.
+- `start` / `stop`：生命周期调用。
+- `parse_packet`：`frame` 字节与 `frame_len`。
+- `parse_log_line`：`line` 文本；返回事件 dict、事件 dict 列表或 `{ "events": [...] }`。
+- `import_file`：`path`；返回导入元数据/事件。
+- `normalize_event`：`topic`、`payload`、`source_kind`、`confidence`、`observed_at`；返回规范化事件 dict。
 
-Live `PacketBridge` uses the built-in Star Resonance parser by default. To opt into a live plugin packet parser, set `act_live_parser_adapter_id` to an active adapter id whose metadata includes `"packet"` in `source_kinds`. WebView and Entity pass the shared plugin manager/event bus into `PacketBridge`, so selected plugin `parse_packet` results can publish canonical ACT events. Unknown, unloaded, or non-packet adapters automatically fall back to `star_resonance_tcp`; inspect `PacketBridge.health()["parser_adapter_selection"]` or the data-source health panel for the selected id and fallback reason.
+实时 `PacketBridge` 默认使用内置 Star Resonance 解析器。要切换到实时插件包解析器，请把 `act_live_parser_adapter_id` 设为已激活、元数据 `source_kinds` 包含 `"packet"` 的适配器 id。WebView 与 Entity 把共享插件管理器/事件总线传入 `PacketBridge`，因此被选中的插件 `parse_packet` 结果可以发布规范化 ACT 事件。未知、未加载或非 packet 适配器会自动回退到 `star_resonance_tcp`；可在 `PacketBridge.health()["parser_adapter_selection"]` 或数据源健康面板查看选中的 id 与回退原因。
 
-Live `parse_packet` handlers should return one of these shapes:
+实时 `parse_packet` handler 应返回以下结构之一：
 
 ```python
 {"events": [{"topic": "damage", "payload": {"damage": 123}}]}
@@ -391,28 +394,32 @@ Live `parse_packet` handlers should return one of these shapes:
 [{"topic": "damage", "payload": {"damage": 456}}]
 ```
 
-The default plugin runtime is still in-process: calls are deep-copied, timed, and failure-accounted by `PluginManager.invoke_extension(...)`, but Python code cannot be force-killed mid-call. Keep live parser handlers deterministic and short unless they opt into `"isolation": "process"` and accept the extra worker startup cost.
+默认插件 runtime 仍是进程内：调用经过深拷贝、耗时测量和失败计数（由 `PluginManager.invoke_extension(...)` 完成），但 Python 代码无法强制中止。除非显式选择 `"isolation": "process"` 并接受额外的 worker 启动成本，否则实时 parser handler 必须保持确定性与短小。
 
-## Example plugin
+## 示例插件
 
-See `plugins/hello_act_plugin/` for a tiny lifecycle example. It demonstrates `ctx.set_defaults()`, decorator-style `ctx.on("act_snapshot")`, and `ctx.on_encounter_finalized()`, then logs compact status lines in both WebView and Entity plugin manager panels.
+参见 `plugins/hello_act_plugin/`，一个最小的生命周期示例，演示 `ctx.set_defaults()`、装饰器风格 `ctx.on("act_snapshot")`、`ctx.on_encounter_finalized()`，并在 WebView 与 Entity 的插件管理器面板中输出紧凑状态行。
 
-See `plugins/star_basic_report_plugin/` for a report-style example. It demonstrates `ctx.subscribe_once()`, explicit `ctx.unsubscribe(token)`, threshold settings, `ctx.snapshot_value()`, extension registration, and plugin-originated `plugin_report_summary` events.
+参见 `plugins/star_basic_report_plugin/`，一个报告型示例，演示 `ctx.subscribe_once()`、显式 `ctx.unsubscribe(token)`、阈值设置、`ctx.snapshot_value()`、扩展注册以及插件发起的 `plugin_report_summary` 事件。
 
-## UI management
+## UI 管理
 
-Both UIs expose the same plugin actions:
+两套 UI 暴露相同的插件操作：
 
-- list plugins
-- show status
-- enable plugin
-- disable plugin
-- reload one plugin or all plugins
+- 列出插件
+- 查看状态
+- 启用插件
+- 禁用插件
+- 重新加载某个插件或所有插件
 
-WebView: `SAO Menu > ACT 插件管理 Plugin Manager`.
+WebView：`SAO Menu > ACT 插件管理 Plugin Manager`。
 
-Entity: `SAO 菜单 > 面板 > ACT插件管理面板`.
+Entity：`SAO 菜单 > 面板 > ACT插件管理面板`。
 
-## Safety notes
+## 打包提示
 
-Plugins run in-process, so keep callbacks fast and defensive. Callback exceptions are isolated by the event bus and recorded as plugin/event failures, but a plugin can still consume CPU if it performs long blocking work. For heavy work, start a background thread and keep event callbacks minimal.
+插件零件（如独立 MIDI 插件、独立 Hide & Seek 插件等）已并入正式打包流程。如果插件需要进入 onedir 发行，请同步 `XiaoACTUI.spec` 的 hidden imports 与资源声明，避免运行时找不到入口或资源。
+
+## 安全注意
+
+插件运行在主进程内，回调要快、要防御。事件总线会把回调异常隔离并记入插件/事件失败统计，但插件仍可能在长阻塞工作中占用 CPU。重型工作请开后台线程，让事件回调保持精简。

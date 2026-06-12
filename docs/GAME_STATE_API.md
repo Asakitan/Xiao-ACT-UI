@@ -23,9 +23,9 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `snapshot["context"]` | `dungeon_id`、`dungeon_scene_id`、`dungeon_name`、Boss HP/盾/破防状态、最近技能/Boss 事件。 |
-| `snapshot["render_spec"]` | WebView/Entity 共用渲染契约；含 `context`、`boss`、`totals`、`rows`、`sources`。 |
-| `snapshot["sources"]` | TCP/Memory 数据源健康摘要。 |
+| `snapshot["context"]` | `dungeon_id`、`dungeon_scene_id`、`dungeon_name`、Boss HP/盾/破防状态、最近技能/Boss 事件。同时含 `last_skill_event`、`last_skill_kind`、`last_dungeon_event`、`last_boss_event`、`last_boss_event_type` 等语义快照，触发器/AutoKey 直接对这些字段做匹配。 |
+| `snapshot["render_spec"]` | WebView/Entity 共用渲染契约；含 `context`、`boss`、`totals`、`rows`、`sources`。`render_spec.context.last_*` 是经过 `combat_fact` 规范化后的稳定语义层（见下文）。 |
+| `snapshot["sources"]` | TCP/Memory 数据源健康摘要；含 `packet.parser_adapter_selection`、`memory.policy`、UnifiedDataSource 健康项。 |
 | `snapshot["live"]` | 当前 encounter 的 DPS/HPS/行数据。 |
 | `snapshot["triggers"]` | ACT 触发/计时器状态。 |
 
@@ -305,6 +305,104 @@ ctx.mem.narrow(job_id, 12000)
 | `mem_show_risk_warning` | 供 UI/health 展示风险提示。 |
 
 这些值会出现在 `UnifiedDataSource.health()["policy"]` 或 `ctx.mem.status()` / data-source health 中。
+
+## `combat_fact` 语义事实层
+
+为了让插件、触发器和 AutoKey 不再硬编码包字段、技能 ID 或地牢编号，所有进入 ACT 流水线的技能/地牢/Boss/怪物事件都会被 `tools/tablekit/combat_preparse.py` 注入一个稳定的 `combat_fact`：
+
+| 来源事件 | 注入函数 | 落点 |
+| --- | --- | --- |
+| 技能（`server_end` / `start_cast` / 普攻 …） | `enrich_skill_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_skill_event`。 |
+| 地牢/场景流转（`sync_dungeon_data` / `sync_dungeon_dirty_data`） | `enrich_dungeon_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_dungeon_event`。 |
+| Boss 机制 buff（`buff_event_*`） | `enrich_boss_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_boss_event` 与 `last_boss_event_type`。 |
+| 怪物聚合（render rows / Entity 面板） | `enrich_monster_event` | 写到 monster 行的 `combat_fact`，并合并 `mechanics`/`shield`/`breaking_stage` 等字段。 |
+
+技能 fact 关键字段（节选）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `skill_id`、`skill_level_id`、`skill_name`、`display_name` | 规范化后的稳定标识与显示名；`display_name` 失败时回退 `技能#<id>`。 |
+| `skill_role` | `player`/`monster`/`boss`/`environment`/`ultimate` 等粗分类。 |
+| `skill_category` / `skill_kind` | 通过 `_classified_kind` 决定的精细分类（与 `skill_role` 在 `category_roles` 内保持一致）。 |
+| `is_ultimate`、`is_player_skill`、`is_monster_skill`、`is_boss_skill`、`is_boss_mechanic_skill`、`is_environment_skill`、`is_scripted_skill`、`is_virtual_skill`、`is_roguelike_affix`、`is_client_effect_skill`、`is_interaction_skill`、`is_companion_skill`、`is_projectile_skill`、`is_passive_skill`、`is_test_skill`、`is_system_skill` | 布尔分类位，AutoKey/触发器直接读取。 |
+| `profession_id`、`sub_profession` | 通过 `_SKILL_TO_PROFESSION` 反查得到的施法职业；命中表时填副职业名。 |
+| `target_uuid`、`caster_uid`、`caster_uuid` | 规范化的对象引用，整数表达。 |
+| `source` | `tcp` / `memory` / `replay`，标记事实来源。 |
+| `stage_id` / `new_stage_id` / `condition_id` | 出现在 stage 推进事件时附带。 |
+
+地牢 fact 关键字段：`dungeon_id`、`scene_id`、`scene_uuid`、`dungeon_difficulty`、`dungeon_name`、`display_name`、`flow_state`、`target_count`、`scene_guid`、`connect_guid`、`source`。
+
+Boss 机制 fact 关键字段：`event_type`、`boss_mechanic_key`（如 `buff_event_<n>`）、`boss_mechanic_label`、`trigger_family`（如 `buff_event` / `phase_change` / `mechanic_call`）、`severity`、`host_uuid`、`buff_uuid`、`buff_id`、`buff_category`、`buff_name`、`source`。`event_type` 与 `tools/tablekit/combat_preparse.py:BOSS_MECHANIC_EVENTS` 对齐。
+
+怪物 fact 关键字段：`uuid`、`uid`、`monster_id`、`monster_name`、`boss_name`、`display_name`、`hp`、`max_hp`、`hp_pct`、`shield_active`、`shield_pct`、`breaking_stage`、`extinction_pct`、`in_overdrive`、`mechanics[]`（`shield` / `breaking` / `overdrive` / `break_tick_stopped` / `dead`）、`buff_count`。
+
+> 插件应只读取 `event["combat_fact"]` 字段，不要再去解析 `skill_id` 数值、生硬比较包字段或自行做职业映射。事实层会随版本扩展但保持向后兼容。
+
+## AutoKey 语义条件
+
+AutoKey 引擎（`engines/auto_key_engine.py`）已迁移到上面的 `combat_fact` 层，下列条件可在 `auto_key_rules.json` 等规则里直接使用：
+
+| 条件类型 | 含义 | 数据来源 |
+| --- | --- | --- |
+| `last_skill_is` | 最近一次技能事件的 `skill_id` 命中给定列表。 | `render_spec.context.last_skill_event.combat_fact.skill_id`。 |
+| `last_skill_category_is` / `last_skill_kind_is` | 最近技能 `skill_category` / `skill_kind` 命中。 | `combat_fact.skill_category`。 |
+| `last_skill_is_ultimate` / `last_skill_is_boss_mechanic` | 布尔判断最近技能是否为终结技/Boss 机制技。 | `combat_fact.is_ultimate` / `combat_fact.is_boss_mechanic_skill`。 |
+| `last_buff_category_is` | 最近 Boss 机制事件的 `buff_category` 命中。 | `last_boss_event.combat_fact.buff_category`。 |
+| `boss_mechanic_is` | 最近 Boss 机制 `event_type` 在列表内。 | `last_boss_event.combat_fact.event_type` / `boss_mechanic_key`。 |
+| `boss_mechanic_family_is` | 最近 Boss 机制 `trigger_family` 命中。 | `last_boss_event.combat_fact.trigger_family`。 |
+| `boss_casting_skill_is` | 当前 Boss 正在施法且 `cast_skill_id` 命中。 | 内存 `boss_actions()` + render 上下文。 |
+| `dungeon_is` | 当前所在副本/场景的 `dungeon_id` 或 `scene_id` 命中。 | `last_dungeon_event.combat_fact.dungeon_id` / `scene_id`。 |
+| `profession_is` / `player_name_is` | 自身职业/角色名匹配。 | ACT 自身状态 + `MemSelfStateProvider`。 |
+
+这些条件在内部会自动 `event.get("combat_fact") or enrich_*_event(event)`，保证即使事件来自历史记录或回放，也能拿到一致的语义层。
+
+## 数据源健康面板
+
+`ctx.get_snapshot()["sources"]` 与 `PacketBridge.health()` 是插件诊断数据源的统一入口：
+
+```jsonc
+{
+  "packet": {
+    "mode": "hybrid",
+    "tcp_active": true,
+    "parser_adapter_selection": {
+      "requested_id": "star_resonance_tcp",
+      "selected_id": "star_resonance_tcp",
+      "mode": "builtin",
+      "fallback_reason": ""
+    }
+  },
+  "memory": {
+    "active": true,
+    "armed": true,
+    "policy": {
+      "mem_auto_scan_enabled": true,
+      "mem_data_source": "hybrid",
+      "mem_max_scan_regions_mb": 256,
+      "mem_allow_full_heap_scan": false,
+      "mem_allow_static_fallback": true,
+      "mem_defer_until_tcp_scene": true,
+      "region_scan_capped": false,
+      "static_fallback_mode": "off",
+      "requested_mode": "hybrid",
+      "mode": "hybrid"
+    }
+  }
+}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `packet.parser_adapter_selection.requested_id` | UI/配置请求使用的 parser adapter id。 |
+| `packet.parser_adapter_selection.selected_id` | 当前实际选中的 adapter（可能因兼容降级到内置）。 |
+| `packet.parser_adapter_selection.mode` | `builtin` / `plugin` / `external`，反映加载源。 |
+| `packet.parser_adapter_selection.fallback_reason` | 非空时表示曾发生 fallback，并给出原因（例如插件不支持 packet 抓取）。 |
+| `memory.policy.requested_mode` / `memory.policy.mode` | 请求的与实际生效的内存模式（`tcp`/`memory`/`hybrid`/`auto`）。 |
+| `memory.policy.region_scan_capped` | 真表示扫描已被 `mem_max_scan_regions_mb` 截断。 |
+| `memory.policy.static_fallback_mode` | `off` / `bundle` / `cache`，反映静态 fallback 是否被启用。 |
+| `memory.policy.mem_defer_until_tcp_scene` | 是否在等待 TCP 场景/全量同步之前延迟内存重扫描。 |
+
+插件应优先消费 `policy.*` 与 `parser_adapter_selection` 而不是直接探测进程或读注册表，以便和 ACT 数据源面板、Mem Scope 面板保持一致。
 
 ## 调用建议
 
