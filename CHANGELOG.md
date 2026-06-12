@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.103: Tk combatant drilldown 补渲 incoming + buffmon 行渲染降配额.
+
+  1) `gui_modules/sao_gui_combatant_drilldown.py` 侧栏补渲后端一直在发的
+    `incoming` 列表(承伤/承疗 mini 行) — web 端 INCOMING/TARGET 区早已渲染,
+    Tk 端此前只渲 outgoing, 双端不对等; 字段回退链(name→topic,
+    amount→value)与 web 逐字一致, `_signature` 同步纳入 incoming
+    防白名单签名陈旧渲染。
+
+  2) `gui_modules/sao_gui_buffmon.py` `_draw_row` 行背景胶囊从
+    "整画布 RGBA overlay + 全图 alpha_composite" 改为行 bbox 尺寸
+    overlay 平移贴回 — 每帧每行省一块全面板分配(12.5Hz × 行数,
+    8 行约省 8-22MB/s 堆翻动), 合成结果逐像素等价。
+
 ## v4.6.102: 更新下载写盘限频 + 插件面板轮询隐藏门.
 
   1) `updater/sao_updater.py` `_set_state` 对 progress-only 更新限频 1s

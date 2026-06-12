@@ -358,11 +358,17 @@ class CombatantDrilldownPanel:
             rows.append(('focus', filters.get('focus_target'), ''))
         for item in _mapping_items(status.get('outgoing'))[:8]:
             rows.append((item.get('kind') or 'out', item.get('name') or '-', self._fmt(item.get('amount'))))
+        for item in _mapping_items(status.get('incoming'))[:5]:
+            rows.append((
+                item.get('kind') or 'in',
+                item.get('name') or item.get('topic') or '-',
+                self._fmt(item.get('amount') if item.get('amount') is not None else item.get('value')),
+            ))
         if not rows:
             return
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text='OUTGOING / FOCUS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
+        tk.Label(box, text='OUTGOING / INCOMING / FOCUS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
         for kind, name, amount in rows:
             tk.Label(box, text=f'{kind}: {name} {amount}', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9), anchor='w').pack(fill='x', padx=8, pady=3)
 
@@ -398,6 +404,9 @@ class CombatantDrilldownPanel:
         outgoing = []
         for item in _mapping_items(status.get('outgoing'))[:8]:
             outgoing.append((item.get('kind'), item.get('name'), item.get('amount')))
+        incoming = []
+        for item in _mapping_items(status.get('incoming'))[:5]:
+            incoming.append((item.get('kind'), item.get('name'), item.get('topic'), item.get('amount'), item.get('value')))
         return repr((
             status.get('combatant_id'),
             summary.get('name'),
@@ -411,4 +420,5 @@ class CombatantDrilldownPanel:
             filters.get('focus_target'),
             skills,
             outgoing,
+            incoming,
         ))

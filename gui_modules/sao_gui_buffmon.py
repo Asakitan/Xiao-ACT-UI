@@ -730,10 +730,11 @@ class _BuffPanelBase:
 
         # Cut-corner pill (web/dps.html clip-path 风格)
         poly = self._row_polygon(rx0, ry, rx1, ry1)
-        # 填充背景
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(overlay, 'RGBA').polygon(poly, fill=bg)
-        img.alpha_composite(overlay)
+        # 填充背景 — overlay 只开行 bbox 大小, 平移多边形后贴回行位
+        overlay = Image.new('RGBA', (rx1 - rx0 + 1, ry1 - ry + 1), (0, 0, 0, 0))
+        local_poly = [(px - rx0, py - ry) for px, py in poly]
+        ImageDraw.Draw(overlay, 'RGBA').polygon(local_poly, fill=bg)
+        img.alpha_composite(overlay, (rx0, ry))
         # 描边
         draw.line(poly + [poly[0]], fill=border, width=1)
         # 顶部细青色 highlight (web .entity-row::after top sheen)
