@@ -61,6 +61,27 @@ except Exception:
 def _gpu_hp_enabled() -> bool:
     return require_entity_gpu('HpOverlay', _gow)
 
+
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
 from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from gui_modules.sao_gui_dps import (
@@ -952,8 +973,8 @@ class HpOverlay:
                   level: Any = None) -> None:
         if not self._visible:
             self.show()
-        self._hp_cur = float(current or 0)
-        self._hp_max = float(total or 0)
+        self._hp_cur = _finite_float(current, 0.0, lo=0.0)
+        self._hp_max = _finite_float(total, 0.0, lo=0.0)
         pct = (self._hp_cur / self._hp_max) if self._hp_max > 0 else 1.0
         pct = max(0.0, min(1.0, pct))
         if pct < self._hp_pct_target - 0.002:
@@ -988,15 +1009,15 @@ class HpOverlay:
         self._schedule_tick(immediate=True)
 
     def _format_sta_text(self) -> str:
-        cur = self._sta_cur
-        tot = self._sta_max
+        cur = _finite_float(self._sta_cur, 0.0, lo=0.0)
+        tot = _finite_float(self._sta_max, 0.0, lo=0.0)
         if tot == 100 and 0 <= cur <= 100:
             return f'{int(round(cur))}%'
         return f'{int(cur)}/{int(tot)}'
 
     def update_sta(self, current: float, total: float) -> None:
-        cur = float(current or 0)
-        tot = float(total or 0)
+        cur = _finite_float(current, 0.0, lo=0.0)
+        tot = _finite_float(total, 0.0, lo=0.0)
         pct = (cur / tot) if tot > 0 else 1.0
         self._sta_pct_target = max(0.0, min(1.0, pct))
         self._sta_cur = cur

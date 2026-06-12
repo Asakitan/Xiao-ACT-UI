@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.11: HP/STA HUD public setter 数值防护修复.
+
+  1) `gui_modules/sao_gui_hp.py` 修复 `HpOverlay.update_hp()` 数值归一。
+     HP HUD 现在容忍坏 current/total live 值,
+     避免异常血量 payload 中断 HP 条刷新。
+
+  2) `gui_modules/sao_gui_hp.py` 修复 `HpOverlay.update_sta()` 数值归一。
+     STA HUD 现在容忍坏 current/total live 值并保护文本格式化,
+     避免异常耐力 payload 中断 STA 条刷新。
+
 ## v4.6.10: BossHP payload 与 additional unit 数值防护修复.
 
   1) `gui_modules/sao_gui_bosshp.py` 修复 BossHP additional unit 数值归一。

@@ -294,6 +294,38 @@ class GpuOverlayTeardownTests(unittest.TestCase):
         self.assertEqual((snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h), (1, 1, 1, 1))
         self.assertEqual(snap.scan_phase, 0.0)
 
+    def test_hp_overlay_update_hp_tolerates_bad_numeric_payload(self) -> None:
+        panel = object.__new__(HpOverlay)
+        panel._visible = True
+        panel._hp_pct_target = 0.5
+        panel._hp_flash_start = 0.0
+        panel._idle_submit_q = 0
+        panel._level = "1"
+        panel._schedule_tick = lambda *_args, **_kwargs: None
+
+        panel.update_hp("bad", float("inf"), level="bad-level")
+
+        self.assertEqual(panel._hp_cur, 0.0)
+        self.assertEqual(panel._hp_max, 0.0)
+        self.assertEqual(panel._hp_pct_target, 1.0)
+        self.assertEqual(panel._idle_submit_q, -1)
+        self.assertEqual(panel._level, "bad-level")
+
+    def test_hp_overlay_update_sta_tolerates_bad_numeric_payload(self) -> None:
+        panel = object.__new__(HpOverlay)
+        panel._sta_offline = False
+        panel._sta_offline_pending = False
+        panel._idle_submit_q = 0
+        panel._schedule_tick = lambda *_args, **_kwargs: None
+
+        panel.update_sta("bad", float("nan"))
+
+        self.assertEqual(panel._sta_cur, 0.0)
+        self.assertEqual(panel._sta_max, 0.0)
+        self.assertEqual(panel._sta_pct_target, 1.0)
+        self.assertEqual(panel._sta_text, "0/0")
+        self.assertEqual(panel._idle_submit_q, -1)
+
     def test_child_bar_snapshots_tolerate_bad_numeric_fields(self) -> None:
         row = _RowSnapshot(icon=">", label="Submenu", hover_t="bad", row_w="nan")
         colors = BarColors(
