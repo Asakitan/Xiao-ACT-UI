@@ -56,6 +56,7 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
@@ -74,6 +75,20 @@ from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
 from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
 from gui_modules.sao_panel_ui import _set_sao_panel_theme
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None, hi: Optional[int] = None) -> int:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0)
+    if not math.isfinite(num):
+        num = float(default or 0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return int(num)
 
 
 class SAOPlayerGUIPanelsMixin:
@@ -139,8 +154,8 @@ class SAOPlayerGUIPanelsMixin:
                 if not pid:
                     return
                 panel_id = str(payload.get('panel_id') or '')
-                w = int(payload.get('width') or 0)
-                h = int(payload.get('height') or 0)
+                w = _finite_int(payload.get('width'), 0, lo=0)
+                h = _finite_int(payload.get('height'), 0, lo=0)
                 try:
                     self.root.after(0, lambda: self._open_plugin_detached_panel(pid, panel_id, w, h))
                 except Exception:
@@ -164,7 +179,8 @@ class SAOPlayerGUIPanelsMixin:
         if panel is None or not panel._exists():
             panel = PluginDetachedPanel(self.root, self, plugin_id,
                                         panel_id=str(panel_id or ''),
-                                        width=int(width or 0), height=int(height or 0))
+                                        width=_finite_int(width, 0, lo=0),
+                                        height=_finite_int(height, 0, lo=0))
             panels[key] = panel
         panel.show()
         try:

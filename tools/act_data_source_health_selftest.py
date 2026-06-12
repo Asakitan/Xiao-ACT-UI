@@ -54,6 +54,14 @@ class FakeOwner:
         self._cfg_settings_ref = {"mem_data_source": "hybrid"}
 
 
+class FakeStringVar:
+    def __init__(self):
+        self.value = ""
+
+    def set(self, value: str) -> None:
+        self.value = str(value)
+
+
 class ActDataSourceHealthTests(unittest.TestCase):
     def test_health_payload_contains_parity_fields(self) -> None:
         payload = runtime.act_data_source_health(FakeOwner(), now=1002.0)
@@ -127,6 +135,25 @@ class ActDataSourceHealthTests(unittest.TestCase):
 
         self.assertEqual(panel._last_sources_sig, "")
         self.assertEqual(panel._last_diag_sig, "")
+
+    def test_panel_status_header_tolerates_bad_numeric_fields(self) -> None:
+        panel = DataSourceHealthPanel.__new__(DataSourceHealthPanel)
+        panel._summary_var = FakeStringVar()
+        panel._status_var = FakeStringVar()
+        panel._list = None
+        panel._diag = None
+
+        panel._render_status({
+            "ok": True,
+            "status": "running",
+            "sources": {"summary": {"data_source": "hybrid"}},
+            "latency_ms": "bad",
+            "last_event_ms": float("nan"),
+            "errors": [],
+        })
+
+        self.assertIn("latency=0ms", panel._status_var.value)
+        self.assertIn("last_event=0ms", panel._status_var.value)
 
     def test_sources_signature_tracks_displayed_requested_mode_and_uptime(self) -> None:
         base = {

@@ -14,6 +14,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -22,6 +23,7 @@ if ROOT not in sys.path:
 from act_platform.event_bus import EventBus
 from act_platform.plugins import PluginManager
 from act_platform.ui_spec import UI, normalize_ui_spec
+from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin
 
 
 PLUGIN_CODE = r'''
@@ -54,6 +56,45 @@ def _make_manager(root: str) -> PluginManager:
     mgr = PluginManager(plugin_dirs=[root], event_bus=EventBus())
     mgr.discover()
     return mgr
+
+
+class _AfterRoot:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def after(self, delay, func):
+        self.calls.append((delay, func))
+
+
+class _DetachedPanelOwner(SAOPlayerGUIPanelsMixin):
+    def __init__(self) -> None:
+        self.root = _AfterRoot()
+        self._plugin_detached_panels = {}
+        self.dismissed = False
+
+    def _dismiss_sao_menu_for_panel(self) -> None:
+        self.dismissed = True
+
+    def _ensure_plugin_window_bridge(self) -> None:
+        pass
+
+
+class _FakeDetachedPanel:
+    created = []
+
+    def __init__(self, _root, _owner, plugin_id, *, panel_id='', width=0, height=0):
+        self.plugin_id = plugin_id
+        self.panel_id = panel_id
+        self.width = width
+        self.height = height
+        self.shown = False
+        self.created.append((plugin_id, panel_id, width, height))
+
+    def _exists(self) -> bool:
+        return True
+
+    def show(self) -> None:
+        self.shown = True
 
 
 class PluginWindowTests(unittest.TestCase):
@@ -108,6 +149,17 @@ class PluginWindowTests(unittest.TestCase):
                                     owner_id="test")
             mgr.invoke_ui_action("main", "redraw", {})
             self.assertTrue(any(p.get("surface") == "sub" for p in got), got)
+
+    def test_detached_panel_open_clamps_bad_event_size(self) -> None:
+        owner = _DetachedPanelOwner()
+        _FakeDetachedPanel.created = []
+
+        with mock.patch("gui_modules.sao_gui_panels_mixin.PluginDetachedPanel", _FakeDetachedPanel):
+            owner._open_plugin_detached_panel(
+                "windemo", "sub", width="bad", height=float("inf"))
+
+        self.assertTrue(owner.dismissed)
+        self.assertEqual(_FakeDetachedPanel.created[0], ("windemo", "sub", 0, 0))
 
     def test_negative_size_clamped(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pw_clamp_") as root:

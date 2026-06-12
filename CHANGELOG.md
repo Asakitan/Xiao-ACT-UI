@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.12: ACT panel numeric payload 防护修复.
+
+  1) `gui_modules/sao_gui_data_source_health.py` 修复状态栏数值归一。
+     Data Source Health 面板现在容忍坏 latency/last_event 值,
+     避免异常诊断 payload 中断状态栏渲染。
+
+  2) `gui_modules/sao_gui_panels_mixin.py` 修复插件 detached panel 尺寸归一。
+     插件 `open_window` payload 的 width/height 现在容忍坏字符串与 NaN/Inf,
+     避免异常尺寸参数导致插件独立面板无法打开。
+
 ## v4.6.11: HP/STA HUD public setter 数值防护修复.
 
   1) `gui_modules/sao_gui_hp.py` 修复 `HpOverlay.update_hp()` 数值归一。

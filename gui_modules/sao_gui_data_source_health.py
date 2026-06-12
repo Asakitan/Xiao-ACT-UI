@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -26,6 +27,20 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None, hi: Optional[int] = None) -> int:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0)
+    if not math.isfinite(num):
+        num = float(default or 0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return int(num)
 
 
 class DataSourceHealthPanel:
@@ -226,8 +241,10 @@ class DataSourceHealthPanel:
         self._summary_var.set(f'SOURCE: {source_label}')
         errors = status.get('errors') or []
         state = str(status.get('status') or ('running' if status.get('ok') else 'error')).upper()
+        latency_ms = _finite_int(status.get('latency_ms'), 0, lo=0)
+        last_event_ms = _finite_int(status.get('last_event_ms'), 0, lo=0)
         self._status_var.set(
-            f"{state} · latency={int(status.get('latency_ms') or 0)}ms · last_event={int(status.get('last_event_ms') or 0)}ms · errors={len(errors)}"
+            f"{state} · latency={latency_ms}ms · last_event={last_event_ms}ms · errors={len(errors)}"
         )
         if self._list is not None:
             sources_sig = self._sources_signature(sources)
