@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.56: Web menu AutoKey condition value/text 修复.
+
+  1) `web/menu.html` 修复 AutoKey condition value 归一。
+     高级 JSON 导入的 bool、slot index、文本匹配和百分比条件现在在渲染与保存前清洗,
+     避免 `false` 字符串显示成 ready 或异常数值传给后端。
+
+  2) `web/menu.html` 修复 AutoKey runtime 状态文本 fallback。
+     active profile、last reason 与 last action label 现在保留合法 `0`,
+     避免运行状态把有效文本显示成默认值或直接隐藏。
+
 ## v4.6.55: Web menu AutoKey condition type 归一修复.
 
   1) `web/menu.html` 修复 AutoKey condition type / slot state 渲染与更新。

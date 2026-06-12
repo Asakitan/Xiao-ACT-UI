@@ -774,7 +774,7 @@ def main() -> int:
         "function _akPressMode(value)",
         "var type = _akConditionType(conditionType);",
         "merged.type = _akConditionType(merged.type);",
-        "if (merged.type === 'slot_state_is') merged.state = _akSlotState(merged.state);",
+        "merged.state = _akSlotState(merged.state);",
         "selected = _akConditionType(selected);",
         "selected = _akSlotState(selected);",
         "var type = _akConditionType(condition.type);",
@@ -786,12 +786,59 @@ def main() -> int:
         "var out = _profileEntry(_akClone(rawAction));",
         "out.press_mode = _akPressMode(out.press_mode);",
         "out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {",
-        "cond.type = _akConditionType(cond.type);",
-        "if (cond.type === 'slot_state_is') cond.state = _akSlotState(cond.state);",
+        "return _akNormalizeCondition(rawCondition);",
     ]
     for snippet in auto_key_condition_type_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey condition/action type snippet: " + snippet)
+
+    auto_key_condition_value_raw_patterns = [
+        "return items.map(function(condition) {\n        var merged = _akDefaultCondition(condition && condition.type);",
+        "'<option value=\"true\"' + (condition.value ? ' selected' : '')",
+        "'<option value=\"false\"' + (!condition.value ? ' selected' : '')",
+        "out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {\n            var cond = _profileEntry(_akClone(rawCondition));\n            cond.type = _akConditionType(cond.type);",
+    ]
+    for pattern in auto_key_condition_value_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey condition values must normalize bool/numeric/text payloads before render/save: " + pattern)
+    auto_key_condition_value_safe_required = [
+        "function _akBoolValue(value, fallback)",
+        "function _akNormalizeCondition(condition)",
+        "merged.value = _akBoolValue(merged.value, true);",
+        "merged.slot_index = _akIntValue('slot_index', merged.slot_index);",
+        "merged.value = _akTextValue(merged.value);",
+        "merged.value = _clampNum(merged.value, 0.5, 0, 1);",
+        "return items.map(_akNormalizeCondition);",
+        "var boolValue = _akBoolValue(condition.value, true);",
+        "'<option value=\"true\"' + (boolValue ? ' selected' : '')",
+        "'<option value=\"false\"' + (!boolValue ? ' selected' : '')",
+        "return _akNormalizeCondition(rawCondition);",
+    ]
+    for snippet in auto_key_condition_value_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey condition value snippet: " + snippet)
+
+    auto_key_runtime_text_raw_patterns = [
+        "bits.push('配置 Profile ' + (state.active_profile_name || '无 None'));",
+        "bits.push('状态 Status ' + ((runtime.last_reason || (runtime.active ? 'RUNNING' : 'IDLE')) || 'IDLE'));",
+        "if (runtime.last_action_label) {",
+        "bits.push('上次 Last ' + runtime.last_action_label);",
+    ]
+    for pattern in auto_key_runtime_text_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey runtime status text must preserve zero text: " + pattern)
+    auto_key_runtime_text_safe_required = [
+        "var activeProfileName = _profileText(state.active_profile_name, '无 None');",
+        "var runtimeReason = _profileText(runtime.last_reason, runtime.active ? 'RUNNING' : 'IDLE');",
+        "var lastActionLabel = _profileText(runtime.last_action_label, '');",
+        "bits.push('配置 Profile ' + activeProfileName);",
+        "bits.push('状态 Status ' + runtimeReason);",
+        "if (lastActionLabel) {",
+        "bits.push('上次 Last ' + lastActionLabel);",
+    ]
+    for snippet in auto_key_runtime_text_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey runtime status text snippet: " + snippet)
 
     boss_raid_editor_text_raw_patterns = [
         "_escHtml(profile.id || '--')",

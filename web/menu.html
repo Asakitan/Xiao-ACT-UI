@@ -5227,12 +5227,15 @@ function _akRenderRuntime() {
     var state = _autoKeyState || {};
     var runtime = state.runtime || {};
     enabledEl.checked = !!state.enabled;
+    var activeProfileName = _profileText(state.active_profile_name, '无 None');
+    var runtimeReason = _profileText(runtime.last_reason, runtime.active ? 'RUNNING' : 'IDLE');
+    var lastActionLabel = _profileText(runtime.last_action_label, '');
     var bits = [];
     bits.push('引擎 Engine ' + (state.enabled ? '开启 ON' : '关闭 OFF'));
-    bits.push('配置 Profile ' + (state.active_profile_name || '无 None'));
-    bits.push('状态 Status ' + ((runtime.last_reason || (runtime.active ? 'RUNNING' : 'IDLE')) || 'IDLE'));
-    if (runtime.last_action_label) {
-        bits.push('上次 Last ' + runtime.last_action_label);
+    bits.push('配置 Profile ' + activeProfileName);
+    bits.push('状态 Status ' + runtimeReason);
+    if (lastActionLabel) {
+        bits.push('上次 Last ' + lastActionLabel);
     }
     runtimeEl.innerHTML = bits.map(function(item) {
         return '<span class="auto-key-pill ' + (state.enabled ? 'active' : '') + '">' + _escHtml(item) + '</span>';
@@ -5333,12 +5336,39 @@ function _akPressMode(value) {
     return key === 'hold' ? 'hold' : 'tap';
 }
 
+function _akBoolValue(value, fallback) {
+    if (typeof value === 'boolean') return value;
+    if (value == null || value === '') return !!fallback;
+    var text = String(value).trim().toLowerCase();
+    if (text === 'false' || text === '0' || text === 'no' || text === 'off') return false;
+    if (text === 'true' || text === '1' || text === 'yes' || text === 'on') return true;
+    return !!fallback;
+}
+
 function _akDefaultCondition(conditionType) {
     var type = _akConditionType(conditionType);
     if (type === 'burst_ready_is') return { type: type, value: true };
     if (type === 'slot_state_is') return { type: type, slot_index: 1, state: 'ready' };
     if (type === 'profession_is' || type === 'player_name_is') return { type: type, value: '' };
     return { type: type, value: 0.5 };
+}
+
+function _akNormalizeCondition(condition) {
+    var raw = _profileEntry(condition);
+    var merged = _akDefaultCondition(raw.type);
+    Object.keys(raw).forEach(function(key) { merged[key] = raw[key]; });
+    merged.type = _akConditionType(merged.type);
+    if (merged.type === 'burst_ready_is') {
+        merged.value = _akBoolValue(merged.value, true);
+    } else if (merged.type === 'slot_state_is') {
+        merged.slot_index = _akIntValue('slot_index', merged.slot_index);
+        merged.state = _akSlotState(merged.state);
+    } else if (merged.type === 'profession_is' || merged.type === 'player_name_is') {
+        merged.value = _akTextValue(merged.value);
+    } else {
+        merged.value = _clampNum(merged.value, 0.5, 0, 1);
+    }
+    return merged;
 }
 
 function _akGetDraftAction(index) {
@@ -5350,13 +5380,7 @@ function _akGetActionConditions(index) {
     var action = _akGetDraftAction(index);
     if (!action) return [];
     var items = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];
-    return items.map(function(condition) {
-        var merged = _akDefaultCondition(condition && condition.type);
-        Object.keys(condition || {}).forEach(function(key) { merged[key] = condition[key]; });
-        merged.type = _akConditionType(merged.type);
-        if (merged.type === 'slot_state_is') merged.state = _akSlotState(merged.state);
-        return merged;
-    });
+    return items.map(_akNormalizeCondition);
 }
 
 function _akSetActionConditions(index, conditions, rerender) {
@@ -5449,10 +5473,11 @@ function _akRenderConditionFields(index, condIndex, condition) {
             '<div class="auto-key-field"><label>状态 State</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'state\', this.value)">' + _akSlotStateOptions(condition.state) + '</select></div>';
     }
     if (type === 'burst_ready_is') {
+        var boolValue = _akBoolValue(condition.value, true);
         return '' +
             '<div class="auto-key-field"><label>目标值 Value</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'bool\')">' +
-                '<option value="true"' + (condition.value ? ' selected' : '') + '>已准备 Ready</option>' +
-                '<option value="false"' + (!condition.value ? ' selected' : '') + '>未准备 Not Ready</option>' +
+                '<option value="true"' + (boolValue ? ' selected' : '') + '>已准备 Ready</option>' +
+                '<option value="false"' + (!boolValue ? ' selected' : '') + '>未准备 Not Ready</option>' +
             '</select></div>';
     }
     if (type === 'profession_is' || type === 'player_name_is') {
@@ -5817,10 +5842,7 @@ function _akSerializeDraft() {
         var out = _profileEntry(_akClone(rawAction));
         out.press_mode = _akPressMode(out.press_mode);
         out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {
-            var cond = _profileEntry(_akClone(rawCondition));
-            cond.type = _akConditionType(cond.type);
-            if (cond.type === 'slot_state_is') cond.state = _akSlotState(cond.state);
-            return cond;
+            return _akNormalizeCondition(rawCondition);
         });
         delete out._conditions_text;
         delete out._conditions_error;
