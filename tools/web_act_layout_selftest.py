@@ -122,6 +122,33 @@ def _assert_plugin_manager_payloads_are_guarded() -> None:
     for snippet in required:
         if snippet not in plugin_manager:
             raise AssertionError("missing plugin manager payload guard snippet: " + snippet)
+    for snippet in (
+        "(plugin.hotkey_count || 0) > 0",
+        "badge('FAIL ' + plugin.failures",
+        "badge('EVENT ' + plugin.event_failures",
+        "esc(plugin.subscription_count || 0)",
+        "String(data.active_count || 0)",
+        "String(data.active_count || 0) + ' / '",
+        "String(listItems(bus.topics).length || bus.topic_count || 0)",
+        "String(bus.subscriber_count || bus.subscriptions || 0)",
+    ):
+        if snippet in plugin_manager:
+            raise AssertionError("plugin manager visible counts must use finite display guards: " + snippet)
+    for snippet in (
+        "function finiteNumber(value, fallback)",
+        "function countNumber(value)",
+        "function countText(value)",
+        "function firstCountText()",
+        "var hotkeyCount = countNumber(plugin.hotkey_count);",
+        "badge('⌨ ' + countText(hotkeyCount), 'ok')",
+        "esc(countText(plugin.subscription_count))",
+        "var activeCount = countText(data.active_count);",
+        "var pluginTotal = firstCountText(data.plugin_count, plugins.length);",
+        "topicListCount ? countText(topicListCount) : countText(bus.topic_count)",
+        "firstCountText(bus.subscriber_count, bus.subscriptions)",
+    ):
+        if snippet not in plugin_manager:
+            raise AssertionError("missing safe plugin manager visible count snippet: " + snippet)
 
 
 def _assert_drilldown_numbers_are_clamped() -> None:

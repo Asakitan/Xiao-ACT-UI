@@ -355,6 +355,26 @@ button.close {
             return item && typeof item === 'object' && !Array.isArray(item);
         });
     }
+    function finiteNumber(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function countNumber(value) {
+        return Math.max(0, Math.floor(finiteNumber(value, 0)));
+    }
+    function countText(value) {
+        return String(countNumber(value));
+    }
+    function firstCountText() {
+        for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value == null || value === '') continue;
+            var number = Number(value);
+            if (isFinite(number)) return countText(number);
+        }
+        return '0';
+    }
 
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
@@ -482,10 +502,13 @@ button.close {
         stateBadges.push(badge(active ? 'ACTIVE' : (enabled ? 'LOADED OFF' : 'DISABLED'), active ? 'ok' : (enabled ? 'warn' : '')));
         if (plugin.pinned) stateBadges.push(badge('★ PINNED', 'warn'));
         stateBadges.push(badge(plugin.declares_panel ? '▣ 面板' : '无面板', plugin.declares_panel ? 'ok' : ''));
-        if ((plugin.hotkey_count || 0) > 0) stateBadges.push(badge('⌨ ' + plugin.hotkey_count, 'ok'));
+        var hotkeyCount = countNumber(plugin.hotkey_count);
+        var failureCount = countNumber(plugin.failures);
+        var eventFailureCount = countNumber(plugin.event_failures);
+        if (hotkeyCount > 0) stateBadges.push(badge('⌨ ' + countText(hotkeyCount), 'ok'));
         if (plugin.loaded) stateBadges.push(badge('LOADED', 'ok'));
-        if ((plugin.failures || 0) > 0) stateBadges.push(badge('FAIL ' + plugin.failures, 'bad'));
-        if ((plugin.event_failures || 0) > 0) stateBadges.push(badge('EVENT ' + plugin.event_failures, 'bad'));
+        if (failureCount > 0) stateBadges.push(badge('FAIL ' + countText(failureCount), 'bad'));
+        if (eventFailureCount > 0) stateBadges.push(badge('EVENT ' + countText(eventFailureCount), 'bad'));
         var logs = listItems(plugin.logs).slice(-5);
         var canEnable = !enabled;
         var idArg = jsArg(plugin.id);
@@ -501,7 +524,7 @@ button.close {
             '<div class="card-top"><div><div class="plugin-name">' + esc(plugin.name || plugin.id) + '</div><div class="plugin-id">' + esc(plugin.id || '') + '</div></div><div class="badges">' + stateBadges.join('') + '</div></div>' +
             '<div class="meta-grid">' +
                 '<div>Version: <span>' + esc(plugin.version || '-') + '</span></div>' +
-                '<div>Subscriptions: <span>' + esc(plugin.subscription_count || 0) + '</span></div>' +
+                '<div>Subscriptions: <span>' + esc(countText(plugin.subscription_count)) + '</span></div>' +
                 '<div>Games: <span>' + esc(listItems(plugin.game_ids).join(', ') || '-') + '</span></div>' +
                 '<div>Permissions: <span>' + esc(listItems(plugin.permissions).join(', ') || '-') + '</span></div>' +
                 '<div>Capabilities: <span>' + esc(listItems(plugin.capability_ids).join(', ') || '-') + '</span></div>' +
@@ -516,12 +539,15 @@ button.close {
     function render(data) {
         data = objectValue(data);
         var plugins = objectItems(data.plugins);
-        document.getElementById('sum-total').textContent = String(data.plugin_count != null ? data.plugin_count : plugins.length);
-        document.getElementById('sum-active').textContent = String(data.active_count || 0);
-        document.getElementById('plugin-count').textContent = String(data.active_count || 0) + ' / ' + String(data.plugin_count != null ? data.plugin_count : plugins.length) + ' ACTIVE';
+        var activeCount = countText(data.active_count);
+        var pluginTotal = firstCountText(data.plugin_count, plugins.length);
+        document.getElementById('sum-total').textContent = pluginTotal;
+        document.getElementById('sum-active').textContent = activeCount;
+        document.getElementById('plugin-count').textContent = activeCount + ' / ' + pluginTotal + ' ACTIVE';
         var bus = objectValue(data.event_bus);
-        document.getElementById('sum-topics').textContent = String(listItems(bus.topics).length || bus.topic_count || 0);
-        document.getElementById('sum-subs').textContent = String(bus.subscriber_count || bus.subscriptions || 0);
+        var topicListCount = listItems(bus.topics).length;
+        document.getElementById('sum-topics').textContent = topicListCount ? countText(topicListCount) : countText(bus.topic_count);
+        document.getElementById('sum-subs').textContent = firstCountText(bus.subscriber_count, bus.subscriptions);
         if (!plugins.length) {
             list.innerHTML = '<div class="empty">未发现插件。<br/>把 plugin.json 和 plugin.py 放到 plugins/&lt;id&gt;/ 下面即可。</div>';
             return;

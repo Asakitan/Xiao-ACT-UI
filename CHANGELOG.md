@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.36: Plugin Manager Web count 显示防护修复.
+
+  1) `web/plugin_manager.html` 修复插件卡片 badge 与 subscription count 显示。
+     hotkey、failure、event failure 与 subscription count 现在归一为有限非负整数,
+     避免异常插件 payload 在卡片上显示 `Infinity`、`NaN` 或原始坏文本。
+
+  2) `web/plugin_manager.html` 修复顶部 active/plugin/event-bus summary count 显示。
+     active count、plugin total、topic count 与 subscriber count 现在通过统一 count fallback 渲染,
+     避免插件管理器摘要区出现不可读计数。
+
 ## v4.6.35: ACT Death/Timeline Web 数值显示防护修复.
 
   1) `web/act_death_recap.html` 修复死亡回放 summary 与 row amount 显示。
