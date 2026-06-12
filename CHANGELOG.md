@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.39: Web menu AutoKey 数值表单默认值修复.
+
+  1) `web/menu.html` 修复 AutoKey editor summary 值渲染。
+     summary helper 现在保留合法 `0` 显示值,
+     避免 `value || '--'` 把有效数值渲染成缺失占位。
+
+  2) `web/menu.html` 修复 AutoKey action/engine 数值输入 hydration。
+     slot、tick、press_count、interval、hold、ready_delay、min_rearm 与 post_delay
+     现在直接交给 `_akIntValue()` 使用字段默认值和范围,
+     避免缺失或异常 profile payload 在编辑器中显示成错误的 0 值。
+
 ## v4.6.38: Web menu AutoKey/BossRaid 表单值防护修复.
 
   1) `web/menu.html` 修复 AutoKey 文本型条件值渲染。

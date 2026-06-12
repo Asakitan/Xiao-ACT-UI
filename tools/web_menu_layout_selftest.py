@@ -242,17 +242,28 @@ def main() -> int:
         "document.getElementById('ak-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
         "document.getElementById('br-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';",
         "_escHtml(String(condition.value || ''))",
+        "_escHtml(value || '--')",
+        "_akIntValue('slot_index', condition.slot_index || 1)",
+        "_akIntValue('profession_id', draft.profession_id || 0)",
+        "_akIntValue('tick_ms', (draft.engine && draft.engine.tick_ms) || 50)",
+        "_akIntValue('slot_index', action.slot_index || 1)",
+        "_akIntValue('press_count', action.press_count || 1)",
+        "_akIntValue('press_interval_ms', action.press_interval_ms || 0)",
+        "_akIntValue('hold_ms', action.hold_ms || 0)",
+        "_akIntValue('ready_delay_ms', action.ready_delay_ms || 0)",
+        "_akIntValue('min_rearm_ms', action.min_rearm_ms || 0)",
+        "_akIntValue('post_delay_ms', action.post_delay_ms || 0)",
     ]
     for pattern in auto_key_raw_patterns:
         if pattern in html:
             raise AssertionError("AutoKey numeric draft/render values must use bounded helpers: " + pattern)
     auto_key_safe_required = [
         "function _akIntValue",
-        "_akIntValue('slot_index', condition.slot_index || 1)",
-        "_akIntValue('tick_ms', (draft.engine && draft.engine.tick_ms) || 50)",
-        "_akIntValue('slot_index', action.slot_index || 1)",
-        "_akIntValue('press_count', action.press_count || 1)",
-        "_akIntValue('post_delay_ms', action.post_delay_ms || 0)",
+        "_akIntValue('slot_index', condition.slot_index)",
+        "_akIntValue('tick_ms', draft.engine && draft.engine.tick_ms)",
+        "_akIntValue('slot_index', action.slot_index)",
+        "_akIntValue('press_count', action.press_count)",
+        "_akIntValue('post_delay_ms', action.post_delay_ms)",
         "if (kind === 'int') value = _akIntValue(fieldName, value);",
         "var pct = _clampNum(value, 0, 0, 100);",
         "var v = _clampInt(val, 0, 0, 120);",
@@ -268,6 +279,18 @@ def main() -> int:
         "var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
         "function _akTextValue(value)",
         "_escHtml(_akTextValue(condition.value))",
+        "function _akDisplayValue(value, fallback)",
+        "_escHtml(_akDisplayValue(value, '--'))",
+        "_akIntValue('slot_index', condition.slot_index)",
+        "_akIntValue('profession_id', draft.profession_id)",
+        "_akIntValue('tick_ms', draft.engine && draft.engine.tick_ms)",
+        "_akIntValue('slot_index', action.slot_index)",
+        "_akIntValue('press_count', action.press_count)",
+        "_akIntValue('press_interval_ms', action.press_interval_ms)",
+        "_akIntValue('hold_ms', action.hold_ms)",
+        "_akIntValue('ready_delay_ms', action.ready_delay_ms)",
+        "_akIntValue('min_rearm_ms', action.min_rearm_ms)",
+        "_akIntValue('post_delay_ms', action.post_delay_ms)",
     ]
     for snippet in auto_key_safe_required:
         if snippet not in html:
