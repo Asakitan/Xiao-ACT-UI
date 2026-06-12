@@ -42,6 +42,7 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import ctypes
+import math
 import tkinter as tk
 import time
 from typing import Any, Optional
@@ -59,6 +60,18 @@ from gui_modules.sao_panel_ui import (
 _user32 = ctypes.windll.user32
 
 
+def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    return num
+
+
 class SAOPlayerGUIFloatHandlersMixin:
     """Mixin bundling float-button drag handlers + small misc helpers."""
 
@@ -68,10 +81,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         delay_s = 3.0
         if isinstance(scene_event, dict):
             reason = str(scene_event.get('reason') or scene_event.get('kind') or reason)
-            try:
-                delay_s = float(scene_event.get('reset_delay_s', delay_s) or delay_s)
-            except Exception:
-                delay_s = 3.0
+            delay_s = _finite_float(scene_event.get('reset_delay_s'), delay_s, lo=0.0)
         self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
         self._pending_combat_reset_reason = reason
         try:
@@ -81,7 +91,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         except Exception:
             pass
         self._scene_damage_grace_until = max(
-            float(getattr(self, '_scene_damage_grace_until', 0.0) or 0.0),
+            _finite_float(getattr(self, '_scene_damage_grace_until', 0.0), 0.0, lo=0.0),
             time.time() + max(8.0, delay_s + 8.0),
         )
         self._last_boss_hp_push_sig = None

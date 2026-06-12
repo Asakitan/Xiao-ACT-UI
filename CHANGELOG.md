@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.13: Entity packet callback 数值防护修复.
+
+  1) `gui_modules/sao_gui_packet_callbacks_mixin.py` 修复 dungeon/scene event ID 归一。
+     地图事件现在容忍坏 dungeon/difficulty 数值并保留有效 scene_id,
+     避免异常 packet 字段让地图横幅、状态更新和 ACT 发布整段丢失。
+
+  2) `gui_modules/sao_gui_float_handlers_mixin.py` 修复 pending combat reset 延迟归一。
+     同副本重开候选现在容忍坏 reset_delay 与既有 scene grace 值,
+     避免异常数值打断 DPS/BossHP 延迟重置流程。
+
 ## v4.6.12: ACT panel numeric payload 防护修复.
 
   1) `gui_modules/sao_gui_data_source_health.py` 修复状态栏数值归一。

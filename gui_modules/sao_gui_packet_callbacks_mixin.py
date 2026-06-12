@@ -51,6 +51,7 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Any, Optional
@@ -60,6 +61,18 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from act_platform.runtime import enrich_action_log_event, publish_owner_event, should_record_owner_combat_event
 from engines.combat_analytics import boss_state_from_monster_update
 from tools.tablekit.combat_preparse import enrich_boss_event, enrich_dungeon_event, enrich_monster_event, enrich_skill_event
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None) -> int:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0)
+    if not math.isfinite(num):
+        num = float(default or 0)
+    if lo is not None:
+        num = max(float(lo), num)
+    return int(num)
 
 
 class SAOPlayerGUIPacketCallbacksMixin:
@@ -109,12 +122,17 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 event['dungeon_id'] = fact.get('dungeon_id')
             self._last_dungeon_event = event
             updates = {'last_dungeon_event': event}
-            dungeon_id = int(event.get('dungeon_id') or 0)
-            scene_id = int(event.get('scene_id') or event.get('scene_uuid')
-                           or event.get('cur_map_id') or 0)
-            difficulty = int(event.get('dungeon_difficulty')
-                             or event.get('difficulty')
-                             or event.get('level_id') or 0)
+            dungeon_id = _finite_int(event.get('dungeon_id'), 0, lo=0)
+            scene_id = _finite_int(
+                event.get('scene_id') or event.get('scene_uuid') or event.get('cur_map_id'),
+                0,
+                lo=0,
+            )
+            difficulty = _finite_int(
+                event.get('dungeon_difficulty') or event.get('difficulty') or event.get('level_id'),
+                0,
+                lo=0,
+            )
             if dungeon_id > 0:
                 updates['dungeon_id'] = dungeon_id
                 try:
@@ -699,4 +717,3 @@ class SAOPlayerGUIPacketCallbacksMixin:
             self.root.after(120, _hide_overlays)
         except Exception:
             pass
-
