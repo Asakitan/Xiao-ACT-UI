@@ -347,6 +347,9 @@ def main() -> int:
         "if (a1 && a1.menu_action) a1.menu_action('toggle_plugin_manager');",
         "Promise.resolve(a3.pin_plugin(pid, !pinned)).then(function () { window.renderPluginPopup(); });",
         "Promise.resolve(en ? a2.disable_plugin(id) : a2.enable_plugin(id))",
+        "Promise.resolve(a.invoke_ui_action(panelId, action, JSON.stringify(payload || {})))",
+        "if (!a || !a.set_plugin_hotkey) return;",
+        "Promise.resolve(a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value))",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -366,6 +369,9 @@ def main() -> int:
         "showToast(pinned ? 'PLUGIN UNPINNED' : 'PLUGIN PINNED');",
         "_callMenuSettingApi(en ? 'disable_plugin' : 'enable_plugin', [id], 'PLUGINS', function() {",
         "showToast(en ? 'PLUGIN DISABLED' : 'PLUGIN ENABLED');",
+        "_callMenuSettingApi('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})], 'PLUGIN PANEL', function() {",
+        "_callMenuSettingApi('set_plugin_hotkey', [sel.getAttribute('data-action'), sel.value], 'PLUGIN HOTKEYS', function() {",
+        "showToast('HOTKEY UPDATED');",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:

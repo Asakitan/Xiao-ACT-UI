@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.68: Web menu plugin detached bridge 响应修复.
+
+  1) `web/menu.html` 修复插件独立面板动作的 bridge 失败反馈。
+     插件面板按钮现在通过标准 helper 调用 `invoke_ui_action`,
+     API 缺失、失败返回、同步异常和 Promise reject 都会显示错误。
+
+  2) `web/menu.html` 修复插件独立面板快捷键设置失败后的交互。
+     快捷键下拉现在通过标准 helper 调用 `set_plugin_hotkey`,
+     成功后刷新并提示, 失败后刷新回弹旧值并显示错误。
+
 ## v4.6.67: Web menu action/plugin popup bridge 响应修复.
 
   1) `web/menu.html` 修复 child-menu 通用 `menu_action` 静默失败。

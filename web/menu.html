@@ -8293,11 +8293,9 @@ setTimeout(function() {
     };
     function pdAction(panelId) {
         return function (action, payload) {
-            var a = api();
-            if (a && a.invoke_ui_action) {
-                Promise.resolve(a.invoke_ui_action(panelId, action, JSON.stringify(payload || {})))
-                    .then(renderPluginDetachedPanels);
-            }
+            _callMenuSettingApi('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})], 'PLUGIN PANEL', function() {
+                renderPluginDetachedPanels();
+            });
         };
     }
     var _pdSeq = 0;
@@ -8428,11 +8426,13 @@ setTimeout(function() {
         var sel = e.target;
         if (!sel || sel.tagName !== 'SELECT' || !sel.getAttribute('data-action')) return;
         if (!sel.closest || !sel.closest('#pd-hotkeys')) return;
-        var a = api();
-        if (!a || !a.set_plugin_hotkey) return;
         // set 被拒 (键被占用/不可解析) 时重建下拉, 选项回弹到改前值。
-        Promise.resolve(a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value))
-            .then(function () { buildPluginDetachedHotkeys(); });
+        _callMenuSettingApi('set_plugin_hotkey', [sel.getAttribute('data-action'), sel.value], 'PLUGIN HOTKEYS', function() {
+            buildPluginDetachedHotkeys();
+            showToast('HOTKEY UPDATED');
+        }, function() {
+            buildPluginDetachedHotkeys();
+        });
     });
     document.addEventListener('click', function (e) {
         if (e.target.id === 'plugin-detached-overlay' || e.target.id === 'pd-close') window.hidePluginDetached();
