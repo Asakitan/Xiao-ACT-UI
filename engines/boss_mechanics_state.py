@@ -112,9 +112,14 @@ def build_mechanics_state(settings, engine, state_mgr,
 
     def _panic_hotkey() -> str:
         # 急停键即主 UI 的 toggle_auto_dodge 绑定 — 跟随用户改键, 标签
-        # 才不会和实际监听漂移 (默认 F12)。
+        # 才不会和实际监听漂移。读 hotkeys 必须 {**DEFAULT_HOTKEYS, **saved}。
+        try:
+            from config import DEFAULT_HOTKEYS
+        except Exception:
+            DEFAULT_HOTKEYS = {}
         hk = _setting("hotkeys", {})
-        value = hk.get("toggle_auto_dodge") if isinstance(hk, dict) else None
+        merged = {**DEFAULT_HOTKEYS, **(hk if isinstance(hk, dict) else {})}
+        value = merged.get("toggle_auto_dodge")
         if isinstance(value, dict):
             value = value.get("key") or value.get("name")
         return str(value or "").strip().upper() or "F12"
@@ -124,7 +129,7 @@ def build_mechanics_state(settings, engine, state_mgr,
         "tts_enabled": bool(_setting("tts_enabled", True)),
         "tts_volume": _i(_setting("tts_volume", 80), 80),
         "banner_enabled": bool(_setting("mech_banner_enabled", True)),
-        "dodge_enabled": bool(linkage.get("dodge_enabled", True)),
+        "dodge_enabled": bool(linkage.get("dodge_enabled", False)),
         "directional_dodge_enabled": bool(_setting("directional_dodge_enabled", False)),
         "auto_walk_enabled": bool(_setting("auto_walk_enabled", False)),
         "linkage_enabled": bool(linkage.get("enabled", False)),
@@ -386,7 +391,7 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
         "tts_enabled": bool(settings.get("tts_enabled", True)),
         "tts_volume": _i(settings.get("tts_volume", 80), 80),
         "banner_enabled": bool(settings.get("mech_banner_enabled", True)),
-        "dodge_enabled": bool(load_linkage_config(settings).get("dodge_enabled", True)),
+        "dodge_enabled": bool(load_linkage_config(settings).get("dodge_enabled", False)),
         "directional_dodge_enabled": bool(settings.get("directional_dodge_enabled", False)),
         "auto_walk_enabled": bool(settings.get("auto_walk_enabled", False)),
     }

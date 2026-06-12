@@ -148,7 +148,7 @@ def normalize_mapping(raw: Any) -> Dict[str, Any]:
 def default_linkage_config() -> Dict[str, Any]:
     return {
         "enabled": False,
-        "dodge_enabled": True,   # master auto-dodge switch (mechanic inline dodges)
+        "dodge_enabled": False,  # master auto-dodge switch (mechanic inline dodges) — 高风险, 默认关
         "global_cooldown_s": 1.0,
         "debug_log": False,
         "mappings": [],
@@ -163,7 +163,7 @@ def normalize_linkage_config(raw: Any) -> Dict[str, Any]:
             mappings.append(normalize_mapping(item))
     return {
         "enabled": _bool(src.get("enabled"), False),
-        "dodge_enabled": _bool(src.get("dodge_enabled"), True),
+        "dodge_enabled": _bool(src.get("dodge_enabled"), False),
         "global_cooldown_s": _float(src.get("global_cooldown_s"), 1.0, 0.0, 60.0),
         "debug_log": _bool(src.get("debug_log"), False),
         "mappings": mappings,
@@ -270,29 +270,26 @@ class BossAutoKeyLinkage:
                 # Cooldown check
                 mid = _s(mapping.get("id"))
                 per_cooldown = _float(mapping.get("cooldown_s"), 3.0)
-                last = self._last_fire.get(mid, 0.0)
-                if per_cooldown > 0 and (now - last) < per_cooldown:
+                prev_last = self._last_fire.get(mid, 0.0)
+                if per_cooldown > 0 and (now - prev_last) < per_cooldown:
                     self._debug(config, f"[Linkage] Skipped '{mapping.get('action_label', key)}': cooldown ({per_cooldown}s)")
                     continue
 
                 # Fire
+                prev_global = self._global_last_fire
                 self._last_fire[mid] = now
                 self._global_last_fire = now
                 self._fire_count += 1
 
-                press_mode = _s(mapping.get("press_mode")) or "tap"
-                hold_ms = _int(mapping.get("hold_ms"), 80)
-                press_count = _int(mapping.get("press_count"), 1)
                 label = _s(mapping.get("action_label")) or key
+                self._debug(config, f"[Linkage] FIRE: '{label}' key={key}")
 
-                self._debug(config, f"[Linkage] FIRE: '{label}' key={key} mode={press_mode} count={press_count}")
-
-                if self._send_key:
-                    threading.Thread(
-                        target=self._send_key,
-                        args=(key, press_mode, hold_ms, press_count),
-                        daemon=True,
-                    ).start()
+                # 经 _dispatch_mapping 走前台门(此路径历史上裸发键绕过了门),
+                # 被门拦下时退还冷却, 不烧掉真机制的窗口
+                self._dispatch_mapping(
+                    mapping, None,
+                    on_blocked=lambda m=mid, n=now, p=prev_last, g=prev_global:
+                        self._refund_fire(m, n, p, g))
                 break  # Only fire first matching mapping per alert
 
     def on_boss_action(self, action: Dict[str, Any]):
@@ -312,7 +309,7 @@ class BossAutoKeyLinkage:
         if not isinstance(action, dict):
             return
         enabled = _bool(config.get("enabled"), False)
-        dodge_enabled = _bool(config.get("dodge_enabled"), True)
+        dodge_enabled = _bool(config.get("dodge_enabled"), False)
         mechanic_id = _s(action.get("mechanic_id"))
         inline_dodge = action.get("mechanic_dodge")
         has_inline = mechanic_id and isinstance(inline_dodge, dict) and (
@@ -349,14 +346,17 @@ class BossAutoKeyLinkage:
             if has_inline and dodge_enabled:
                 mech_key = f"mech:{mechanic_id}"
                 per_cd = _float(inline_dodge.get("cooldown_s"), 3.0)
-                if not (per_cd > 0 and (now - self._last_fire.get(mech_key, 0.0)) < per_cd):
+                prev_mech = self._last_fire.get(mech_key, 0.0)
+                if not (per_cd > 0 and (now - prev_mech) < per_cd):
                     self._last_fire[mech_key] = now
                     self._fire_count += 1
                     self._debug(config, f"[Linkage] MECH_DODGE fire: mech={mechanic_id} "
                                          f"name='{action.get('mechanic_name') or ''}'")
                     self._dispatch_mapping(inline_dodge, cast_dur,
                                            wait_override_s=dodge_wait,
-                                           gate=self._dodge_still_enabled)
+                                           gate=self._dodge_still_enabled,
+                                           on_blocked=lambda k=mech_key, n=now, p=prev_mech:
+                                               self._refund_fire(k, n, p))
                     return   # one fire per action
 
             if not enabled:
@@ -387,8 +387,10 @@ class BossAutoKeyLinkage:
                         continue
                     mid = _s(mapping.get("id"))
                     per_cd = _float(mapping.get("cooldown_s"), 3.0)
-                    if per_cd > 0 and (now - self._last_fire.get(mid, 0.0)) < per_cd:
+                    prev_last = self._last_fire.get(mid, 0.0)
+                    if per_cd > 0 and (now - prev_last) < per_cd:
                         continue
+                    prev_global = self._global_last_fire
                     self._last_fire[mid] = now
                     self._global_last_fire = now
                     self._fire_count += 1
@@ -397,25 +399,42 @@ class BossAutoKeyLinkage:
                                          f"label='{mapping.get('action_label') or key}'")
                     self._dispatch_mapping(
                         mapping, cast_dur,
-                        wait_override_s=dodge_wait if trig_type == "mechanic" else None)
+                        wait_override_s=dodge_wait if trig_type == "mechanic" else None,
+                        on_blocked=lambda m=mid, n=now, p=prev_last, g=prev_global:
+                            self._refund_fire(m, n, p, g))
                     return   # one fire per action
 
     def _dodge_still_enabled(self) -> bool:
         """Live re-read of the master dodge switch (panic kills in-flight waits)."""
         try:
             cfg = load_linkage_config(self._settings)
-            return _bool(cfg.get("dodge_enabled"), True)
+            return _bool(cfg.get("dodge_enabled"), False)
         except Exception:
             return True
+
+    def _refund_fire(self, mid: str, stamped: float, prev: float,
+                     prev_global: Optional[float] = None) -> None:
+        """被门拦下的发键退还冷却 — 拦截不应烧掉下一次真触发的冷却窗口。
+        只在时间戳仍是本次盖的章时回退(期间有新触发则不动)。"""
+        with self._lock:
+            if self._last_fire.get(mid) == stamped:
+                if prev > 0:
+                    self._last_fire[mid] = prev
+                else:
+                    self._last_fire.pop(mid, None)
+            if prev_global is not None and self._global_last_fire == stamped:
+                self._global_last_fire = prev_global
 
     def _dispatch_mapping(self, mapping: Dict[str, Any], cast_dur: Any,
                           wait_override_s: Any = None,
                           gate: Optional[Callable[[], bool]] = None,
-                          skip_foreground: bool = False):
+                          skip_foreground: bool = False,
+                          on_blocked: Optional[Callable[[], None]] = None):
         """Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence.
         `wait_override_s` replaces the delay/lead computation (countdown-aligned
         mechanic dodges). `gate` is re-checked after the wait; the foreground
-        gate is re-checked too unless `skip_foreground` (editor dry-run)."""
+        gate is re-checked too unless `skip_foreground` (editor dry-run).
+        `on_blocked` runs if the pre-send gate blocks (cooldown refund)."""
         delay_ms = _int(mapping.get("delay_ms"), 0)
         lead_ms = _int(mapping.get("lead_ms"), 0)
         wait_s = max(0.0, delay_ms / 1000.0)
@@ -453,6 +472,11 @@ class BossAutoKeyLinkage:
                 if wait_s > 0:
                     time.sleep(wait_s)
                 if _blocked():
+                    if on_blocked is not None:
+                        try:
+                            on_blocked()
+                        except Exception:
+                            pass
                     return
                 if seq:
                     for step in seq:
@@ -730,7 +754,7 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     return {
         "ok": True,
         "enabled": _bool(cfg.get("enabled"), False),
-        "dodge_enabled": _bool(cfg.get("dodge_enabled"), True),
+        "dodge_enabled": _bool(cfg.get("dodge_enabled"), False),
         "global_cooldown_s": cfg.get("global_cooldown_s", 1.0),
         "data_source": data_source or "tcp",
         "mem_available": mem_available,

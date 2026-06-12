@@ -818,6 +818,9 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         'breaking_stage',
         'boss_mechanic',
         'boss_mechanic_family',
+        'boss_skill',
+        'boss_mechanic_skill',
+        'ultimate_skill',
     )
     ALERT_TYPES = ('both', 'visual', 'sound')
     CONDITION_TYPES = ('always', 'hp_pct', 'shield_active', 'breaking')
@@ -1110,6 +1113,9 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._draft['profile_name'] = self._profile_vars['profile_name'].get().strip()
         self._draft['boss_total_hp'] = _as_int(self._profile_vars['boss_total_hp'].get(), 0, 0)
         self._draft['enrage_time_s'] = _as_int(self._profile_vars['enrage_time_s'].get(), 600, 0, 86400)
+        # enrage.time_s > 0 时引擎以 dict 为准(normalize_enrage), 必须同步否则编辑不生效
+        if isinstance(self._draft.get('enrage'), dict):
+            self._draft['enrage']['time_s'] = self._draft['enrage_time_s']
         self._draft['target_name_pattern'] = self._profile_vars['target_name_pattern'].get().strip()
         self._draft['simple_mode'] = bool(self._profile_vars['simple_mode'].get())
         if self._description_text is not None:
@@ -1141,7 +1147,11 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
                 'name': pv['name'].get().strip(),
                 'trigger': {
                     'type': pv['trigger_type'].get().strip() or 'manual',
-                    'value': pv['trigger_value'].get().strip() if pv['trigger_type'].get().strip() in ('boss_mechanic', 'boss_mechanic_family') else _as_float(pv['trigger_value'].get(), 0.0, 0.0),
+                    # 字符串透传类型须与引擎 normalize 一致, 走 float 会把技能id写成 '1028010.0'
+                    'value': pv['trigger_value'].get().strip() if pv['trigger_type'].get().strip() in (
+                        'boss_mechanic', 'boss_mechanic_family', 'boss_skill',
+                        'boss_mechanic_skill', 'ultimate_skill')
+                    else _as_float(pv['trigger_value'].get(), 0.0, 0.0),
                 },
                 'timelines': timelines,
             })
@@ -1207,6 +1217,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._sync_draft_from_widgets()
         config = self._load() or {}
         active_before = str(config.get('active_profile_id') or '')
+        self._adopt_store_mechanics(config)
         normalized = normalize_boss_raid_profile(
             self._draft, author_snapshot=self._author_fn())
         upsert_boss_raid_profile(
@@ -1219,10 +1230,18 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._set_status('Saved BossRaid profile')
         self._reload(keep_selected=True)
 
+    def _adopt_store_mechanics(self, config: dict) -> None:
+        """mechanics 由机制编辑器直写仓库, 本面板不编辑 — 保存/导出前取仓库当前值,
+        防止打开面板时的旧快照把别处刚保存的机制整体回滚。"""
+        current = find_boss_raid_profile(config, str(self._draft.get('id') or ''))
+        if current is not None:
+            self._draft['mechanics'] = _clone(current.get('mechanics') or [])
+
     def _export_selected(self) -> None:
         if not self._draft:
             return
         self._sync_draft_from_widgets()
+        self._adopt_store_mechanics(self._load() or {})
         normalized = normalize_boss_raid_profile(
             self._draft, author_snapshot=self._author_fn())
         path = export_boss_raid_profile(normalized)

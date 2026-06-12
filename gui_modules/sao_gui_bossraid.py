@@ -552,7 +552,7 @@ class _MechanicsEditorMixin:
         # 高级行: 自动化, 默认关 + 风险徽章 + 醒目急停
         tk.Label(row2, text='自动', bg=PANEL_CARD, fg=TEXT_MUTED,
                  font=panel_font(8)).pack(side=tk.LEFT, padx=(0, 4))
-        _switch(row2, '自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
+        _switch(row2, '自动躲避', 'dodge_enabled', master.get('dodge_enabled', False))
         _switch(row2, '定向移动', 'directional_dodge_enabled',
                 master.get('directional_dodge_enabled', False))
         _switch(row2, '自动走位', 'auto_walk_enabled',

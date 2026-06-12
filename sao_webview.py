@@ -6808,7 +6808,7 @@ class SAOWebViewGUI:
         """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
         try:
             cfg = load_linkage_config(self._cfg_settings_ref)
-            new_state = not bool(cfg.get('dodge_enabled', True))
+            new_state = not bool(cfg.get('dodge_enabled', False))
             set_linkage_dodge_enabled(self._cfg_settings_ref, new_state)
             key = 'F12'
             try:
@@ -6823,6 +6823,12 @@ class SAOWebViewGUI:
             msg = (f'已启用 ({key} 紧急停用)' if new_state
                    else f'已禁用 ({key} 重新启用)')
             self._show_identity_alert_window('自动躲避', msg)
+            # 同步刷新机制编辑器里的总开关显示, 防止 F12 后面板状态脱节
+            try:
+                self._eval_raid_editor(
+                    'if(window.RaidEditor&&RaidEditor.loadMechanics)RaidEditor.loadMechanics()')
+            except Exception:
+                pass
             print(f'[SAO] auto-dodge {"on" if new_state else "off"}')
         except Exception as e:
             print(f'[SAO] toggle_auto_dodge failed: {e}')
@@ -7299,9 +7305,9 @@ class SAOWebViewGUI:
         try:
             engine = getattr(self, '_boss_raid_engine', None)
             if engine:
-                status = engine.get_status()
-                entities = engine.get_entities()
-                payload = {**status, 'entities': entities}
+                status = engine.get_status()   # include_entities=True, JS updateStatus 消费 status.entities
+                # JS RaidEditor.updateFull 契约是嵌套 {status, phases} — 平铺会被整体忽略
+                payload = {'status': status, 'phases': engine.get_profile_phases()}
                 self._eval_raid_editor(
                     f'RaidEditor.updateFull({json.dumps(payload, ensure_ascii=False)})')
         except Exception:

@@ -572,11 +572,30 @@ function loadMechanics() {
     }).catch(function () {});
 }
 
+function _mechNotice(msg, isErr) {
+    var el = document.getElementById('mech-notice');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'mech-notice';
+        el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);'
+            + 'z-index:99;padding:6px 14px;border-radius:6px;font-size:11px;'
+            + 'pointer-events:none;transition:opacity .3s;opacity:0;';
+        document.body.appendChild(el);
+    }
+    el.style.background = isErr ? 'rgba(168,42,42,.93)' : 'rgba(32,82,122,.93)';
+    el.style.color = '#fff';
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.style.opacity = '0'; }, 2600);
+}
+
 function _mechReply(p) {
     Promise.resolve(p).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok && r.state) { _mechState = r.state; renderMechanics(); }
-    }).catch(function () {});
+        else if (r && !r.ok) { _mechNotice(r.message || '操作失败', true); }
+    }).catch(function () { _mechNotice('操作失败: 接口异常', true); });
 }
 
 function renderMechanics() {
@@ -763,7 +782,15 @@ function mechTest(mid, kinds) {
     if (!m) return;
     var a = _api();
     if (a && a.test_mechanic) {
-        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).catch(function () {});
+        // 按键试发跳过前台门, 会落在当前前台窗口 — 必须先警告再发
+        if ((kinds || []).indexOf('dodge') >= 0) {
+            _mechNotice('按键试发: 将发送到当前前台窗口', true);
+        }
+        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).then(function (j) {
+            var r = (typeof j === 'string') ? JSON.parse(j) : j;
+            if (r && !r.ok) _mechNotice(r.message || '试发失败', true);
+            else if (r && r.message) _mechNotice(r.message, false);
+        }).catch(function () { _mechNotice('试发失败: 接口异常', true); });
     }
 }
 
@@ -1336,6 +1363,7 @@ window.RaidEditor = {
     updateStatus: updateStatus,
     updateFull: updateFull,
     loadReactions: loadReactions,
+    loadMechanics: loadMechanics,
     fadeIn: fadeIn,
     fadeOut: fadeOut,
 };

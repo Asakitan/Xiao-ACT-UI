@@ -233,6 +233,17 @@ class SAOPlayerGUIFloatHandlersMixin:
                    else f'已禁用 ({key} 重新启用)')
             if getattr(self, '_alert_overlay', None):
                 self._alert_overlay.show_alert('自动躲避', msg)
+            # 同步刷新已打开的机制面板 — 否则总开关显示与引擎实际状态脱节
+            for attr in ('_bossraid_panel', '_bossraid_detail_panel'):
+                p = getattr(self, attr, None)
+                if p is None:
+                    continue
+                try:
+                    p._mech_bump()
+                    if hasattr(p, '_mx_rerender'):
+                        p._mx_rerender()
+                except Exception:
+                    pass
             print(f'[SAO Entity] auto-dodge {"on" if new_state else "off"}')
         except Exception as e:
             print(f'[SAO Entity] toggle_auto_dodge failed: {e}')

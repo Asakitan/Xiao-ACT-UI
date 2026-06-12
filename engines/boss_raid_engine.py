@@ -2206,6 +2206,11 @@ class BossRaidEngine:
         with self._lock:
             self._self_dead = bool(is_dead)
 
+    def get_profile_phases(self) -> List[Dict[str, Any]]:
+        """当前档案的 phases 副本 — UI 全量推送用 (updateFull 契约要 phases 数组)。"""
+        with self._lock:
+            return [dict(p) for p in (self._profile or {}).get("phases") or []]
+
     def get_status(self, include_entities: bool = True) -> Dict[str, Any]:
         """Return current engine status dict. `include_entities=False` skips the
         O(N) per-entity list build — used by the boss-reactions editor path and
