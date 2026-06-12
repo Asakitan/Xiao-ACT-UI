@@ -22,6 +22,20 @@ class _FakeSettings:
         return self.values.get(key, default)
 
 
+class _RecordingSettings(_FakeSettings):
+    def __init__(self, values=None) -> None:
+        super().__init__(values or {})
+        self.calls = []
+        self.saved = False
+
+    def set(self, key: str, value) -> None:
+        self.values[key] = value
+        self.calls.append((key, value))
+
+    def save(self) -> None:
+        self.saved = True
+
+
 class DpsOverlayPayloadTests(unittest.TestCase):
     def _hidden_panel(self) -> DpsOverlay:
         panel = DpsOverlay.__new__(DpsOverlay)
@@ -448,6 +462,75 @@ class DpsOverlayPayloadTests(unittest.TestCase):
         self.assertEqual(panel._detail_w, 700)
         self.assertEqual(panel._detail_h, 560)
         self.assertTrue(panel._drag_moved)
+
+    def test_drag_start_decimal_event_preserves_drag_modes(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._detail_mode = True
+        panel._minimized = False
+        panel._list_rect = None
+        panel._detail_w = "640.0"
+        panel._detail_h = "500.0"
+        panel._resize_hit_rect = lambda: (0, 0, 100, 100)  # type: ignore[method-assign]
+
+        panel._on_drag_start(
+            SimpleNamespace(x="10.0", y="10.0", x_root="50.0", y_root="60.0")
+        )
+
+        self.assertTrue(panel._resize_active)
+        self.assertEqual(panel._resize_start_root, (50, 60))
+        self.assertEqual(panel._resize_start_size, (640, 500))
+
+        moving = DpsOverlay.__new__(DpsOverlay)
+        moving._detail_mode = False
+        moving._minimized = False
+        moving._list_rect = None
+        moving._x = "100.0"
+        moving._y = "200.0"
+        moving._gpu_managed = False
+        moving._gpu_window = None
+        moving._win = None
+        moving._visible = False
+
+        moving._on_drag_start(
+            SimpleNamespace(x="5.0", y="6.0", x_root="150.0", y_root="260.0")
+        )
+        moving._on_drag_move(SimpleNamespace(x_root="170.0", y_root="290.0"))
+
+        self.assertTrue(moving._drag_moved)
+        self.assertEqual((moving._x, moving._y), (120, 230))
+
+    def test_drag_end_decimal_geometry_persists_settings(self) -> None:
+        settings = _RecordingSettings()
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._list_drag_active = False
+        panel._resize_active = False
+        panel._drag_moved = True
+        panel._x = "123.0"
+        panel._y = "456.0"
+        panel.settings = settings
+
+        panel._on_drag_end(SimpleNamespace(x="0.0", y="0.0"))
+
+        self.assertEqual(settings.calls, [("dps_ov_x", 123), ("dps_ov_y", 456)])
+        self.assertTrue(settings.saved)
+
+        resize_settings = _RecordingSettings()
+        resize = DpsOverlay.__new__(DpsOverlay)
+        resize._list_drag_active = False
+        resize._resize_active = True
+        resize._drag_moved = True
+        resize._detail_w = "700.0"
+        resize._detail_h = "560.0"
+        resize.settings = resize_settings
+        resize._schedule_tick = lambda **kwargs: None  # type: ignore[method-assign]
+
+        resize._on_drag_end(SimpleNamespace(x="0.0", y="0.0"))
+
+        self.assertEqual(
+            resize_settings.calls,
+            [("dps_detail_w", 700), ("dps_detail_h", 560)],
+        )
+        self.assertTrue(resize_settings.saved)
 
 
 if __name__ == "__main__":

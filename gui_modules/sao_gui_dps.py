@@ -3355,35 +3355,44 @@ class DpsOverlay:
             self._resize_active = False
             self._list_drag_active = False
             self._list_drag_pending_acc = 0.0
+            local_x = _safe_int(getattr(ev, 'x', 0))
+            local_y = _safe_int(getattr(ev, 'y', 0))
+            root_x = _safe_int(getattr(ev, 'x_root', 0))
+            root_y = _safe_int(getattr(ev, 'y_root', 0))
+            current_x = _safe_int(getattr(self, '_x', 0))
+            current_y = _safe_int(getattr(self, '_y', 0))
             if self._detail_mode and self._point_in_rect(
-                    int(ev.x), int(ev.y), self._resize_hit_rect()):
+                    local_x, local_y, self._resize_hit_rect()):
                 self._resize_active = True
-                self._resize_start_root = (int(ev.x_root), int(ev.y_root))
-                self._resize_start_size = (int(self._detail_w), int(self._detail_h))
+                self._resize_start_root = (root_x, root_y)
+                self._resize_start_size = (
+                    _safe_int(self._detail_w, default=self.DETAIL_DEFAULT_W),
+                    _safe_int(self._detail_h, default=self.DETAIL_DEFAULT_H),
+                )
                 self._drag_start_root = self._resize_start_root
                 self._drag_moved = False
                 return
             if self._minimized and not self._detail_mode:
-                self._drag_ox = ev.x_root - self._x
-                self._drag_oy = ev.y_root - self._y
-                self._drag_start_root = (int(ev.x_root), int(ev.y_root))
+                self._drag_ox = root_x - current_x
+                self._drag_oy = root_y - current_y
+                self._drag_start_root = (root_x, root_y)
                 self._drag_moved = False
                 return
             # 落点在 entity 列表区域 → 拖动滚动列表 (上下), 不移动窗口
             if self._list_rect is not None and self._point_in_rect(
-                    int(ev.x), int(ev.y), self._list_rect):
+                    local_x, local_y, self._list_rect):
                 # 仅当列表实际可滚动 (内容多于可见行) 才进入 drag-scroll
                 if self._max_scroll_offset() > 0:
                     self._list_drag_active = True
-                    self._list_drag_start_y = int(ev.y_root)
+                    self._list_drag_start_y = root_y
                     self._list_drag_start_offset = self._current_scroll_offset()
                     self._list_drag_pending_acc = 0.0
-                    self._drag_start_root = (int(ev.x_root), int(ev.y_root))
+                    self._drag_start_root = (root_x, root_y)
                     self._drag_moved = False
                     return
-            self._drag_ox = ev.x_root - self._x
-            self._drag_oy = ev.y_root - self._y
-            self._drag_start_root = (int(ev.x_root), int(ev.y_root))
+            self._drag_ox = root_x - current_x
+            self._drag_oy = root_y - current_y
+            self._drag_start_root = (root_x, root_y)
             self._drag_moved = False
         except Exception:
             self._drag_ox = 0
@@ -3449,15 +3458,19 @@ class DpsOverlay:
                             pass
                     self._schedule_tick(immediate=True)
                 return
-            dx = int(ev.x_root) - self._drag_start_root[0]
-            dy = int(ev.y_root) - self._drag_start_root[1]
+            root_x = _safe_int(getattr(ev, 'x_root', 0))
+            root_y = _safe_int(getattr(ev, 'y_root', 0))
+            start_root_x = _safe_int((self._drag_start_root or (0, 0))[0])
+            start_root_y = _safe_int((self._drag_start_root or (0, 0))[1])
+            dx = root_x - start_root_x
+            dy = root_y - start_root_y
             if not self._drag_moved and \
                abs(dx) < self.CLICK_DRAG_THRESHOLD and \
                abs(dy) < self.CLICK_DRAG_THRESHOLD:
                 return
             self._drag_moved = True
-            self._x = int(ev.x_root - self._drag_ox)
-            self._y = int(ev.y_root - self._drag_oy)
+            self._x = int(root_x - _safe_float(self._drag_ox))
+            self._y = int(root_y - _safe_float(self._drag_oy))
             if self._gpu_managed and self._gpu_window is not None:
                 try:
                     w, h = self._last_rendered_size or (0, 0)
@@ -3473,13 +3486,15 @@ class DpsOverlay:
             pass
 
     def _on_drag_end(self, ev) -> None:
+        local_x = _safe_int(getattr(ev, 'x', 0))
+        local_y = _safe_int(getattr(ev, 'y', 0))
         if self._list_drag_active:
             self._list_drag_active = False
             # 列表拖动完成, 不当作 click; 若没移动则 fall through 当作普通 click
             if self._drag_moved:
                 return
             try:
-                self._handle_click(int(ev.x), int(ev.y))
+                self._handle_click(local_x, local_y)
             except Exception:
                 pass
             return
@@ -3488,8 +3503,24 @@ class DpsOverlay:
             self._resize_active = False
             if moved and self.settings is not None:
                 try:
-                    self.settings.set('dps_detail_w', int(self._detail_w))
-                    self.settings.set('dps_detail_h', int(self._detail_h))
+                    self.settings.set(
+                        'dps_detail_w',
+                        _safe_int(
+                            self._detail_w,
+                            default=self.DETAIL_DEFAULT_W,
+                            min_value=self.DETAIL_MIN_W,
+                            max_value=self.DETAIL_MAX_W,
+                        ),
+                    )
+                    self.settings.set(
+                        'dps_detail_h',
+                        _safe_int(
+                            self._detail_h,
+                            default=self.DETAIL_DEFAULT_H,
+                            min_value=self.DETAIL_MIN_H,
+                            max_value=self.DETAIL_MAX_H,
+                        ),
+                    )
                     save = getattr(self.settings, 'save', None)
                     if callable(save):
                         save()
@@ -3499,14 +3530,14 @@ class DpsOverlay:
             return
         if not self._drag_moved:
             try:
-                self._handle_click(int(ev.x), int(ev.y))
+                self._handle_click(local_x, local_y)
             except Exception:
                 pass
             return
         if self.settings is not None:
             try:
-                self.settings.set('dps_ov_x', int(self._x))
-                self.settings.set('dps_ov_y', int(self._y))
+                self.settings.set('dps_ov_x', _safe_int(self._x))
+                self.settings.set('dps_ov_y', _safe_int(self._y))
                 save = getattr(self.settings, 'save', None)
                 if callable(save):
                     save()
