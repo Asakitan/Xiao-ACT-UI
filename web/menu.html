@@ -4722,15 +4722,22 @@ function exitApplication() {
         }
     }, 560);
 }
+function _toggleMenuViaBridgeOrClose() {
+    if (!(window.pywebview && window.pywebview.api && window.pywebview.api.toggle_menu)) {
+        closeMenu();
+        return;
+    }
+    Promise.resolve().then(function() {
+        return window.pywebview.api.toggle_menu();
+    }).catch(function() {
+        closeMenu();
+    });
+}
 
 /* Click backdrop to close — route through Python so window hides properly */
 overlay.addEventListener('click', function(e) {
     if (e.target === overlay) {
-        if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.toggle_menu();
-        } else {
-            closeMenu();
-        }
+        _toggleMenuViaBridgeOrClose();
     }
 });
 
@@ -6467,7 +6474,9 @@ function _setAllThemes(theme) {
 
 function _initPanelThemes() {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.get_panel_themes) {
-        window.pywebview.api.get_panel_themes().then(function(themes) {
+        Promise.resolve().then(function() {
+            return window.pywebview.api.get_panel_themes();
+        }).then(function(themes) {
             _syncPanelThemes(themes);
         }).catch(function() { _syncPanelThemes(_panelThemes); });
     } else {
@@ -6899,11 +6908,7 @@ document.addEventListener('keydown', function(e) {
         } else if (document.getElementById('alert-dialog').classList.contains('show')) {
             closeAlert();
         } else if (menuOpen) {
-            if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.toggle_menu();
-            } else {
-                closeMenu();
-            }
+            _toggleMenuViaBridgeOrClose();
         }
     }
 });

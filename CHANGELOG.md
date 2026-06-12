@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.71: Web menu close/theme bridge fallback 修复.
+
+  1) `web/menu.html` 修复 Web menu close/toggle bridge 失败兜底。
+     背景点击和 Escape 关闭菜单现在通过安全 helper 调用 `toggle_menu`,
+     API 缺失、同步异常和 Promise reject 都会回退到本地 `closeMenu()`。
+
+  2) `web/menu.html` 修复 panel theme 初始拉取的同步异常 fallback。
+     `get_panel_themes` 现在通过 Promise 包裹调用,
+     非 Promise 返回、同步异常和 reject 都会安全回退到当前主题缓存。
+
 ## v4.6.70: Web menu initial state bridge 响应修复.
 
   1) `web/menu.html` 修复 AutoKey 初始状态拉取的失败处理。

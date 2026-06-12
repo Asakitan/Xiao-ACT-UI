@@ -353,6 +353,8 @@ def main() -> int:
         "Promise.resolve(window.pywebview.api.apply_update())",
         "Promise.resolve(window.pywebview.api.download_update())",
         "Promise.resolve(window.pywebview.api.skip_update())",
+        "            window.pywebview.api.toggle_menu();",
+        "window.pywebview.api.get_panel_themes().then(function(themes) {",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -380,6 +382,10 @@ def main() -> int:
         "_saoCallUpdaterApi('apply_update', '启动 updater 失败', function() {}, function(message) {",
         "_saoCallUpdaterApi('download_update', '请求更新失败', function() {}, function(message) {",
         "_saoCallUpdaterApi('skip_update', '跳过更新失败', function() {",
+        "function _toggleMenuViaBridgeOrClose()",
+        "return window.pywebview.api.toggle_menu();",
+        "}).catch(function() {\n        closeMenu();",
+        "return window.pywebview.api.get_panel_themes();",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:
