@@ -753,6 +753,46 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey draft action text/id snippet: " + snippet)
 
+    auto_key_condition_type_raw_patterns = [
+        "var type = String(conditionType || 'hp_pct_gte');",
+        "var type = String(condition.type || 'hp_pct_gte');",
+        "_akSlotStateOptions(String(condition.state || 'ready'))",
+        "_akConditionTypeOptions(String(condition.type || 'hp_pct_gte'))",
+        "conditions.push(_akDefaultCondition(conditionType || 'hp_pct_gte'));",
+        "conditions[condIndex] = _akDefaultCondition(conditionType || 'hp_pct_gte');",
+        "draft.actions = (draft.actions || []).map(function(action) {",
+        "out.conditions = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];",
+    ]
+    for pattern in auto_key_condition_type_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey condition/action types must normalize enum values before render/save: " + pattern)
+    auto_key_condition_type_safe_required = [
+        "function _akConditionType(value)",
+        "var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true };",
+        "function _akSlotState(value)",
+        "var allowed = { ready: true, cooldown: true, active: true, insufficient_energy: true, unknown: true };",
+        "function _akPressMode(value)",
+        "var type = _akConditionType(conditionType);",
+        "merged.type = _akConditionType(merged.type);",
+        "if (merged.type === 'slot_state_is') merged.state = _akSlotState(merged.state);",
+        "selected = _akConditionType(selected);",
+        "selected = _akSlotState(selected);",
+        "var type = _akConditionType(condition.type);",
+        "_akSlotStateOptions(condition.state)",
+        "_akConditionTypeOptions(condition.type)",
+        "if (fieldName === 'press_mode') value = _akPressMode(value);",
+        "if (fieldName === 'state') value = _akSlotState(value);",
+        "draft.actions = _profileEntries(draft.actions).map(function(rawAction) {",
+        "var out = _profileEntry(_akClone(rawAction));",
+        "out.press_mode = _akPressMode(out.press_mode);",
+        "out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {",
+        "cond.type = _akConditionType(cond.type);",
+        "if (cond.type === 'slot_state_is') cond.state = _akSlotState(cond.state);",
+    ]
+    for snippet in auto_key_condition_type_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey condition/action type snippet: " + snippet)
+
     boss_raid_editor_text_raw_patterns = [
         "_escHtml(profile.id || '--')",
         "_escHtml(profile.source || 'local')",

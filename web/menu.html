@@ -5316,8 +5316,25 @@ function _akRenderEditorIdentitySummary(draft) {
     ].join('');
 }
 
+function _akConditionType(value) {
+    var key = _profileText(value, 'hp_pct_gte');
+    var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true };
+    return allowed[key] ? key : 'hp_pct_gte';
+}
+
+function _akSlotState(value) {
+    var key = _profileText(value, 'ready');
+    var allowed = { ready: true, cooldown: true, active: true, insufficient_energy: true, unknown: true };
+    return allowed[key] ? key : 'ready';
+}
+
+function _akPressMode(value) {
+    var key = _profileText(value, 'tap');
+    return key === 'hold' ? 'hold' : 'tap';
+}
+
 function _akDefaultCondition(conditionType) {
-    var type = String(conditionType || 'hp_pct_gte');
+    var type = _akConditionType(conditionType);
     if (type === 'burst_ready_is') return { type: type, value: true };
     if (type === 'slot_state_is') return { type: type, slot_index: 1, state: 'ready' };
     if (type === 'profession_is' || type === 'player_name_is') return { type: type, value: '' };
@@ -5336,6 +5353,8 @@ function _akGetActionConditions(index) {
     return items.map(function(condition) {
         var merged = _akDefaultCondition(condition && condition.type);
         Object.keys(condition || {}).forEach(function(key) { merged[key] = condition[key]; });
+        merged.type = _akConditionType(merged.type);
+        if (merged.type === 'slot_state_is') merged.state = _akSlotState(merged.state);
         return merged;
     });
 }
@@ -5351,6 +5370,7 @@ function _akSetActionConditions(index, conditions, rerender) {
 }
 
 function _akConditionTypeOptions(selected) {
+    selected = _akConditionType(selected);
     return [
         ['hp_pct_gte', 'HP 至少 >='],
         ['hp_pct_lte', 'HP 不高于 <='],
@@ -5365,6 +5385,7 @@ function _akConditionTypeOptions(selected) {
 }
 
 function _akSlotStateOptions(selected) {
+    selected = _akSlotState(selected);
     return [
         ['ready', '就绪 Ready'],
         ['cooldown', '冷却中 Cooldown'],
@@ -5421,11 +5442,11 @@ function _cloudMissingText(value) {
 }
 
 function _akRenderConditionFields(index, condIndex, condition) {
-    var type = String(condition.type || 'hp_pct_gte');
+    var type = _akConditionType(condition.type);
     if (type === 'slot_state_is') {
         return '' +
             '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(_akIntValue('slot_index', condition.slot_index))) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'slot_index\', this.value, \'int\')" /></div>' +
-            '<div class="auto-key-field"><label>状态 State</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'state\', this.value)">' + _akSlotStateOptions(String(condition.state || 'ready')) + '</select></div>';
+            '<div class="auto-key-field"><label>状态 State</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'state\', this.value)">' + _akSlotStateOptions(condition.state) + '</select></div>';
     }
     if (type === 'burst_ready_is') {
         return '' +
@@ -5452,7 +5473,7 @@ function _akRenderConditionCard(index, condition, condIndex) {
                 '</div>' +
             '</div>' +
             '<div class="auto-key-condition-grid">' +
-                '<div class="auto-key-field"><label>条件类型 Type</label><select onchange="_akSetConditionType(' + index + ', ' + condIndex + ', this.value)">' + _akConditionTypeOptions(String(condition.type || 'hp_pct_gte')) + '</select></div>' +
+                '<div class="auto-key-field"><label>条件类型 Type</label><select onchange="_akSetConditionType(' + index + ', ' + condIndex + ', this.value)">' + _akConditionTypeOptions(condition.type) + '</select></div>' +
                 _akRenderConditionFields(index, condIndex, condition) +
             '</div>' +
         '</div>';
@@ -5460,7 +5481,7 @@ function _akRenderConditionCard(index, condition, condIndex) {
 
 function _akAddCondition(index, conditionType) {
     var conditions = _akGetActionConditions(index);
-    conditions.push(_akDefaultCondition(conditionType || 'hp_pct_gte'));
+    conditions.push(_akDefaultCondition(conditionType));
     _akSetActionConditions(index, conditions, true);
 }
 
@@ -5473,7 +5494,7 @@ function _akDeleteCondition(index, condIndex) {
 function _akSetConditionType(index, condIndex, conditionType) {
     var conditions = _akGetActionConditions(index);
     if (!conditions[condIndex]) return;
-    conditions[condIndex] = _akDefaultCondition(conditionType || 'hp_pct_gte');
+    conditions[condIndex] = _akDefaultCondition(conditionType);
     _akSetActionConditions(index, conditions, true);
 }
 
@@ -5483,6 +5504,7 @@ function _akDraftConditionField(index, condIndex, fieldName, value, kind) {
     if (!condition) return;
     if (kind === 'int') value = _akIntValue(fieldName, value);
     if (kind === 'bool') value = String(value) === 'true';
+    if (fieldName === 'state') value = _akSlotState(value);
     if (kind === 'pct') {
         var pct = _clampNum(value, 0, 0, 100);
         value = pct / 100;
@@ -5754,6 +5776,7 @@ function _akDraftActionField(index, fieldName, value, kind) {
     if (kind === 'int') value = _akIntValue(fieldName, value);
     if (kind === 'bool') value = !!value;
     if (fieldName === 'key') value = _profileText(value, '').toUpperCase();
+    if (fieldName === 'press_mode') value = _akPressMode(value);
     _autoKeyDraftProfile.actions[index][fieldName] = value;
     _autoKeyDraftDirty = true;
 }
@@ -5790,9 +5813,15 @@ function _akSerializeDraft() {
     if (!_autoKeyDraftProfile) return null;
     var draft = _akClone(_autoKeyDraftProfile);
     draft.updated_at = new Date().toISOString();
-    draft.actions = (draft.actions || []).map(function(action) {
-        var out = _akClone(action) || {};
-        out.conditions = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];
+    draft.actions = _profileEntries(draft.actions).map(function(rawAction) {
+        var out = _profileEntry(_akClone(rawAction));
+        out.press_mode = _akPressMode(out.press_mode);
+        out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {
+            var cond = _profileEntry(_akClone(rawCondition));
+            cond.type = _akConditionType(cond.type);
+            if (cond.type === 'slot_state_is') cond.state = _akSlotState(cond.state);
+            return cond;
+        });
         delete out._conditions_text;
         delete out._conditions_error;
         return out;

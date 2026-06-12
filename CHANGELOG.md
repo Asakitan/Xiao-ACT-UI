@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.55: Web menu AutoKey condition type 归一修复.
+
+  1) `web/menu.html` 修复 AutoKey condition type / slot state 渲染与更新。
+     条件类型和槽位状态现在通过 allowlist 归一,
+     避免异常枚举导致下拉框无选中或把无效条件传入草稿。
+
+  2) `web/menu.html` 修复 AutoKey press mode 与保存 payload 归一。
+     press mode 和 serialize 出口现在会清洗 action/condition entry,
+     避免 malformed draft 或高级 JSON 把无效枚举传给后端。
+
 ## v4.6.54: Web menu AutoKey draft action fallback 修复.
 
   1) `web/menu.html` 修复 AutoKey draft action entry 初始化。
