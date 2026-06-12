@@ -758,14 +758,31 @@ class _BuffPanelBase:
     # ─────────────────────────────────────
     #  Present
     # ─────────────────────────────────────
+    def _header_sig(self) -> Tuple:
+        try:
+            header_label = self.HEADER_LABEL
+        except Exception:
+            header_label = ''
+        return (
+            str(self.HEADER_KICKER or ''),
+            str(header_label or ''),
+            str(self.BADGE_LABEL or ''),
+            tuple(self.BADGE_COLOR or ()),
+        )
+
     def _row_sig(self, rows: List[dict]) -> Tuple:
-        """变化 signature — 只在 rows 内容/秒数(整数)变时重画 base_img。"""
-        return tuple(
-            (r.get('id'), r.get('uuid'),
-             int(_finite_float(r.get('rem_s'), -1.0) * 10),
-             _finite_int(r.get('layer'), 0, lo=0), _finite_int(r.get('count'), 0, lo=0),
-             r.get('name'))
-            for r in rows
+        """变化 signature — 只在可见内容/秒数(0.1s 桶)变化时重画 base_img。"""
+        return (
+            self._header_sig(),
+            tuple(
+                (r.get('id'), r.get('uuid'),
+                 int(_finite_float(r.get('rem_s'), -1.0) * 10),
+                 _finite_int(r.get('layer'), 0, lo=0), _finite_int(r.get('count'), 0, lo=0),
+                 _finite_int(r.get('apply_count'), 0, lo=0),
+                 round(_finite_float(r.get('uptime_pct'), -1.0, lo=-1.0, hi=1.0), 3),
+                 r.get('name'))
+                for r in rows
+            ),
         )
 
     def _render_and_present(self):

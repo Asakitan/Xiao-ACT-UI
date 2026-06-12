@@ -11,7 +11,7 @@ import unittest
 
 from PIL import Image, ImageDraw
 
-from gui_modules.sao_gui_buffmon import SelfBuffOverlay, _BuffPanelBase, _finite_float, _finite_int
+from gui_modules.sao_gui_buffmon import BossBuffOverlay, SelfBuffOverlay, _BuffPanelBase, _finite_float, _finite_int
 
 
 class BuffMonNumericTests(unittest.TestCase):
@@ -36,6 +36,33 @@ class BuffMonNumericTests(unittest.TestCase):
             "uptime_pct": float("inf"),
         }, 0, 30, 220)
         self.assertTrue(panel._row_sig([{"rem_s": float("nan"), "layer": float("inf"), "count": "bad"}]))
+
+    def test_row_signature_tracks_visible_uptime_and_apply_count(self) -> None:
+        panel = _BuffPanelBase.__new__(_BuffPanelBase)
+        base = [{
+            "id": 100,
+            "uuid": 1,
+            "name": "Good Buff",
+            "rem_s": 12.0,
+            "layer": 1,
+            "count": 1,
+            "uptime_pct": 0.25,
+            "apply_count": 1,
+        }]
+        uptime_changed = [dict(base[0], uptime_pct=0.75)]
+        apply_count_changed = [dict(base[0], apply_count=3)]
+
+        self.assertNotEqual(panel._row_sig(base), panel._row_sig(uptime_changed))
+        self.assertNotEqual(panel._row_sig(base), panel._row_sig(apply_count_changed))
+
+    def test_row_signature_tracks_dynamic_header_label(self) -> None:
+        panel = BossBuffOverlay.__new__(BossBuffOverlay)
+        rows = [{"id": 100, "uuid": 1, "name": "Good Buff", "rem_s": 12.0, "layer": 1, "count": 1}]
+        panel._target_name = "Alpha"
+        first = panel._row_sig(rows)
+        panel._target_name = "Beta"
+
+        self.assertNotEqual(first, panel._row_sig(rows))
 
     def test_self_buff_update_skips_bad_ids_and_keeps_good_rows(self) -> None:
         panel = SelfBuffOverlay.__new__(SelfBuffOverlay)

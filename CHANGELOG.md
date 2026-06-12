@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.6: BuffMon 缓存签名渲染修复.
+
+  1) `gui_modules/sao_gui_buffmon.py` 修复 self buff 覆盖率与触发次数缓存签名。
+     BuffMon 底图缓存现在跟踪 `uptime_pct` 与 `apply_count`,
+     避免 ACT 覆盖率细条或触发次数更新时仍复用旧底图。
+
+  2) `gui_modules/sao_gui_buffmon.py` 修复动态 header 缓存签名。
+     Boss buff 面板现在把动态目标标题、kicker 与 badge 纳入底图签名,
+     避免目标切换但 buff 行相同的时候继续显示旧目标名。
+
 ## v4.6.5: Menu plugin payload 防护修复.
 
   1) `web/menu.html` 修复 detached plugin panel payload 形状处理。
