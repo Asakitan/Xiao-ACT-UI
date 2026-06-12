@@ -203,9 +203,11 @@
             try { window._pickerConsumer = 'boss_raid'; } catch (_) {}
             return call('bossraid.import_picker.start', { path: String(path || '') }).then(normalizeOk);
         },
-        select_file: function (path) {
-            var consumer = '';
-            try { consumer = String(window._pickerConsumer || ''); } catch (_) {}
+        select_file: function (path, consumerName) {
+            var consumer = String(consumerName || '');
+            if (!consumer) {
+                try { consumer = String(window._pickerConsumer || ''); } catch (_) {}
+            }
             return call('file.select_file', {
                 path: String(path || ''),
                 consumer: consumer

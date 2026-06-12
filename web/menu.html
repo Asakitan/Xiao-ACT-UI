@@ -4846,6 +4846,14 @@ function _pickerEntryText(value) {
     return text ? text : '';
 }
 
+function _pickerConsumerLabel(consumer) {
+    return consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS';
+}
+
+function _pickerParseResult(consumer, result) {
+    return consumer === 'boss_raid' ? _brParseApiResult(result) : _akParseApiResult(result);
+}
+
 function showFilePicker(dataJson) {
     var data = _pickerPayload(dataJson);
     _pickerMode = _pickerModeValue(data.mode);
@@ -4893,11 +4901,15 @@ function showFilePicker(dataJson) {
         el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(_pickerEntryText(f.name)) + '</span>' + infoStr;
         el.addEventListener('click', function() {
             var consumer = _pickerConsumer || 'auto_key';
+            var filePath = _pickerEntryText(f.path);
             playSound('snd-click');
-            closeFilePicker();
-            if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.select_file(_pickerEntryText(f.path)).then(function(result) {
-                    var data = _akParseApiResult(result);
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.select_file) {
+                var request = Promise.resolve().then(function() {
+                    return window.pywebview.api.select_file(filePath, consumer);
+                });
+                closeFilePicker();
+                request.then(function(result) {
+                    var data = _pickerParseResult(consumer, result);
                     if (data && data.state) {
                         if (consumer === 'boss_raid') {
                             _syncBossRaidState(data.state);
@@ -4908,9 +4920,14 @@ function showFilePicker(dataJson) {
                     if (data && data.ok) {
                         showToast(consumer === 'boss_raid' ? 'BOSS RAID IMPORTED' : 'IMPORT COMPLETE');
                     } else if (data && data.message) {
-                        showAlert(consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS', data.message, true);
+                        showAlert(_pickerConsumerLabel(consumer), data.message, true);
                     }
+                }).catch(function(err) {
+                    showAlert(_pickerConsumerLabel(consumer), String(err || '无法导入文件 / Unable to import file'), true);
                 });
+            } else {
+                closeFilePicker();
+                showAlert(_pickerConsumerLabel(consumer), 'pywebview API 不可用 / pywebview API is not available', true);
             }
         });
         list.appendChild(el);
@@ -4930,11 +4947,21 @@ function closeFilePicker() {
 }
 
 function _pickerBrowse(path) {
-    if (!window.pywebview || !window.pywebview.api) return;
-    window.pywebview.api.browse_dir(path).then(function(result) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.browse_dir) {
+        showAlert('FILE PICKER', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve().then(function() {
+        return window.pywebview.api.browse_dir(path);
+    }).then(function(result) {
         var d = _pickerPayload(result);
+        if (d.error) {
+            showAlert('FILE PICKER', _pickerEntryText(d.error), true);
+        }
         d.mode = _pickerModeValue(_pickerMode);
         showFilePicker(d);
+    }).catch(function(err) {
+        showAlert('FILE PICKER', String(err || '无法打开目录 / Unable to open folder'), true);
     });
 }
 
@@ -5028,10 +5055,9 @@ function _fmtSize(bytes) {
 
 document.getElementById('picker-close').addEventListener('click', closeFilePicker);
 document.getElementById('picker-use-folder').addEventListener('click', function() {
+    var folderPath = _pickerCurrentDir;
     closeFilePicker();
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.select_folder(_pickerCurrentDir);
-    }
+    _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
 });
 
 /* ═══ Circle click handlers ═══ */

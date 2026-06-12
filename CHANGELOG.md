@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.64: Web menu file picker bridge 修复.
+
+  1) `web/menu.html` 与 `web/pywebview-shim.js` 修复 file picker consumer 参数传递。
+     文件导入现在会在关闭 picker 前把 auto_key/boss_raid consumer 显式传给 bridge,
+     避免 WebView2 shim 因 `_pickerConsumer` 被清空而丢失导入目标。
+
+  2) `web/menu.html` 修复 file picker bridge 失败反馈。
+     `select_file`、`browse_dir` 和 `select_folder` 现在会处理 Promise reject/错误返回,
+     在失败时显示对应 AUTO KEYS/BOSS RAID/FILE PICKER 提示, 不再静默失败。
+
 ## v4.6.63: Web menu slots/theme bridge 响应修复.
 
   1) `web/menu.html` 与 `sao_webview.py` 修复 watched slots bridge 响应处理。

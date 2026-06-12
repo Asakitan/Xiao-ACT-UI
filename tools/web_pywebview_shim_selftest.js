@@ -327,6 +327,12 @@ function assert(cond, message) {
   assert(last.payload.path === "D:\\profiles\\ak.json", "select_file path was not forwarded");
   assert(last.payload.consumer === "auto_key", "select_file consumer was not forwarded");
 
+  window._pickerConsumer = "";
+  await window.pywebview.api.select_file("D:\\profiles\\raid.json", "boss_raid");
+  last = calls[calls.length - 1];
+  assert(last.name === "file.select_file", "select_file explicit consumer command mismatch");
+  assert(last.payload.consumer === "boss_raid", "select_file explicit consumer was not forwarded");
+
   await window.pywebview.api.set_boss_raid_enabled(true);
   last = calls[calls.length - 1];
   assert(last.name === "bossraid.set_enabled", "set_boss_raid_enabled command mismatch");
