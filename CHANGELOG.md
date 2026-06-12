@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.3: Plugin Layer payload 防护修复.
+
+  1) `web/plugin_layer.js` 修复插件 spec 节点树 payload 形状处理。
+     Plugin Layer 现在归一 `nodes`、`children`、`ops`、`rows` 与 `columns`,
+     避免坏插件 UI spec 打断覆盖层或 takeover 渲染。
+
+  2) `web/plugin_layer.js` 修复 overlay/hook 返回 payload 形状处理。
+     Plugin Layer 现在归一 overlay 列表、overlay spec 与 hook 返回对象,
+     避免坏插件返回值打断全局 WebView 插件渲染层。
+
 ## v4.6.2: Mem Scope payload 防护修复.
 
   1) `web/mem_scope.html` 修复状态、目录、实体与伤害 payload 形状处理。

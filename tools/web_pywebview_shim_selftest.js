@@ -499,6 +499,37 @@ function assert(cond, message) {
   assert(pluginLayer.includes('name: "act.plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to act.plugins.invoke_ui_action");
   assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
   assert(pluginLayer.includes(".splg-tablewrap{max-width:100%;overflow-x:auto;"), "plugin layer table wrapper should scroll wide plugin tables");
+  for (const snippet of [
+    "(node.children || []).forEach(function (c) {",
+    "(node.ops || []).forEach(function (op) {",
+    "var cols = node.columns || [];",
+    "var rows = node.rows || [];",
+    "return !!(spec && (spec.title || ((spec.nodes || []).length)));",
+    "spec = spec || {};",
+    "if (!(spec.nodes || []).length && !spec.title)",
+    "(spec.nodes || []).forEach(function (n) {",
+    "var overlays = (data && data.overlays) || [];",
+  ]) {
+    assert(!pluginLayer.includes(snippet), "plugin layer still trusts malformed plugin spec payloads: " + snippet);
+  }
+  for (const snippet of [
+    "function isObjectValue(value)",
+    "function objectValue(value)",
+    "function listItems(value)",
+    "function objectItems(value)",
+    "node = objectValue(node);",
+    "objectItems(node.children).forEach(function (c) {",
+    "objectItems(node.ops).forEach(function (op) {",
+    "var cols = objectItems(node.columns);",
+    "var rows = objectItems(node.rows);",
+    "spec = objectValue(spec);",
+    "var nodes = objectItems(spec.nodes);",
+    "nodes.forEach(function (n) {",
+    "var overlays = objectItems(objectValue(data).overlays);",
+    "renderSpec(objectValue(ov.spec), card, overlayAction(ov.panel_id || (objectValue(ov.spec).panel_id)));",
+  ]) {
+    assert(pluginLayer.includes(snippet), "plugin layer is missing guarded plugin spec handling: " + snippet);
+  }
 
   const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
@@ -533,8 +564,8 @@ function assert(cond, message) {
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
   assert(timelineVcr.includes("timelinePayload(name, args || [])"), "timeline VCR is missing fallback payload mapping");
-  assert(timelineVcr.includes("delta_ms: numericArg(args[0], 1000)"), "timeline VCR should forward step delta_ms");
-  assert(timelineVcr.includes("cursor_ms: numericArg(args[0], 0)"), "timeline VCR should forward seek cursor_ms");
+  assert(timelineVcr.includes("delta_ms: safeDeltaMs(args[0])"), "timeline VCR should forward normalized step delta_ms");
+  assert(timelineVcr.includes("cursor_ms: safeCursorMs(args[0])"), "timeline VCR should forward normalized seek cursor_ms");
   assert(timelineVcr.includes("speed: safeSpeed(args[0])"), "timeline VCR should normalize fallback speed");
   assert(!timelineVcr.includes("Number(speed.value || 1)"), "timeline VCR should not pass raw speed input");
 
@@ -566,7 +597,7 @@ function assert(cond, message) {
   const offlineImport = fs.readFileSync(path.join(root, "web/act_offline_import.html"), "utf8");
   assert(!offlineImport.includes("{ args: args || [] }"), "offline import still sends bare fallback args");
   assert(offlineImport.includes("offlinePayload(name, args || [])"), "offline import is missing fallback payload mapping");
-  assert(offlineImport.includes("history_limit: numericArg(args[0], 20)"), "offline import should forward history_limit as a named payload field");
+  assert(offlineImport.includes("history_limit: safeLimit(args[0], 20, 200)"), "offline import should forward normalized history_limit as a named payload field");
   assert(offlineImport.includes("path: String(args[0] || '')"), "offline import should forward import path as a named payload field");
   assert(offlineImport.includes("index: safeHistoryIndex(args[0], 0)"), "offline import should forward normalized history index as a named payload field");
 

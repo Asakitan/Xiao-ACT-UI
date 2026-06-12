@@ -85,6 +85,24 @@
             .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
+    function isObjectValue(value) {
+        return value && typeof value === "object" && !Array.isArray(value);
+    }
+
+    function objectValue(value) {
+        return isObjectValue(value) ? value : {};
+    }
+
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+
+    function objectItems(value) {
+        return listItems(value).filter(function (item) {
+            return isObjectValue(item);
+        });
+    }
+
     // ── spec -> DOM ──────────────────────────────────────────────────────────
     function el(tag, cls, html) {
         var e = document.createElement(tag);
@@ -94,7 +112,8 @@
     }
 
     function renderNode(node, onAction) {
-        var t = node && node.type;
+        node = objectValue(node);
+        var t = node.type;
         if (t === "panel" || t === "section" || t === "card" || t === "group" || t === "row") {
             var box = el("div", "splg-" + t + (node.title ? " splg-titled" : ""));
             if (node.accent) box.style.setProperty("--splg-acc", barColor(node.accent));
@@ -109,7 +128,7 @@
                 inner.style.justifyContent =
                     { left: "flex-start", center: "center", right: "flex-end" }[node.align] || "flex-start";
             }
-            (node.children || []).forEach(function (c) {
+            objectItems(node.children).forEach(function (c) {
                 var ce = renderNode(c, onAction);
                 if (ce) inner.appendChild(ce);
             });
@@ -179,6 +198,7 @@
     }
 
     function renderCanvas(node) {
+        node = objectValue(node);
         var w = +node.width || 1, h = +node.height || 1;
         var wrap = el("div", "splg-canvaswrap");
         var cnv = document.createElement("canvas");
@@ -187,7 +207,7 @@
         var ctx = cnv.getContext("2d");
         var bg = canvasColor(node.bg, "");
         if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
-        (node.ops || []).forEach(function (op) {
+        objectItems(node.ops).forEach(function (op) {
             var k = op.op, fill, outline;
             if (k === "rect") {
                 fill = canvasColor(op.fill, ""); outline = canvasColor(op.outline, "");
@@ -216,8 +236,9 @@
     }
 
     function renderTable(node) {
-        var cols = node.columns || [];
-        var rows = node.rows || [];
+        node = objectValue(node);
+        var cols = objectItems(node.columns);
+        var rows = objectItems(node.rows);
         if (!cols.length && rows.length) cols = Object.keys(rows[0]).map(function (k) { return { key: k, title: k, align: "left" }; });
         var html = "";
         if (node.title) html += '<div class="splg-tabtitle">' + esc(node.title) + "</div>";
@@ -251,7 +272,8 @@
     }
 
     function hasRenderableSpec(spec) {
-        return !!(spec && (spec.title || ((spec.nodes || []).length)));
+        spec = objectValue(spec);
+        return !!(spec.title || objectItems(spec.nodes).length);
     }
 
     // Collect live text-input values within one panel mount into {id: value}.
@@ -267,9 +289,11 @@
     }
 
     function renderSpec(spec, mount, onAction) {
-        spec = spec || {};
-        if (!(spec.nodes || []).length && !spec.title) {
+        spec = objectValue(spec);
+        var nodes = objectItems(spec.nodes);
+        if (!nodes.length && !spec.title) {
             spec = { nodes: [{ type: "text", text: "(empty)", style: "muted", align: "left" }] };
+            nodes = objectItems(spec.nodes);
         }
         var sig = specSignature(spec);
         if (mount.__splg_sig === sig && mount.__splg_rendered
@@ -297,7 +321,7 @@
         } : null;
         mount.innerHTML = "";
         if (spec.title) mount.appendChild(el("div", "splg-text splg-st-title", esc(spec.title)));
-        (spec.nodes || []).forEach(function (n) {
+        nodes.forEach(function (n) {
             try { var e = renderNode(n, wrapped); if (e) mount.appendChild(e); }
             catch (_) { mount.appendChild(el("div", "splg-text splg-st-bad", "[render error]")); }
         });
@@ -387,7 +411,7 @@
         if (!document.body) return;
         return call("act_render_overlays", [SURFACE]).then(function (data) {
             var mount = overlayMount();
-            var overlays = (data && data.overlays) || [];
+            var overlays = objectItems(objectValue(data).overlays);
             var sig = specSignature(overlays);
             if (!overlays.length) {
                 if (mount.__splg_overlay_sig !== sig) mount.innerHTML = "";
@@ -401,7 +425,7 @@
             mount.innerHTML = "";
             overlays.forEach(function (ov) {
                 var card = el("div", "splg-section");
-                renderSpec(ov.spec || {}, card, overlayAction(ov.panel_id || (ov.spec && ov.spec.panel_id)));
+                renderSpec(objectValue(ov.spec), card, overlayAction(ov.panel_id || (objectValue(ov.spec).panel_id)));
                 mount.appendChild(card);
             });
         });
@@ -435,6 +459,7 @@
         process: function (surface, payload) {
             return call("act_render_apply_hooks", [surface || SURFACE, JSON.stringify(payload || {})])
                 .then(function (data) {
+                    data = objectValue(data);
                     if (!data || !data.ok) return { payload: payload, override: null };
                     return { payload: data.payload != null ? data.payload : payload, override: data.override || null };
                 });
