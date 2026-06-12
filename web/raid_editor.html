@@ -853,6 +853,10 @@ function _mForm(m) {
     var preset = seq.length ? (isDash ? 'dash' : 'seq') : (inline.action_key
         ? (String(inline.press_mode) === 'hold' ? 'hold' : 'tap') : 'none');
     var html = '<div style="background:rgba(8,14,22,.55);border-radius:6px;padding:7px;margin-top:5px;font-size:10px;">';
+    // 新机制(未绑任何检测id)给三步引导
+    if (!_idList(det.skill_ids).length && !_idList(det.buff_ids).length) {
+        html += '<div style="font-size:9px;color:#ffd46f;margin-bottom:4px;">新机制 3 步: ① 下方「检测」绑至少一个技能/Buff(触发条件) ② 填 TTS/横幅文案 ③ 点保存。需自动躲避再配「自动躲避」段。</div>';
+    }
     // 名称 + 颜色
     html += '<div style="margin-bottom:4px;">' + _mInput('mf-name', '名称', d.name, 110)
         + ' 颜色 ' + _MECH_COLORS.map(function (c) {
@@ -1043,11 +1047,18 @@ function _mCollect() {
     var alert = d.alert = _objectValue(d.alert);
     var dodge = d.dodge = _objectValue(d.dodge);
     var inline = dodge.inline = _objectValue(dodge.inline);
+    var oldName = String(d.name || '');
     if (document.getElementById('mf-name')) d.name = _mVal('mf-name') || '机制';
+    var newName = String(d.name || '');
     var notesEl = document.getElementById('mf-notes');
     if (notesEl) d.notes = String(notesEl.value || '').trim();
     if (document.getElementById('mf-tts')) alert.tts_text = _mVal('mf-tts');
     if (document.getElementById('mf-banner')) alert.banner_text = _mVal('mf-banner');
+    // 改名时 TTS/横幅 文案若仍是旧名(或空)就跟着改 — 用户没自定义过才同步
+    if (newName && newName !== oldName) {
+        if (!alert.tts_text || alert.tts_text === oldName) alert.tts_text = newName;
+        if (!alert.banner_text || alert.banner_text === oldName) alert.banner_text = newName;
+    }
     alert.countdown_s = _clampNum(_mNum('mf-cd', alert.countdown_s != null ? alert.countdown_s : 8), 8, 0, 3600);
     alert.pre_warn_s = _clampNum(_mNum('mf-pre', alert.pre_warn_s != null ? alert.pre_warn_s : 3), 3, 0, 3600);
     alert.cooldown_s = _clampNum(_mNum('mf-cool', alert.cooldown_s != null ? alert.cooldown_s : 5), 5, 0, 600);

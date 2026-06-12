@@ -517,7 +517,8 @@ class _MechanicsEditorMixin:
         self._render_mech_master(st.get('master') or {})
         if not st.get('ok'):
             self._mx_empty('没有可编辑的档案',
-                           '先在 Phases 页创建档案, 或导入 assets/boss_raids 下的机制示例 JSON')
+                           '到「BossRaid 详细编辑器」新建档案, 或用其「导入」按钮载入 '
+                           'assets/boss_raids/ 下的 *_机制示例.json (9 个 raid boss 现成示例)')
             return
         inbox = list(st.get('inbox') or [])
         if inbox:
@@ -700,11 +701,12 @@ class _MechanicsEditorMixin:
         tk.Label(head, text=mech.get('name') or '机制', bg=PANEL_CARD, fg=GOLD,
                  font=panel_font(9, bold=True), anchor='w'
                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # 试发按钮: 🔊试听 / 旗试横幅 / ⌨试按键(⚠会向前台窗口真发键)
         for txt, cb in (('删除', lambda _mid=mid: self._mech_delete(_mid)),
                         ('编辑', lambda _mid=mid: self._mech_edit(_mid)),
-                        ('按键', lambda _m=mech: self._mech_test(_m, ('dodge',))),
-                        ('横幅', lambda _m=mech: self._mech_test(_m, ('banner',))),
-                        ('🔊', lambda _m=mech: self._mech_test(_m, ('tts',)))):
+                        ('⌨试⚠', lambda _m=mech: self._mech_test(_m, ('dodge',))),
+                        ('旗试', lambda _m=mech: self._mech_test(_m, ('banner',))),
+                        ('🔊试', lambda _m=mech: self._mech_test(_m, ('tts',)))):
             make_action_button(head, txt, cb, width=4).pack(side=tk.RIGHT, padx=(3, 0))
 
         summary = mech.get('summary') or {}
@@ -816,6 +818,12 @@ class _MechanicsEditorMixin:
         form.pack(fill=tk.X, pady=(5, 0))
         v: Dict[str, Any] = {}
         self._mech_vars = v
+        # 新机制(未绑任何检测id)给个三步引导, 不让人对着空表单发懵
+        if not (det.get('skill_ids') or det.get('buff_ids')):
+            tk.Label(form, text='新机制 3 步: ① 下方「检测」绑至少一个技能/Buff(触发条件) '
+                     '② 填 TTS/横幅文案 ③ 点保存。需自动躲避再配「自动躲避」段。',
+                     bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 3))
 
         def _row(parent):
             r = tk.Frame(parent, bg=PANEL_CARD_ALT)
@@ -1181,8 +1189,10 @@ class _MechanicsEditorMixin:
                 return float(_sv(key, default))
             except Exception:
                 return default
+        old_name = str(draft.get('name') or '')
         if 'name' in v:
             draft['name'] = (_sv('name') or '机制').strip()
+        new_name = str(draft.get('name') or '')
         nw = v.get('notes_widget')
         if nw is not None:
             try:
@@ -1193,6 +1203,12 @@ class _MechanicsEditorMixin:
             alert['tts_text'] = _sv('tts_text').strip()
         if 'banner_text' in v:
             alert['banner_text'] = _sv('banner_text').strip()
+        # 改名时 TTS/横幅 文案若仍是旧名(或空)就跟着改 — 用户没自定义过才同步
+        if new_name and new_name != old_name:
+            if not alert.get('tts_text') or alert.get('tts_text') == old_name:
+                alert['tts_text'] = new_name
+            if not alert.get('banner_text') or alert.get('banner_text') == old_name:
+                alert['banner_text'] = new_name
         if 'countdown_s' in v:
             alert['countdown_s'] = _num('countdown_s', 8)
         if 'pre_warn_s' in v:
