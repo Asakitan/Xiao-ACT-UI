@@ -210,10 +210,14 @@ class BossAutoKeyLinkage:
     phase/timeline events and fire mapped keystrokes.
     """
 
+    # 定向躲避按住的移动键 — 偏移连招命中这些键会松错 director 的按住态, 故躲避中跳过
+    _MOVE_KEYS = frozenset({"W", "A", "S", "D"})
+
     def __init__(self, settings,
                  send_key: Optional[Callable[[str, str, int, int], None]] = None,
                  on_log: Optional[Callable[[str], None]] = None,
-                 foreground_gate: Optional[Callable[[], bool]] = None):
+                 foreground_gate: Optional[Callable[[], bool]] = None,
+                 dodge_active_gate: Optional[Callable[[], bool]] = None):
         """
         Args:
             settings: SettingsManager instance
@@ -222,11 +226,14 @@ class BossAutoKeyLinkage:
             foreground_gate: callable() → False blocks key emission (game not
                 foreground); re-checked right before sending so delayed dodges
                 die when the game loses focus mid-wait
+            dodge_active_gate: callable() → True 表示定向躲避正按住 WASD; 此时
+                跳过连招里的移动键(W/A/S/D), 防穿插松错 director 的按住态
         """
         self._settings = settings
         self._send_key = send_key
         self._on_log = on_log
         self._foreground_gate = foreground_gate
+        self._dodge_active_gate = dodge_active_gate
 
         self._lock = threading.Lock()
         self._last_fire: Dict[str, float] = {}   # mapping_id → last fire time
@@ -477,6 +484,16 @@ class BossAutoKeyLinkage:
                     pass
             return False
 
+        def _skip_move(k: str) -> bool:
+            # 定向躲避正按住 WASD 时, 跳过连招里的移动键 — 否则 tap/release
+            # 会松错 director 的按住态, 躲避方向错位 (审查: WASD-combo 冲突)
+            if k.upper() not in self._MOVE_KEYS or self._dodge_active_gate is None:
+                return False
+            try:
+                return bool(self._dodge_active_gate())
+            except Exception:
+                return False
+
         def _run():
             try:
                 if wait_s > 0:
@@ -496,14 +513,14 @@ class BossAutoKeyLinkage:
                             if _blocked():
                                 return
                         sk = _s(step.get("key"))
-                        if not sk:
+                        if not sk or _skip_move(sk):
                             continue
                         sh = _int(step.get("hold_ms"), 0)
                         if sh > 0:
                             send(sk, "hold", sh, 1)
                         else:
                             send(sk, "tap", 0, 1)
-                elif key:
+                elif key and not _skip_move(key):
                     send(key, press_mode, hold_ms, press_count)
             except Exception:
                 pass

@@ -6476,6 +6476,9 @@ class SAOWebViewGUI:
                 send_key=self._send_linked_key,
                 on_log=lambda msg: print(msg),
                 foreground_gate=self._auto_key_engine.is_game_foreground,
+                # 定向躲避按住 WASD 时连招跳过移动键 (无 director 则恒 False, 无副作用)
+                dodge_active_gate=lambda: bool(getattr(self, '_auto_dodge_director', None))
+                and self._auto_dodge_director.is_active(),
             )
             try:
                 self._mech_alert_controller = MechanicAlertController(

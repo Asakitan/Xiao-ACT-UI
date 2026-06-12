@@ -429,6 +429,14 @@ class _MechanicsEditorMixin:
         ('走向 ▸ 走向编号圈', 'goto_circle'),
         ('走向 ▸ 按序走完编号圈', 'walk_sequence'),
     )
+    # 高级检测: 来源 / 事件 下拉 (标签 → 值)
+    _DETECT_SOURCES = (('任意', 'any'), ('Boss 身上', 'boss'), ('自身/玩家', 'self'))
+    _DETECT_EVENTS = (
+        ('无', ''),
+        ('破防 breaking', 'breaking'),
+        ('护盾破碎 shield_broken', 'shield_broken'),
+        ('狂暴 overdrive', 'overdrive'),
+    )
     # 几何形状下拉 (标签 → shape 值); 空=不填, 用招式生命周期判停
     _GEOMETRY_SHAPES = (
         ('无 (招式生命周期判停)', ''),
@@ -962,6 +970,40 @@ class _MechanicsEditorMixin:
                     self._mx_rerender()),
                 kind='accent', width=4).pack(side=tk.RIGHT)
 
+        # 高级触发 (选填): 限定来源/boss、HP%穿越、计时锚+重复、事件
+        make_section_title(form, '高级触发 (选填, 与上面检测ID并用)')
+        adv1 = _row(form)
+        src_lbls = dict(self._DETECT_SOURCES)
+        cur_src = str(det.get('source') or 'any')
+        cur_src_lbl = next((l for l, val in self._DETECT_SOURCES if val == cur_src), '任意')
+        svar = _tk.StringVar(value=cur_src_lbl)
+        v['detect_source'] = (svar, src_lbls)
+        tk.Label(adv1, text='来源', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        smenu = _tk.OptionMenu(adv1, svar, *[l for l, _ in self._DETECT_SOURCES])
+        smenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        smenu.pack(side=tk.LEFT, padx=(2, 8))
+        _field(adv1, '限定BossID', 'detect_boss_base_id', det.get('boss_base_id', 0), 8)
+        adv2 = _row(form)
+        _field(adv2, 'HP%≤触发', 'detect_hp_pct', det.get('hp_pct', 0.0), 5)
+        ev_lbls = dict(self._DETECT_EVENTS)
+        cur_ev = str(det.get('event') or '')
+        cur_ev_lbl = next((l for l, val in self._DETECT_EVENTS if val == cur_ev), '无')
+        evar = _tk.StringVar(value=cur_ev_lbl)
+        v['detect_event'] = (evar, ev_lbls)
+        tk.Label(adv2, text='事件', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        emenu = _tk.OptionMenu(adv2, evar, *[l for l, _ in self._DETECT_EVENTS])
+        emenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        emenu.pack(side=tk.LEFT, padx=(2, 0))
+        adv3 = _row(form)
+        _field(adv3, '阶段计时s', 'detect_time_into_phase_s', det.get('time_into_phase_s', 0.0), 5)
+        _field(adv3, '战斗计时s', 'detect_time_into_fight_s', det.get('time_into_fight_s', 0.0), 5)
+        _field(adv3, '重复间隔s', 'detect_repeat_interval_s', det.get('repeat_interval_s', 0.0), 5)
+        tk.Label(form, text='留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。',
+                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+
         # 提醒
         make_section_title(form, '提醒')
         a1 = _row(form)
@@ -1189,6 +1231,25 @@ class _MechanicsEditorMixin:
                 return float(_sv(key, default))
             except Exception:
                 return default
+        # 高级检测字段 (下拉 + 数值; 不在表单时不动, 保留草稿原值)
+        spick = v.get('detect_source')
+        if spick:
+            svar, src_lbls = spick
+            det['source'] = src_lbls.get(svar.get() or '任意', 'any')
+        epick = v.get('detect_event')
+        if epick:
+            evar, ev_lbls = epick
+            det['event'] = ev_lbls.get(evar.get() or '无', '')
+        if 'detect_boss_base_id' in v:
+            det['boss_base_id'] = int(_num('detect_boss_base_id', 0))
+        if 'detect_hp_pct' in v:
+            det['hp_pct'] = _num('detect_hp_pct', 0.0)
+        if 'detect_time_into_phase_s' in v:
+            det['time_into_phase_s'] = _num('detect_time_into_phase_s', 0.0)
+        if 'detect_time_into_fight_s' in v:
+            det['time_into_fight_s'] = _num('detect_time_into_fight_s', 0.0)
+        if 'detect_repeat_interval_s' in v:
+            det['repeat_interval_s'] = _num('detect_repeat_interval_s', 0.0)
         old_name = str(draft.get('name') or '')
         if 'name' in v:
             draft['name'] = (_sv('name') or '机制').strip()

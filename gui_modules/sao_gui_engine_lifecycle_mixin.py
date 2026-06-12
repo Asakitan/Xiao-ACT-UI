@@ -272,6 +272,9 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 send_key=self._send_linked_key,
                 on_log=lambda msg: print(msg),
                 foreground_gate=self._auto_key_engine.is_game_foreground,
+                # 晚绑定: director 在下方才建; 定向躲避按住 WASD 时连招跳过移动键
+                dodge_active_gate=lambda: bool(getattr(self, '_auto_dodge_director', None))
+                and self._auto_dodge_director.is_active(),
             )
 
             def _on_boss_alert_with_linkage(title, message):

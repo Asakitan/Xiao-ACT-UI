@@ -154,6 +154,11 @@ class AutoDodgeDirector:
         self._io_lock = threading.Lock()    # 护 _held + SendInput I/O (审查 #2: 与epoch锁分离)
         self._epoch = 0          # 单飞: 每次新 dodge +1, 旧循环检测到不等即退出
 
+    def is_active(self) -> bool:
+        """当前是否正按住移动键 (有进行中的定向躲避)。linkage 据此避免发 WASD
+        穿插破坏: 定向躲避按住 W+A 时, 一条偏移连招若也含 WASD 会松错键。"""
+        return bool(self._held)
+
     def _blocked(self) -> bool:
         if self._gate is None:
             return False

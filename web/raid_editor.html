@@ -919,6 +919,24 @@ function _mForm(m) {
             + _esc(h.name + ' #' + hid + ' (' + tag + ')') + '</span>'
             + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="' + fn + '(' + hid + ')">绑定</span></div>';
     }).join('');
+    // 高级触发 (选填) — 与 Tk _DETECT_SOURCES / _DETECT_EVENTS 1:1
+    var detSrc = String(det.source || 'any');
+    var detEv = String(det.event || '');
+    var srcOpts = [['any', '任意'], ['boss', 'Boss 身上'], ['self', '自身/玩家']];
+    var evOpts = [['', '无'], ['breaking', '破防 breaking'],
+        ['shield_broken', '护盾破碎 shield_broken'], ['overdrive', '狂暴 overdrive']];
+    html += '<div class="phase-header" style="font-size:10px;">高级触发 (选填, 与上面检测ID并用)</div>'
+        + '<div style="margin:3px 0;">来源 <select id="mf-det-src" class="mech-input">'
+        + srcOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detSrc === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+        + '</select> ' + _mInput('mf-det-boss', '限定BossID', det.boss_base_id || 0, 64) + '</div>'
+        + '<div style="margin:3px 0;">' + _mInput('mf-det-hp', 'HP%≤触发', det.hp_pct || 0, 48)
+        + ' 事件 <select id="mf-det-ev" class="mech-input">'
+        + evOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detEv === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+        + '</select></div>'
+        + '<div style="margin:3px 0;">' + _mInput('mf-det-tp', '阶段计时s', det.time_into_phase_s || 0, 48)
+        + _mInput('mf-det-tf', '战斗计时s', det.time_into_fight_s || 0, 48)
+        + _mInput('mf-det-ri', '重复间隔s', det.repeat_interval_s || 0, 48) + '</div>'
+        + '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。</div>';
     // 提醒
     html += '<div class="phase-header" style="font-size:10px;">提醒</div>'
         + '<div style="margin:3px 0;">' + _mInput('mf-tts', 'TTS文案', alert.tts_text, 170)
@@ -1047,6 +1065,16 @@ function _mCollect() {
     var alert = d.alert = _objectValue(d.alert);
     var dodge = d.dodge = _objectValue(d.dodge);
     var inline = dodge.inline = _objectValue(dodge.inline);
+    // 高级检测字段 (不在表单时不动, 保留草稿原值)
+    var srcEl = document.getElementById('mf-det-src');
+    if (srcEl) det.source = String(srcEl.value || 'any');
+    var evEl = document.getElementById('mf-det-ev');
+    if (evEl) det.event = String(evEl.value || '');
+    if (document.getElementById('mf-det-boss')) det.boss_base_id = _clampInt(_mNum('mf-det-boss', 0), 0, 0, 99999999);
+    if (document.getElementById('mf-det-hp')) det.hp_pct = _clampNum(_mNum('mf-det-hp', 0), 0, 0, 100);
+    if (document.getElementById('mf-det-tp')) det.time_into_phase_s = _clampNum(_mNum('mf-det-tp', 0), 0, 0, 86400);
+    if (document.getElementById('mf-det-tf')) det.time_into_fight_s = _clampNum(_mNum('mf-det-tf', 0), 0, 0, 86400);
+    if (document.getElementById('mf-det-ri')) det.repeat_interval_s = _clampNum(_mNum('mf-det-ri', 0), 0, 0, 86400);
     var oldName = String(d.name || '');
     if (document.getElementById('mf-name')) d.name = _mVal('mf-name') || '机制';
     var newName = String(d.name || '');

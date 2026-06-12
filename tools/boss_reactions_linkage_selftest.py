@@ -165,6 +165,26 @@ def test_disabled():
     check("disabled no fire", sent == [])
 
 
+def test_wasd_skip_while_dodging():
+    print("[WASD skip while directional dodge active]")
+    sent = []
+    active = {"on": True}
+    lk = BossAutoKeyLinkage(
+        _Settings(_cfg([
+            {"trigger_type": "boss_stun",
+             "sequence": [{"key": "W"}, {"key": "1"}, {"key": "D"}], "cooldown_s": 0},
+        ])),
+        send_key=lambda k, pm, hm, pc: sent.append(k),
+        dodge_active_gate=lambda: active["on"])
+    _fire(lk, {"cast_edge": "none", "stun_edge": True})
+    check("WASD skipped, non-move key kept", sent == ["1"], repr(sent))
+    # 躲避结束后移动键照发
+    sent.clear()
+    active["on"] = False
+    _fire(lk, {"cast_edge": "none", "stun_edge": True})
+    check("all keys fire when dodge inactive", sent == ["W", "1", "D"], repr(sent))
+
+
 def test_panic_stop():
     print("[panic_stop kills in-flight]")
     # 带 delay 的派发: panic_stop 在等待窗口内调用 → 应被作废, 不发键
@@ -192,6 +212,7 @@ def main():
     test_cooldown()
     test_sequence()
     test_disabled()
+    test_wasd_skip_while_dodging()
     test_panic_stop()
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0
