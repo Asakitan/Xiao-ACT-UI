@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.54: Web menu AutoKey draft action fallback 修复.
+
+  1) `web/menu.html` 修复 AutoKey draft action entry 初始化。
+     action id/label 与 conditions 现在先做 entry/array 防护并保留合法 `0`,
+     避免载入草稿时覆盖有效 ID/标签或因 malformed action 中断编辑器。
+
+  2) `web/menu.html` 修复 AutoKey action key/conditions JSON 输入 fallback。
+     key、advanced JSON 文本、复制标签和创建后选中 ID 现在使用安全文本 helper,
+     避免直接传入 `0` 被静默当成空值或错误应用空条件。
+
 ## v4.6.53: Web menu profile selection id 防护修复.
 
   1) `web/menu.html` 修复 AutoKey profile 选择/保存/导出 ID fallback。

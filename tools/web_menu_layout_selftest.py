@@ -720,6 +720,39 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey editor text/action snippet: " + snippet)
 
+    auto_key_draft_action_raw_patterns = [
+        "if (!action.id) action.id = _akNewClientId('action');",
+        "if (!action.label) action.label = 'Action ' + (index + 1);",
+        "if (!Array.isArray(action.conditions)) action.conditions = [];",
+        "action._conditions_text = JSON.stringify(action.conditions || [], null, 2);",
+        "if (fieldName === 'key') value = String(value || '').toUpperCase();",
+        "_autoKeyDraftProfile.actions[index]._conditions_text = String(text || '');",
+        "var parsed = String(text || '').trim();",
+        "action._conditions_text = String(text || '');",
+        "action.label = String(action.label || 'Action') + ' Copy';",
+        "_autoKeySelectedProfileId = (data.state && data.state.active_profile_id) || _autoKeySelectedProfileId;",
+    ]
+    for pattern in auto_key_draft_action_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey draft action text/id inputs must guard entries and preserve zero text: " + pattern)
+    auto_key_draft_action_safe_required = [
+        "draft.actions = _profileEntries(draft.actions).map(_profileEntry);",
+        "action.id = _profileText(action.id, _akNewClientId('action'));",
+        "action.label = _profileText(action.label, 'Action ' + (index + 1));",
+        "action.conditions = _profileEntries(action.conditions).map(_profileEntry);",
+        "action._conditions_text = JSON.stringify(action.conditions, null, 2);",
+        "if (fieldName === 'key') value = _profileText(value, '').toUpperCase();",
+        "_autoKeyDraftProfile.actions[index]._conditions_text = _profileText(text, '');",
+        "var rawText = _profileText(text, '');",
+        "var parsed = rawText.trim();",
+        "action._conditions_text = rawText;",
+        "action.label = _profileText(action.label, 'Action') + ' Copy';",
+        "_autoKeySelectedProfileId = _profileText(data && data.state && data.state.active_profile_id, _autoKeySelectedProfileId);",
+    ]
+    for snippet in auto_key_draft_action_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey draft action text/id snippet: " + snippet)
+
     boss_raid_editor_text_raw_patterns = [
         "_escHtml(profile.id || '--')",
         "_escHtml(profile.source || 'local')",

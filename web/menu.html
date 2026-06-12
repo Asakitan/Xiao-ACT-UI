@@ -5162,15 +5162,13 @@ function _akPrepareDraft(profile) {
     if (!draft.engine) {
         draft.engine = { tick_ms: 50, require_foreground: true, pause_on_death: true };
     }
-    if (!Array.isArray(draft.actions)) {
-        draft.actions = [];
-    }
+    draft.actions = _profileEntries(draft.actions).map(_profileEntry);
     draft.actions.forEach(function(action, index) {
-        if (!action.id) action.id = _akNewClientId('action');
-        if (!action.label) action.label = 'Action ' + (index + 1);
+        action.id = _profileText(action.id, _akNewClientId('action'));
+        action.label = _profileText(action.label, 'Action ' + (index + 1));
         if (typeof action.enabled !== 'boolean') action.enabled = true;
-        if (!Array.isArray(action.conditions)) action.conditions = [];
-        action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+        action.conditions = _profileEntries(action.conditions).map(_profileEntry);
+        action._conditions_text = JSON.stringify(action.conditions, null, 2);
         action._conditions_error = '';
     });
     return draft;
@@ -5346,7 +5344,7 @@ function _akSetActionConditions(index, conditions, rerender) {
     var action = _akGetDraftAction(index);
     if (!action) return;
     action.conditions = _akClone(Array.isArray(conditions) ? conditions : []);
-    action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+    action._conditions_text = JSON.stringify(action.conditions, null, 2);
     action._conditions_error = '';
     _autoKeyDraftDirty = true;
     if (rerender !== false) _akRenderActionList();
@@ -5755,31 +5753,32 @@ function _akDraftActionField(index, fieldName, value, kind) {
     if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
     if (kind === 'int') value = _akIntValue(fieldName, value);
     if (kind === 'bool') value = !!value;
-    if (fieldName === 'key') value = String(value || '').toUpperCase();
+    if (fieldName === 'key') value = _profileText(value, '').toUpperCase();
     _autoKeyDraftProfile.actions[index][fieldName] = value;
     _autoKeyDraftDirty = true;
 }
 
 function _akDraftActionConditions(index, text) {
     if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
-    _autoKeyDraftProfile.actions[index]._conditions_text = String(text || '');
+    _autoKeyDraftProfile.actions[index]._conditions_text = _profileText(text, '');
     _autoKeyDraftDirty = true;
 }
 
 function _akApplyActionConditionsJson(index, text) {
     var action = _akGetDraftAction(index);
     if (!action) return;
+    var rawText = _profileText(text, '');
     try {
-        var parsed = String(text || '').trim();
+        var parsed = rawText.trim();
         parsed = parsed ? JSON.parse(parsed) : [];
         if (!Array.isArray(parsed)) throw new Error('must be an array');
         action.conditions = _akClone(parsed);
-        action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+        action._conditions_text = JSON.stringify(action.conditions, null, 2);
         action._conditions_error = '';
         _autoKeyDraftDirty = true;
         _akRenderActionList();
     } catch (e) {
-        action._conditions_text = String(text || '');
+        action._conditions_text = rawText;
         action._conditions_error = e.message || String(e);
         _autoKeyDraftDirty = true;
         _akRenderActionList();
@@ -5804,7 +5803,7 @@ function _akSerializeDraft() {
 function _akCreateProfile() {
     _autoKeyDraftDirty = false;
     _akCallApi('create_auto_key_profile', [], function(data) {
-        _autoKeySelectedProfileId = (data.state && data.state.active_profile_id) || _autoKeySelectedProfileId;
+        _autoKeySelectedProfileId = _profileText(data && data.state && data.state.active_profile_id, _autoKeySelectedProfileId);
         _akLoadDraftFromState(_autoKeySelectedProfileId, true);
         _autoKeyTab = 'editor';
         _renderAutoKeyUI();
@@ -5876,7 +5875,7 @@ function _akCloneAction(index) {
     if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
     var action = _akClone(_autoKeyDraftProfile.actions[index]);
     action.id = _akNewClientId('action');
-    action.label = String(action.label || 'Action') + ' Copy';
+    action.label = _profileText(action.label, 'Action') + ' Copy';
     _autoKeyDraftProfile.actions.splice(index + 1, 0, action);
     _autoKeyDraftDirty = true;
     _akRenderActionList();
