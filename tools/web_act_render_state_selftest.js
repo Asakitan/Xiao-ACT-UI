@@ -64,6 +64,15 @@ const deathRecap = read("web/act_death_recap.html");
 assert(deathRecap.includes("Death recap copy failed"), "death recap copy must report clipboard failure");
 assert(deathRecap.includes("return navigator.clipboard.writeText(data.text)"), "death recap copy must await clipboard write");
 
+const reportExport = read("web/act_report_export.html");
+assert(reportExport.includes("function fallbackCopyText(text)"), "report export must provide clipboard fallback");
+assert(reportExport.includes("报告复制失败"), "report export must report clipboard failure");
+assert(reportExport.includes("Mini-Parse 复制失败"), "report export mini copy must report clipboard failure");
+
+const dataSourceHealth = read("web/data_source_health.html");
+assert(dataSourceHealth.includes("function fallbackCopyText(text)"), "data source health must provide clipboard fallback");
+assert(dataSourceHealth.includes("健康快照复制失败"), "data source health must report clipboard failure");
+
 const dps = read("web/dps.html");
 assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");
 assert(!dps.includes('onclick="_openDetail(\' + Number(entity.uid || 0) + \')"'), "DPS row click must not coerce entity uid to Number");

@@ -341,17 +341,23 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         renderDiagnostics(payload);
     }
 
-    function copyText(text) {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            return navigator.clipboard.writeText(text);
-        }
+    function fallbackCopyText(text) {
         var area = document.createElement('textarea');
         area.value = text;
         document.body.appendChild(area);
         area.select();
-        document.execCommand('copy');
-        document.body.removeChild(area);
-        return Promise.resolve();
+        var ok = false;
+        try { ok = document.execCommand('copy'); }
+        finally { document.body.removeChild(area); }
+        if (!ok) throw new Error('clipboard unavailable');
+        return true;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).catch(function () { return fallbackCopyText(text); });
+        }
+        return Promise.resolve().then(function () { return fallbackCopyText(text); });
     }
 
     window.DataSourceHealth = {
@@ -372,11 +378,9 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         },
         copy: function () {
             var text = JSON.stringify(lastPayload || {}, null, 2);
-            return apiCall('copy_data_source_health').then(function (payload) {
+            return apiCall('copy_data_source_health').catch(function () { return null; }).then(function (payload) {
                 if (payload && payload.text) text = payload.text;
-                return copyText(text).then(function () { showToast('已复制健康快照'); });
-            }).catch(function () {
-                return copyText(text).then(function () { showToast('已复制健康快照'); });
+                return copyText(text).then(function () { showToast('已复制健康快照'); }).catch(function () { showToast('健康快照复制失败'); return payload; });
             });
         },
         close: function () { apiCall('toggle_data_source_health'); },

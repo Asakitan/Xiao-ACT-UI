@@ -319,15 +319,23 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             '</div></section><section class="card"><div style="color:var(--act-gold);font-size:12px;letter-spacing:.12em;margin-bottom:8px;">TOP COMBATANTS</div>' + renderRows(rows) + '</section>';
     }
 
-    function copyText(text) {
-        if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    function fallbackCopyText(text) {
         var area = document.createElement('textarea');
         area.value = text;
         document.body.appendChild(area);
         area.select();
-        document.execCommand('copy');
-        document.body.removeChild(area);
-        return Promise.resolve();
+        var ok = false;
+        try { ok = document.execCommand('copy'); }
+        finally { document.body.removeChild(area); }
+        if (!ok) throw new Error('clipboard unavailable');
+        return true;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).catch(function () { return fallbackCopyText(text); });
+        }
+        return Promise.resolve().then(function () { return fallbackCopyText(text); });
     }
 
     window.ReportExport = {
@@ -359,13 +367,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         copy: function () {
             return apiCall('copy_report_export', [fmt()]).then(function (payload) {
                 var text = payload.text || JSON.stringify(lastPayload || {}, null, 2);
-                return copyText(text).then(function () { showToast(payload.ok ? '报告已复制' : (payload.message || '已复制当前状态')); });
+                return copyText(text).then(function () { showToast(payload.ok ? '报告已复制' : (payload.message || '已复制当前状态')); }).catch(function () { showToast('报告复制失败'); return payload; });
             });
         },
         copyMiniParse: function () {
             return apiCall('copy_mini_parse', ['summary_table']).then(function (payload) {
                 var text = payload.text || '';
-                return copyText(text).then(function () { showToast(payload.ok ? 'Mini-Parse 已复制' : (payload.message || 'Mini-Parse 已复制当前文本')); });
+                return copyText(text).then(function () { showToast(payload.ok ? 'Mini-Parse 已复制' : (payload.message || 'Mini-Parse 已复制当前文本')); }).catch(function () { showToast('Mini-Parse 复制失败'); return payload; });
             });
         },
         loadHistory: function (index) {

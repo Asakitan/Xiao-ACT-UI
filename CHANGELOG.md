@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.84: 报告导出/数据源健康剪贴板 fallback 与失败提示.
+
+  1) `web/act_report_export.html` 的报告复制与 Mini-Parse 复制现在会在
+    async clipboard 被拒绝时回退到 textarea/execCommand 路径, 两条路径都失败
+    时显示明确失败提示, 不再静默无反馈。
+
+  2) `web/data_source_health.html` 健康快照复制同样补齐 async clipboard 拒绝
+    后的 fallback 与失败提示, API 查询失败时仍会复制当前本地快照。
+
 ## v4.6.83: ACT 行为日志/死亡回放复制失败状态修正.
 
   1) `web/act_action_log.html` 复制行为日志时现在等待浏览器 clipboard
