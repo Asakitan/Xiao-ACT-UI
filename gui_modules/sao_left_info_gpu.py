@@ -120,12 +120,12 @@ class _LeftInfoSnapshot:
                  sweep_phase: float, sweep_strength: float):
         self.username = str(username)
         self.description = str(description)
-        self.top_w = int(top_w)
-        self.top_h = int(top_h)
-        self.bottom_w = int(bottom_w)
-        self.bottom_h = int(bottom_h)
-        self.sweep_phase = float(sweep_phase)
-        self.sweep_strength = float(sweep_strength)
+        self.top_w = _finite_int(top_w, 1, lo=1)
+        self.top_h = _finite_int(top_h, 1, lo=1)
+        self.bottom_w = _finite_int(bottom_w, 1, lo=1)
+        self.bottom_h = _finite_int(bottom_h, 1, lo=1)
+        self.sweep_phase = _finite_float(sweep_phase, 0.0)
+        self.sweep_strength = _finite_float(sweep_strength, 0.0, lo=0.0, hi=1.0)
 
 
 class LeftInfoGpuPainter:

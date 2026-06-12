@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.9: GPU LeftInfo/BossHP 数值防护修复.
+
+  1) `gui_modules/sao_left_info_gpu.py` 修复 LeftInfo GPU snapshot 数值归一。
+     左侧信息 GPU 面板现在容忍坏尺寸、扫描相位与扫描强度参数,
+     避免异常 snapshot 值打断签名计算或本帧提交。
+
+  2) `gui_modules/sao_gui_bosshp.py` 修复 BossHP live payload 数值归一。
+     Boss 血条现在容忍坏 HP、护盾、破韧与 additional unit 数值,
+     避免异常 TCP/UI payload 中断 BossHP 渲染更新。
+
 ## v4.6.8: 菜单 GPU snapshot 数值防护修复.
 
   1) `gui_modules/sao_child_bar_gpu.py` 修复 ChildBar GPU snapshot 数值归一。

@@ -18,7 +18,7 @@ from gui_modules.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
 from gui_modules.sao_left_info_gpu import (
     LeftInfoGpuPainter, PlayerPanelGpuPainter, SessionPlayersGpuPainter,
-    _PlayerPanelSnapshot, _SessionPlayersSnapshot,
+    _LeftInfoSnapshot, _PlayerPanelSnapshot, _SessionPlayersSnapshot,
 )
 from gui_modules.sao_menu_bar_gpu import _ButtonSnapshot
 from gui_modules.sao_menu_bar_gpu import MenuBarGpuPainter
@@ -174,6 +174,22 @@ class GpuOverlayTeardownTests(unittest.TestCase):
         self.assertEqual(snap.reveal, 1.0)
         self.assertEqual(snap.rows[0], ("Alice", "1", "bad", True))
 
+    def test_left_info_snapshot_tolerates_bad_numeric_fields(self) -> None:
+        snap = _LeftInfoSnapshot(
+            username="Kirito",
+            description="Black Swordsman",
+            top_w="bad",
+            top_h=float("nan"),
+            bottom_w=-5,
+            bottom_h=None,
+            sweep_phase=float("inf"),
+            sweep_strength="bad",
+        )
+
+        self.assertEqual((snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h), (1, 1, 1, 1))
+        self.assertEqual(snap.sweep_phase, 0.0)
+        self.assertEqual(snap.sweep_strength, 0.0)
+
     def test_player_panel_snapshot_tolerates_bad_numeric_fields(self) -> None:
         snap = _PlayerPanelSnapshot(
             username="Kirito",
@@ -232,6 +248,60 @@ class GpuOverlayTeardownTests(unittest.TestCase):
         self.assertEqual(snap.hover_t, 0.0)
         self.assertTrue(snap.active)
         self.assertEqual(snap.icon, "●")
+
+    def test_bosshp_update_tolerates_bad_numeric_payload(self) -> None:
+        panel = object.__new__(BossHpOverlay)
+        panel._gpu_managed = True
+        panel._hwnd = 0
+        panel._visible = True
+        panel._exiting = False
+        panel._hide_after_exit = False
+        panel._fade_alpha = 1.0
+        panel._fade_from = 1.0
+        panel._fade_target = 1.0
+        panel._fade_start = 0.0
+        panel._fade_duration = 0.0
+        panel._target_hp_pct = 0.5
+        panel._target_trail_pct = 0.5
+        panel._trail_pending_time = 0.0
+        panel._last_shield_active = False
+        panel._last_shield_pct = 0.0
+        panel._shield_ghost_pct = 0.0
+        panel._break_state = "tracking"
+        panel._recover_interpolating = False
+        panel._target_break_pct = 0.0
+        panel._last_breaking_stage = -1
+        panel._last_break_pct = 0.0
+        panel._additional_units = []
+        panel._idle_committed = True
+        panel._trigger_shield_fx = lambda *_args, **_kwargs: None
+        panel._begin_recovery = lambda: None
+        panel._trigger_recover_fastfill = lambda: None
+        panel._update_break_state = lambda *_args, **_kwargs: None
+        panel._schedule_tick = lambda *_args, **_kwargs: None
+
+        panel.update({
+            "active": True,
+            "boss_name": "Bad Payload Boss",
+            "hp_pct": "bad",
+            "current_hp": "bad",
+            "total_hp": float("inf"),
+            "shield_active": True,
+            "shield_pct": "bad",
+            "breaking_stage": "bad",
+            "extinction_pct": float("nan"),
+            "additional": [
+                {"name": "Phase", "hp_pct": "bad", "breaking_stage": "bad"},
+            ],
+        })
+
+        self.assertEqual(panel._target_hp_pct, 0.0)
+        self.assertEqual(panel._current_hp, 0.0)
+        self.assertEqual(panel._total_hp, 0.0)
+        self.assertEqual(panel._target_shield_pct, 0.0)
+        self.assertEqual(panel._breaking_stage, -1)
+        self.assertEqual(panel._last_break_pct, 0.0)
+        self.assertEqual(panel._additional_units[0]["breaking_stage"], -1)
 
 
 if __name__ == "__main__":

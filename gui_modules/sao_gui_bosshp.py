@@ -88,6 +88,45 @@ def _mix(a: Tuple[int, int, int, int],
     return _CY_UI.mix_rgba(a, b, t)
 
 
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _unit_pct(value: Any, default: float = 0.0) -> float:
+    return _finite_float(value, default, lo=0.0, hi=1.0)
+
+
 def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     """Return `img` with its alpha multiplied by `mask` (L-mode). Used to
     clip arbitrary layers to the rounded-rect panel interior."""
@@ -768,7 +807,7 @@ class BossHpOverlay:
     @_probe.decorate('ui.bosshp.update')
     def update(self, data: dict) -> None:
         """Ingest a snapshot; drive the animation loop."""
-        if data is None:
+        if not isinstance(data, dict):
             return
         if not data.get('active', False):
             self._additional_units = []
@@ -800,7 +839,7 @@ class BossHpOverlay:
         self._boss_name = name
         self._stage_text = str(data.get('stage_text') or '')
 
-        hp_pct = max(0.0, min(1.0, float(data.get('hp_pct') or 0)))
+        hp_pct = _unit_pct(data.get('hp_pct'))
         if hp_pct < self._target_hp_pct - 0.001:
             # Damage taken → schedule trail catch-up after a short lag.
             # Per webview reference, damage flash is NOT triggered on generic
@@ -813,8 +852,8 @@ class BossHpOverlay:
             self._trail_pending_time = 0.0
         self._target_hp_pct = hp_pct
 
-        self._current_hp = float(data.get('current_hp') or 0)
-        self._total_hp = float(data.get('total_hp') or 0)
+        self._current_hp = _finite_float(data.get('current_hp'), 0.0, lo=0.0)
+        self._total_hp = _finite_float(data.get('total_hp'), 0.0, lo=0.0)
         self._hp_source = str(data.get('hp_source') or '')
         self._additional_units = self._normalize_additional_units(
             data.get('additional') or [])
@@ -822,7 +861,7 @@ class BossHpOverlay:
         # Shield is signal-driven (TCP-authoritative): trust shield_active + shield_pct
         # directly; no liveness guessing.
         shield_active = bool(data.get('shield_active', False))
-        shield_pct = max(0.0, min(1.0, float(data.get('shield_pct') or 0)))
+        shield_pct = _unit_pct(data.get('shield_pct'))
 
         if self._last_shield_active and not shield_active:
             # Shield just broke → retain a ghost shell and fire the full
@@ -842,8 +881,8 @@ class BossHpOverlay:
         self._shield_active = shield_active
         self._target_shield_pct = shield_pct if shield_active else 0.0
 
-        stage = int(data.get('breaking_stage') if data.get('breaking_stage') is not None else -1)
-        ext_pct = max(0.0, min(1.0, float(data.get('extinction_pct') or 0)))
+        stage = _finite_int(data.get('breaking_stage'), -1, lo=-1)
+        ext_pct = _unit_pct(data.get('extinction_pct'))
         has_break = bool(data.get('has_break_data', False))
 
         self._breaking_stage = stage
@@ -894,7 +933,7 @@ class BossHpOverlay:
                 'hp_pct': hp_pct,
                 'extinction_pct': ext_pct,
                 'has_break_data': bool(raw.get('has_break_data', False)),
-                'breaking_stage': int(raw.get('breaking_stage') or -1),
+                'breaking_stage': _finite_int(raw.get('breaking_stage'), -1, lo=-1),
                 'shield_active': bool(raw.get('shield_active', False)),
                 'shield_pct': shield_pct,
             })
