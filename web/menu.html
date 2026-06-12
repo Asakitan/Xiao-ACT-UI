@@ -5091,26 +5091,46 @@ document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
         var component = _sourceComponentName(this.getAttribute('data-component'));
         var mode = _componentSourceValue(component, this.getAttribute('data-mode'));
         if (!component || !mode) return;
+        var previousMap = {};
+        _sourceComponents.forEach(function(key) { previousMap[key] = _dataSourceMap[key]; });
         playSound('snd-click');
         _dataSourceMap[component] = mode;
         _syncSourceButtons();
         _updateSourceSummary();
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_component_source) {
-            window.pywebview.api.set_component_source(component, mode);
-        }
+        _callMenuSettingApi('set_component_source', [component, mode], 'DATA SOURCE', function(data) {
+            if (data && data.data_source_map && typeof data.data_source_map === 'object') {
+                _syncDataSourceMap(data.data_source_map);
+            } else if (data && data.component !== undefined && data.mode !== undefined) {
+                var returnedComponent = _sourceComponentName(data.component);
+                if (returnedComponent) _dataSourceMap[returnedComponent] = _componentSourceValue(returnedComponent, data.mode);
+            }
+            _syncSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _syncDataSourceMap(previousMap);
+            _syncSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
 document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
         var mode = _memSourceValue(this.getAttribute('data-mode'));
+        var previousMode = _memDataSource;
         playSound('snd-click');
         _memDataSource = mode;
         _syncMemSourceButtons();
         _updateSourceSummary();
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_data_source) {
-            window.pywebview.api.set_data_source(mode);
-        }
+        _callMenuSettingApi('set_data_source', [mode], 'DATA SOURCE', function(data) {
+            _memDataSource = _memSourceValue(data && data.mode !== undefined ? data.mode : mode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _memDataSource = _memSourceValue(previousMode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
 
@@ -5179,6 +5199,29 @@ function _setBridgeBackedCheckbox(el, methodName, requested, label) {
     }).catch(function(err) {
         el.checked = !on;
         showAlert(label, String(err || '设置失败 / Unable to update setting'), true);
+    });
+}
+
+function _callMenuSettingApi(methodName, args, label, onOk, onFail) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api[methodName]) {
+        var missing = { ok: false, message: 'pywebview API 不可用 / pywebview API is not available' };
+        if (onFail) onFail(missing);
+        showAlert(label, missing.message, true);
+        return;
+    }
+    Promise.resolve(api[methodName].apply(api, args || [])).then(function(result) {
+        var data = (result === null || typeof result === 'undefined' || result === '') ? { ok: true } : _menuParseApiResult(result);
+        if (!data || data.ok === false) {
+            if (onFail) onFail(data);
+            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
+            return;
+        }
+        if (onOk) onOk(data);
+    }).catch(function(err) {
+        var failed = { ok: false, message: String(err || '设置失败 / Unable to update setting') };
+        if (onFail) onFail(failed);
+        showAlert(label, failed.message, true);
     });
 }
 
@@ -7673,16 +7716,23 @@ function _setBossBarModeUI(mode) {
     });
     return safeMode;
 }
+function _bossBarActiveMode() {
+    var active = document.querySelector('#boss-bar-mode-group .boss-bar-mode-btn.active');
+    return _bossBarModeValue(active ? active.getAttribute('data-mode') : 'boss_raid');
+}
 document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
         playSound('snd-click');
+        var previousMode = _bossBarActiveMode();
         var mode = _setBossBarModeUI(this.getAttribute('data-mode'));
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_boss_bar_mode) {
-            window.pywebview.api.set_boss_bar_mode(mode);
-        }
         var labels = { always: '有敌人就显示', boss_raid: '仅 Boss Raid', off: '关闭' };
-        showToast('BOSS HP BAR: ' + (labels[mode] || mode));
+        _callMenuSettingApi('set_boss_bar_mode', [mode], 'BOSS HP BAR', function(data) {
+            var applied = _setBossBarModeUI(data && data.mode !== undefined ? data.mode : mode);
+            showToast('BOSS HP BAR: ' + (labels[applied] || applied));
+        }, function() {
+            _setBossBarModeUI(previousMode);
+        });
     });
 });
 

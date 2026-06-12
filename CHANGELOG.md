@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.61: Web menu setting bridge 响应修复.
+
+  1) `web/menu.html` 修复 boss bar mode bridge 响应处理。
+     点击切换后现在会等待 `set_boss_bar_mode` 返回, 按后端返回的 mode 重新同步 UI,
+     失败时回滚到原 active mode 并提示用户。
+
+  2) `web/menu.html` 修复 data source bridge 响应处理。
+     component source 和 mem data source 现在会消费后端返回的标准化 mode/map,
+     明确失败或 Promise reject 时回滚到原设置, 避免界面与真实配置分叉。
+
 ## v4.6.60: Web menu toggle/boss-bar fallback 修复.
 
   1) `web/menu.html` 修复 boss bar mode 前端归一。
