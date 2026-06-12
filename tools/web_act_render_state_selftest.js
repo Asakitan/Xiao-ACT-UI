@@ -73,6 +73,11 @@ const dataSourceHealth = read("web/data_source_health.html");
 assert(dataSourceHealth.includes("function fallbackCopyText(text)"), "data source health must provide clipboard fallback");
 assert(dataSourceHealth.includes("健康快照复制失败"), "data source health must report clipboard failure");
 
+const memScope = read("web/mem_scope.html");
+assert(memScope.includes("function fallbackCopyText(text)"), "mem scope address copy must provide clipboard fallback");
+assert(memScope.includes("复制失败"), "mem scope address copy must report clipboard failure");
+assert(memScope.includes("attr_map API 不可用"), "mem scope attr button must report missing attr API");
+
 const dps = read("web/dps.html");
 assert(!dps.includes('data-uid="\' + Number(entity.uid || 0)'), "DPS rows must not coerce entity uid to Number for data-uid");
 assert(!dps.includes('onclick="_openDetail(\' + Number(entity.uid || 0) + \')"'), "DPS row click must not coerce entity uid to Number");

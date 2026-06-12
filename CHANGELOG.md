@@ -2,6 +2,14 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.85: Mem Scope 地址复制与 attr 按钮反馈修正.
+
+  1) `web/mem_scope.html` 搜索结果地址复制现在会等待 clipboard 写入结果,
+    async clipboard 失败时回退到 textarea/execCommand, 两条路径都失败时显示复制失败。
+
+  2) `web/mem_scope.html` 的 attr 按钮在 `mem_attr_map` API 不可用时会提示
+    `attr_map API 不可用`, 不再点击后静默无反馈。
+
 ## v4.6.84: 报告导出/数据源健康剪贴板 fallback 与失败提示.
 
   1) `web/act_report_export.html` 的报告复制与 Mini-Parse 复制现在会在

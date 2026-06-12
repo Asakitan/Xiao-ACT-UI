@@ -271,16 +271,34 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         });
     }
 
+    function fallbackCopyText(text) {
+        var area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); }
+        finally { document.body.removeChild(area); }
+        if (!ok) throw new Error('clipboard unavailable');
+        return true;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).catch(function () { return fallbackCopyText(text); });
+        }
+        return Promise.resolve().then(function () { return fallbackCopyText(text); });
+    }
+
     function copyAddr(addr) {
-        try {
-            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(addr);
-        } catch (_) {}
-        toast('已复制 ' + addr);
+        addr = String(addr || '');
+        copyText(addr).then(function () { toast('已复制 ' + addr); })
+            .catch(function () { toast('复制失败 ' + addr); });
     }
 
     function readAttr(addr) {
         var a = api();
-        if (!a || !a.mem_attr_map) return;
+        if (!a || !a.mem_attr_map) { toast(addr + ': attr_map API 不可用'); return; }
         Promise.resolve(a.mem_attr_map(addr)).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) {
