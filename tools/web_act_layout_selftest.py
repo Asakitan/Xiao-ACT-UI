@@ -95,6 +95,35 @@ def _assert_inline_js_args_are_escaped() -> None:
         raise AssertionError("trigger timer must encode rule ids with escaped jsArg")
 
 
+def _assert_plugin_manager_payloads_are_guarded() -> None:
+    plugin_manager = _read_web("plugin_manager.html")
+    forbidden = (
+        "var plugins = Array.isArray(data.plugins) ? data.plugins : [];",
+        "var bus = data.event_bus || {};",
+        "var logs = Array.isArray(plugin.logs) ? plugin.logs.slice(-5) : [];",
+        "esc((plugin.game_ids || []).join(', ') || '-')",
+        "var panels = (data && data.panels || []).filter(function (p) { return p.available && !p.hidden; });",
+    )
+    for snippet in forbidden:
+        if snippet in plugin_manager:
+            raise AssertionError("plugin manager payload guard missing for: " + snippet)
+    required = (
+        "function objectValue(value)",
+        "function listItems(value)",
+        "function objectItems(value)",
+        "plugin = objectValue(plugin);",
+        "var logs = listItems(plugin.logs).slice(-5);",
+        "esc(listItems(plugin.game_ids).join(', ') || '-')",
+        "data = objectValue(data);",
+        "var plugins = objectItems(data.plugins);",
+        "var bus = objectValue(data.event_bus);",
+        "var panels = objectItems(objectValue(data).panels).filter(function (p) { return p.available && !p.hidden; });",
+    )
+    for snippet in required:
+        if snippet not in plugin_manager:
+            raise AssertionError("missing plugin manager payload guard snippet: " + snippet)
+
+
 def _assert_drilldown_numbers_are_clamped() -> None:
     combatant = _read_web("act_combatant_drilldown.html")
     skill = _read_web("act_skill_drilldown.html")
@@ -646,6 +675,7 @@ def main() -> int:
     _assert_side_scroll("trigger_timer_manager.html", "trigger timer manager")
     _assert_selector_scroll("plugin_manager.html", ".side-panel", "plugin manager")
     _assert_inline_js_args_are_escaped()
+    _assert_plugin_manager_payloads_are_guarded()
     _assert_drilldown_numbers_are_clamped()
     _assert_act_dynamic_classes_and_widths_are_safe()
     _assert_history_indexes_are_normalized()

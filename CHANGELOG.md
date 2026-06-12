@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.91: Plugin Manager payload 防护修复.
+
+  1) `web/plugin_manager.html` 修复插件管理列表 payload 形状处理。
+     Plugin Manager Web 现在归一状态对象并只渲染对象插件行,
+     避免 null 或坏插件条目打断插件卡片渲染。
+
+  2) `web/plugin_manager.html` 修复插件 Panels 列表 payload 形状处理。
+     Plugin Manager Web 现在归一 event bus、数组字段与 UI panel 列表,
+     避免坏 panel payload 打断插件面板页增量渲染。
+
 ## v4.5.90: Raid Editor mechanics ID 参数修复.
 
   1) `web/raid_editor.html` 修复 mechanics 检测 chip 删除参数处理。

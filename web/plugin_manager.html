@@ -342,6 +342,20 @@ button.close {
         return result || {};
     }
 
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+
+    function objectItems(value) {
+        return listItems(value).filter(function (item) {
+            return item && typeof item === 'object' && !Array.isArray(item);
+        });
+    }
+
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') {
@@ -460,6 +474,7 @@ button.close {
     }
 
     function renderCard(plugin) {
+        plugin = objectValue(plugin);
         var active = !!plugin.active;
         var enabled = !!plugin.enabled;
         var cls = 'plugin-card' + (active ? ' active' : '') + (!enabled ? ' disabled' : '');
@@ -471,7 +486,7 @@ button.close {
         if (plugin.loaded) stateBadges.push(badge('LOADED', 'ok'));
         if ((plugin.failures || 0) > 0) stateBadges.push(badge('FAIL ' + plugin.failures, 'bad'));
         if ((plugin.event_failures || 0) > 0) stateBadges.push(badge('EVENT ' + plugin.event_failures, 'bad'));
-        var logs = Array.isArray(plugin.logs) ? plugin.logs.slice(-5) : [];
+        var logs = listItems(plugin.logs).slice(-5);
         var canEnable = !enabled;
         var idArg = jsArg(plugin.id);
         var actions = '';
@@ -487,9 +502,9 @@ button.close {
             '<div class="meta-grid">' +
                 '<div>Version: <span>' + esc(plugin.version || '-') + '</span></div>' +
                 '<div>Subscriptions: <span>' + esc(plugin.subscription_count || 0) + '</span></div>' +
-                '<div>Games: <span>' + esc((plugin.game_ids || []).join(', ') || '-') + '</span></div>' +
-                '<div>Permissions: <span>' + esc((plugin.permissions || []).join(', ') || '-') + '</span></div>' +
-                '<div>Capabilities: <span>' + esc((plugin.capability_ids || []).join(', ') || '-') + '</span></div>' +
+                '<div>Games: <span>' + esc(listItems(plugin.game_ids).join(', ') || '-') + '</span></div>' +
+                '<div>Permissions: <span>' + esc(listItems(plugin.permissions).join(', ') || '-') + '</span></div>' +
+                '<div>Capabilities: <span>' + esc(listItems(plugin.capability_ids).join(', ') || '-') + '</span></div>' +
                 '<div style="grid-column:1/-1">Entry: <span>' + esc(plugin.entry || '-') + '</span></div>' +
             '</div>' +
             (plugin.last_error ? '<div class="error-box">' + esc(plugin.last_error) + '</div>' : '') +
@@ -499,12 +514,13 @@ button.close {
     }
 
     function render(data) {
-        var plugins = Array.isArray(data.plugins) ? data.plugins : [];
+        data = objectValue(data);
+        var plugins = objectItems(data.plugins);
         document.getElementById('sum-total').textContent = String(data.plugin_count != null ? data.plugin_count : plugins.length);
         document.getElementById('sum-active').textContent = String(data.active_count || 0);
         document.getElementById('plugin-count').textContent = String(data.active_count || 0) + ' / ' + String(data.plugin_count != null ? data.plugin_count : plugins.length) + ' ACTIVE';
-        var bus = data.event_bus || {};
-        document.getElementById('sum-topics').textContent = String((bus.topics || []).length || bus.topic_count || 0);
+        var bus = objectValue(data.event_bus);
+        document.getElementById('sum-topics').textContent = String(listItems(bus.topics).length || bus.topic_count || 0);
         document.getElementById('sum-subs').textContent = String(bus.subscriber_count || bus.subscriptions || 0);
         if (!plugins.length) {
             list.innerHTML = '<div class="empty">未发现插件。<br/>把 plugin.json 和 plugin.py 放到 plugins/&lt;id&gt;/ 下面即可。</div>';
@@ -601,7 +617,7 @@ button.close {
             var seq = ++PluginManager._panelSeq;
             return apiCall('get_plugin_ui_panels', []).then(function (data) {
                 if (seq !== PluginManager._panelSeq) return;
-                var panels = (data && data.panels || []).filter(function (p) { return p.available && !p.hidden; });
+                var panels = objectItems(objectValue(data).panels).filter(function (p) { return p.available && !p.hidden; });
                 if (!panels.length) {
                     clearPanelCards(grid, '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>');
                     return;
