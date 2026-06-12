@@ -268,7 +268,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var out = {};
         var p = objectValue(r.payload);
         Object.keys(p).forEach(function (k) { out[k] = p[k]; });
-        ['time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid', 'skill_id', 'skill_name', 'monster_id', 'value', 'damage', 'heal', 'source'].forEach(function (k) {
+        // 行级解析名键是 'skill'/'monster'; 与 Tk _render_raw_payload 键列表 1:1
+        ['time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid', 'skill_id', 'skill', 'skill_name', 'monster_id', 'monster', 'monster_name', 'value', 'damage', 'heal', 'source'].forEach(function (k) {
             if (r[k] != null && r[k] !== '' && !(k in out)) out[k] = r[k];
         });
         return out;

@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.116: aggregate raw 视图解析名键修正 + Tk 滚动位置保留.
+
+  1) aggregate 展开 raw 事件视图(双端)补 'skill'/'monster' 键 —
+    行级解析名由 _action_log_group_metadata 写在这两个键下,
+    双端键列表此前只引用不存在的行级 'skill_name'/'monster_name',
+    解析出的人话技能/怪物名从未在 raw 视图出现(payload 自带时除外);
+    Tk/web 键列表同步对齐 1:1。
+
+  2) `gui_modules/sao_gui_act_aggregate.py` 重建时保留滚动位置 —
+    web 端 setContentHtml 早就 preserveScroll, Tk 端每次签名变化
+    全量重建后滚动跳回顶部; 现重建前记 canvas.yview 分数、重建后
+    update_idletasks + scrollregion + yview_moveto 还原。
+
 ## v4.6.115: report_export 指标卡暗色残留 + Tk commander 长名防挤防裁.
 
   1) `gui_modules/sao_gui_report_export.py` 指标卡(Damage/DPS/Heal/

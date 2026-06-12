@@ -274,6 +274,7 @@ class ActAggregatePanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
+        self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
@@ -294,6 +295,13 @@ class ActAggregatePanel:
         if sig == self._last_sig:
             return
         self._last_sig = sig
+        # 重建前记滚动位置, 重建后还原 — web 端 setContentHtml(preserveScroll)
+        # 同款; 否则每次刷新滚动跳回顶部
+        canvas = getattr(self, '_canvas', None)
+        try:
+            scroll_y = canvas.yview()[0] if canvas is not None else 0.0
+        except Exception:
+            scroll_y = 0.0
         for child in list(self._rows.winfo_children()):
             child.destroy()
         self._render_header_summary(status)
@@ -308,6 +316,13 @@ class ActAggregatePanel:
         accent = {'skill': 'gold', 'monster': 'danger', 'actor': 'cyan', 'topic': 'gold', 'field': 'cyan'}.get(str(status.get('group_by') or 'skill'), 'gold')
         self._render_group_section(f'按 {dim_label} 聚合', '', 'g', groups, value_key='damage', accent=accent)
         self._render_graph_preview(status.get('graph') if isinstance(status.get('graph'), Mapping) else {})
+        if canvas is not None and scroll_y > 0:
+            try:
+                self._rows.update_idletasks()
+                canvas.configure(scrollregion=canvas.bbox('all'))
+                canvas.yview_moveto(scroll_y)
+            except Exception:
+                pass
 
     def _render_header_summary(self, status: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -394,8 +409,11 @@ class ActAggregatePanel:
     def _render_raw_payload(self, parent: tk.Misc, row: Mapping[str, Any]) -> None:
         """The full event as the plugin sees it — raw payload + raw UIDs + epoch time."""
         raw = dict(row.get('payload') if isinstance(row.get('payload'), Mapping) else {})
+        # 行级解析名键是 'skill'/'monster' (_action_log_group_metadata),
+        # 'skill_name'/'monster_name' 只可能来自 payload 本身
         for key in ('time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid',
-                    'skill_id', 'skill_name', 'monster_id', 'monster_name', 'value', 'damage', 'heal', 'source'):
+                    'skill_id', 'skill', 'skill_name', 'monster_id', 'monster', 'monster_name',
+                    'value', 'damage', 'heal', 'source'):
             if row.get(key) not in (None, '') and key not in raw:
                 raw[key] = row.get(key)
         text = json.dumps(raw, ensure_ascii=False, indent=2, default=str)
