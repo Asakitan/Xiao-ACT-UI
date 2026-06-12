@@ -95,6 +95,24 @@ class TcpBuffSkillTest(unittest.TestCase):
         ids = [r["skill_id"] for r in obs.get(90001, [])]
         self.assertIn(827173, ids, "TCP-detected skill must land in observed skills")
 
+    def test_malformed_monster_numbers_keep_valid_boss_update(self):
+        eng = self._engine()
+
+        eng.on_monster_update(_monster(
+            1000,
+            [],
+            hp="bad",
+            max_hp=2000,
+            shield_pct="bad",
+            breaking_stage="bad",
+            extinction_pct="nan",
+        ))
+
+        self.assertEqual(eng._boss_uuid, 1000)
+        self.assertEqual(eng._boss_hp, 0)
+        self.assertEqual(eng._boss_max_hp, 2000)
+        self.assertEqual(eng._boss_breaking_stage, 0)
+
 
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(TcpBuffSkillTest)

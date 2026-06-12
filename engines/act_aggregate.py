@@ -9,6 +9,7 @@ not have to render one raw event per line by default.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import math
 from typing import Any, Iterable, Mapping
 
 
@@ -65,7 +66,8 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
             value = value.replace(",", "").strip()
             if not value:
                 return default
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else default
     except Exception:
         return default
 
@@ -181,7 +183,7 @@ def normalize_act_event_row(event_or_row: Mapping[str, Any], *, index: int = 0) 
     kind = "heal" if topic == "heal" or _safe_float(payload.get("heal") or payload.get("total_heal"), 0.0) else ("damage" if topic == "damage" or _safe_float(payload.get("damage") or payload.get("total_damage"), 0.0) else topic)
     row_id = _text(item.get("id")) or f"{topic}:{time_ms}:{index}"
     return {
-        "index": int(item.get("index") or index),
+        "index": _safe_int(item.get("index"), index),
         "id": row_id,
         "time_ms": time_ms,
         "topic": topic,
@@ -222,7 +224,7 @@ def normalize_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         for idx, row in enumerate(rows or [])
         if isinstance(row, Mapping)
     ]
-    normalized.sort(key=lambda row: (int(row.get("time_ms") or 0), int(row.get("index") or 0), str(row.get("id") or "")))
+    normalized.sort(key=lambda row: (_safe_int(row.get("time_ms"), 0), _safe_int(row.get("index"), 0), str(row.get("id") or "")))
     return normalized
 
 
@@ -255,15 +257,15 @@ def _new_group(key: str, kind: str, name: str) -> dict[str, Any]:
 
 
 def _add_common(group: dict[str, Any], row: Mapping[str, Any], *, sample_limit: int = 8) -> None:
-    time_ms = int(row.get("time_ms") or 0)
-    group["count"] = int(group.get("count") or 0) + 1
-    group["total_value"] = round(float(group.get("total_value") or 0.0) + float(row.get("value") or 0.0), 3)
-    group["damage"] = round(float(group.get("damage") or 0.0) + float(row.get("damage") or 0.0), 3)
-    group["heal"] = round(float(group.get("heal") or 0.0) + float(row.get("heal") or 0.0), 3)
+    time_ms = _safe_int(row.get("time_ms"), 0)
+    group["count"] = _safe_int(group.get("count"), 0) + 1
+    group["total_value"] = round(_safe_float(group.get("total_value"), 0.0) + _safe_float(row.get("value"), 0.0), 3)
+    group["damage"] = round(_safe_float(group.get("damage"), 0.0) + _safe_float(row.get("damage"), 0.0), 3)
+    group["heal"] = round(_safe_float(group.get("heal"), 0.0) + _safe_float(row.get("heal"), 0.0), 3)
     if time_ms:
-        first = int(group.get("first_time_ms") or 0)
+        first = _safe_int(group.get("first_time_ms"), 0)
         group["first_time_ms"] = time_ms if not first else min(first, time_ms)
-        group["last_time_ms"] = max(int(group.get("last_time_ms") or 0), time_ms)
+        group["last_time_ms"] = max(_safe_int(group.get("last_time_ms"), 0), time_ms)
     for field, out_key in (
         ("actor", "actors"), ("actor_uid", "actor_uids"), ("target", "targets"),
         ("target_uid", "target_uids"), ("skill_name", "skills"), ("skill_id", "skill_ids"),
@@ -272,7 +274,7 @@ def _add_common(group: dict[str, Any], row: Mapping[str, Any], *, sample_limit: 
         ("source", "sources"), ("topic", "topics"),
     ):
         _append_unique(group[out_key], row.get(field))
-    if len(group["rows"]) < max(1, int(sample_limit or 8)):
+    if len(group["rows"]) < max(1, _safe_int(sample_limit or 8, 8)):
         group["rows"].append(dict(row))
     else:
         group["has_more_rows"] = True
@@ -282,13 +284,13 @@ def _finalize_groups(groups: Iterable[dict[str, Any]], *, top_n: int = 20) -> li
     out = []
     for group in groups:
         item = dict(group)
-        item["total_value"] = round(float(item.get("total_value") or 0.0), 3)
-        item["damage"] = round(float(item.get("damage") or 0.0), 3)
-        item["heal"] = round(float(item.get("heal") or 0.0), 3)
-        item["duration_ms"] = max(0, int(item.get("last_time_ms") or 0) - int(item.get("first_time_ms") or 0))
+        item["total_value"] = round(_safe_float(item.get("total_value"), 0.0), 3)
+        item["damage"] = round(_safe_float(item.get("damage"), 0.0), 3)
+        item["heal"] = round(_safe_float(item.get("heal"), 0.0), 3)
+        item["duration_ms"] = max(0, _safe_int(item.get("last_time_ms"), 0) - _safe_int(item.get("first_time_ms"), 0))
         out.append(item)
-    out.sort(key=lambda item: (-float(item.get("damage") or item.get("total_value") or 0.0), -int(item.get("count") or 0), str(item.get("name") or ""), str(item.get("key") or "")))
-    return out[:max(1, int(top_n or 20))]
+    out.sort(key=lambda item: (-_safe_float(item.get("damage") or item.get("total_value"), 0.0), -_safe_int(item.get("count"), 0), str(item.get("name") or ""), str(item.get("key") or "")))
+    return out[:max(1, _safe_int(top_n or 20, 20))]
 
 
 def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int = 1000, top_n: int = 80,
@@ -299,13 +301,13 @@ def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int
     normalized = list(rows) if _pre_normalized else normalize_rows(rows)
     if not normalized:
         return []
-    bucket_ms = max(100, int(window_ms or 1000))
-    first_ms = int(normalized[0].get("time_ms") or 0)
+    bucket_ms = max(100, _safe_int(window_ms or 1000, 1000))
+    first_ms = _safe_int(normalized[0].get("time_ms"), 0)
     groups: dict[int, dict[str, Any]] = {}
     topic_counters: dict[int, Counter[str]] = defaultdict(Counter)
     label_counters: dict[int, Counter[str]] = defaultdict(Counter)
     for row in normalized:
-        time_ms = int(row.get("time_ms") or 0)
+        time_ms = _safe_int(row.get("time_ms"), 0)
         bucket = ((time_ms - first_ms) // bucket_ms) if first_ms else (time_ms // bucket_ms)
         start = first_ms + bucket * bucket_ms if first_ms else bucket * bucket_ms
         key = f"time:{start}:{start + bucket_ms}"
@@ -319,14 +321,14 @@ def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int
     for idx, group in enumerate(ordered):
         group["topics_top"] = _counter_top(topic_counters[idx], limit=5)
         group["labels_top"] = _counter_top(label_counters[idx], limit=5)
-    return ordered[:max(1, int(top_n or 80))]
+    return ordered[:max(1, _safe_int(top_n or 80, 80))]
 
 
 def aggregate_damage_by_skill(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
                               _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     for row in (rows if _pre_normalized else normalize_rows(rows)):
-        if not (float(row.get("damage") or 0.0) or float(row.get("heal") or 0.0) or row.get("skill_id") or row.get("skill_name")):
+        if not (_safe_float(row.get("damage"), 0.0) or _safe_float(row.get("heal"), 0.0) or row.get("skill_id") or row.get("skill_name")):
             continue
         key = _key("skill", row.get("skill_id"), str(row.get("skill_name") or ""), str(row.get("label") or row.get("id") or "unknown"))
         name = str(row.get("skill_name") or row.get("label") or row.get("skill_id") or "Unknown Skill")
@@ -339,7 +341,7 @@ def aggregate_damage_by_monster(rows: Iterable[Mapping[str, Any]], *, top_n: int
                                 _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     for row in (rows if _pre_normalized else normalize_rows(rows)):
-        if not (float(row.get("damage") or 0.0) or row.get("monster_id") or row.get("monster_name") or row.get("target_uid")):
+        if not (_safe_float(row.get("damage"), 0.0) or row.get("monster_id") or row.get("monster_name") or row.get("target_uid")):
             continue
         key = _key("monster", row.get("monster_id") or row.get("target_uid"), str(row.get("monster_name") or row.get("target") or ""), str(row.get("id") or "unknown"))
         name = str(row.get("monster_name") or row.get("target") or row.get("monster_id") or row.get("target_uid") or "Unknown Target")
@@ -354,7 +356,7 @@ def aggregate_damage_by_dungeon(rows: Iterable[Mapping[str, Any]], *, top_n: int
     for row in (rows if _pre_normalized else normalize_rows(rows)):
         dungeon_id = row.get("dungeon_id")
         dungeon_name = str(row.get("dungeon_name") or "")
-        if not (dungeon_id or dungeon_name or float(row.get("damage") or 0.0) or float(row.get("heal") or 0.0)):
+        if not (dungeon_id or dungeon_name or _safe_float(row.get("damage"), 0.0) or _safe_float(row.get("heal"), 0.0)):
             continue
         key = _key("dungeon", dungeon_id, dungeon_name, "live")
         name = dungeon_name or (str(dungeon_id) if dungeon_id else "Live Encounter")
@@ -439,10 +441,11 @@ def _overview(rows: list[dict[str, Any]], render_spec: Mapping[str, Any] | None 
     totals = render_spec.get("totals") if isinstance(render_spec.get("totals"), Mapping) else {}
     encounter = render_spec.get("encounter") if isinstance(render_spec.get("encounter"), Mapping) else {}
     context = render_spec.get("context") if isinstance(render_spec.get("context"), Mapping) else {}
-    first = min((int(row.get("time_ms") or 0) for row in rows if int(row.get("time_ms") or 0)), default=0)
-    last = max((int(row.get("time_ms") or 0) for row in rows if int(row.get("time_ms") or 0)), default=0)
-    damage = sum(float(row.get("damage") or 0.0) for row in rows)
-    heal = sum(float(row.get("heal") or 0.0) for row in rows)
+    times = [_safe_int(row.get("time_ms"), 0) for row in rows]
+    first = min((value for value in times if value), default=0)
+    last = max((value for value in times if value), default=0)
+    damage = sum(_safe_float(row.get("damage"), 0.0) for row in rows)
+    heal = sum(_safe_float(row.get("heal"), 0.0) for row in rows)
     render_damage = _safe_float(totals.get("damage"), 0.0)
     render_heal = _safe_float(totals.get("heal"), 0.0)
     # `slice_span_ms` is the width of the *retained event slice*; it is only the
@@ -490,10 +493,10 @@ def build_act_aggregate_summary(rows: Iterable[Mapping[str, Any]], *, render_spe
     return {
         "overview": _overview(normalized, render_spec),
         "timeline_clusters": timeline,
-        "skill_damage": skills[:max(1, int(top_n or 20))],
-        "monster_damage": monsters[:max(1, int(top_n or 20))],
-        "dungeon_damage": dungeons[:max(1, min(int(top_n or 20), 12))],
-        "log_groups": logs[:max(1, int(top_n or 20))],
+        "skill_damage": skills[:max(1, _safe_int(top_n or 20, 20))],
+        "monster_damage": monsters[:max(1, _safe_int(top_n or 20, 20))],
+        "dungeon_damage": dungeons[:max(1, min(_safe_int(top_n or 20, 20), 12))],
+        "log_groups": logs[:max(1, _safe_int(top_n or 20, 20))],
         "source_mix": _source_mix(normalized),
         "raw_counts": {
             "rows": len(normalized),

@@ -3,6 +3,7 @@
 
 import copy
 import json
+import math
 import os
 import threading
 import time
@@ -80,6 +81,8 @@ def _coerce_float(value: Any, default: float = 0.0, minimum: Optional[float] = N
     try:
         result = float(value)
     except Exception:
+        result = float(default)
+    if not math.isfinite(result):
         result = float(default)
     if minimum is not None:
         result = max(minimum, result)
@@ -1309,9 +1312,9 @@ class BossRaidEngine:
             if self._state != self.STATE_RUNNING:
                 # Still track even when idle so we can show info
                 pass
-            uuid = int(monster_data.get("uuid", 0))
-            hp = int(monster_data.get("hp") or 0)
-            max_hp = int(monster_data.get("max_hp") or 0)
+            uuid = _coerce_int(monster_data.get("uuid"), 0, minimum=0)
+            hp = _coerce_int(monster_data.get("hp"), 0, minimum=0)
+            max_hp = _coerce_int(monster_data.get("max_hp"), 0, minimum=0)
 
             # ── Update multi-entity tracking ──
             if uuid and uuid in self._entities:
@@ -1320,9 +1323,9 @@ class BossRaidEngine:
                     ent['hp'] = hp
                     ent['max_hp'] = max_hp
                 ent['shield_active'] = bool(monster_data.get('shield_active'))
-                ent['shield_pct'] = float(monster_data.get('shield_pct') or 0.0)
-                ent['breaking_stage'] = int(monster_data.get('breaking_stage') or 0)
-                ent['extinction_pct'] = float(monster_data.get('extinction_pct') or 0.0)
+                ent['shield_pct'] = _coerce_float(monster_data.get('shield_pct'), 0.0, minimum=0.0)
+                ent['breaking_stage'] = _coerce_int(monster_data.get('breaking_stage'), 0)
+                ent['extinction_pct'] = _coerce_float(monster_data.get('extinction_pct'), 0.0, minimum=0.0)
                 ent['in_overdrive'] = bool(monster_data.get('in_overdrive'))
                 name = _string(monster_data.get('name', ''))
                 if name and not ent.get('name'):
@@ -1340,15 +1343,15 @@ class BossRaidEngine:
                 return
 
             self._last_monster_data = monster_data
-            self._boss_base_id = int(monster_data.get("template_id") or 0) or self._boss_base_id
+            self._boss_base_id = _coerce_int(monster_data.get("template_id"), 0, minimum=0) or self._boss_base_id
             if max_hp > 0:
                 self._boss_hp = hp
                 self._boss_max_hp = max_hp
-            self._boss_breaking_stage = int(monster_data.get("breaking_stage") or 0)
-            self._boss_extinction_pct = float(monster_data.get("extinction_pct") or 0.0)
+            self._boss_breaking_stage = _coerce_int(monster_data.get("breaking_stage"), 0)
+            self._boss_extinction_pct = _coerce_float(monster_data.get("extinction_pct"), 0.0, minimum=0.0)
             self._boss_in_overdrive = bool(monster_data.get("in_overdrive"))
             self._boss_shield_active = bool(monster_data.get("shield_active"))
-            self._boss_shield_pct = float(monster_data.get("shield_pct") or 0.0)
+            self._boss_shield_pct = _coerce_float(monster_data.get("shield_pct"), 0.0, minimum=0.0)
             self._observe_state_transitions_locked()
 
             # pure-TCP boss-skill detection (no-op while a memory feed is live)

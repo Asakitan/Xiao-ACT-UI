@@ -168,6 +168,26 @@ class ActAggregateTests(unittest.TestCase):
         self.assertEqual(summary["source_mix"][0]["source"], "packet")
         self.assertEqual({item["name"] for item in summary["log_groups"]}, {"Slash", "Pierce", "Recover"})
 
+    def test_summary_tolerates_bad_row_index(self) -> None:
+        summary = build_act_aggregate_summary([
+            {
+                "id": "evt-bad-index",
+                "index": "bad",
+                "time_ms": 100,
+                "topic": "damage",
+                "source": "packet",
+                "actor": "Kirito",
+                "target": "Boss",
+                "label": "Slash",
+                "damage": 1200,
+                "payload": {"skill_id": 110048200100, "monster_name": "Boss"},
+            },
+        ])
+
+        self.assertEqual(summary["raw_counts"]["rows"], 1)
+        self.assertEqual(summary["overview"]["damage"], 1200)
+        self.assertEqual(summary["skill_damage"][0]["count"], 1)
+
     def test_runtime_aggregate_status_from_event_bus(self) -> None:
         class Owner:
             pass

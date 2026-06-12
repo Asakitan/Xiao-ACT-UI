@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.14: ACT aggregate 与 BossRaid monster 数值防护修复.
+
+  1) `engines/act_aggregate.py` 修复 ACT 聚合行数值归一。
+     坏 `index`、预归一化行的坏时间/计数/伤害值不再打断聚合摘要,
+     避免 ACT 聚合驾驶舱因为单条异常历史行渲染失败。
+
+  2) `engines/boss_raid_engine.py` 修复 BossRaid monster 更新数值归一。
+     `hp`、`max_hp`、护盾/破韧/灭绝进度等 TCP 字段现在先归一成有限数,
+     避免单个异常字段让有效 boss UUID/最大血量与机制观察更新整段丢失。
+
 ## v4.6.13: Entity packet callback 数值防护修复.
 
   1) `gui_modules/sao_gui_packet_callbacks_mixin.py` 修复 dungeon/scene event ID 归一。
