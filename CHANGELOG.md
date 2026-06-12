@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.96: 插件卡片按钮聚合 + 菜单分离面板隐藏时停渲.
+
+  1) 插件管理卡片(Web `web/plugin_manager.html` + Tk
+    `gui_modules/sao_gui_plugin_manager.py` 双端 1:1)按钮 5→3: 重载/置顶/
+    卸载收进「更多 ▾」(Web 用 select 即开即用, Tk 用 tk.Menu 弹出),
+    启用/禁用保持直显; 全部原功能保留, 禁用态/条件显示语义不变。
+
+  2) `web/menu.html` 插件分离面板 800ms 轮询在 document.hidden(菜单窗口
+    隐藏)时跳过重渲染, 计时器保留待恢复, 不再后台空转。
+
 ## v4.6.95: BuffMon compose 签名去 id() + Mem Scope 搜索轮询减半.
 
   1) `gui_modules/sao_gui_buffmon.py` GPU compose 签名从 `id(base_img)` 改为

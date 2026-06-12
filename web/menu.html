@@ -8353,8 +8353,9 @@ setTimeout(function() {
         if (_pdTimer) clearInterval(_pdTimer);
         _pdTimer = setInterval(function () {
             var o = document.getElementById('plugin-detached-overlay');
-            if (o && o.style.display !== 'none') renderPluginDetachedPanels();
-            else { clearInterval(_pdTimer); _pdTimer = null; }
+            if (!o || o.style.display === 'none') { clearInterval(_pdTimer); _pdTimer = null; return; }
+            if (document.hidden) return;  // 菜单窗口隐藏时跳过重渲, 计时器保留待恢复
+            renderPluginDetachedPanels();
         }, 800);
     };
     window.hidePluginDetached = function () {

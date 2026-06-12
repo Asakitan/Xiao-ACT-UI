@@ -170,6 +170,17 @@ button.close {
 }
 .meta-grid span { color: var(--text); }
 .plugin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.plugin-actions select.card-more {
+    border: 1px solid rgba(117, 205, 255, 0.48);
+    background: linear-gradient(180deg, rgba(61, 143, 201, 0.42), rgba(19, 48, 74, 0.58));
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 9px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.plugin-actions select.card-more option { background: #13304a; color: var(--text); }
 .error-box, .log-box {
     margin-top: 8px;
     border: 1px solid rgba(255, 107, 130, 0.36);
@@ -515,11 +526,15 @@ button.close {
         var actions = '';
         actions += '<button type="button" class="primary" onclick="PluginManager.enable(' + idArg + ')"' + (canEnable ? '' : ' disabled') + '>启用 Enable</button>';
         actions += '<button type="button" class="danger" onclick="PluginManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
-        actions += '<button type="button" onclick="PluginManager.reload(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>重载 Reload</button>';
-        actions += '<button type="button" onclick="PluginManager.pin(' + idArg + ',' + (plugin.pinned ? 'false' : 'true') + ')">' + (plugin.pinned ? '★ 取消置顶' : '☆ 置顶 Pin') + '</button>';
+        // 重载/置顶/卸载收进「更多 ▾」(select 即开即用, 与 raid_editor 试▾ 同款)
+        actions += '<select class="card-more" onchange="if(this.value){var k=this.value;this.selectedIndex=0;PluginManager.cardAction(' + idArg + ',k);}">';
+        actions += '<option value="">更多 ▾</option>';
+        actions += '<option value="reload"' + (enabled ? '' : ' disabled') + '>重载 Reload</option>';
+        actions += '<option value="' + (plugin.pinned ? 'unpin' : 'pin') + '">' + (plugin.pinned ? '★ 取消置顶' : '☆ 置顶 Pin') + '</option>';
         if (plugin.user_installed) {
-            actions += '<button type="button" class="danger" onclick="PluginManager.uninstall(' + idArg + ')">卸载 Uninstall</button>';
+            actions += '<option value="uninstall">卸载 Uninstall</option>';
         }
+        actions += '</select>';
         return '<article class="' + cls + '">' +
             '<div class="card-top"><div><div class="plugin-name">' + esc(plugin.name || plugin.id) + '</div><div class="plugin-id">' + esc(plugin.id || '') + '</div></div><div class="badges">' + stateBadges.join('') + '</div></div>' +
             '<div class="meta-grid">' +
@@ -587,6 +602,12 @@ button.close {
                 showToast(data.ok === false ? (data.message || '卸载失败') : (data.message || (id + ' 已卸载')));
                 return PluginManager.refresh();
             });
+        },
+        cardAction: function (id, key) {
+            if (key === 'reload') return PluginManager.reload(id);
+            if (key === 'pin') return PluginManager.pin(id, true);
+            if (key === 'unpin') return PluginManager.pin(id, false);
+            if (key === 'uninstall') return PluginManager.uninstall(id);
         },
         reload: function (id) {
             return apiCall('reload_plugins', [id]).then(function (data) {

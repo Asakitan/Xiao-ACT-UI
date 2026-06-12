@@ -367,13 +367,9 @@ class PluginManagerPanel:
         actions.pack(fill='x', padx=10, pady=(0, 9))
         self._action_button(actions, '启用 Enable', lambda pid=plugin_id: self._enable(pid), enabled=not enabled)
         self._action_button(actions, '禁用 Disable', lambda pid=plugin_id: self._disable(pid), enabled=enabled)
-        self._action_button(actions, '重载 Reload', lambda pid=plugin_id: self._reload(pid), enabled=enabled)
-        self._action_button(
-            actions, ('★ 取消置顶' if pinned else '☆ 置顶 Pin'),
-            lambda pid=plugin_id, pn=pinned: self._pin(pid, not pn))
-        if bool(plugin.get('user_installed')):
-            self._action_button(
-                actions, '卸载 Uninstall', lambda pid=plugin_id: self._uninstall(pid))
+        # 重载/置顶/卸载收进「更多 ▾」菜单 (与 Web plugin_manager 卡片 1:1)
+        self._more_button(actions, plugin_id, enabled=enabled, pinned=pinned,
+                          user_installed=bool(plugin.get('user_installed')))
 
     def _format_meta(self, plugin: Mapping[str, Any]) -> str:
         games = ','.join(str(x) for x in (plugin.get('game_ids') or [])) or '-'
@@ -398,7 +394,7 @@ class PluginManagerPanel:
             f"entry={plugin.get('entry') or '-'}"
         )
 
-    def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> None:
+    def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> tk.Button:
         btn = tk.Button(
             parent,
             text=text,
@@ -415,6 +411,31 @@ class PluginManagerPanel:
             pady=3,
         )
         btn.pack(side='left', padx=(0, 7))
+        return btn
+
+    def _more_button(self, parent: tk.Frame, plugin_id: str, *, enabled: bool,
+                     pinned: bool, user_installed: bool) -> None:
+        btn = self._action_button(parent, '更多 ▾', None)
+
+        def _post() -> None:
+            menu = tk.Menu(btn, tearoff=0,
+                           bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
+                           activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
+                           disabledforeground='#6e8190', relief='flat', bd=0)
+            menu.add_command(label='重载 Reload',
+                             command=lambda: self._reload(plugin_id),
+                             state=('normal' if enabled else 'disabled'))
+            menu.add_command(label=('★ 取消置顶' if pinned else '☆ 置顶 Pin'),
+                             command=lambda: self._pin(plugin_id, not pinned))
+            if user_installed:
+                menu.add_command(label='卸载 Uninstall',
+                                 command=lambda: self._uninstall(plugin_id))
+            try:
+                menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+            finally:
+                menu.grab_release()
+
+        btn.configure(command=_post)
 
     def _import_plugin(self) -> None:
         try:
