@@ -730,6 +730,8 @@ def main() -> int:
         "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "results.forEach(function(item) {\n            var data = (typeof item === 'string') ? JSON.parse(item) : item;",
         "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = (typeof result === 'string') ? JSON.parse(result) : result;",
+        "window.pywebview.api.get_auto_key_state().then(function(result) {\n            var data = _akParseApiResult(result);",
+        "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = _brParseApiResult(result);",
     ]
     for pattern in boss_raid_api_raw_patterns:
         if pattern in html:
@@ -745,7 +747,14 @@ def main() -> int:
         "var rows = Array.isArray(results) ? results : [];",
         "rows.forEach(function(item) {",
         "var data = _brParseApiResult(item);",
-        "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = _brParseApiResult(result);",
+        "function _loadInitialAutoKeyState()",
+        "return api.get_auto_key_state();",
+        "showToast(_menuApiMessage(data, 'AUTO KEY STATE LOAD FAILED'), 3200);",
+        "function _loadInitialBossRaidState()",
+        "return api.get_boss_raid_state();",
+        "showToast(_menuApiMessage(data, 'BOSS RAID STATE LOAD FAILED'), 3200);",
+        "_loadInitialAutoKeyState();",
+        "_loadInitialBossRaidState();",
         "data.message || data.error || data.detail",
     ]
     for snippet in boss_raid_api_safe_required:

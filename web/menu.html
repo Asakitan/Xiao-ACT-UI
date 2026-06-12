@@ -6109,6 +6109,23 @@ function _akRefreshState() {
     });
 }
 
+function _loadInitialAutoKeyState() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_auto_key_state) return;
+    Promise.resolve().then(function() {
+        return api.get_auto_key_state();
+    }).then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.ok && data.state) {
+            _syncAutoKeyState(data.state);
+        } else if (data && data.ok === false) {
+            showToast(_menuApiMessage(data, 'AUTO KEY STATE LOAD FAILED'), 3200);
+        }
+    }).catch(function(err) {
+        showToast(String(err || 'AUTO KEY STATE LOAD FAILED'), 3200);
+    });
+}
+
 function _akAddAction() {
     if (!_autoKeyDraftProfile) return;
     var nextIndex = (_autoKeyDraftProfile.actions || []).length + 1;
@@ -7742,6 +7759,22 @@ function _brRefreshState() {
         showToast('BOSS RAID REFRESHED');
     });
 }
+function _loadInitialBossRaidState() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_boss_raid_state) return;
+    Promise.resolve().then(function() {
+        return api.get_boss_raid_state();
+    }).then(function(result) {
+        var data = _brParseApiResult(result);
+        if (data && data.ok !== false && data.state) {
+            _syncBossRaidState(data.state);
+        } else if (data && data.ok === false) {
+            showToast(_menuApiMessage(data, 'BOSS RAID STATE LOAD FAILED'), 3200);
+        }
+    }).catch(function(err) {
+        showToast(String(err || 'BOSS RAID STATE LOAD FAILED'), 3200);
+    });
+}
 function _brSaveProfile() {
     if (!_brDraftProfile) {
         showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
@@ -8150,22 +8183,8 @@ window.SAO = {
 
 setTimeout(function() {
     _initPanelThemes();
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_auto_key_state) {
-        window.pywebview.api.get_auto_key_state().then(function(result) {
-            var data = _akParseApiResult(result);
-            if (data && data.ok && data.state) {
-                _syncAutoKeyState(data.state);
-            }
-        });
-    }
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_boss_raid_state) {
-        window.pywebview.api.get_boss_raid_state().then(function(result) {
-            var data = _brParseApiResult(result);
-            if (data && data.ok !== false && data.state) {
-                _syncBossRaidState(data.state);
-            }
-        });
-    }
+    _loadInitialAutoKeyState();
+    _loadInitialBossRaidState();
     // System clock — SAO sci-fi style with seconds
     function _menuClock() {
         var el = document.getElementById('info-clock');

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.70: Web menu initial state bridge 响应修复.
+
+  1) `web/menu.html` 修复 AutoKey 初始状态拉取的失败处理。
+     启动初始化现在通过安全 loader 调用 `get_auto_key_state`,
+     同步异常、失败返回和 Promise reject 都不会中断后续菜单初始化。
+
+  2) `web/menu.html` 修复 BossRaid 初始状态拉取的失败处理。
+     启动初始化现在通过安全 loader 调用 `get_boss_raid_state`,
+     失败时显示短提示并保留现有本地状态, 避免裸 Promise 静默失败。
+
 ## v4.6.69: Web menu updater bridge 响应修复.
 
   1) `web/menu.html` 修复 updater apply/download 的失败恢复。
