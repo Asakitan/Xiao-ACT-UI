@@ -568,7 +568,7 @@ class PacketBridge:
             try:
                 ms.set_dps_tracker(tracker)
             except Exception:
-                pass
+                logger.warning('[Bridge] set_dps_tracker passthrough to mem source failed', exc_info=True)
 
     def set_boss_raid_engine(self, engine) -> None:
         """Wire the boss raid engine so the (lazily-created) memory source can push
@@ -580,7 +580,7 @@ class PacketBridge:
             try:
                 ms.set_boss_raid_engine(engine)
             except Exception:
-                pass
+                logger.warning('[Bridge] set_boss_raid_engine passthrough to mem source failed', exc_info=True)
 
     def _start_memory_source(self) -> bool:
         """Lazy-import + start UnifiedDataSource. Returns True on success."""

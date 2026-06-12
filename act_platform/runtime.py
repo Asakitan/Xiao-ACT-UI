@@ -616,6 +616,10 @@ def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
     if not result.get("ok"):
         return result
     try:
+        manager.clear_persisted_enabled(plugin_id)
+    except Exception:
+        pass
+    try:
         status = manager.status()
     except Exception:
         status = {}

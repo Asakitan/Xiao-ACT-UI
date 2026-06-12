@@ -1642,6 +1642,17 @@ class PluginManager:
     def _set_persisted_enabled(self, plugin_id: str, enabled: bool) -> None:
         current = self._persisted_enabled()
         current[str(plugin_id or "")] = bool(enabled)
+        self._store_persisted_enabled(current)
+
+    def clear_persisted_enabled(self, plugin_id: str) -> None:
+        """卸载后清掉该插件的持久化启用标记, 避免同名插件复用旧状态."""
+        current = self._persisted_enabled()
+        if str(plugin_id or "") not in current:
+            return
+        current.pop(str(plugin_id or ""), None)
+        self._store_persisted_enabled(current)
+
+    def _store_persisted_enabled(self, current: dict[str, bool]) -> None:
         if self.settings is not None and hasattr(self.settings, "set"):
             self.settings.set("act_plugin_enabled", current)
             save = getattr(self.settings, "save", None)

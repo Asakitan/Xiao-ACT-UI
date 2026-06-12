@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.77: 内存源依赖透传失败可见化 + 插件卸载清除启用残留.
+
+  1) `net/packet_bridge.py` `set_dps_tracker`/`set_boss_raid_engine` 向 mem source
+     透传失败时不再静默吞错, 输出 `[Bridge] ... passthrough failed` 警告;
+     该透传链断裂曾导致 DPS 面板缺 MEM 数据 (历史 7afd689), 现在可被日志定位。
+
+  2) `act_platform/plugins.py` 新增 `clear_persisted_enabled`,
+     `act_plugin_uninstall` 卸载成功后清除 `act_plugin_enabled` 持久化残留,
+     避免之后导入同名插件复用旧启用状态; install selftest 10 绿。
+
 ## v4.6.76: DPS 技能语义匹配热路径提速 + 设置保存失败可见化.
 
   1) `engines/dps_tracker.py` 重构 `_semantic_base_skill_id` 的候选匹配。
