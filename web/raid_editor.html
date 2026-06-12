@@ -394,11 +394,12 @@ function _badges(rec) {
 
 function loadReactions() {
     var a = _api();
-    if (!a || !a.get_boss_reactions) { return; }
+    if (!a || !a.get_boss_reactions) { _mechNotice('Boss 反应接口不可用', true); return; }
     Promise.resolve(a.get_boss_reactions(_reactScene, _reactBoss || null)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
-    }).catch(function () {});
+        else if (r && !r.ok) { _mechNotice(r.message || 'Boss 反应加载失败', true); }
+    }).catch(function () { _mechNotice('Boss 反应加载失败: 接口异常', true); });
 }
 
 function _obsLabel(s) {
@@ -814,7 +815,7 @@ function mechNew() {
         dodge: { enabled: false, linkage_id: '', inline: {} }
     };
     var a = _api();
-    if (!a || !a.save_mechanic) return;
+    if (!a || !a.save_mechanic) { _mechNotice('机制接口不可用', true); return; }
     Promise.resolve(a.save_mechanic(JSON.stringify(draft))).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok && r.state) {
@@ -826,8 +827,10 @@ function mechNew() {
                 delete _mechDraft.summary;
             }
             renderMechanics();
+        } else if (r && !r.ok) {
+            _mechNotice(r.message || '新建机制失败', true);
         }
-    }).catch(function () {});
+    }).catch(function () { _mechNotice('新建机制失败: 接口异常', true); });
 }
 
 function _mInput(id, label, value, width) {
@@ -1401,14 +1404,14 @@ function updateFull(data) {
 
 // Actions
 function advancePhase() {
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.raid_next_phase();
-    }
+    var a = _api();
+    if (!a || !a.raid_next_phase) { _mechNotice('阶段推进接口不可用', true); return; }
+    Promise.resolve(a.raid_next_phase()).catch(function () { _mechNotice('阶段推进失败: 接口异常', true); });
 }
 function resetRaid() {
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.raid_reset();
-    }
+    var a = _api();
+    if (!a || !a.raid_reset) { _mechNotice('重置接口不可用', true); return; }
+    Promise.resolve(a.raid_reset()).catch(function () { _mechNotice('重置失败: 接口异常', true); });
 }
 
 // Show/Hide
