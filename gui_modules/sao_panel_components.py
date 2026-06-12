@@ -9,6 +9,7 @@ swap repaints every panel consistently — never hardcode hex here.
 
 from __future__ import annotations
 
+import math
 import time as _time
 import tkinter as tk
 from typing import Any, Callable, Iterable, Mapping, Optional
@@ -38,6 +39,21 @@ def _pc(key: str, fallback: str = '') -> str:
         return ui._theme_color(key, fallback) or fallback
     except Exception:
         return fallback
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None,
+                hi: Optional[int] = None) -> int:
+    try:
+        number = float(default if value is None or value == '' else value)
+    except Exception:
+        number = float(default or 0)
+    if not math.isfinite(number):
+        number = float(default or 0)
+    if lo is not None:
+        number = max(float(lo), number)
+    if hi is not None:
+        number = min(float(hi), number)
+    return int(number)
 
 
 # ── 可读时间格式化（所有 ACT 面板共用，禁止再拿 epoch-ms 直接 print）──
@@ -384,6 +400,6 @@ def source_badges(parent: tk.Misc, sources: Iterable[Mapping[str, Any]]) -> tk.F
     for item in sources or []:
         if not isinstance(item, Mapping):
             continue
-        text = f"{source_cn(item.get('source'), default='-')} · {int(item.get('count') or 0)}"
+        text = f"{source_cn(item.get('source'), default='-')} · {_finite_int(item.get('count'), 0, lo=0)}"
         status_badge(frame, text, kind='cyan').pack(side='left', padx=(0, SP_SM), pady=2)
     return frame

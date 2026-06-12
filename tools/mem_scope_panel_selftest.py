@@ -6,6 +6,7 @@ from __future__ import annotations
 import _bootstrap  # noqa: F401
 
 import unittest
+from unittest import mock
 
 from gui_modules.sao_gui_mem_scope import MemScopePanel
 
@@ -103,6 +104,31 @@ class MemScopePanelSignatureTests(unittest.TestCase):
         panel.destroy()
 
         self.assertEqual(panel._last_sig, "")
+
+    def test_render_search_tolerates_bad_count_and_progress(self) -> None:
+        class _Widget:
+            def pack(self, *args, **kwargs):
+                return None
+
+        panel = _panel()
+        panel._rows = _Widget()
+        panel._job_id = "job-1"
+
+        with (
+            mock.patch("gui_modules.sao_gui_mem_scope.tk.Frame", return_value=_Widget()),
+            mock.patch("gui_modules.sao_gui_mem_scope.tk.Label", return_value=_Widget()),
+            mock.patch("gui_modules.sao_gui_mem_scope.section_card", return_value=_Widget()),
+            mock.patch("gui_modules.sao_gui_mem_scope.empty_state", return_value=_Widget()),
+            mock.patch("gui_modules.sao_gui_mem_scope.action_button", return_value=_Widget()),
+        ):
+            panel._render_search({
+                "search": {
+                    "state": "running",
+                    "count": "bad",
+                    "progress": "bad",
+                    "results": [],
+                }
+            })
 
 
 if __name__ == "__main__":

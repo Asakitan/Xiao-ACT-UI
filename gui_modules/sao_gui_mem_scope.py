@@ -11,6 +11,7 @@ The WebView twin is ``web/mem_scope.html`` — both consume the same JSON contra
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, List, Mapping, Optional
@@ -47,6 +48,27 @@ from gui_modules.sao_panel_ui import (
 
 _DTYPES = ("i32", "u32", "i64", "u64", "f32", "utf16")
 _POLL_MS = 500
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None,
+                  hi: Optional[float] = None) -> float:
+    try:
+        number = float(default if value is None or value == '' else value)
+    except Exception:
+        number = float(default or 0.0)
+    if not math.isfinite(number):
+        number = float(default or 0.0)
+    if lo is not None:
+        number = max(float(lo), number)
+    if hi is not None:
+        number = min(float(hi), number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None,
+                hi: Optional[int] = None) -> int:
+    number = _finite_float(value, float(default or 0), lo=lo, hi=hi)
+    return int(number)
 
 
 class MemScopePanel:
@@ -369,7 +391,7 @@ class MemScopePanel:
     def _render_search(self, status: Mapping[str, Any]) -> None:
         search = status.get('search') if isinstance(status.get('search'), Mapping) else {}
         results = [r for r in (search.get('results') or []) if isinstance(r, Mapping)]
-        count = int(search.get('count') or 0)
+        count = _finite_int(search.get('count'), 0, lo=0)
         badge = f"{len(results)}/{count}" if count else "0"
         box = section_card(self._rows, '搜索结果 Search', badge=badge, accent='cyan')
         box.pack(fill='x', padx=4, pady=(SP_MD, 0))
@@ -384,7 +406,7 @@ class MemScopePanel:
                      font=('Segoe UI', 9), anchor='w').pack(fill='x')
             return
         if state == 'running':
-            pct = int(float(search.get('progress') or 0) * 100)
+            pct = int(_finite_float(search.get('progress'), 0.0, lo=0.0, hi=1.0) * 100)
             tk.Label(inner, text=f"扫描中… {pct}%", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                      font=('Segoe UI', 9), anchor='w').pack(fill='x')
             return

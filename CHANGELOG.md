@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.15: Tk shared panel 搜索与来源徽标数值防护修复.
+
+  1) `gui_modules/sao_gui_mem_scope.py` 修复 Mem Scope 搜索状态数值归一。
+     坏 `count` / `progress` 不再打断搜索结果区域渲染,
+     扫描中进度会被限制在 0-100% 的安全范围内。
+
+  2) `gui_modules/sao_panel_components.py` 修复共享来源徽标计数归一。
+     ACT 聚合等面板的 `source_mix.count` 坏值现在显示为 0,
+     避免单个异常来源计数让整组来源徽标创建失败。
+
 ## v4.6.14: ACT aggregate 与 BossRaid monster 数值防护修复.
 
   1) `engines/act_aggregate.py` 修复 ACT 聚合行数值归一。
