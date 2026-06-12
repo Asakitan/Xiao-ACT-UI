@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.60: Web menu toggle/boss-bar fallback 修复.
+
+  1) `web/menu.html` 修复 boss bar mode 前端归一。
+     配置恢复和点击切换现在先通过 allowlist 收敛到
+     `always`/`boss_raid`/`off`, 避免坏配置让按钮没有 active 状态或传出异常模式。
+
+  2) `web/menu.html` 修复 DPS/buffmon toggle 响应处理。
+     开关现在会解析 bridge 返回值, 明确失败或 Promise reject 时回滚 checkbox 并弹出错误,
+     避免界面显示 ON/OFF 但后端设置没有成功落地。
+
 ## v4.6.59: DPS fade timeout fallback 修复.
 
   1) `web/menu.html` 修复 DPS fade timeout 设置恢复。

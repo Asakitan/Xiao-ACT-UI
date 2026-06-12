@@ -5144,6 +5144,44 @@ function _menuParseApiResult(result) {
     return _menuApiObject(result) ? result : { ok: false, message: String(result) };
 }
 
+function _menuApiMessage(data, fallback) {
+    data = _menuApiObject(data) ? data : {};
+    return _profileText(data.message, _profileText(data.error, _profileText(data.detail, fallback)));
+}
+
+function _menuToggleResult(result, expected) {
+    if (result === null || typeof result === 'undefined' || result === '') {
+        return { ok: true, enabled: !!expected };
+    }
+    var data = _menuParseApiResult(result);
+    if (data.ok !== false && data.enabled === undefined) data.enabled = !!expected;
+    return data;
+}
+
+function _setBridgeBackedCheckbox(el, methodName, requested, label) {
+    var api = window.pywebview && window.pywebview.api;
+    var on = !!requested;
+    if (!api || !api[methodName]) {
+        el.checked = !on;
+        showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve(api[methodName](on)).then(function(result) {
+        var data = _menuToggleResult(result, on);
+        if (!data || data.ok === false) {
+            if (data && data.enabled !== undefined) el.checked = !!data.enabled;
+            else el.checked = !on;
+            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
+            return;
+        }
+        el.checked = !!data.enabled;
+        showToast(label + ': ' + (el.checked ? 'ON' : 'OFF'));
+    }).catch(function(err) {
+        el.checked = !on;
+        showAlert(label, String(err || '设置失败 / Unable to update setting'), true);
+    });
+}
+
 function _akParseApiResult(result) {
     if (!result) return {};
     if (typeof result === 'string') {
@@ -6310,8 +6348,8 @@ function restoreMenuSettings(cfg) {
         _syncAutoKeyState(cfg.auto_key);
     }
     /* Boss bar mode */
-    if (cfg.boss_bar_mode) {
-        _setBossBarModeUI(cfg.boss_bar_mode);
+    if (cfg.boss_bar_mode !== undefined) {
+        _setBossBarModeUI(_bossBarModeValue(cfg.boss_bar_mode));
     }
     /* DPS meter toggle */
     if (cfg.dps_enabled !== undefined) {
@@ -7623,17 +7661,23 @@ document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(tab
 });
 
 /* Boss bar mode selector */
+function _bossBarModeValue(value) {
+    var mode = String(value || '').trim().toLowerCase();
+    return (mode === 'always' || mode === 'boss_raid' || mode === 'off') ? mode : 'boss_raid';
+}
+
 function _setBossBarModeUI(mode) {
+    var safeMode = _bossBarModeValue(mode);
     document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
-        btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
+        btn.classList.toggle('active', _bossBarModeValue(btn.getAttribute('data-mode')) === safeMode);
     });
+    return safeMode;
 }
 document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
         playSound('snd-click');
-        var mode = this.getAttribute('data-mode');
-        _setBossBarModeUI(mode);
+        var mode = _setBossBarModeUI(this.getAttribute('data-mode'));
         if (window.pywebview && window.pywebview.api && window.pywebview.api.set_boss_bar_mode) {
             window.pywebview.api.set_boss_bar_mode(mode);
         }
@@ -7650,10 +7694,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.set_dps_enabled) {
-                window.pywebview.api.set_dps_enabled(on);
-            }
-            showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));
+            _setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
         });
     }
 })();
@@ -7666,10 +7707,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.set_buffmon_enabled) {
-                window.pywebview.api.set_buffmon_enabled(on);
-            }
-            showToast('BUFF MONITOR: ' + (on ? 'ON' : 'OFF'));
+            _setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
         });
     }
 })();

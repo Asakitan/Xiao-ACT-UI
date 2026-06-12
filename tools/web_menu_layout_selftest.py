@@ -137,6 +137,11 @@ def main() -> int:
         "var slot = parseInt(el.getAttribute('data-slot'));",
         "cfg.watched_slots.indexOf(slot) >= 0",
         "if (fadeEl) fadeEl.value = cfg.dps_fade_timeout_s;",
+        "if (cfg.boss_bar_mode) {\n        _setBossBarModeUI(cfg.boss_bar_mode);",
+        "btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);",
+        "var mode = this.getAttribute('data-mode');\n        _setBossBarModeUI(mode);",
+        "window.pywebview.api.set_dps_enabled(on);\n            }\n            showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));",
+        "window.pywebview.api.set_buffmon_enabled(on);\n            }\n            showToast('BUFF MONITOR: ' + (on ? 'ON' : 'OFF'));",
     ]
     for pattern in menu_raw_patterns:
         if pattern in html:
@@ -163,6 +168,15 @@ def main() -> int:
         "if (slot != null && restoredSlots[slot]) {",
         "var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);",
         "if (fadeEl) fadeEl.value = restoredFadeTimeout;",
+        "function _bossBarModeValue(value)",
+        "return (mode === 'always' || mode === 'boss_raid' || mode === 'off') ? mode : 'boss_raid';",
+        "_setBossBarModeUI(_bossBarModeValue(cfg.boss_bar_mode));",
+        "var mode = _setBossBarModeUI(this.getAttribute('data-mode'));",
+        "function _setBridgeBackedCheckbox(el, methodName, requested, label)",
+        "function _menuToggleResult(result, expected)",
+        "showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);",
+        "_setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');",
+        "_setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
