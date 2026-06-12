@@ -10195,6 +10195,17 @@ class SAOWebViewGUI:
                         _bb_max_extinction = 0
                         _bb_stop_ticking = False
 
+                    # Resolve the boss name BEFORE the push-gate signature so a
+                    # late-arriving name (MEM nameplate harvest / tracker uuid map)
+                    # still re-pushes a steady bar. uuid falls back to the last
+                    # damaged target so the gs/MEM branch (no TCP monster object)
+                    # can hit the tracker uuid->name map — mirrors the Tk mixin.
+                    from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
+                    _bb_boss_name = _bb_name(
+                        _bb_direct_data,
+                        (_bb_direct_data or {}).get('uuid', 0)
+                        or getattr(self, '_bb_last_target_uuid', 0),
+                        getattr(self, '_dps_tracker', None)) or ''
                     _bb_sig = (
                         _bb_show,
                         round(float(_bb_hp_pct), 3),
@@ -10211,10 +10222,10 @@ class SAOWebViewGUI:
                         bool(_bb_stop_ticking),
                         bool(_bb_overdrive),
                         bool(_bb_invincible),
+                        _bb_boss_name,
                     )
                     if _bb_sig != getattr(self, '_last_boss_bar_sig', None):
                         self._last_boss_bar_sig = _bb_sig
-                        from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
                         _bb_data = {
                             'active': _bb_show,
                             'hp_pct': _bb_sig[1],
@@ -10231,10 +10242,7 @@ class SAOWebViewGUI:
                             'stop_breaking_ticking': _bb_sig[12],
                             'in_overdrive': _bb_sig[13],
                             'invincible': _bb_sig[14],
-                            'boss_name': _bb_name(
-                                _bb_direct_data,
-                                (_bb_direct_data or {}).get('uuid', 0),
-                                getattr(self, '_dps_tracker', None)) or '',
+                            'boss_name': _bb_boss_name,
                             'additional': _bb_additional,
                         }
                         self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')
