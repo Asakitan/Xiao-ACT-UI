@@ -890,6 +890,46 @@ def main() -> None:
 
     mem_forbidden = [
         (
+            "d = d || {};",
+            "Mem Scope root payload must guard non-object data.",
+        ),
+        (
+            "var st = d.status || {};",
+            "Mem Scope status payload must guard non-object data.",
+        ),
+        (
+            "var cats = (d.catalog && d.catalog.categories) || [];",
+            "Mem Scope catalog categories must guard non-list data.",
+        ),
+        (
+            "var s = d.self || {};",
+            "Mem Scope self payload must guard non-object data.",
+        ),
+        (
+            "var rows = (d.entities && d.entities.entities) || [];",
+            "Mem Scope entity rows must guard non-list data.",
+        ),
+        (
+            "var totals = (d.damage && d.damage.totals) || {};",
+            "Mem Scope damage totals must guard non-object data.",
+        ),
+        (
+            "var s = d.search || {};",
+            "Mem Scope search payload must guard non-object data.",
+        ),
+        (
+            "var results = s.results || [];",
+            "Mem Scope search results must guard non-list data.",
+        ),
+        (
+            "var av = r.as || {}, bits = [esc(r.addr)];",
+            "Mem Scope result hint rows must guard nested as payloads.",
+        ),
+        (
+            "var loc = r['in'] || {};",
+            "Mem Scope result hint rows must guard nested location payloads.",
+        ),
+        (
             "rows.sort(function (a, b) { return Number(b.total) - Number(a.total); });",
             "Mem Scope damage sorting must not subtract raw Number() values.",
         ),
@@ -907,8 +947,64 @@ def main() -> None:
 
     mem_required = [
         (
+            "function isObjectValue(value)",
+            "Mem Scope should expose object-shape detection.",
+        ),
+        (
+            "function objectValue(value)",
+            "Mem Scope should normalize object payloads.",
+        ),
+        (
+            "function listItems(value)",
+            "Mem Scope should normalize list payloads.",
+        ),
+        (
+            "function objectItems(value)",
+            "Mem Scope should filter object-list payloads.",
+        ),
+        (
             "function finiteNum(value, fallback, lo, hi)",
             "Mem Scope should expose finite number normalization.",
+        ),
+        (
+            "d = objectValue(d);",
+            "Mem Scope should normalize root render payloads.",
+        ),
+        (
+            "var st = objectValue(d.status);",
+            "Mem Scope should normalize status payloads.",
+        ),
+        (
+            "var cats = objectItems(objectValue(d.catalog).categories);",
+            "Mem Scope should normalize catalog category rows.",
+        ),
+        (
+            "var s = objectValue(d.self);",
+            "Mem Scope should normalize self payloads.",
+        ),
+        (
+            "var rows = objectItems(objectValue(d.entities).entities);",
+            "Mem Scope should normalize entity rows.",
+        ),
+        (
+            "var totals = objectValue(objectValue(d.damage).totals);",
+            "Mem Scope should normalize damage totals maps.",
+        ),
+        (
+            "var s = objectValue(d.search);",
+            "Mem Scope should normalize search payloads.",
+        ),
+        (
+            "var results = objectItems(s.results);",
+            "Mem Scope should normalize search result rows.",
+        ),
+        (
+            "var av = objectValue(r.as), bits = [esc(r.addr)];",
+            "Mem Scope should normalize result hint value maps.",
+        ),
+        (
+            "var loc = objectValue(r['in']);",
+            "Mem Scope should normalize result hint location maps.",
         ),
         (
             "var rows = keys.map(function (k) { return { uid: k, total: finiteNum(totals[k], 0, 0) }; });",

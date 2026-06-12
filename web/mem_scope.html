@@ -110,6 +110,20 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     function finiteInt(value, fallback, lo, hi) {
         return Math.round(finiteNum(value, fallback, lo, hi));
     }
+    function isObjectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value);
+    }
+    function objectValue(value) {
+        return isObjectValue(value) ? value : {};
+    }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) {
+            return isObjectValue(item);
+        });
+    }
 
     function section(title, badge, acc, innerHtml) {
         return '<div class="ms-section" style="--acc:' + acc + '">'
@@ -132,14 +146,15 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function hintLine(r) {
-        var av = r.as || {}, bits = [esc(r.addr)];
+        r = objectValue(r);
+        var av = objectValue(r.as), bits = [esc(r.addr)];
         if ('u32' in av) bits.push('u32=' + av.u32);
         if ('i32' in av && av.i32 !== av.u32) bits.push('i32=' + av.i32);
         if ('f32' in av) bits.push('f32=' + av.f32);
         if (av.utf16) bits.push("'" + esc(av.utf16) + "'");
         else if (av.cstr) bits.push('"' + esc(av.cstr) + '"');
         if (av.ptr) bits.push('-&gt;' + av.ptr);
-        var loc = r['in'] || {};
+        var loc = objectValue(r['in']);
         if (loc.module) bits.push('in ' + esc(loc.module) + '+' + loc.offset);
         else if (loc.region) bits.push('[' + esc(loc.region) + ']');
         if (r.klass_hint) bits.push('~' + esc(r.klass_hint));
@@ -147,8 +162,8 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function render(d) {
-        d = d || {};
-        var st = d.status || {};
+        d = objectValue(d);
+        var st = objectValue(d.status);
         var active = !!st.active;
         statusPill.textContent = active ? 'HYBRID' : 'TCP-ONLY';
         var html = '<div class="ms-badges">';
@@ -175,10 +190,12 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function catalogHtml(d, hintOnly) {
-        var cats = (d.catalog && d.catalog.categories) || [];
+        d = objectValue(d);
+        var cats = objectItems(objectValue(d.catalog).categories);
         if (!cats.length) return '';
         var inner = '';
         cats.forEach(function (c) {
+            c = objectValue(c);
             var ok = !!c.available;
             inner += '<div class="ms-cat">'
                 + '<span class="ms-badge" style="--acc:' + (ok ? 'var(--act-cyan)' : '#ffb454') + '">'
@@ -190,7 +207,8 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function selfHtml(d) {
-        var s = d.self || {};
+        d = objectValue(d);
+        var s = objectValue(d.self);
         if (!s.ok) return '';
         var skip = { ok: 1, reason: 1, hint: 1, resources: 1 }, inner = '';
         Object.keys(s).forEach(function (k) {
@@ -201,14 +219,16 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function entitiesHtml(d) {
-        var rows = (d.entities && d.entities.entities) || [];
+        d = objectValue(d);
+        var rows = objectItems(objectValue(d.entities).entities);
         if (!rows.length) return section('实体 Entities', 0, '#ff6b82', '<div class="ms-empty">暂无可见战斗实体（开怪后出现）。</div>');
         var cols = [['kind', '类型'], ['name', '名字'], ['cur_hp', 'HP'], ['max_hp', 'MaxHP'], ['hp_pct', '%'], ['base_id', 'BaseId'], ['obj', '地址']];
         return section('实体 Entities', rows.length, '#ff6b82', renderTable(cols, rows.slice(0, 40)));
     }
 
     function damageHtml(d) {
-        var totals = (d.damage && d.damage.totals) || {};
+        d = objectValue(d);
+        var totals = objectValue(objectValue(d.damage).totals);
         var keys = Object.keys(totals);
         if (!keys.length) return section('伤害总表 Damage', 0, 'var(--act-gold)', '<div class="ms-empty">暂无伤害数据。</div>');
         var rows = keys.map(function (k) { return { uid: k, total: finiteNum(totals[k], 0, 0) }; });
@@ -217,8 +237,9 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
     }
 
     function searchHtml(d) {
-        var s = d.search || {};
-        var results = s.results || [];
+        d = objectValue(d);
+        var s = objectValue(d.search);
+        var results = objectItems(s.results);
         var count = finiteInt(s.count, 0, 0);
         var badge = count ? (results.length + '/' + count) : '0';
         var inner = '';

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.2: Mem Scope payload 防护修复.
+
+  1) `web/mem_scope.html` 修复状态、目录、实体与伤害 payload 形状处理。
+     Mem Scope Web 现在归一根对象、状态对象、目录列表、实体列表与伤害映射,
+     避免坏 payload 打断面板主体渲染。
+
+  2) `web/mem_scope.html` 修复搜索结果与结果提示行 payload 形状处理。
+     Mem Scope Web 现在只渲染对象搜索结果并归一 `as`/`in` 嵌套对象,
+     避免坏搜索结果打断地址提示和搜索列表渲染。
+
 ## v4.6.1: Trigger Timer Manager payload 防护修复.
 
   1) `web/trigger_timer_manager.html` 修复 recent 事件列表 payload 形状处理。
