@@ -28,6 +28,7 @@ Entity menu bar rendering is GPU-required; do not fall back to Tk/ULW.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 import tkinter as tk
@@ -52,6 +53,26 @@ def gpu_menu_bar_enabled() -> bool:
     return require_entity_gpu('MenuBarGpuPainter', _gow)
 
 
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
 class _ButtonSnapshot:
     """Plain data carrier for a single button's visual state. Built
     on the main thread under the Tk lock and consumed on the worker —
@@ -60,8 +81,8 @@ class _ButtonSnapshot:
     __slots__ = ('size', 'hover_t', 'active', 'icon')
 
     def __init__(self, size: float, hover_t: float, active: bool, icon: str):
-        self.size = float(size)
-        self.hover_t = float(hover_t)
+        self.size = _finite_float(size, 1.0, lo=1.0)
+        self.hover_t = _finite_float(hover_t, 0.0, lo=0.0, hi=1.0)
         self.active = bool(active)
         self.icon = str(icon or '●')
 

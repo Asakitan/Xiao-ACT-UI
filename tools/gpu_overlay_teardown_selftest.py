@@ -12,6 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gui_modules.sao_child_bar_gpu import ChildBarGpuPainter
+from gui_modules.sao_child_bar_gpu import BarColors, _ChildBarSnapshot, _RowSnapshot
 from gui_modules.sao_gui_bosshp import BossHpOverlay
 from gui_modules.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
@@ -19,6 +20,7 @@ from gui_modules.sao_left_info_gpu import (
     LeftInfoGpuPainter, PlayerPanelGpuPainter, SessionPlayersGpuPainter,
     _PlayerPanelSnapshot, _SessionPlayersSnapshot,
 )
+from gui_modules.sao_menu_bar_gpu import _ButtonSnapshot
 from gui_modules.sao_menu_bar_gpu import MenuBarGpuPainter
 
 
@@ -195,6 +197,41 @@ class GpuOverlayTeardownTests(unittest.TestCase):
         self.assertEqual(snap.sta, (0, 0))
         self.assertEqual((snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h), (1, 1, 1, 1))
         self.assertEqual(snap.scan_phase, 0.0)
+
+    def test_child_bar_snapshots_tolerate_bad_numeric_fields(self) -> None:
+        row = _RowSnapshot(icon=">", label="Submenu", hover_t="bad", row_w="nan")
+        colors = BarColors(
+            "#010101",
+            "#202020",
+            "#ffffff",
+            "#ffd27a",
+            "#86dfff",
+            "#f3af12",
+            lambda a, _b, _t: a,
+        )
+        snap = _ChildBarSnapshot(
+            line_w="bad",
+            line_h=float("inf"),
+            arrow_w=-5,
+            fade_t=float("nan"),
+            rows=[row],
+            bg_hex="#010101",
+            colors=colors,
+        )
+
+        self.assertEqual(row.hover_t, 0.0)
+        self.assertEqual(row.row_w, 1)
+        self.assertEqual((snap.line_w, snap.line_h, snap.arrow_w), (1, 1, 1))
+        self.assertEqual(snap.fade_t, 0.0)
+        self.assertEqual(snap.rows, [row])
+
+    def test_menu_bar_button_snapshot_tolerates_bad_numeric_fields(self) -> None:
+        snap = _ButtonSnapshot(size="nan", hover_t=float("inf"), active=True, icon="")
+
+        self.assertEqual(snap.size, 1.0)
+        self.assertEqual(snap.hover_t, 0.0)
+        self.assertTrue(snap.active)
+        self.assertEqual(snap.icon, "●")
 
 
 if __name__ == "__main__":

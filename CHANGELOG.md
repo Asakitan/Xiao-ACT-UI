@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.8: 菜单 GPU snapshot 数值防护修复.
+
+  1) `gui_modules/sao_child_bar_gpu.py` 修复 ChildBar GPU snapshot 数值归一。
+     子菜单 GPU 面板现在容忍坏 hover、行宽、线宽、箭头宽与 fade 参数,
+     避免异常动画/几何值打断子菜单帧提交。
+
+  2) `gui_modules/sao_menu_bar_gpu.py` 修复 MenuBar button snapshot 数值归一。
+     主菜单 GPU 按钮现在容忍坏 size/hover 参数,
+     避免 NaN/Inf 进入签名或 compose 路径造成按钮条渲染异常。
+
 ## v4.6.7: GPU snapshot 数值防护修复.
 
   1) `gui_modules/sao_left_info_gpu.py` 修复 Session Players GPU snapshot 数值归一。

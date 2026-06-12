@@ -32,6 +32,7 @@ Public API:
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -61,6 +62,41 @@ def gpu_child_bar_enabled() -> bool:
     return require_entity_gpu('ChildBarGpuPainter', _gow)
 
 
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
 # ═══════════════════════════════════════════════
 #  Snapshots (worker-safe, no Tk)
 # ═══════════════════════════════════════════════
@@ -71,8 +107,8 @@ class _RowSnapshot:
     def __init__(self, icon: str, label: str, hover_t: float, row_w: int):
         self.icon = icon
         self.label = label
-        self.hover_t = max(0.0, min(1.0, float(hover_t)))
-        self.row_w = max(1, int(row_w))
+        self.hover_t = _finite_float(hover_t, 0.0, lo=0.0, hi=1.0)
+        self.row_w = _finite_int(row_w, 1, lo=1)
 
 
 class _ChildBarSnapshot:
@@ -82,10 +118,10 @@ class _ChildBarSnapshot:
     def __init__(self, line_w: int, line_h: int, arrow_w: int,
                  fade_t: float, rows: List[_RowSnapshot],
                  bg_hex: str, colors: 'BarColors'):
-        self.line_w = max(1, int(line_w))
-        self.line_h = max(1, int(line_h))
-        self.arrow_w = max(1, int(arrow_w))
-        self.fade_t = max(0.0, min(1.0, float(fade_t)))
+        self.line_w = _finite_int(line_w, 1, lo=1)
+        self.line_h = _finite_int(line_h, 1, lo=1)
+        self.arrow_w = _finite_int(arrow_w, 1, lo=1)
+        self.fade_t = _finite_float(fade_t, 0.0, lo=0.0, hi=1.0)
         self.rows = rows
         self.bg_hex = bg_hex
         self.colors = colors
