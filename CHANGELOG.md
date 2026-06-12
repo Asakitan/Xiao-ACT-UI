@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.69: Web menu updater bridge 响应修复.
+
+  1) `web/menu.html` 修复 updater apply/download 的失败恢复。
+     更新按钮现在通过 updater 专用 bridge helper 调用,
+     能兼容布尔值、JSON、空返回、同步异常和 Promise reject,
+     失败时恢复原 UI 状态并显示错误。
+
+  2) `web/menu.html` 修复 skip update 失败被吞掉的问题。
+     跳过更新现在只在 bridge 成功后隐藏面板,
+     失败时解锁按钮、恢复状态并显示错误提示。
+
 ## v4.6.68: Web menu plugin detached bridge 响应修复.
 
   1) `web/menu.html` 修复插件独立面板动作的 bridge 失败反馈。

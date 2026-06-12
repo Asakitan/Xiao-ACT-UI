@@ -6645,6 +6645,46 @@ function _saoEnsureUpdaterBanner() {
         ui.later.style.pointerEvents = '';
         ui.skip.style.pointerEvents = '';
     }
+    function _saoUpdaterApiResult(result, fallback) {
+        if (result === true || result === null || typeof result === 'undefined' || result === '') {
+            return { ok: true };
+        }
+        if (result === false) {
+            return { ok: false, message: fallback };
+        }
+        if (typeof result === 'string') {
+            try {
+                return _saoUpdaterApiResult(JSON.parse(result), fallback);
+            } catch (e) {
+                return { ok: false, message: result };
+            }
+        }
+        return _menuApiObject(result) ? result : { ok: false, message: String(result) };
+    }
+    function _saoCallUpdaterApi(methodName, fallback, onOk, onFail) {
+        var api = window.pywebview && window.pywebview.api;
+        if (!api || !api[methodName]) {
+            if (onFail) onFail('更新器接口不可用');
+            return;
+        }
+        var request;
+        try {
+            request = Promise.resolve(api[methodName]());
+        } catch (err) {
+            if (onFail) onFail(String(err || fallback));
+            return;
+        }
+        request.then(function(result) {
+            var data = _saoUpdaterApiResult(result, fallback);
+            if (!data || data.ok === false) {
+                if (onFail) onFail(_menuApiMessage(data, fallback));
+                return;
+            }
+            if (onOk) onOk(data);
+        }).catch(function(err) {
+            if (onFail) onFail(String(err || fallback));
+        });
+    }
     // 暴露给 updateUpdaterState 用 (state 推送后强制解锁)
     window.__saoUnlockUpdaterButtons = function() {
         var u = window.__SAO_UPDATER_UI;
@@ -6664,36 +6704,18 @@ function _saoEnsureUpdaterBanner() {
             ui.meta.textContent = '请稍候…';
             ui.later.style.display = 'none';
             ui.skip.style.display = 'none';
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.apply_update) {
-                Promise.resolve(window.pywebview.api.apply_update())
-                    .then(function(ok) {
-                        if (ok) return;
-                        _saoUnlockUpdaterButtons(ui);
-                        _saoRestoreUpdaterState(s);
-                        showToast('启动 updater 失败', 3200);
-                    })
-                    .catch(function() {
-                        _saoUnlockUpdaterButtons(ui);
-                        _saoRestoreUpdaterState(s);
-                        showToast('启动 updater 失败', 3200);
-                    });
-            } else {
+            _saoCallUpdaterApi('apply_update', '启动 updater 失败', function() {}, function(message) {
                 _saoUnlockUpdaterButtons(ui);
                 _saoRestoreUpdaterState(s);
-                showToast('更新器接口不可用', 3200);
-            }
+                showToast(message, 3200);
+            });
         } else {
             _saoLockUpdaterButtons(ui, '请求中...');
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.download_update) {
-                try {
-                    Promise.resolve(window.pywebview.api.download_update())
-                        .catch(function() { _saoUnlockUpdaterButtons(ui); });
-                } catch (e) {
-                    _saoUnlockUpdaterButtons(ui);
-                }
-            } else {
+            _saoCallUpdaterApi('download_update', '请求更新失败', function() {}, function(message) {
                 _saoUnlockUpdaterButtons(ui);
-            }
+                _saoRestoreUpdaterState(s);
+                showToast(message, 3200);
+            });
         }
     };
     ui.later.onclick = function() {
@@ -6705,14 +6727,16 @@ function _saoEnsureUpdaterBanner() {
     };
     ui.skip.onclick = function() {
         if (ui.__sao_busy) return;
+        var s = __SAO_UPDATER_STATE || {};
         _saoLockUpdaterButtons(ui, ui.action.textContent);
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.skip_update) {
-            try {
-                Promise.resolve(window.pywebview.api.skip_update())
-                    .catch(function() {});
-            } catch (e) { }
-        }
-        _saoShowUpdaterPanel(false);
+        _saoCallUpdaterApi('skip_update', '跳过更新失败', function() {
+            _saoUnlockUpdaterButtons(ui);
+            _saoShowUpdaterPanel(false);
+        }, function(message) {
+            _saoUnlockUpdaterButtons(ui);
+            _saoRestoreUpdaterState(s);
+            showToast(message, 3200);
+        });
     };
     window.__SAO_UPDATER_UI = ui;
     return ui;

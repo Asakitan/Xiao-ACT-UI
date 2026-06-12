@@ -350,6 +350,9 @@ def main() -> int:
         "Promise.resolve(a.invoke_ui_action(panelId, action, JSON.stringify(payload || {})))",
         "if (!a || !a.set_plugin_hotkey) return;",
         "Promise.resolve(a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value))",
+        "Promise.resolve(window.pywebview.api.apply_update())",
+        "Promise.resolve(window.pywebview.api.download_update())",
+        "Promise.resolve(window.pywebview.api.skip_update())",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -372,6 +375,11 @@ def main() -> int:
         "_callMenuSettingApi('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})], 'PLUGIN PANEL', function() {",
         "_callMenuSettingApi('set_plugin_hotkey', [sel.getAttribute('data-action'), sel.value], 'PLUGIN HOTKEYS', function() {",
         "showToast('HOTKEY UPDATED');",
+        "function _saoUpdaterApiResult(result, fallback)",
+        "function _saoCallUpdaterApi(methodName, fallback, onOk, onFail)",
+        "_saoCallUpdaterApi('apply_update', '启动 updater 失败', function() {}, function(message) {",
+        "_saoCallUpdaterApi('download_update', '请求更新失败', function() {}, function(message) {",
+        "_saoCallUpdaterApi('skip_update', '跳过更新失败', function() {",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:
