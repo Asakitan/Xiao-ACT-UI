@@ -598,19 +598,21 @@ class ActionLogPanel:
         payload = row.get('payload') if isinstance(row.get('payload'), Mapping) else {}
         uid = row.get('target_uid') or payload.get('target_uuid') or payload.get('target_uid') or row.get('actor_uid') or payload.get('actor_uid') or '-'
         dungeon = row.get('dungeon') or payload.get('dungeon_name') or payload.get('dungeon_id') or '-'
-        box = tk.Frame(parent, bg='#081521', highlightthickness=1, highlightbackground='#254a63')
+        # 明细盒用主题常量 — 旧硬编码 '#081521' 近黑底是扁平化前残留,
+        # 浅色 LABEL/VALUE_FG 灰字打上去对比度严重不足
+        box = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', pady=3, padx=12)
-        top = tk.Frame(box, bg='#081521')
+        top = tk.Frame(box, bg=_SAO_PANEL_HEADER_BG)
         top.pack(fill='x', padx=8, pady=(5, 2))
         for text, width, fg in (
             (f"{_finite_int(row.get('time_ms'), 0, lo=0)}ms", 10, _SAO_PANEL_LABEL_FG),
-            (str(row.get('topic') or '-'), 10, _SAO_PANEL_GOLD),
-            (str(row.get('label') or '-'), 30, _SAO_PANEL_VALUE_FG),
-            (str(row.get('value') or ''), 12, _SAO_PANEL_VALUE_FG),
+            (str(row.get('topic') or '-'), 12, _SAO_PANEL_GOLD),
+            (str(row.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
+            (str(row.get('value') or ''), 14, _SAO_PANEL_VALUE_FG),
         ):
-            tk.Label(top, text=text, width=width, anchor='w', bg='#081521', fg=fg, font=('Segoe UI', 8)).pack(side='left', padx=2)
+            tk.Label(top, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=fg, font=('Segoe UI', 8)).pack(side='left', padx=2)
         meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'} · uid={uid} · dungeon={dungeon} · source={row.get('source') or '-'}"
-        tk.Label(box, text=meta, bg='#081521', fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(0, 5))
+        tk.Label(box, text=meta, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(0, 5))
 
     def _render_header(self, parent: Optional[tk.Misc] = None) -> None:
         parent = parent or self._rows

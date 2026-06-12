@@ -263,7 +263,7 @@ class GraphTimeseriesPanel:
         tk.OptionMenu(control, self._topic_var, '', 'damage', 'heal', 'boss', 'skill', command=lambda _v: self.filter()).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        tk.Button(control, text='过滤 Filter', command=self.filter).pack(side='left', padx=(0, 8))
+        action_button(control, '过滤 Filter', self.filter, kind='gold').pack(side='left', padx=(0, 8))
         tk.Label(control, text='Range ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000', command=lambda _v: self.zoom()).pack(side='left', padx=(6, 0))
         tk.Checkbutton(

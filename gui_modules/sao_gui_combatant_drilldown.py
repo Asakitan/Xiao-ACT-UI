@@ -216,7 +216,7 @@ class CombatantDrilldownPanel:
         tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Target', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._focus_var, width=16).pack(side='left', padx=(6, 8))
-        tk.Button(control, text='Focus', command=self.focus_target).pack(side='left')
+        tk.Button(control, text='Focus', command=self.focus_target, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=2).pack(side='left')
 
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=12, pady=(0, 6))
 

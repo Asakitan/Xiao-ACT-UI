@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.114: action_log 明细盒暗色残留修复 + Tk 裸按钮统一.
+
+  1) `gui_modules/sao_gui_action_log.py` 组展开明细盒修复 — 硬编码
+    '#081521' 近黑底是 ACT 扁平化(浅色系)前的残留, 浅色调
+    LABEL/VALUE_FG 灰字打上去对比度严重不足几乎不可读; 改主题常量
+    (HEADER_BG 嵌套盒+BORDER 边线)浅/深主题都自动适配; 明细列宽
+    同步对齐主行 (10,12,34,14)。
+
+  2) Tk 裸默认按钮统一 — combatant drilldown 'Focus' 与 graph
+    timeseries '过滤 Filter' 是 Win 灰凸起默认样式, 在扁平浅色
+    工具条里突兀且无按压反馈; 分别套用同面板 toolbar 按钮样式 /
+    action_button 共享组件。
+
 ## v4.6.113: DPS 条形图缓存免拷贝 + 三处 Web 视觉修缮.
 
   1) `gui_modules/sao_gui_dps.py` `_make_bar` 缓存命中/存入不再 .copy()
