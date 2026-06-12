@@ -2579,6 +2579,7 @@ class AutoKeyEditorAPI:
     def save_autokey_actions(self, actions_json):
         """Save recorded burst-ready → skill trigger actions.
         actions_json: JSON string of [{trigger_slot, action_slot}, ...]
+        返回 {'ok': bool, ...} JSON, 让前端能区分保存成功/失败。
         """
         try:
             actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
@@ -2587,8 +2588,9 @@ class AutoKeyEditorAPI:
                 engine.set_burst_actions(actions)
             self._g._set_setting('autokey_burst_actions', actions)
             self._g._sync_menu_settings()
-        except Exception:
-            pass
+            return json.dumps({'ok': True, 'count': len(actions or [])})
+        except Exception as exc:
+            return json.dumps({'ok': False, 'message': str(exc)})
 
     def get_autokey_actions(self):
         """Return current burst-ready actions as JSON."""

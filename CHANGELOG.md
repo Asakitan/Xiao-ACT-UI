@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.88: AutoKey SAVE 与钢琴面板按钮诚实反馈.
+
+  1) `web/autokey_editor.html` SAVE 按钮现在显示保存结果(已保存 N 条/失败原因),
+    接口不可用时提示「保存接口不可用」; `AutoKeyEditorAPI.save_autokey_actions`
+    改为返回 `{'ok': bool}` JSON, 不再静默吞掉保存异常。
+
+  2) `web/panel.html` 钢琴面板控制按钮(速度/转调/旋律开关等)在接口不可用或
+    调用异常时给出提示, 不再点击后静默无反应。
+
 ## v4.6.87: Raid 编辑器按钮缺 API/失败反馈.
 
   1) `web/raid_editor.html` 「从内存导入」与「+ 新建机制」在接口不可用、

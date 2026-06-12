@@ -425,8 +425,28 @@ document.getElementById('panel-close').addEventListener('click', function() {
     }, 120);
 });
 
+function _panelNotice(msg, isErr) {
+    var el = document.getElementById('panel-notice');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'panel-notice';
+        el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);'
+            + 'z-index:99;padding:6px 14px;border-radius:6px;font-size:11px;'
+            + 'pointer-events:none;transition:opacity .3s;opacity:0;';
+        document.body.appendChild(el);
+    }
+    el.style.background = isErr ? 'rgba(168,42,42,.93)' : 'rgba(32,82,122,.93)';
+    el.style.color = '#fff';
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.style.opacity = '0'; }, 2600);
+}
+
 function doAction(action) {
-    if (window.pywebview && window.pywebview.api) window.pywebview.api.panel_action(action);
+    var a = window.pywebview && window.pywebview.api;
+    if (!a || !a.panel_action) { _panelNotice('面板接口不可用', true); return; }
+    Promise.resolve(a.panel_action(action)).catch(function () { _panelNotice('操作失败: 接口异常', true); });
 }
 
 /* ═══════════════════════════════════════════════

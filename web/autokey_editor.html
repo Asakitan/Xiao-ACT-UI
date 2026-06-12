@@ -392,10 +392,32 @@ function clearActions() {
     _renderActions();
 }
 
-function saveActions() {
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.save_autokey_actions(JSON.stringify(_actions));
+function _akNotice(msg, isErr) {
+    var el = document.getElementById('ak-notice');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'ak-notice';
+        el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);'
+            + 'z-index:99;padding:6px 14px;border-radius:6px;font-size:11px;'
+            + 'pointer-events:none;transition:opacity .3s;opacity:0;';
+        document.body.appendChild(el);
     }
+    el.style.background = isErr ? 'rgba(168,42,42,.93)' : 'rgba(32,82,122,.93)';
+    el.style.color = '#fff';
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.style.opacity = '0'; }, 2600);
+}
+
+function saveActions() {
+    var a = window.pywebview && window.pywebview.api;
+    if (!a || !a.save_autokey_actions) { _akNotice('保存接口不可用', true); return; }
+    Promise.resolve(a.save_autokey_actions(JSON.stringify(_actions))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok === false) { _akNotice(r.message || '保存失败', true); }
+        else { _akNotice('已保存 ' + _actions.length + ' 条动作'); }
+    }).catch(function () { _akNotice('保存失败: 接口异常', true); });
 }
 
 // Status updates
