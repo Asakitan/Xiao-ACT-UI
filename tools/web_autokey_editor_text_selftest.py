@@ -79,9 +79,10 @@ def main() -> int:
         "onclick=\"toggleRole(' + uuidArg + ')",
         "if (String(_lastEntities[i].uuid == null ? '' : _lastEntities[i].uuid) === uuid)",
         "onchange=\"mechToggle(' + midArg + ', this.checked)",
-        "onclick=\"mechTest(' + midArg + ',[\\'tts\\'])",
+        # 卡片头三个试发聚合成「试▾」下拉; 删除收进表单底部 — mid 仍走 _jsArg
+        "mechTest(' + midArg + ',[k]);",
         "onclick=\"mechEdit(' + midArg + ')",
-        "onclick=\"mechDelete(' + midArg + ')",
+        "onclick=\"mechDelete(' + _jsArg(m.id) + ')",
         "function _finiteNum",
         "function _clampNum",
         "function _clampInt",

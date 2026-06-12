@@ -479,6 +479,119 @@ class _MechanicsEditorMixin:
         self._mech_vars: Dict[str, Any] = {}
         self._mech_catalog_results: list = []
         self._mech_rev = 0
+        # 折叠组状态: None=自动(有内容才展开), True/False=用户手动定; 开关表单时重置
+        self._mech_sec_open: Dict[str, Optional[bool]] = {}
+        self._mech_master_help = False
+
+    # ── 折叠组 / 摘要 ──
+
+    def _mech_sec_is_open(self, key: str, has_content: bool) -> bool:
+        cur = self._mech_sec_open.get(key)
+        return bool(has_content) if cur is None else bool(cur)
+
+    def _mech_sec_toggle(self, key: str, cur_open: bool) -> None:
+        if self._mech_editing:
+            self._mech_collect_draft()
+        self._mech_sec_open[key] = not cur_open
+        self._mx_rerender()
+
+    def _mech_group_header(self, parent, key: str, title: str,
+                           summary: str, has_content: bool) -> bool:
+        """可点开合的分组标题; 收起时把摘要带在标题后。返回当前是否展开。"""
+        open_ = self._mech_sec_is_open(key, has_content)
+        txt = ('▾ ' if open_ else '▸ ') + title
+        if not open_ and summary:
+            txt += ' · ' + summary
+        hdr = tk.Label(parent, text=txt, bg=PANEL_CARD_ALT, fg=CYAN,
+                       font=panel_font(8, bold=True), anchor='w', cursor='hand2',
+                       wraplength=380, justify='left')
+        hdr.pack(fill=tk.X, pady=(6, 2))
+        hdr.bind('<Button-1>',
+                 lambda _e, _k=key, _o=open_: self._mech_sec_toggle(_k, _o))
+        return open_
+
+    def _mech_adv_summary(self, det: Dict[str, Any]) -> str:
+        """高级触发收起时的一行摘要 (与 Web _mAdvSummary 逐字一致)。"""
+        parts = []
+        src = str(det.get('source') or 'any')
+        if src == 'boss':
+            parts.append('限Boss身上')
+        elif src == 'self':
+            parts.append('限自身')
+        if int(det.get('boss_base_id') or 0) > 0:
+            parts.append('Boss#%d' % int(det.get('boss_base_id') or 0))
+        if float(det.get('hp_pct') or 0) > 0:
+            parts.append('HP≤%g%%' % float(det.get('hp_pct') or 0))
+        if float(det.get('time_into_phase_s') or 0) > 0:
+            parts.append('阶段%gs' % float(det.get('time_into_phase_s') or 0))
+        if float(det.get('time_into_fight_s') or 0) > 0:
+            parts.append('战斗%gs' % float(det.get('time_into_fight_s') or 0))
+        if float(det.get('repeat_interval_s') or 0) > 0:
+            parts.append('每%gs重复' % float(det.get('repeat_interval_s') or 0))
+        ev = str(det.get('event') or '')
+        if ev:
+            parts.append({'breaking': '破防', 'shield_broken': '护盾破碎',
+                          'overdrive': '狂暴'}.get(ev, ev))
+        return ' · '.join(parts) if parts else '未启用'
+
+    def _mech_dodge_summary(self, dodge: Dict[str, Any],
+                            inline: Dict[str, Any]) -> str:
+        """躲避组收起时的一行摘要 (与 Web _mDodgeSummary 逐字一致)。"""
+        parts = []
+        seq = list(inline.get('sequence') or [])
+        key = str(inline.get('action_key') or '').strip()
+        if seq:
+            keys = {str(s.get('key') or '').upper() for s in seq}
+            if len(keys) == 1 and len(seq) >= 2 and \
+                    all(not int(s.get('hold_ms') or 0) for s in seq):
+                parts.append('冲刺%s×%d' % (next(iter(keys)) or '?', len(seq)))
+            else:
+                parts.append('序列%d步' % len(seq))
+        elif key:
+            parts.append(('按住' if str(inline.get('press_mode')) == 'hold'
+                          else '轻点') + key)
+        if parts and not dodge.get('enabled'):
+            parts.append('未启用')
+        direction = str(inline.get('direction') or '')
+        if direction:
+            lbl = next((l for l, val in self._DODGE_DIRECTIONS if val == direction),
+                       '自定义')
+            parts.append(lbl.split('▸ ')[-1])
+        geom = inline.get('geometry') or {}
+        shape = str(geom.get('shape') or '')
+        radius = float(geom.get('radius') or 0)
+        if shape or radius > 0:
+            sl = {'circle': '圆', 'ring': '环', 'sector': '扇形', 'cone': '锥形',
+                  'line': '直线', 'cross': '十字'}.get(shape, shape or '几何')
+            parts.append(sl + ('%gm' % radius if radius > 0 else ''))
+        return ' · '.join(parts) if parts else '未配置'
+
+    def _mech_toast(self, msg: str, error: bool = False) -> None:
+        """面板内浮动反馈条 (2.6s 自散), 与 Web _mechNotice 同款配色。"""
+        if not msg:
+            return
+        old = getattr(self, '_mech_toast_win', None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+        try:
+            host = self._mx_container.winfo_toplevel()
+            tw = tk.Toplevel(host)
+            tw.overrideredirect(True)
+            tw.attributes('-topmost', True)
+            tk.Label(tw, text=msg, bg='#a82a2a' if error else '#20527a',
+                     fg='#ffffff', font=panel_font(8), padx=12, pady=5,
+                     wraplength=380, justify='left').pack()
+            host.update_idletasks()
+            x = host.winfo_rootx() + (host.winfo_width() - tw.winfo_reqwidth()) // 2
+            y = host.winfo_rooty() + host.winfo_height() - tw.winfo_reqheight() - 24
+            tw.geometry('+%d+%d' % (max(0, x), max(0, y)))
+            self._mech_toast_win = tw
+            tw.after(2600, tw.destroy)
+        except Exception:
+            pass
 
     def _mech_bump(self) -> None:
         self._mech_rev += 1
@@ -558,9 +671,20 @@ class _MechanicsEditorMixin:
                        highlightthickness=1, padx=8, pady=5)
         bar.pack(fill=tk.X, pady=(0, 5))
         apply_surface_chrome(bar, accent=GOLD)
-        # 标题: 集中说明这是全局功能控制 (审查 UI#1)
-        tk.Label(bar, text='● 功能总开关', bg=PANEL_CARD, fg=GOLD,
-                 font=panel_font(9, bold=True)).pack(anchor='w')
+        # 标题: 集中说明这是全局功能控制 (审查 UI#1); 长说明收进 ? 按钮
+        title_row = tk.Frame(bar, bg=PANEL_CARD)
+        title_row.pack(fill=tk.X)
+        tk.Label(title_row, text='● 功能总开关', bg=PANEL_CARD, fg=GOLD,
+                 font=panel_font(9, bold=True)).pack(side=tk.LEFT)
+
+        def _flip_help():
+            if self._mech_editing:
+                self._mech_collect_draft()
+            self._mech_master_help = not self._mech_master_help
+            self._mech_bump()
+            self._mx_rerender()
+        make_action_button(title_row, '?', _flip_help, width=2
+                           ).pack(side=tk.RIGHT)
         # 基础(默认开): 提醒类, 不操作游戏
         row = tk.Frame(bar, bg=PANEL_CARD)
         row.pack(fill=tk.X, pady=(2, 0))
@@ -611,11 +735,12 @@ class _MechanicsEditorMixin:
                  bg=PANEL_CARD, fg=DANGER,
                  font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(2, 0))
         # 边界澄清: 这三个开关只管「机制」的自动躲避/走位, 与 Boss反应(连招联动)
-        # 编辑器的「联动总开关」是两套独立的东西
-        tk.Label(bar, text='说明: 自动躲避/定向移动/自动走位 仅作用于本页「机制」; '
-                 'Boss连招联动在「Boss反应」编辑器另开。三项任一开启即按机制配置操作游戏。',
-                 bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(7),
-                 anchor='w', wraplength=520, justify='left').pack(fill=tk.X, pady=(2, 0))
+        # 编辑器的「联动总开关」是两套独立的东西。默认收起, ? 按钮展开
+        if self._mech_master_help:
+            tk.Label(bar, text='说明: 自动躲避/定向移动/自动走位 仅作用于本页「机制」; '
+                     'Boss连招联动在「Boss反应」编辑器另开。三项任一开启即按机制配置操作游戏。',
+                     bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(7),
+                     anchor='w', wraplength=520, justify='left').pack(fill=tk.X, pady=(2, 0))
         if master.get('zh_voice') is False:
             tk.Label(bar, text='⚠ 未检测到中文语音 (SAPI zh-CN), 播报可能不准确',
                      bg=PANEL_CARD, fg=DANGER, font=panel_font(8),
@@ -709,13 +834,23 @@ class _MechanicsEditorMixin:
         tk.Label(head, text=mech.get('name') or '机制', bg=PANEL_CARD, fg=GOLD,
                  font=panel_font(9, bold=True), anchor='w'
                  ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        # 试发按钮: 🔊试听 / 旗试横幅 / ⌨试按键(⚠会向前台窗口真发键)
-        for txt, cb in (('删除', lambda _mid=mid: self._mech_delete(_mid)),
-                        ('编辑', lambda _mid=mid: self._mech_edit(_mid)),
-                        ('⌨试⚠', lambda _m=mech: self._mech_test(_m, ('dodge',))),
-                        ('旗试', lambda _m=mech: self._mech_test(_m, ('banner',))),
-                        ('🔊试', lambda _m=mech: self._mech_test(_m, ('tts',)))):
-            make_action_button(head, txt, cb, width=4).pack(side=tk.RIGHT, padx=(3, 0))
+        # 三个试发聚合成「试▾」菜单; 删除收进编辑表单底部 (防误点 + 头部减杂)
+        make_action_button(head, '编辑', lambda _mid=mid: self._mech_edit(_mid),
+                           width=4).pack(side=tk.RIGHT, padx=(3, 0))
+        test_items = (('🔊 试听', ('tts',)), ('横幅预览', ('banner',)),
+                      ('⌨ 按键 (⚠真发键)', ('dodge',)))
+        tvar = _tk.StringVar(value='试▾')
+
+        def _pick_test(lbl, _m=mech, _v=tvar):
+            kinds = dict(test_items).get(lbl)
+            _v.set('试▾')
+            if kinds:
+                self._mech_test(_m, kinds)
+        tm = _tk.OptionMenu(head, tvar, *[t for t, _ in test_items],
+                            command=_pick_test)
+        tm.config(font=panel_font(8), bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                  highlightthickness=0)
+        tm.pack(side=tk.RIGHT, padx=(3, 0))
 
         summary = mech.get('summary') or {}
         names = mech.get('skill_names') or {}
@@ -757,6 +892,7 @@ class _MechanicsEditorMixin:
         }
         cfg = self._mech_call('save_mech', draft)
         self._mech_bump()
+        self._mech_sec_open = {}
         # 进入新机制的编辑态: 从返回配置里找到刚插入的 id
         try:
             profiles = list((cfg or {}).get('profiles') or [])
@@ -776,6 +912,7 @@ class _MechanicsEditorMixin:
         # form never refills from a stale draft
         self._mech_draft = {}
         self._mech_catalog_results = []
+        self._mech_sec_open = {}
         self._mech_bump()
         self._mx_rerender()
 
@@ -805,7 +942,13 @@ class _MechanicsEditorMixin:
         self._mx_rerender()
 
     def _mech_test(self, mech: Dict[str, Any], kinds) -> None:
-        self._mech_call('test', mech, tuple(kinds))
+        res = self._mech_call('test', mech, tuple(kinds)) or {}
+        msg = str(res.get('message') or '').strip()
+        if 'dodge' in kinds:
+            # 按键试发跳过前台门, 落在当前前台窗口 — 结果里必须带上这一点
+            msg = ('按键试发(发往前台窗口): ' + msg) if msg else '按键试发: 已发往当前前台窗口'
+        if msg:
+            self._mech_toast(msg, error=not res.get('ok', True))
 
     # ── 编辑表单 (卡片内行展开) ──
 
@@ -829,7 +972,7 @@ class _MechanicsEditorMixin:
         # 新机制(未绑任何检测id)给个三步引导, 不让人对着空表单发懵
         if not (det.get('skill_ids') or det.get('buff_ids')):
             tk.Label(form, text='新机制 3 步: ① 下方「检测」绑至少一个技能/Buff(触发条件) '
-                     '② 填 TTS/横幅文案 ③ 点保存。需自动躲避再配「自动躲避」段。',
+                     '② 填 TTS/横幅文案 ③ 点保存。需自动躲避点开「自动躲避与走位」组。',
                      bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
                      anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 3))
 
@@ -971,38 +1114,41 @@ class _MechanicsEditorMixin:
                 kind='accent', width=4).pack(side=tk.RIGHT)
 
         # 高级触发 (选填): 限定来源/boss、HP%穿越、计时锚+重复、事件
-        make_section_title(form, '高级触发 (选填, 与上面检测ID并用)')
-        adv1 = _row(form)
-        src_lbls = dict(self._DETECT_SOURCES)
-        cur_src = str(det.get('source') or 'any')
-        cur_src_lbl = next((l for l, val in self._DETECT_SOURCES if val == cur_src), '任意')
-        svar = _tk.StringVar(value=cur_src_lbl)
-        v['detect_source'] = (svar, src_lbls)
-        tk.Label(adv1, text='来源', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                 font=panel_font(8)).pack(side=tk.LEFT)
-        smenu = _tk.OptionMenu(adv1, svar, *[l for l, _ in self._DETECT_SOURCES])
-        smenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-        smenu.pack(side=tk.LEFT, padx=(2, 8))
-        _field(adv1, '限定BossID', 'detect_boss_base_id', det.get('boss_base_id', 0), 8)
-        adv2 = _row(form)
-        _field(adv2, 'HP%≤触发', 'detect_hp_pct', det.get('hp_pct', 0.0), 5)
-        ev_lbls = dict(self._DETECT_EVENTS)
-        cur_ev = str(det.get('event') or '')
-        cur_ev_lbl = next((l for l, val in self._DETECT_EVENTS if val == cur_ev), '无')
-        evar = _tk.StringVar(value=cur_ev_lbl)
-        v['detect_event'] = (evar, ev_lbls)
-        tk.Label(adv2, text='事件', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                 font=panel_font(8)).pack(side=tk.LEFT)
-        emenu = _tk.OptionMenu(adv2, evar, *[l for l, _ in self._DETECT_EVENTS])
-        emenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-        emenu.pack(side=tk.LEFT, padx=(2, 0))
-        adv3 = _row(form)
-        _field(adv3, '阶段计时s', 'detect_time_into_phase_s', det.get('time_into_phase_s', 0.0), 5)
-        _field(adv3, '战斗计时s', 'detect_time_into_fight_s', det.get('time_into_fight_s', 0.0), 5)
-        _field(adv3, '重复间隔s', 'detect_repeat_interval_s', det.get('repeat_interval_s', 0.0), 5)
-        tk.Label(form, text='留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。',
-                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
-                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+        # 折叠组: 没配置时收起省空间, 摘要带在标题后
+        adv_summary = self._mech_adv_summary(det)
+        if self._mech_group_header(form, 'adv', '高级触发 (选填, 与检测ID并用)',
+                                   adv_summary, adv_summary != '未启用'):
+            adv1 = _row(form)
+            src_lbls = dict(self._DETECT_SOURCES)
+            cur_src = str(det.get('source') or 'any')
+            cur_src_lbl = next((l for l, val in self._DETECT_SOURCES if val == cur_src), '任意')
+            svar = _tk.StringVar(value=cur_src_lbl)
+            v['detect_source'] = (svar, src_lbls)
+            tk.Label(adv1, text='来源', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            smenu = _tk.OptionMenu(adv1, svar, *[l for l, _ in self._DETECT_SOURCES])
+            smenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            smenu.pack(side=tk.LEFT, padx=(2, 8))
+            _field(adv1, '限定BossID', 'detect_boss_base_id', det.get('boss_base_id', 0), 8)
+            adv2 = _row(form)
+            _field(adv2, 'HP%≤触发', 'detect_hp_pct', det.get('hp_pct', 0.0), 5)
+            ev_lbls = dict(self._DETECT_EVENTS)
+            cur_ev = str(det.get('event') or '')
+            cur_ev_lbl = next((l for l, val in self._DETECT_EVENTS if val == cur_ev), '无')
+            evar = _tk.StringVar(value=cur_ev_lbl)
+            v['detect_event'] = (evar, ev_lbls)
+            tk.Label(adv2, text='事件', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            emenu = _tk.OptionMenu(adv2, evar, *[l for l, _ in self._DETECT_EVENTS])
+            emenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            emenu.pack(side=tk.LEFT, padx=(2, 0))
+            adv3 = _row(form)
+            _field(adv3, '阶段计时s', 'detect_time_into_phase_s', det.get('time_into_phase_s', 0.0), 5)
+            _field(adv3, '战斗计时s', 'detect_time_into_fight_s', det.get('time_into_fight_s', 0.0), 5)
+            _field(adv3, '重复间隔s', 'detect_repeat_interval_s', det.get('repeat_interval_s', 0.0), 5)
+            tk.Label(form, text='留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。',
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
 
         # 提醒
         make_section_title(form, '提醒')
@@ -1018,165 +1164,168 @@ class _MechanicsEditorMixin:
         _field(a3, '预警s', 'pre_warn_s', alert.get('pre_warn_s'), 5)
         _field(a3, '冷却s', 'cooldown_s', alert.get('cooldown_s'), 5)
 
-        # 躲避
-        make_section_title(form, '自动躲避')
-        d1 = _row(form)
-        den_var = _tk.IntVar(value=1 if dodge.get('enabled') else 0)
-        v['dodge_enabled'] = den_var
-        _tk.Checkbutton(d1, text='启用', variable=den_var, bg=PANEL_CARD_ALT,
-                        fg=TEXT_MAIN, font=panel_font(8), selectcolor=PANEL_CARD,
-                        activebackground=PANEL_CARD_ALT).pack(side=tk.LEFT, padx=(0, 8))
-        seq = list(inline.get('sequence') or [])
-        # 连续冲刺 = 同键、均匀间隔、零按住的序列 (≥2 步)
-        is_dash = bool(seq) and len(seq) >= 2 and \
-            len({(s.get('key') or '').upper() for s in seq}) == 1 and \
-            all(int(s.get('hold_ms') or 0) == 0 for s in seq) and \
-            all(int(s.get('delay_ms') or 0) == int(seq[1].get('delay_ms') or 0)
-                for s in seq[1:])
-        preset_idx = (3 if is_dash else 4) if seq else (
-            2 if str(inline.get('press_mode')) == 'hold' and inline.get('action_key') else (
-                1 if inline.get('action_key') else 0))
-        pvar = _tk.StringVar(value=self._DODGE_PRESETS[preset_idx])
-        v['dodge_preset'] = pvar
+        # 躲避 + 定向移动 + 几何 合并为一个折叠组 (都是"自动操作"一类,
+        # 大多数纯提醒机制用不到, 收起省一大段)
+        dodge_summary = self._mech_dodge_summary(dodge, inline)
+        if self._mech_group_header(form, 'dodge', '自动躲避与走位 (按键/移动/几何)',
+                                   dodge_summary, dodge_summary != '未配置'):
+            d1 = _row(form)
+            den_var = _tk.IntVar(value=1 if dodge.get('enabled') else 0)
+            v['dodge_enabled'] = den_var
+            _tk.Checkbutton(d1, text='启用', variable=den_var, bg=PANEL_CARD_ALT,
+                            fg=TEXT_MAIN, font=panel_font(8), selectcolor=PANEL_CARD,
+                            activebackground=PANEL_CARD_ALT).pack(side=tk.LEFT, padx=(0, 8))
+            seq = list(inline.get('sequence') or [])
+            # 连续冲刺 = 同键、均匀间隔、零按住的序列 (≥2 步)
+            is_dash = bool(seq) and len(seq) >= 2 and \
+                len({(s.get('key') or '').upper() for s in seq}) == 1 and \
+                all(int(s.get('hold_ms') or 0) == 0 for s in seq) and \
+                all(int(s.get('delay_ms') or 0) == int(seq[1].get('delay_ms') or 0)
+                    for s in seq[1:])
+            preset_idx = (3 if is_dash else 4) if seq else (
+                2 if str(inline.get('press_mode')) == 'hold' and inline.get('action_key') else (
+                    1 if inline.get('action_key') else 0))
+            pvar = _tk.StringVar(value=self._DODGE_PRESETS[preset_idx])
+            v['dodge_preset'] = pvar
 
-        def _preset_pick(lbl):
-            self._mech_collect_draft()
-            if lbl == '连续冲刺' and not is_dash:
-                inline['sequence'] = self._dash_sequence()
-            elif lbl == '按键序列' and not (inline.get('sequence') or []):
-                inline['sequence'] = [{'key': '', 'delay_ms': 0, 'hold_ms': 0}]
-            elif lbl not in ('按键序列', '连续冲刺'):
-                inline['sequence'] = []
-            inline['press_mode'] = 'hold' if lbl == '按住按键' else 'tap'
-            self._mx_rerender()
-        pm = _tk.OptionMenu(d1, pvar, *self._DODGE_PRESETS, command=_preset_pick)
-        pm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-        pm.pack(side=tk.LEFT, padx=(0, 8))
-        _field(d1, '提前ms', 'lead_ms', inline.get('lead_ms', 300), 6)
-        preset_lbl = pvar.get()
-        if preset_lbl in ('轻点按键', '按住按键'):
-            d2 = _row(form)
-            _field(d2, '键', 'dodge_key', inline.get('action_key') or '', 6)
-            if preset_lbl == '按住按键':
-                _field(d2, '按住ms', 'dodge_hold', inline.get('hold_ms', 600), 6)
-        elif preset_lbl == '连续冲刺':
-            d2 = _row(form)
-            dash_key = (seq[0].get('key') if seq else '') or 'SHIFT'
-            dash_n = len(seq) if seq else 3
-            dash_iv = int(seq[1].get('delay_ms')) if len(seq) >= 2 else 300
-            _field(d2, '键', 'dash_key', dash_key, 6)
-            _field(d2, '次数', 'dash_count', dash_n, 4)
-            _field(d2, '间隔ms', 'dash_interval', dash_iv, 6)
-            tk.Label(form, text='躲避时连续点该键 N 次 (默认 Shift×3 每 0.3s), 适合冲刺位移躲圈',
-                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
-                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
-        elif preset_lbl == '按键序列':
-            v['seq_vars'] = []
-            for idx, step in enumerate(seq):
-                sr = _row(form)
-                kv = _tk.StringVar(value=str(step.get('key') or ''))
-                dv = _tk.StringVar(value=str(int(step.get('delay_ms') or 0)))
-                hv = _tk.StringVar(value=str(int(step.get('hold_ms') or 0)))
-                v['seq_vars'].append((kv, dv, hv))
-                tk.Label(sr, text='步%d 键' % (idx + 1), bg=PANEL_CARD_ALT,
-                         fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
-                _tk.Entry(sr, textvariable=kv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
-                tk.Label(sr, text='延迟ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                         font=panel_font(8)).pack(side=tk.LEFT)
-                _tk.Entry(sr, textvariable=dv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
-                tk.Label(sr, text='按住ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                         font=panel_font(8)).pack(side=tk.LEFT)
-                _tk.Entry(sr, textvariable=hv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+            def _preset_pick(lbl):
+                self._mech_collect_draft()
+                if lbl == '连续冲刺' and not is_dash:
+                    inline['sequence'] = self._dash_sequence()
+                elif lbl == '按键序列' and not (inline.get('sequence') or []):
+                    inline['sequence'] = [{'key': '', 'delay_ms': 0, 'hold_ms': 0}]
+                elif lbl not in ('按键序列', '连续冲刺'):
+                    inline['sequence'] = []
+                inline['press_mode'] = 'hold' if lbl == '按住按键' else 'tap'
+                self._mx_rerender()
+            pm = _tk.OptionMenu(d1, pvar, *self._DODGE_PRESETS, command=_preset_pick)
+            pm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            pm.pack(side=tk.LEFT, padx=(0, 8))
+            _field(d1, '提前ms', 'lead_ms', inline.get('lead_ms', 300), 6)
+            preset_lbl = pvar.get()
+            if preset_lbl in ('轻点按键', '按住按键'):
+                d2 = _row(form)
+                _field(d2, '键', 'dodge_key', inline.get('action_key') or '', 6)
+                if preset_lbl == '按住按键':
+                    _field(d2, '按住ms', 'dodge_hold', inline.get('hold_ms', 600), 6)
+            elif preset_lbl == '连续冲刺':
+                d2 = _row(form)
+                dash_key = (seq[0].get('key') if seq else '') or 'SHIFT'
+                dash_n = len(seq) if seq else 3
+                dash_iv = int(seq[1].get('delay_ms')) if len(seq) >= 2 else 300
+                _field(d2, '键', 'dash_key', dash_key, 6)
+                _field(d2, '次数', 'dash_count', dash_n, 4)
+                _field(d2, '间隔ms', 'dash_interval', dash_iv, 6)
+                tk.Label(form, text='躲避时连续点该键 N 次 (默认 Shift×3 每 0.3s), 适合冲刺位移躲圈',
+                         bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                         anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+            elif preset_lbl == '按键序列':
+                v['seq_vars'] = []
+                for idx, step in enumerate(seq):
+                    sr = _row(form)
+                    kv = _tk.StringVar(value=str(step.get('key') or ''))
+                    dv = _tk.StringVar(value=str(int(step.get('delay_ms') or 0)))
+                    hv = _tk.StringVar(value=str(int(step.get('hold_ms') or 0)))
+                    v['seq_vars'].append((kv, dv, hv))
+                    tk.Label(sr, text='步%d 键' % (idx + 1), bg=PANEL_CARD_ALT,
+                             fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
+                    _tk.Entry(sr, textvariable=kv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                    tk.Label(sr, text='延迟ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                             font=panel_font(8)).pack(side=tk.LEFT)
+                    _tk.Entry(sr, textvariable=dv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                    tk.Label(sr, text='按住ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                             font=panel_font(8)).pack(side=tk.LEFT)
+                    _tk.Entry(sr, textvariable=hv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                    make_action_button(
+                        sr, '✕',
+                        lambda _i=idx: (self._mech_collect_draft(),
+                                        inline['sequence'].pop(_i),
+                                        self._mx_rerender()),
+                        width=2).pack(side=tk.RIGHT)
+                seq_btn_row = _row(form)
                 make_action_button(
-                    sr, '✕',
-                    lambda _i=idx: (self._mech_collect_draft(),
-                                    inline['sequence'].pop(_i),
-                                    self._mx_rerender()),
-                    width=2).pack(side=tk.RIGHT)
-            seq_btn_row = _row(form)
-            make_action_button(
-                seq_btn_row, '+ 加一步',
-                lambda: (self._mech_collect_draft(),
-                         inline.setdefault('sequence', []).append(
-                             {'key': '', 'delay_ms': 0, 'hold_ms': 0}),
-                         self._mx_rerender()),
-                width=8).pack(side=tk.LEFT)
+                    seq_btn_row, '+ 加一步',
+                    lambda: (self._mech_collect_draft(),
+                             inline.setdefault('sequence', []).append(
+                                 {'key': '', 'delay_ms': 0, 'hold_ms': 0}),
+                             self._mx_rerender()),
+                    width=8).pack(side=tk.LEFT)
 
-        # 定向移动 (按住 WASD 把人物挪开; 需总开关「定向移动」开启)
-        make_section_title(form, '定向移动 (WASD 挪位)')
-        dir_master_on = bool((self._mech_state.get('master') or {})
-                             .get('directional_dodge_enabled', False))
-        if not dir_master_on:
-            tk.Label(form, text='● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)',
-                     bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
-                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
-        mv = _row(form)
-        cur_dir = str(inline.get('direction') or '')
-        directions = list(self._DODGE_DIRECTIONS)
-        if cur_dir and cur_dir not in {val for _l, val in directions}:
-            # 参数化方向(goto_point:x,z / world:dx,dz / away_point:x,z)没有固定下拉项,
-            # 以自定义项保留 — 否则一次保存就被静默清成「不移动」
-            directions.append(('自定义 ▸ ' + cur_dir, cur_dir))
-        dir_lbls = {lbl: val for lbl, val in directions}
-        cur_dir_lbl = next((lbl for lbl, val in directions if val == cur_dir),
-                           '不移动')
-        dvar = _tk.StringVar(value=cur_dir_lbl)
-        v['dodge_direction'] = (dvar, dir_lbls)
-        st = 'normal' if dir_master_on else 'disabled'
-        tk.Label(mv, text='方向', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                 font=panel_font(8)).pack(side=tk.LEFT)
-        dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in directions])
-        dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
-                     highlightthickness=0, state=st)
-        dmenu.pack(side=tk.LEFT, padx=(2, 8))
-        _field(mv, '超时ms', 'move_ms', inline.get('move_ms', 600), 6)
-        if cur_dir.startswith('away'):   # 仅"远离"类才显示精准出圈余量
-            mv2 = _row(form)
-            _field(mv2, '出圈到此距离(m)', 'exit_margin_m', inline.get('exit_margin_m', 6.0), 6)
-            tk.Label(mv2, text='挪到离目标这么远即停 (越大越安全/越远离输出位)',
-                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
-        elif cur_dir.startswith('goto') or cur_dir.startswith('walk'):  # 走向类: 到位半径
-            walk_master_on = bool((self._mech_state.get('master') or {})
-                                  .get('auto_walk_enabled', False))
-            if not walk_master_on:   # 与 Web 一致的醒目警告 (审查 #6 UI parity)
-                tk.Label(form, text='● 顶部「自动走位」总开关未开 — 走向类不会执行 (仅保存配置)',
+            # 定向移动 (按住 WASD 把人物挪开; 需总开关「定向移动」开启)
+            make_section_title(form, '定向移动 (WASD 挪位)')
+            dir_master_on = bool((self._mech_state.get('master') or {})
+                                 .get('directional_dodge_enabled', False))
+            if not dir_master_on:
+                tk.Label(form, text='● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)',
                          bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
                          anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
-            mv2 = _row(form)
-            _field(mv2, '到位半径(m)', 'arrive_m', inline.get('arrive_m', 2.0), 6)
-            tk.Label(mv2, text='走到离目标这么近即停 (需「自动走位」总开关; 读不到目标位直接停)',
-                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
-        tk.Label(form, text=self._DODGE_DIR_HELP,
-                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
-                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
-        _panic = str((self._mech_state.get('master') or {}).get('panic_hotkey')
-                     or 'F12')
-        tk.Label(form, text=self._DODGE_DANGER % _panic,
-                 bg=PANEL_CARD_ALT, fg=DANGER, font=panel_font(8),
-                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
+            mv = _row(form)
+            cur_dir = str(inline.get('direction') or '')
+            directions = list(self._DODGE_DIRECTIONS)
+            if cur_dir and cur_dir not in {val for _l, val in directions}:
+                # 参数化方向(goto_point:x,z / world:dx,dz / away_point:x,z)没有固定下拉项,
+                # 以自定义项保留 — 否则一次保存就被静默清成「不移动」
+                directions.append(('自定义 ▸ ' + cur_dir, cur_dir))
+            dir_lbls = {lbl: val for lbl, val in directions}
+            cur_dir_lbl = next((lbl for lbl, val in directions if val == cur_dir),
+                               '不移动')
+            dvar = _tk.StringVar(value=cur_dir_lbl)
+            v['dodge_direction'] = (dvar, dir_lbls)
+            st = 'normal' if dir_master_on else 'disabled'
+            tk.Label(mv, text='方向', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in directions])
+            dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
+                         highlightthickness=0, state=st)
+            dmenu.pack(side=tk.LEFT, padx=(2, 8))
+            _field(mv, '超时ms', 'move_ms', inline.get('move_ms', 600), 6)
+            if cur_dir.startswith('away'):   # 仅"远离"类才显示精准出圈余量
+                mv2 = _row(form)
+                _field(mv2, '出圈到此距离(m)', 'exit_margin_m', inline.get('exit_margin_m', 6.0), 6)
+                tk.Label(mv2, text='挪到离目标这么远即停 (越大越安全/越远离输出位)',
+                         bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
+            elif cur_dir.startswith('goto') or cur_dir.startswith('walk'):  # 走向类: 到位半径
+                walk_master_on = bool((self._mech_state.get('master') or {})
+                                      .get('auto_walk_enabled', False))
+                if not walk_master_on:   # 与 Web 一致的醒目警告 (审查 #6 UI parity)
+                    tk.Label(form, text='● 顶部「自动走位」总开关未开 — 走向类不会执行 (仅保存配置)',
+                             bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
+                             anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
+                mv2 = _row(form)
+                _field(mv2, '到位半径(m)', 'arrive_m', inline.get('arrive_m', 2.0), 6)
+                tk.Label(mv2, text='走到离目标这么近即停 (需「自动走位」总开关; 读不到目标位直接停)',
+                         bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
+            tk.Label(form, text=self._DODGE_DIR_HELP,
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+            _panic = str((self._mech_state.get('master') or {}).get('panic_hotkey')
+                         or 'F12')
+            tk.Label(form, text=self._DODGE_DANGER % _panic,
+                     bg=PANEL_CARD_ALT, fg=DANGER, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
 
-        # 几何范围 (精准出圈; 留空=用招式生命周期判停)
-        make_section_title(form, '几何范围 (圈/扇形, 选填)')
-        geom = inline.get('geometry') or {}
-        gsrc = str(geom.get('source') or '')
-        gv = _row(form)
-        gshape_lbls = dict(self._GEOMETRY_SHAPES)
-        cur_shape = str(geom.get('shape') or '')
-        cur_shape_lbl = next((l for l, val in self._GEOMETRY_SHAPES if val == cur_shape), '无')
-        gvar = _tk.StringVar(value=cur_shape_lbl)
-        v['geometry_shape'] = (gvar, gshape_lbls)
-        tk.Label(gv, text='形状', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
-                 font=panel_font(8)).pack(side=tk.LEFT)
-        gmenu = _tk.OptionMenu(gv, gvar, *[l for l, _ in self._GEOMETRY_SHAPES])
-        gmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-        gmenu.pack(side=tk.LEFT, padx=(2, 8))
-        _field(gv, '半径m', 'geom_radius', geom.get('radius', 0.0), 5)
-        _field(gv, '内径m', 'geom_inner', geom.get('inner', 0.0), 5)
-        src_lbl = {'manual': '手填(优先, 不被自动覆盖)', 'runtime': '进本实测(自动)',
-                   'reverse': '逆向/领域(自动)'}.get(gsrc, '未填')
-        tk.Label(form, text='当前来源: %s · 填了半径=按精确范围出圈; 留空=招式生命周期判停' % src_lbl,
-                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
-                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
+            # 几何范围 (精准出圈; 留空=用招式生命周期判停)
+            make_section_title(form, '几何范围 (圈/扇形, 选填)')
+            geom = inline.get('geometry') or {}
+            gsrc = str(geom.get('source') or '')
+            gv = _row(form)
+            gshape_lbls = dict(self._GEOMETRY_SHAPES)
+            cur_shape = str(geom.get('shape') or '')
+            cur_shape_lbl = next((l for l, val in self._GEOMETRY_SHAPES if val == cur_shape), '无')
+            gvar = _tk.StringVar(value=cur_shape_lbl)
+            v['geometry_shape'] = (gvar, gshape_lbls)
+            tk.Label(gv, text='形状', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            gmenu = _tk.OptionMenu(gv, gvar, *[l for l, _ in self._GEOMETRY_SHAPES])
+            gmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            gmenu.pack(side=tk.LEFT, padx=(2, 8))
+            _field(gv, '半径m', 'geom_radius', geom.get('radius', 0.0), 5)
+            _field(gv, '内径m', 'geom_inner', geom.get('inner', 0.0), 5)
+            src_lbl = {'manual': '手填(优先, 不被自动覆盖)', 'runtime': '进本实测(自动)',
+                       'reverse': '逆向/领域(自动)'}.get(gsrc, '未填')
+            tk.Label(form, text='当前来源: %s · 填了半径=按精确范围出圈; 留空=招式生命周期判停' % src_lbl,
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
 
         # 阶段范围
         ph_row = _row(form)
@@ -1209,6 +1358,10 @@ class _MechanicsEditorMixin:
                                     setattr(self, '_mech_draft', {}),
                                     self._mech_bump(), self._mx_rerender()),
                            width=6).pack(side=tk.RIGHT, padx=(0, 6))
+        # 删除从卡片头收到这里: 编辑态才可删, 防误点
+        make_action_button(btns, '删除机制',
+                           lambda _mid=str(mech.get('id') or ''): self._mech_delete(_mid),
+                           kind='danger', width=8).pack(side=tk.LEFT)
 
     def _mech_collect_draft(self) -> Dict[str, Any]:
         """把当前表单变量回收进草稿 (供重渲染/试发/保存共用)。"""
@@ -1313,41 +1466,44 @@ class _MechanicsEditorMixin:
                 inline['geometry'] = {'shape': '', 'radius': 0.0, 'inner': 0.0,
                                       'angle': 0.0, 'width': 0.0, 'center': 'boss',
                                       'source': ''}
-        preset = _sv('dodge_preset', '无')
-        if preset == '轻点按键':
-            inline['press_mode'] = 'tap'
-            inline['action_key'] = _sv('dodge_key').strip().upper()
-            inline['sequence'] = []
-        elif preset == '按住按键':
-            inline['press_mode'] = 'hold'
-            inline['action_key'] = _sv('dodge_key').strip().upper()
-            inline['hold_ms'] = int(_num('dodge_hold', 600))
-            inline['sequence'] = []
-        elif preset == '连续冲刺':
-            inline['sequence'] = self._dash_sequence(
-                _sv('dash_key', 'SHIFT'), _num('dash_count', 3),
-                _num('dash_interval', 300))
-            inline['action_key'] = ''
-        elif preset == '按键序列':
-            # keep empty-key steps so indexes stay aligned with the rendered
-            # rows (✕ deletes by index); they are filtered out at save time
-            steps = []
-            for kv, dv, hv in v.get('seq_vars') or []:
-                key = (kv.get() or '').strip().upper()
-                try:
-                    delay = int(float(dv.get() or 0))
-                except Exception:
-                    delay = 0
-                try:
-                    hold = int(float(hv.get() or 0))
-                except Exception:
-                    hold = 0
-                steps.append({'key': key, 'delay_ms': delay, 'hold_ms': hold})
-            inline['sequence'] = steps
-            inline['action_key'] = ''
-        else:
-            inline['action_key'] = ''
-            inline['sequence'] = []
+        # 折叠组收起时 dodge_preset 不在表单 — 没这个守卫, 收起后保存会把
+        # 按键配置静默清空 (else 分支清 action_key/sequence)
+        if 'dodge_preset' in v:
+            preset = _sv('dodge_preset', '无')
+            if preset == '轻点按键':
+                inline['press_mode'] = 'tap'
+                inline['action_key'] = _sv('dodge_key').strip().upper()
+                inline['sequence'] = []
+            elif preset == '按住按键':
+                inline['press_mode'] = 'hold'
+                inline['action_key'] = _sv('dodge_key').strip().upper()
+                inline['hold_ms'] = int(_num('dodge_hold', 600))
+                inline['sequence'] = []
+            elif preset == '连续冲刺':
+                inline['sequence'] = self._dash_sequence(
+                    _sv('dash_key', 'SHIFT'), _num('dash_count', 3),
+                    _num('dash_interval', 300))
+                inline['action_key'] = ''
+            elif preset == '按键序列':
+                # keep empty-key steps so indexes stay aligned with the rendered
+                # rows (✕ deletes by index); they are filtered out at save time
+                steps = []
+                for kv, dv, hv in v.get('seq_vars') or []:
+                    key = (kv.get() or '').strip().upper()
+                    try:
+                        delay = int(float(dv.get() or 0))
+                    except Exception:
+                        delay = 0
+                    try:
+                        hold = int(float(hv.get() or 0))
+                    except Exception:
+                        hold = 0
+                    steps.append({'key': key, 'delay_ms': delay, 'hold_ms': hold})
+                inline['sequence'] = steps
+                inline['action_key'] = ''
+            else:
+                inline['action_key'] = ''
+                inline['sequence'] = []
         pick = v.get('phase_pick')
         if pick:
             phvar, ph_opts = pick

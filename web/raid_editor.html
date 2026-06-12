@@ -550,11 +550,12 @@ function saveReaction(trig, skillId, id) {
         action_key: key, delay_ms: delay, cooldown_s: cd,
     };
     var a = _api();
-    if (!a || !a.save_boss_reaction) return;
+    if (!a || !a.save_boss_reaction) { _mechNotice('Boss 反应保存接口不可用', true); return; }
     Promise.resolve(a.save_boss_reaction(JSON.stringify(m), _reactScene, _reactBoss)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
-        if (r && r.ok) { _reactState = r.state; renderReactions(); }
-    }).catch(function () {});
+        if (r && r.ok) { _reactState = r.state; renderReactions(); _mechNotice('Boss 反应已保存'); }
+        else if (r && !r.ok) { _mechNotice(r.message || 'Boss 反应保存失败', true); }
+    }).catch(function () { _mechNotice('Boss 反应保存失败: 接口异常', true); });
 }
 
 /* ── 机制编辑器 (与 Tk 简单/详细面板共用 build_mechanics_state 契约) ── */
@@ -563,14 +564,112 @@ var _mechEditing = null;     // 正在编辑的机制 id
 var _mechDraft = null;       // 编辑草稿 (深拷贝)
 var _mechCatalog = [];
 var _MECH_COLORS = ['#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0'];
+// 折叠组状态: null=自动(有内容才展开), true/false=用户手动定; 开关表单时重置
+var _mechSecOpen = {};
+var _mechMasterHelp = false;
+// 定向移动下拉 (与 Tk _DODGE_DIRECTIONS 1:1)
+var _DIR_OPTS = [['', '不移动'], ['back', '视角 ▸ ↓向后撤'], ['forward', '视角 ▸ ↑向前'],
+       ['left', '视角 ▸ ←向左'], ['right', '视角 ▸ →向右'],
+       ['back_left', '视角 ▸ ↙左后撤'], ['back_right', '视角 ▸ ↘右后撤'],
+       ['forward_left', '视角 ▸ ↖左前'], ['forward_right', '视角 ▸ ↗右前'],
+       ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)'],
+       ['goto_teammate', '走向 ▸ 靠拢队友(抱团/分摊)'], ['goto_circle', '走向 ▸ 走向编号圈'],
+       ['walk_sequence', '走向 ▸ 按序走完编号圈']];
+
+function _mSecOpen(key, hasContent) {
+    var cur = _mechSecOpen[key];
+    return cur == null ? !!hasContent : !!cur;
+}
+
+function mechSecToggle(key, curOpen) {
+    if (_mechEditing) _mCollect();
+    _mechSecOpen[key] = !curOpen;
+    renderMechanics();
+}
+
+function mechMasterHelpToggle() {
+    if (_mechEditing) _mCollect();
+    _mechMasterHelp = !_mechMasterHelp;
+    renderMechanics();
+}
+
+function _gNum(x) {
+    var n = Math.round((Number(x) || 0) * 10) / 10;
+    return String(n);
+}
+
+// 高级触发收起时的一行摘要 (与 Tk _mech_adv_summary 逐字一致)
+function _mAdvSummary(det) {
+    var parts = [];
+    var src = String(det.source || 'any');
+    if (src === 'boss') parts.push('限Boss身上');
+    else if (src === 'self') parts.push('限自身');
+    if ((Number(det.boss_base_id) || 0) > 0) parts.push('Boss#' + Math.trunc(Number(det.boss_base_id)));
+    if ((Number(det.hp_pct) || 0) > 0) parts.push('HP≤' + _gNum(det.hp_pct) + '%');
+    if ((Number(det.time_into_phase_s) || 0) > 0) parts.push('阶段' + _gNum(det.time_into_phase_s) + 's');
+    if ((Number(det.time_into_fight_s) || 0) > 0) parts.push('战斗' + _gNum(det.time_into_fight_s) + 's');
+    if ((Number(det.repeat_interval_s) || 0) > 0) parts.push('每' + _gNum(det.repeat_interval_s) + 's重复');
+    var ev = String(det.event || '');
+    if (ev) parts.push(({breaking: '破防', shield_broken: '护盾破碎', overdrive: '狂暴'})[ev] || ev);
+    return parts.length ? parts.join(' · ') : '未启用';
+}
+
+// 躲避组收起时的一行摘要 (与 Tk _mech_dodge_summary 逐字一致)
+function _mDodgeSummary(dodge, inline) {
+    var parts = [];
+    var seq = _objectItems(inline.sequence);
+    var key = String(inline.action_key || '').trim();
+    if (seq.length) {
+        var keys = {};
+        seq.forEach(function (s) { keys[String(s.key || '').toUpperCase()] = 1; });
+        var uniq = Object.keys(keys);
+        var noHold = seq.every(function (s) { return !(Number(s.hold_ms) || 0); });
+        if (uniq.length === 1 && seq.length >= 2 && noHold) {
+            parts.push('冲刺' + (uniq[0] || '?') + '×' + seq.length);
+        } else {
+            parts.push('序列' + seq.length + '步');
+        }
+    } else if (key) {
+        parts.push((String(inline.press_mode) === 'hold' ? '按住' : '轻点') + key);
+    }
+    if (parts.length && !dodge.enabled) parts.push('未启用');
+    var dir = String(inline.direction || '');
+    if (dir) {
+        var lbl = '自定义';
+        for (var i = 0; i < _DIR_OPTS.length; i++) {
+            if (_DIR_OPTS[i][0] === dir) { lbl = _DIR_OPTS[i][1]; break; }
+        }
+        var seg = lbl.split('▸ ');
+        parts.push(seg[seg.length - 1]);
+    }
+    var geom = _objectValue(inline.geometry);
+    var shape = String(geom.shape || '');
+    var radius = Number(geom.radius) || 0;
+    if (shape || radius > 0) {
+        var sl = ({circle: '圆', ring: '环', sector: '扇形', cone: '锥形',
+                   line: '直线', cross: '十字'})[shape] || (shape || '几何');
+        parts.push(sl + (radius > 0 ? (_gNum(radius) + 'm') : ''));
+    }
+    return parts.length ? parts.join(' · ') : '未配置';
+}
+
+// 折叠组标题 (收起时摘要带在标题后)
+function _mGroupHeader(key, title, summary, isOpen) {
+    return '<div class="phase-header" style="font-size:10px;cursor:pointer;color:#75cdff;" '
+        + 'onclick="mechSecToggle(\'' + key + '\',' + (isOpen ? 'true' : 'false') + ')">'
+        + (isOpen ? '▾ ' : '▸ ') + _esc(title)
+        + (!isOpen && summary ? ' · <span style="color:#9fc0d8;font-weight:normal;">' + _esc(summary) + '</span>' : '')
+        + '</div>';
+}
 
 function loadMechanics() {
     var a = _api();
-    if (!a || !a.get_mechanics) return;
+    if (!a || !a.get_mechanics) { _mechNotice('机制状态接口不可用', true); return; }
     Promise.resolve(a.get_mechanics(null, null)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _mechState = r.state; renderMechanics(); }
-    }).catch(function () {});
+        else if (r && !r.ok) { _mechNotice(r.message || '机制状态加载失败', true); }
+    }).catch(function () { _mechNotice('机制状态加载失败: 接口异常', true); });
 }
 
 function _mechNotice(msg, isErr) {
@@ -606,7 +705,11 @@ function renderMechanics() {
         (master.zh_voice === false) ? '' : 'none';
     var mEl = document.getElementById('mech-master');
     mEl.innerHTML = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;">'
-        + '<div style="font-size:11px;font-weight:bold;color:#ffd46f;margin-bottom:3px;">● 功能总开关</div>'
+        // 标题行 + ? 按钮: 边界长说明收起, 点 ? 展开
+        + '<div style="display:flex;align-items:center;margin-bottom:3px;">'
+        + '<span style="flex:1;font-size:11px;font-weight:bold;color:#ffd46f;">● 功能总开关</span>'
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechMasterHelpToggle()">?</span>'
+        + '</div>'
         // 基础(默认开): 提醒类, 不操作游戏
         + '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;">'
         + '<span style="color:#75808d;">提醒</span>'
@@ -623,7 +726,12 @@ function renderMechanics() {
         + _mSwitch('自动走位', 'auto_walk_enabled', master.auto_walk_enabled)
         + '<span style="background:#c0392b;color:#fff;font-size:8px;padding:1px 4px;border-radius:3px;">默认关·有风险</span>'
         + '<span style="color:#ff6b5c;font-weight:bold;">⏹ 急停 ' + _esc(master.panic_hotkey || 'F12') + '</span>'
-        + '</div></div>';
+        + '</div>'
+        + (_mechMasterHelp
+            ? '<div style="font-size:9px;color:#75808d;margin-top:3px;">说明: 自动躲避/定向移动/自动走位 仅作用于本页「机制」; '
+              + 'Boss连招联动在「Boss反应」编辑器另开。三项任一开启即按机制配置操作游戏。</div>'
+            : '')
+        + '</div>';
     if (!st.ok) {
         document.getElementById('mech-inbox-header').style.display = 'none';
         document.getElementById('mech-inbox').innerHTML = '';
@@ -655,11 +763,13 @@ function _mSwitch(label, key, value) {
 
 function mechMaster(flags) {
     var a = _api();
-    if (!a || !a.set_mechanics_master) return;
+    if (!a || !a.set_mechanics_master) { _mechNotice('总开关接口不可用', true); return; }
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
-    Promise.resolve(a.set_mechanics_master(JSON.stringify(flags))).then(function () {
-        loadMechanics();
-    }).catch(function () {});
+    Promise.resolve(a.set_mechanics_master(JSON.stringify(flags))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok === false) { _mechNotice(r.message || '总开关保存失败', true); }
+        else { loadMechanics(); }
+    }).catch(function () { _mechNotice('总开关保存失败: 接口异常', true); });
 }
 
 function _mInboxRow(rec) {
@@ -690,7 +800,7 @@ function mechCreateFromSkill(sid, name, dur) {
     sid = _idNum(sid, null);
     if (sid == null) return;
     var a = _api();
-    if (!a || !a.create_mechanic_from_skill) return;
+    if (!a || !a.create_mechanic_from_skill) { _mechNotice('一键建机制接口不可用', true); return; }
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
     _mechReply(a.create_mechanic_from_skill(sid, name || '', dur));
 }
@@ -699,7 +809,7 @@ function mechBind(mid, sid) {
     sid = _idNum(sid, null);
     if (sid == null) return;
     var a = _api();
-    if (!a || !a.bind_mechanic_skill) return;
+    if (!a || !a.bind_mechanic_skill) { _mechNotice('绑定接口不可用', true); return; }
     if (_mechEditing) _mCollect();   // preserve open-form input across the reload
     // 绑进正在编辑的机制时草稿也要进账, 否则「保存」会用旧草稿覆盖掉刚绑的技能
     if (_mechEditing === mid && _mechDraft) {
@@ -728,11 +838,15 @@ function _mCard(m) {
         + '<input type="checkbox"' + (m.enabled !== false ? ' checked' : '')
         + ' onchange="mechToggle(' + midArg + ', this.checked)">'
         + '<span style="flex:1;font-size:11px;font-weight:600;color:#ffd46f;">' + _esc(m.name || '机制') + '</span>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'tts\'])">🔊</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'banner\'])">横幅</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(' + midArg + ',[\'dodge\'])">按键</div>'
+        // 三个试发聚合成「试▾」; 删除收进编辑表单底部 (防误点 + 头部减杂)
+        + '<select class="mech-input" style="max-width:54px;font-size:10px;" '
+        + 'onchange="if(this.value){var k=this.value;this.selectedIndex=0;mechTest(' + midArg + ',[k]);}">'
+        + '<option value="">试▾</option>'
+        + '<option value="tts">🔊 试听</option>'
+        + '<option value="banner">横幅预览</option>'
+        + '<option value="dodge">⌨ 按键 (⚠真发键)</option>'
+        + '</select>'
         + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechEdit(' + midArg + ')">编辑</div>'
-        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechDelete(' + midArg + ')">删除</div>'
         + '</div>'
         + '<div style="font-size:9px;color:#9fc0d8;margin-top:2px;">' + _esc(sub) + '</div>';
     var notes = String(m.notes || '').trim();
@@ -756,7 +870,8 @@ function mechToggle(mid, enabled) {
     delete m2.summary; delete m2.skill_names;
     m2.enabled = !!enabled;
     var a = _api();
-    if (a && a.save_mechanic) _mechReply(a.save_mechanic(JSON.stringify(m2)));
+    if (!a || !a.save_mechanic) { _mechNotice('机制保存接口不可用', true); return; }
+    _mechReply(a.save_mechanic(JSON.stringify(m2)));
 }
 
 function _mFind(mid) {
@@ -774,12 +889,13 @@ function mechEdit(mid) {
         if (_mechDraft) { delete _mechDraft.summary; }
         _mechCatalog = [];
     }
+    _mechSecOpen = {};
     renderMechanics();
 }
 
 function mechDelete(mid) {
     var a = _api();
-    if (!a || !a.delete_mechanic) return;
+    if (!a || !a.delete_mechanic) { _mechNotice('删除接口不可用', true); return; }
     var m = _mFind(mid);
     var nm = (m && m.name) ? m.name : mid;
     if (!window.confirm('删除机制「' + nm + '」? 此操作不可撤销。')) return;
@@ -791,17 +907,16 @@ function mechTest(mid, kinds) {
     var m = (_mechEditing === mid && _mechDraft) ? _mCollect() : _mFind(mid);
     if (!m) return;
     var a = _api();
-    if (a && a.test_mechanic) {
-        // 按键试发跳过前台门, 会落在当前前台窗口 — 必须先警告再发
-        if ((kinds || []).indexOf('dodge') >= 0) {
-            _mechNotice('按键试发: 将发送到当前前台窗口', true);
-        }
-        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).then(function (j) {
-            var r = (typeof j === 'string') ? JSON.parse(j) : j;
-            if (r && !r.ok) _mechNotice(r.message || '试发失败', true);
-            else if (r && r.message) _mechNotice(r.message, false);
-        }).catch(function () { _mechNotice('试发失败: 接口异常', true); });
+    if (!a || !a.test_mechanic) { _mechNotice('试发接口不可用', true); return; }
+    // 按键试发跳过前台门, 会落在当前前台窗口 — 必须先警告再发
+    if ((kinds || []).indexOf('dodge') >= 0) {
+        _mechNotice('按键试发: 将发送到当前前台窗口', true);
     }
+    Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && !r.ok) _mechNotice(r.message || '试发失败', true);
+        else if (r && r.message) _mechNotice(r.message, false);
+    }).catch(function () { _mechNotice('试发失败: 接口异常', true); });
 }
 
 function mechNew() {
@@ -826,6 +941,7 @@ function mechNew() {
                 _mechDraft = JSON.parse(JSON.stringify(mechs[mechs.length - 1]));
                 delete _mechDraft.summary;
             }
+            _mechSecOpen = {};
             renderMechanics();
         } else if (r && !r.ok) {
             _mechNotice(r.message || '新建机制失败', true);
@@ -858,7 +974,7 @@ function _mForm(m) {
     var html = '<div style="background:rgba(8,14,22,.55);border-radius:6px;padding:7px;margin-top:5px;font-size:10px;">';
     // 新机制(未绑任何检测id)给三步引导
     if (!_idList(det.skill_ids).length && !_idList(det.buff_ids).length) {
-        html += '<div style="font-size:9px;color:#ffd46f;margin-bottom:4px;">新机制 3 步: ① 下方「检测」绑至少一个技能/Buff(触发条件) ② 填 TTS/横幅文案 ③ 点保存。需自动躲避再配「自动躲避」段。</div>';
+        html += '<div style="font-size:9px;color:#ffd46f;margin-bottom:4px;">新机制 3 步: ① 下方「检测」绑至少一个技能/Buff(触发条件) ② 填 TTS/横幅文案 ③ 点保存。需自动躲避点开「自动躲避与走位」组。</div>';
     }
     // 名称 + 颜色
     html += '<div style="margin-bottom:4px;">' + _mInput('mf-name', '名称', d.name, 110)
@@ -923,23 +1039,28 @@ function _mForm(m) {
             + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="' + fn + '(' + hid + ')">绑定</span></div>';
     }).join('');
     // 高级触发 (选填) — 与 Tk _DETECT_SOURCES / _DETECT_EVENTS 1:1
-    var detSrc = String(det.source || 'any');
-    var detEv = String(det.event || '');
-    var srcOpts = [['any', '任意'], ['boss', 'Boss 身上'], ['self', '自身/玩家']];
-    var evOpts = [['', '无'], ['breaking', '破防 breaking'],
-        ['shield_broken', '护盾破碎 shield_broken'], ['overdrive', '狂暴 overdrive']];
-    html += '<div class="phase-header" style="font-size:10px;">高级触发 (选填, 与上面检测ID并用)</div>'
-        + '<div style="margin:3px 0;">来源 <select id="mf-det-src" class="mech-input">'
-        + srcOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detSrc === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
-        + '</select> ' + _mInput('mf-det-boss', '限定BossID', det.boss_base_id || 0, 64) + '</div>'
-        + '<div style="margin:3px 0;">' + _mInput('mf-det-hp', 'HP%≤触发', det.hp_pct || 0, 48)
-        + ' 事件 <select id="mf-det-ev" class="mech-input">'
-        + evOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detEv === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
-        + '</select></div>'
-        + '<div style="margin:3px 0;">' + _mInput('mf-det-tp', '阶段计时s', det.time_into_phase_s || 0, 48)
-        + _mInput('mf-det-tf', '战斗计时s', det.time_into_fight_s || 0, 48)
-        + _mInput('mf-det-ri', '重复间隔s', det.repeat_interval_s || 0, 48) + '</div>'
-        + '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。</div>';
+    // 折叠组: 没配置时收起省空间, 摘要带在标题后
+    var advSummary = _mAdvSummary(det);
+    var advOpen = _mSecOpen('adv', advSummary !== '未启用');
+    html += _mGroupHeader('adv', '高级触发 (选填, 与检测ID并用)', advSummary, advOpen);
+    if (advOpen) {
+        var detSrc = String(det.source || 'any');
+        var detEv = String(det.event || '');
+        var srcOpts = [['any', '任意'], ['boss', 'Boss 身上'], ['self', '自身/玩家']];
+        var evOpts = [['', '无'], ['breaking', '破防 breaking'],
+            ['shield_broken', '护盾破碎 shield_broken'], ['overdrive', '狂暴 overdrive']];
+        html += '<div style="margin:3px 0;">来源 <select id="mf-det-src" class="mech-input">'
+            + srcOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detSrc === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+            + '</select> ' + _mInput('mf-det-boss', '限定BossID', det.boss_base_id || 0, 64) + '</div>'
+            + '<div style="margin:3px 0;">' + _mInput('mf-det-hp', 'HP%≤触发', det.hp_pct || 0, 48)
+            + ' 事件 <select id="mf-det-ev" class="mech-input">'
+            + evOpts.map(function (o) { return '<option value="' + o[0] + '"' + (detEv === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')
+            + '</select></div>'
+            + '<div style="margin:3px 0;">' + _mInput('mf-det-tp', '阶段计时s', det.time_into_phase_s || 0, 48)
+            + _mInput('mf-det-tf', '战斗计时s', det.time_into_fight_s || 0, 48)
+            + _mInput('mf-det-ri', '重复间隔s', det.repeat_interval_s || 0, 48) + '</div>'
+            + '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">留 0/空 = 不启用该条; 计时锚配重复间隔可周期触发; HP%在血量跌破时单发。</div>';
+    }
     // 提醒
     html += '<div class="phase-header" style="font-size:10px;">提醒</div>'
         + '<div style="margin:3px 0;">' + _mInput('mf-tts', 'TTS文案', alert.tts_text, 170)
@@ -948,8 +1069,13 @@ function _mForm(m) {
         + '<div style="margin:3px 0;">' + _mInput('mf-cd', '倒计时s', alert.countdown_s, 44)
         + _mInput('mf-pre', '预警s', alert.pre_warn_s, 44)
         + _mInput('mf-cool', '冷却s', alert.cooldown_s, 44) + '</div>';
-    // 躲避
-    html += '<div class="phase-header" style="font-size:10px;">自动躲避</div><div style="margin:3px 0;">'
+    // 躲避 + 定向移动 + 几何 合并为一个折叠组 (都是"自动操作"一类,
+    // 大多数纯提醒机制用不到, 收起省一大段)
+    var dodgeSummary = _mDodgeSummary(dodge, inline);
+    var dodgeOpen = _mSecOpen('dodge', dodgeSummary !== '未配置');
+    html += _mGroupHeader('dodge', '自动躲避与走位 (按键/移动/几何)', dodgeSummary, dodgeOpen);
+    if (dodgeOpen) {
+    html += '<div style="margin:3px 0;">'
         + '<label style="margin-right:8px;color:#e8f6ff;"><input type="checkbox" id="mf-dodge-en"'
         + (dodge.enabled ? ' checked' : '') + '> 启用</label>'
         + '<select id="mf-preset" class="mech-input" onchange="mechPresetChange(this.value)">'
@@ -984,13 +1110,7 @@ function _mForm(m) {
     if (!dirMasterOn) {
         html += '<div style="font-size:10px;color:#ffd46f;margin:2px 0;">● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)</div>';
     }
-    var dirOpts = [['', '不移动'], ['back', '视角 ▸ ↓向后撤'], ['forward', '视角 ▸ ↑向前'],
-           ['left', '视角 ▸ ←向左'], ['right', '视角 ▸ →向右'],
-           ['back_left', '视角 ▸ ↙左后撤'], ['back_right', '视角 ▸ ↘右后撤'],
-           ['forward_left', '视角 ▸ ↖左前'], ['forward_right', '视角 ▸ ↗右前'],
-           ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)'],
-           ['goto_teammate', '走向 ▸ 靠拢队友(抱团/分摊)'], ['goto_circle', '走向 ▸ 走向编号圈'],
-           ['walk_sequence', '走向 ▸ 按序走完编号圈']];
+    var dirOpts = _DIR_OPTS.slice();
     if (curDir && !dirOpts.some(function (o) { return o[0] === curDir; })) {
         // 参数化方向(goto_point:x,z / world:dx,dz / away_point:x,z)以自定义项保留,
         // 否则一次保存就被静默清成「不移动」
@@ -1034,6 +1154,7 @@ function _mForm(m) {
                    reverse: '逆向/领域(自动)'})[gsrc] || '未填';
     html += '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">当前来源: ' + _esc(srcLbl)
         + ' · 填了半径=按精确范围出圈; 留空=招式生命周期判停</div>';
+    }
     // 阶段范围
     var phases = _objectItems(_objectValue(_mechState).phases);
     var pids = _listItems(d.phase_ids);
@@ -1044,7 +1165,10 @@ function _mForm(m) {
         + phases.map(function (p) {
             return '<option value="' + _esc(p.id) + '"' + (pids.length === 1 && pids.indexOf(p.id) >= 0 ? ' selected' : '') + '>' + _esc(p.name || p.id) + '</option>';
         }).join('') + '</select></div>';
-    html += '<div style="display:flex;justify-content:flex-end;gap:6px;margin-top:4px;">'
+    // 删除从卡片头收到这里: 编辑态才可删, 防误点
+    html += '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">'
+        + '<div class="action-btn" style="padding:2px 10px;font-size:10px;color:#ff6b5c;" onclick="mechDelete(' + _jsArg(m.id) + ')">删除机制</div>'
+        + '<div style="flex:1;"></div>'
         + '<div class="action-btn" style="padding:2px 10px;font-size:10px;" onclick="mechCancelEdit()">取消</div>'
         + '<div class="action-btn accent" style="padding:2px 10px;font-size:10px;" onclick="mechSaveForm()">保存</div></div>';
     return html + '</div>';
@@ -1096,6 +1220,9 @@ function _mCollect() {
     var den = document.getElementById('mf-dodge-en');
     if (den) dodge.enabled = !!den.checked;
     inline.lead_ms = _clampInt(_mNum('mf-lead', inline.lead_ms != null ? inline.lead_ms : 300), 300, 0, 60000);
+    // 折叠组收起时 mf-preset 不在 DOM — 没这个守卫, 收起后保存会把
+    // 按键配置静默清空 (else 分支清 action_key/sequence)
+    if (document.getElementById('mf-preset')) {
     var preset = _mVal('mf-preset') || 'none';
     if (preset === 'tap') {
         inline.press_mode = 'tap';
@@ -1128,6 +1255,7 @@ function _mCollect() {
     } else {
         inline.action_key = '';
         inline.sequence = [];
+    }
     }
     var dirEl = document.getElementById('mf-dir');
     if (dirEl) inline.direction = String(dirEl.value || '');
