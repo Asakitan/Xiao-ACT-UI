@@ -5089,6 +5089,12 @@ function _akClone(value) {
     return value ? JSON.parse(JSON.stringify(value)) : null;
 }
 
+function _menuTabName(value) {
+    var key = String(value == null ? '' : value);
+    var allowed = { local: true, editor: true, cloud: true };
+    return allowed[key] ? key : 'local';
+}
+
 function _akNewClientId(prefix) {
     return (prefix || 'ak') + '_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1000000).toString(36);
 }
@@ -5607,6 +5613,7 @@ function _akRenderCloud() {
 }
 
 function _akRenderTabState() {
+    _autoKeyTab = _menuTabName(_autoKeyTab);
     document.querySelectorAll('#auto-key-tabs .auto-key-tab').forEach(function(tab) {
         tab.classList.toggle('active', tab.getAttribute('data-tab') === _autoKeyTab);
     });
@@ -5642,12 +5649,12 @@ function _syncAutoKeyState(state) {
 function _akSelectProfile(profileId, tabName) {
     _autoKeySelectedProfileId = String(profileId || '');
     _akLoadDraftFromState(_autoKeySelectedProfileId, true);
-    if (tabName) _autoKeyTab = tabName;
+    if (tabName) _autoKeyTab = _menuTabName(tabName);
     _renderAutoKeyUI();
 }
 
 function _akSetTab(tabName) {
-    _autoKeyTab = tabName || 'local';
+    _autoKeyTab = _menuTabName(tabName);
     if (_autoKeyTab === 'editor' && !_autoKeyDraftProfile) {
         _akLoadDraftFromState(_autoKeySelectedProfileId, true);
         _akPopulateEditorFields();
@@ -6821,12 +6828,12 @@ function _brLoadDraftFromState(profileId, force) {
 }
 
 function _brSetTab(tab) {
-    _brTab = tab || 'local';
+    _brTab = _menuTabName(tab);
     document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(t) { t.classList.remove('active'); });
-    var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab="' + _brTab + '"]');
+    var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab="' + _menuTabName(_brTab) + '"]');
     if (active) active.classList.add('active');
     document.querySelectorAll('#sub-bossRaid .boss-raid-panel').forEach(function(p) { p.classList.remove('show'); });
-    var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab="' + _brTab + '"]');
+    var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab="' + _menuTabName(_brTab) + '"]');
     if (panel) panel.classList.add('show');
     if (_brTab === 'editor' && !_brDraftProfile) {
         _brLoadDraftFromState(_brSelectedProfileId, true);

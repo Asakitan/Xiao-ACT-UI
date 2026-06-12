@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.44: Web menu tab 参数归一修复.
+
+  1) `web/menu.html` 修复 AutoKey tab 状态传播。
+     AutoKey profile select 与 tab 切换现在只接受 local/editor/cloud,
+     避免异常 tab 值让所有 tab panel 同时隐藏或进入不可恢复状态。
+
+  2) `web/menu.html` 修复 BossRaid tab selector 参数传播。
+     BossRaid tab 名称现在归一后再写入状态和 querySelector,
+     避免异常 tab payload 破坏 selector 或让编辑/云端面板渲染为空。
+
 ## v4.6.43: Web menu cloud payload 渲染修复.
 
   1) `web/menu.html` 修复 AutoKey Cloud 身份/结果 payload 渲染。

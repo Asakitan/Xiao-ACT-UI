@@ -419,6 +419,29 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey/BossRaid cloud payload snippet: " + snippet)
 
+    tab_state_raw_patterns = [
+        "if (tabName) _autoKeyTab = tabName;",
+        "_autoKeyTab = tabName || 'local';",
+        "_brTab = tab || 'local';",
+        "var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab=\"' + _brTab + '\"]');",
+        "var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab=\"' + _brTab + '\"]');",
+    ]
+    for pattern in tab_state_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey/BossRaid tab state must normalize tab names before UI state or selectors: " + pattern)
+    tab_state_safe_required = [
+        "function _menuTabName(value)",
+        "var allowed = { local: true, editor: true, cloud: true };",
+        "return allowed[key] ? key : 'local';",
+        "_autoKeyTab = _menuTabName(tabName);",
+        "_brTab = _menuTabName(tab);",
+        "var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab=\"' + _menuTabName(_brTab) + '\"]');",
+        "var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab=\"' + _menuTabName(_brTab) + '\"]');",
+    ]
+    for snippet in tab_state_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey/BossRaid tab-state snippet: " + snippet)
+
     linkage_raw_patterns = [
         "_linkageMappings = s.mappings || [];",
         "if (_linkageMappings.length === 0) {",
