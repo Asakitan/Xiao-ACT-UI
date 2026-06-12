@@ -358,6 +358,67 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey numeric form snippet: " + snippet)
 
+    cloud_payload_raw_patterns = [
+        "_akSummaryItem('当前 UID Current UID', identity.player_uid || '--', !identity.player_uid)",
+        "_akSummaryItem('当前玩家 Current Player', identity.player_name || '--', !identity.player_name)",
+        "document.getElementById('ak-identity-uid').textContent = identity.player_uid || '--';",
+        "document.getElementById('ak-identity-name').textContent = identity.player_name || '--';",
+        "document.getElementById('ak-identity-profession-name').textContent = identity.profession_name || '--';",
+        "document.getElementById('br-identity-uid').textContent = identity.player_uid || '--';",
+        "document.getElementById('br-identity-name').textContent = identity.player_name || '--';",
+        "document.getElementById('br-identity-profession-name').textContent = identity.profession_name || '--';",
+        "(identity.missing || []).join(', ') || 'identity'",
+        "var results = Array.isArray(search.results) ? search.results : [];",
+        "resultsEl.innerHTML = results.map(function(item) {",
+        "var items = Array.isArray(search.results) ? search.results : [];",
+        "resultsEl.innerHTML = items.map(function(item) {",
+        "var remoteId = String(item.id || '');",
+        "_escHtml('UID ' + (item.player_uid || '--'))",
+        "_escHtml(item.player_name || '--')",
+        "_escHtml(item.profession_name || '任意 Any')",
+        "_escHtml(item.player_name || '?')",
+        "_escHtml(item.player_uid || '--')",
+    ]
+    for pattern in cloud_payload_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey/BossRaid cloud payloads must guard malformed entries and preserve zero text: " + pattern)
+    cloud_payload_safe_required = [
+        "function _cloudEntry(entry)",
+        "function _cloudEntries(value)",
+        "function _cloudText(value, fallback)",
+        "function _cloudMissingText(value)",
+        "var identityUid = _cloudText(identity.player_uid, '--');",
+        "var identityName = _cloudText(identity.player_name, '--');",
+        "_akSummaryItem('当前 UID Current UID', identityUid, identityUid === '--')",
+        "_akSummaryItem('当前玩家 Current Player', identityName, identityName === '--')",
+        "document.getElementById('ak-identity-uid').textContent = _cloudText(identity.player_uid, '--');",
+        "document.getElementById('ak-identity-name').textContent = _cloudText(identity.player_name, '--');",
+        "document.getElementById('ak-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');",
+        "var akMissingText = _cloudMissingText(identity.missing);",
+        "bits.push('<span class=\"auto-key-pill auto-key-status-warn\">缺少 ' + _escHtml(akMissingText) + '</span>');",
+        "var results = _cloudEntries(search.results);",
+        "resultsEl.innerHTML = results.map(function(rawItem) {",
+        "document.getElementById('br-identity-uid').textContent = _cloudText(identity.player_uid, '--');",
+        "document.getElementById('br-identity-name').textContent = _cloudText(identity.player_name, '--');",
+        "document.getElementById('br-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');",
+        "var brMissingText = _cloudMissingText(identity.missing);",
+        "bits.push('<span class=\"boss-raid-pill auto-key-status-warn\">缺少 ' + _escHtml(brMissingText) + '</span>');",
+        "var items = _cloudEntries(search.results);",
+        "resultsEl.innerHTML = items.map(function(rawItem) {",
+        "var item = _cloudEntry(rawItem);",
+        "var remoteId = _cloudText(item.id, '');",
+        "_escHtml('UID ' + _cloudText(item.player_uid, '--'))",
+        "_escHtml(_cloudText(item.player_name, '--'))",
+        "_escHtml(_cloudText(item.profession_name, '任意 Any'))",
+        "_escHtml(_cloudText(item.player_name, '?'))",
+        "_escHtml(_cloudText(item.player_uid, '--'))",
+        "showAlert('AUTO KEYS', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);",
+        "showAlert('BOSS RAID', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);",
+    ]
+    for snippet in cloud_payload_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey/BossRaid cloud payload snippet: " + snippet)
+
     linkage_raw_patterns = [
         "_linkageMappings = s.mappings || [];",
         "if (_linkageMappings.length === 0) {",

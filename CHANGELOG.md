@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.43: Web menu cloud payload 渲染修复.
+
+  1) `web/menu.html` 修复 AutoKey Cloud 身份/结果 payload 渲染。
+     identity.missing 与 search.results entries 现在会做 shape 防护,
+     malformed cloud payload 不再中断云端页, 合法 `0` 身份/结果文本也会保留显示。
+
+  2) `web/menu.html` 修复 BossRaid Cloud 身份/结果 payload 渲染。
+     BossRaid 云端页现在复用安全的 cloud helper 渲染身份、缺失字段和远端结果,
+     避免异常 payload 破坏上传提示或云端卡片渲染。
+
 ## v4.6.42: Web menu picker/leaderboard payload 防护修复.
 
   1) `web/menu.html` 修复 File Picker payload 渲染。

@@ -5265,9 +5265,11 @@ function _akRenderEditorIdentitySummary(draft) {
     var profileProfessionIdValue = draft ? _clampInt(draft.profession_id, 0, 0, 999999999) : 0;
     var identityProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
     var profileProfessionId = profileProfessionIdValue > 0 ? String(profileProfessionIdValue) : '不限制 Any';
+    var identityUid = _cloudText(identity.player_uid, '--');
+    var identityName = _cloudText(identity.player_name, '--');
     summaryEl.innerHTML = [
-        _akSummaryItem('当前 UID Current UID', identity.player_uid || '--', !identity.player_uid),
-        _akSummaryItem('当前玩家 Current Player', identity.player_name || '--', !identity.player_name),
+        _akSummaryItem('当前 UID Current UID', identityUid, identityUid === '--'),
+        _akSummaryItem('当前玩家 Current Player', identityName, identityName === '--'),
         _akSummaryItem('当前职业 ID Current Profession ID', identityProfessionId > 0 ? String(identityProfessionId) : '--', !(identityProfessionId > 0)),
         _akSummaryItem('脚本职业限制 Profile Filter', profileProfession + ' / ' + profileProfessionId, false)
     ].join('');
@@ -5341,6 +5343,30 @@ function _akDisplayValue(value, fallback) {
     if (value == null) return fallback;
     var text = String(value);
     return text ? text : fallback;
+}
+
+function _cloudEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+
+function _cloudEntries(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function _cloudText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
+function _cloudMissingText(value) {
+    var values = Array.isArray(value) ? value : ((value == null || value === '') ? [] : [value]);
+    var text = values.map(function(item) {
+        return _cloudText(item, '');
+    }).filter(function(item) {
+        return !!item;
+    }).join(', ');
+    return text || 'identity';
 }
 
 function _akRenderConditionFields(index, condIndex, condition) {
@@ -5518,19 +5544,20 @@ function _akRenderCloud() {
     if (document.getElementById('ak-search-player-uid')) document.getElementById('ak-search-player-uid').value = query.player_uid || '';
     if (document.getElementById('ak-search-player-name')) document.getElementById('ak-search-player-name').value = query.player_name || '';
     if (document.getElementById('ak-search-profession-name')) document.getElementById('ak-search-profession-name').value = query.profession_name || '';
-    if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = identity.player_uid || '--';
-    if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = identity.player_name || '--';
+    if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = _cloudText(identity.player_uid, '--');
+    if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = _cloudText(identity.player_name, '--');
     if (document.getElementById('ak-identity-profession-id')) {
         var akProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
         document.getElementById('ak-identity-profession-id').textContent = akProfessionId > 0 ? String(akProfessionId) : '--';
     }
-    if (document.getElementById('ak-identity-profession-name')) document.getElementById('ak-identity-profession-name').textContent = identity.profession_name || '--';
+    if (document.getElementById('ak-identity-profession-name')) document.getElementById('ak-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');
     if (uploadMetaEl) {
         var bits = [];
         if (identity.ready) {
             bits.push('<span class="auto-key-pill auto-key-status-good">身份完整 Identity Ready</span>');
         } else {
-            bits.push('<span class="auto-key-pill auto-key-status-warn">缺少 ' + _escHtml((identity.missing || []).join(', ') || 'identity') + '</span>');
+            var akMissingText = _cloudMissingText(identity.missing);
+            bits.push('<span class="auto-key-pill auto-key-status-warn">缺少 ' + _escHtml(akMissingText) + '</span>');
         }
         if (auth.ready) {
             bits.push('<span class="auto-key-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
@@ -5548,7 +5575,7 @@ function _akRenderCloud() {
         uploadBtn.disabled = !identity.ready;
     }
     if (!resultsEl) return;
-    var results = Array.isArray(search.results) ? search.results : [];
+    var results = _cloudEntries(search.results);
     if (search.error) {
         resultsEl.innerHTML = '<div class="auto-key-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
         return;
@@ -5557,23 +5584,24 @@ function _akRenderCloud() {
         resultsEl.innerHTML = '<div class="auto-key-empty">还没有云端配置。先填写上面的筛选条件再搜索。<br>No cloud profiles yet. Enter filters above and start a search.</div>';
         return;
     }
-    resultsEl.innerHTML = results.map(function(item) {
-        var remoteId = String(item.id || '');
+    resultsEl.innerHTML = results.map(function(rawItem) {
+        var item = _cloudEntry(rawItem);
+        var remoteId = _cloudText(item.id, '');
         return '' +
             '<div class="auto-key-cloud-card">' +
                 '<div class="auto-key-card-head">' +
-                    '<div class="auto-key-card-title">' + _escHtml(item.profile_name || ('Remote #' + remoteId)) + '</div>' +
+                    '<div class="auto-key-card-title">' + _escHtml(_cloudText(item.profile_name, 'Remote #' + _cloudText(remoteId, '?'))) + '</div>' +
                     '<div class="auto-key-card-actions">' +
                         '<button class="auto-key-btn primary" type="button" onclick="_akDownloadRemote(' + _jsAttrArg(remoteId) + '); return false;">下载 Download</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span class="auto-key-pill">' + _escHtml('UID ' + (item.player_uid || '--')) + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(item.player_name || '--') + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(item.profession_name || '任意 Any') + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(item.updated_at || item.created_at || '') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml('UID ' + _cloudText(item.player_uid, '--')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.player_name, '--')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.profession_name, '任意 Any')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.updated_at, _cloudText(item.created_at, ''))) + '</span>' +
                 '</div>' +
-                '<div class="auto-key-card-meta"><span>' + _escHtml(item.description || '暂无说明 / No description') + '</span></div>' +
+                '<div class="auto-key-card-meta"><span>' + _escHtml(_cloudText(item.description, '暂无说明 / No description')) + '</span></div>' +
             '</div>';
     }).join('');
 }
@@ -5920,7 +5948,7 @@ function _akUploadActive() {
         return;
     }
     if (!identity.ready) {
-        showAlert('AUTO KEYS', '当前角色信息不完整，无法上传。缺少: ' + ((identity.missing || []).join(', ') || 'identity'), true);
+        showAlert('AUTO KEYS', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);
         return;
     }
     if (_autoKeyDraftDirty) {
@@ -7152,19 +7180,20 @@ function _brRenderCloud() {
     if (document.getElementById('br-search-profile-name')) document.getElementById('br-search-profile-name').value = query.profile_name || '';
     if (document.getElementById('br-search-player-uid')) document.getElementById('br-search-player-uid').value = query.player_uid || '';
     if (document.getElementById('br-search-player-name')) document.getElementById('br-search-player-name').value = query.player_name || '';
-    if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = identity.player_uid || '--';
-    if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = identity.player_name || '--';
+    if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = _cloudText(identity.player_uid, '--');
+    if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = _cloudText(identity.player_name, '--');
     if (document.getElementById('br-identity-profession-id')) {
         var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
         document.getElementById('br-identity-profession-id').textContent = brProfessionId > 0 ? String(brProfessionId) : '--';
     }
-    if (document.getElementById('br-identity-profession-name')) document.getElementById('br-identity-profession-name').textContent = identity.profession_name || '--';
+    if (document.getElementById('br-identity-profession-name')) document.getElementById('br-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');
     if (uploadMetaEl) {
         var bits = [];
         if (identity.ready) {
             bits.push('<span class="boss-raid-pill auto-key-status-good">身份完整 Identity Ready</span>');
         } else {
-            bits.push('<span class="boss-raid-pill auto-key-status-warn">缺少 ' + _escHtml((identity.missing || []).join(', ') || 'identity') + '</span>');
+            var brMissingText = _cloudMissingText(identity.missing);
+            bits.push('<span class="boss-raid-pill auto-key-status-warn">缺少 ' + _escHtml(brMissingText) + '</span>');
         }
         if (auth.ready) {
             bits.push('<span class="boss-raid-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
@@ -7182,7 +7211,7 @@ function _brRenderCloud() {
         uploadBtn.disabled = !identity.ready || !state.local_profile_count;
     }
     if (!resultsEl) return;
-    var items = Array.isArray(search.results) ? search.results : [];
+    var items = _cloudEntries(search.results);
     if (search.error) {
         resultsEl.innerHTML = '<div class="boss-raid-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
         return;
@@ -7191,12 +7220,13 @@ function _brRenderCloud() {
         resultsEl.innerHTML = '<div class="boss-raid-empty">还没有云端结果。先填写上面的搜索条件，再发起搜索。<br>No cloud profiles yet. Fill in filters above and start a search.</div>';
         return;
     }
-    resultsEl.innerHTML = items.map(function(item) {
-        var remoteId = String(item.id || '');
+    resultsEl.innerHTML = items.map(function(rawItem) {
+        var item = _cloudEntry(rawItem);
+        var remoteId = _cloudText(item.id, '');
         return '<div class="boss-raid-card" onclick="_brDownloadRemote(' + _jsAttrArg(remoteId) + ')">' +
             '<div class="boss-raid-card-info">' +
-                '<div class="boss-raid-card-name">' + _escHtml(item.profile_name || 'Boss') + '</div>' +
-                '<div class="boss-raid-card-meta">by ' + _escHtml(item.player_name || '?') + ' · UID: ' + _escHtml(item.player_uid || '--') + ' · HP: ' + _escHtml(_brNumText(item.boss_total_hp, '?')) + ' · ' + _escHtml(item.updated_at || item.created_at || '') + '</div>' +
+                '<div class="boss-raid-card-name">' + _escHtml(_cloudText(item.profile_name, 'Boss')) + '</div>' +
+                '<div class="boss-raid-card-meta">by ' + _escHtml(_cloudText(item.player_name, '?')) + ' · UID: ' + _escHtml(_cloudText(item.player_uid, '--')) + ' · HP: ' + _escHtml(_brNumText(item.boss_total_hp, '?')) + ' · ' + _escHtml(_cloudText(item.updated_at, _cloudText(item.created_at, ''))) + '</div>' +
             '</div>' +
             '<div class="boss-raid-card-actions">' +
                 '<button class="boss-raid-btn primary" type="button" onclick="event.stopPropagation(); _brDownloadRemote(' + _jsAttrArg(remoteId) + '); return false;">下载 Download</button>' +
@@ -7305,7 +7335,7 @@ function _brUploadActive() {
         return;
     }
     if (!identity.ready) {
-        showAlert('BOSS RAID', '当前角色信息不完整，无法上传。缺少: ' + ((identity.missing || []).join(', ') || 'identity'), true);
+        showAlert('BOSS RAID', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);
         return;
     }
     if (_brDraftDirty) {
