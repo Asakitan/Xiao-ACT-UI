@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.79: Web DPS 面板脏签名守卫 + 抓包消费错误计数可观测.
+
+  1) `web/dps.html` 新增 `_setHtml` 脏签名守卫并收口全部 7 个 innerHTML
+     写点 (列表/详情卡/技能行/空态)。推送数据未变时跳过整块 DOM 重建,
+     消除空闲期/重复快照下的重排开销, 命中特效类也不再被无关重建掐断。
+
+  2) `net/packet_capture.py` 消费循环异常新增 `parse_consumer_errors`
+     计数, 经 `stats` 自动流入 data source health 面板与 Bridge 5s 诊断行
+     (`consume_err=`), 帧处理失败从只进日志变为用户可见。
+
 ## v4.6.78: 更新失败回滚真实生效 + Mem Scope 操作失败反馈.
 
   1) `update_apply.py` 修复更新中途失败时回滚空转的问题。

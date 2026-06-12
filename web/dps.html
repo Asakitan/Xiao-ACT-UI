@@ -1825,6 +1825,15 @@ function _switchDetailView() {
     document.getElementById('detail-view').classList.add('show');
 }
 
+// 脏签名守卫: html 没变就跳过 innerHTML 重建, 省掉相同数据下的整块
+// DOM 重排, 也避免命中特效类被无关重建掐掉。
+function _setHtml(el, html) {
+    if (!el) return;
+    if (el._saoLastHtml === html) return;
+    el._saoLastHtml = html;
+    el.innerHTML = html;
+}
+
 function _renderHeader() {
     _setMode(_viewMode);
     _renderActMeta();
@@ -1869,7 +1878,7 @@ function _renderList() {
     }
 
     if (!entities.length) {
-        frame.innerHTML = '<div class="empty">' + (_viewMode === 'report' ? 'NO REPORT DATA' : 'NO LIVE COMBAT DATA') + '</div>';
+        _setHtml(frame, '<div class="empty">' + (_viewMode === 'report' ? 'NO REPORT DATA' : 'NO LIVE COMBAT DATA') + '</div>');
         return;
     }
 
@@ -1906,14 +1915,14 @@ function _renderList() {
             +   '</div>'
             + '</div>';
     }
-    frame.innerHTML = html;
+    _setHtml(frame, html);
     _applyPendingHitFx();
 }
 
 function _renderDetailBase(entity) {
     if (!entity) {
-        document.getElementById('detail-grid').innerHTML = '<div class="empty">NO DETAIL DATA</div>';
-        document.getElementById('detail-skills').innerHTML = '<div class="empty">NO SKILL DATA</div>';
+        _setHtml(document.getElementById('detail-grid'), '<div class="empty">NO DETAIL DATA</div>');
+        _setHtml(document.getElementById('detail-skills'), '<div class="empty">NO SKILL DATA</div>');
         return;
     }
 
@@ -1940,7 +1949,7 @@ function _renderDetailBase(entity) {
             +   '<div class="stat-value ' + stats[i][2] + '">' + stats[i][1] + '</div>'
             + '</div>';
     }
-    document.getElementById('detail-grid').innerHTML = html;
+    _setHtml(document.getElementById('detail-grid'), html);
 }
 
 // Heat gradient by relative output: low → cold blue, mid → gold, high → hot
@@ -1962,7 +1971,7 @@ function _renderSkillRows(entity) {
     var skills = (entity && entity.skills) ? entity.skills.slice() : [];
     var frame = document.getElementById('detail-skills');
     if (!skills.length) {
-        frame.innerHTML = '<div class="empty">' + (_viewMode === 'report' ? 'NO SKILL DATA IN LAST REPORT' : 'WAITING FOR LIVE SKILL DETAIL') + '</div>';
+        _setHtml(frame, '<div class="empty">' + (_viewMode === 'report' ? 'NO SKILL DATA IN LAST REPORT' : 'WAITING FOR LIVE SKILL DETAIL') + '</div>');
         return;
     }
 
@@ -2010,7 +2019,7 @@ function _renderSkillRows(entity) {
             +   '<div class="skill-track"><div class="skill-fill" style="width:' + _barPct(amount, maxVal) + '%;background:' + fill + ';box-shadow:0 0 6px ' + glow + '"></div></div>'
             + '</div>';
     }
-    frame.innerHTML = html;
+    _setHtml(frame, html);
 }
 
 function _renderDetail() {

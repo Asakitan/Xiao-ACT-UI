@@ -996,6 +996,7 @@ class PacketCapture:
         # sheds load in pathological floods (where falling behind is worse).
         self._frame_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=8192)
         self._frame_drops = 0
+        self._consume_errors = 0
         self._consumer_thread: Optional[threading.Thread] = None
 
         # ── Cross-NIC duplicate-frame guard (double-damage fix) ────────────
@@ -1115,7 +1116,8 @@ class PacketCapture:
                     self._on_game_packet(payload)
             except Exception as exc:
                 import traceback
-                logger.error(f'[Capture] consumer error: {exc}\n{traceback.format_exc()}')
+                self._consume_errors += 1
+                logger.error(f'[Capture] consumer error #{self._consume_errors}: {exc}\n{traceback.format_exc()}')
 
     @property
     def server_identified(self) -> bool:
@@ -1133,6 +1135,7 @@ class PacketCapture:
         merged['parse_queue_depth'] = self._frame_q.qsize()
         merged['parse_frame_drops'] = self._frame_drops
         merged['parse_frame_dupes'] = self._frame_dupes
+        merged['parse_consumer_errors'] = self._consume_errors
         return merged
 
     def force_reconnect(self, reason: str = 'watchdog') -> bool:

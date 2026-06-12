@@ -1424,11 +1424,12 @@ class PacketBridge:
                 cap_game = cap_stats.get('complete_game_frames', '?')
                 gap_skips = cap_stats.get('gap_skips', 0)
                 cache_of = cap_stats.get('cache_overflows', 0)
+                consume_err = cap_stats.get('parse_consumer_errors', 0)
                 thr_alive = cap._thread.is_alive() if cap and cap._thread else '?'
                 print(
                     f'[Bridge] 诊断: thread_alive={thr_alive} server={srv} '
                     f'cap_raw={cap_raw} cap_tcp={cap_tcp} cap_game={cap_game} '
-                    f'gap_skip={gap_skips} overflow={cache_of} | '
+                    f'gap_skip={gap_skips} overflow={cache_of} consume_err={consume_err} | '
                     f'parser_raw={ps["raw_frames"]} parser_game={ps["game_frames"]} '
                     f'unknown_msg={ps["unknown_message_types"]} '
                     f'unknown_notify={ps["unknown_notify_methods"]} '
