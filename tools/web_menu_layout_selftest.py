@@ -470,6 +470,45 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey/BossRaid cloud payload snippet: " + snippet)
 
+    cloud_settings_raw_patterns = [
+        "if (document.getElementById('ak-server-url')) document.getElementById('ak-server-url').value = state.server_url || '';",
+        "if (document.getElementById('ak-search-q')) document.getElementById('ak-search-q').value = query.q || '';",
+        "if (document.getElementById('br-server-url')) document.getElementById('br-server-url').value = state.server_url || '';",
+        "if (document.getElementById('br-search-q')) document.getElementById('br-search-q').value = query.q || '';",
+        "var serverUrl = (document.getElementById('ak-server-url').value || '').trim();",
+        "q: (document.getElementById('ak-search-q').value || '').trim(),",
+        "var serverUrl = (document.getElementById('br-server-url').value || '').trim();",
+        "q: ((document.getElementById('br-search-q') || {}).value || '').trim(),",
+        "var targetId = _autoKeyDraftProfile ? _autoKeyDraftProfile.id : ((_autoKeyState && _autoKeyState.active_profile_id) || '');",
+        "showToast('UPLOAD COMPLETE #' + (data.remote_id || ''));",
+        "var targetId = _brDraftProfile ? _brDraftProfile.id : ((_bossRaidState && _bossRaidState.active_profile_id) || '');",
+        "showToast('BOSS RAID UPLOADED #' + (data.remote_id || ''));",
+    ]
+    for pattern in cloud_settings_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey/BossRaid cloud settings and upload ids must preserve zero text and guard inputs: " + pattern)
+    cloud_settings_safe_required = [
+        "function _cloudInputText(id)",
+        "function _cloudSetInputText(id, value)",
+        "_cloudSetInputText('ak-server-url', state.server_url);",
+        "_cloudSetInputText('ak-search-q', query.q);",
+        "_cloudSetInputText('br-server-url', state.server_url);",
+        "_cloudSetInputText('br-search-q', query.q);",
+        "var serverUrl = _cloudInputText('ak-server-url');",
+        "q: _cloudInputText('ak-search-q'),",
+        "profession_name: _cloudInputText('ak-search-profession-name'),",
+        "var serverUrl = _cloudInputText('br-server-url');",
+        "q: _cloudInputText('br-search-q'),",
+        "player_name: _cloudInputText('br-search-player-name'),",
+        "var targetId = _autoKeyDraftProfile ? _cloudText(_autoKeyDraftProfile.id, '') : _cloudText(_autoKeyState && _autoKeyState.active_profile_id, '');",
+        "showToast('UPLOAD COMPLETE #' + _cloudText(data && data.remote_id, ''));",
+        "var targetId = _brDraftProfile ? _cloudText(_brDraftProfile.id, '') : _cloudText(_bossRaidState && _bossRaidState.active_profile_id, '');",
+        "showToast('BOSS RAID UPLOADED #' + _cloudText(data && data.remote_id, ''));",
+    ]
+    for snippet in cloud_settings_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey/BossRaid cloud settings/upload snippet: " + snippet)
+
     tab_state_raw_patterns = [
         "if (tabName) _autoKeyTab = tabName;",
         "_autoKeyTab = tabName || 'local';",

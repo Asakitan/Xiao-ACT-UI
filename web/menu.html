@@ -5402,6 +5402,16 @@ function _cloudText(value, fallback) {
     return text ? text : fallback;
 }
 
+function _cloudInputText(id) {
+    var el = document.getElementById(id);
+    return el ? _cloudText(el.value, '').trim() : '';
+}
+
+function _cloudSetInputText(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.value = _cloudText(value, '');
+}
+
 function _cloudMissingText(value) {
     var values = Array.isArray(value) ? value : ((value == null || value === '') ? [] : [value]);
     var text = values.map(function(item) {
@@ -5583,12 +5593,12 @@ function _akRenderCloud() {
     var resultsEl = document.getElementById('auto-key-cloud-results');
     var uploadMetaEl = document.getElementById('ak-upload-auth-meta');
     var uploadBtn = document.getElementById('ak-upload-active-btn');
-    if (document.getElementById('ak-server-url')) document.getElementById('ak-server-url').value = state.server_url || '';
-    if (document.getElementById('ak-search-q')) document.getElementById('ak-search-q').value = query.q || '';
-    if (document.getElementById('ak-search-profile-name')) document.getElementById('ak-search-profile-name').value = query.profile_name || '';
-    if (document.getElementById('ak-search-player-uid')) document.getElementById('ak-search-player-uid').value = query.player_uid || '';
-    if (document.getElementById('ak-search-player-name')) document.getElementById('ak-search-player-name').value = query.player_name || '';
-    if (document.getElementById('ak-search-profession-name')) document.getElementById('ak-search-profession-name').value = query.profession_name || '';
+    _cloudSetInputText('ak-server-url', state.server_url);
+    _cloudSetInputText('ak-search-q', query.q);
+    _cloudSetInputText('ak-search-profile-name', query.profile_name);
+    _cloudSetInputText('ak-search-player-uid', query.player_uid);
+    _cloudSetInputText('ak-search-player-name', query.player_name);
+    _cloudSetInputText('ak-search-profession-name', query.profession_name);
     if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = _cloudText(identity.player_uid, '--');
     if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = _cloudText(identity.player_name, '--');
     if (document.getElementById('ak-identity-profession-id')) {
@@ -5941,7 +5951,7 @@ function _akImportProfile() {
 
 function _akSaveCloudSettings(afterSave) {
     if (!window.pywebview || !window.pywebview.api) return;
-    var serverUrl = (document.getElementById('ak-server-url').value || '').trim();
+    var serverUrl = _cloudInputText('ak-server-url');
     Promise.all([
         window.pywebview.api.set_auto_key_server_url(serverUrl)
     ]).then(function(results) {
@@ -5965,11 +5975,11 @@ function _akSaveCloudSettings(afterSave) {
 function _akSearchRemote() {
     _akSaveCloudSettings(function() {
         var query = {
-            q: (document.getElementById('ak-search-q').value || '').trim(),
-            profile_name: (document.getElementById('ak-search-profile-name').value || '').trim(),
-            player_uid: (document.getElementById('ak-search-player-uid').value || '').trim(),
-            player_name: (document.getElementById('ak-search-player-name').value || '').trim(),
-            profession_name: (document.getElementById('ak-search-profession-name').value || '').trim(),
+            q: _cloudInputText('ak-search-q'),
+            profile_name: _cloudInputText('ak-search-profile-name'),
+            player_uid: _cloudInputText('ak-search-player-uid'),
+            player_name: _cloudInputText('ak-search-player-name'),
+            profession_name: _cloudInputText('ak-search-profession-name'),
             page: 1,
             page_size: 20
         };
@@ -5987,7 +5997,7 @@ function _akDownloadRemote(remoteId) {
 }
 
 function _akUploadActive() {
-    var targetId = _autoKeyDraftProfile ? _autoKeyDraftProfile.id : ((_autoKeyState && _autoKeyState.active_profile_id) || '');
+    var targetId = _autoKeyDraftProfile ? _cloudText(_autoKeyDraftProfile.id, '') : _cloudText(_autoKeyState && _autoKeyState.active_profile_id, '');
     var identity = (_autoKeyState && _autoKeyState.identity) || {};
     if (!targetId) {
         showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
@@ -6004,7 +6014,7 @@ function _akUploadActive() {
     _akSaveCloudSettings(function() {
         _akRefreshUploadAuth(false, function() {
             _akCallApi('upload_auto_key_profile', [targetId], function(data) {
-                showToast('UPLOAD COMPLETE #' + (data.remote_id || ''));
+                showToast('UPLOAD COMPLETE #' + _cloudText(data && data.remote_id, ''));
             });
         });
     });
@@ -7285,11 +7295,11 @@ function _brRenderCloud() {
     var resultsEl = document.getElementById('boss-raid-cloud-results');
     var uploadMetaEl = document.getElementById('br-upload-auth-meta');
     var uploadBtn = document.getElementById('br-upload-active-btn');
-    if (document.getElementById('br-server-url')) document.getElementById('br-server-url').value = state.server_url || '';
-    if (document.getElementById('br-search-q')) document.getElementById('br-search-q').value = query.q || '';
-    if (document.getElementById('br-search-profile-name')) document.getElementById('br-search-profile-name').value = query.profile_name || '';
-    if (document.getElementById('br-search-player-uid')) document.getElementById('br-search-player-uid').value = query.player_uid || '';
-    if (document.getElementById('br-search-player-name')) document.getElementById('br-search-player-name').value = query.player_name || '';
+    _cloudSetInputText('br-server-url', state.server_url);
+    _cloudSetInputText('br-search-q', query.q);
+    _cloudSetInputText('br-search-profile-name', query.profile_name);
+    _cloudSetInputText('br-search-player-uid', query.player_uid);
+    _cloudSetInputText('br-search-player-name', query.player_name);
     if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = _cloudText(identity.player_uid, '--');
     if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = _cloudText(identity.player_name, '--');
     if (document.getElementById('br-identity-profession-id')) {
@@ -7404,7 +7414,7 @@ function _brDeleteProfile() {
 
 function _brSaveCloudSettings(afterSave) {
     if (!window.pywebview || !window.pywebview.api) return;
-    var serverUrl = (document.getElementById('br-server-url').value || '').trim();
+    var serverUrl = _cloudInputText('br-server-url');
     Promise.all([
         window.pywebview.api.set_boss_raid_server_url(serverUrl)
     ]).then(function(results) {
@@ -7439,7 +7449,7 @@ function _brIssueToken() {
     });
 }
 function _brUploadActive() {
-    var targetId = _brDraftProfile ? _brDraftProfile.id : ((_bossRaidState && _bossRaidState.active_profile_id) || '');
+    var targetId = _brDraftProfile ? _cloudText(_brDraftProfile.id, '') : _cloudText(_bossRaidState && _bossRaidState.active_profile_id, '');
     var identity = (_bossRaidState && _bossRaidState.identity) || {};
     if (!targetId) {
         showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
@@ -7456,7 +7466,7 @@ function _brUploadActive() {
     _brSaveCloudSettings(function() {
         _brRefreshUploadAuth(false, function() {
             _brCallApi('upload_boss_raid_profile', [targetId], function(data) {
-                showToast('BOSS RAID UPLOADED #' + (data.remote_id || ''));
+                showToast('BOSS RAID UPLOADED #' + _cloudText(data && data.remote_id, ''));
             });
         });
     });
@@ -7464,10 +7474,10 @@ function _brUploadActive() {
 function _brSearchRemote() {
     _brSaveCloudSettings(function() {
         var query = {
-            q: ((document.getElementById('br-search-q') || {}).value || '').trim(),
-            profile_name: ((document.getElementById('br-search-profile-name') || {}).value || '').trim(),
-            player_uid: ((document.getElementById('br-search-player-uid') || {}).value || '').trim(),
-            player_name: ((document.getElementById('br-search-player-name') || {}).value || '').trim(),
+            q: _cloudInputText('br-search-q'),
+            profile_name: _cloudInputText('br-search-profile-name'),
+            player_uid: _cloudInputText('br-search-player-uid'),
+            player_name: _cloudInputText('br-search-player-name'),
             page: 1,
             page_size: 20
         };

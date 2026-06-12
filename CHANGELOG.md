@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.52: Web menu cloud settings 参数传递修复.
+
+  1) `web/menu.html` 修复 AutoKey/BossRaid cloud 表单回填与读取。
+     server/search 输入现在通过统一 helper 读写,
+     避免合法 `0` query/server 文本被 fallback 清空或缺失元素打断搜索。
+
+  2) `web/menu.html` 修复 AutoKey/BossRaid 上传 ID 与 remote_id 显示。
+     上传目标 profile id 与上传完成 remote_id toast 现在保留合法 `0`,
+     避免有效 ID 被误判为未选择或显示为空。
+
 ## v4.6.51: Web menu plugin popup id/text 防护修复.
 
   1) `web/menu.html` 修复 plugin popup/detached id 传递。
