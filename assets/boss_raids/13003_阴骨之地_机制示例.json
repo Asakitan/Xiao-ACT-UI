@@ -3,8 +3,8 @@
  "profile": {
   "id": "boss_example_102451_auto",
   "schema_version": 2,
-  "profile_name": "骸·修洛特尔 · 机制示例 (全难度通用)",
-  "description": "《神龙枷所》骸·修洛特尔 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 8 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+  "profile_name": "阴骨之地(骸·修洛特尔) · 机制示例 (全难度通用)",
+  "description": "《虚空浮岛·神龙枷所》第二场: 阴骨之地 — 骸·修洛特尔(虚蚀龙) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 8 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
   "boss_total_hp": 0,
   "enrage_time_s": 600,
   "enrage": {
@@ -958,6 +958,70 @@
        "width": 0.0,
        "center": "boss",
        "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_shield_bearer",
+    "name": "虚蚀龙-持盾者(四元素盾)",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：持盾者点名(火/冰/风/雷, buff 882220/882222/882224/882226)\n躲法：被点名持盾按团队分配就位; 盾领域半径3米(FieldTable实测), 中心锚待进本确认",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      882220,
+      882222,
+      882224,
+      882226
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "持盾点名 · 按团队分配就位(盾领域3米)",
+     "tts_text": "持盾点名",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 3.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "reverse"
       }
      }
     }
