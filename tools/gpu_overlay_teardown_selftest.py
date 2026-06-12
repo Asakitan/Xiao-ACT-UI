@@ -7,6 +7,8 @@ import os
 import sys
 import unittest
 
+from PIL import Image
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -16,6 +18,7 @@ from gui_modules.sao_child_bar_gpu import BarColors, _ChildBarSnapshot, _RowSnap
 from gui_modules.sao_gui_bosshp import BossHpOverlay
 from gui_modules.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
+from gui_modules.sao_gui_state_mixin import SAOPlayerGUIStateMixin
 from gui_modules.sao_left_info_gpu import (
     LeftInfoGpuPainter, PlayerPanelGpuPainter, SessionPlayersGpuPainter,
     _LeftInfoSnapshot, _PlayerPanelSnapshot, _SessionPlayersSnapshot,
@@ -61,6 +64,83 @@ class _Renderer:
 
     def reset(self) -> None:
         self.reset_count += 1
+
+
+class _BossHpMonster:
+    def __init__(self, uuid: int, hp: int, max_hp: int, payload: dict) -> None:
+        self.uuid = uuid
+        self.hp = hp
+        self.max_hp = max_hp
+        self._payload = dict(payload)
+
+    def to_dict(self) -> dict:
+        return dict(self._payload)
+
+
+class _BossHpBridge:
+    def __init__(self, monsters: list[_BossHpMonster]) -> None:
+        self._monsters = {m.uuid: m for m in monsters}
+
+    def get_monster(self, uuid: int):
+        return self._monsters.get(uuid)
+
+
+class _BossHpGameState:
+    boss_raid_active = False
+    boss_hp_source = "packet"
+
+
+class _BossHpStateOwner(SAOPlayerGUIStateMixin):
+    def __init__(self) -> None:
+        self._boss_hp_overlay = object()
+        self._bb_last_target_uuid = 1001
+        self._bb_last_damage_ts = 10.0
+        self._bb_recent_targets = {1001: 10.0, 1002: 9.9}
+        self._scene_damage_grace_until = 0.0
+        self._last_boss_hp_push_sig = None
+        self._bb_last_hp_motion_sig = None
+        self._bb_last_hp_motion_ts = 0.0
+        self._dps_tracker = None
+        self._packet_engine = _BossHpBridge([
+            _BossHpMonster(
+                1001, 900, 1000,
+                {
+                    "name": "Bad Payload Boss",
+                    "shield_active": True,
+                    "shield_pct": "bad",
+                    "breaking_stage": "bad",
+                    "has_break_data": True,
+                    "extinction_pct": float("nan"),
+                    "extinction": "bad",
+                    "max_extinction": float("inf"),
+                },
+            ),
+            _BossHpMonster(
+                1002, 500, 1000,
+                {
+                    "name": "Add",
+                    "hp_pct": float("nan"),
+                    "extinction_pct": "bad",
+                    "has_break_data": True,
+                    "breaking_stage": "bad",
+                    "shield_active": True,
+                    "shield_pct": float("inf"),
+                },
+            ),
+        ])
+
+    def _get_setting(self, key: str, default=None):
+        if key == "boss_bar_mode":
+            return "boss_raid"
+        if key == "boss_hp_stable_hide_s":
+            return 2.5
+        return default
+
+    def _boss_hp_hold_timeout_s(self) -> float:
+        return 5.0
+
+    def _boss_monster_usable(self, monster) -> bool:
+        return monster is not None
 
 
 def _owned_pair():
@@ -302,6 +382,46 @@ class GpuOverlayTeardownTests(unittest.TestCase):
         self.assertEqual(panel._breaking_stage, -1)
         self.assertEqual(panel._last_break_pct, 0.0)
         self.assertEqual(panel._additional_units[0]["breaking_stage"], -1)
+
+    def test_bosshp_additional_units_normalize_nonfinite_and_draw_bad_state(self) -> None:
+        panel = object.__new__(BossHpOverlay)
+        bad_units = [{
+            "name": "Phase",
+            "hp_pct": float("nan"),
+            "extinction_pct": float("inf"),
+            "has_break_data": True,
+            "breaking_stage": "bad",
+            "shield_active": True,
+            "shield_pct": "bad",
+        }]
+
+        normalized = panel._normalize_additional_units(bad_units)
+
+        self.assertEqual(normalized[0]["hp_pct"], 0.0)
+        self.assertEqual(normalized[0]["extinction_pct"], 0.0)
+        self.assertEqual(normalized[0]["shield_pct"], 0.0)
+        self.assertEqual(normalized[0]["breaking_stage"], -1)
+
+        panel._additional_units = bad_units
+        img = Image.new("RGBA", (BossHpOverlay.WIDTH, BossHpOverlay.HEIGHT), (0, 0, 0, 0))
+        panel._draw_additional_units(img, 0)
+
+    def test_bosshp_state_delta_tolerates_bad_direct_payload(self) -> None:
+        owner = _BossHpStateOwner()
+
+        payload = owner._compute_boss_hp_delta(_BossHpGameState(), 10.0)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["hp_pct"], 0.9)
+        self.assertEqual(payload["shield_pct"], 0.0)
+        self.assertEqual(payload["breaking_stage"], 0)
+        self.assertEqual(payload["extinction_pct"], 0.0)
+        self.assertEqual(payload["extinction"], 0)
+        self.assertEqual(payload["max_extinction"], 0)
+        self.assertEqual(payload["additional"][0]["hp_pct"], 0.0)
+        self.assertEqual(payload["additional"][0]["extinction_pct"], 0.0)
+        self.assertEqual(payload["additional"][0]["breaking_stage"], -1)
+        self.assertEqual(payload["additional"][0]["shield_pct"], 0.0)
 
 
 if __name__ == "__main__":

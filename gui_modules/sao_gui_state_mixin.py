@@ -24,6 +24,7 @@ worker, leaving only Tk widget mutations on main).
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Any, Dict, List
@@ -31,14 +32,53 @@ from typing import Any, Dict, List
 from engines.combat_analytics import mem_boss_break_override
 
 
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: float | None = None,
+    hi: float | None = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: int | None = None,
+    hi: int | None = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _unit_pct(value: Any, default: float = 0.0) -> float:
+    return _finite_float(value, default, lo=0.0, hi=1.0)
+
+
 def _boss_bar_main_key(_m, _recent_targets):
     """Boss-bar primary-target sort key. Hoisted from _compute_boss_hp_delta
     so the daemon worker doesn't rebind a fresh closure per tick."""
-    _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
-    _hp = int(getattr(_m, 'hp', 0) or 0)
+    _max_hp = _finite_int(getattr(_m, 'max_hp', 0), 0, lo=0)
+    _hp = _finite_int(getattr(_m, 'hp', 0), 0, lo=0)
     _mh_for_pct = _max_hp if _max_hp > 0 else (_hp if _hp > 0 else 1)
     _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
-    _last_ts = float(_recent_targets.get(getattr(_m, 'uuid', 0), 0) or 0.0)
+    _last_ts = _finite_float(_recent_targets.get(getattr(_m, 'uuid', 0), 0), 0.0)
     return (-_max_hp, -_hp_pct, -_last_ts)
 
 
@@ -441,8 +481,8 @@ class SAOPlayerGUIStateMixin:
             _now = _pp_now
             _bb_timeout = self._boss_hp_hold_timeout_s()
             try:
-                _bb_scene_grace = _now < float(
-                    getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
+                _bb_scene_grace = _now < _finite_float(
+                    getattr(self, '_scene_damage_grace_until', 0.0), 0.0)
             except Exception:
                 _bb_scene_grace = False
             for uuid in list(self._bb_recent_targets.keys()):
@@ -452,8 +492,8 @@ class SAOPlayerGUIStateMixin:
             _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
             if not _has_recent_self_damage and not self._bb_recent_targets:
                 self._bb_last_target_uuid = 0
-            _bb_last_target_damage_ts = float(
-                self._bb_recent_targets.get(self._bb_last_target_uuid, 0.0) or 0.0)
+            _bb_last_target_damage_ts = _finite_float(
+                self._bb_recent_targets.get(self._bb_last_target_uuid, 0.0), 0.0)
             _bb_target_damage_live = bool(
                 self._bb_last_target_uuid
                 and _bb_last_target_damage_ts > 0.0
@@ -481,7 +521,7 @@ class SAOPlayerGUIStateMixin:
                             # events mixin already filters these at write
                             # time, but stale entries pre-fix could still
                             # be sitting in the dict.
-                            if (int(uuid) & 0xFFFF) == 640:
+                            if (_finite_int(uuid, 0, lo=0) & 0xFFFF) == 640:
                                 continue
                             m = _bridge.get_monster(uuid)
                             if self._boss_monster_usable(m):
@@ -491,8 +531,11 @@ class SAOPlayerGUIStateMixin:
                         _recent_monsters.sort(key=lambda _m: _boss_bar_main_key(_m, _rt))
                         main_m = _recent_monsters[0]
                         self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
-                        _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
-                        _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
+                        _bb_direct_max = (
+                            _finite_int(getattr(main_m, 'max_hp', 0), 0, lo=0)
+                            or _finite_int(getattr(main_m, 'hp', 0), 0, lo=0)
+                        )
+                        _bb_direct_hp = _finite_int(getattr(main_m, 'hp', 0), 0, lo=0)
                         _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
                         _bb_src = 'packet'
                         for m in _recent_monsters[1:]:
@@ -505,19 +548,22 @@ class SAOPlayerGUIStateMixin:
                                          or str(d.get('name', 'Unit'))[:20])
                             _bb_additional.append({
                                 'name': _add_name,
-                                'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
-                                'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
+                                'hp_pct': round(_unit_pct(d.get('hp_pct')), 3),
+                                'extinction_pct': round(_unit_pct(d.get('extinction_pct')), 3),
                                 'has_break_data': bool(d.get('has_break_data', False)),
-                                'breaking_stage': int(d.get('breaking_stage', -1)),
+                                'breaking_stage': _finite_int(d.get('breaking_stage'), -1, lo=-1),
                                 'shield_active': bool(d.get('shield_active', False)),
-                                'shield_pct': round(float(d.get('shield_pct', 0.0)), 3),
+                                'shield_pct': round(_unit_pct(d.get('shield_pct')), 3),
                             })
                 elif self._bb_last_target_uuid and not _has_recent_self_damage:
                     try:
                         _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
                         if self._boss_monster_usable(_m):
-                            _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
-                            _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
+                            _bb_direct_max = (
+                                _finite_int(getattr(_m, 'max_hp', 0), 0, lo=0)
+                                or _finite_int(getattr(_m, 'hp', 0), 0, lo=0)
+                            )
+                            _bb_direct_hp = _finite_int(getattr(_m, 'hp', 0), 0, lo=0)
                             _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
                             _bb_src = 'packet'
                     except Exception:
@@ -568,12 +614,12 @@ class SAOPlayerGUIStateMixin:
                     'current_hp': _bb_direct_hp,
                     'total_hp': _bb_direct_max,
                     'shield_active': bool(_bb_direct_data.get('shield_active')),
-                    'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
-                    'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
+                    'shield_pct': round(_unit_pct(_bb_direct_data.get('shield_pct')), 3),
+                    'breaking_stage': _finite_int(_bb_direct_data.get('breaking_stage'), 0, lo=-1),
                     'has_break_data': bool(_bb_direct_data.get('has_break_data')),
-                    'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
-                    'extinction': int(_bb_direct_data.get('extinction') or 0),
-                    'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
+                    'extinction_pct': round(_unit_pct(_bb_direct_data.get('extinction_pct')), 3),
+                    'extinction': _finite_int(_bb_direct_data.get('extinction'), 0, lo=0),
+                    'max_extinction': _finite_int(_bb_direct_data.get('max_extinction'), 0, lo=0),
                     'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
                     'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
                     'invincible': False,
@@ -593,7 +639,7 @@ class SAOPlayerGUIStateMixin:
                     _bb_target_label = f'{_bb_target_uuid:X}'[-6:]
                 _bb_data = {
                     'active': True,
-                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                    'hp_pct': round(_unit_pct(getattr(gs, 'boss_hp_est_pct', 1.0), 1.0), 3),
                     'hp_source': 'estimate',
                     'current_hp': 0,
                     'total_hp': 0,
@@ -612,18 +658,19 @@ class SAOPlayerGUIStateMixin:
                     or (f'Target {_bb_target_label}' if _bb_target_label else 'Target'),
                 }
             else:
-                _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
+                _bb_breaking_stage_gs = _finite_int(
+                    getattr(gs, 'boss_breaking_stage', -1), -1, lo=-1)
                 _bb_data = {
                     'active': _bb_show,
-                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                    'hp_pct': round(_unit_pct(getattr(gs, 'boss_hp_est_pct', 1.0), 1.0), 3),
                     'hp_source': _bb_src,
-                    'current_hp': getattr(gs, 'boss_current_hp', 0),
-                    'total_hp': getattr(gs, 'boss_total_hp', 0),
+                    'current_hp': _finite_int(getattr(gs, 'boss_current_hp', 0), 0, lo=0),
+                    'total_hp': _finite_int(getattr(gs, 'boss_total_hp', 0), 0, lo=0),
                     'shield_active': getattr(gs, 'boss_shield_active', False),
-                    'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
+                    'shield_pct': round(_unit_pct(getattr(gs, 'boss_shield_pct', 0.0)), 3),
                     'breaking_stage': _bb_breaking_stage_gs,
                     'has_break_data': _bb_breaking_stage_gs != -1,
-                    'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
+                    'extinction_pct': round(_unit_pct(getattr(gs, 'boss_extinction_pct', 0.0)), 3),
                     'extinction': 0,
                     'max_extinction': 0,
                     'stop_breaking_ticking': False,
@@ -639,22 +686,23 @@ class SAOPlayerGUIStateMixin:
             # motion-sig / build_boss_bar_sig push gate so MEM-only break changes still push.
             _bb_mem_break = mem_boss_break_override(_bridge)
             if _bb_mem_break is not None:
-                (_bb_data['breaking_stage'],
-                 _bb_data['has_break_data'],
-                 _bb_data['extinction_pct']) = _bb_mem_break
+                (_bb_stage, _bb_has_break, _bb_ext_pct) = _bb_mem_break
+                _bb_data['breaking_stage'] = _finite_int(_bb_stage, -1, lo=-1)
+                _bb_data['has_break_data'] = bool(_bb_has_break)
+                _bb_data['extinction_pct'] = _unit_pct(_bb_ext_pct)
                 _bb_data['extinction'] = 0
                 _bb_data['max_extinction'] = 0
                 _bb_data['stop_breaking_ticking'] = False
             if _bb_show and not _bb_raid_active:
                 _bb_hp_motion_sig = (
-                    int(self._bb_last_target_uuid or 0),
+                    _finite_int(self._bb_last_target_uuid, 0, lo=0),
                     str(_bb_data.get('hp_source') or ''),
-                    int(_bb_data.get('current_hp') or 0),
-                    int(_bb_data.get('total_hp') or 0),
-                    round(float(_bb_data.get('hp_pct') or 0.0), 4),
-                    round(float(_bb_data.get('shield_pct') or 0.0), 4),
-                    int(_bb_data.get('breaking_stage') or -1),
-                    round(float(_bb_data.get('extinction_pct') or 0.0), 4),
+                    _finite_int(_bb_data.get('current_hp'), 0, lo=0),
+                    _finite_int(_bb_data.get('total_hp'), 0, lo=0),
+                    round(_unit_pct(_bb_data.get('hp_pct')), 4),
+                    round(_unit_pct(_bb_data.get('shield_pct')), 4),
+                    _finite_int(_bb_data.get('breaking_stage'), -1, lo=-1),
+                    round(_unit_pct(_bb_data.get('extinction_pct')), 4),
                 )
                 _bb_prev_motion_sig = getattr(self, '_bb_last_hp_motion_sig', None)
                 _bb_is_new_target = (
@@ -1038,4 +1086,3 @@ class SAOPlayerGUIStateMixin:
                 self.root.after(200, self._recognition_loop)
             except Exception:
                 pass
-

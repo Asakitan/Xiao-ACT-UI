@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.10: BossHP payload 与 additional unit 数值防护修复.
+
+  1) `gui_modules/sao_gui_bosshp.py` 修复 BossHP additional unit 数值归一。
+     附属单位 HP、破韧与护盾值现在统一过滤 NaN/Inf/坏字符串,
+     避免 mini bar 错显示为满值或绘制阶段抛错。
+
+  2) `gui_modules/sao_gui_state_mixin.py` 修复 BossHP 推送前 payload 数值归一。
+     状态 worker 现在先归一 direct/additional BossHP 数值与签名字段,
+     避免坏 TCP/内存字段让 BossHP payload 静默变成 `None`。
+
 ## v4.6.9: GPU LeftInfo/BossHP 数值防护修复.
 
   1) `gui_modules/sao_left_info_gpu.py` 修复 LeftInfo GPU snapshot 数值归一。

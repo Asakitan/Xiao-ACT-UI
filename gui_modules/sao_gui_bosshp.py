@@ -916,18 +916,9 @@ class BossHpOverlay:
         for raw in units[:4]:
             if not isinstance(raw, dict):
                 continue
-            try:
-                hp_pct = max(0.0, min(1.0, float(raw.get('hp_pct') or 0.0)))
-            except Exception:
-                hp_pct = 0.0
-            try:
-                ext_pct = max(0.0, min(1.0, float(raw.get('extinction_pct') or 0.0)))
-            except Exception:
-                ext_pct = 0.0
-            try:
-                shield_pct = max(0.0, min(1.0, float(raw.get('shield_pct') or 0.0)))
-            except Exception:
-                shield_pct = 0.0
+            hp_pct = _unit_pct(raw.get('hp_pct'))
+            ext_pct = _unit_pct(raw.get('extinction_pct'))
+            shield_pct = _unit_pct(raw.get('shield_pct'))
             normalized.append({
                 'name': str(raw.get('name') or 'Unit')[:20],
                 'hp_pct': hp_pct,
@@ -2695,7 +2686,7 @@ class BossHpOverlay:
                                 (x + 6, line_y))
 
             # Layout: name + pct (top row, y0..y15), HP bar (y16..y26), break/status (y28..y36)
-            hp_pct = max(0.0, min(1.0, float(unit.get('hp_pct') or 0.0)))
+            hp_pct = _unit_pct(unit.get('hp_pct'))
             name = str(unit.get('name') or 'Unit')
             name_font = _pick_font(name, 11)
             pct_text = f'{int(round(hp_pct * 100))}%'
@@ -2744,8 +2735,9 @@ class BossHpOverlay:
                     (hp_x + 1, hp_y + 1),
                 )
             # 护盾覆盖
-            if bool(unit.get('shield_active')) and float(unit.get('shield_pct') or 0.0) > 0:
-                shield_w = int(round((hp_w - 2) * max(0.0, min(1.0, float(unit.get('shield_pct') or 0.0)))))
+            shield_pct = _unit_pct(unit.get('shield_pct'))
+            if bool(unit.get('shield_active')) and shield_pct > 0:
+                shield_w = int(round((hp_w - 2) * shield_pct))
                 if shield_w > 0:
                     draw.rounded_rectangle(
                         (hp_x + 1, hp_y + 1, hp_x + 1 + shield_w, hp_y + hp_h - 1),
@@ -2761,11 +2753,11 @@ class BossHpOverlay:
                 radius=1, fill=(45, 50, 58, 100),
             )
             if bool(unit.get('has_break_data', False)):
-                ext_pct = max(0.0, min(1.0, float(unit.get('extinction_pct') or 0.0)))
+                ext_pct = _unit_pct(unit.get('extinction_pct'))
                 bw = int(round((break_w - 2) * ext_pct))
                 if bw > 0:
                     fill = (255, 94, 94, 220)
-                    if int(unit.get('breaking_stage') or -1) > 0:
+                    if _finite_int(unit.get('breaking_stage'), -1, lo=-1) > 0:
                         fill = (243, 175, 18, 230)
                     draw.rounded_rectangle(
                         (x + 9, break_y + 1,
