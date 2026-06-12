@@ -70,5 +70,45 @@ assert(dps.includes("Math.round(_finiteNum(v, lo))"), "DPS resize clamp must use
 assert(dps.includes("function _barPct"), "DPS must centralize bar width clamping");
 assert(dps.includes("var barPct = _barPct(amount, maxVal);"), "DPS list rows must render bars through _barPct");
 assert(dps.includes("style=\"width:' + _barPct(amount, maxVal) + '%;background:"), "DPS detail skill bars must render through _barPct");
+for (const snippet of [
+  "var rows = (spec && spec.mode === 'live' && spec.rows) || [];",
+  "var totals = spec.totals || {};",
+  "return !!(_lastReport && _lastReport.entities && _lastReport.entities.length);",
+  "var entities = (data && data.entities) || [];",
+  "var entities = ((_currentData() && _currentData().entities) || []).slice();",
+  "var triggers = (_actSnapshot && _actSnapshot.triggers) || {};",
+  "var emitted = triggers.emitted || [];",
+  "var recent = triggers.recent || [];",
+  "var entities = ((data && data.entities) || []).slice();",
+  "_liveSnapshot = data || _emptySnapshot();",
+  "_actSnapshot = snapshot || null;",
+  "_lastReport = report || null;",
+  "_historySnapshot = report || null;",
+]) {
+  assert(!dps.includes(snippet), "DPS must guard malformed visible payloads: " + snippet);
+}
+for (const snippet of [
+  "function _isObjectValue(v)",
+  "function _objectValue(v)",
+  "function _listItems(v)",
+  "function _objectItems(v)",
+  "var spec = _objectValue(_objectValue(_actSnapshot).render_spec);",
+  "var rows = spec.mode === 'live' ? _objectItems(spec.rows) : [];",
+  "var totals = _objectValue(spec.totals);",
+  "return !!(_objectItems(_objectValue(_lastReport).entities).length);",
+  "var entities = _objectItems(_objectValue(data).entities);",
+  "var entities = _objectItems(_objectValue(_currentData()).entities).slice();",
+  "var triggers = _objectValue(_objectValue(_actSnapshot).triggers);",
+  "var emitted = _objectItems(triggers.emitted);",
+  "var recent = _objectItems(triggers.recent);",
+  "var data = _objectValue(_currentListData());",
+  "var entities = _objectItems(data.entities).slice();",
+  "_liveSnapshot = _objectValue(data);",
+  "_actSnapshot = _isObjectValue(snapshot) ? snapshot : null;",
+  "_lastReport = _isObjectValue(report) ? report : null;",
+  "_historySnapshot = _isObjectValue(report) ? report : null;",
+]) {
+  assert(dps.includes(snippet), "DPS is missing guarded visible payload handling: " + snippet);
+}
 
 console.log("web_act_render_state_selftest: ok");

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.4: DPS Web payload 防护修复.
+
+  1) `web/dps.html` 修复实体列表与报告入口 payload 形状处理。
+     DPS Web 现在归一 live/report/history/detail 根对象与实体列表,
+     避免坏实体 payload 打断列表、详情和报告渲染。
+
+  2) `web/dps.html` 修复 ACT trigger 提示 payload 形状处理。
+     DPS Web 现在归一 ACT snapshot、trigger 对象与 emitted/recent 事件列表,
+     避免坏 trigger payload 打断页眉战斗提示渲染。
+
 ## v4.6.3: Plugin Layer payload 防护修复.
 
   1) `web/plugin_layer.js` 修复插件 spec 节点树 payload 形状处理。

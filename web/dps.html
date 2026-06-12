@@ -1447,6 +1447,24 @@ function _clamp01(v, fallback) {
     return Math.max(0, Math.min(1, _finiteNum(v, fallback == null ? 0 : fallback)));
 }
 
+function _isObjectValue(v) {
+    return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function _objectValue(v) {
+    return _isObjectValue(v) ? v : {};
+}
+
+function _listItems(v) {
+    return Array.isArray(v) ? v : [];
+}
+
+function _objectItems(v) {
+    return _listItems(v).filter(function(item) {
+        return _isObjectValue(item);
+    });
+}
+
 function _barPct(value, maxValue) {
     var max = _nonNegNum(maxValue, 0);
     if (max <= 0) return 0;
@@ -1527,10 +1545,10 @@ function _currentData() {
 }
 
 function _actRowsDataFallback(baseData) {
-    var spec = (_actSnapshot && _actSnapshot.render_spec) || null;
-    var rows = (spec && spec.mode === 'live' && spec.rows) || [];
+    var spec = _objectValue(_objectValue(_actSnapshot).render_spec);
+    var rows = spec.mode === 'live' ? _objectItems(spec.rows) : [];
     if (!rows.length) return baseData || _emptySnapshot();
-    var totals = spec.totals || {};
+    var totals = _objectValue(spec.totals);
     var out = Object.assign({}, baseData || _emptySnapshot());
     out.encounter_active = spec.mode === 'live';
     out.elapsed_s = _nonNegNum(totals.elapsed_s || out.elapsed_s || 0, 0);
@@ -1563,7 +1581,7 @@ function _currentListData() {
 }
 
 function _hasReport() {
-    return !!(_lastReport && _lastReport.entities && _lastReport.entities.length);
+    return !!(_objectItems(_objectValue(_lastReport).entities).length);
 }
 
 function _normalizeHitFxTier(tier) {
@@ -1687,7 +1705,7 @@ function _applyPendingHitFx() {
 }
 
 function _findEntity(data, uid) {
-    var entities = (data && data.entities) || [];
+    var entities = _objectItems(_objectValue(data).entities);
     var key = _uidKey(uid);
     if (!_hasUid(key)) return null;
     for (var i = 0; i < entities.length; i++) {
@@ -1708,7 +1726,7 @@ function _findEntityRowByUid(uid) {
 
 function _pickDetailUid() {
     if (_hasUid(_detailUid)) return _uidKey(_detailUid);
-    var entities = ((_currentData() && _currentData().entities) || []).slice();
+    var entities = _objectItems(_objectValue(_currentData()).entities).slice();
     for (var i = 0; i < entities.length; i++) {
         if (entities[i].is_self && _hasUid(entities[i].uid)) {
             return _uidKey(entities[i].uid);
@@ -1784,9 +1802,9 @@ function _renderActMeta() {
 }
 
 function _latestActTriggerText() {
-    var triggers = (_actSnapshot && _actSnapshot.triggers) || {};
-    var emitted = triggers.emitted || [];
-    var recent = triggers.recent || [];
+    var triggers = _objectValue(_objectValue(_actSnapshot).triggers);
+    var emitted = _objectItems(triggers.emitted);
+    var recent = _objectItems(triggers.recent);
     var events = emitted.length ? emitted : recent;
     if (!events.length) return '';
     var ev = emitted.length ? (events[events.length - 1] || {}) : (events[0] || {});
@@ -1842,8 +1860,8 @@ function _renderFooter() {
 
 function _renderList() {
     if (_detailVisible) return;
-    var data = _currentListData();
-    var entities = ((data && data.entities) || []).slice();
+    var data = _objectValue(_currentListData());
+    var entities = _objectItems(data.entities).slice();
     var frame = document.getElementById('list-frame');
 
     if (_currentTab === 'heal') {
@@ -2022,7 +2040,7 @@ function _renderAll() {
 }
 
 function showLive(data) {
-    _liveSnapshot = data || _emptySnapshot();
+    _liveSnapshot = _objectValue(data);
     _viewMode = 'live';
     _captureHitFx(_liveSnapshot);
     if (_detailVisible) {
@@ -2040,7 +2058,7 @@ function showLive(data) {
 }
 
 function showActSnapshot(snapshot) {
-    _actSnapshot = snapshot || null;
+    _actSnapshot = _isObjectValue(snapshot) ? snapshot : null;
     if (_viewMode === 'live') {
         _renderAll();
     } else {
@@ -2050,7 +2068,7 @@ function showActSnapshot(snapshot) {
 }
 
 function updateDps(data) {
-    _liveSnapshot = data || _emptySnapshot();
+    _liveSnapshot = _objectValue(data);
     _captureHitFx(_liveSnapshot);
     if (_viewMode === 'live') {
         _renderAll();
@@ -2061,7 +2079,7 @@ function updateDps(data) {
 }
 
 function showLastReport(report) {
-    _lastReport = report || null;
+    _lastReport = _isObjectValue(report) ? report : null;
     _clearTransientHitFx();
     _viewMode = 'report';
     _detailMode = false;
@@ -2073,7 +2091,7 @@ function showLastReport(report) {
 }
 
 function showHistoryReport(report) {
-    _historySnapshot = report || null;
+    _historySnapshot = _isObjectValue(report) ? report : null;
     _clearTransientHitFx();
     _viewMode = 'history';
     _detailMode = false;
@@ -2085,6 +2103,7 @@ function showHistoryReport(report) {
 }
 
 function updateDetail(data) {
+    data = _objectValue(data);
     if (!data) return;
     var uidKey = _uidKey(data.uid);
     if (!_hasUid(uidKey)) return;
