@@ -188,13 +188,6 @@ class OfflineImportPanel:
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'IMPORT WIZARD').pack(side='left')
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
-        ).pack(side='left', padx=(12, 0))
         for label, cmd in (
             ('刷新 Refresh', self.refresh),
             ('选择 Choose', self.choose_file),
@@ -215,6 +208,14 @@ class OfflineImportPanel:
                 pady=4,
             ).pack(side='right', padx=(6, 0))
 
+        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
+        tk.Label(
+            toolbar,
+            textvariable=self._summary_var,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(side='left', padx=(12, 0))
         path_row = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         path_row.pack(fill='x', padx=12, pady=(0, 8))
         tk.Label(path_row, text='Path', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')

@@ -147,13 +147,6 @@ class TriggerTimerManagerPanel:
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'ALERT SDK').pack(side='left')
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
-        ).pack(side='left', padx=(12, 0))
         for label, cmd in (
             ('刷新 Refresh', self.refresh),
             ('重载 Reload', self._reload),
@@ -173,6 +166,14 @@ class TriggerTimerManagerPanel:
                 pady=4,
             ).pack(side='right', padx=(6, 0))
 
+        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
+        tk.Label(
+            toolbar,
+            textvariable=self._summary_var,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(side='left', padx=(12, 0))
         tk.Label(
             body,
             textvariable=self._status_var,

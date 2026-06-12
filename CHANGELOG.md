@@ -2,6 +2,14 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.120: 工具条按钮防挤尾扫(再 6 面板, 该类收口).
+
+  1) v4.6.119 同类尾扫 — mem_scope / data_source_health /
+    plugin_manager / graph_timeseries / offline_import /
+    trigger_timer_manager 的工具条统一改按钮先 pack、summary 标签
+    后 pack。至此全部 13 个带 summary 工具条的 ACT 面板 + commander
+    成员卡(v4.6.115)该 bug 类收口。
+
 ## v4.6.119: ACT 面板工具条按钮防挤横扫(7 面板).
 
   1) Tk pack 挤出坑横扫 — 工具条 summary 标签先 pack(LEFT) 时,

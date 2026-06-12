@@ -249,11 +249,12 @@ class MemScopePanel:
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=14, pady=(12, 8))
         _sao_pill(toolbar, 'MEM').pack(side='left')
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
-                 font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
         action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
         action_button(toolbar, '复制 Copy', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        # 按钮先 pack — 窄窗下 summary 不挤按钮
+        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))
