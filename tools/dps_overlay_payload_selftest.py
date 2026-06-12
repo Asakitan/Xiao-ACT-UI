@@ -376,6 +376,46 @@ class DpsOverlayPayloadTests(unittest.TestCase):
         self.assertTrue(panel._advance_animations(1.0))
         self.assertGreater(panel._skill_scroll_disp, 0.0)
 
+    def test_bad_compose_signature_numeric_state_still_dirty_skips(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._is_animating = lambda: False  # type: ignore[method-assign]
+        panel._rows = {}
+        panel._detail_visible = False
+        panel._disp_elapsed = "bad-elapsed"
+        panel._target_total_damage = object()
+        panel._target_total_dps = "nan"
+        panel._target_total_heal = float("inf")
+        panel._target_total_hps = "bad-hps"
+        panel._view_mode = "live"
+        panel._current_tab = "damage"
+        panel._detail_mode = False
+        panel._detail_uid = "11.0"
+        panel._minimized = False
+        panel._panel_notice = ""
+        panel._panel_notice_until = 0.0
+        panel._detail_w = object()
+        panel._detail_h = "bad-height"
+        panel._act_snapshot = None
+        panel._fade_alpha = object()
+
+        sig = panel._compose_signature(1.0)
+
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig[0:5], (0, 0, 0, 0, 0))
+        self.assertEqual(sig[9], 11)
+        self.assertEqual(sig[12], panel.DETAIL_DEFAULT_W)
+        self.assertEqual(sig[13], panel.DETAIL_DEFAULT_H)
+        self.assertEqual(sig[16], 0.0)
+
+    def test_gpu_event_bad_numeric_state_does_not_abort(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._x = object()
+        panel._y = "bad-y"
+
+        ev = panel._gpu_event(object(), "bad-local-y", delta="bad-delta")
+
+        self.assertEqual((ev.x, ev.y, ev.x_root, ev.y_root, ev.delta), (0, 0, 0, 0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

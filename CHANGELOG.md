@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.23: DPS dirty signature 与 GPU 事件数值防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 compose signature 数值归一。
+     坏 target/detail/fade 运行态不再让 `_compose_signature()` 退化为 `None`,
+     避免 dirty-skip 失效后持续提交重复帧。
+
+  2) `gui_modules/sao_gui_dps.py` 修复 GPU 事件坐标归一。
+     坏本地坐标、根坐标或 wheel delta 现在回退为安全数值,
+     避免 GPU 鼠标事件构造阶段打断拖拽/滚轮交互。
+
 ## v4.6.22: DPS detail 尺寸与动画状态防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 detail 模式尺寸状态归一。

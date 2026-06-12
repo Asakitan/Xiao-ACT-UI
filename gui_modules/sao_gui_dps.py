@@ -1296,23 +1296,23 @@ class DpsOverlay:
                 if isinstance(ent, dict):
                     detail_sig = _CY_UI.dps_detail_signature(ent)
             return (
-                int(self._disp_elapsed),  # 1 Hz tick
-                int(self._target_total_damage),
-                int(self._target_total_dps),
-                int(self._target_total_heal),
-                int(self._target_total_hps),
+                _safe_int(self._disp_elapsed),  # 1 Hz tick
+                _safe_int(self._target_total_damage),
+                _safe_int(self._target_total_dps),
+                _safe_int(self._target_total_heal),
+                _safe_int(self._target_total_hps),
                 self._view_mode,
                 self._current_tab,
                 bool(self._detail_visible),
                 bool(self._detail_mode),
-                int(self._detail_uid),
+                _safe_int(self._detail_uid),
                 bool(self._minimized),
                 self._panel_notice_text(),
-                int(self._detail_w),
-                int(self._detail_h),
+                _safe_int(self._detail_w, default=self.DETAIL_DEFAULT_W),
+                _safe_int(self._detail_h, default=self.DETAIL_DEFAULT_H),
                 self._act_badge_text(),
                 detail_sig,
-                round(float(self._fade_alpha), 3),
+                round(_safe_float(self._fade_alpha), 3),
                 row_sig,
             )
         except Exception:
@@ -3315,13 +3315,15 @@ class DpsOverlay:
     # ──────────────────────────────────────────
 
     def _gpu_event(self, x: float, y: float, delta: int = 0):
-        lx = int(round(x))
-        ly = int(round(y))
+        lx = int(round(_safe_float(x)))
+        ly = int(round(_safe_float(y)))
+        root_x = _safe_int(self._x) + lx
+        root_y = _safe_int(self._y) + ly
         return SimpleNamespace(
             x=lx, y=ly,
-            x_root=int(self._x + lx),
-            y_root=int(self._y + ly),
-            delta=int(delta),
+            x_root=root_x,
+            y_root=root_y,
+            delta=_safe_int(delta),
         )
 
     def _on_gpu_cursor_pos(self, x: float, y: float) -> None:
