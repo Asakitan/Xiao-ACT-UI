@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.22: DPS detail 尺寸与动画状态防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 detail 模式尺寸状态归一。
+     坏 `_detail_w` / `_detail_h` 运行态现在回退到默认详情尺寸并继续 clamp,
+     避免详情窗口 compose size 计算失败导致面板渲染中断。
+
+  2) `gui_modules/sao_gui_dps.py` 修复详情技能滚动动画状态归一。
+     坏 `_skill_scroll_disp` / `_skill_scroll_target` 现在在动画判断和推进时回退为安全数值,
+     避免 tick/dirty-signature 流程被异常滚动状态打断。
+
 ## v4.6.21: DPS hit FX 与 UID 参数归一修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 hit FX seq/uid 参数归一。

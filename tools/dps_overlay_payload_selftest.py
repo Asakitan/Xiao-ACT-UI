@@ -337,6 +337,45 @@ class DpsOverlayPayloadTests(unittest.TestCase):
         self.assertEqual(panel._self_uid, 11)
         self.assertTrue(row.is_self)
 
+    def test_bad_detail_size_state_does_not_abort_compute_size(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._detail_mode = True
+        panel._detail_w = object()
+        panel._detail_h = "bad-height"
+
+        size = panel._compute_size()
+
+        self.assertEqual(size, (panel.DETAIL_DEFAULT_W, panel.DETAIL_DEFAULT_H))
+        self.assertEqual(panel._detail_w, panel.DETAIL_DEFAULT_W)
+        self.assertEqual(panel._detail_h, panel.DETAIL_DEFAULT_H)
+
+    def test_bad_skill_scroll_animation_state_does_not_abort_tick_math(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._detail_visible = True
+        panel._skill_scroll_disp = object()
+        panel._skill_scroll_target = 96.0
+        panel._fade_alpha = 0.0
+        panel._fade_target = 0.0
+        panel._fade_from = 0.0
+        panel._fade_start = 0.0
+        panel._fade_duration = 1.0
+        panel._disp_total_damage = 0.0
+        panel._target_total_damage = 0.0
+        panel._disp_total_dps = 0.0
+        panel._target_total_dps = 0.0
+        panel._disp_total_heal = 0.0
+        panel._target_total_heal = 0.0
+        panel._disp_total_hps = 0.0
+        panel._target_total_hps = 0.0
+        panel._disp_elapsed = 0.0
+        panel._target_elapsed = 0.0
+        panel._rows = {}
+        panel._panel_fx_tier = ""
+
+        self.assertTrue(panel._is_animating())
+        self.assertTrue(panel._advance_animations(1.0))
+        self.assertGreater(panel._skill_scroll_disp, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

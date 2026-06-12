@@ -1265,10 +1265,11 @@ class DpsOverlay:
     def _is_animating(self) -> bool:
         # Keep ticking at 60 Hz while the detail skill list is gliding so the
         # eased scroll resubmits every frame (see _compose_signature -> None).
-        if self._detail_visible and abs(
-                float(self._skill_scroll_disp)
-                - float(self._skill_scroll_target)) > 0.75:
-            return True
+        if self._detail_visible:
+            disp = _safe_float(self._skill_scroll_disp)
+            target = _safe_float(self._skill_scroll_target)
+            if abs(disp - target) > 0.75:
+                return True
         return bool(_CY_UI.dps_overlay_animating(
             self._hide_after_fade,
             self._fade_alpha, self._fade_target,
@@ -1398,8 +1399,8 @@ class DpsOverlay:
         # wheel target so the detail skill list glides like the webview
         # .skill-frame instead of snapping one row per notch.
         if self._detail_visible:
-            disp = float(self._skill_scroll_disp)
-            tgt = float(self._skill_scroll_target)
+            disp = _safe_float(self._skill_scroll_disp)
+            tgt = _safe_float(self._skill_scroll_target)
             if abs(tgt - disp) > 0.75:
                 self._skill_scroll_disp = disp + (tgt - disp) * self.SKILL_SCROLL_EASE
                 animating = True
@@ -1614,8 +1615,16 @@ class DpsOverlay:
 
     def _compute_size(self) -> tuple:
         if self._detail_mode:
-            w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, int(self._detail_w)))
-            h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, int(self._detail_h)))
+            w = max(
+                self.DETAIL_MIN_W,
+                min(self.DETAIL_MAX_W,
+                    _safe_int(self._detail_w, default=self.DETAIL_DEFAULT_W)),
+            )
+            h = max(
+                self.DETAIL_MIN_H,
+                min(self.DETAIL_MAX_H,
+                    _safe_int(self._detail_h, default=self.DETAIL_DEFAULT_H)),
+            )
             self._detail_w, self._detail_h = w, h
             return (w, h)
         if self._minimized:
