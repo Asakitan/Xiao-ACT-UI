@@ -139,6 +139,17 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function objectValue(value) {
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     }
+    function finiteValue(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(finiteValue(value, 0))));
+    }
+    function valueText(value, fallback) {
+        return String(finiteValue(value, fallback));
+    }
     function offlinePayload(name, args) {
         args = args || [];
         if (name === 'get_offline_import_status') return { history_limit: safeLimit(args[0], 20, 200) };
@@ -176,20 +187,20 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             + '<div class="metric"><span>Encounter</span><strong>' + esc(pv.encounter_id || report.encounter_id || '-') + '</strong></div>'
             + '<div class="metric"><span>Format</span><strong>' + esc(result.format || '-') + '</strong></div>'
             + '<div class="metric"><span>Importer</span><strong>' + esc(result.importer || '-') + '</strong></div>'
-            + '<div class="metric"><span>Total Damage</span><strong>' + esc(pv.total_damage || '-') + '</strong></div>'
-            + '<div class="metric"><span>Events</span><strong>' + esc(result.event_count || 0) + '</strong></div>'
+            + '<div class="metric"><span>Total Damage</span><strong>' + esc(valueText(pv.total_damage, '-')) + '</strong></div>'
+            + '<div class="metric"><span>Events</span><strong>' + esc(countText(result.event_count)) + '</strong></div>'
             + '<div class="metric"><span>Persisted</span><strong>' + esc(result.persisted ? 'YES' : 'NO') + '</strong></div>'
             + '</div></div>';
     }
     function renderHistory(history) {
         var rows = objectItems(objectValue(history).encounters);
-        document.getElementById('sum-history').textContent = String(rows.length || 0);
+        document.getElementById('sum-history').textContent = countText(rows.length);
         if (!rows.length) { historyList.innerHTML = '<div class="empty">暂无历史报告</div>'; return; }
         historyList.innerHTML = rows.slice(0, 12).map(function (item, i) {
             item = objectValue(item);
             var index = item._history_index == null ? i : item._history_index;
             return '<div class="history-item"><strong>' + esc(item.encounter_id || ('#' + i)) + '</strong><small>'
-                + esc(item.completed_local_time || item.completed_at || '') + ' · dmg=' + esc(item.total_damage || 0)
+                + esc(item.completed_local_time || item.completed_at || '') + ' · dmg=' + esc(valueText(item.total_damage, 0))
                 + '</small><button type="button" onclick="OfflineImport.loadHistory(' + safeHistoryIndex(index, i) + ')">加载 Load</button></div>';
         }).join('');
     }
@@ -201,7 +212,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : 'var(--act-muted)';
         document.getElementById('sum-state').textContent = data.status || 'idle';
         document.getElementById('sum-format').textContent = last.format || '--';
-        document.getElementById('sum-events').textContent = String(last.event_count || 0);
+        document.getElementById('sum-events').textContent = countText(last.event_count);
         preview.innerHTML = previewHtml(last);
         renderHistory(data.history);
         if (data.ok === false) showToast(data.message || 'Offline import status failed');

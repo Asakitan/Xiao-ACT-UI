@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.34: ACT Report/Offline Web 数值显示防护修复.
+
+  1) `web/act_report_export.html` 修复 report preview/history/top-row 数值显示。
+     damage、dps、heal、duration、storage count 与 import toast 现在通过有限数值 formatter 渲染,
+     避免导出面板出现 `Infinity`、`NaN` 或原始坏 payload 文本。
+
+  2) `web/act_offline_import.html` 修复 offline import preview/history/summary 数值显示。
+     total damage、event count、history count 与历史 damage 现在归一为有限显示文本,
+     避免离线导入面板出现不可读数值。
+
 ## v4.6.33: ACT Action Log Web 可见数值显示防护修复.
 
   1) `web/act_action_log.html` 修复分组卡片 count 与 total 显示。

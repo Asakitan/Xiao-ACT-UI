@@ -526,7 +526,7 @@ def _assert_report_and_offline_lists_are_guarded() -> None:
         "var rows = objectItems(p.top_rows);",
         "var historyItems = objectItems(payload.history);",
         "var storage = objectValue(payload.storage_status);",
-        "document.getElementById('sum-count').textContent = String(storage.count || historyItems.length || 0);",
+        "document.getElementById('sum-count').textContent = firstCountText(storage.count, historyItems.length);",
         "renderHistory(historyItems);",
         "if (!payload.ok && (!rows.length && !historyItems.length))",
         "historyPayload = objectValue(historyPayload);",
@@ -535,6 +535,30 @@ def _assert_report_and_offline_lists_are_guarded() -> None:
     ):
         if snippet not in report:
             raise AssertionError("missing safe report export list/object snippet: " + snippet)
+    for snippet in (
+        "esc(row.damage || 0)",
+        "esc(item.total_damage || 0)",
+        "String(storage.count || historyItems.length || 0)",
+        "metric('Damage', p.total_damage || 0)",
+        "(p.elapsed_s || 0) + 's'",
+        "(payload.event_count || 0) + ' events'",
+    ):
+        if snippet in report:
+            raise AssertionError("report export visible numerics must use finite display guards: " + snippet)
+    for snippet in (
+        "function countText(value)",
+        "function valueText(value, fallback)",
+        "function durationText(value)",
+        "function firstCountText()",
+        "esc(valueText(row.damage, 0))",
+        "esc(valueText(item.total_damage, 0))",
+        "firstCountText(storage.count, historyItems.length)",
+        "metric('Damage', valueText(p.total_damage, 0))",
+        "metric('Duration', durationText(p.elapsed_s))",
+        "countText(payload.event_count) + ' events'",
+    ):
+        if snippet not in report:
+            raise AssertionError("missing safe report export numeric snippet: " + snippet)
     for snippet in (
         "function listItems(value)",
         "function objectItems(value)",
@@ -550,6 +574,26 @@ def _assert_report_and_offline_lists_are_guarded() -> None:
     ):
         if snippet not in offline:
             raise AssertionError("missing safe offline import list/object snippet: " + snippet)
+    for snippet in (
+        "esc(pv.total_damage || '-')",
+        "esc(result.event_count || 0)",
+        "String(rows.length || 0)",
+        "esc(item.total_damage || 0)",
+        "String(last.event_count || 0)",
+    ):
+        if snippet in offline:
+            raise AssertionError("offline import visible numerics must use finite display guards: " + snippet)
+    for snippet in (
+        "function countText(value)",
+        "function valueText(value, fallback)",
+        "esc(valueText(pv.total_damage, '-'))",
+        "esc(countText(result.event_count))",
+        "countText(rows.length)",
+        "esc(valueText(item.total_damage, 0))",
+        "countText(last.event_count)",
+    ):
+        if snippet not in offline:
+            raise AssertionError("missing safe offline import numeric snippet: " + snippet)
 
 
 def _assert_data_source_health_payloads_are_guarded() -> None:

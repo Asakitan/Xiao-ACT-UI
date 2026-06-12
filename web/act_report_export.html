@@ -181,6 +181,29 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function objectValue(value) {
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     }
+    function finiteValue(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(finiteValue(value, 0))));
+    }
+    function valueText(value, fallback) {
+        return String(finiteValue(value, fallback));
+    }
+    function durationText(value) {
+        return valueText(value, 0) + 's';
+    }
+    function firstCountText() {
+        for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value == null || value === '') continue;
+            var number = Number(value);
+            if (isFinite(number)) return countText(number);
+        }
+        return '0';
+    }
 
     function reportPayload(name, args) {
         args = args || [];
@@ -251,7 +274,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         return '<table class="table"><thead><tr><th>#</th><th>Name</th><th>Damage</th><th>DPS</th><th>Heal</th></tr></thead><tbody>' +
             rows.slice(0).map(function (row, idx) {
                 row = objectValue(row);
-                return '<tr><td>' + esc(row.rank || idx + 1) + '</td><td>' + esc(row.name || row.uid || '-') + '</td><td>' + esc(row.damage || 0) + '</td><td>' + esc(row.dps || 0) + '</td><td>' + esc(row.heal || 0) + '</td></tr>';
+                return '<tr><td>' + esc(row.rank || idx + 1) + '</td><td>' + esc(row.name || row.uid || '-') + '</td><td>' + esc(valueText(row.damage, 0)) + '</td><td>' + esc(valueText(row.dps, 0)) + '</td><td>' + esc(valueText(row.heal, 0)) + '</td></tr>';
             }).join('') + '</tbody></table>';
     }
 
@@ -264,7 +287,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         historyList.innerHTML = items.filter(function (_, idx) { return idx < 12; }).map(function (item, idx) {
             item = objectValue(item);
             var historyIndex = safeHistoryIndex(item._history_index, idx);
-            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(item.total_damage || 0) + ' · dps=' + esc(item.total_dps || 0) + '<br/><small>' + esc((item.elapsed_s || 0) + 's') + '</small><div class="history-actions"><button type="button" onclick="ReportExport.loadHistory(' + historyIndex + ')">载入</button><button type="button" onclick="ReportExport.deleteHistory(' + historyIndex + ')">删除</button></div></div>';
+            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(valueText(item.total_damage, 0)) + ' · dps=' + esc(valueText(item.total_dps, 0)) + '<br/><small>' + esc(durationText(item.elapsed_s)) + '</small><div class="history-actions"><button type="button" onclick="ReportExport.loadHistory(' + historyIndex + ')">载入</button><button type="button" onclick="ReportExport.deleteHistory(' + historyIndex + ')">删除</button></div></div>';
         }).join('');
     }
 
@@ -279,7 +302,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         statusPill.style.color = payload.ok ? 'var(--act-ok)' : 'var(--act-danger)';
         document.getElementById('sum-id').textContent = payload.encounter_id || '--';
         document.getElementById('sum-format').textContent = (payload.selected_format || fmt()).toUpperCase();
-        document.getElementById('sum-count').textContent = String(storage.count || historyItems.length || 0);
+        document.getElementById('sum-count').textContent = firstCountText(storage.count, historyItems.length);
         document.getElementById('sum-storage').textContent = storage.available ? 'READY' : 'N/A';
         apiCall('get_selective_parsing_status', []).then(function (selective) {
             var node = document.getElementById('sum-selective');
@@ -291,8 +314,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             return;
         }
         preview.innerHTML = '<section class="card"><div class="metric-grid">' +
-            metric('Damage', p.total_damage || 0) + metric('DPS', p.total_dps || 0) +
-            metric('Heal', p.total_heal || 0) + metric('Duration', (p.elapsed_s || 0) + 's') +
+            metric('Damage', valueText(p.total_damage, 0)) + metric('DPS', valueText(p.total_dps, 0)) +
+            metric('Heal', valueText(p.total_heal, 0)) + metric('Duration', durationText(p.elapsed_s)) +
             '</div></section><section class="card"><div style="color:var(--act-gold);font-size:12px;letter-spacing:.12em;margin-bottom:8px;">TOP COMBATANTS</div>' + renderRows(rows) + '</section>';
     }
 
@@ -383,7 +406,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 return Promise.resolve({ ok: false, message: 'No import file selected' });
             }
             return apiCall('import_offline_report', [path, true, true]).then(function (payload) {
-                showToast(payload.ok ? ('导入完成 ' + (payload.event_count || 0) + ' events') : (payload.message || '导入失败'));
+                showToast(payload.ok ? ('导入完成 ' + countText(payload.event_count) + ' events') : (payload.message || '导入失败'));
                 return ReportExport.refresh();
             });
         },
