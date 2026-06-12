@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import ctypes
+import math
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from decimal import Decimal, ROUND_HALF_UP
@@ -296,6 +297,42 @@ def _round_half_up_int(value: float) -> int:
     return int(_CY_UI.dps_round_half_up_int(value))
 
 
+def _safe_int(value: Any, default: int = 0,
+              min_value: Optional[int] = None,
+              max_value: Optional[int] = None) -> int:
+    try:
+        result = int(value or 0)
+    except Exception:
+        try:
+            as_float = float(value)
+            if not math.isfinite(as_float):
+                return int(default)
+            result = int(as_float)
+        except Exception:
+            return int(default)
+    if min_value is not None and result < min_value:
+        result = min_value
+    if max_value is not None and result > max_value:
+        result = max_value
+    return result
+
+
+def _safe_float(value: Any, default: float = 0.0,
+                min_value: Optional[float] = None,
+                max_value: Optional[float] = None) -> float:
+    try:
+        result = float(value or 0.0)
+    except Exception:
+        return float(default)
+    if not math.isfinite(result):
+        return float(default)
+    if min_value is not None and result < min_value:
+        result = min_value
+    if max_value is not None and result > max_value:
+        result = max_value
+    return result
+
+
 # ═══════════════════════════════════════════════
 #  Easing
 # ═══════════════════════════════════════════════
@@ -358,21 +395,18 @@ class _RowState:
     def update_targets(self, data: dict) -> None:
         self.name = str(data.get('name') or self.name)
         self.profession = str(data.get('profession') or '')
-        try:
-            self.fight_point = int(data.get('fight_point') or 0)
-        except Exception:
-            self.fight_point = 0
+        self.fight_point = _safe_int(data.get('fight_point'))
         self.is_self = bool(data.get('is_self'))
-        self.damage_total = int(data.get('damage_total') or 0)
-        self.mem_damage_total = int(data.get('mem_damage_total') or 0)
-        self.mem_dps = int(data.get('mem_dps') or 0)
-        self.heal_total = int(data.get('heal_total') or 0)
-        self.damage_pct = float(data.get('damage_pct') or 0)
-        self.target_damage = float(data.get('damage_total') or 0)
-        self.target_dps = float(data.get('dps') or 0)
-        self.target_heal = float(data.get('heal_total') or 0)
-        self.target_hps = float(data.get('hps') or 0)
-        self.target_bar_pct = float(data.get('bar_pct') or 0)
+        self.damage_total = _safe_int(data.get('damage_total'))
+        self.mem_damage_total = _safe_int(data.get('mem_damage_total'))
+        self.mem_dps = _safe_int(data.get('mem_dps'))
+        self.heal_total = _safe_int(data.get('heal_total'))
+        self.damage_pct = _safe_float(data.get('damage_pct'))
+        self.target_damage = _safe_float(data.get('damage_total'))
+        self.target_dps = _safe_float(data.get('dps'))
+        self.target_heal = _safe_float(data.get('heal_total'))
+        self.target_hps = _safe_float(data.get('hps'))
+        self.target_bar_pct = _safe_float(data.get('bar_pct'), min_value=0.0, max_value=1.0)
 
 
 # ═══════════════════════════════════════════════
@@ -1110,16 +1144,16 @@ class DpsOverlay:
         entities = list(entities or [])
         has_content = bool(
             entities
-            or int(snapshot.get('total_damage') or 0) > 0
-            or int(snapshot.get('total_heal') or 0) > 0
+            or _safe_int(snapshot.get('total_damage')) > 0
+            or _safe_int(snapshot.get('total_heal')) > 0
         )
         if (not self._visible or not self._window_ready()) and not has_content and not force_show:
             self._last_snapshot = snapshot
-            self._target_total_damage = float(snapshot.get('total_damage') or 0)
-            self._target_total_dps = float(snapshot.get('total_dps') or 0)
-            self._target_total_heal = float(snapshot.get('total_heal') or 0)
-            self._target_total_hps = float(snapshot.get('total_hps') or 0)
-            self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
+            self._target_total_damage = _safe_float(snapshot.get('total_damage'))
+            self._target_total_dps = _safe_float(snapshot.get('total_dps'))
+            self._target_total_heal = _safe_float(snapshot.get('total_heal'))
+            self._target_total_hps = _safe_float(snapshot.get('total_hps'))
+            self._target_elapsed = _safe_float(snapshot.get('elapsed_s'))
             self._encounter_active = bool(snapshot.get('encounter_active'))
             return
         if (not self._visible or not self._window_ready()) and force_show:
@@ -1128,11 +1162,11 @@ class DpsOverlay:
             self.show()
         self._last_snapshot = snapshot
 
-        self._target_total_damage = float(snapshot.get('total_damage') or 0)
-        self._target_total_dps = float(snapshot.get('total_dps') or 0)
-        self._target_total_heal = float(snapshot.get('total_heal') or 0)
-        self._target_total_hps = float(snapshot.get('total_hps') or 0)
-        self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
+        self._target_total_damage = _safe_float(snapshot.get('total_damage'))
+        self._target_total_dps = _safe_float(snapshot.get('total_dps'))
+        self._target_total_heal = _safe_float(snapshot.get('total_heal'))
+        self._target_total_hps = _safe_float(snapshot.get('total_hps'))
+        self._target_elapsed = _safe_float(snapshot.get('elapsed_s'))
         self._encounter_active = bool(snapshot.get('encounter_active'))
 
         seen_uids: List[int] = []
@@ -1141,10 +1175,7 @@ class DpsOverlay:
         # unable to ever reach rank 7+ because the model only retained 6 rows.
         self._scroll_offset = max(0, min(self._scroll_offset, max(0, len(entities) - self.MAX_ROWS)))
         for idx, ent in enumerate(entities):
-            try:
-                uid = int(ent.get('uid') or 0)
-            except Exception:
-                uid = 0
+            uid = _safe_int(ent.get('uid'))
             if not uid:
                 continue
             row = self._rows.get(uid)
@@ -1485,37 +1516,37 @@ class DpsOverlay:
         amount_key = 'heal' if is_heal else 'damage'
         rate_key = 'hps' if is_heal else 'dps'
         sorted_rows.sort(
-            key=lambda ent: (float(ent.get(amount_key) or 0), int(ent.get('uid') or 0)),
+            key=lambda ent: (_safe_float(ent.get(amount_key)), _safe_int(ent.get('uid'))),
             reverse=True,
         )
         scroll = max(0, min(self._scroll_offset, max(0, len(sorted_rows) - self.MAX_ROWS)))
         self._scroll_offset = scroll
-        total = sum(float(ent.get(amount_key) or 0) for ent in sorted_rows)
+        total = sum(_safe_float(ent.get(amount_key)) for ent in sorted_rows)
         if total <= 0:
             try:
                 totals = ((self._act_snapshot or {}).get('render_spec') or {}).get('totals') or {}
-                total = float(totals.get('heal' if is_heal else 'damage') or 0)
+                total = _safe_float(totals.get('heal' if is_heal else 'damage'))
             except Exception:
                 total = 0.0
-        max_amount = max([float(ent.get(amount_key) or 0) for ent in sorted_rows], default=0.0)
+        max_amount = max([_safe_float(ent.get(amount_key)) for ent in sorted_rows], default=0.0)
         for ent in sorted_rows[scroll: scroll + self.MAX_ROWS]:
-            uid = int(ent.get('uid') or 0)
-            amount = float(ent.get(amount_key) or 0)
+            uid = _safe_int(ent.get('uid'))
+            amount = _safe_float(ent.get(amount_key))
             rows.append({
                 'uid': uid,
                 'name': str(ent.get('name') or f'Player_{uid or 0}'),
                 'profession': str(ent.get('profession') or ''),
-                'fight_point': int(ent.get('fight_point') or 0),
+                'fight_point': _safe_int(ent.get('fight_point')),
                 'is_self': bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid),
                 'amount': amount,
-                'rate': float(ent.get(rate_key) or 0),
-                'pct': (amount / total) if total > 0 else float(ent.get('damage_pct') or 0.0),
+                'rate': _safe_float(ent.get(rate_key)),
+                'pct': (amount / total) if total > 0 else _safe_float(ent.get('damage_pct')),
                 'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
                 # carry the MEM cross-check total straight from the render_spec ent (it is
                 # already present per combat_analytics _entity_rows) -- the live path emits
                 # it at row.mem_damage_total but the ACT path early-returns before that.
-                'mem_damage_total': int(ent.get('mem_damage_total') or 0),
-                'mem_dps': int(ent.get('mem_dps') or 0),
+                'mem_damage_total': _safe_int(ent.get('mem_damage_total')),
+                'mem_dps': _safe_int(ent.get('mem_dps')),
                 'is_heal': is_heal,
                 'fx_tier': '',
                 'fx_start': 0.0,
@@ -1530,34 +1561,34 @@ class DpsOverlay:
         if self._view_mode == 'report':
             entities = self._report_entities()
             entities.sort(
-                key=lambda ent: float(ent.get('heal_total' if is_heal else 'damage_total') or 0),
+                key=lambda ent: _safe_float(ent.get('heal_total' if is_heal else 'damage_total')),
                 reverse=True,
             )
             scroll = max(0, min(self._scroll_offset_report, max(0, len(entities) - self.MAX_ROWS)))
             self._scroll_offset_report = scroll
-            total = float((self._last_report or {}).get(
+            total = _safe_float((self._last_report or {}).get(
                 'total_heal' if is_heal else 'total_damage'
-            ) or 0)
+            ))
             max_amount = max(
-                [float(ent.get('heal_total' if is_heal else 'damage_total') or 0)
+                [_safe_float(ent.get('heal_total' if is_heal else 'damage_total'))
                  for ent in entities],
                 default=0.0,
             )
             for ent in entities[scroll: scroll + self.MAX_ROWS]:
-                uid = int(ent.get('uid') or 0)
-                amount = float(ent.get('heal_total' if is_heal else 'damage_total') or 0)
+                uid = _safe_int(ent.get('uid'))
+                amount = _safe_float(ent.get('heal_total' if is_heal else 'damage_total'))
                 rows.append({
                     'uid': uid,
                     'name': str(ent.get('name') or f'Player_{uid or 0}'),
                     'profession': str(ent.get('profession') or ''),
-                    'fight_point': int(ent.get('fight_point') or 0),
+                    'fight_point': _safe_int(ent.get('fight_point')),
                     'is_self': bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid),
                     'amount': amount,
-                    'rate': float(ent.get('hps' if is_heal else 'dps') or 0),
+                    'rate': _safe_float(ent.get('hps' if is_heal else 'dps')),
                     'pct': (amount / total) if total > 0 else 0.0,
                     'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
-                    'mem_damage_total': int(ent.get('mem_damage_total') or 0),
-                    'mem_dps': int(ent.get('mem_dps') or 0),
+                    'mem_damage_total': _safe_int(ent.get('mem_damage_total')),
+                    'mem_dps': _safe_int(ent.get('mem_dps')),
                     'is_heal': is_heal,
                     'fx_tier': '',
                     'fx_start': 0.0,
@@ -2166,7 +2197,7 @@ class DpsOverlay:
             if ry + rh > ly + lh - 2:
                 continue
             self._draw_row(draw, img, row_data, rx, ry, rw, rh, rank_base + rank_idx)
-            uid = int(row_data.get('uid') or 0)
+            uid = _safe_int(row_data.get('uid'))
             if uid > 0:
                 self._row_click_regions.append(
                     (uid, (rx, ry, rx + rw, ry + rh))
@@ -2241,7 +2272,7 @@ class DpsOverlay:
             )
 
         # Animated bar fill (within clip)
-        bar_pct = max(0.0, min(1.0, float(row['bar_pct'] or 0.0)))
+        bar_pct = _safe_float(row.get('bar_pct'), min_value=0.0, max_value=1.0)
         bar_w = int(max(0, (w - 4) * bar_pct))
         if bar_w > 0:
             bar_img = self._make_bar(bar_w, h - 4, row['is_self'], row['is_heal'])
@@ -2320,19 +2351,22 @@ class DpsOverlay:
         # Right side: damage total (13px) + dps/pct (9px muted)
         font_val = _load_font('sao', 13)
         font_sub = _load_font('sao', 9)
-        val_main = _fmt_num(row['amount'])
+        amount = _safe_float(row.get('amount'))
+        rate = _safe_float(row.get('rate'))
+        val_main = _fmt_num(amount)
         val_color = name_color if _fx_shadow else self.TEXT_MAIN
         vw = self._tracked_text_width(draw, val_main, font_val, 0.7)
         self._draw_tracked(draw, (x + w - 10 - vw, y + 6), val_main,
                            font_val, val_color, 0.7,
                            shadow_color=_fx_shadow, shadow_blur=5 if _fx_shadow else 0)
-        pct = int(round(float(row['pct'] or 0.0) * 100))
-        val_sub = f'{_fmt_num(row["rate"])}/s · {pct}%'
+        pct = int(round(_safe_float(row.get('pct')) * 100))
+        val_sub = f'{_fmt_num(rate)}/s · {pct}%'
         # MEM cross-check: per-encounter DPS from the game's own DamageDataMgr (cumulative total
         # scoped to the MEM combat window). The cumulative total is meaningless as a per-fight
         # figure (only accrues at the Association dummy), so show DPS. Parity with _memBadge.
-        if (not row.get('is_heal')) and row.get('mem_dps'):
-            val_sub += f' · MEM {_fmt_num(int(row["mem_dps"]))}/s'
+        mem_dps = _safe_int(row.get('mem_dps'))
+        if (not row.get('is_heal')) and mem_dps:
+            val_sub += f' · MEM {_fmt_num(mem_dps)}/s'
         sw_ = self._tracked_text_width(draw, val_sub, font_sub, 0.75)
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)

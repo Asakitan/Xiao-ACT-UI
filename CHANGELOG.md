@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.17: DPS overlay payload 数值防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 live snapshot 与实体行数值归一。
+     坏 total/entity damage、heal、DPS/HPS、MEM 与比例字段现在回退到有限默认值,
+     避免单次异常 DPS payload 打断面板刷新或让条形渲染失真。
+
+  2) `gui_modules/sao_gui_dps.py` 修复 report/ACT/list row 数值与点击区归一。
+     最近战报、ACT 渲染行和列表点击区域现在容忍坏 uid/数值,
+     避免单条异常记录让整张 DPS 列表空白或交互区注册失败。
+
 ## v4.6.16: BossRaid 摘要与更新弹窗数值防护修复.
 
   1) `gui_modules/sao_gui_bossraid.py` 修复 Boss 反应摘要计数归一。
