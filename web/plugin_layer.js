@@ -116,6 +116,31 @@
         return Math.round(finiteNumber(value, fallback, lo, hi));
     }
 
+    function choiceToken(value, allowed, fallback) {
+        var text = String(value || "").trim().toLowerCase();
+        return allowed.indexOf(text) >= 0 ? text : fallback;
+    }
+
+    function textStyle(value) {
+        return choiceToken(
+            value,
+            ["title", "subtitle", "value", "label", "muted", "ok", "warn", "bad", "gold", "accent", "mono"],
+            "value"
+        );
+    }
+
+    function badgeStyle(value) {
+        return choiceToken(value, ["muted", "ok", "warn", "bad", "gold", "accent"], "muted");
+    }
+
+    function buttonStyle(value) {
+        return choiceToken(value, ["default", "primary", "danger", "ghost"], "default");
+    }
+
+    function alignToken(value) {
+        return choiceToken(value, ["left", "center", "right"], "left");
+    }
+
     // ── spec -> DOM ──────────────────────────────────────────────────────────
     function el(tag, cls, html) {
         var e = document.createElement(tag);
@@ -137,9 +162,10 @@
                 box.appendChild(head);
             }
             var inner = el("div", "splg-body splg-" + t + "-body");
-            if (t === "row" && node.align) {
+            if (t === "row") {
+                var rowAlign = alignToken(node.align);
                 inner.style.justifyContent =
-                    { left: "flex-start", center: "center", right: "flex-end" }[node.align] || "flex-start";
+                    { left: "flex-start", center: "center", right: "flex-end" }[rowAlign] || "flex-start";
             }
             objectItems(node.children).forEach(function (c) {
                 var ce = renderNode(c, onAction);
@@ -148,11 +174,11 @@
             box.appendChild(inner);
             return box;
         }
-        if (t === "text") return el("div", "splg-text splg-st-" + (node.style || "value") + " splg-al-" + (node.align || "left"), esc(node.text));
+        if (t === "text") return el("div", "splg-text splg-st-" + textStyle(node.style) + " splg-al-" + alignToken(node.align), esc(node.text));
         if (t === "kv") {
             var kv = el("div", "splg-kv");
             kv.appendChild(el("span", "splg-k", esc(node.label)));
-            kv.appendChild(el("span", "splg-v splg-st-" + (node.style || "value"), esc(node.value)));
+            kv.appendChild(el("span", "splg-v splg-st-" + textStyle(node.style), esc(node.value)));
             return kv;
         }
         if (t === "bar") {
@@ -171,7 +197,7 @@
             wrap.appendChild(track);
             return wrap;
         }
-        if (t === "badge") return el("span", "splg-badge splg-bg-" + (node.style || "muted"), esc(node.text));
+        if (t === "badge") return el("span", "splg-badge splg-bg-" + badgeStyle(node.style), esc(node.text));
         if (t === "divider") return el("div", "splg-divider");
         if (t === "spacer") {
             var s = el("div", "splg-spacer");
@@ -179,7 +205,7 @@
             return s;
         }
         if (t === "button") {
-            var b = el("button", "splg-btn splg-btn-" + (node.style || "default"), esc(node.label || node.action));
+            var b = el("button", "splg-btn splg-btn-" + buttonStyle(node.style), esc(node.label || node.action));
             if (node.disabled) b.disabled = true;
             else b.addEventListener("click", function () { if (onAction) onAction(node.action || "", node.payload || {}); });
             return b;
@@ -278,7 +304,7 @@
         var html = "";
         if (node.title) html += '<div class="splg-tabtitle">' + esc(node.title) + "</div>";
         html += '<table class="splg-table"><thead><tr>';
-        cols.forEach(function (c) { html += '<th class="splg-al-' + (c.align || "left") + '">' + esc(c.title || c.key) + "</th>"; });
+        cols.forEach(function (c) { html += '<th class="splg-al-' + alignToken(c.align) + '">' + esc(c.title || c.key) + "</th>"; });
         html += "</tr></thead><tbody>";
         var hk = node.highlight_key || "";
         rows.forEach(function (r) {
@@ -286,7 +312,7 @@
             html += '<tr class="' + hi + '">';
             cols.forEach(function (c) {
                 var v = r[c.key];
-                html += '<td class="splg-al-' + (c.align || "left") + '">' + esc(v == null ? "" : v) + "</td>";
+                html += '<td class="splg-al-' + alignToken(c.align) + '">' + esc(v == null ? "" : v) + "</td>";
             });
             html += "</tr>";
         });

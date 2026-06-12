@@ -535,6 +535,32 @@ function assert(cond, message) {
     assert(pluginLayer.includes(snippet), "plugin layer is missing numeric plugin UI guards: " + snippet);
   }
   for (const snippet of [
+    "\"splg-st-\" + (node.style || \"value\")",
+    "\"splg-al-\" + (node.align || \"left\")",
+    "\"splg-bg-\" + (node.style || \"muted\")",
+    "\"splg-btn-\" + (node.style || \"default\")",
+    "'<th class=\"splg-al-' + (c.align || \"left\")",
+    "'<td class=\"splg-al-' + (c.align || \"left\")",
+  ]) {
+    assert(!pluginLayer.includes(snippet), "plugin layer must normalize class tokens before rendering: " + snippet);
+  }
+  for (const snippet of [
+    "function choiceToken(value, allowed, fallback)",
+    "function textStyle(value)",
+    "function badgeStyle(value)",
+    "function buttonStyle(value)",
+    "function alignToken(value)",
+    "\"splg-text splg-st-\" + textStyle(node.style)",
+    "\" splg-al-\" + alignToken(node.align)",
+    "\"splg-v splg-st-\" + textStyle(node.style)",
+    "\"splg-badge splg-bg-\" + badgeStyle(node.style)",
+    "\"splg-btn splg-btn-\" + buttonStyle(node.style)",
+    "'<th class=\"splg-al-' + alignToken(c.align)",
+    "'<td class=\"splg-al-' + alignToken(c.align)",
+  ]) {
+    assert(pluginLayer.includes(snippet), "plugin layer is missing class-token normalization: " + snippet);
+  }
+  for (const snippet of [
     "(node.children || []).forEach(function (c) {",
     "(node.ops || []).forEach(function (op) {",
     "var cols = node.columns || [];",

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.28: Web plugin layer 样式 class token 防护修复.
+
+  1) `web/plugin_layer.js` 修复插件 text/kv/badge/button 样式 token 归一。
+     插件 payload 中的异常 style 现在只会映射到允许的 SAO class,
+     避免未知或带空格的 token 破坏插件层视觉样式。
+
+  2) `web/plugin_layer.js` 修复插件 row/table 对齐 token 归一。
+     row、table header 与 table cell 对齐现在只接受 left/center/right,
+     避免异常 align payload 拼接进 className 导致布局或渲染不完整。
+
 ## v4.6.27: Web plugin layer 尺寸与 canvas 数值防护修复.
 
   1) `web/plugin_layer.js` 修复插件 UI bar/spacer/input 尺寸归一。
