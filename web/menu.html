@@ -5095,12 +5095,26 @@ function _menuTabName(value) {
     return allowed[key] ? key : 'local';
 }
 
+function _profileEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+
+function _profileEntries(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function _profileText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
 function _akNewClientId(prefix) {
     return (prefix || 'ak') + '_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1000000).toString(36);
 }
 
 function _akProfilesFull() {
-    return (_autoKeyState && Array.isArray(_autoKeyState.profiles_full)) ? _autoKeyState.profiles_full : [];
+    return _profileEntries(_autoKeyState && _autoKeyState.profiles_full).map(_profileEntry);
 }
 
 function _akFindProfile(profileId) {
@@ -5108,7 +5122,7 @@ function _akFindProfile(profileId) {
     if (!id) return null;
     var profiles = _akProfilesFull();
     for (var i = 0; i < profiles.length; i++) {
-        if (String(profiles[i].id || '') === id) return profiles[i];
+        if (_profileText(profiles[i].id, '') === id) return profiles[i];
     }
     return null;
 }
@@ -5120,7 +5134,7 @@ function _akEnsureSelectedProfile() {
         return;
     }
     if (_akFindProfile(_autoKeySelectedProfileId)) return;
-    _autoKeySelectedProfileId = String((_autoKeyState && _autoKeyState.active_profile_id) || profiles[0].id || '');
+    _autoKeySelectedProfileId = _profileText((_autoKeyState && _autoKeyState.active_profile_id), _profileText(profiles[0].id, ''));
 }
 
 function _akPrepareDraft(profile) {
@@ -5151,7 +5165,7 @@ function _akLoadDraftFromState(profileId, force) {
         _autoKeyDraftProfile = null;
         return;
     }
-    _autoKeySelectedProfileId = String(profile.id || '');
+    _autoKeySelectedProfileId = _profileText(profile.id, '');
     if (!force && _autoKeyDraftDirty && _autoKeyDraftProfile && String(_autoKeyDraftProfile.id || '') === _autoKeySelectedProfileId) {
         return;
     }
@@ -5218,11 +5232,15 @@ function _akRenderLocal() {
         return;
     }
     var summaries = {};
-    ((state.profiles || [])).forEach(function(item) { summaries[String(item.id || '')] = item; });
-    listEl.innerHTML = profiles.map(function(profile) {
-        var id = String(profile.id || '');
+    _profileEntries(state.profiles).forEach(function(rawItem) {
+        var item = _profileEntry(rawItem);
+        summaries[_profileText(item.id, '')] = item;
+    });
+    listEl.innerHTML = profiles.map(function(rawProfile) {
+        var profile = _profileEntry(rawProfile);
+        var id = _profileText(profile.id, '');
         var summary = summaries[id] || {};
-        var actionCount = _clampInt(summary.action_count, ((profile.actions || []).length || 0), 0, 999999);
+        var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);
         var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);
         var classes = ['auto-key-profile'];
         if (String(state.active_profile_id || '') === id) classes.push('active');
@@ -5230,20 +5248,20 @@ function _akRenderLocal() {
         return '' +
             '<div class="' + classes.join(' ') + '">' +
                 '<div class="auto-key-card-head">' +
-                    '<div class="auto-key-card-title">' + _escHtml(profile.profile_name || '配置 Profile') + '</div>' +
+                    '<div class="auto-key-card-title">' + _escHtml(_profileText(profile.profile_name, '配置 Profile')) + '</div>' +
                     '<div class="auto-key-card-actions">' +
                         '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + _jsAttrArg(id) + ', \'editor\'); return false;">编辑 Edit</button>' +
                         '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + _jsAttrArg(id) + '); return false;">启用 Activate</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml((profile.profession_name || '任意 Any').toUpperCase()) + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(String(profile.source || 'local').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml(_profileText(profile.profession_name, '任意 Any').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_profileText(profile.source, 'local').toUpperCase()) + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(actionCount + ' 动作 Actions / ' + enabledCount + ' 已启用 On') + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(profile.updated_at || '') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_profileText(profile.updated_at, '')) + '</span>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span>' + _escHtml(profile.description || '暂无说明 / No description') + '</span>' +
+                    '<span>' + _escHtml(_profileText(profile.description, '暂无说明 / No description')) + '</span>' +
                 '</div>' +
                 '<div class="auto-key-card-actions">' +
                     '<button class="auto-key-btn" type="button" onclick="_akCopyProfile(' + _jsAttrArg(id) + '); return false;">复制 Copy</button>' +
@@ -6767,9 +6785,10 @@ var _brDraftDirty = false;
 var _brTab = 'local';
 
 function _syncBossRaidState(state) {
-    _bossRaidState = state || {};
+    var safeState = _profileEntry(state);
+    _bossRaidState = safeState;
     var el = document.getElementById('boss-raid-enabled');
-    if (el) el.checked = !!state.enabled;
+    if (el) el.checked = !!safeState.enabled;
     _brEnsureSelected();
     if (!_brDraftProfile || !_brDraftDirty || !_brFindProfile(_brSelectedProfileId)) {
         _brLoadDraftFromState(_brSelectedProfileId, true);
@@ -6800,17 +6819,31 @@ function _brCallApi(method, args, onOk) {
     });
 }
 
+function _brProfilesFull() {
+    return _profileEntries(_bossRaidState && _bossRaidState.profiles_full).map(_profileEntry);
+}
+
+function _brProfiles() {
+    return _profileEntries(_bossRaidState && _bossRaidState.profiles).map(_profileEntry);
+}
+
 function _brEnsureSelected() {
-    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles_full)) ? _bossRaidState.profiles_full : [];
+    var profiles = _brProfilesFull();
     if (!profiles.length) { _brSelectedProfileId = ''; return; }
-    var found = profiles.find(function(p) { return p.id === _brSelectedProfileId; });
+    var found = profiles.find(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        return _profileText(p.id, '') === _brSelectedProfileId;
+    });
     if (found) return;
-    _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || profiles[0].id || '');
+    _brSelectedProfileId = _profileText((_bossRaidState && _bossRaidState.active_profile_id), _profileText(_profileEntry(profiles[0]).id, ''));
 }
 
 function _brFindProfile(id) {
-    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles_full)) ? _bossRaidState.profiles_full : [];
-    return profiles.find(function(p) { return String(p.id) === String(id); }) || null;
+    var profiles = _brProfilesFull();
+    return profiles.find(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        return _profileText(p.id, '') === String(id);
+    }) || null;
 }
 
 function _brLoadDraftFromState(profileId, force) {
@@ -6854,24 +6887,26 @@ function _brSetTab(tab) {
 function _brRenderLocal() {
     var list = document.getElementById('boss-raid-profile-list');
     if (!list) return;
-    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles)) ? _bossRaidState.profiles : [];
+    var profiles = _brProfiles();
     var activeId = (_bossRaidState && _bossRaidState.active_profile_id) || '';
     if (!profiles.length) {
         list.innerHTML = '<div style="padding:12px;color:rgba(86,92,98,0.68);font-size:12px;">暂无配置 No profiles yet</div>';
         return;
     }
-    list.innerHTML = profiles.map(function(p) {
-        var isActive = (p.id === activeId);
-        var isSelected = (p.id === _brSelectedProfileId);
+    list.innerHTML = profiles.map(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        var id = _profileText(p.id, '');
+        var isActive = (id === activeId);
+        var isSelected = (id === _brSelectedProfileId);
         return '<div class="boss-raid-card' + (isActive ? ' active-profile' : '') + (isSelected ? ' selected' : '') +
-            '" onclick="_brSelectProfile(' + _jsAttrArg(p.id) + ')">' +
+            '" onclick="_brSelectProfile(' + _jsAttrArg(id) + ')">' +
             '<div class="boss-raid-card-info">' +
-                '<div class="boss-raid-card-name">' + _escHtml(p.profile_name || 'Boss Raid') + '</div>' +
+                '<div class="boss-raid-card-name">' + _escHtml(_profileText(p.profile_name, 'Boss Raid')) + '</div>' +
                 '<div class="boss-raid-card-meta">HP: ' + _escHtml(_brNumText(p.boss_total_hp, '?')) + ' · Enrage: ' + _escHtml(_brNumText(p.enrage_time_s, 0)) + 's · P' + _escHtml(_brNumText(p.phase_count, 0)) + ' · TL' + _escHtml(_brNumText(p.timeline_count, 0)) + '</div>' +
             '</div>' +
             '<div class="boss-raid-card-actions">' +
-                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brActivateProfile(' + _jsAttrArg(p.id) + ');">激活 Activate</button>' +
-                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brEditProfile(' + _jsAttrArg(p.id) + ');">编辑 Edit</button>' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brActivateProfile(' + _jsAttrArg(id) + ');">激活 Activate</button>' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brEditProfile(' + _jsAttrArg(id) + ');">编辑 Edit</button>' +
             '</div>' +
         '</div>';
     }).join('');

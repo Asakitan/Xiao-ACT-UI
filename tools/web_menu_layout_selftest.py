@@ -79,8 +79,8 @@ def main() -> int:
         raise AssertionError("AutoKey activate must use _jsAttrArg(id)")
     if "_akDownloadRemote(' + _jsAttrArg(remoteId) + ')" not in html:
         raise AssertionError("AutoKey cloud download must use _jsAttrArg(remoteId)")
-    if "_brSelectProfile(' + _jsAttrArg(p.id) + ')" not in html:
-        raise AssertionError("BossRaid select must use _jsAttrArg(p.id)")
+    if "_brSelectProfile(' + _jsAttrArg(id) + ')" not in html:
+        raise AssertionError("BossRaid select must use _jsAttrArg(id)")
     if "_brDownloadRemote(' + _jsAttrArg(remoteId) + ')" not in html:
         raise AssertionError("BossRaid cloud download must use _jsAttrArg(remoteId)")
     if html.count("function _escAttr") != 1:
@@ -332,7 +332,7 @@ def main() -> int:
         "document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
         "var seconds = _clampNum(val, 1.0, 0, 60);",
         "api.set_linkage_global_cooldown(seconds);",
-        "var actionCount = _clampInt(summary.action_count, ((profile.actions || []).length || 0), 0, 999999);",
+        "var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);",
         "var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);",
         "var profileProfessionIdValue = draft ? _clampInt(draft.profession_id, 0, 0, 999999999) : 0;",
         "var identityProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);",
@@ -441,6 +441,62 @@ def main() -> int:
     for snippet in tab_state_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey/BossRaid tab-state snippet: " + snippet)
+
+    profile_payload_raw_patterns = [
+        "return (_autoKeyState && Array.isArray(_autoKeyState.profiles_full)) ? _autoKeyState.profiles_full : [];",
+        "((state.profiles || [])).forEach(function(item) { summaries[String(item.id || '')] = item; });",
+        "listEl.innerHTML = profiles.map(function(profile) {",
+        "var id = String(profile.id || '');",
+        "((profile.actions || []).length || 0)",
+        "_escHtml(profile.profile_name || '配置 Profile')",
+        "_escHtml((profile.profession_name || '任意 Any').toUpperCase())",
+        "_escHtml(profile.updated_at || '')",
+        "_escHtml(profile.description || '暂无说明 / No description')",
+        "var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles_full)) ? _bossRaidState.profiles_full : [];",
+        "var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles)) ? _bossRaidState.profiles : [];",
+        "var found = profiles.find(function(p) { return p.id === _brSelectedProfileId; });",
+        "return profiles.find(function(p) { return String(p.id) === String(id); }) || null;",
+        "list.innerHTML = profiles.map(function(p) {",
+        "var isActive = (p.id === activeId);",
+        "onclick=\"_brSelectProfile(' + _jsAttrArg(p.id) + ')\"",
+        "_escHtml(p.profile_name || 'Boss Raid')",
+    ]
+    for pattern in profile_payload_raw_patterns:
+        if pattern in html:
+            raise AssertionError("AutoKey/BossRaid local profile payloads must guard malformed entries and preserve zero text: " + pattern)
+    profile_payload_safe_required = [
+        "function _profileEntry(entry)",
+        "function _profileEntries(value)",
+        "function _profileText(value, fallback)",
+        "return _profileEntries(_autoKeyState && _autoKeyState.profiles_full).map(_profileEntry);",
+        "_profileEntries(state.profiles).forEach(function(rawItem) {",
+        "var item = _profileEntry(rawItem);",
+        "summaries[_profileText(item.id, '')] = item;",
+        "listEl.innerHTML = profiles.map(function(rawProfile) {",
+        "var profile = _profileEntry(rawProfile);",
+        "var id = _profileText(profile.id, '');",
+        "var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);",
+        "_escHtml(_profileText(profile.profile_name, '配置 Profile'))",
+        "_escHtml(_profileText(profile.profession_name, '任意 Any').toUpperCase())",
+        "_escHtml(_profileText(profile.updated_at, ''))",
+        "_escHtml(_profileText(profile.description, '暂无说明 / No description'))",
+        "function _brProfilesFull()",
+        "function _brProfiles()",
+        "var safeState = _profileEntry(state);",
+        "var profiles = _brProfilesFull();",
+        "var p = _profileEntry(rawProfile);",
+        "return _profileText(p.id, '') === _brSelectedProfileId;",
+        "return _profileText(p.id, '') === String(id);",
+        "var profiles = _brProfiles();",
+        "list.innerHTML = profiles.map(function(rawProfile) {",
+        "var id = _profileText(p.id, '');",
+        "var isActive = (id === activeId);",
+        "onclick=\"_brSelectProfile(' + _jsAttrArg(id) + ')\"",
+        "_escHtml(_profileText(p.profile_name, 'Boss Raid'))",
+    ]
+    for snippet in profile_payload_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe AutoKey/BossRaid local profile payload snippet: " + snippet)
 
     linkage_raw_patterns = [
         "_linkageMappings = s.mappings || [];",

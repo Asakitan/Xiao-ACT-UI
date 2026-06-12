@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.45: Web menu local profile payload 渲染修复.
+
+  1) `web/menu.html` 修复 AutoKey 本地 profile payload 渲染。
+     profiles_full、profiles summary 和 profile actions 现在会做 entry/array shape 防护,
+     malformed profile 不再中断本地配置列表, 合法 `0` 文本也会保留显示。
+
+  2) `web/menu.html` 修复 BossRaid 本地 profile payload 渲染。
+     BossRaid profiles/profiles_full 现在会先归一 entry 再选择与渲染,
+     避免异常 profile entry 破坏本地卡片、选择状态或草稿加载。
+
 ## v4.6.44: Web menu tab 参数归一修复.
 
   1) `web/menu.html` 修复 AutoKey tab 状态传播。
