@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.35: ACT Death/Timeline Web 数值显示防护修复.
+
+  1) `web/act_death_recap.html` 修复死亡回放 summary 与 row amount 显示。
+     incoming damage、healing、shield、row count 与事件 amount 现在通过有限数值 formatter 渲染,
+     避免异常 payload 显示为 `Infinity`、`NaN` 或隐藏合法 0。
+
+  2) `web/act_timeline_vcr.html` 修复时间线事件 key/value 与事件计数显示。
+     fallback event key 与 event value 现在过滤非有限数值,
+     避免坏 time/value payload 造成折叠状态碰撞或不可读文本。
+
 ## v4.6.34: ACT Report/Offline Web 数值显示防护修复.
 
   1) `web/act_report_export.html` 修复 report preview/history/top-row 数值显示。

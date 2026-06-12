@@ -377,6 +377,27 @@ def _assert_action_log_and_death_recap_numbers_are_normalized() -> None:
     ):
         if snippet not in death_recap:
             raise AssertionError("missing safe death recap numeric/list snippet: " + snippet)
+    for snippet in (
+        "String(summary.incoming_damage || 0)",
+        "String(summary.healing || 0)",
+        "String(summary.shield || 0)",
+        "String(rows.length || 0)",
+        "esc(row.amount || '')",
+    ):
+        if snippet in death_recap:
+            raise AssertionError("death recap visible numerics must use finite display guards: " + snippet)
+    for snippet in (
+        "function countText(value)",
+        "function numberText(value, fallback)",
+        "function looseValueText(value, fallback)",
+        "numberText(summary.incoming_damage, 0)",
+        "numberText(summary.healing, 0)",
+        "numberText(summary.shield, 0)",
+        "countText(rows.length)",
+        "looseValueText(row.amount, '')",
+    ):
+        if snippet not in death_recap:
+            raise AssertionError("missing safe death recap visible numeric snippet: " + snippet)
 
 
 def _assert_timeline_speed_is_normalized() -> None:
@@ -417,6 +438,9 @@ def _assert_timeline_and_aggregate_lists_are_guarded() -> None:
         "var events = data.events || [];",
         "String((data.errors || []).length)",
         "JSON.stringify(ev.payload || {})",
+        "(ev.time_ms || 0) + '|'",
+        "String(events.length || 0)",
+        "esc(ev.value || '')",
     ):
         if snippet in timeline:
             raise AssertionError("timeline VCR must guard list/object payloads: " + snippet)
@@ -440,6 +464,12 @@ def _assert_timeline_and_aggregate_lists_are_guarded() -> None:
         "var events = objectItems(data.events);",
         "var errorCount = listItems(data.errors).length;",
         "var payload = objectValue(ev.payload);",
+        "function countText(value)",
+        "function keyNumberText(value)",
+        "function looseValueText(value, fallback)",
+        "keyNumberText(ev.time_ms) + '|'",
+        "countText(events.length)",
+        "looseValueText(ev.value, '')",
     ):
         if snippet not in timeline:
             raise AssertionError("missing safe timeline list/object snippet: " + snippet)

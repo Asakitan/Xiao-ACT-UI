@@ -136,6 +136,24 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function objectValue(value) {
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(finiteNumberArg(value, 0))));
+    }
+    function numberText(value, fallback) {
+        return String(finiteNumberArg(value, fallback));
+    }
+    function looseValueText(value, fallback) {
+        if (value == null || value === '') return fallback;
+        if (typeof value === 'number') return isFinite(value) ? String(value) : fallback;
+        var text = String(value);
+        var trimmed = text.trim();
+        var lower = trimmed.toLowerCase();
+        if (lower === 'nan' || lower === 'infinity' || lower === '+infinity' || lower === '-infinity') return fallback;
+        var numeric = Number(trimmed);
+        if (trimmed && isFinite(numeric)) return String(numeric);
+        if (trimmed && !isNaN(numeric)) return fallback;
+        return text;
+    }
     function deathRecapPayload(name, args) {
         args = args || [];
         if (name === 'get_death_recap_status' || name === 'copy_death_recap') {
@@ -167,17 +185,17 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var win = objectValue(data.window);
         var errorCount = listItems(data.errors).length;
         document.getElementById('sum-death').textContent = death.name || death.entity_id || '-';
-        document.getElementById('sum-damage').textContent = String(summary.incoming_damage || 0);
-        document.getElementById('sum-heal').textContent = String(summary.healing || 0);
-        document.getElementById('sum-shield').textContent = String(summary.shield || 0);
-        document.getElementById('sum-rows').textContent = String(rows.length || 0);
+        document.getElementById('sum-damage').textContent = numberText(summary.incoming_damage, 0);
+        document.getElementById('sum-heal').textContent = numberText(summary.healing, 0);
+        document.getElementById('sum-shield').textContent = numberText(summary.shield, 0);
+        document.getElementById('sum-rows').textContent = countText(rows.length);
         document.getElementById('sum-window').textContent = ActTime.fmtDur(win.before_ms);
         document.getElementById('sum-errors').textContent = String(errorCount);
         if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无死亡回放。<br/>等待 death/is_dead/hp=0 事件。</div>'; return; }
         rowsEl.innerHTML = '<table class="table"><thead><tr><th>Delta</th><th>Time</th><th>Kind</th><th>Actor</th><th>Target</th><th>Amount</th><th>Detail</th></tr></thead><tbody>' + rows.map(function (row) {
             row = row && typeof row === 'object' ? row : {};
             var payload = objectValue(row.payload);
-            var main = '<tr class="evt ' + (row.is_death ? 'death' : '') + '" onclick="DeathRecap.toggleRow(this)"><td>' + esc(ActTime.fmtSigned(row.relative_ms)) + '</td><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="kind">' + esc(row.kind || row.topic || '-') + '</span></td><td>' + esc(row.actor || '-') + '</td><td>' + esc(row.target || '-') + '</td><td>' + esc(row.amount || '') + '</td><td><div class="payload">' + esc(row.label || '') + '</div></td></tr>';
+            var main = '<tr class="evt ' + (row.is_death ? 'death' : '') + '" onclick="DeathRecap.toggleRow(this)"><td>' + esc(ActTime.fmtSigned(row.relative_ms)) + '</td><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="kind">' + esc(row.kind || row.topic || '-') + '</span></td><td>' + esc(row.actor || '-') + '</td><td>' + esc(row.target || '-') + '</td><td>' + esc(looseValueText(row.amount, '')) + '</td><td><div class="payload">' + esc(row.label || '') + '</div></td></tr>';
             var detail = '<tr class="detail" style="display:none;"><td colspan="7"><div class="payload">' + esc(JSON.stringify(payload)) + '</div></td></tr>';
             return main + detail;
         }).join('') + '</tbody></table>';

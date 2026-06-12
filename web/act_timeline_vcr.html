@@ -155,6 +155,24 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     function objectValue(value) {
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(numericArg(value, 0))));
+    }
+    function keyNumberText(value) {
+        return String(numericArg(value, 0));
+    }
+    function looseValueText(value, fallback) {
+        if (value == null || value === '') return fallback;
+        if (typeof value === 'number') return isFinite(value) ? String(value) : fallback;
+        var text = String(value);
+        var trimmed = text.trim();
+        var lower = trimmed.toLowerCase();
+        if (lower === 'nan' || lower === 'infinity' || lower === '+infinity' || lower === '-infinity') return fallback;
+        var numeric = Number(trimmed);
+        if (trimmed && isFinite(numeric)) return String(numeric);
+        if (trimmed && !isNaN(numeric)) return fallback;
+        return text;
+    }
     function eventTopicClass(topic) {
         topic = String(topic || '').toLowerCase();
         if (topic.indexOf('damage') >= 0 || topic.indexOf('death') >= 0) return ' damage';
@@ -188,7 +206,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     }
     function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
     function eventKey(ev, idx) {
-        return String(ev.id || ev.event_id || ev.key || ((ev.time_ms || 0) + '|' + (ev.topic || '') + '|' + (ev.label || '') + '|' + idx));
+        return String(ev.id || ev.event_id || ev.key || (keyNumberText(ev.time_ms) + '|' + (ev.topic || '') + '|' + (ev.label || '') + '|' + idx));
     }
     function setListHtml(html, preserveScroll) {
         var top = list.scrollTop || 0;
@@ -207,7 +225,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var errorCount = listItems(data.errors).length;
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : (data.playing ? 'PLAYING' : 'READY');
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : (data.playing ? 'var(--act-ok)' : 'var(--act-muted)');
-        document.getElementById('sum-events').textContent = String(events.length || 0);
+        document.getElementById('sum-events').textContent = countText(events.length);
         document.getElementById('sum-cursor').textContent = ActTime.fmtDur(data.cursor_ms);
         document.getElementById('sum-speed').textContent = String(safeSpeed(data.speed)) + 'x';
         document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
@@ -217,7 +235,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             var key = eventKey(ev, idx);
             var open = !!expandedEvents[key];
             var payload = objectValue(ev.payload);
-            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
+            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(looseValueText(ev.value, '')) + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
         }).join(''), preserveScroll);
     }
     window.TimelineVcr = {
