@@ -15,6 +15,7 @@ AUTOKEY_EDITOR = ROOT / "web" / "autokey_editor.html"
 MECH_BANNER = ROOT / "web" / "mech_banner.html"
 SKILLFX = ROOT / "web" / "skillfx.html"
 MEM_SCOPE = ROOT / "web" / "mem_scope.html"
+PANEL = ROOT / "web" / "panel.html"
 
 
 def _check_absent(source: str, snippet: str, message: str) -> None:
@@ -36,6 +37,7 @@ def main() -> None:
     mech_banner = MECH_BANNER.read_text(encoding="utf-8")
     skillfx = SKILLFX.read_text(encoding="utf-8")
     mem_scope = MEM_SCOPE.read_text(encoding="utf-8")
+    panel = PANEL.read_text(encoding="utf-8")
 
     raid_forbidden = [
         (
@@ -1021,6 +1023,48 @@ def main() -> None:
     ]
     for snippet, message in mem_required:
         _check_present(mem_scope, snippet, message)
+
+    panel_forbidden = [
+        (
+            "data.speed.toFixed(2)",
+            "Floating panel speed must not call toFixed() on raw payload values.",
+        ),
+        (
+            "Math.round(data.bpm)",
+            "Floating panel BPM must not round raw payload values.",
+        ),
+    ]
+    for snippet, message in panel_forbidden:
+        _check_absent(panel, snippet, message)
+
+    panel_required = [
+        (
+            "function _panelFiniteNumber(value, fallback)",
+            "Floating panel should expose finite numeric normalization.",
+        ),
+        (
+            "function _panelFmtSpeed(value)",
+            "Floating panel should format speed through a guarded helper.",
+        ),
+        (
+            "function _panelFmtBpm(value)",
+            "Floating panel should format BPM through a guarded helper.",
+        ),
+        (
+            "el.textContent = _panelFmtSpeed(data.speed);",
+            "Floating panel control speed should use guarded formatting.",
+        ),
+        (
+            "b.textContent=_panelFmtBpm(data.bpm);",
+            "Floating panel status BPM should use guarded formatting.",
+        ),
+        (
+            "sp.textContent=_panelFmtSpeed(data.speed);",
+            "Floating panel status speed should use guarded formatting.",
+        ),
+    ]
+    for snippet, message in panel_required:
+        _check_present(panel, snippet, message)
 
     print("web_small_panels_numeric_selftest: ok")
 

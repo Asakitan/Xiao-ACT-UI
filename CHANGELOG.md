@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.26: Web panel speed 与 BPM 数值渲染防护修复.
+
+  1) `web/panel.html` 修复 control/status speed 文本格式化。
+     speed payload 为字符串或异常值时现在会先归一再 `toFixed`,
+     避免小面板状态更新因为单个 speed 字段抛错而中断。
+
+  2) `web/panel.html` 修复 status BPM 文本格式化。
+     BPM payload 为坏值时现在回退为 `—`,
+     避免状态面板显示 `NaN` 这类对用户不友好的数值。
+
 ## v4.6.25: DPS 拖拽坐标与几何保存防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复拖拽开始/移动坐标归一。

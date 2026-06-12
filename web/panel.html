@@ -711,12 +711,27 @@ function initPanel(type, state) {
 }
 
 /* ═══ Update panel state ═══ */
+function _panelFiniteNumber(value, fallback) {
+    var number = Number(value);
+    if (!isFinite(number)) number = Number(fallback || 0);
+    return isFinite(number) ? number : 0;
+}
+
+function _panelFmtSpeed(value) {
+    return _panelFiniteNumber(value, 1).toFixed(2) + '×';
+}
+
+function _panelFmtBpm(value) {
+    var bpm = _panelFiniteNumber(value, 0);
+    return bpm > 0 ? Math.round(bpm) : '—';
+}
+
 function updatePanel(data) {
     if (!data) return;
     if (panelType === 'control') {
         if (data.speed !== undefined) {
             var el = document.getElementById('val-speed');
-            if (el) el.textContent = data.speed.toFixed(2) + '×';
+            if (el) el.textContent = _panelFmtSpeed(data.speed);
         }
         if (data.transpose !== undefined) {
             var el2 = document.getElementById('val-transpose');
@@ -735,8 +750,14 @@ function updatePanel(data) {
         }
         if (data.play_state) { var p=document.getElementById('stat-play'); if(p) p.textContent=data.play_state; }
         if (data.mode) { var m=document.getElementById('stat-mode'); if(m) m.textContent=data.mode; }
-        if (data.bpm !== undefined) { var b=document.getElementById('stat-bpm'); if(b) b.textContent=data.bpm>0?Math.round(data.bpm):'—'; }
-        if (data.speed !== undefined) { var sp=document.getElementById('stat-speed'); if(sp) sp.textContent=data.speed.toFixed(2)+'×'; }
+        if (data.bpm !== undefined) {
+            var b=document.getElementById('stat-bpm');
+            if(b) b.textContent=_panelFmtBpm(data.bpm);
+        }
+        if (data.speed !== undefined) {
+            var sp=document.getElementById('stat-speed');
+            if(sp) sp.textContent=_panelFmtSpeed(data.speed);
+        }
         if (data.kb_mode !== undefined) {
             var km=document.getElementById('stat-kbmode');
             if (km) {
