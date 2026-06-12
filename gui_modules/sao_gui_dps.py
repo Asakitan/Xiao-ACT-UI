@@ -675,16 +675,21 @@ class DpsOverlay:
         self._x = max(0, sw - self.WIDTH - max(16, int(sw * 0.012)))
         self._y = max(0, int(sh * 0.18))
         if settings is not None:
-            try:
-                self._x = int(settings.get('dps_ov_x', self._x))
-                self._y = int(settings.get('dps_ov_y', self._y))
-                self._detail_w = int(settings.get('dps_detail_w', self._detail_w))
-                self._detail_h = int(settings.get('dps_detail_h', self._detail_h))
-                self._minimized = bool(settings.get('dps_minimized', False))
-                self._detail_w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, self._detail_w))
-                self._detail_h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, self._detail_h))
-            except Exception:
-                pass
+            def _setting(key: str, default: Any) -> Any:
+                try:
+                    return settings.get(key, default)
+                except Exception:
+                    return default
+
+            self._x = _safe_int(_setting('dps_ov_x', self._x), default=int(self._x))
+            self._y = _safe_int(_setting('dps_ov_y', self._y), default=int(self._y))
+            self._detail_w = _safe_int(
+                _setting('dps_detail_w', self._detail_w), default=int(self._detail_w))
+            self._detail_h = _safe_int(
+                _setting('dps_detail_h', self._detail_h), default=int(self._detail_h))
+            self._minimized = bool(_setting('dps_minimized', False))
+            self._detail_w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, self._detail_w))
+            self._detail_h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, self._detail_h))
 
         # Animation state
         self._rows: Dict[int, _RowState] = {}
@@ -1173,7 +1178,8 @@ class DpsOverlay:
         # Keep row state for the full ranked entity list. Rendering applies
         # the scroll window later; dropping offscreen rows here made the wheel
         # unable to ever reach rank 7+ because the model only retained 6 rows.
-        self._scroll_offset = max(0, min(self._scroll_offset, max(0, len(entities) - self.MAX_ROWS)))
+        self._scroll_offset = max(
+            0, min(_safe_int(self._scroll_offset), max(0, len(entities) - self.MAX_ROWS)))
         for idx, ent in enumerate(entities):
             uid = _safe_int(ent.get('uid'))
             if not uid:
@@ -1196,8 +1202,7 @@ class DpsOverlay:
 
         # Clamp scroll offset to the current entity count
         max_off = max(0, len(entities) - self.MAX_ROWS)
-        if self._scroll_offset > max_off:
-            self._scroll_offset = max_off
+        self._scroll_offset = max(0, min(_safe_int(self._scroll_offset), max_off))
 
         self._row_order = seen_uids
 
@@ -1495,8 +1500,8 @@ class DpsOverlay:
         """Return the scroll offset clamped to current data bounds."""
         if self._view_mode == 'report':
             total = len(self._report_entities())
-            return max(0, min(self._scroll_offset_report, max(0, total - self.MAX_ROWS)))
-        return max(0, min(self._scroll_offset, max(0, len(self._rows) - self.MAX_ROWS)))
+            return max(0, min(_safe_int(self._scroll_offset_report), max(0, total - self.MAX_ROWS)))
+        return max(0, min(_safe_int(self._scroll_offset), max(0, len(self._rows) - self.MAX_ROWS)))
 
     def _act_render_rows(self) -> List[dict]:
         try:
@@ -1519,7 +1524,7 @@ class DpsOverlay:
             key=lambda ent: (_safe_float(ent.get(amount_key)), _safe_int(ent.get('uid'))),
             reverse=True,
         )
-        scroll = max(0, min(self._scroll_offset, max(0, len(sorted_rows) - self.MAX_ROWS)))
+        scroll = max(0, min(_safe_int(self._scroll_offset), max(0, len(sorted_rows) - self.MAX_ROWS)))
         self._scroll_offset = scroll
         total = sum(_safe_float(ent.get(amount_key)) for ent in sorted_rows)
         if total <= 0:
@@ -1564,7 +1569,10 @@ class DpsOverlay:
                 key=lambda ent: _safe_float(ent.get('heal_total' if is_heal else 'damage_total')),
                 reverse=True,
             )
-            scroll = max(0, min(self._scroll_offset_report, max(0, len(entities) - self.MAX_ROWS)))
+            scroll = max(
+                0,
+                min(_safe_int(self._scroll_offset_report), max(0, len(entities) - self.MAX_ROWS)),
+            )
             self._scroll_offset_report = scroll
             total = _safe_float((self._last_report or {}).get(
                 'total_heal' if is_heal else 'total_damage'
@@ -1605,7 +1613,7 @@ class DpsOverlay:
             live_rows.sort(key=lambda row: (row.disp_heal, row.uid), reverse=True)
         else:
             live_rows.sort(key=lambda row: (row.disp_y, row.uid))
-        scroll = max(0, min(self._scroll_offset, max(0, len(live_rows) - self.MAX_ROWS)))
+        scroll = max(0, min(_safe_int(self._scroll_offset), max(0, len(live_rows) - self.MAX_ROWS)))
         self._scroll_offset = scroll
         total = self._disp_total_heal if is_heal else self._disp_total_damage
         max_amount = max(
@@ -2647,8 +2655,14 @@ class DpsOverlay:
         self._skill_content_h = content_h
         self._skill_view_h = view_h
         self._skill_max_scroll = max_scroll
-        self._skill_scroll_target = max(0.0, min(self._skill_scroll_target, max_scroll))
-        self._skill_scroll_disp = max(0.0, min(self._skill_scroll_disp, max_scroll))
+        self._skill_scroll_target = max(
+            0.0,
+            min(_safe_float(self._skill_scroll_target), max_scroll),
+        )
+        self._skill_scroll_disp = max(
+            0.0,
+            min(_safe_float(self._skill_scroll_disp), max_scroll),
+        )
         scroll = self._skill_scroll_disp
 
         # Reserve a right gutter for the scrollbar only when the list overflows.
@@ -3544,10 +3558,11 @@ class DpsOverlay:
         from the last _draw_detail_view pass (_skill_max_scroll), and the
         draw pass re-clamps in case the geometry changed since.
         """
-        max_scroll = float(getattr(self, '_skill_max_scroll', 0.0) or 0.0)
-        old = float(getattr(self, '_skill_scroll_target', 0.0) or 0.0)
+        max_scroll = _safe_float(getattr(self, '_skill_max_scroll', 0.0), min_value=0.0)
+        old_raw = getattr(self, '_skill_scroll_target', 0.0)
+        old = _safe_float(old_raw, min_value=0.0, max_value=max_scroll)
         new = max(0.0, min(max_scroll, old + direction * self.SKILL_WHEEL_STEP))
-        if new != old:
+        if new != old or old_raw != new:
             self._skill_scroll_target = new
             self._schedule_tick(immediate=True)
 
@@ -3559,11 +3574,11 @@ class DpsOverlay:
         return max(0, total - self.MAX_ROWS)
 
     def _current_scroll_offset(self) -> int:
-        return int(getattr(self, self._scroll_offset_attr(), 0) or 0)
+        return _safe_int(getattr(self, self._scroll_offset_attr(), 0), min_value=0)
 
     def _set_scroll_offset(self, value: int) -> None:
         max_offset = self._max_scroll_offset()
-        v = max(0, min(max_offset, int(value)))
+        v = max(0, min(max_offset, _safe_int(value)))
         setattr(self, self._scroll_offset_attr(), v)
         self._schedule_tick(immediate=True)
 

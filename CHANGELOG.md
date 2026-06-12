@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.20: DPS 布局设置与滚动状态防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 DPS 布局设置逐项归一。
+     坏 `dps_ov_x` 等单个设置值不再吞掉后续有效 y/detail/minimized 设置,
+     避免配置局部损坏导致面板位置、详情尺寸或最小化状态无法恢复。
+
+  2) `gui_modules/sao_gui_dps.py` 修复列表与详情技能滚动状态归一。
+     坏 scroll offset / skill-scroll 状态现在回退到安全范围,
+     避免滚轮、列表绘制或详情技能列表因为异常状态打断渲染。
+
 ## v4.6.19: DPS header 与通知数值防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复 ACT badge 版本号归一。

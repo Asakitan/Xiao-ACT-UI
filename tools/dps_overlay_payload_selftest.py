@@ -13,6 +13,14 @@ from PIL import Image, ImageDraw
 from gui_modules.sao_gui_dps import DpsOverlay, _RowState
 
 
+class _FakeSettings:
+    def __init__(self, values: dict) -> None:
+        self.values = dict(values)
+
+    def get(self, key: str, default=None):
+        return self.values.get(key, default)
+
+
 class DpsOverlayPayloadTests(unittest.TestCase):
     def _hidden_panel(self) -> DpsOverlay:
         panel = DpsOverlay.__new__(DpsOverlay)
@@ -255,6 +263,51 @@ class DpsOverlayPayloadTests(unittest.TestCase):
 
         panel._panel_notice_until = object()
         self.assertEqual(panel._panel_notice_text(), "")
+
+    def test_init_bad_position_setting_preserves_other_layout_settings(self) -> None:
+        settings = _FakeSettings({
+            "dps_ov_x": "bad-x",
+            "dps_ov_y": 321,
+            "dps_detail_w": 640,
+            "dps_detail_h": 500,
+            "dps_minimized": True,
+            "panel_themes": {},
+        })
+
+        panel = DpsOverlay(root=None, settings=settings)
+
+        self.assertEqual(panel._y, 321)
+        self.assertEqual(panel._detail_w, 640)
+        self.assertEqual(panel._detail_h, 500)
+        self.assertTrue(panel._minimized)
+
+    def test_bad_scroll_state_does_not_abort_rows_or_skill_scroll(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._current_tab = "damage"
+        panel._view_mode = "live"
+        panel._scroll_offset = "bad-offset"
+        panel._scroll_offset_report = "bad-report-offset"
+        panel._rows = {}
+        panel._act_snapshot = None
+        panel._visible = False
+        panel._win = None
+        panel._disp_total_damage = 0.0
+        panel._disp_total_heal = 0.0
+        row = _RowState(11)
+        row.disp_damage = 100.0
+        panel._rows[row.uid] = row
+
+        rows = panel._build_view_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(panel._current_scroll_offset(), 0)
+
+        panel._set_scroll_offset("bad-value")
+        self.assertEqual(panel._scroll_offset, 0)
+
+        panel._skill_max_scroll = object()
+        panel._skill_scroll_target = object()
+        panel._scroll_skills(1)
+        self.assertEqual(panel._skill_scroll_target, 0.0)
 
 
 if __name__ == "__main__":
