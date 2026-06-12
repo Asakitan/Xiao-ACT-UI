@@ -66,6 +66,26 @@ def main() -> None:
             "'<span class=\"cd-time\">' + timeStr + '</span>'",
             "Commander skill slot time must be escaped before rendering.",
         ),
+        (
+            "if (!_data || !_data.members || _data.members.length === 0) {",
+            "Commander members payload must be normalized before empty-state checks.",
+        ),
+        (
+            "for (var i = 0; i < _data.members.length; i++) {",
+            "Commander member rows must iterate normalized object items.",
+        ),
+        (
+            "if (m.is_self && m.skill_slots && m.skill_slots.length > 0) {",
+            "Commander skill slot payload must be normalized before rendering.",
+        ),
+        (
+            "for (var j = 0; j < m.skill_slots.length; j++) {",
+            "Commander skill slots must iterate normalized object items.",
+        ),
+        (
+            "if (_data && _data.members && _data.members.length > 0) {",
+            "Commander boss overview members payload must be normalized before branching.",
+        ),
     ]
     for snippet, message in forbidden:
         _check_absent(html, snippet, message)
@@ -116,7 +136,7 @@ def main() -> None:
             "Commander HP bar should render only when max HP is valid.",
         ),
         (
-            "var dungeonText = dungeonIdText(_data && _data.dungeon_id);",
+            "var dungeonText = dungeonIdText(data.dungeon_id);",
             "Commander boss tab should normalize dungeon id before branching.",
         ),
         (
@@ -134,6 +154,46 @@ def main() -> None:
         (
             "'<span class=\"cd-time\">' + esc(timeStr) + '</span>'",
             "Commander skill slot time should be escaped before rendering.",
+        ),
+        (
+            "function isObjectValue(value)",
+            "Commander renderer should expose object-shape detection.",
+        ),
+        (
+            "function objectValue(value)",
+            "Commander renderer should normalize object payloads.",
+        ),
+        (
+            "function objectItems(value)",
+            "Commander renderer should filter object-list payloads.",
+        ),
+        (
+            "var data = objectValue(_data);",
+            "Commander renderer should normalize root data before rendering.",
+        ),
+        (
+            "var members = objectItems(data.members);",
+            "Commander renderer should normalize member lists.",
+        ),
+        (
+            "if (!members.length) {",
+            "Commander empty-state checks should use normalized members.",
+        ),
+        (
+            "var m = objectValue(members[i]);",
+            "Commander member rows should guard each member object.",
+        ),
+        (
+            "var slots = objectItems(m.skill_slots);",
+            "Commander skill slots should normalize slot lists.",
+        ),
+        (
+            "if (m.is_self && slots.length > 0) {",
+            "Commander skill slot rendering should branch on normalized slots.",
+        ),
+        (
+            "var s = objectValue(slots[j]);",
+            "Commander skill slot rows should guard each slot object.",
         ),
     ]
     for snippet, message in required:

@@ -369,6 +369,18 @@ function esc(s) {
 
 function attr(s) { return esc(s); }
 
+function isObjectValue(value) {
+    return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function objectValue(value) {
+    return isObjectValue(value) ? value : {};
+}
+
+function objectItems(value) {
+    return Array.isArray(value) ? value.filter(isObjectValue) : [];
+}
+
 function idText(v) { return String(v == null ? '' : v); }
 
 function nonNegNum(value, fallback) {
@@ -430,7 +442,9 @@ function dungeonIdText(value) {
 
 // ═══ Render Functions ═══
 function renderTeamTab() {
-    if (!_data || !_data.members || _data.members.length === 0) {
+    var data = objectValue(_data);
+    var members = objectItems(data.members);
+    if (!members.length) {
         return '<div class="empty-state">' +
             '<div class="empty-icon">⚔</div>' +
             '<div class="empty-text">暂无队伍信息<br>No team data — join a party to see members</div>' +
@@ -439,8 +453,8 @@ function renderTeamTab() {
     var html = '<div class="team-section">';
     html += '<div class="team-header"><span>PARTY</span><span class="line"></span></div>';
 
-    for (var i = 0; i < _data.members.length; i++) {
-        var m = _data.members[i];
+    for (var i = 0; i < members.length; i++) {
+        var m = objectValue(members[i]);
         var uidText = idText(m.uid);
         var selfCls = m.is_self ? ' is-self' : '';
         var leaderCls = m.is_leader ? ' is-leader' : '';
@@ -472,10 +486,11 @@ function renderTeamTab() {
         }
 
         // Skill CD grid (self player only — server doesn't send other players' CDs)
-        if (m.is_self && m.skill_slots && m.skill_slots.length > 0) {
+        var slots = objectItems(m.skill_slots);
+        if (m.is_self && slots.length > 0) {
             html += '<div class="cd-grid">';
-            for (var j = 0; j < m.skill_slots.length; j++) {
-                var s = m.skill_slots[j];
+            for (var j = 0; j < slots.length; j++) {
+                var s = objectValue(slots[j]);
                 var slotCls = safeSlotState(s.state);
                 var fillH = (pct01(s.cooldown_pct) * 100).toFixed(1);
                 var timeStr = slotCls === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
@@ -496,10 +511,11 @@ function renderTeamTab() {
 }
 
 function renderBossTab() {
+    var data = objectValue(_data);
     // Boss raid info — placeholder for now, can be populated from boss raid profiles
     var html = '<div class="boss-section">';
     html += '<div class="team-header"><span>BOSS RAID</span><span class="line"></span></div>';
-    var dungeonText = dungeonIdText(_data && _data.dungeon_id);
+    var dungeonText = dungeonIdText(data.dungeon_id);
 
     if (!dungeonText) {
         html += '<div class="empty-state">' +
@@ -514,10 +530,11 @@ function renderBossTab() {
     }
 
     // Team overview (compact) in boss tab
-    if (_data && _data.members && _data.members.length > 0) {
+    var members = objectItems(data.members);
+    if (members.length > 0) {
         html += '<div class="team-header" style="margin-top:10px"><span>TEAM OVERVIEW</span><span class="line"></span></div>';
-        for (var i = 0; i < _data.members.length; i++) {
-            var m = _data.members[i];
+        for (var i = 0; i < members.length; i++) {
+            var m = objectValue(members[i]);
             var uidText = idText(m.uid);
             var selfCls = m.is_self ? ' is-self' : '';
             html += '<div class="member-card' + selfCls + '" style="padding:4px 8px">';
@@ -528,10 +545,11 @@ function renderBossTab() {
             }
             html += '</div>';
             // Compact CD display for self in boss tab
-            if (m.is_self && m.skill_slots && m.skill_slots.length > 0) {
+            var slots = objectItems(m.skill_slots);
+            if (m.is_self && slots.length > 0) {
                 html += '<div class="cd-grid">';
-                for (var j = 0; j < m.skill_slots.length; j++) {
-                    var s = m.skill_slots[j];
+                for (var j = 0; j < slots.length; j++) {
+                    var s = objectValue(slots[j]);
                     var slotCls = safeSlotState(s.state);
                     var fillH = (pct01(s.cooldown_pct) * 100).toFixed(1);
                     var timeStr = slotCls === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.29: Commander Web payload shape 防护修复.
+
+  1) `web/commander.html` 修复成员列表 payload 归一。
+     team 与 boss overview 现在只渲染对象成员条目,
+     避免字符串或异常 `members` payload 生成空 UID 假队友。
+
+  2) `web/commander.html` 修复技能槽列表 payload 归一。
+     self skill slots 现在只渲染对象槽位条目,
+     避免异常 `skill_slots` payload 生成假的 ready 技能格。
+
 ## v4.6.28: Web plugin layer 样式 class token 防护修复.
 
   1) `web/plugin_layer.js` 修复插件 text/kv/badge/button 样式 token 归一。
