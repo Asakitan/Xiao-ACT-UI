@@ -312,9 +312,16 @@
         const text = exported.text || JSON.stringify(exported, null, 2);
         var copied = false;
         try { await navigator.clipboard.writeText(text); copied = true; } catch (_) {}
-        document.getElementById('status').textContent = copied
-          ? 'Exported graph JSON (' + text.length + ' chars)'
-          : 'Export generated (' + text.length + ' chars), but clipboard copy failed';
+        var statusText;
+        if (exported && exported.ok === false) {
+          statusText = 'Export failed: ' + (exported.message || 'unknown error')
+            + (copied ? ' — fallback JSON copied' : ', clipboard copy failed');
+        } else {
+          statusText = copied
+            ? 'Exported graph JSON (' + text.length + ' chars)'
+            : 'Export generated (' + text.length + ' chars), but clipboard copy failed';
+        }
+        document.getElementById('status').textContent = statusText;
       },
       async close() {
         this.fadeOut();

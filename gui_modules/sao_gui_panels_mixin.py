@@ -57,6 +57,7 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import math
+import time
 from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
@@ -427,8 +428,12 @@ class SAOPlayerGUIPanelsMixin:
             if _sig != self._last_commander_push_sig:
                 self._last_commander_push_sig = _sig
                 self._commander_panel.update(data)
-        except Exception:
-            pass
+        except Exception as exc:
+            # 推送循环里持续失败 60s 只记一次, 面板空白时控制台能看到根因。
+            now = time.monotonic()
+            if now - getattr(self, '_commander_push_fail_at', 0.0) >= 60.0:
+                self._commander_push_fail_at = now
+                print(f'[Commander] data push failed: {exc}')
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""

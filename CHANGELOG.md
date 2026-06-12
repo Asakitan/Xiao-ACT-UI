@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.97: Graph 导出 ok:false 假成功修正 + Commander 推送失败可诊断.
+
+  1) Graph/Timeseries 导出(Tk `gui_modules/sao_gui_graph_timeseries.py` +
+    Web `web/act_graph_timeseries.html` 双端 1:1)在后端返回 ok:false 时
+    显示 `Export failed: 原因 — fallback JSON copied`, 不再统一报
+    「已复制」假成功; 成功路径措辞不变。
+
+  2) `gui_modules/sao_gui_panels_mixin.py` Commander 数据推送异常不再
+    `except: pass` 全吞, 60s 去重打印根因, 面板空白时可从控制台定位。
+
 ## v4.6.96: 插件卡片按钮聚合 + 菜单分离面板隐藏时停渲.
 
   1) 插件管理卡片(Web `web/plugin_manager.html` + Tk

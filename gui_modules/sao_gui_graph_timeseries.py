@@ -186,10 +186,15 @@ class GraphTimeseriesPanel:
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "text": json.dumps(self._last_status, ensure_ascii=False, indent=2)}
         text = str(result.get('text') or json.dumps(self._last_status, ensure_ascii=False, indent=2))
+        export_failed = bool(result.get('ok') is False)
         try:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
-            self._status_var.set('Graph JSON copied to clipboard')
+            if export_failed:
+                self._status_var.set(
+                    f"Export failed: {result.get('message') or 'unknown error'} — fallback JSON copied")
+            else:
+                self._status_var.set('Graph JSON copied to clipboard')
         except Exception as exc:
             self._status_var.set(str(exc))
             result = dict(result)
