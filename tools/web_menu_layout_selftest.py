@@ -162,6 +162,28 @@ def main() -> int:
     for snippet in menu_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe menu runtime value snippet: " + snippet)
+
+    session_players_raw_patterns = [
+        "var name = row.name || '--';",
+        "_escHtml(row.name || '')",
+        "_escHtml(row.uid || '--')",
+        "_escHtml(row.fight_power || '--')",
+    ]
+    for pattern in session_players_raw_patterns:
+        if pattern in html:
+            raise AssertionError("Session Players rows must guard malformed entries and preserve zero text: " + pattern)
+    session_players_safe_required = [
+        "row = (row && typeof row === 'object') ? row : {};",
+        "function _spText(value, fallback)",
+        "var name = _spText(row.name, '--');",
+        "_escHtml(_spText(row.name, ''))",
+        "_escHtml(_spText(row.uid, '--'))",
+        "_escHtml(_spText(row.fight_power, '--'))",
+    ]
+    for snippet in session_players_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe Session Players row snippet: " + snippet)
+
     boss_raid_raw_patterns = [
         "'<div class=\"boss-raid-card-meta\">HP: ' + (p.boss_total_hp || '?')",
         "' · HP: ' + (item.boss_total_hp || '?')",
@@ -322,6 +344,37 @@ def main() -> int:
     for snippet in linkage_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe Boss/AutoKey linkage mapping snippet: " + snippet)
+
+    leaderboard_payload_raw_patterns = [
+        "function showLeaderboard(dataJson) {\n    var data = (typeof dataJson === 'string') ? JSON.parse(dataJson) : dataJson;",
+        "_lbEntries = (data && data.entries) ? data.entries.slice() : [];",
+        "_lbSelfDevice = data.self_device || '';",
+        "_lbSelfDeviceName = data.self_player_id || data.self_device_name || '';",
+        "var shown = _lbSelfDeviceName || '--';",
+        "var primaryName = _escHtml(e.player_id || e.username || e.device_name || 'Player');",
+        "_lbSelfDeviceName = _lbSelfDeviceName || e.player_id || e.username || e.device_name || '';",
+        "document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + (_lbSelfDeviceName || '--');",
+    ]
+    for pattern in leaderboard_payload_raw_patterns:
+        if pattern in html:
+            raise AssertionError("Leaderboard payload/text rendering must guard malformed payloads and preserve zero text: " + pattern)
+    leaderboard_payload_safe_required = [
+        "function _lbPayload(dataJson)",
+        "try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }",
+        "function _lbText(value, fallback)",
+        "function _lbFirstText(values, fallback)",
+        "var shown = _lbText(_lbSelfDeviceName, '--');",
+        "var primaryName = _escHtml(_lbFirstText([e.player_id, e.username, e.device_name], 'Player'));",
+        "var data = _lbPayload(dataJson);",
+        "_lbEntries = Array.isArray(data.entries) ? data.entries.map(function(e) { return (e && typeof e === 'object') ? e : {}; }) : [];",
+        "_lbSelfDevice = _lbText(data.self_device, '');",
+        "_lbSelfDeviceName = _lbFirstText([data.self_player_id, data.self_device_name], '');",
+        "_lbSelfDeviceName = _lbFirstText([_lbSelfDeviceName, e.player_id, e.username, e.device_name], '');",
+        "document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + _lbText(_lbSelfDeviceName, '--');",
+    ]
+    for snippet in leaderboard_payload_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe Leaderboard payload/text snippet: " + snippet)
 
     print(
         f"OK web menu layout: {item_count} items, "

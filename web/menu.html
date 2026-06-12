@@ -4227,16 +4227,23 @@ function _syncSessionPlayersAnchor(withChild) {
     sessionPlayersEl.classList.toggle('with-child', !!withChild);
 }
 
+function _spText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
 function _makeSessionPlayerRow(row, idx) {
+    row = (row && typeof row === 'object') ? row : {};
     var el = document.createElement('div');
     el.className = 'sp-row' + (row.is_self ? ' self' : '');
     el.style.setProperty('--sp-delay', (Math.max(0, idx || 0) % 12) * 18 + 'ms');
-    var name = row.name || '--';
+    var name = _spText(row.name, '--');
     if (row.is_self && name !== '--') name = '* ' + name;
     el.innerHTML =
-        '<div class="sp-name" title="' + _escHtml(row.name || '') + '">' + _escHtml(name) + '</div>' +
-        '<div class="sp-uid">' + _escHtml(row.uid || '--') + '</div>' +
-        '<div class="sp-power">' + _escHtml(row.fight_power || '--') + '</div>';
+        '<div class="sp-name" title="' + _escHtml(_spText(row.name, '')) + '">' + _escHtml(name) + '</div>' +
+        '<div class="sp-uid">' + _escHtml(_spText(row.uid, '--')) + '</div>' +
+        '<div class="sp-power">' + _escHtml(_spText(row.fight_power, '--')) + '</div>';
     return el;
 }
 
@@ -6453,6 +6460,27 @@ var _lbSelfDeviceName = '';
 var _lbSelfRank = null;
 var _lbFocusRank = null;
 
+function _lbPayload(dataJson) {
+    if (typeof dataJson === 'string') {
+        try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }
+    }
+    return (dataJson && typeof dataJson === 'object') ? dataJson : {};
+}
+
+function _lbText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
+function _lbFirstText(values, fallback) {
+    for (var i = 0; i < values.length; i++) {
+        var text = _lbText(values[i], '');
+        if (text) return text;
+    }
+    return fallback;
+}
+
 function _updateLbSize(rowCount) {
     var box = document.querySelector('#lb-dialog .lb-box');
     var rows = Math.max(1, Math.min(_lbPerPage, rowCount || 1));
@@ -6529,7 +6557,7 @@ function _lbApplyFilter(resetPage) {
 
 function _lbRender() {
     var list = document.getElementById('lb-list');
-    var shown = _lbSelfDeviceName || '--';
+    var shown = _lbText(_lbSelfDeviceName, '--');
     document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + shown;
     document.getElementById('lb-self-rank').textContent = 'SELF RANK: ' + (_lbSelfRank ? _lbRankLabel({ rank: _lbSelfRank }) : '--');
 
@@ -6550,10 +6578,12 @@ function _lbRender() {
         row.className = 'lb-row';
         if (e.is_self || (_lbSelfDevice && e.device_id === _lbSelfDevice)) row.className += ' lb-self';
         if (_lbFocusRank && _lbPositiveInt(e.rank, 999999) === _lbFocusRank) row.className += ' lb-jump';
-        var primaryName = _escHtml(e.player_id || e.username || e.device_name || 'Player');
+        var primaryName = _escHtml(_lbFirstText([e.player_id, e.username, e.device_name], 'Player'));
+        var usernameText = _lbText(e.username, '');
+        var playerDeviceText = _lbFirstText([e.player_id, e.device_name], '');
         var metaBits = [];
-        if (e.username && e.username !== (e.player_id || e.device_name)) metaBits.push('@' + _escHtml(e.username));
-        if (e.profession) metaBits.push(_escHtml(e.profession));
+        if (usernameText && usernameText !== playerDeviceText) metaBits.push('@' + _escHtml(usernameText));
+        if (_lbText(e.profession, '')) metaBits.push(_escHtml(_lbText(e.profession, '')));
         row.innerHTML =
             '<span class="lb-rank">' + _escHtml(_lbRankLabel(e)) + '</span>' +
             '<span class="lb-name">' + primaryName + (metaBits.length ? '<span class="lb-sub">' + metaBits.join(' · ') + '</span>' : '') + '</span>' +
@@ -6568,18 +6598,18 @@ function _lbRender() {
 }
 
 function showLeaderboard(dataJson) {
-    var data = (typeof dataJson === 'string') ? JSON.parse(dataJson) : dataJson;
+    var data = _lbPayload(dataJson);
     _lbCurrentSort = data.sort || _lbCurrentSort;
-    _lbEntries = (data && data.entries) ? data.entries.slice() : [];
-    _lbSelfDevice = data.self_device || '';
-    _lbSelfDeviceName = data.self_player_id || data.self_device_name || '';
+    _lbEntries = Array.isArray(data.entries) ? data.entries.map(function(e) { return (e && typeof e === 'object') ? e : {}; }) : [];
+    _lbSelfDevice = _lbText(data.self_device, '');
+    _lbSelfDeviceName = _lbFirstText([data.self_player_id, data.self_device_name], '');
     _lbSelfRank = null;
     _lbFocusRank = null;
     _lbEntries.forEach(function(e, idx) {
         if (e.rank === undefined) e.rank = idx + 1;
         if (e.is_self || (_lbSelfDevice && e.device_id === _lbSelfDevice)) {
             _lbSelfRank = e.rank;
-            _lbSelfDeviceName = _lbSelfDeviceName || e.player_id || e.username || e.device_name || '';
+            _lbSelfDeviceName = _lbFirstText([_lbSelfDeviceName, e.player_id, e.username, e.device_name], '');
         }
     });
     document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
@@ -6588,7 +6618,7 @@ function showLeaderboard(dataJson) {
 
     if (_lbEntries.length === 0) {
         document.getElementById('lb-list').innerHTML = '<div class="lb-empty">暂无排行数据<br><span style="font-size:11px;color:#bbb;">完成演奏后数据将自动上传</span></div>';
-        document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + (_lbSelfDeviceName || '--');
+        document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + _lbText(_lbSelfDeviceName, '--');
         document.getElementById('lb-self-rank').textContent = 'SELF RANK: --';
         document.getElementById('lb-page').textContent = '0 / 0';
         _updateLbSize(1);

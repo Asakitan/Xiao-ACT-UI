@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.41: Web menu Session/Leaderboard payload 渲染修复.
+
+  1) `web/menu.html` 修复 Session Players 行渲染。
+     玩家行现在会兜底 malformed/null row, 并保留 name、uid、fight_power 的合法 `0`,
+     避免异常 players payload 中断批量渲染或把有效文本显示成占位。
+
+  2) `web/menu.html` 修复 Leaderboard payload 与身份文本渲染。
+     leaderboard JSON/entries 现在会做 payload shape 防护,
+     player id、device name 与 self id 也会保留合法 `0`,
+     避免异常 payload 崩溃或隐藏数值型玩家标识。
+
 ## v4.6.40: Web menu Boss/AutoKey linkage 映射渲染修复.
 
   1) `web/menu.html` 修复 Boss ↔ AutoKey Linkage mappings payload shape。
