@@ -136,6 +136,7 @@ def main() -> int:
         "slots.push(parseInt(el.getAttribute('data-slot')));",
         "var slot = parseInt(el.getAttribute('data-slot'));",
         "cfg.watched_slots.indexOf(slot) >= 0",
+        "if (fadeEl) fadeEl.value = cfg.dps_fade_timeout_s;",
     ]
     for pattern in menu_raw_patterns:
         if pattern in html:
@@ -160,6 +161,8 @@ def main() -> int:
         "cfg.watched_slots.forEach(function(slotValue) {",
         "if (slot != null) restoredSlots[slot] = true;",
         "if (slot != null && restoredSlots[slot]) {",
+        "var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);",
+        "if (fadeEl) fadeEl.value = restoredFadeTimeout;",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
@@ -923,6 +926,22 @@ def main() -> int:
             raise AssertionError("missing safe data source settings snippet: " + snippet)
 
     webview_py = SAO_WEBVIEW.read_text(encoding="utf-8")
+    dps_settings_raw_patterns = [
+        "val = max(0, int(seconds or 0))",
+    ]
+    for pattern in dps_settings_raw_patterns:
+        if pattern in webview_py:
+            raise AssertionError("DPS fade timeout bridge values must recover bad input and clamp to 0..120: " + pattern)
+    dps_settings_safe_required = [
+        "def _dps_fade_timeout_value(seconds: Any) -> int:",
+        "if not math.isfinite(value):",
+        "return max(0, min(120, int(value)))",
+        "val = _dps_fade_timeout_value(seconds)",
+    ]
+    for snippet in dps_settings_safe_required:
+        if snippet not in webview_py:
+            raise AssertionError("missing safe DPS fade timeout bridge snippet: " + snippet)
+
     source_bridge_raw_patterns = [
         "def set_component_source(self, component, mode):\n        \"\"\"Legacy no-op: per-component source switching is no longer exposed.\"\"\"",
         "'mem_data_source': str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').lower(),\n            }\n            try:\n                cfg['panel_themes']",
@@ -951,6 +970,7 @@ def main() -> int:
     hud_bridge_raw_patterns = [
         "private static JsonObject HandleComponentSource(JsonObject? payload)",
         "[\"legacy_noop\"] = true,",
+        "var seconds = Math.Max(0, rawSeconds);",
     ]
     for pattern in hud_bridge_raw_patterns:
         if pattern in hud_bridge:
@@ -963,6 +983,7 @@ def main() -> int:
         "_settings.Set(SettingsKeys.DataSourceMap, SourceMapToJson(sourceMap));",
         "_settings.Set(SettingsKeys.DataSource, \"mixed\");",
         "[\"data_source_map\"] = SourceMapToJson(sourceMap),",
+        "var seconds = Math.Clamp(rawSeconds, 0, 120);",
         "private static string NormalizeSourceComponent(string component)",
         "private static string NormalizeComponentSourceMode(string component, string mode)",
     ]

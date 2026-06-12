@@ -123,7 +123,7 @@ public sealed class HudSettingsBridge : IDisposable
         if (!TryGetInt(node, out var rawSeconds))
             return new JsonObject { ["ok"] = false, ["error"] = "bad_payload" };
 
-        var seconds = Math.Max(0, rawSeconds);
+        var seconds = Math.Clamp(rawSeconds, 0, 120);
         _settings.Set(SettingsKeys.DpsFadeTimeoutSeconds, seconds);
         _settings.Save();
         return new JsonObject

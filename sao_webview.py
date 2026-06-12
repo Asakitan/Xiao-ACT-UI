@@ -200,6 +200,16 @@ def _get_icon_path() -> Optional[str]:
     return icon_path if os.path.exists(icon_path) else None
 
 
+def _dps_fade_timeout_value(seconds: Any) -> int:
+    try:
+        value = float(seconds)
+        if not math.isfinite(value):
+            value = 0.0
+    except Exception:
+        value = 0.0
+    return max(0, min(120, int(value)))
+
+
 def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
@@ -1997,7 +2007,7 @@ class SAOWebAPI:
         return json.dumps({'ok': True, 'enabled': on}, ensure_ascii=False)
 
     def set_dps_fade_timeout(self, seconds):
-        val = max(0, int(seconds or 0))
+        val = _dps_fade_timeout_value(seconds)
         self._g._set_setting('dps_fade_timeout_s', val)
         self._g._sync_menu_settings()
         return json.dumps({'ok': True, 'timeout': val}, ensure_ascii=False)
@@ -2217,7 +2227,7 @@ class PanelAPI:
 
     def set_dps_fade_timeout(self, seconds):
         """Set DPS fade-out idle timeout in seconds (0 = never fade)."""
-        val = max(0, int(seconds or 0))
+        val = _dps_fade_timeout_value(seconds)
         self._g._set_setting('dps_fade_timeout_s', val)
         self._g._sync_menu_settings()
 

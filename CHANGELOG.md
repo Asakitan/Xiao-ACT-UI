@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.59: DPS fade timeout fallback 修复.
+
+  1) `web/menu.html` 修复 DPS fade timeout 设置恢复。
+     `restoreMenuSettings()` 现在将 `dps_fade_timeout_s` 夹到 0..120 再回填,
+     避免坏配置或越界值让输入框显示异常并误导用户。
+
+  2) Python/C# bridge 修复 DPS fade timeout 参数归一。
+     `set_dps_fade_timeout()` 现在对坏输入恢复为 0, 并统一夹到 0..120,
+     与 WebView2 shim 和菜单输入范围保持一致。
+
 ## v4.6.58: Web menu data source 参数传递修复.
 
   1) `web/menu.html` 修复 data source 设置归一。

@@ -115,8 +115,14 @@ public class Session197HudSettingsBridgeTests : IDisposable
         }));
 
         Assert.Equal(0, reply!.Payload!["seconds"]!.GetValue<int>());
+        reply = router.Dispatch(Cmd(BridgeCommands.SetDpsFadeTimeout, new JsonObject
+        {
+            ["seconds"] = 999,
+        }));
+
+        Assert.Equal(120, reply!.Payload!["seconds"]!.GetValue<int>());
         var reloaded = new SettingsManager(_path);
-        Assert.Equal(0, reloaded.GetInt(SettingsKeys.DpsFadeTimeoutSeconds, defaultValue: 5));
+        Assert.Equal(120, reloaded.GetInt(SettingsKeys.DpsFadeTimeoutSeconds, defaultValue: 5));
     }
 
     [Fact]

@@ -29,6 +29,13 @@ class _Owner:
     def _reconfigure_data_engines(self, restart_packet: bool = True) -> None:
         self.reconfigure_calls.append(restart_packet)
 
+    def _set_setting(self, key: str, value) -> None:
+        self._cfg_settings_ref.set(key, value)
+        self._cfg_settings_ref.save()
+
+    def _get_setting(self, key: str, default=None):
+        return self._cfg_settings_ref.get(key, default)
+
 
 def main() -> int:
     settings = SettingsManager(str(ROOT / "temp" / "webview_component_source_selftest.json"))
@@ -55,6 +62,13 @@ def main() -> int:
     bad = json.loads(api.set_component_source("boss", "packet"))
     if bad.get("ok") is not False or bad.get("error") != "bad_component":
         raise AssertionError(f"invalid component should be rejected: {bad}")
+
+    timeout = json.loads(api.set_dps_fade_timeout("999.7"))
+    if timeout.get("timeout") != 120 or settings.get("dps_fade_timeout_s") != 120:
+        raise AssertionError(f"DPS fade timeout should clamp high values: {timeout}")
+    timeout = json.loads(api.set_dps_fade_timeout("not-a-number"))
+    if timeout.get("timeout") != 0 or settings.get("dps_fade_timeout_s") != 0:
+        raise AssertionError(f"DPS fade timeout should recover bad values: {timeout}")
 
     try:
         Path(settings._path).unlink(missing_ok=True)

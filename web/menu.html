@@ -6326,7 +6326,8 @@ function restoreMenuSettings(cfg) {
     /* DPS fade timeout */
     if (cfg.dps_fade_timeout_s !== undefined) {
         var fadeEl = document.getElementById('dps-fade-timeout');
-        if (fadeEl) fadeEl.value = cfg.dps_fade_timeout_s;
+        var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);
+        if (fadeEl) fadeEl.value = restoredFadeTimeout;
     }
     if (cfg.dps_last_report_available !== undefined) {
         _setDpsLastReportAvailable(!!cfg.dps_last_report_available);
