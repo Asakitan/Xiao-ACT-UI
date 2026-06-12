@@ -6414,13 +6414,19 @@ function _saoShowUpdaterPanel(show) {
     ui.root.setAttribute('aria-hidden', show ? 'false' : 'true');
 }
 
+function _saoUpdaterBadgeClass(variant) {
+    var key = String(variant == null ? '' : variant);
+    var allowed = { force: true, active: true, ready: true };
+    return 'saoUpdaterBadge' + (allowed[key] ? ' ' + key : '');
+}
+
 function _saoSetUpdaterBadge(ui, text, variant) {
     ui.badge.textContent = text;
-    ui.badge.className = 'saoUpdaterBadge' + (variant ? ' ' + variant : '');
+    ui.badge.className = _saoUpdaterBadgeClass(variant);
 }
 
 function _saoSetUpdaterNotes(ui, text, fallback) {
-    var content = String(text || fallback || '').trim();
+    var content = _profileText(text, _profileText(fallback, '')).trim();
     ui.notes.textContent = content;
     ui.notes.style.display = content ? '' : 'none';
 }
@@ -6463,7 +6469,7 @@ function updateUpdaterState(data) {
     }
     if (s.state === 'error') {
         _saoShowUpdaterPanel(false);
-        showToast('更新检查失败: ' + (s.error || ''), 3500);
+        showToast('更新检查失败: ' + _profileText(s.error, ''), 3500);
         return;
     }
 
@@ -6471,7 +6477,7 @@ function updateUpdaterState(data) {
     var sizeBytes = _clampNum(s.size, 0, 0, Number.MAX_SAFE_INTEGER);
     var sizeMb = sizeBytes / 1024 / 1024;
     var sizeStr = sizeMb > 0 ? sizeMb.toFixed(1) + ' MB' : '等待服务器提供包大小';
-    var promptKey = (s.state || '') + ':' + (s.latest_version || '');
+    var promptKey = _profileText(s.state, '') + ':' + _profileText(s.latest_version, '');
     if (promptKey && __SAO_UPDATER_PROMPTED !== promptKey && (s.state === 'available' || s.state === 'ready')) {
         __SAO_UPDATER_PROMPTED = promptKey;
         if (typeof playSound === 'function') {
@@ -6485,7 +6491,7 @@ function updateUpdaterState(data) {
             return;
         }
         ui.headline.textContent = force ? '检测到必需更新' : '发现新版本';
-        ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;
+        ui.version.textContent = 'v' + _profileText(s.latest_version, '?') + ' · ' + sizeStr;
         _saoSetUpdaterBadge(ui, force ? 'REQUIRED' : 'AVAILABLE', force ? 'force' : 'active');
         _saoSetUpdaterNotes(ui, s.notes, force ? '当前版本低于服务端最低要求，请先完成更新。' : '可立即下载更新包，重启应用后自动切换到新版本。');
         _saoSetUpdaterProgress(ui, 0, false);
@@ -6498,7 +6504,7 @@ function updateUpdaterState(data) {
     } else if (s.state === 'downloading') {
         var pct = _clampInt(_clampNum(s.progress, 0, 0, 1) * 100, 0, 0, 100);
         ui.headline.textContent = '正在下载更新';
-        ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;
+        ui.version.textContent = 'v' + _profileText(s.latest_version, '?') + ' · ' + sizeStr;
         _saoSetUpdaterBadge(ui, 'DOWNLOADING', 'active');
         _saoSetUpdaterNotes(ui, s.notes, '更新包已开始下载，完成后可直接重启应用。');
         _saoSetUpdaterProgress(ui, pct, true);
@@ -6510,7 +6516,7 @@ function updateUpdaterState(data) {
         _saoShowUpdaterPanel(true);
     } else if (s.state === 'ready') {
         ui.headline.textContent = '更新包已下载完成';
-        ui.version.textContent = 'v' + (s.latest_version || '?') + ' 已就绪';
+        ui.version.textContent = 'v' + _profileText(s.latest_version, '?') + ' 已就绪';
         _saoSetUpdaterBadge(ui, 'READY', 'ready');
         _saoSetUpdaterNotes(ui, s.notes, '重启应用后将自动应用本次更新。');
         _saoSetUpdaterProgress(ui, 100, true);

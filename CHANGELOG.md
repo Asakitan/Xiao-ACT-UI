@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.50: Web menu updater class/text 防护修复.
+
+  1) `web/menu.html` 修复 updater badge class token 归一。
+     updater badge variant 现在通过 allowlist 转成 class token,
+     避免异常 variant 注入额外 class 或破坏 badge 样式。
+
+  2) `web/menu.html` 修复 updater 文本 fallback。
+     notes、error、prompt key 与 latest_version 显示现在保留合法 `0`,
+     避免更新提示把有效文本显示成空值或占位符。
+
 ## v4.6.49: Web menu editor text fallback 修复.
 
   1) `web/menu.html` 修复 AutoKey editor profile/action 文本渲染。

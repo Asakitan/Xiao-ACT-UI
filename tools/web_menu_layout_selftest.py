@@ -613,6 +613,32 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid editor/runtime text snippet: " + snippet)
 
+    updater_raw_patterns = [
+        "ui.badge.className = 'saoUpdaterBadge' + (variant ? ' ' + variant : '');",
+        "var content = String(text || fallback || '').trim();",
+        "showToast('更新检查失败: ' + (s.error || ''), 3500);",
+        "var promptKey = (s.state || '') + ':' + (s.latest_version || '');",
+        "ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;",
+        "ui.version.textContent = 'v' + (s.latest_version || '?') + ' 已就绪';",
+    ]
+    for pattern in updater_raw_patterns:
+        if pattern in html:
+            raise AssertionError("Updater badge/text rendering must normalize class tokens and preserve zero text: " + pattern)
+    updater_safe_required = [
+        "function _saoUpdaterBadgeClass(variant)",
+        "var allowed = { force: true, active: true, ready: true };",
+        "return 'saoUpdaterBadge' + (allowed[key] ? ' ' + key : '');",
+        "ui.badge.className = _saoUpdaterBadgeClass(variant);",
+        "var content = _profileText(text, _profileText(fallback, '')).trim();",
+        "showToast('更新检查失败: ' + _profileText(s.error, ''), 3500);",
+        "var promptKey = _profileText(s.state, '') + ':' + _profileText(s.latest_version, '');",
+        "ui.version.textContent = 'v' + _profileText(s.latest_version, '?') + ' · ' + sizeStr;",
+        "ui.version.textContent = 'v' + _profileText(s.latest_version, '?') + ' 已就绪';",
+    ]
+    for snippet in updater_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe Updater badge/text snippet: " + snippet)
+
     menu_response_raw_patterns = [
         "window.pywebview.api.show_last_dps_report().then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "api.get_linkage_state().then(function(raw) {\n        var resp = typeof raw === 'string' ? JSON.parse(raw) : raw;",
