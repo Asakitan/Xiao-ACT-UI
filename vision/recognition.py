@@ -1021,7 +1021,12 @@ class RecognitionEngine:
                         else:
                             if not self._sta_offline:
                                 self._sta_offline = True
-                                print("[Vision] STA bar not detected — OFFLINE")
+                                _rh, _rw = int(st_img.shape[0]), int(st_img.shape[1])
+                                _hint = ''
+                                if _rw < 150 or _rh < 8:
+                                    _hint = (f' (ROI {_rw}x{_rh} 偏小 — 检查游戏窗口'
+                                             f'是否 16:9 且未被遮挡/裁切)')
+                                print(f"[Vision] STA bar not detected — OFFLINE{_hint}")
                             updates["stamina_offline"] = True
                     elif self._sta_offline:
                         # Currently offline — require sustained good

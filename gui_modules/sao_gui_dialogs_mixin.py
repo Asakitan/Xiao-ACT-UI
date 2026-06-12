@@ -149,8 +149,8 @@ class SAOPlayerGUIDialogsMixin:
                 menu.tk_popup(x_root, max(0, y_root - 90))
             finally:
                 menu.grab_release()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f'[SAO] HP overlay context menu failed: {exc}')
 
     def _show_welcome_then_menu(self):
         """首次启动: 显示欢迎对话框, 完成后再打开菜单"""

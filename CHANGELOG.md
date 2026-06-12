@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.100: STA 离线诊断提示 + HP 面板右键菜单失败日志.
+
+  1) `vision/recognition.py` STA 识别转 OFFLINE 时, 若 ROI 尺寸明显偏小
+    (宽<150 或 高<8 像素)在日志附「检查游戏窗口是否 16:9 且未被遮挡/裁切」
+    提示 — 非 16:9/裁切窗口导致识别失准时用户有排查线索。
+
+  2) `gui_modules/sao_gui_dialogs_mixin.py` HP 面板右键菜单构建/弹出失败
+    不再静默吞掉, 控制台打印原因(菜单本身失败无法用 UI 反馈)。
+
 ## v4.6.99: 更新下载进度兜底与残损更新包防误报.
 
   1) `updater/sao_updater.py` 下载进度在服务器不给 Content-Length(chunked)
