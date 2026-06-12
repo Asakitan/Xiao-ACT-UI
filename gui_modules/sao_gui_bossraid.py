@@ -382,6 +382,7 @@ class _BossReactionsEditorMixin:
 
     def _save_reaction_row(self, trig, skill_id, mid, key_var, delay_var, cd_var, en_var) -> None:
         if not self._save_reaction:
+            self._mech_toast('保存接口不可用', error=True)
             return
 
         def _i(s, d=0):
@@ -403,8 +404,8 @@ class _BossReactionsEditorMixin:
         }
         try:
             self._save_reaction(mapping)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._mech_toast(f'反应保存失败: {exc}', error=True)
         self._rx_rerender()
 
 
@@ -577,7 +578,8 @@ class _MechanicsEditorMixin:
             except Exception:
                 pass
         try:
-            host = self._mx_container.winfo_toplevel()
+            anchor = getattr(self, '_mx_container', None) or getattr(self, '_rx_container', None)
+            host = anchor.winfo_toplevel()
             tw = tk.Toplevel(host)
             tw.overrideredirect(True)
             tw.attributes('-topmost', True)

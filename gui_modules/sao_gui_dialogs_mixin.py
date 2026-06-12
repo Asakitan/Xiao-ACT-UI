@@ -310,8 +310,9 @@ class SAOPlayerGUIDialogsMixin:
                         dlg_win.bind('<Destroy>', _clear_ref, add='+')
                     except Exception:
                         pass
-            except Exception:
+            except Exception as exc:
                 self._profile_dialog_ref = None
                 self._profile_dialog_pending = False
+                self._show_entity_alert('资料编辑', f'打开失败: {exc}', display_time=4.0)
 
         self.root.after(600, _open_profile_dialog)

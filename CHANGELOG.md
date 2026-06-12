@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.93: Boss 反应保存与资料编辑打开失败反馈.
+
+  1) `gui_modules/sao_gui_bossraid.py` 反应行「保存」失败或保存接口缺失
+    时 `_mech_toast` 提示, 不再静默假成功; `_mech_toast` 锚点支持反应
+    容器(_rx_container)回退, 反应 tab 上也能显示。
+
+  2) `gui_modules/sao_gui_dialogs_mixin.py` 「修改角色资料」对话框打开
+    失败时提示「资料编辑: 打开失败」, 不再点击后无任何反应。
+
 ## v4.6.92: Tk 配置编辑器导出失败反馈.
 
   1) `gui_modules/sao_gui_profile_editors.py` AutoKey 编辑器「导出」失败
