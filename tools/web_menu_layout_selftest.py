@@ -296,6 +296,33 @@ def main() -> int:
         if snippet not in html:
             raise AssertionError("missing safe AutoKey numeric form snippet: " + snippet)
 
+    linkage_raw_patterns = [
+        "_linkageMappings = s.mappings || [];",
+        "if (_linkageMappings.length === 0) {",
+        "for (var i = 0; i < _linkageMappings.length; i++) {",
+        "var m = _linkageMappings[i];",
+        "_escAttr(m.trigger_match || '')",
+        "_escAttr(m.action_key || '')",
+        "_escAttr(m.action_label || '')",
+    ]
+    for pattern in linkage_raw_patterns:
+        if pattern in html:
+            raise AssertionError("Boss/AutoKey linkage mapping values must validate payload shape and preserve zero text: " + pattern)
+    linkage_safe_required = [
+        "_linkageMappings = Array.isArray(s.mappings) ? s.mappings : [];",
+        "var mappings = Array.isArray(_linkageMappings) ? _linkageMappings : [];",
+        "_linkageMappings = mappings;",
+        "if (mappings.length === 0) {",
+        "for (var i = 0; i < mappings.length; i++) {",
+        "var m = mappings[i] || {};",
+        "_escAttr(_akTextValue(m.trigger_match))",
+        "_escAttr(_akTextValue(m.action_key))",
+        "_escAttr(_akTextValue(m.action_label))",
+    ]
+    for snippet in linkage_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe Boss/AutoKey linkage mapping snippet: " + snippet)
+
     print(
         f"OK web menu layout: {item_count} items, "
         f"item_box={item_box_height}px, frame={frame_height}px"

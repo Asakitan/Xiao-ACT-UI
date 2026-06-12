@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.40: Web menu Boss/AutoKey linkage 映射渲染修复.
+
+  1) `web/menu.html` 修复 Boss ↔ AutoKey Linkage mappings payload shape。
+     从 bridge 回来的 `mappings` 现在必须是数组才会渲染,
+     避免异常 payload 被当作字符串/对象迭代后生成错误映射行。
+
+  2) `web/menu.html` 修复 Linkage 映射文本字段 hydration。
+     trigger_match、action_key 与 action_label 现在保留合法 `0`,
+     避免 `value || ''` 把用户配置的数值型匹配/标签显示为空。
+
 ## v4.6.39: Web menu AutoKey 数值表单默认值修复.
 
   1) `web/menu.html` 修复 AutoKey editor summary 值渲染。

@@ -7395,7 +7395,7 @@ function _initLinkageUI() {
         document.getElementById('linkage-enabled').checked = s.enabled;
         document.getElementById('linkage-debug').checked = s.debug_log;
         document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);
-        _linkageMappings = s.mappings || [];
+        _linkageMappings = Array.isArray(s.mappings) ? s.mappings : [];
         _renderLinkageMappings();
     });
 }
@@ -7403,7 +7403,9 @@ function _initLinkageUI() {
 function _renderLinkageMappings() {
     var container = document.getElementById('linkage-mappings');
     if (!container) return;
-    if (_linkageMappings.length === 0) {
+    var mappings = Array.isArray(_linkageMappings) ? _linkageMappings : [];
+    _linkageMappings = mappings;
+    if (mappings.length === 0) {
         container.innerHTML = '<div style="font-size:10px;color:rgb(160,158,160);">No mappings. Click + to add.</div>';
         return;
     }
@@ -7414,8 +7416,8 @@ function _renderLinkageMappings() {
         enrage: 'Enrage',
     };
     var html = '';
-    for (var i = 0; i < _linkageMappings.length; i++) {
-        var m = _linkageMappings[i];
+    for (var i = 0; i < mappings.length; i++) {
+        var m = mappings[i] || {};
         html += '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:4px 6px;background:rgba(245,243,240,0.80);border:1px solid rgba(201,198,198,0.45);border-radius:6px;">';
         html += '<select data-idx="' + i + '" data-field="trigger_type" onchange="_updateMapping(this)" '
              + 'style="font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);">';
@@ -7423,14 +7425,14 @@ function _renderLinkageMappings() {
             html += '<option value="' + t + '"' + (m.trigger_type === t ? ' selected' : '') + '>' + (triggerLabels[t] || t) + '</option>';
         });
         html += '</select>';
-        html += '<input type="text" data-idx="' + i + '" data-field="trigger_match" value="' + _escAttr(m.trigger_match || '') + '" '
+        html += '<input type="text" data-idx="' + i + '" data-field="trigger_match" value="' + _escAttr(_akTextValue(m.trigger_match)) + '" '
              + 'placeholder="match..." onchange="_updateMapping(this)" '
              + 'style="width:60px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
         html += '<span style="font-size:9px;color:rgb(160,158,160);">→</span>';
-        html += '<input type="text" data-idx="' + i + '" data-field="action_key" value="' + _escAttr(m.action_key || '') + '" '
+        html += '<input type="text" data-idx="' + i + '" data-field="action_key" value="' + _escAttr(_akTextValue(m.action_key)) + '" '
              + 'placeholder="Key" onchange="_updateMapping(this)" '
              + 'style="width:36px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);text-transform:uppercase;" />';
-        html += '<input type="text" data-idx="' + i + '" data-field="action_label" value="' + _escAttr(m.action_label || '') + '" '
+        html += '<input type="text" data-idx="' + i + '" data-field="action_label" value="' + _escAttr(_akTextValue(m.action_label)) + '" '
              + 'placeholder="Label" onchange="_updateMapping(this)" '
              + 'style="width:50px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
         html += '<span style="font-size:8px;color:rgb(185,183,183);cursor:pointer;" onclick="_removeLinkageMapping(' + i + ')">✕</span>';
