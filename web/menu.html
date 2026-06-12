@@ -5285,7 +5285,16 @@ function _callMenuSettingApi(methodName, args, label, onOk, onFail) {
         showAlert(label, missing.message, true);
         return;
     }
-    Promise.resolve(api[methodName].apply(api, args || [])).then(function(result) {
+    var promise;
+    try {
+        promise = Promise.resolve(api[methodName].apply(api, args || []));
+    } catch (err) {
+        var thrown = { ok: false, message: String(err || '设置失败 / Unable to update setting') };
+        if (onFail && onFail(thrown) === false) return;
+        showAlert(label, thrown.message, true);
+        return;
+    }
+    promise.then(function(result) {
         var data = (result === null || typeof result === 'undefined' || result === '') ? { ok: true } : _menuParseApiResult(result);
         if (!data || data.ok === false) {
             if (onFail && onFail(data) === false) return;
@@ -6507,9 +6516,7 @@ function restoreMenuSettings(cfg) {
     }
     /* DPS fade timeout */
     if (cfg.dps_fade_timeout_s !== undefined) {
-        var fadeEl = document.getElementById('dps-fade-timeout');
-        var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);
-        if (fadeEl) fadeEl.value = restoredFadeTimeout;
+        var restoredFadeTimeout = _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
     }
     if (cfg.dps_last_report_available !== undefined) {
         _setDpsLastReportAvailable(!!cfg.dps_last_report_available);
@@ -6902,6 +6909,47 @@ function _lbSortKey(value, fallback) {
     return allowed[key] ? key : fallback;
 }
 
+function _lbSyncTabs() {
+    document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
+    var activeTab = document.querySelector('.lb-tab[data-sort="' + _lbSortKey(_lbCurrentSort, 'xp') + '"]');
+    if (activeTab) activeTab.classList.add('active');
+}
+
+function _lbRestoreAfterFetchFailure(previousSort, message) {
+    _lbCurrentSort = _lbSortKey(previousSort, 'xp');
+    _lbSyncTabs();
+    if (_lbEntries.length) {
+        _lbApplyFilter(false);
+    } else {
+        document.getElementById('lb-list').innerHTML = '<div class="lb-empty">暂无排行数据<br><span style="font-size:11px;color:#bbb;">完成演奏后数据将自动上传</span></div>';
+        document.getElementById('lb-page').textContent = '0 / 0';
+        _updateLbSize(1);
+    }
+    showAlert('LEADERBOARD', message || '无法刷新排行榜 / Unable to refresh leaderboard', true);
+}
+
+function _lbRequestSort(nextSort, previousSort) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.fetch_leaderboard) {
+        _lbRestoreAfterFetchFailure(previousSort, 'pywebview API 不可用 / pywebview API is not available');
+        return;
+    }
+    Promise.resolve().then(function() {
+        return api.fetch_leaderboard(nextSort);
+    }).then(function(result) {
+        var data = (result === null || typeof result === 'undefined' || result === '') ? { ok: true } : _menuParseApiResult(result);
+        if (!data || data.ok === false) {
+            _lbRestoreAfterFetchFailure(previousSort, _menuApiMessage(data, '无法刷新排行榜 / Unable to refresh leaderboard'));
+            return;
+        }
+        if (Array.isArray(data.entries)) {
+            showLeaderboard(data);
+        }
+    }).catch(function(err) {
+        _lbRestoreAfterFetchFailure(previousSort, String(err || '无法刷新排行榜 / Unable to refresh leaderboard'));
+    });
+}
+
 function _updateLbSize(rowCount) {
     var box = document.querySelector('#lb-dialog .lb-box');
     var rows = Math.max(1, Math.min(_lbPerPage, rowCount || 1));
@@ -7097,14 +7145,12 @@ document.getElementById('lb-search').addEventListener('keydown', function(e) {
 
 document.getElementById('lb-tabs').querySelectorAll('.lb-tab').forEach(function(tab) {
     tab.addEventListener('click', function() {
-        document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
-        tab.classList.add('active');
+        var previousSort = _lbCurrentSort;
         _lbCurrentSort = _lbSortKey(tab.getAttribute('data-sort'), _lbCurrentSort);
+        _lbSyncTabs();
         document.getElementById('lb-list').innerHTML = '<div class="lb-loading">加载中...</div>';
         playSound('snd-click');
-        if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.fetch_leaderboard(_lbCurrentSort);
-        }
+        _lbRequestSort(_lbCurrentSort, previousSort);
     });
 });
 
@@ -7863,13 +7909,27 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
     }
 })();
 
-function _setDpsFadeTimeout(val) {
-    var v = _clampInt(val, 0, 0, 120);
+var _dpsFadeTimeoutValue = 5;
+var _dpsFadeTimeoutRequestSeq = 0;
+function _setDpsFadeTimeoutUI(val, commit) {
+    var v = _clampInt(val, _dpsFadeTimeoutValue, 0, 120);
     var el = document.getElementById('dps-fade-timeout');
     if (el) el.value = v;
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_dps_fade_timeout) {
-        window.pywebview.api.set_dps_fade_timeout(v);
-    }
+    if (commit !== false) _dpsFadeTimeoutValue = v;
+    return v;
+}
+function _setDpsFadeTimeout(val) {
+    var previousValue = _dpsFadeTimeoutValue;
+    var v = _setDpsFadeTimeoutUI(val, false);
+    var requestSeq = ++_dpsFadeTimeoutRequestSeq;
+    _callMenuSettingApi('set_dps_fade_timeout', [v], 'DPS METER', function(data) {
+        if (requestSeq !== _dpsFadeTimeoutRequestSeq) return;
+        var applied = data && data.timeout !== undefined ? data.timeout : (data && data.seconds !== undefined ? data.seconds : v);
+        _setDpsFadeTimeoutUI(applied);
+    }, function() {
+        if (requestSeq !== _dpsFadeTimeoutRequestSeq) return false;
+        _setDpsFadeTimeoutUI(previousValue);
+    });
 }
 
 function _setDpsLastReportAvailable(available) {

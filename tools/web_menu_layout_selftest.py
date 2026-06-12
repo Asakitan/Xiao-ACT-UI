@@ -147,6 +147,7 @@ def main() -> int:
         "window.pywebview.api.set_burst_enabled(this.checked);",
         "window.pywebview.api.set_sound_enabled(this.checked);",
         "window.pywebview.api.set_sound_volume(volume);",
+        "window.pywebview.api.set_dps_fade_timeout(v);",
         "window.pywebview.api.set_dps_enabled(on);\n            }\n            showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));",
         "window.pywebview.api.set_buffmon_enabled(on);\n            }\n            showToast('BUFF MONITOR: ' + (on ? 'ON' : 'OFF'));",
     ]
@@ -178,14 +179,14 @@ def main() -> int:
         "_syncWatchedSlots(data && Array.isArray(data.slots) ? data.slots : slots);",
         "_syncWatchedSlots(_watchedSlotsList());",
         "_syncWatchedSlots(cfg.watched_slots);",
-        "var restoredFadeTimeout = _clampInt(cfg.dps_fade_timeout_s, 5, 0, 120);",
-        "if (fadeEl) fadeEl.value = restoredFadeTimeout;",
+        "var restoredFadeTimeout = _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);",
         "function _bossBarModeValue(value)",
         "return (mode === 'always' || mode === 'boss_raid' || mode === 'off') ? mode : 'boss_raid';",
         "_setBossBarModeUI(_bossBarModeValue(cfg.boss_bar_mode));",
         "var mode = _setBossBarModeUI(this.getAttribute('data-mode'));",
         "function _callMenuSettingApi(methodName, args, label, onOk, onFail)",
         "api[methodName].apply(api, args || [])",
+        "try {\n        promise = Promise.resolve(api[methodName].apply(api, args || []));",
         "function _bossBarActiveMode()",
         "_callMenuSettingApi('set_boss_bar_mode', [mode], 'BOSS HP BAR', function(data) {",
         "_setBossBarModeUI(previousMode);",
@@ -200,6 +201,12 @@ def main() -> int:
         "_setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');",
         "_setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');",
         "_setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');",
+        "function _setDpsFadeTimeoutUI(val, commit)",
+        "var _dpsFadeTimeoutRequestSeq = 0;",
+        "var v = _setDpsFadeTimeoutUI(val, false);",
+        "_callMenuSettingApi('set_dps_fade_timeout', [v], 'DPS METER', function(data) {",
+        "_setDpsFadeTimeoutUI(applied);",
+        "_setDpsFadeTimeoutUI(previousValue);",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
@@ -434,7 +441,7 @@ def main() -> int:
         "_akIntValue('post_delay_ms', action.post_delay_ms)",
         "if (kind === 'int') value = _akIntValue(fieldName, value);",
         "var pct = _clampNum(value, 0, 0, 100);",
-        "var v = _clampInt(val, 0, 0, 120);",
+        "var v = _clampInt(val, _dpsFadeTimeoutValue, 0, 120);",
         "if (cdEl) cdEl.value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
         "var seconds = _clampNum(val, 1.0, 0, 60);",
         "api.set_linkage_global_cooldown(seconds);",
@@ -1236,6 +1243,7 @@ def main() -> int:
         "_lbCurrentSort = data.sort || _lbCurrentSort;",
         "var activeTab = document.querySelector('.lb-tab[data-sort=\"' + _lbCurrentSort + '\"]');",
         "_lbCurrentSort = tab.getAttribute('data-sort');",
+        "window.pywebview.api.fetch_leaderboard(_lbCurrentSort);",
     ]
     for pattern in leaderboard_sort_raw_patterns:
         if pattern in html:
@@ -1244,10 +1252,15 @@ def main() -> int:
         "function _lbSortKey(value, fallback)",
         "var allowed = { xp: true, level: true, songs_played: true, play_time: true };",
         "return allowed[key] ? key : fallback;",
-        "_lbCurrentSort = _lbSortKey(data.sort, _lbCurrentSort);",
+        "function _lbSyncTabs()",
         "var activeTab = document.querySelector('.lb-tab[data-sort=\"' + _lbSortKey(_lbCurrentSort, 'xp') + '\"]');",
+        "function _lbRestoreAfterFetchFailure(previousSort, message)",
+        "function _lbRequestSort(nextSort, previousSort)",
+        "_lbCurrentSort = _lbSortKey(data.sort, _lbCurrentSort);",
+        "_lbSyncTabs();",
         "_lbCurrentSort = _lbSortKey(tab.getAttribute('data-sort'), _lbCurrentSort);",
-        "window.pywebview.api.fetch_leaderboard(_lbCurrentSort);",
+        "_lbRequestSort(_lbCurrentSort, previousSort);",
+        "_lbRestoreAfterFetchFailure(previousSort, _menuApiMessage(data, '无法刷新排行榜 / Unable to refresh leaderboard'));",
     ]
     for snippet in leaderboard_sort_safe_required:
         if snippet not in html:

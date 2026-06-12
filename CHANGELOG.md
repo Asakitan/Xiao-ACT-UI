@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.65: Web menu leaderboard/DPS bridge 响应修复.
+
+  1) `web/menu.html` 修复 leaderboard sort fetch 失败交互。
+     排行榜切换排序现在会检查 `fetch_leaderboard` 是否可用, 处理失败返回/Promise reject,
+     失败时恢复上一排序并重绘旧数据, 避免列表永久停在 loading。
+
+  2) `web/menu.html` 修复 DPS fade timeout bridge 响应处理。
+     fade timeout 现在通过标准 setting helper 保存, 成功时按后端 timeout/seconds 重新同步,
+     失败时回滚到上一确认值; setting helper 也会捕获同步 throw。
+
 ## v4.6.64: Web menu file picker bridge 修复.
 
   1) `web/menu.html` 与 `web/pywebview-shim.js` 修复 file picker consumer 参数传递。
