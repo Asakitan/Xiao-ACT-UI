@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.47: Web menu DPS/Linkage response 防护修复.
+
+  1) `web/menu.html` 修复 DPS last report response 解析。
+     打开上一场 DPS 报告时会安全处理字符串、空值和非对象响应,
+     malformed response 不再以 JSON SyntaxError 打断用户提示。
+
+  2) `web/menu.html` 修复 Boss/AutoKey Linkage 初始化 response 解析。
+     Linkage state 现在会先校验 API response 与 state 对象再同步控件,
+     避免异常 response 破坏初始化或把当前 UI 状态清成错误默认值。
+
 ## v4.6.46: Web menu BossRaid API response 防护修复.
 
   1) `web/menu.html` 修复 BossRaid bridge API response 解析。

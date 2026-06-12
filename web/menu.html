@@ -5077,6 +5077,25 @@ if (document.querySelector('.menu-hint')) {
     document.querySelector('.menu-hint').textContent = 'F5 识别 RECOGNITION / F6 自动按键 AUTO KEY';
 }
 
+function _menuApiObject(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function _menuParseApiResult(result) {
+    if (result === null || typeof result === 'undefined' || result === '') {
+        return { ok: false, message: 'Empty API response' };
+    }
+    if (typeof result === 'string') {
+        try {
+            var parsed = JSON.parse(result);
+            return _menuApiObject(parsed) ? parsed : { ok: false, message: String(result) };
+        } catch (e) {
+            return { ok: false, message: result };
+        }
+    }
+    return _menuApiObject(result) ? result : { ok: false, message: String(result) };
+}
+
 function _akParseApiResult(result) {
     if (!result) return {};
     if (typeof result === 'string') {
@@ -7528,9 +7547,9 @@ function _showLastDpsReport() {
         return;
     }
     window.pywebview.api.show_last_dps_report().then(function(result) {
-        var data = (typeof result === 'string') ? JSON.parse(result) : result;
+        var data = _menuParseApiResult(result);
         if (!data || data.ok === false) {
-            showAlert('DPS METER', (data && data.message) ? data.message : '无法打开上一场战斗报告 / Unable to open last combat report', true);
+            showAlert('DPS METER', (data && (data.message || data.error || data.detail)) ? (data.message || data.error || data.detail) : '无法打开上一场战斗报告 / Unable to open last combat report', true);
             return;
         }
         showToast('DPS REPORT: LAST REPORT');
@@ -7546,12 +7565,16 @@ function _initLinkageUI() {
     var api = window.pywebview && window.pywebview.api;
     if (!api || !api.get_linkage_state) return;
     api.get_linkage_state().then(function(raw) {
-        var resp = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var resp = _menuParseApiResult(raw);
         if (!resp.ok) return;
-        var s = resp.state;
-        document.getElementById('linkage-enabled').checked = s.enabled;
-        document.getElementById('linkage-debug').checked = s.debug_log;
-        document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);
+        var s = _menuApiObject(resp.state) ? resp.state : null;
+        if (!s) return;
+        var enabledEl = document.getElementById('linkage-enabled');
+        var debugEl = document.getElementById('linkage-debug');
+        var cdEl = document.getElementById('linkage-global-cd');
+        if (enabledEl) enabledEl.checked = !!s.enabled;
+        if (debugEl) debugEl.checked = !!s.debug_log;
+        if (cdEl) cdEl.value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);
         _linkageMappings = Array.isArray(s.mappings) ? s.mappings : [];
         _renderLinkageMappings();
     });

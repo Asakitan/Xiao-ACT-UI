@@ -329,7 +329,7 @@ def main() -> int:
         "if (kind === 'int') value = _akIntValue(fieldName, value);",
         "var pct = _clampNum(value, 0, 0, 100);",
         "var v = _clampInt(val, 0, 0, 120);",
-        "document.getElementById('linkage-global-cd').value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
+        "if (cdEl) cdEl.value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);",
         "var seconds = _clampNum(val, 1.0, 0, 60);",
         "api.set_linkage_global_cooldown(seconds);",
         "var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);",
@@ -521,6 +521,31 @@ def main() -> int:
     for snippet in boss_raid_api_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe BossRaid API response snippet: " + snippet)
+
+    menu_response_raw_patterns = [
+        "window.pywebview.api.show_last_dps_report().then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
+        "api.get_linkage_state().then(function(raw) {\n        var resp = typeof raw === 'string' ? JSON.parse(raw) : raw;",
+        "var s = resp.state;\n        document.getElementById('linkage-enabled').checked = s.enabled;",
+    ]
+    for pattern in menu_response_raw_patterns:
+        if pattern in html:
+            raise AssertionError("DPS/Linkage menu responses must use safe parsing and state guards: " + pattern)
+    menu_response_safe_required = [
+        "function _menuApiObject(value)",
+        "function _menuParseApiResult(result)",
+        "return _menuApiObject(parsed) ? parsed : { ok: false, message: String(result) };",
+        "return _menuApiObject(result) ? result : { ok: false, message: String(result) };",
+        "var data = _menuParseApiResult(result);",
+        "data.message || data.error || data.detail",
+        "var resp = _menuParseApiResult(raw);",
+        "var s = _menuApiObject(resp.state) ? resp.state : null;",
+        "if (!s) return;",
+        "var enabledEl = document.getElementById('linkage-enabled');",
+        "if (enabledEl) enabledEl.checked = !!s.enabled;",
+    ]
+    for snippet in menu_response_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe DPS/Linkage response snippet: " + snippet)
 
     linkage_raw_patterns = [
         "_linkageMappings = s.mappings || [];",
