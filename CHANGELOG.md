@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.19: DPS header 与通知数值防护修复.
+
+  1) `gui_modules/sao_gui_dps.py` 修复 ACT badge 版本号归一。
+     坏 `render_spec.version` 现在回退为 `ACT V1` 并保留 mode/source/boss 上下文,
+     避免头部状态徽标因为单个异常字段整体消失。
+
+  2) `gui_modules/sao_gui_dps.py` 修复 panel notice 时长与过期时间归一。
+     坏 notice `seconds` 或过期时间现在安全回退,
+     避免最小化/导出/历史提示等通知路径打断面板渲染。
+
 ## v4.6.18: DPS detail-view 数值防护修复.
 
   1) `gui_modules/sao_gui_dps.py` 修复详情实体查找 uid 归一。

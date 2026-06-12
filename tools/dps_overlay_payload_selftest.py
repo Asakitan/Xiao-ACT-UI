@@ -223,6 +223,39 @@ class DpsOverlayPayloadTests(unittest.TestCase):
 
         self.assertGreaterEqual(panel._skill_content_h, 0)
 
+    def test_act_badge_bad_version_preserves_visible_context(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._view_mode = "live"
+        panel._act_snapshot = {
+            "render_spec": {
+                "version": "bad-version",
+                "mode": "live",
+                "sources": {"summary": {"data_source": "mem"}},
+                "boss": {"hp_source": "packet"},
+            },
+        }
+
+        badge = panel._act_badge_text()
+
+        self.assertIn("ACT V1", badge)
+        self.assertIn("LIVE", badge)
+        self.assertIn("MEM", badge)
+        self.assertIn("BOSS PACKET", badge)
+
+    def test_panel_notice_bad_seconds_and_expiry_do_not_abort(self) -> None:
+        panel = DpsOverlay.__new__(DpsOverlay)
+        panel._visible = False
+        panel._win = None
+        panel._panel_notice = ""
+        panel._panel_notice_until = 0.0
+        panel._last_compose_sig = None
+
+        panel._set_panel_notice("Hello", seconds="bad-seconds")
+        self.assertEqual(panel._panel_notice_text(), "Hello")
+
+        panel._panel_notice_until = object()
+        self.assertEqual(panel._panel_notice_text(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

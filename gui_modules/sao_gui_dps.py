@@ -1926,7 +1926,8 @@ class DpsOverlay:
             mode = str(spec.get('mode') or self._view_mode or 'live').upper()
             boss = spec.get('boss') or {}
             hp_source = str(boss.get('hp_source') or '')
-            parts = [f"ACT V{int(spec.get('version') or 1)}", mode, source]
+            version = _safe_int(spec.get('version'), default=1, min_value=1)
+            parts = [f"ACT V{version}", mode, source]
             if hp_source and hp_source != 'none':
                 parts.append(f'BOSS {hp_source.upper()}')
             return ' · '.join(parts)
@@ -3260,12 +3261,13 @@ class DpsOverlay:
 
     def _set_panel_notice(self, message: str, *, seconds: float = 4.0) -> None:
         self._panel_notice = str(message or '')
-        self._panel_notice_until = time.time() + max(0.5, float(seconds or 4.0))
+        duration = _safe_float(seconds if seconds else 4.0, default=4.0, min_value=0.5)
+        self._panel_notice_until = time.time() + duration
         self._last_compose_sig = None
         self._schedule_tick(immediate=True)
 
     def _panel_notice_text(self) -> str:
-        if self._panel_notice and time.time() <= float(self._panel_notice_until or 0.0):
+        if self._panel_notice and time.time() <= _safe_float(self._panel_notice_until):
             return self._panel_notice
         return ''
 
