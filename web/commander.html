@@ -167,7 +167,8 @@ html,body { background:transparent!important; overflow:hidden; user-select:none;
 }
 .member-name {
     font-family:var(--font-ui); font-size:12px; color:var(--text-primary);
-    font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    /* min-width:0 — flex 子项默认 min-width:auto 不收缩, 长中文名不省略 */
+    font-weight:600; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .member-prof {
     font-family:var(--font-ui); font-size:10px; color:var(--text-secondary);

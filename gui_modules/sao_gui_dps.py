@@ -2959,7 +2959,8 @@ class DpsOverlay:
         key = (bw, bh, is_self, is_heal)
         cache = getattr(self, '_bar_cache', {})
         if key in cache:
-            return cache[key].copy()
+            # 调用方只作 alpha_composite 源, 不在返回图上作画 — 免 copy
+            return cache[key]
         if is_heal:
             ca, cb = self.BAR_HEAL_A, self.BAR_HEAL_B
         elif is_self:
@@ -3009,7 +3010,7 @@ class DpsOverlay:
         out.alpha_composite(leading)
         cache[key] = out
         self._bar_cache = cache
-        return out.copy()
+        return out
 
     def _truncate(self, text: str, font, max_w: int,
                   draw: ImageDraw.ImageDraw) -> str:

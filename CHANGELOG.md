@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.113: DPS 条形图缓存免拷贝 + 三处 Web 视觉修缮.
+
+  1) `gui_modules/sao_gui_dps.py` `_make_bar` 缓存命中/存入不再 .copy()
+    — 唯一调用方只把返回图当 alpha_composite 源(不在其上作画),
+    每行每帧一次的 PIL 拷贝纯属浪费。
+
+  2) Web 视觉修缮: commander.html `.member-name` 与 boss_hp.html
+    `.additional-unit .name` 补 `min-width:0`(flex 子项默认
+    min-width:auto 不收缩, 长中文名不省略号截断而是撑爆行);
+    plugin_manager.html `.pm-tab` 补 :hover 态(有 cursor:pointer
+    无悬停反馈, 与同页卡片按钮不一致)。
+
 ## v4.6.112: 令牌常数时间比较 + action_log live 行新鲜度缓存.
 
   1) `server/app.py`(两处 legacy 上传令牌) + `update_host/app.py`
