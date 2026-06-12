@@ -4454,11 +4454,7 @@ var _sndMap = {
     'snd-alert-close': 'alert_close'
 };
 function playSound(id) {
-    try {
-        if (window.pywebview && window.pywebview.api) {
-            window.pywebview.api.play_sound(_sndMap[id] || id);
-        }
-    } catch(e) {}
+    _callMenuBridgeQuiet('play_sound', [_sndMap[id] || id]);
 }
 function _setSoundVolumeUI(value, commit) {
     var volume = _clampInt(value, _soundVolumeValue, 0, 100);
@@ -6259,15 +6255,23 @@ function _akExportDraft() {
 }
 
 function _akImportProfile() {
-    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.start_auto_key_import_picker) return;
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.start_auto_key_import_picker) {
+        showAlert('AUTO KEYS', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
     _pickerConsumer = 'auto_key';
-    window.pywebview.api.start_auto_key_import_picker().then(function(result) {
+    Promise.resolve().then(function() {
+        return api.start_auto_key_import_picker();
+    }).then(function(result) {
         var data = _akParseApiResult(result);
         if (data && data.ok && data.browser) {
             showFilePicker(data.browser);
             return;
         }
         showAlert('AUTO KEYS', (data && data.message) ? data.message : '无法打开导入选择器 / Unable to open import picker', true);
+    }).catch(function(err) {
+        showAlert('AUTO KEYS', String(err || '无法打开导入选择器 / Unable to open import picker'), true);
     });
 }
 

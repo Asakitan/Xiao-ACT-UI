@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.75: Web menu sound/import picker bridge fallback 修复.
+
+  1) `web/menu.html` 修复声音播放 bridge 的 Promise reject 兜底。
+     `playSound` 现在通过静默 bridge helper 调用 `play_sound`,
+     保持音效失败不打扰用户, 同时避免异步失败冒成未处理错误。
+
+  2) `web/menu.html` 修复 AutoKey 导入选择器缺少失败反馈的问题。
+     `_akImportProfile` 现在会在 API 缺失、同步异常或 Promise reject 时显示 `AUTO KEYS` 错误,
+     成功返回时仍按原逻辑打开文件选择器。
+
 ## v4.6.74: Web menu AutoKey/BossRaid API helper fallback 修复.
 
   1) `web/menu.html` 修复 AutoKey 通用 API helper 的同步异常与非 Promise 返回处理。

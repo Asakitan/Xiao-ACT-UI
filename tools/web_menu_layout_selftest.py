@@ -358,6 +358,7 @@ def main() -> int:
         "window.pywebview.api.exit_app();",
         "window.pywebview.api.menu_action('exit');",
         "window.pywebview.api.alert_ok();",
+        "window.pywebview.api.play_sound(_sndMap[id] || id);",
         "Promise.all([\n        window.pywebview.api.set_auto_key_server_url(serverUrl)",
         "Promise.all([\n        window.pywebview.api.set_boss_raid_server_url(serverUrl)",
     ]
@@ -396,6 +397,7 @@ def main() -> int:
         "_callMenuBridgeQuiet('exit_app', [], fallbackExit)",
         "if (!_callMenuBridgeQuiet('menu_action', ['exit'], failExit)) {",
         "_callMenuBridgeQuiet('alert_ok');",
+        "_callMenuBridgeQuiet('play_sound', [_sndMap[id] || id]);",
         "_callMenuSettingApi('set_auto_key_server_url', [serverUrl], 'AUTO KEYS', function(data) {",
         "_callMenuSettingApi('set_boss_raid_server_url', [serverUrl], 'BOSS RAID', function(data) {",
     ]
@@ -747,6 +749,8 @@ def main() -> int:
     boss_raid_api_raw_patterns = [
         "var promise = fn.apply(window.pywebview.api, args || []);\n    if (!promise || typeof promise.then !== 'function') return;",
         "api[method].apply(api, args || []).then(function(result) {",
+        "if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.start_auto_key_import_picker) return;",
+        "window.pywebview.api.start_auto_key_import_picker().then(function(result) {",
         "api[method].apply(api, args || []).then(function(result) {\n        var data = (typeof result === 'string') ? JSON.parse(result) : result;",
         "results.forEach(function(item) {\n            var data = (typeof item === 'string') ? JSON.parse(item) : item;",
         "window.pywebview.api.get_boss_raid_state().then(function(result) {\n            var data = (typeof result === 'string') ? JSON.parse(result) : result;",
@@ -765,6 +769,9 @@ def main() -> int:
         "return _brApiObject(result) ? result : { ok: false, message: String(result) };",
         "request = Promise.resolve(fn.apply(window.pywebview.api, args || []));",
         "request = Promise.resolve(api[method].apply(api, args || []));",
+        "if (!api || !api.start_auto_key_import_picker) {\n        showAlert('AUTO KEYS', 'pywebview API 不可用 / pywebview API is not available', true);",
+        "return api.start_auto_key_import_picker();",
+        "showAlert('AUTO KEYS', String(err || '无法打开导入选择器 / Unable to open import picker'), true);",
         "var data = _brParseApiResult(result);",
         "function _loadInitialAutoKeyState()",
         "return api.get_auto_key_state();",
