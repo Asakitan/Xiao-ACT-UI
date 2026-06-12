@@ -220,6 +220,13 @@ class SAOPlayerGUIFloatHandlersMixin:
                     director.release_all()
                 except Exception:
                     pass
+            # 同步作废 linkage 在飞的发键线程, 否则 hold 连招无视 F12 继续发
+            linkage = getattr(self, '_boss_autokey_linkage', None)
+            if linkage is not None:
+                try:
+                    linkage.panic_stop()
+                except Exception:
+                    pass
             key = 'F12'
             try:
                 v = (self.settings.get('hotkeys', {}) or {}).get('toggle_auto_dodge')

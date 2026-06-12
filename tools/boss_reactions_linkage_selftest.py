@@ -165,6 +165,24 @@ def test_disabled():
     check("disabled no fire", sent == [])
 
 
+def test_panic_stop():
+    print("[panic_stop kills in-flight]")
+    # 带 delay 的派发: panic_stop 在等待窗口内调用 → 应被作废, 不发键
+    lk, sent = _linkage(_cfg([
+        {"trigger_type": "boss_cast", "skill_id": 100, "action_key": "SPACE",
+         "delay_ms": 120, "cooldown_s": 0},
+    ]))
+    lk.on_boss_action({"cast_edge": "start", "skill_id": 100, "boss_base_id": 1})
+    time.sleep(0.03)        # 仍在 120ms 等待窗口内
+    lk.panic_stop()
+    time.sleep(0.15)        # 越过原 delay
+    check("in-flight key cancelled by panic_stop", sent == [], repr(sent))
+    # panic 后新触发照常工作 (epoch 快照只杀那一次)
+    lk.on_boss_action({"cast_edge": "start", "skill_id": 100, "boss_base_id": 1})
+    time.sleep(0.2)
+    check("post-panic trigger still fires", sent == [("SPACE", "tap", 80, 1)], repr(sent))
+
+
 def main():
     test_backcompat()
     test_boss_cast_match()
@@ -174,6 +192,7 @@ def main():
     test_cooldown()
     test_sequence()
     test_disabled()
+    test_panic_stop()
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0
 

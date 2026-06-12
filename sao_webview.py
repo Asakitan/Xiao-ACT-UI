@@ -2865,25 +2865,31 @@ class SAOWebViewGUI:
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
-        """Send a keystroke for boss→autokey linkage, reusing AutoKeyEngine's VK map."""
+        """Send a keystroke for boss→autokey linkage. 用 scancode (移动/Shift冲刺/E走
+        等躲避键游戏只认扫描码, wVk 不响应) — 与 Tk 端 _send_linked_key 一致。"""
         try:
             from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes
+            KEYEVENTF_SCANCODE = 0x0008
             key = (key or "").strip().upper()
             vk = VK_NAME_MAP.get(key)
             if vk is None and len(key) == 1 and key.isalpha():
                 vk = ord(key)
             if vk is None:
                 return
+            scan = ctypes.windll.user32.MapVirtualKeyW(int(vk), 0)
+            if not scan:
+                return
             hold_s = max(0.015, hold_ms / 1000.0) if press_mode == "hold" else 0.015
             extra = ctypes.c_ulong(0)
             for _ in range(max(1, press_count)):
-                ki = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=0, time=0,
-                                dwExtraInfo=ctypes.pointer(extra))
+                ki = KEYBDINPUT(wVk=0, wScan=int(scan), dwFlags=KEYEVENTF_SCANCODE,
+                                time=0, dwExtraInfo=ctypes.pointer(extra))
                 ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
                 ctypes.windll.user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
                 time.sleep(hold_s)
-                ki2 = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0,
+                ki2 = KEYBDINPUT(wVk=0, wScan=int(scan),
+                                 dwFlags=KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, time=0,
                                  dwExtraInfo=ctypes.pointer(extra))
                 ev2 = INPUT(type=INPUT_KEYBOARD, ki=ki2)
                 ctypes.windll.user32.SendInput(1, ctypes.byref(ev2), ctypes.sizeof(INPUT))
@@ -6831,6 +6837,19 @@ class SAOWebViewGUI:
             cfg = load_linkage_config(self._cfg_settings_ref)
             new_state = not bool(cfg.get('dodge_enabled', False))
             set_linkage_dodge_enabled(self._cfg_settings_ref, new_state)
+            # 急停: 松开定向躲避按住的键 + 作废 linkage 在飞发键线程
+            director = getattr(self, '_auto_dodge_director', None)
+            if director is not None:
+                try:
+                    director.release_all()
+                except Exception:
+                    pass
+            linkage = getattr(self, '_boss_autokey_linkage', None)
+            if linkage is not None:
+                try:
+                    linkage.panic_stop()
+                except Exception:
+                    pass
             key = 'F12'
             try:
                 saved = getattr(self, '_cfg_settings_ref', None)

@@ -591,6 +591,12 @@ class _MechanicsEditorMixin:
         tk.Label(row2, text='⏹ 急停 %s' % (master.get('panic_hotkey') or 'F12'),
                  bg=PANEL_CARD, fg=DANGER,
                  font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(2, 0))
+        # 边界澄清: 这三个开关只管「机制」的自动躲避/走位, 与 Boss反应(连招联动)
+        # 编辑器的「联动总开关」是两套独立的东西
+        tk.Label(bar, text='说明: 自动躲避/定向移动/自动走位 仅作用于本页「机制」; '
+                 'Boss连招联动在「Boss反应」编辑器另开。三项任一开启即按机制配置操作游戏。',
+                 bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(7),
+                 anchor='w', wraplength=520, justify='left').pack(fill=tk.X, pady=(2, 0))
         if master.get('zh_voice') is False:
             tk.Label(bar, text='⚠ 未检测到中文语音 (SAPI zh-CN), 播报可能不准确',
                      bg=PANEL_CARD, fg=DANGER, font=panel_font(8),

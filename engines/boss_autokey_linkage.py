@@ -232,6 +232,13 @@ class BossAutoKeyLinkage:
         self._last_fire: Dict[str, float] = {}   # mapping_id → last fire time
         self._global_last_fire: float = 0.0
         self._fire_count: int = 0
+        self._panic_epoch: int = 0   # 每次 panic_stop +1, 在飞的发键线程据此自杀
+
+    def panic_stop(self) -> None:
+        """急停: 作废所有在途(等待中/序列进行中)的发键线程。F12 与 AutoDodgeDirector
+        .release_all() 同步调用 — 否则 hold 型连招会无视急停继续发, 破坏 panic。"""
+        with self._lock:
+            self._panic_epoch += 1
 
     def on_boss_raid_alert(self, title: str, message: str):
         """Called when boss raid engine fires an alert (phase change, timeline, enrage, etc.).
@@ -451,8 +458,11 @@ class BossAutoKeyLinkage:
         fg_gate = None if skip_foreground else self._foreground_gate
         if not send:
             return
+        start_epoch = self._panic_epoch   # panic_stop() 后此快照失配 → 自杀
 
         def _blocked() -> bool:
+            if self._panic_epoch != start_epoch:   # F12 急停作废在飞动作
+                return True
             if gate is not None:
                 try:
                     if not gate():
