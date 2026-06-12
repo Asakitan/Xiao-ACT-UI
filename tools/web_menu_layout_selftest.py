@@ -143,6 +143,9 @@ def main() -> int:
         "window.pywebview.api.set_boss_bar_mode(mode);",
         "window.pywebview.api.set_component_source(component, mode);",
         "window.pywebview.api.set_data_source(mode);",
+        "window.pywebview.api.set_burst_enabled(this.checked);",
+        "window.pywebview.api.set_sound_enabled(this.checked);",
+        "window.pywebview.api.set_sound_volume(volume);",
         "window.pywebview.api.set_dps_enabled(on);\n            }\n            showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));",
         "window.pywebview.api.set_buffmon_enabled(on);\n            }\n            showToast('BUFF MONITOR: ' + (on ? 'ON' : 'OFF'));",
     ]
@@ -152,11 +155,13 @@ def main() -> int:
     menu_safe_required = [
         "var xpPct = _clampNum(data.xp_pct, 0, 0, 100);",
         "document.getElementById('info-xp').style.width = xpPct + '%';",
-        "var volume = _clampInt(this.value, 80, 0, 100);",
-        "this.value = volume;",
-        "window.pywebview.api.set_sound_volume(volume);",
-        "var restoredVolume = _clampInt(cfg.sound_volume, 80, 0, 100);",
-        "document.getElementById('sound-volume').value = restoredVolume;",
+        "function _setSoundVolumeUI(value, commit)",
+        "if (commit !== false) _soundVolumeValue = volume;",
+        "var _soundVolumeRequestSeq = 0;",
+        "var volume = _setSoundVolumeUI(this.value, false);",
+        "_callMenuSettingApi('set_sound_volume', [volume], 'SOUND', function(data) {",
+        "if (requestSeq !== _soundVolumeRequestSeq) return false;",
+        "var restoredVolume = _setSoundVolumeUI(cfg.sound_volume);",
         "var value = _clampInt(pct, 0, 0, 100);",
         "var sizeBytes = _clampNum(s.size, 0, 0, Number.MAX_SAFE_INTEGER);",
         "var sizeMb = sizeBytes / 1024 / 1024;",
@@ -189,6 +194,8 @@ def main() -> int:
         "showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);",
         "_setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');",
         "_setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');",
+        "_setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');",
+        "_setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');",
     ]
     for snippet in menu_safe_required:
         if snippet not in html:
@@ -968,6 +975,29 @@ def main() -> int:
     for snippet in dps_settings_safe_required:
         if snippet not in webview_py:
             raise AssertionError("missing safe DPS fade timeout bridge snippet: " + snippet)
+
+    sound_burst_bridge_raw_patterns = [
+        "self._g._set_setting('burst_enabled', bool(enabled))",
+        "set_sound_enabled(bool(enabled))",
+        "self._g._set_setting('sound_enabled', bool(enabled))",
+        "set_sound_volume(int(volume_pct))",
+        "self._g._set_setting('sound_volume', int(volume_pct))",
+    ]
+    for pattern in sound_burst_bridge_raw_patterns:
+        if pattern in webview_py:
+            raise AssertionError("Python WebView sound/burst bridge values must return ack and recover bad input: " + pattern)
+    sound_burst_bridge_safe_required = [
+        "def _setting_bool_value(value: Any) -> bool:",
+        "def _sound_volume_value(volume_pct: Any) -> int:",
+        "return max(0, min(100, int(value)))",
+        "state = _setting_bool_value(enabled)",
+        "return json.dumps({'ok': True, 'enabled': state}, ensure_ascii=False)",
+        "volume = _sound_volume_value(volume_pct)",
+        "return json.dumps({'ok': True, 'volume': volume}, ensure_ascii=False)",
+    ]
+    for snippet in sound_burst_bridge_safe_required:
+        if snippet not in webview_py:
+            raise AssertionError("missing Python WebView sound/burst bridge snippet: " + snippet)
 
     source_bridge_raw_patterns = [
         "def set_component_source(self, component, mode):\n        \"\"\"Legacy no-op: per-component source switching is no longer exposed.\"\"\"",

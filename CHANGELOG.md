@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.62: Web menu burst/sound bridge 响应修复.
+
+  1) `web/menu.html` 修复 burst/sound 控件 bridge 失败时的交互回滚。
+     Burst 和 sound 开关现在复用标准 bridge checkbox helper,
+     明确失败或 Promise reject 时恢复原选中状态并提示用户。
+
+  2) `web/menu.html` 与 `sao_webview.py` 修复 sound volume 响应与参数处理。
+     音量滑杆现在按后端返回的 volume 重新同步, 失败时回滚到上一确认值;
+     Python bridge 也会夹取 0..100、容忍坏输入, 并返回结构化 ack。
+
 ## v4.6.61: Web menu setting bridge 响应修复.
 
   1) `web/menu.html` 修复 boss bar mode bridge 响应处理。

@@ -4442,6 +4442,8 @@ function closeSessionPlayers(manual) {
 })();
 
 /* ═══ Sound helpers — via Python bridge ═══ */
+var _soundVolumeValue = 70;
+var _soundVolumeRequestSeq = 0;
 var _sndMap = {
     'snd-click': 'click',
     'snd-popup': 'menu_open',
@@ -4457,6 +4459,13 @@ function playSound(id) {
             window.pywebview.api.play_sound(_sndMap[id] || id);
         }
     } catch(e) {}
+}
+function _setSoundVolumeUI(value, commit) {
+    var volume = _clampInt(value, _soundVolumeValue, 0, 100);
+    if (commit !== false) _soundVolumeValue = volume;
+    var el = document.getElementById('sound-volume');
+    if (el) el.value = volume;
+    return volume;
 }
 
 /* ═══ Fisheye backdrop — WebGL 60fps barrel distortion ═══ */
@@ -5054,26 +5063,29 @@ function _saveWatchedSlots() {
 document.getElementById('burst-enabled').addEventListener('change', function(e) {
     e.stopPropagation();
     playSound('snd-click');
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_burst_enabled) {
-        window.pywebview.api.set_burst_enabled(this.checked);
-    }
+    var on = !!this.checked;
+    _setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
 });
 
 /* ═══ Sound controls ═══ */
 document.getElementById('sound-enabled').addEventListener('change', function(e) {
     e.stopPropagation();
     playSound('snd-click');
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_sound_enabled) {
-        window.pywebview.api.set_sound_enabled(this.checked);
-    }
+    var on = !!this.checked;
+    _setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');
 });
 document.getElementById('sound-volume').addEventListener('input', function(e) {
     e.stopPropagation();
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_sound_volume) {
-        var volume = _clampInt(this.value, 80, 0, 100);
-        this.value = volume;
-        window.pywebview.api.set_sound_volume(volume);
-    }
+    var previousVolume = _soundVolumeValue;
+    var volume = _setSoundVolumeUI(this.value, false);
+    var requestSeq = ++_soundVolumeRequestSeq;
+    _callMenuSettingApi('set_sound_volume', [volume], 'SOUND', function(data) {
+        if (requestSeq !== _soundVolumeRequestSeq) return;
+        _setSoundVolumeUI(data && data.volume !== undefined ? data.volume : volume);
+    }, function() {
+        if (requestSeq !== _soundVolumeRequestSeq) return false;
+        _setSoundVolumeUI(previousVolume);
+    });
 });
 
 /* ═══ Data source panel ═══ */
@@ -5206,21 +5218,21 @@ function _callMenuSettingApi(methodName, args, label, onOk, onFail) {
     var api = window.pywebview && window.pywebview.api;
     if (!api || !api[methodName]) {
         var missing = { ok: false, message: 'pywebview API 不可用 / pywebview API is not available' };
-        if (onFail) onFail(missing);
+        if (onFail && onFail(missing) === false) return;
         showAlert(label, missing.message, true);
         return;
     }
     Promise.resolve(api[methodName].apply(api, args || [])).then(function(result) {
         var data = (result === null || typeof result === 'undefined' || result === '') ? { ok: true } : _menuParseApiResult(result);
         if (!data || data.ok === false) {
-            if (onFail) onFail(data);
+            if (onFail && onFail(data) === false) return;
             showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
             return;
         }
         if (onOk) onOk(data);
     }).catch(function(err) {
         var failed = { ok: false, message: String(err || '设置失败 / Unable to update setting') };
-        if (onFail) onFail(failed);
+        if (onFail && onFail(failed) === false) return;
         showAlert(label, failed.message, true);
     });
 }
@@ -6364,8 +6376,7 @@ function restoreMenuSettings(cfg) {
         document.getElementById('sound-enabled').checked = !!cfg.sound_enabled;
     }
     if (cfg.sound_volume !== undefined) {
-        var restoredVolume = _clampInt(cfg.sound_volume, 80, 0, 100);
-        document.getElementById('sound-volume').value = restoredVolume;
+        var restoredVolume = _setSoundVolumeUI(cfg.sound_volume);
     }
     /* Data source */
     if (cfg.panel_themes) {

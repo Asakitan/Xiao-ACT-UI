@@ -210,6 +210,26 @@ def _dps_fade_timeout_value(seconds: Any) -> int:
     return max(0, min(120, int(value)))
 
 
+def _setting_bool_value(value: Any) -> bool:
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"0", "false", "off", "no", "disabled"}:
+            return False
+        if text in {"1", "true", "on", "yes", "enabled"}:
+            return True
+    return bool(value)
+
+
+def _sound_volume_value(volume_pct: Any) -> int:
+    try:
+        value = float(volume_pct)
+        if not math.isfinite(value):
+            value = 70.0
+    except Exception:
+        value = 70.0
+    return max(0, min(100, int(value)))
+
+
 def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
@@ -1232,7 +1252,12 @@ class SAOWebAPI:
 
     def set_burst_enabled(self, enabled):
         """Enable/disable Burst Mode Ready alerts."""
-        self._g._set_setting('burst_enabled', bool(enabled))
+        state = _setting_bool_value(enabled)
+        try:
+            self._g._set_setting('burst_enabled', state)
+            return json.dumps({'ok': True, 'enabled': state}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'enabled': state, 'message': str(e)}, ensure_ascii=False)
 
     def set_auto_key_enabled(self, enabled):
         try:
@@ -1969,15 +1994,25 @@ class SAOWebAPI:
     # ── Sound settings ──
     def set_sound_enabled(self, enabled):
         """Global SFX on/off."""
-        from utils.sao_sound import set_sound_enabled
-        set_sound_enabled(bool(enabled))
-        self._g._set_setting('sound_enabled', bool(enabled))
+        state = _setting_bool_value(enabled)
+        try:
+            from utils.sao_sound import set_sound_enabled
+            set_sound_enabled(state)
+            self._g._set_setting('sound_enabled', state)
+            return json.dumps({'ok': True, 'enabled': state}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'enabled': state, 'message': str(e)}, ensure_ascii=False)
 
     def set_sound_volume(self, volume_pct):
         """Global volume 0-100."""
-        from utils.sao_sound import set_sound_volume
-        set_sound_volume(int(volume_pct))
-        self._g._set_setting('sound_volume', int(volume_pct))
+        volume = _sound_volume_value(volume_pct)
+        try:
+            from utils.sao_sound import set_sound_volume
+            set_sound_volume(volume)
+            self._g._set_setting('sound_volume', volume)
+            return json.dumps({'ok': True, 'volume': volume}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'volume': volume, 'message': str(e)}, ensure_ascii=False)
 
     # ── Boss bar mode ──
     def set_boss_bar_mode(self, mode):
