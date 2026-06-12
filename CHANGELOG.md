@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.66: Web menu plugin/editor bridge 响应修复.
+
+  1) `web/menu.html` 修复插件全部重载的 bridge 失败反馈。
+     Reload All Plugins 现在通过标准 setting helper 调用 `reload_plugins`,
+     成功后重绘插件列表并提示, 失败时显示错误而不是静默无响应。
+
+  2) `web/menu.html` 修复 AutoKey/BossRaid editor toggle 的 bridge 失败反馈。
+     两个 editor toggle 现在统一处理 API 缺失、失败返回和 Promise reject,
+     成功时显示明确 toast, 失败时给出对应面板错误提示。
+
 ## v4.6.65: Web menu leaderboard/DPS bridge 响应修复.
 
   1) `web/menu.html` 修复 leaderboard sort fetch 失败交互。

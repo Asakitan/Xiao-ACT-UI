@@ -5085,12 +5085,10 @@ document.querySelectorAll('.child-menu li').forEach(function(li) {
             return;
         }
         if (action === 'reload_plugins_all') {
-            var ar = window.pywebview && window.pywebview.api;
-            if (ar && ar.reload_plugins) {
-                Promise.resolve(ar.reload_plugins('')).then(function () {
-                    if (window.renderPluginsCategory) window.renderPluginsCategory();
-                });
-            }
+            _callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {
+                if (window.renderPluginsCategory) window.renderPluginsCategory();
+                showToast('PLUGINS RELOADED');
+            });
             return;
         }
         if (action && window.pywebview && window.pywebview.api) {
@@ -7618,14 +7616,14 @@ function _brReset() {
 }
 
 function _toggleRaidEditorPanel() {
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_raid_editor) {
-        window.pywebview.api.toggle_raid_editor();
-    }
+    _callMenuSettingApi('toggle_raid_editor', [], 'BOSS RAID', function() {
+        showToast('BOSS RAID EDITOR');
+    });
 }
 function _toggleAutoKeyEditorPanel() {
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_autokey_editor) {
-        window.pywebview.api.toggle_autokey_editor();
-    }
+    _callMenuSettingApi('toggle_autokey_editor', [], 'AUTO KEYS', function() {
+        showToast('AUTO KEY EDITOR');
+    });
 }
 
 function _brRenderCloud() {

@@ -340,6 +340,9 @@ def main() -> int:
     plugin_menu_raw_patterns = [
         "((it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '')",
         "var hk = (it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '';",
+        "Promise.resolve(ar.reload_plugins('')).then(function () {",
+        "window.pywebview.api.toggle_raid_editor();",
+        "window.pywebview.api.toggle_autokey_editor();",
     ]
     for pattern in plugin_menu_raw_patterns:
         if pattern in html:
@@ -349,6 +352,10 @@ def main() -> int:
         "function _pluginCountText(value)",
         "var hkCount = _pluginCountNumber(it.hotkey_count);",
         "hkCount ? ' ⌨' + _pluginCountText(hkCount) : ''",
+        "_callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {",
+        "showToast('PLUGINS RELOADED');",
+        "_callMenuSettingApi('toggle_raid_editor', [], 'BOSS RAID', function() {",
+        "_callMenuSettingApi('toggle_autokey_editor', [], 'AUTO KEYS', function() {",
     ]
     for snippet in plugin_menu_safe_required:
         if snippet not in html:
