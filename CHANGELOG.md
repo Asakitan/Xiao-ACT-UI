@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.105: timeline/graph 状态生产者补 retained 新鲜度缓存.
+
+  1) `act_platform/runtime.py` `act_timeline_status` 补 aggregate 同款
+    新鲜度缓存 — 事件列表按 (bus.retained, query, limit) 缓存, 无新事件
+    时跳过 recent_events 深拷贝 + 逐事件 compact + query 过滤(每行一次
+    json.dumps); cursor/speed/playing 播放态不进缓存每次现读保持实时。
+
+  2) 同文件 `act_graph_timeseries_status` 同款 — series/row_count/
+    observed_range 按 (retained, metric, query, topic, range, limit)
+    缓存, 无新事件时跳过整套 series 重建(4 序列 × N 点 dict churn);
+    encounter_id 等轻字段每次现算。Tk 350ms 轮询 + web 异步轮询
+    双端同收益, 战斗后面板空转成本归零。
+
 ## v4.6.104: ACT 事件总线热路径降本 + DPS 打击特效去冗余合成.
 
   1) `act_platform/event_bus.py` `_recent` 改 deque(maxlen) — 旧 list

@@ -1850,18 +1850,41 @@ def act_timeline_status(owner: Any, *, limit: int = 80, query: str = "") -> dict
             "errors": all_errors,
         })
         return replay_status
-    try:
-        raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
-    except Exception as exc:
-        raw_events = []
-        errors.append(str(exc))
-    events = [_compact_timeline_event(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+    # 事件列表是 (retained 计数, query, limit) 的纯函数 — 同 aggregate 的
+    # 新鲜度缓存: 无新事件时跳过 recent_events 深拷贝 + 逐事件 compact +
+    # query 过滤(每行一次 json.dumps)。cursor/speed/playing 是播放态,
+    # 不进缓存, 每次现读保持实时。
     text = query_text.strip().lower()
-    if text:
-        events = [
-            event for event in events
-            if text in json.dumps(event, ensure_ascii=False, default=str).lower()
-        ]
+    _bus = None
+    _ev_key = None
+    try:
+        _bus = ensure_act_event_bus(owner)
+        _ev_key = (_bus.retained, text, row_limit)
+    except Exception as exc:
+        errors.append(str(exc))
+    events: Optional[list] = None
+    if _ev_key is not None:
+        _cached = getattr(owner, "_act_timeline_events_cache", None)
+        if _cached is not None and _cached[0] == _ev_key:
+            events = _cached[1]
+    if events is None:
+        raw_events: list = []
+        if _bus is not None:
+            try:
+                raw_events = _bus.recent_events(row_limit)
+            except Exception as exc:
+                errors.append(str(exc))
+        events = [_compact_timeline_event(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+        if text:
+            events = [
+                event for event in events
+                if text in json.dumps(event, ensure_ascii=False, default=str).lower()
+            ]
+        if _ev_key is not None and not errors:
+            try:
+                setattr(owner, "_act_timeline_events_cache", (_ev_key, events))
+            except Exception:
+                pass
     filters.update({"query": query_text, "limit": row_limit})
     return {
         "ok": not errors,
@@ -3233,20 +3256,47 @@ def act_graph_timeseries_status(owner: Any, *, metric: str | None = None, limit:
         state["time_range_ms"] = max(0, int(time_range_ms or 0))
     row_limit = max(1, min(int(limit or 120), 500))
     errors: list[str] = []
+    # series/observed_range 是 (retained 计数 + 参数) 的纯函数 — 同 aggregate
+    # 的新鲜度缓存: 无新事件时跳过 recent_events 深拷贝 + 整套 series 重建。
+    # encounter_id 等轻字段不进缓存, 每次现算。
+    _bus = None
+    _cache_key = None
     try:
-        raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
+        _bus = ensure_act_event_bus(owner)
+        _cache_key = (_bus.retained, selected_metric,
+                      str(filters.get("query") or ""), str(filters.get("topic") or ""),
+                      int(state.get("time_range_ms") or 0), row_limit)
     except Exception as exc:
-        raw_events = []
         errors.append(str(exc))
-    rows = _graph_rows_from_events(raw_events, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
-    if int(state.get("time_range_ms") or 0) > 0 and rows:
-        end_ms = max(int(row.get("time_ms") or 0) for row in rows)
-        start_ms = max(0, end_ms - int(state.get("time_range_ms") or 0))
-        rows = [row for row in rows if int(row.get("time_ms") or 0) >= start_ms]
-    series = _build_graph_series(rows, selected_metric)
-    observed_range = 0
-    if rows:
-        observed_range = max(0, max(int(row.get("time_ms") or 0) for row in rows) - min(int(row.get("time_ms") or 0) for row in rows))
+    _hit = None
+    if _cache_key is not None:
+        _cached = getattr(owner, "_act_graph_series_cache", None)
+        if _cached is not None and _cached[0] == _cache_key:
+            _hit = _cached[1]
+    if _hit is not None:
+        series, row_count, observed_range = _hit
+    else:
+        raw_events: list = []
+        if _bus is not None:
+            try:
+                raw_events = _bus.recent_events(row_limit)
+            except Exception as exc:
+                errors.append(str(exc))
+        rows = _graph_rows_from_events(raw_events, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
+        if int(state.get("time_range_ms") or 0) > 0 and rows:
+            end_ms = max(int(row.get("time_ms") or 0) for row in rows)
+            start_ms = max(0, end_ms - int(state.get("time_range_ms") or 0))
+            rows = [row for row in rows if int(row.get("time_ms") or 0) >= start_ms]
+        series = _build_graph_series(rows, selected_metric)
+        observed_range = 0
+        if rows:
+            observed_range = max(0, max(int(row.get("time_ms") or 0) for row in rows) - min(int(row.get("time_ms") or 0) for row in rows))
+        row_count = len(rows)
+        if _cache_key is not None and not errors:
+            try:
+                setattr(owner, "_act_graph_series_cache", (_cache_key, (series, row_count, observed_range)))
+            except Exception:
+                pass
     effective_range = int(state.get("time_range_ms") or 0) or observed_range
     state["filters"] = filters
     return {
@@ -3258,7 +3308,7 @@ def act_graph_timeseries_status(owner: Any, *, metric: str | None = None, limit:
         "metrics": list(_GRAPH_METRICS),
         "time_range_ms": int(effective_range),
         "filters": filters,
-        "row_count": len(rows),
+        "row_count": row_count,
         "errors": errors,
     }
 
