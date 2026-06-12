@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.76: DPS 技能语义匹配热路径提速 + 设置保存失败可见化.
+
+  1) `engines/dps_tracker.py` 重构 `_semantic_base_skill_id` 的候选匹配。
+     四张名字表的 id 并集提为模块级缓存 (按底表对象身份失效, 底表重载自动重建),
+     候选搜索从全表 O(n) 子串扫描改为枚举 sid 的 4+ 位子串查集合 (等价语义, 已对拍验证)。
+     消除战斗开局大量新技能 id 首见时的卡顿。
+
+  2) `config.py` 设置保存 fallback 直写失败时不再静默吞错,
+     输出 `[Settings] Fallback write also failed` 日志, 用户可知设置未落盘。
+
 ## v4.6.75: Web menu sound/import picker bridge fallback 修复.
 
   1) `web/menu.html` 修复声音播放 bridge 的 Promise reject 兜底。

@@ -138,24 +138,46 @@ def _skill_semantic_fact(skill_id: int) -> Dict[str, Any]:
     return dict(_skill_semantic_fact_cached(_safe_int(skill_id, 0)))
 
 
+_KNOWN_SKILL_IDS_CACHE: tuple[tuple[int, ...], frozenset] | None = None
+
+
+def _known_skill_ids() -> frozenset:
+    """四张名字表的 id 并集; 按底表对象身份缓存, 底表 cache_clear 重载后自动重建."""
+    global _KNOWN_SKILL_IDS_CACHE
+    from tools.tablekit.name_table_classifier import aoyi_skill_names, damage_attr_names, skill_fallback_names, skill_table
+    tables = (skill_table(), skill_fallback_names(), aoyi_skill_names(), damage_attr_names())
+    key = tuple(id(t) for t in tables)
+    cached = _KNOWN_SKILL_IDS_CACHE
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    union = frozenset().union(*tables)
+    _KNOWN_SKILL_IDS_CACHE = (key, union)
+    return union
+
+
 @lru_cache(maxsize=4096)
 def _semantic_base_skill_id(skill_id: int) -> int:
     sid = _safe_int(skill_id, 0)
     if sid <= 0:
         return 0
     try:
-        from tools.tablekit.name_table_classifier import aoyi_skill_names, damage_attr_names, skill_fallback_names, skill_table
-        known_skill_ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | set(damage_attr_names())
+        known_skill_ids = _known_skill_ids()
         if sid in known_skill_ids:
             return sid
         digits = str(sid)
+        # 候选 = digits 的 4+ 位子串且是已知 id; 枚举子串查集合, 避免全表扫描.
+        # 跳过前导 0 的子串: str(base_id) 不会以 0 开头, 等价于原全表 substring 匹配.
+        seen: set = set()
         candidates = []
-        for base_id in known_skill_ids:
-            if base_id <= 0:
+        n = len(digits)
+        for i in range(n - 3):
+            if digits[i] == '0':
                 continue
-            base_text = str(base_id)
-            if len(base_text) >= 4 and base_text in digits:
-                candidates.append(base_id)
+            for j in range(i + 4, n + 1):
+                cand = int(digits[i:j])
+                if cand in known_skill_ids and cand > 0 and cand not in seen:
+                    seen.add(cand)
+                    candidates.append(cand)
         if candidates:
             return max(candidates, key=lambda value: len(str(value)))
     except Exception:

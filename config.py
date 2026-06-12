@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.6.75"
+APP_VERSION = "4.6.76"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -817,8 +817,8 @@ class SettingsManager:
                     json.dump(self._data, handle, indent=2, ensure_ascii=False)
                     handle.flush()
                     os.fsync(handle.fileno())
-            except Exception:
-                pass
+            except Exception as e2:
+                print(f"[Settings] Fallback write also failed: {e2} (path={self._path}); settings NOT saved")
 
     def get_data_source_map(self) -> dict:
         raw_map = self._data.get("data_source_map", {})
