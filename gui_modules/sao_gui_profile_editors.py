@@ -422,19 +422,43 @@ class AutoKeyDetailPanel(_DetailEditorBase):
                                lambda pid=pid: self._activate_profile(pid),
                                kind='ready' if active else 'default',
                                width=3).pack(side=tk.LEFT, padx=(5, 0))
-            make_action_button(row, 'COPY',
-                               lambda pid=pid: self._copy_profile(pid),
-                               width=4).pack(side=tk.LEFT, padx=(5, 0))
-            make_action_button(row, 'EXP',
-                               lambda pid=pid: self._export_profile(pid),
-                               width=3).pack(side=tk.LEFT, padx=(5, 0))
-            make_action_button(row, 'DEL',
-                               lambda pid=pid: self._delete_profile(pid),
-                               kind='danger', width=3).pack(side=tk.LEFT, padx=(5, 0))
+            # 把同类的「档案文件管理」动作(复制/导出/删除)聚合进「更多 ▾」下拉,
+            # 主动作 OPEN/ON 保留在外。与插件管理器 _more_button / web card-more 同款,
+            # 双端 1:1, 聚合不删功能。
+            self._make_profile_more_button(row, pid).pack(side=tk.LEFT, padx=(5, 0))
             for child in card.winfo_children():
                 child.bind('<Button-1>',
                            lambda _event, pid=pid: self._select_profile(pid),
                            add='+')
+
+    def _make_profile_more_button(self, parent: tk.Widget, pid: str) -> tk.Widget:
+        """「更多 ▾」聚合按钮: 弹 tk.Menu 收纳复制/导出/删除(与插件管理器同款)。"""
+        holder: Dict[str, Any] = {}
+
+        def _post() -> None:
+            btn = holder.get('btn')
+            if btn is None:
+                return
+            menu = tk.Menu(btn, tearoff=0,
+                           bg=PANEL_HEADER, fg=TEXT_MAIN,
+                           activebackground=CYAN, activeforeground='white',
+                           relief='flat', bd=0)
+            menu.add_command(label='复制 Copy',
+                             command=lambda: self._copy_profile(pid))
+            menu.add_command(label='导出 Export',
+                             command=lambda: self._export_profile(pid))
+            menu.add_separator()
+            menu.add_command(label='删除 Delete',
+                             command=lambda: self._delete_profile(pid))
+            try:
+                menu.tk_popup(btn.winfo_rootx(),
+                              btn.winfo_rooty() + btn.winfo_height())
+            finally:
+                menu.grab_release()
+
+        btn = make_action_button(parent, '更多 ▾', _post, width=6)
+        holder['btn'] = btn
+        return btn
 
     def _render_editor(self) -> None:
         assert self._editor_body is not None

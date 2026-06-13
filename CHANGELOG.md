@@ -2,6 +2,23 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.137: AutoKey 档案列表按钮聚合(双端 1:1; 5 按钮→2 主+「更多 ▾」, 不删功能).
+
+  按钮聚合(用户明列需求): AutoKey 档案卡片此前 Tk 单行 5 个按钮
+  (OPEN/ON/COPY/EXP/DEL, 命中"同排 >4-5 按钮"聚合阈值), web 则 Edit/Activate 一行 +
+  Copy/Export/Delete 一行。把**同类的「档案文件管理」动作(复制/导出/删除)**收进
+  「更多 ▾」下拉, 主动作(编辑/启用 = OPEN/ON)保留在外。两端结构归一为
+  [主动作 ×2] + [更多 ▾]:
+
+  - `gui_modules/sao_gui_profile_editors.py` `AutoKeyDetailPanel`: 新增
+    `_make_profile_more_button`, 弹 `tk.Menu`(复制/导出/删除), 与插件管理器
+    `_more_button` 同款; 卡片单行从 5 按钮降为 OPEN/ON/更多▾。
+  - `web/menu.html` `_akRenderLocal`: 头部动作行加 `<select class="auto-key-btn
+    card-more">更多 ▾</select>`(复制/导出/删除), 删除底部三按钮行; 新增
+    `_akCardAction` 派发器 + `.card-more` 样式。与插件管理器 web `card-more` 同款。
+  - 聚合**不删功能**(5 动作全保留可达, 删除仍走 `_akDeleteProfile` 二次确认);
+    BossRaid 档案列表仅 3 按钮(OPEN/ON/COPY, 未过阈值)故不动, 保持其两端现状。
+
 ## v4.6.136: DPS 面板每帧热路径去重(滚动计数 + 命中 FX 衰减), 像素零变化.
 
   性能(战斗热路径, 非 idle): `sao_gui_dps.py` 的 `_draw_row`/`_draw_list_frame`

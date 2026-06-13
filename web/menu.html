@@ -1041,6 +1041,10 @@ html, body {
     background: linear-gradient(180deg, rgba(255,244,232,0.90), rgba(248,214,168,0.56));
     border-color: rgba(243, 175, 18, 0.45);
 }
+.auto-key-btn.card-more {
+    padding-top: 7px;
+    padding-bottom: 7px;
+}
 .auto-key-list,
 .auto-key-cloud-results,
 .auto-key-action-list {
@@ -5524,6 +5528,13 @@ function _akRenderLocal() {
                     '<div class="auto-key-card-actions">' +
                         '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + _jsAttrArg(id) + ', \'editor\'); return false;">编辑 Edit</button>' +
                         '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + _jsAttrArg(id) + '); return false;">启用 Activate</button>' +
+                        // 复制/导出/删除(同类档案管理动作)聚合进「更多 ▾」, 与 Tk _make_profile_more_button 1:1
+                        '<select class="auto-key-btn card-more" onchange="_akCardAction(' + _jsAttrArg(id) + ', this.value); this.selectedIndex=0; return false;">' +
+                            '<option value="">更多 ▾</option>' +
+                            '<option value="copy">复制 Copy</option>' +
+                            '<option value="export">导出 Export</option>' +
+                            '<option value="delete">删除 Delete</option>' +
+                        '</select>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
@@ -5534,11 +5545,6 @@ function _akRenderLocal() {
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
                     '<span>' + _escHtml(_profileText(profile.description, '暂无说明 / No description')) + '</span>' +
-                '</div>' +
-                '<div class="auto-key-card-actions">' +
-                    '<button class="auto-key-btn" type="button" onclick="_akCopyProfile(' + _jsAttrArg(id) + '); return false;">复制 Copy</button>' +
-                    '<button class="auto-key-btn" type="button" onclick="_akExportProfile(' + _jsAttrArg(id) + '); return false;">导出 Export</button>' +
-                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteProfile(' + _jsAttrArg(id) + '); return false;">删除 Delete</button>' +
                 '</div>' +
             '</div>';
     }).join('');
@@ -6146,6 +6152,14 @@ function _akExportProfile(profileId) {
     _akCallApi('export_auto_key_profile', [profileId], function(data) {
         showAlert('AUTO KEYS', '已导出到 / Exported to:\n' + _profileText(data && data.path, ''), true);
     });
+}
+
+// 「更多 ▾」下拉派发到聚合的档案管理动作(复制/导出/删除)。与 Tk _make_profile_more_button 1:1。
+function _akCardAction(profileId, action) {
+    if (!action) return;
+    if (action === 'copy') { _akCopyProfile(profileId); }
+    else if (action === 'export') { _akExportProfile(profileId); }
+    else if (action === 'delete') { _akDeleteProfile(profileId); }
 }
 
 function _akRefreshState() {
