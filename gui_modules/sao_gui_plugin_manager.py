@@ -476,30 +476,40 @@ class PluginManagerPanel:
         result = act_plugin_reload(self.owner)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Reload failed'))
+        else:
+            self._status_var.set('插件已重载')
         self.refresh()
 
     def _reload(self, plugin_id: str) -> None:
         result = act_plugin_reload(self.owner, plugin_id)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Reload failed'))
+        else:
+            self._status_var.set(f'{plugin_id} reloaded')
         self.refresh()
 
     def _enable(self, plugin_id: str) -> None:
         result = act_plugin_enable(self.owner, plugin_id)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Enable failed'))
+        else:
+            self._status_var.set(f'{plugin_id} enabled')
         self.refresh()
 
     def _disable(self, plugin_id: str) -> None:
         result = act_plugin_disable(self.owner, plugin_id)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Disable failed'))
+        else:
+            self._status_var.set(f'{plugin_id} disabled')
         self.refresh()
 
     def _pin(self, plugin_id: str, pinned: bool) -> None:
         result = act_plugin_pin(self.owner, plugin_id, pinned)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Pin failed'))
+        else:
+            self._status_var.set(f'{plugin_id} pinned' if pinned else f'{plugin_id} unpinned')
         self.refresh()
         # Reflect the new pin order in the SAO menu if it is open.
         refresh_menu = getattr(self.owner, '_refresh_menu_if_open', None)

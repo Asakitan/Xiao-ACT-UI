@@ -358,18 +358,24 @@ class TriggerTimerManagerPanel:
         result = act_trigger_reload(self.owner)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Reload failed'))
+        else:
+            self._status_var.set('触发器已重载')
         self.refresh()
 
     def _enable(self, rule_id: str) -> None:
         result = act_trigger_enable(self.owner, rule_id)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Enable failed'))
+        else:
+            self._status_var.set(f'{rule_id} enabled')
         self.refresh()
 
     def _disable(self, rule_id: str) -> None:
         result = act_trigger_disable(self.owner, rule_id)
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Disable failed'))
+        else:
+            self._status_var.set(f'{rule_id} disabled')
         self.refresh()
 
     def _test(self, rule_id: str) -> None:

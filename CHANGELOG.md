@@ -2,6 +2,25 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.125: Tk 插件管理器/触发器面板成功反馈补齐(双端 1:1).
+
+  延续 v4.6.124 的诚实反馈线: web 这两个面板的 enable/disable/reload 等动作
+  一直弹成功 toast(`id enabled`/`触发器已重载`...), Tk 侧此前只在 `ok is False`
+  时写 `_status_var`、成功完全静默 → 用户点完不知是否生效。补成功反馈, 文案与
+  web 1:1:
+
+  1) `gui_modules/sao_gui_plugin_manager.py`: `_reload_all`(插件已重载)/
+    `_reload`({id} reloaded)/`_enable`({id} enabled)/`_disable`({id} disabled)/
+    `_pin`({id} pinned|unpinned) 五处补 else 成功分支。uninstall/import 早已
+    双态反馈, 不动。
+
+  2) `gui_modules/sao_gui_trigger_timer_manager.py`: `_reload`(触发器已重载)/
+    `_enable`({id} enabled)/`_disable`({id} disabled) 三处补成功分支。_test
+    早已有反馈, 不动。
+
+  `refresh()` 不写 `_status_var`(经核), 成功文案不被刷新覆盖。基线 81/81 绿,
+  plugin_manager_panel 3/3 + trigger_timer_panel 5/5。
+
 ## v4.6.124: Tk AutoKey 保存诚实反馈补齐(双端 1:1).
 
   `gui_modules/sao_gui_actions_mixin.py` `_save_autokey_burst_actions` 补齐两处
