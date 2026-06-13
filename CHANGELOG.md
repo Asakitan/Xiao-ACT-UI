@@ -2,6 +2,26 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.140: 修复切换场景不更新服务器 / 抓不到 full sync / 地图横幅不弹(net/packet_capture.py).
+
+  抓包链路严重回归 + 切换瞬间 full-sync 丢失(直连/加速器都受影响):
+
+  - **场景服务器切换死代码(根因)**: 诊断提交 f0713a7 给 TcpReassembler 加 raw-cap
+    诊断时, 把「场景服务器切换」整段代码误嵌进了 `elif _RAW_CAP_DUMP_ENABLED and
+    (C3SB_SHORT in payload)` 诊断分支。生产态(诊断开关 False)下该 elif 永不进入 →
+    切场景时严格识别命中也永不切换 _server_addr、不触发 on_server_change、新场景服
+    所有帧被 `addr != _server_addr` 丢弃 → cap_game 冻结、DPS=0、切换 title 不弹。
+    修复: 把切换体移回 `if self._identify_strict(payload):` 命中分支内(旧服 ≥3s
+    无数据后执行), 诊断 elif 退回成纯打印。
+  - **切换瞬间 full-sync 丢失**: 新场景服在 v2.3.15「旧服 3s 保护」窗口里一次性发完
+    SyncContainerData(自身全量: 名字/等级/装备) + 场景事件(地图横幅来源) + 内存桥
+    full-sync 触发, 这些段在正式 switch 前被 `addr != _server_addr` 丢弃, 只进 24
+    槽回放缓冲, 繁忙主城里和 ~24 玩家 Appear 包交织被挤掉(实测只回放 1~5 个)。
+    回放缓冲 _RECENT_PKT_LIMIT 24→512, 让整段 full sync 存活到 switch 后由
+    _replay_recent_for_addr 补喂 → 角色名/等级、地图横幅、NPC 全恢复。
+  - 实测验证: 冒烟测试(切换触发 + on_server_change + 旧服活跃不误切)PASS; 直连
+    live 日志确认两次 ⚡ 场景服务器切换 + cap_game 持续增长 + 玩家/怪物/横幅回来。
+
 ## v4.6.139: mem_scope web 补「复制快照 / 刷新」按钮(双端 parity; web 此前缺失).
 
   渲染不全 / 功能缺失(web mem_scope 工具栏比 Tk 少两个动作):

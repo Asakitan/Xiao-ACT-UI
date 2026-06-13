@@ -385,7 +385,13 @@ class TcpReassembler:
         # 短路丢弃, (2) 来自新 server addr 但还没识别 → 被 `_try_identify` False 丢弃.
         # 缓存最近的 (addr,seq,payload) 让识别成功后能补喂.
         self._recent_pkts: list = []  # list[(addr, seq, payload)]
-        self._RECENT_PKT_LIMIT = 24
+        # 切场景瞬间新场景服会在 v2.3.15 "旧服 3 秒保护" 窗口内把一次性的
+        # SyncContainerData (自身全量同步: 名字/等级/装备) 一口气发完, 这些段在
+        # 我们正式 switch 之前全被 `addr != server_addr` 丢弃, 只能靠这个缓冲在
+        # switch 后补喂回去. SyncContainerData 是多段大帧, 繁忙主城里还和 ~24 个
+        # 玩家的 Appear 包交织 → 24 个槽远不够 (实测只回放到 1~5 个, 大帧被挤掉).
+        # 放大到 512 让整段 full sync 能存活到 switch 后被 _replay_recent_for_addr 补喂.
+        self._RECENT_PKT_LIMIT = 512
         # v2.3.7: 同服重连冷却 — 真实重连是单次事件, 不可能几秒内连发.
         # 旧版本只要 _seq_anomalous + (loose c3SB 或 _looks_like_frame_start)
         # 就触发, 误识率不为零, 一旦在繁忙流上误中, _next_seq 被重置 -1, 下一
@@ -538,12 +544,11 @@ class TcpReassembler:
                               f'严格识别命中, 但旧服务器 {self._server_addr} 在 '
                               f'{_now - self._last_t:.2f}s 内仍活跃 → 拒绝切换(丢弃)', flush=True)
                     return
-            elif _RAW_CAP_DUMP_ENABLED and (C3SB_SHORT in payload):
-                # 新 addr 带 c3SB 但未通过严格识别 → 开放世界服务器首包格式可能
-                # 不是 FrameDown 嵌套 c3SB / LoginReturn (诊断: 一次性 per addr)。
-                if _raw_cap_addr_seen.get(addr, 0) <= _RAW_CAP_PER_ADDR:
-                    print(f'[Capture][DIAG] 新服务器 {_fmt_ip(src_ip)}:{sport} 带 c3SB '
-                          f'但严格识别未命中 → 不切换。head={payload[:16].hex()}', flush=True)
+                # 旧服务器已停 (≥3s 无有效游戏帧) → 真正的场景服务器切换。
+                # 切换体必须留在 strict-identify 命中分支内; 下方
+                # _RAW_CAP_DUMP_ENABLED elif 仅做诊断打印, 不承载任何切换逻辑
+                # —— 否则诊断关闭 (生产态) 时切换永不触发, 切场景不更新服务器、
+                # 不触发 on_server_change、新场景 full sync 全被丢。
                 old_addr = self._server_addr
                 self._server_addr = addr
                 self._server_meta = dict(meta)
@@ -580,6 +585,12 @@ class TcpReassembler:
                     )
                 # 继续处理新服务器的首个包
                 self._feed_tcp(seq, payload)
+            elif _RAW_CAP_DUMP_ENABLED and (C3SB_SHORT in payload):
+                # 新 addr 带 c3SB 但未通过严格识别 → 开放世界服务器首包格式可能
+                # 不是 FrameDown 嵌套 c3SB / LoginReturn (诊断 only: 一次性 per addr)。
+                if _raw_cap_addr_seen.get(addr, 0) <= _RAW_CAP_PER_ADDR:
+                    print(f'[Capture][DIAG] 新服务器 {_fmt_ip(src_ip)}:{sport} 带 c3SB '
+                          f'但严格识别未命中 → 不切换。head={payload[:16].hex()}', flush=True)
             return
 
         # ─── 同服重连检测 ───
