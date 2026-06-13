@@ -59,6 +59,37 @@
     --menu-hover-warm: rgba(248, 242, 231, 0.98);
     --menu-hover-warm-2: rgba(239, 227, 202, 0.92);
     --menu-hover-border: rgba(243, 175, 18, 0.42);
+    --menu-control-bg: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(224,226,218,0.56));
+    --menu-control-bg-hover: linear-gradient(180deg, var(--menu-hover-warm), var(--menu-hover-warm-2));
+    --menu-control-bg-active: linear-gradient(180deg, rgba(175,247,255,0.42), rgba(104,228,255,0.20));
+    --menu-control-bg-warn: linear-gradient(180deg, rgba(255,244,232,0.90), rgba(248,214,168,0.56));
+    --menu-control-border: rgba(201, 198, 198, 0.50);
+    --menu-control-border-soft: rgba(201, 198, 198, 0.34);
+    --menu-control-border-hover: rgba(243, 175, 18, 0.52);
+    --menu-control-border-active: rgba(104, 228, 255, 0.58);
+    --menu-control-text: rgba(100, 99, 100, 0.86);
+    --menu-control-text-strong: rgba(80, 78, 80, 0.96);
+    --menu-control-muted: rgba(140, 138, 140, 0.86);
+    --menu-control-disabled: rgba(185, 183, 183, 0.84);
+    --menu-control-warning: rgb(180, 130, 20);
+    --menu-field-bg: rgba(255,255,255,0.90);
+    --menu-card-bg: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(237,239,232,0.74));
+    --menu-card-bg-soft: rgba(255,255,255,0.72);
+    --menu-card-bg-hover: rgba(243,175,18,0.10);
+    --menu-card-bg-selected: rgba(243,175,18,0.16);
+    --menu-card-shadow: inset 0 1px 0 rgba(255,255,255,0.40), 0 1px 3px rgba(50,50,0,0.06);
+    --menu-row-bg: rgba(255,255,255,0.84);
+    --menu-row-bg-alt: rgba(247,248,249,0.88);
+    --menu-row-bg-self: rgba(255,250,240,0.94);
+    --menu-dialog-head: rgba(255, 255, 255, 0.86);
+    --menu-dialog-body: rgba(234, 233, 233, 0.72);
+    --menu-dialog-foot: rgba(255, 255, 255, 0.86);
+    --menu-ok: rgb(66, 140, 230);
+    --menu-ok-bg: rgba(66, 140, 230, 0.12);
+    --menu-danger: rgb(209, 61, 79);
+    --menu-danger-bg: rgba(209, 61, 79, 0.10);
+    --menu-scroll-track: rgba(200,200,200,0.18);
+    --menu-scroll-thumb: rgba(243,175,18,0.42);
 
     /* ── Authoritative SAO accent tokens (mirror sao_theme/colors.py · SAOColors) ── */
     --sao-cyan: #5eb8ca;          /* MenuHudSpriteRenderer._CYAN (94,184,202) */
@@ -100,6 +131,53 @@
     --menu-hover-warm: rgba(50, 42, 28, 0.98);
     --menu-hover-warm-2: rgba(42, 34, 22, 0.94);
     --menu-hover-border: rgba(243, 190, 82, 0.46);
+    --menu-control-bg: linear-gradient(180deg, rgba(31, 44, 62, 0.92), rgba(18, 28, 42, 0.82));
+    --menu-control-bg-hover: linear-gradient(180deg, rgba(38, 58, 80, 0.96), rgba(25, 43, 62, 0.88));
+    --menu-control-bg-active: linear-gradient(180deg, rgba(104,228,255,0.24), rgba(104,228,255,0.12));
+    --menu-control-bg-warn: linear-gradient(180deg, rgba(74, 54, 25, 0.92), rgba(52, 39, 21, 0.82));
+    --menu-control-border: rgba(104, 228, 255, 0.28);
+    --menu-control-border-soft: rgba(104, 228, 255, 0.18);
+    --menu-control-border-hover: rgba(240, 196, 86, 0.52);
+    --menu-control-border-active: rgba(104, 228, 255, 0.54);
+    --menu-control-text: rgba(225, 238, 248, 0.92);
+    --menu-control-text-strong: rgba(240, 247, 255, 0.98);
+    --menu-control-muted: rgba(159, 180, 196, 0.84);
+    --menu-control-disabled: rgba(118, 134, 148, 0.82);
+    --menu-control-warning: rgb(240, 196, 86);
+    --menu-field-bg: rgba(14, 23, 36, 0.88);
+    --menu-card-bg: linear-gradient(180deg, rgba(26, 40, 59, 0.92), rgba(16, 25, 38, 0.86));
+    --menu-card-bg-soft: rgba(22, 34, 51, 0.76);
+    --menu-card-bg-hover: rgba(104,228,255,0.10);
+    --menu-card-bg-selected: rgba(240,196,86,0.14);
+    --menu-card-shadow: inset 0 1px 0 rgba(104,228,255,0.08), 0 8px 20px rgba(0,0,0,0.22);
+    --menu-row-bg: rgba(24, 36, 52, 0.86);
+    --menu-row-bg-alt: rgba(19, 30, 45, 0.88);
+    --menu-row-bg-self: rgba(52, 42, 25, 0.90);
+    --menu-dialog-head: rgba(25, 37, 54, 0.92);
+    --menu-dialog-body: rgba(15, 24, 36, 0.88);
+    --menu-dialog-foot: rgba(20, 31, 46, 0.92);
+    --menu-ok: rgb(104, 164, 255);
+    --menu-ok-bg: rgba(104, 164, 255, 0.12);
+    --menu-danger: rgb(255, 112, 122);
+    --menu-danger-bg: rgba(255, 112, 122, 0.12);
+    --menu-scroll-track: rgba(104,228,255,0.10);
+    --menu-scroll-thumb: rgba(104,228,255,0.48);
+    --circle-border: rgba(104,228,255,0.42);
+    --circle-bg: rgba(22, 34, 51, 0.96);
+    --circle-icon: rgba(128, 210, 232, 0.92);
+    --circle-hover-bg: rgba(31, 54, 71, 0.98);
+    --circle-hover-icon: rgba(218, 246, 255, 0.96);
+    --circle-active-border: rgb(240, 196, 86);
+    --circle-active-bg: rgba(58, 46, 25, 0.98);
+    --circle-active-icon: rgba(255, 232, 168, 0.96);
+    --child-bg: rgba(22, 34, 51, 0.94);
+    --child-hover: rgba(52, 42, 25, 0.96);
+    --child-hover-fg: rgba(255, 232, 168, 0.96);
+    --child-text: rgba(225, 238, 248, 0.92);
+    --child-line: rgba(104, 228, 255, 0.24);
+    --child-icon: rgba(128, 210, 232, 0.88);
+    --info-top: rgba(24, 36, 52, 0.96);
+    --info-bottom: rgba(16, 25, 38, 0.94);
 }
 
 /* ═══════════════════════════════════════
@@ -114,7 +192,7 @@ html, body {
     -webkit-user-select: none;
     font-family: var(--font-ui);
     letter-spacing: 1px;
-    color: #555;
+    color: var(--menu-text);
 }
 
 .position,
@@ -1745,7 +1823,7 @@ html, body {
     background: rgba(255,255,255,0.84);
     border: 1px solid rgba(201,198,198,0.34);
     box-shadow: inset 3px 0 0 rgba(134,223,255,0.72);
-    color: #555;
+    color: var(--menu-control-text);
     font-size: 12px;
     animation: sp-row-open 0.28s cubic-bezier(.2,.84,.22,1) both;
     animation-delay: var(--sp-delay, 0ms);
@@ -2153,7 +2231,7 @@ html, body {
     cursor: pointer;
     border-bottom: 1px solid rgba(210,210,210,0.4);
     font-size: 13px;
-    color: #555;
+    color: var(--menu-control-text);
     gap: 8px;
     transition: background 0.1s;
 }
@@ -2311,7 +2389,7 @@ html, body {
     padding: 9px 14px;
     border-bottom: 1px solid rgba(210,210,210,0.35);
     font-size: 12px;
-    color: #555;
+    color: var(--menu-control-text);
     gap: 8px;
 }
 .lb-row:nth-child(-n+3) { background: rgba(243,175,18,0.08); }
@@ -2489,7 +2567,7 @@ html, body {
     border-radius: 4px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.2);
     font-size: 14px;
-    color: #555;
+    color: var(--menu-control-text);
     opacity: 0;
     transition: opacity 0.3s, transform 0.3s;
     pointer-events: none;
@@ -3271,6 +3349,7 @@ html, body {
 .child-menu#sub-act .widget-row {
     width: 100%;
 }
+
 /* ─── Text clarity: disable blur / motion-heavy transitions on the menu shell ─── */
 .info,
 .info.visible,
@@ -3374,6 +3453,291 @@ html, body {
 #sub-panels .source-summary,
 #sub-act .source-summary {
     color: rgb(160,158,160);
+}
+
+/* ─── Theme chrome pass: keep SAOMenu controls on the same dark/light tokens ─── */
+.widget-label,
+#sub-panels .widget-label,
+#sub-act .widget-label,
+.source-name,
+.auto-key-card-title,
+.auto-key-section-title,
+.boss-raid-section-title,
+.boss-raid-card-name,
+.auto-key-summary-value,
+.boss-raid-summary-value,
+.sp-title,
+.sp-name,
+.alert-title span {
+    color: var(--menu-control-text-strong) !important;
+}
+.widget-note,
+#sub-panels .widget-note,
+#sub-act .widget-note,
+.source-note,
+.auto-key-card-meta,
+.auto-key-section-note,
+.boss-raid-section-note,
+.boss-raid-card-meta,
+.boss-raid-field label,
+.auto-key-field label,
+.auto-key-summary-label,
+.boss-raid-summary-label,
+.auto-key-condition-note,
+.auto-key-json-status,
+.auto-key-empty,
+.sp-subtitle,
+.sp-empty,
+.sp-more,
+.saoUpdaterMeta,
+.saoUpdaterNotes,
+.sao-clock-label,
+.child-menu li .shortcut,
+.lb-empty,
+.lb-loading,
+.lb-page,
+.lb-row .lb-stat,
+.lb-row .lb-name .lb-sub {
+    color: var(--menu-control-muted) !important;
+}
+.child-menu li.widget-row,
+#sub-panels li.widget-row,
+#sub-act li.widget-row,
+.auto-key-runtime,
+.source-summary,
+.auto-key-section,
+.auto-key-profile,
+.auto-key-cloud-card,
+.auto-key-action-card,
+.auto-key-condition-card,
+.auto-key-summary-item,
+.auto-key-details,
+.auto-key-empty.compact,
+.boss-raid-section,
+.boss-raid-card,
+.boss-raid-summary-item,
+.br-phase-card,
+.sessionPlayersBox,
+.source-dialog-body,
+.saoUpdaterBody,
+.saoMsgBox,
+.lb-box {
+    background: var(--menu-card-bg) !important;
+    border-color: var(--menu-control-border-soft) !important;
+    color: var(--menu-control-text) !important;
+    box-shadow: var(--menu-card-shadow) !important;
+}
+.child-menu li.widget-row:hover,
+#sub-panels li.widget-row:hover,
+#sub-act li.widget-row:hover,
+.boss-raid-card:hover,
+.boss-raid-card.selected,
+.auto-key-profile.selected {
+    background: var(--menu-card-bg-hover) !important;
+    border-color: var(--menu-control-border-hover) !important;
+}
+.auto-key-profile.active,
+.boss-raid-card.active-profile,
+.auto-key-pill.active {
+    background: var(--menu-card-bg-selected) !important;
+    border-color: var(--menu-control-border-active) !important;
+}
+.auto-key-tab,
+.boss-raid-tab,
+.auto-key-btn,
+.boss-raid-btn,
+.mode-btn,
+.slot-chk,
+.boss-bar-mode-btn,
+.btn-use-folder,
+.lb-tab,
+.saoUpdaterBadge {
+    background: var(--menu-control-bg) !important;
+    border-color: var(--menu-control-border) !important;
+    color: var(--menu-control-text) !important;
+    box-shadow: none !important;
+}
+.auto-key-tab:hover,
+.boss-raid-tab:hover,
+.auto-key-btn:hover,
+.boss-raid-btn:hover,
+.mode-btn:hover,
+.slot-chk:hover,
+.boss-bar-mode-btn:hover,
+.lb-tab:hover {
+    background: var(--menu-control-bg-hover) !important;
+    border-color: var(--menu-control-border-hover) !important;
+    color: var(--menu-control-text-strong) !important;
+}
+.auto-key-tab.active,
+.boss-raid-tab.active,
+.auto-key-btn.primary,
+.boss-raid-btn.primary,
+.mode-btn.active,
+.slot-chk.active,
+.boss-bar-mode-btn.active,
+.saoUpdaterBadge.active,
+.saoUpdaterBadge.ready,
+.lb-tab.active {
+    background: var(--menu-control-bg-active) !important;
+    border-color: var(--menu-control-border-active) !important;
+    color: var(--menu-control-text-strong) !important;
+    box-shadow: 0 0 14px rgba(104, 228, 255, 0.16) !important;
+}
+.auto-key-btn.warn,
+.saoUpdaterBadge.force {
+    background: var(--menu-control-bg-warn) !important;
+    border-color: var(--menu-control-border-hover) !important;
+    color: var(--menu-control-warning) !important;
+}
+.boss-raid-btn.danger,
+.auto-key-pill.warn {
+    background: var(--menu-danger-bg) !important;
+    border-color: var(--menu-danger) !important;
+    color: var(--menu-danger) !important;
+}
+.auto-key-btn:disabled,
+.boss-raid-btn:disabled,
+.mode-btn.disabled {
+    color: var(--menu-control-disabled) !important;
+    border-color: var(--menu-control-border-soft) !important;
+    opacity: 0.48;
+}
+.boss-raid-field input,
+.boss-raid-field textarea,
+.boss-raid-field select,
+.auto-key-field input,
+.auto-key-field textarea,
+.auto-key-field select,
+.br-tl-row input,
+.br-tl-row select,
+.auto-key-details-body textarea,
+.lb-select {
+    background: var(--menu-field-bg) !important;
+    border-color: var(--menu-control-border) !important;
+    color: var(--menu-control-text-strong) !important;
+}
+.auto-key-pill,
+.boss-raid-summary-item,
+.auto-key-summary-item {
+    background: var(--menu-card-bg-soft) !important;
+    border-color: var(--menu-control-border-soft) !important;
+    color: var(--menu-control-text) !important;
+}
+.source-row,
+.boss-raid-section-head,
+.auto-key-section-head,
+.auto-key-details[open] summary {
+    border-color: var(--menu-control-border-soft) !important;
+}
+.sao-toggle,
+#sub-panels .sao-toggle,
+#sub-act .sao-toggle {
+    color: var(--menu-control-text) !important;
+}
+.sao-toggle .toggle-track,
+#sub-panels .sao-toggle .toggle-track,
+#sub-act .sao-toggle .toggle-track,
+.sao-slider,
+#sub-panels .sao-slider,
+#sub-act .sao-slider,
+.saoUpdaterProgress {
+    background: var(--menu-field-bg) !important;
+    border-color: var(--menu-control-border-soft) !important;
+}
+.sao-toggle .toggle-thumb {
+    background: var(--menu-control-muted) !important;
+}
+.sao-toggle input:checked + .toggle-track,
+#sub-panels .sao-toggle input:checked + .toggle-track,
+#sub-act .sao-toggle input:checked + .toggle-track {
+    background: var(--menu-control-bg-active) !important;
+    border-color: var(--menu-control-border-active) !important;
+}
+.sao-toggle input:checked + .toggle-track .toggle-thumb,
+.sao-slider::-webkit-slider-thumb {
+    background: var(--sao-cyan-bright) !important;
+}
+.sessionPlayersBox {
+    border-color: var(--menu-border) !important;
+}
+.sp-header,
+.sp-columns,
+.saoMsgBox > .alert-title,
+.saoMsgBox > .alert-footer,
+.lb-footer {
+    background: var(--menu-dialog-head) !important;
+    border-color: var(--menu-border-strong) !important;
+    color: var(--menu-control-text) !important;
+}
+.sp-list,
+.saoMsgBox > .alert-body {
+    background: var(--menu-dialog-body) !important;
+    color: var(--menu-control-text) !important;
+}
+.sp-row,
+.br-tl-row,
+.lb-row {
+    background: var(--menu-row-bg) !important;
+    border-color: var(--menu-control-border-soft) !important;
+    color: var(--menu-control-text) !important;
+}
+.sp-row:nth-child(even),
+.br-tl-row:nth-child(even),
+.lb-row:nth-child(even) {
+    background: var(--menu-row-bg-alt) !important;
+}
+.sp-row.self,
+.lb-row.lb-self,
+.lb-row.lb-jump {
+    background: var(--menu-row-bg-self) !important;
+    box-shadow: inset 3px 0 0 var(--sao-gold) !important;
+}
+.sp-uid,
+.sp-power,
+.lb-row .lb-lv {
+    color: var(--menu-control-muted) !important;
+}
+.sp-row.self .sp-power,
+.saoUpdaterProgressText,
+.sao-clock-bracket,
+.sao-clock-digits,
+.lb-row:nth-child(1) .lb-rank,
+.lb-row.lb-jump .lb-rank {
+    color: var(--sao-gold) !important;
+}
+.btn-circle {
+    background: var(--menu-field-bg) !important;
+    box-shadow: 0 0 10px var(--menu-shadow) !important;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.btn-circle:hover {
+    transform: translateY(-1px) scale(1.03);
+    box-shadow: 0 0 14px rgba(104, 228, 255, 0.24) !important;
+}
+.btn-ok { border-color: var(--menu-ok) !important; }
+.btn-close { border-color: var(--menu-danger) !important; }
+.btn-ok .inner { background: var(--menu-ok) !important; }
+.btn-close .inner { background: var(--menu-danger) !important; }
+.btn-ok .inner::after { background: var(--menu-ok) !important; }
+.toast {
+    background: var(--menu-dialog-head) !important;
+    border: 1px solid var(--menu-control-border) !important;
+    color: var(--menu-control-text-strong) !important;
+}
+.auto-key-list::-webkit-scrollbar-track,
+.auto-key-cloud-results::-webkit-scrollbar-track,
+.auto-key-action-list::-webkit-scrollbar-track,
+.sp-list::-webkit-scrollbar-track,
+.saoUpdaterNotes::-webkit-scrollbar-track {
+    background: var(--menu-scroll-track) !important;
+}
+.auto-key-list::-webkit-scrollbar-thumb,
+.auto-key-cloud-results::-webkit-scrollbar-thumb,
+.auto-key-action-list::-webkit-scrollbar-thumb,
+.sp-list::-webkit-scrollbar-thumb,
+.saoUpdaterNotes::-webkit-scrollbar-thumb {
+    background: var(--menu-scroll-thumb) !important;
 }
 
 /* ═══════════════════════════════════════
@@ -6462,7 +6826,12 @@ function _menuThemeFromPanels() {
 }
 
 function _applyMenuTheme(theme) {
-    document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');
+    var themeName = _themeValue(theme, 'dark');
+    var root = document.documentElement;
+    root.classList.toggle('theme-dark', themeName === 'dark');
+    root.classList.toggle('theme-light', themeName === 'light');
+    root.dataset.actTheme = themeName;
+    root.style.colorScheme = themeName;
 }
 
 function _syncPanelThemes(themes) {

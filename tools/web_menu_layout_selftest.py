@@ -969,9 +969,12 @@ def main() -> int:
             raise AssertionError("missing safe AutoKey runtime status text snippet: " + snippet)
 
     theme_settings_raw_patterns = [
+        "color: #555;",
+        "color-mix(",
         "var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');",
         "var t = String(themes[p] || '').toLowerCase();",
         "function _applyMenuTheme(theme) {\n    document.documentElement.classList.toggle('theme-dark', theme === 'dark');",
+        "function _applyMenuTheme(theme) {\n    document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');",
         "function _toggleTheme(panel) {\n    var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');",
         "window.pywebview.api.set_panel_theme(panel, next);",
         "window.pywebview.api.set_panel_theme(panelName, next);",
@@ -991,7 +994,12 @@ def main() -> int:
         "function _applyPanelThemeAck(data, fallbackPanel, fallbackTheme)",
         "var t = _themeValue(_panelThemes[p], _themeDefault(p));",
         "var t = _themeValue(themes[p], _themeDefault(p));",
-        "document.documentElement.classList.toggle('theme-dark', _themeValue(theme, 'dark') === 'dark');",
+        "var themeName = _themeValue(theme, 'dark');",
+        "var root = document.documentElement;",
+        "root.classList.toggle('theme-dark', themeName === 'dark');",
+        "root.classList.toggle('theme-light', themeName === 'light');",
+        "root.dataset.actTheme = themeName;",
+        "root.style.colorScheme = themeName;",
         "var panelName = _themePanelName(panel);",
         "if (!panelName) return;",
         "_callMenuSettingApi('set_panel_theme', [panelName, next], 'PANEL THEME', function(data) {",
@@ -1006,6 +1014,27 @@ def main() -> int:
     for snippet in theme_settings_safe_required:
         if snippet not in html:
             raise AssertionError("missing safe panel theme settings snippet: " + snippet)
+
+    theme_css_safe_required = [
+        "color: var(--menu-text);",
+        "--menu-control-bg:",
+        "--menu-card-bg:",
+        "--menu-dialog-head:",
+        "--circle-bg: rgba(22, 34, 51, 0.96);",
+        "--child-bg: rgba(22, 34, 51, 0.94);",
+        "--info-top: rgba(24, 36, 52, 0.96);",
+        "/* ─── Theme chrome pass: keep SAOMenu controls on the same dark/light tokens ─── */",
+        ".auto-key-tab,\n.boss-raid-tab,\n.auto-key-btn,\n.boss-raid-btn,\n.mode-btn,\n.slot-chk,",
+        "background: var(--menu-control-bg) !important;",
+        ".child-menu li.widget-row,\n#sub-panels li.widget-row,\n#sub-act li.widget-row,",
+        "background: var(--menu-card-bg) !important;",
+        ".btn-ok { border-color: var(--menu-ok) !important; }",
+        ".btn-close { border-color: var(--menu-danger) !important; }",
+        ".sp-row,\n.br-tl-row,\n.lb-row {",
+    ]
+    for snippet in theme_css_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing SAOMenu theme CSS snippet: " + snippet)
 
     info_update_raw_patterns = [
         "function updateInfo(data) {\n    if (data.username) document.getElementById('info-username').textContent = data.username;",
