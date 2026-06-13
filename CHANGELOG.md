@@ -2,6 +2,27 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.129: Entity Boss↔AutoKey 联动总开关 + 全局CD 控件补齐(双端 1:1).
+
+  web 主菜单一直有「BOSS ↔ AUTOKEY LINKAGE」区(联动 ON/OFF + Debug + 全局CD +
+  映射表), entity/Tk 端的 Boss 反应编辑器此前只能编辑单条反应映射, **没有联动
+  总开关和全局CD 控件**——Tk 用户无法全局开关联动或调全局冷却(只能逐条改),
+  尽管引擎两端都读这些值(`load_linkage_config` 的 `enabled`/`global_cooldown_s`
+  门控所有联动)。典型「web 有 entity 漏」的半成品。
+
+  - `gui_modules/sao_gui_bossraid.py` `_render_reactions` 顶部新增「联动」行:
+    ON/OFF 复选 + 全局CD(s) 输入框, 读 `st.enabled`/`st.global_cooldown_s`
+    (build_boss_reactions_state 早已下发), 写经新 `set_linkage_fn` 回调; 保存失败
+    弹 `_mech_toast`。控件以 `getattr(self,'_set_linkage',None)` 守卫, 未接线则
+    不渲染(不崩)。
+  - 回调链: `_init_reactions_state` + `BossRaidPanel`/`BossRaidDetailPanel`
+    (sao_gui_profile_editors) 构造器加 `set_linkage_fn`; actions_mixin 两处构造
+    都接 `_set_linkage_field`(load→set→save_linkage_config, global_cooldown_s
+    钳 0-60, 与 web `set_linkage_*` 一致)。
+
+  注: web 的 Debug Log 开关本轮未补(build_boss_reactions_state 未下发 debug_log,
+  且属诊断项), 留后续。映射编辑两端早已有。基线 81/81 绿。
+
 ## v4.6.128: WebView 更新错误弹窗与 Tk 对齐(不再吓人, 双端 1:1).
 
   `sao_webview.py` `_build_update_popup_payload` 的 `state=='error'` 分支改为

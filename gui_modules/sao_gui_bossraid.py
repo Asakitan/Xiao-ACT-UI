@@ -149,9 +149,11 @@ class _BossReactionsEditorMixin:
         'mechanic': ('机制', '#555a63'),
     }
 
-    def _init_reactions_state(self, load_reactions_fn, save_reaction_fn):
+    def _init_reactions_state(self, load_reactions_fn, save_reaction_fn,
+                              set_linkage_fn=None):
         self._load_reactions = load_reactions_fn
         self._save_reaction = save_reaction_fn
+        self._set_linkage = set_linkage_fn
         self._react_state = {}
         self._react_boss = 0
         self._react_scene = None
@@ -214,6 +216,45 @@ class _BossReactionsEditorMixin:
             self._react_scene = str(st.get('selected_scene_key') or '0')
         # the contract resolves the default boss; mirror it so save/match align
         self._react_boss = int(st.get('selected_boss_base_id') or self._react_boss or 0)
+
+        # ── 联动总开关 + 全局CD (与 web menu「BOSS ↔ AUTOKEY LINKAGE」对齐;
+        #    entity 端此前只能编辑单条反应, 无总开关/全局CD 控件) ──
+        _set_lk = getattr(self, '_set_linkage', None)
+        if _set_lk is not None:
+            lk_row = tk.Frame(container, bg=PANEL_BG)
+            lk_row.pack(fill=tk.X, pady=(0, 4))
+            tk.Label(lk_row, text='联动', bg=PANEL_BG, fg=TEXT_MUTED,
+                     font=panel_font(9)).pack(side=tk.LEFT)
+            _lk_en = _tk.BooleanVar(value=bool(st.get('enabled', False)))
+
+            def _toggle_lk_enabled(_v=_lk_en):
+                try:
+                    _set_lk('enabled', bool(_v.get()))
+                except Exception as exc:
+                    self._mech_toast('联动开关保存失败: %s' % exc, error=True)
+
+            _tk.Checkbutton(lk_row, text='ON/OFF', variable=_lk_en,
+                            command=_toggle_lk_enabled, bg=PANEL_BG, fg=TEXT_MAIN,
+                            selectcolor=PANEL_CARD, activebackground=PANEL_BG,
+                            activeforeground=TEXT_MAIN, font=panel_font(8),
+                            bd=0, highlightthickness=0).pack(side=tk.LEFT, padx=(6, 12))
+            tk.Label(lk_row, text='全局CD(s)', bg=PANEL_BG, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            _lk_cd = _tk.StringVar(value=str(st.get('global_cooldown_s', 1.0)))
+
+            def _commit_lk_cd(_evt=None, _v=_lk_cd):
+                try:
+                    _set_lk('global_cooldown_s', float(_v.get()))
+                except Exception as exc:
+                    self._mech_toast('全局CD保存失败: %s' % exc, error=True)
+
+            _lk_cd_entry = tk.Entry(lk_row, textvariable=_lk_cd, width=5,
+                                    font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
+                                    insertbackground=TEXT_MAIN, bd=0,
+                                    highlightthickness=1, highlightbackground=PANEL_EDGE)
+            _lk_cd_entry.pack(side=tk.LEFT, padx=(4, 0))
+            _lk_cd_entry.bind('<Return>', _commit_lk_cd)
+            _lk_cd_entry.bind('<FocusOut>', _commit_lk_cd)
 
         # ── scene selector (map / 场景) ──
         scenes = list(st.get('scenes') or [])
@@ -1549,6 +1590,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         on_reset: Optional[Callable[[], None]] = None,
         load_reactions_fn: Optional[Callable[[], dict]] = None,
         save_reaction_fn: Optional[Callable[[dict], Any]] = None,
+        set_linkage_fn: Optional[Callable[[str, Any], Any]] = None,
         mechanics_api: Optional[Dict[str, Callable]] = None,
     ):
         self._master = master
@@ -1561,6 +1603,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         self._on_reset = on_reset or (lambda: None)
         self._load_reactions = load_reactions_fn
         self._save_reaction = save_reaction_fn
+        self._set_linkage = set_linkage_fn
         self._init_mechanics(mechanics_api)
         self._react_state: Dict[str, Any] = {}
         self._react_boss: int = 0

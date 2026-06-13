@@ -94,6 +94,7 @@ class SAOPlayerGUIActionsMixin:
                 ),
                 load_reactions_fn=self._load_boss_reactions_state,
                 save_reaction_fn=self._save_boss_reaction,
+                set_linkage_fn=self._set_linkage_field,
                 mechanics_api=self._mechanics_editor_api(),
             )
         self._bossraid_panel.toggle()
@@ -225,6 +226,19 @@ class SAOPlayerGUIActionsMixin:
         from engines.boss_autokey_linkage import upsert_mapping
         return upsert_mapping(self._cfg_settings_ref, mapping)
 
+    def _set_linkage_field(self, field: str, value: Any) -> Any:
+        """Set one top-level Boss↔AutoKey linkage config field and persist.
+        Mirrors web AutoKeyEditorAPI.set_linkage_enabled / set_linkage_global_cooldown
+        so the entity reactions editor reaches parity with the web menu's linkage
+        section (which previously had no entity-side control)."""
+        from engines.boss_autokey_linkage import load_linkage_config, save_linkage_config
+        config = load_linkage_config(self._cfg_settings_ref)
+        if field == 'global_cooldown_s':
+            config[field] = max(0.0, min(60.0, float(value)))
+        else:
+            config[field] = bool(value)
+        return save_linkage_config(self._cfg_settings_ref, config)
+
     def _toggle_autokey_detail_panel(self):
         """Open/close the full AutoKey profile editor."""
         self._dismiss_sao_menu_for_panel()
@@ -249,6 +263,7 @@ class SAOPlayerGUIActionsMixin:
                 author_fn=getattr(self, '_boss_raid_author_snapshot', None),
                 load_reactions_fn=self._load_boss_reactions_state,
                 save_reaction_fn=self._save_boss_reaction,
+                set_linkage_fn=self._set_linkage_field,
                 mechanics_api=self._mechanics_editor_api(),
             )
         self._bossraid_detail_panel.toggle()

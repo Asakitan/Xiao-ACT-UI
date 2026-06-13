@@ -835,6 +835,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
                  author_fn: Optional[Callable[[], dict]] = None,
                  load_reactions_fn: Optional[Callable[..., dict]] = None,
                  save_reaction_fn: Optional[Callable[[dict], Any]] = None,
+                 set_linkage_fn: Optional[Callable[[str, Any], Any]] = None,
                  mechanics_api: Optional[Dict[str, Callable]] = None):
         super().__init__(master, 'BossRaid Detail Editor',
                          'Profile, phase and timeline editor')
@@ -849,7 +850,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._phase_vars: List[Dict[str, Any]] = []
         # shared scene→boss→skill reaction editor (same memory/TCP feed as the
         # quick BossRaid panel); None callbacks → section is hidden.
-        self._init_reactions_state(load_reactions_fn, save_reaction_fn)
+        self._init_reactions_state(load_reactions_fn, save_reaction_fn, set_linkage_fn)
         self._reactions_frame: Optional[tk.Frame] = None
         # shared mechanics editor (same contract as quick panel + web editor)
         self._init_mechanics(mechanics_api)
