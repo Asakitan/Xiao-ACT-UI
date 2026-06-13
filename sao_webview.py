@@ -9868,7 +9868,6 @@ class SAOWebViewGUI:
             progress = int(round(float(getattr(snapshot, 'progress', 0.0) or 0.0) * 100.0)) if snapshot else 0
         except Exception:
             progress = 0
-        error = str(getattr(snapshot, 'error', '') or '').strip() if snapshot else ''
         if state == 'available':
             if latest_version and skipped_version == latest_version and not force_required:
                 return None
@@ -9898,19 +9897,20 @@ class SAOWebViewGUI:
                 'duration_ms': 6500,
             }
         if state == 'error':
-            return {
-                'key': f'error:{latest_version}:{error}',
-                'title': 'UPDATE ERROR',
-                'message': error or '更新服务暂不可用，请稍后重试。',
-                'duration_ms': 5200,
-            }
+            # 与 entity/Tk 端一致 (sao_gui_status_updater_mixin._build_update_popup_payload):
+            # 自动检查在 DNS/网络预热期可能瞬时失败, 这类错误留在更新面板与手动检查
+            # 反馈里即可, 不再弹一个吓人的 identity alert。错误状态仍随 snapshot 推到
+            # menu 的更新面板 (sao-updater-meta/badge) 显示, 不丢信息。
+            return None
         return None
 
     def _maybe_show_update_popup(self, snapshot=None):
         # v2.1.2-m: 防 sao_alert 反复弹窗:
         #   1) downloading 状态完全静音 (进度由 SAO 菜单/状态面板显示)
         #   2) 同一个 popup_key 不重复弹 (依旧依赖 _last_update_popup_key)
-        #   3) 当前 alert 还在显示且不是 error → 跳过 (避免无意义重叠)
+        #   3) 当前 alert 还在显示 → 跳过 (避免无意义重叠)
+        # 注: error 状态现已不产生 popup (与 Tk 端一致, 见 _build_update_popup_payload),
+        # 故此处只剩 available / ready 两类一次性事件提示。
         payload = self._build_update_popup_payload(snapshot)
         if not payload:
             return
@@ -9920,8 +9920,7 @@ class SAOWebViewGUI:
         if popup_key.startswith('downloading:'):
             self._last_update_popup_key = popup_key
             return
-        if (getattr(self, '_identity_alert_visible', False)
-                and not popup_key.startswith('error:')):
+        if getattr(self, '_identity_alert_visible', False):
             self._last_update_popup_key = popup_key
             return
         self._last_update_popup_key = popup_key

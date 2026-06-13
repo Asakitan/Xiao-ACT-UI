@@ -2,6 +2,21 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.128: WebView 更新错误弹窗与 Tk 对齐(不再吓人, 双端 1:1).
+
+  `sao_webview.py` `_build_update_popup_payload` 的 `state=='error'` 分支改为
+  返回 None, 与 entity/Tk 端 `sao_gui_status_updater_mixin` 一致。
+
+  背景: 自动更新检查在 DNS/网络预热期可能瞬时失败。Tk 端早有注释明确"这类
+  错误留在更新面板与手动检查反馈里, 不弹吓人的 alert", 但 web 端一直照弹一个
+  「UPDATE ERROR」identity alert(还特意优先于其他 alert)——同一个 UX 决策只在
+  Tk 落地、web 漏做(典型半成品)。现 web 也不再弹错误弹窗; 错误状态仍随 snapshot
+  推到 menu 更新面板(sao-updater-meta/badge)显示, 不丢信息; 手动检查失败仍有
+  反馈。available/downloading/ready 弹窗不变。
+
+  连带: `_maybe_show_update_popup` 移除已失效的 error 优先分支(error 不再产生
+  payload), 简化 `_identity_alert_visible` 守卫; 清理同方法内不再使用的 error 局部。
+
 ## v4.6.127: Tk BossRaid 机制写操作失败反馈 + 反应保存成功反馈(双端 1:1).
 
   诚实反馈脉最后一处(bossraid), 补 `gui_modules/sao_gui_bossraid.py` 两处与
