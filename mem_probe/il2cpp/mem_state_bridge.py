@@ -31,6 +31,7 @@ if _ROOT not in sys.path:
 
 from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
 from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from mem_probe.il2cpp.field_authority import FieldAuthority, ProbeReason, Source
 
 
 class MemStateBridge:
@@ -78,6 +79,16 @@ class MemStateBridge:
         self.last_skill_cd_count: int = 0
         self.last_resources: dict = {}
         self.last_is_dead: bool = False
+        # Phase 5: granular per-field ownership. PacketBridge consumes this map so
+        # one bad memory reader no longer flips the whole subsystem to TCP.
+        self._field_authority = FieldAuthority()
+        if self.packet_bridge is not None:
+            fn = getattr(self.packet_bridge, 'set_field_authority', None)
+            if callable(fn):
+                try:
+                    fn(self._field_authority)
+                except Exception:
+                    pass
         # entity-HP arm (MEM-driven boss/entity HP; additive, never fights live TCP)
         self._entity_enabled: bool = True
         self._entity_provider: Any = None
@@ -133,6 +144,7 @@ class MemStateBridge:
         # authoritative id->name into it. Lazily fetched via _mem_name_cache().
         self._name_cache = None
         self._name_cache_checked: bool = False
+        self._name_overlay_writer = None
         self._nr = None
         self._nr_tried = False
         # nameplate name harvest: read the game's *rendered* over-head name from the UI
@@ -717,6 +729,15 @@ class MemStateBridge:
             names = res.get("names") or {}
             nr = self._name_resolver()
             cache = self._mem_name_cache()
+            writer = None
+            if cache is not None:
+                try:
+                    if self._name_overlay_writer is None:
+                        from tools.tablekit.live_overlay_writer import LiveNameOverlayWriter
+                        self._name_overlay_writer = LiveNameOverlayWriter(cache, min_confirmations=1)
+                    writer = self._name_overlay_writer
+                except Exception:
+                    writer = None
             for base, nm in names.items():
                 if base in self._np_resolved_bases:
                     continue                                  # handled once; no re-overlay
@@ -733,10 +754,9 @@ class MemStateBridge:
                 if nm == json_nm:
                     continue                                  # JSON already correct
                 # persist the authoritative game name into the overlay cache
-                if cache is not None:
+                if writer is not None:
                     try:
-                        cache.observe_name(kind, base, nm,
-                                           source="mem_nameplate", confidence="mem")
+                        writer.observe(kind, base, nm, context={"source": "nameplate"})
                     except Exception:
                         pass
                 # combat entities also go to the live panel (npcs aren't shown there)
@@ -772,6 +792,7 @@ class MemStateBridge:
 
     def _on_uid(self, uid: int):
         self.last_uid = uid
+        self._field_authority.record_success('identity', source=Source.MEMORY)
         self._log(f"[MemBridge] uid={uid}")
         # game_state.player_id 是 str
         if self.state_mgr is not None:
@@ -794,6 +815,7 @@ class MemStateBridge:
     def _on_hp(self, cur_hp: int, max_hp: int):
         self.last_hp = cur_hp
         self.last_max_hp = max_hp
+        self._field_authority.record_success('hp', source=Source.MEMORY)
         # 主推 game_state — 所有面板订阅 GameState 即可
         if self.state_mgr is not None:
             try:
@@ -813,6 +835,7 @@ class MemStateBridge:
         if total <= 0 or cur < 0 or cur > total * 4:
             return  # 数据可疑, 跳过避免污染 GameState
         try:
+            self._field_authority.record_success('stamina', source=Source.MEMORY)
             pct = (float(cur) / float(total)) if total > 0 else 1.0
             pct = max(0.0, min(1.0, pct))
             self.state_mgr.update(stamina_current=int(cur),
@@ -836,6 +859,9 @@ class MemStateBridge:
                 kw['fight_point'] = int(ident['fight_point'])
             # season_medal_level 不是 GameState 字段; 跳过
             if kw:
+                if 'level_base' in kw:
+                    self._field_authority.record_success('level', source=Source.MEMORY)
+                self._field_authority.record_success('identity', source=Source.MEMORY)
                 self.state_mgr.update(**kw)
                 self._log(f"[MemBridge] identity {kw}")
         except Exception:
@@ -844,6 +870,10 @@ class MemStateBridge:
     def _on_profession(self, profession_id: int, char_name: str):
         self.last_profession_id = profession_id
         self.last_char_name = char_name
+        self._field_authority.record_success('profession', source=Source.MEMORY)
+        if char_name:
+            self._field_authority.record_success('name', source=Source.MEMORY)
+            self._field_authority.record_success('identity', source=Source.MEMORY)
         self._log(f"[MemBridge] profession={profession_id} name={char_name!r}")
         if self.state_mgr is not None:
             try:
@@ -864,6 +894,8 @@ class MemStateBridge:
 
     def _on_skill_cd(self, cds: list):
         self.last_skill_cd_count = len(cds)
+        if cds:
+            self._field_authority.record_success('skills', source=Source.MEMORY)
         # 把 SkillCD list 转成 GameState.skill_slots 格式 (HUD/SkillFX/AutoKey 都用这个)
         if self.state_mgr is not None:
             try:
@@ -898,6 +930,26 @@ class MemStateBridge:
                 except Exception:
                     traceback.print_exc()
 
+    @staticmethod
+    def _classify_probe_failure(mode: str, err: str) -> ProbeReason:
+        """Map provider status text to the Phase-5 typed failure reason.
+
+        The current provider still reports status as `(mode, err)` strings, so this
+        bridge performs a conservative text classification until the provider emits
+        typed ProbeFailure values directly. Importantly, scan-in-progress and missing
+        process are NOT counted as field failures by FieldAuthority.
+        """
+        text = f"{mode or ''} {err or ''}".lower()
+        if "scan" in text and ("progress" in text or "in_progress" in text or "running" in text):
+            return ProbeReason.SCAN_IN_PROGRESS
+        if "process" in text or "openprocess" in text or "star.exe" in text or "pid" in text:
+            return ProbeReason.PROCESS_MISSING
+        if "anchor" in text or "relocate" in text or "klass" in text:
+            return ProbeReason.ANCHOR_INVALID
+        if "layout" in text or "sanity" in text or "drift" in text or "plaus" in text:
+            return ProbeReason.LAYOUT_DRIFT
+        return ProbeReason.SNAPSHOT_NONE
+
     def _on_status(self, mode: str, err: str):
         self.mode = mode
         self.last_error = err
@@ -912,12 +964,25 @@ class MemStateBridge:
                 pass
         # 切换 packet_bridge 的权威源状态
         if self.packet_bridge is not None:
+            fn_fa = getattr(self.packet_bridge, 'set_field_authority', None)
+            if callable(fn_fa):
+                try:
+                    fn_fa(self._field_authority)
+                except Exception:
+                    pass
             fn = getattr(self.packet_bridge, 'set_mem_authoritative', None)
             if callable(fn):
                 try:
                     fn(mode == 'memory')
                 except Exception:
                     pass
+        if mode == 'memory':
+            return
+        # Phase 5: degrade fields independently based on the typed failure reason.
+        # A scan in progress or missing process does not count as failure, by policy.
+        reason = self._classify_probe_failure(mode, err)
+        for comp in ('hp', 'level', 'skills', 'identity', 'profession', 'name'):
+            self._field_authority.record_failure(comp, reason)
 
     # ───────── 查询 ─────────
 

@@ -16,12 +16,11 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from mem_probe.il2cpp import auto_offsets as _ao
+
 _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
-ENT_COMPLIST_OFF = 0x60
-ARRAY_ELEMS_OFF = 0x20
+ARRAY_ELEMS_OFF = 0x20               # Il2Cpp STRUCTURAL: array element ptrs start
 SKILLCOMP_NAME = "ZStateSkillComp"
-CUR_SKILL_OFF = 0x40    # curSkillId_ fallback (auto-offset 优先)
-CUR_STAGE_OFF = 0x64    # curStageId_ fallback
 IDLE_SKILL_IDS = (0, 1)  # 待机/无技能
 
 
@@ -29,6 +28,13 @@ class BossSkillStateReader:
     def __init__(self, dps_source):
         self._src = dps_source
         self._pm = dps_source.sr.pm
+        # init-time auto-offset resolution (Stage A only — never re-resolve in hot path).
+        # ZEntity.compList_ is a managed field; resolved by name from the live dump or
+        # bundle, falling back to the verified-live literal 0x60 when both are missing.
+        ent = (_ao.resolve(dps_source, "Panda.ZGame.ZEntity",
+                            {"off_ent_complist": ("compList_", 0x60)})
+               if dps_source is not None else {})
+        self._off_ent_complist = int(ent.get("off_ent_complist", 0x60))
         self._off_skill = 0
         self._off_stage = 0
         self._comp_cache: Dict[int, int] = {}   # ent_obj → ZStateSkillComp ptr (热路径缓存)
@@ -48,7 +54,7 @@ class BossSkillStateReader:
         cached = self._comp_cache.get(ent_obj)
         if cached and self._kname(cached) == SKILLCOMP_NAME:
             return cached
-        cl = self._pm.read_u64(ent_obj + ENT_COMPLIST_OFF) or 0
+        cl = self._pm.read_u64(ent_obj + self._off_ent_complist) or 0
         if not (_MINP <= cl <= _MAXP):
             return 0
         for i in range(40):
@@ -61,14 +67,13 @@ class BossSkillStateReader:
     def _resolve_offsets(self, comp: int) -> None:
         if self._off_skill:
             return
+        # auto-offset via auto_offsets.offset (live field table -> dump bundle -> literal)
         try:
-            from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
-            fm = LiveFieldResolver(self._pm)._field_map(self._pm.read_u64(comp)) or {}
-            self._off_skill = int(fm.get("curSkillId_") or CUR_SKILL_OFF)
-            self._off_stage = int(fm.get("curStageId_") or CUR_STAGE_OFF)
+            self._off_skill = int(_ao.offset(self._src, SKILLCOMP_NAME, "curSkillId_") or 0x40)
+            self._off_stage = int(_ao.offset(self._src, SKILLCOMP_NAME, "curStageId_") or 0x64)
         except Exception:
-            self._off_skill = CUR_SKILL_OFF
-            self._off_stage = CUR_STAGE_OFF
+            self._off_skill = 0x40
+            self._off_stage = 0x64
 
     def read_skill_cast(self, ent_obj: int) -> Optional[Dict]:
         """返回 {skill_id, stage_id} (boss 当前出招); 待机/读不到返回 None。"""

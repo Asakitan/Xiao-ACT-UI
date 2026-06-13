@@ -30,6 +30,7 @@ from mem_probe.il2cpp.mem_string_pool import (
     CLASS_FIELDS_OFF, FI_NAME_OFF, FI_PARENT_OFF, FI_OFF_OFF, FI_STRIDE,
     STR_LEN_OFF, STR_CHARS_OFF, ARR_LEN_OFF, ARR_ELEMS_OFF, NATIVEARRAY_LEN_OFF,
 )
+from mem_probe.il2cpp import root_pointer_cache as _rpc
 
 try:
     from mem_probe import cy_memscan as _cy
@@ -40,6 +41,7 @@ PROXYMGR_STATIC_FIELDS_OFF = 0xB8                 # Il2CppClass.static_fields (r
 
 SCENE_CLS = "Bokura.SceneTableBase"
 PROXY_CLS = "Table.Utility.TableProxyManager"
+_RPC_SCENECFG = "SceneConfigMgr"
 
 
 class MapNameReader:
@@ -54,8 +56,27 @@ class MapNameReader:
         self._scene_names: Dict[int, str] = {}
         self._scene_cfg = 0
         self._scene_cfg_hint = 0          # region base that last held SceneConfigMgr
+        self._scene_cfg_klass = 0
         self._cfg_scratch = None          # reused scan buffer
         self._ready = False
+        self._scene_cfg_offsets_ready = False
+        self._scene_cur_off = self.SCENECFG_CUR_OFF
+        self._scene_table_off = self.SCENECFG_SCENE_TABLE_OFF
+        self._scene_first_table_off = self.SCENECFG_FIRST_TABLE_OFF
+        self._game_key = ""
+        try:
+            self._game_key = getattr(dps_source, "game_key", "") or \
+                (dps_source.sr.bundle_meta.get("ga_sha256_first_1mb") if
+                 getattr(dps_source, "sr", None) else "") or ""
+        except Exception:
+            self._game_key = ""
+        if self._game_key:
+            cached = _rpc.get_entry(self._game_key, _RPC_SCENECFG) or {}
+            addr = cached.get("addr") if isinstance(cached.get("addr"), int) else 0
+            klass = cached.get("klass_addr") if isinstance(cached.get("klass_addr"), int) else 0
+            if addr and klass:
+                self._scene_cfg = addr
+                self._scene_cfg_klass = klass
 
     # ── klass/field/string resolution: delegated to the shared bridge ─────────
     def _resolve_klass(self, full: str) -> int:
@@ -106,20 +127,48 @@ class MapNameReader:
     # ── current scene id: SceneConfigMgr.curSceneId_ (CharSerialize.SceneData is
     #    null in many scenes, so it's not a reliable source) ─────────────────────
     SCENECFG_CLS = "SceneConfigMgr"
+    # Verified-live literal fallbacks for the SceneConfigMgr singleton's three
+    # fields. Resolved by name (via StringPoolBridge's live field-table walk) on
+    # first use; the class attribute remains as the self-healing fallback.
     SCENECFG_CUR_OFF = 0xE0          # curSceneId_
     SCENECFG_SCENE_TABLE_OFF = 0xD8  # sceneTable_
     SCENECFG_FIRST_TABLE_OFF = 0x50  # monsterTable_ (first of ~18 consecutive ZTable ptrs)
+
+    def _scene_cfg_off(self, field: str, fallback: int) -> int:
+        """Auto-offset a SceneConfigMgr field by name (live field table -> literal)."""
+        try:
+            k = self._resolve_klass(self.SCENECFG_CLS)
+            if k:
+                off = self._field_off(k, field)
+                if off is not None and off > 0:
+                    return int(off)
+        except Exception:
+            pass
+        return fallback
+
+    def _resolve_scene_cfg_offsets(self) -> None:
+        if self._scene_cfg_offsets_ready:
+            return
+        self._scene_cur_off = self._scene_cfg_off("curSceneId_", self.SCENECFG_CUR_OFF)
+        self._scene_table_off = self._scene_cfg_off("sceneTable_", self.SCENECFG_SCENE_TABLE_OFF)
+        self._scene_first_table_off = self._scene_cfg_off("monsterTable_", self.SCENECFG_FIRST_TABLE_OFF)
+        self._scene_cfg_offsets_ready = True
 
     def _validate_scene_cfg(self, obj: int, sset: set) -> bool:
         """One block read of 0x50..0xE4 + local checks (was 14 single RPMs)."""
         if obj < 0:
             return False
-        blob = self.pm.read_bytes(obj + 0x50, (self.SCENECFG_CUR_OFF + 4) - 0x50)
-        if not blob or len(blob) < (self.SCENECFG_CUR_OFF + 4) - 0x50:
+        self._resolve_scene_cfg_offsets()
+        if min(self._scene_cur_off, self._scene_table_off, self._scene_first_table_off) < 0x50:
+            return False
+        end_off = max(self._scene_cur_off + 4, self._scene_table_off + 8,
+                      self._scene_first_table_off + 8, self.SCENECFG_CUR_OFF + 4)
+        blob = self.pm.read_bytes(obj + 0x50, end_off - 0x50)
+        if not blob or len(blob) < end_off - 0x50:
             return False
         import struct
-        st = struct.unpack_from("<Q", blob, self.SCENECFG_SCENE_TABLE_OFF - 0x50)[0]
-        mt = struct.unpack_from("<Q", blob, self.SCENECFG_FIRST_TABLE_OFF - 0x50)[0]
+        st = struct.unpack_from("<Q", blob, self._scene_table_off - 0x50)[0]
+        mt = struct.unpack_from("<Q", blob, self._scene_first_table_off - 0x50)[0]
         if not (_plaus(st) and _plaus(mt) and st != mt):
             return False
         run = 0
@@ -129,7 +178,7 @@ class MapNameReader:
                 run += 1
         if run < 12:
             return False
-        cur = struct.unpack_from("<i", blob, self.SCENECFG_CUR_OFF - 0x50)[0]
+        cur = struct.unpack_from("<i", blob, self._scene_cur_off - 0x50)[0]
         return cur in sset
 
     def _locate_scene_cfg(self, hint_scene_id: int = 0) -> int:
@@ -143,12 +192,26 @@ class MapNameReader:
         the per-region numpy copy. A confirmed object's region is remembered so a
         re-locate after invalidation re-scans it first.
         """
-        if self._scene_cfg and self.pm.read_i32(self._scene_cfg + self.SCENECFG_CUR_OFF) in self._scene_names:
-            return self._scene_cfg
+        self._resolve_scene_cfg_offsets()
         sset = set(self._scene_names.keys())
         if not sset:
             return 0
-        cur_off = self.SCENECFG_CUR_OFF
+        if self._scene_cfg and self._scene_cfg_klass:
+            trusted = False
+            if self._game_key:
+                trusted = _rpc.validate(self._game_key, _RPC_SCENECFG, self.pm)
+            else:
+                try:
+                    trusted = self.pm.read_u64(self._scene_cfg) == self._scene_cfg_klass
+                except Exception:
+                    trusted = False
+            if trusted:
+                return self._scene_cfg
+            if self._game_key:
+                _rpc.invalidate(self._game_key, _RPC_SCENECFG)
+            self._scene_cfg = 0
+            self._scene_cfg_klass = 0
+        cur_off = self._scene_cur_off
         # Prefer the single TCP-known scene id as the needle; fall back to the full
         # known-id set. The id is a u32 at curSceneId_; subtract the offset for obj.
         needle_one = int(hint_scene_id) if (hint_scene_id and hint_scene_id in sset) else 0
@@ -192,6 +255,13 @@ class MapNameReader:
                     obj = _scan_region(r)
                     if obj:
                         self._scene_cfg = obj
+                        self._scene_cfg_klass = int(self.pm.read_u64(obj) or 0)
+                        if self._game_key and self._scene_cfg_klass:
+                            _rpc.set(self._game_key, _RPC_SCENECFG,
+                                     addr=obj, klass_addr=self._scene_cfg_klass,
+                                     klass_name=_RPC_SCENECFG,
+                                     extras={"hint_region_base": r.base})
+                            _rpc.persist(self._game_key)
                         return obj
                     break
         for r in self.pm.iter_regions(only_readable=True, only_private=True):
@@ -201,6 +271,13 @@ class MapNameReader:
             if obj:
                 self._scene_cfg = obj
                 self._scene_cfg_hint = r.base
+                self._scene_cfg_klass = int(self.pm.read_u64(obj) or 0)
+                if self._game_key and self._scene_cfg_klass:
+                    _rpc.set(self._game_key, _RPC_SCENECFG,
+                             addr=obj, klass_addr=self._scene_cfg_klass,
+                             klass_name=_RPC_SCENECFG,
+                             extras={"hint_region_base": r.base})
+                    _rpc.persist(self._game_key)
                 return obj
         return 0
 
@@ -208,7 +285,7 @@ class MapNameReader:
         cfg = self._locate_scene_cfg(hint_scene_id)
         if not cfg:
             return 0
-        return int(self.pm.read_i32(cfg + self.SCENECFG_CUR_OFF) or 0)
+        return int(self.pm.read_i32(cfg + self._scene_cur_off) or 0)
 
     def current_map_name(self, hint_scene_id: int = 0) -> str:
         return self.name_for_scene(self.current_scene_id(hint_scene_id))
@@ -228,6 +305,7 @@ class MapNameReader:
                 pass
             if not self._ensure_pool():
                 return False
+            self._resolve_scene_cfg_offsets()
             if not self._ensure_scene_index():
                 return False
             self._ready = True

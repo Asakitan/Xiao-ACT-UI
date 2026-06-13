@@ -393,6 +393,10 @@ class PacketBridge:
         self._dps_tracker = None                 # set by GUI; mem source pushes MEM dmg table here
         self._boss_raid_engine = None            # set by GUI; mem boss-action feed -> on_mem_boss_action
         self._mem_authoritative = False          # mem owns real-time self state when True
+        # Phase 5: granular per-field authority. When present, replaces the single
+        # bool for per-component publish gating (one bad field no longer flips the
+        # whole subsystem to TCP). `mem_per_field_authority` toggles the dispatch.
+        self._field_authority = None
         self._last_name_resolver_reload_ts: float = 0.0
         try:
             self._tcp_name_cache = TcpNameCache(path=runtime_cache_path(), on_save=self._on_tcp_name_cache_saved)
@@ -484,8 +488,50 @@ class PacketBridge:
     def set_mem_authoritative(self, value: bool) -> None:
         """Called by the mem bridge: True when the memory source owns real-time self
         state (hybrid). TCP then defers self hp/stamina/skills/level to memory and
-        keeps only identity/anchor + damage events. Auto-cleared on mem->TCP fallback."""
+        keeps only identity/anchor + damage events. Auto-cleared on mem->TCP fallback.
+
+        Phase 5 back-compat shim: when ``mem_per_field_authority`` is enabled in
+        settings, the bridge prefers ``set_field_authority`` (granular per-field
+        map) and this method becomes a no-op that only updates the bool mirror.
+        """
         self._mem_authoritative = bool(value)
+
+    def set_field_authority(self, authority) -> None:
+        """Phase 5: install the granular per-field authority map.
+
+        When set, ``_publish_player_update`` consults ``authority.source(comp)``
+        per component instead of the single ``_mem_authoritative`` bool. Each
+        component can independently be Source.TCP / Source.MEMORY / Source.EITHER,
+        so one reader in backoff no longer flips the whole subsystem to TCP.
+
+        Passing ``None`` reverts to legacy single-bool behavior (back-compat)."""
+        self._field_authority = authority
+
+    def _component_source_for_publish(self, component: str) -> str:
+        """Return 'tcp' or 'memory' for one component at publish time.
+
+        Honors the granular FieldAuthority map when installed; otherwise falls back
+        to the legacy single-bool signal (mem_auth => all of hp/level/stamina/skills
+        belong to memory). 'memory' tells the publish path to skip writing that
+        component (the mem bridge owns it)."""
+        fa = self._field_authority
+        try:
+            if self._settings is not None and hasattr(self._settings, 'get') \
+                    and self._settings.get('mem_per_field_authority', True) is False:
+                fa = None
+        except Exception:
+            pass
+        if fa is not None:
+            from mem_probe.il2cpp.field_authority import Source
+            src = fa.source(component)
+            if src == Source.MEMORY:
+                return 'memory'
+            if src == Source.EITHER:
+                # cheap: if confidence >= 0.5 we trust mem, else let TCP through
+                return 'memory' if fa.confidence(component) >= 0.5 else 'tcp'
+            return 'tcp'
+        # Legacy single-bool path (mem_per_field_authority = False or no FA installed)
+        return 'memory' if bool(getattr(self, '_mem_authoritative', False)) else 'tcp'
 
     def start(self):
         """启动抓包，后台线程运行.
@@ -1655,16 +1701,20 @@ class PacketBridge:
         # string check); previously this function paid that 6+ times per
         # bridge publish. Caching keeps results stable across the function
         # and reduces the bridge thread's per-event Python overhead.
-        # Memory-authoritative hybrid: when the mem source is healthy it OWNS the
-        # real-time self state, so TCP defers (avoids double-push / jitter). TCP
-        # still supplies identity (uid/name/fight_point) as the bootstrap + anchor,
-        # plus damage events. Auto-resumes when the mem source falls back to TCP.
-        mem_auth = bool(getattr(self, '_mem_authoritative', False))
+        # Phase 5: when a FieldAuthority is installed (set_field_authority), each
+        # component is checked individually — one bad reader no longer flips the
+        # whole subsystem to TCP. Falls back to the legacy single-bool mirror when
+        # no FieldAuthority is installed.
+        # Per-component memory ownership (memory => TCP skips that field's write)
+        mem_hp = self._component_source_for_publish('hp') == 'memory'
+        mem_level = self._component_source_for_publish('level') == 'memory'
+        mem_stamina = self._component_source_for_publish('stamina') == 'memory'
+        mem_skills = self._component_source_for_publish('skills') == 'memory'
         use_identity = self._use_packet_source('identity')
-        use_level = self._use_packet_source('level') and not mem_auth
-        use_hp = self._use_packet_source('hp') and not mem_auth
-        use_stamina = self._use_packet_source('stamina') and not mem_auth
-        use_skills = self._use_packet_source('skills') and not mem_auth
+        use_level = self._use_packet_source('level') and not mem_level
+        use_hp = self._use_packet_source('hp') and not mem_hp
+        use_stamina = self._use_packet_source('stamina') and not mem_stamina
+        use_skills = self._use_packet_source('skills') and not mem_skills
         # Cache the lock-guarded state snapshot too — `_state_mgr.state` is a
         # @property that acquires the GameStateManager lock on every access.
         # We read it for stamina_max defaults and skill_slot diff comparison.

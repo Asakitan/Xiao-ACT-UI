@@ -469,6 +469,19 @@ DEFAULT_DATA_SOURCE_MAP = {
     "identity": "packet",
 }
 
+# Memory / hybrid defaults. These are intentionally read-through defaults: they do
+# not rewrite an existing settings.json until the user changes a setting, preserving
+# backward compatibility while giving new memory-mode features stable knobs.
+DEFAULT_SETTINGS = {
+    "mem_persist_names": True,
+    "mem_per_field_authority": True,
+    "mem_failure_backoff_max_s": 30.0,
+    "mem_reprobe_interval_s": 1.0,
+    "mem_overlay_flush_interval_s": 5.0,
+    "mem_root_ptr_cache_enabled": True,
+    "mem_enforce_o1_poll_contract": True,
+}
+
 
 def normalize_source_mode(mode: Any, default: str = "packet") -> str:
     text = str(mode or "").strip().lower()
@@ -780,7 +793,11 @@ class SettingsManager:
             self._data = {}
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self._data.get(key, default)
+        if key in self._data:
+            return self._data.get(key)
+        if default is not None:
+            return default
+        return DEFAULT_SETTINGS.get(key, default)
 
     def set(self, key: str, value: Any):
         self._data[key] = value

@@ -76,16 +76,39 @@ DEFAULT_CLASSES: List[str] = [
     #   DamageDataMgr/DamageData           -> mem_damage_reader
     #   ZStateMachine/BuffComp/BuffItem    -> mem_boss_action_reader
     "Panda.ZGame.ZEntityMgr",
+    "Panda.ZGame.ZClientEntityMgr",          # mem_entity_mgr client registry
+    "Panda.ZGame.ServerStateEntityMgr",       # server entity registry singleton
     "Panda.ZGame.ZEntity",
+    "Panda.ZGame.PlayerEnt",                 # PlayerEnt field offsets
+    "Panda.ZGame.BattleResComp",             # boss combat resource component (HP probe)
     "Panda.ZGame.ZAttrCollection",
+    "Panda.ZGame.ZAttrCacheSlim",            # cacheSlim sublist inline layout
     "Panda.ZGame.DamageDataMgr",
     "Panda.ZGame.DamageData",
     "Panda.ZGame.ZStateMachine",
     "Panda.ZGame.BuffComp",
     "Panda.ZGame.BuffItem",
+    "Panda.ZGame.PlayerHpWatcher",           # sCheckAttrIndex_ static (HP attr keys)
+    "Panda.ZGame.CameraManager",             # mem_camera_reader singleton
+    "Panda.ZGame.SceneConfigMgr",            # scene/map singleton (mem_map_name_reader anchor)
     # HUD GM render (debug overlay anchor used by some probes)
     "Panda.Hud.HudGmRender",
     "Panda.Hud.HudGm",
+    # Localization + table registry that the name/boss/map readers resolve offsets
+    # from by name (used by mem_string_pool / mem_config_table_reader / mem_map_name_reader /
+    # mem_field_geometry_reader / mem_boss_skill_state_reader).
+    "Panda.Module.StringPoolRuntimeImpl",
+    "Bokura.MonsterTableBase",
+    "Bokura.SceneTableBase",
+    "Bokura.RaidDungeonTableBase",
+    "Bokura.SkillTableBase",
+    "Bokura.BuffTableBase",
+    "Bokura.FieldTableBase",
+    "Bokura.NpcTableBase",
+    "Bokura.ItemTableBase",
+    "Bokura.DungeonTableBase",
+    "Bokura.Table.ReadProxy",                # generic row reader used by table_columns
+    "Table.Utility.TableProxyManager",        # table registry singleton
 ]
 
 

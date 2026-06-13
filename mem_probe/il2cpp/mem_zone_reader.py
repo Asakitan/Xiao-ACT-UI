@@ -13,28 +13,47 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
 
+from mem_probe.il2cpp import auto_offsets as _ao
+
 _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
 
-ZONE_DICT_OFF = 0xA8 - 0x18      # ZEntityMgr.zoneDict_ 实测 0x90
-ENT_COMPLIST_OFF = 0x60         # ZEntity.compList_ (ZComponent[])
-ENT_ZONETYPE_OFF = 0x118        # ZoneEnt.zoneType_ (fallback)
-ENT_UUID_OFF = 0xC0             # ZEntity.Uuid (fallback)
-ENT_BASEID_OFF = 0xE0          # ZoneEnt(:ZEntity).BaseId (fallback, auto-offset 优先)
-ZONECOMP_ENTSINZONE_OFF = 0x70  # ZoneComp.entitiesIdInZone_ (fallback, auto-offset 优先)
-# ZList<T> 布局: 前有 recyclePooledObj_(bool), items_@0x18, size_@0x20
+# ── Il2Cpp STRUCTURAL constants (runtime-defined, NOT game-class fields) ──
+# ZList<T>.items_ @0x18, .size_ @0x20; managed-array first-element offset 0x20.
 ZLIST_ITEMS_OFF = 0x18
 ZLIST_SIZE_OFF = 0x20
-ARRAY_ELEMS_OFF = 0x20          # 托管数组首元素偏移
+ARRAY_ELEMS_OFF = 0x20
+
+# ── verified-live literal fallbacks (auto-offset preferred; resolved in __init__) ──
+ENT_ZONETYPE_OFF = 0x118        # ZoneEnt.zoneType_ (klass not bundled; fallback only)
+ENT_BASEID_OFF = 0xE0           # ZoneEnt(:ZEntity).BaseId (klass not bundled; fallback)
+ZONE_DICT_FALLBACK = 0x90       # ZEntityMgr.zoneDict_
+ENT_COMPLIST_FALLBACK = 0x60    # ZEntity.compList_
+ENT_UUID_FALLBACK = 0xC0        # ZEntity.Uuid
+ZONECOMP_ENTSINZONE_OFF = 0x70  # ZoneComp.entitiesIdInZone_ (resolved live via _zc_fmap)
 
 
 class ZoneReader:
     def __init__(self, dps_source):
         self._src = dps_source
         self._pm = dps_source.sr.pm
+        # init-time auto-offset of the managed fields whose classes are in the
+        # curated bundle (Panda.ZGame.ZEntityMgr / .ZEntity). Live field-table or
+        # dump preferred; literal fallback when both miss.
+        try:
+            mgr = _ao.resolve(dps_source, "Panda.ZGame.ZEntityMgr",
+                              {"off_zone_dict": ("zoneDict_", ZONE_DICT_FALLBACK)})
+            ent = _ao.resolve(dps_source, "Panda.ZGame.ZEntity", {
+                "off_ent_complist": ("compList_", ENT_COMPLIST_FALLBACK),
+                "off_uuid": ("Uuid", ENT_UUID_FALLBACK),
+            })
+        except Exception:
+            mgr = ent = {}
+        self._off_zone_dict = int(mgr.get("off_zone_dict", ZONE_DICT_FALLBACK))
+        self._off_ent_complist = int(ent.get("off_ent_complist", ENT_COMPLIST_FALLBACK))
+        self._off_uuid = int(ent.get("off_uuid", ENT_UUID_FALLBACK))
         self._zonecomp_klass = 0
         self._off_entsinzone = 0
         self._off_group = 0
-        self._off_uuid = 0
         self._zc_fields = None
 
     def _kname(self, obj: int) -> str:
@@ -76,7 +95,7 @@ class ZoneReader:
         return self._off_group
 
     def _zone_comp(self, zone_obj: int) -> int:
-        cl = self._pm.read_u64(zone_obj + ENT_COMPLIST_OFF) or 0
+        cl = self._pm.read_u64(zone_obj + self._off_ent_complist) or 0
         if not (_MINP <= cl <= _MAXP):
             return 0
         for i in range(16):
@@ -102,13 +121,14 @@ class ZoneReader:
         return out
 
     def zones_containing(self, mgr_addr: int, player_uuid: int,
-                         zone_dict_off: int = 0x90) -> List[Dict]:
+                         zone_dict_off: int = 0) -> List[Dict]:
         """返回玩家当前所在的全部区域 [{zone_uuid, zone_type, members_n}]。"""
+        zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:
             from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
             emr = EntityMgrReader(self._src)
-            d = self._pm.read_u64(mgr_addr + zone_dict_off) or 0
+            d = self._pm.read_u64(mgr_addr + zoff) or 0
             for key, zone in emr._read_dict_entries(d, max_entries=64):
                 zc = self._zone_comp(zone)
                 if not zc:
@@ -122,16 +142,17 @@ class ZoneReader:
             pass
         return out
 
-    def snapshot(self, mgr_addr: int, zone_dict_off: int = 0x90) -> List[Dict]:
+    def snapshot(self, mgr_addr: int, zone_dict_off: int = 0) -> List[Dict]:
         """一次快照全部活动区域: [{zone_uuid, base_id, group_id, zone_type, members:set}]。
         编号圈追踪器消费此快照按出现顺序编号 + 用 members 做命中归属。O(zones), 区域少。"""
+        zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:
             from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
             emr = EntityMgrReader(self._src)
             emr.locate(0)        # 触发 off_ent_baseid 等 auto-offset 解析
             baseid_off = int(getattr(emr, "off_ent_baseid", ENT_BASEID_OFF) or ENT_BASEID_OFF)
-            d = self._pm.read_u64(mgr_addr + zone_dict_off) or 0
+            d = self._pm.read_u64(mgr_addr + zoff) or 0
             for key, zone in emr._read_dict_entries(d, max_entries=64):
                 zc = self._zone_comp(zone)
                 if not zc:
@@ -148,7 +169,7 @@ class ZoneReader:
         return out
 
     def player_zone_uuids(self, mgr_addr: int, player_uuid: int,
-                          zone_dict_off: int = 0x90) -> Set[int]:
+                          zone_dict_off: int = 0) -> Set[int]:
         return {z["zone_uuid"] for z in
                 self.zones_containing(mgr_addr, player_uuid, zone_dict_off)}
 

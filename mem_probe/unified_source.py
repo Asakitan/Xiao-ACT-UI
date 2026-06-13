@@ -95,6 +95,12 @@ class UnifiedDataSource:
             max_scan_regions_mb=int(self._policy["max_scan_regions_mb"]),
             on_log=self._on_bridge_log,
         )
+        try:
+            fa = getattr(self._bridge, "_field_authority", None)
+            if fa is not None:
+                fa.backoff_cap_s = float(self._policy.get("mem_failure_backoff_max_s", 30.0))
+        except Exception:
+            pass
 
     # ───────── public API expected by PacketBridge ─────────
 
@@ -218,6 +224,10 @@ class UnifiedDataSource:
                 "scene": "tcp_fallback",
             },
             "policy": self._policy_health(),
+            "hybrid": {
+                "field_authority": self._field_authority_health(),
+            },
+            "root_pointer_cache": self._root_pointer_cache_health(),
             "self": {
                 "uid": int(getattr(self._bridge, "last_uid", 0) or 0),
                 "hp": int(getattr(self._bridge, "last_hp", 0) or 0),
@@ -365,6 +375,13 @@ class UnifiedDataSource:
             "defer_until_tcp_scene": bool(defer_until_tcp_scene),
             "start_on_scene": bool(start_on_scene),
             "start_on_full_sync": bool(start_on_full_sync),
+            "mem_persist_names": self._bool_setting("mem_persist_names", True),
+            "mem_per_field_authority": self._bool_setting("mem_per_field_authority", True),
+            "mem_failure_backoff_max_s": round(self._float_setting("mem_failure_backoff_max_s", 30.0), 3),
+            "mem_reprobe_interval_s": round(self._float_setting("mem_reprobe_interval_s", 1.0), 3),
+            "mem_overlay_flush_interval_s": round(self._float_setting("mem_overlay_flush_interval_s", 5.0), 3),
+            "mem_root_ptr_cache_enabled": self._bool_setting("mem_root_ptr_cache_enabled", True),
+            "mem_enforce_o1_poll_contract": self._bool_setting("mem_enforce_o1_poll_contract", True),
             "start_allowed": not bool(fallback_reason),
             "fallback_reason": fallback_reason,
         }
@@ -378,6 +395,34 @@ class UnifiedDataSource:
         except Exception:
             pass
         return out
+
+    def _field_authority_health(self) -> dict:
+        try:
+            fa = getattr(self._bridge, "_field_authority", None)
+            if fa is not None:
+                return fa.report()
+        except Exception:
+            pass
+        return {}
+
+    def _root_pointer_cache_health(self) -> dict:
+        try:
+            src = getattr(getattr(self._bridge, "_entity_provider", None), "_src", None) \
+                or getattr(getattr(self._bridge, "_provider", None), "_src", None)
+            if src is None:
+                return {"game_key": "", "entries": 0, "names": []}
+            game_key = str(getattr(src, "game_key", "") or "")
+            if not game_key:
+                sr = getattr(src, "sr", None)
+                meta = getattr(sr, "bundle_meta", None) if sr is not None else None
+                if isinstance(meta, dict):
+                    game_key = str(meta.get("ga_sha256_first_1mb") or "")
+            if not game_key:
+                return {"game_key": "", "entries": 0, "names": []}
+            from mem_probe.il2cpp import root_pointer_cache as _rpc
+            return _rpc.coverage(game_key)
+        except Exception:
+            return {"game_key": "", "entries": 0, "names": []}
 
     def _setting_value(self, key: str, default: Any = None) -> Any:
         settings = self.settings

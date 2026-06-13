@@ -39,11 +39,18 @@ from typing import Iterable, List, Optional, Tuple
 from mem_probe.il2cpp.static_dps_source import StaticDpsSource
 from mem_probe.il2cpp.script_parser import ScriptIndex
 from mem_probe.il2cpp import auto_offsets as _ao
+from mem_probe.il2cpp import root_pointer_cache as _rpc
 
 try:
     from mem_probe import cy_memscan as _cy
 except Exception:  # pragma: no cover
     _cy = None
+
+
+# RootPointerCache named entry for the ZEntityMgr singleton. Per the O(1) steady-state
+# contract: bootstrap writes both ``addr`` and ``klass_addr`` here so Stage B can
+# validate via a single read_u64 + compare, never a scan.
+_RPC_NAME = "ZEntityMgr"
 
 
 # ────────── 常量 ──────────
@@ -187,6 +194,23 @@ class EntityMgrReader:
         self._scan_field_span = max(
             self.off_player_uuid, self.off_entity_dict, self.off_boss_dict,
             self.off_monster_dict, self.off_npc_dict) + 8
+        # Phase 4: hydrate from RootPointerCache so Stage A (full heap scan + klass
+        # resolve) is skipped entirely on warm starts. The cached klass_addr is the
+        # Stage-B trust needle — a single read_u64 + compare in locate().
+        self._game_key = ""
+        try:
+            self._game_key = getattr(self._src, "game_key", "") or \
+                (self._src.sr.bundle_meta.get("ga_sha256_first_1mb") if
+                 getattr(self._src, "sr", None) else "") or ""
+        except Exception:
+            self._game_key = ""
+        if self._game_key:
+            cached = _rpc.get_entry(self._game_key, _RPC_NAME) or {}
+            addr = cached.get("addr") if isinstance(cached.get("addr"), int) else 0
+            klass = cached.get("klass_addr") if isinstance(cached.get("klass_addr"), int) else 0
+            if addr and klass:
+                self._mgr_addr = addr
+                self._mgr_klass = klass
 
     def _klass_name(self, kp: int) -> str:
         """Read an Il2CppClass name (klass+0x10 -> char*) for validation."""
@@ -381,19 +405,35 @@ class EntityMgrReader:
         return best_obj or None
 
     def locate(self, player_uuid: int, force_rescan: bool = False) -> Optional[int]:
-        """返回 ZEntityMgr 实例地址. 缓存已找到的 mgr_addr, 用 player_uuid 校验依然有效."""
-        if not force_rescan and self._mgr_addr:
-            # Validate the cached mgr by KLASS SENTINEL (the instance's klass ptr at
-            # obj+0 == ZEntityMgr klass), NOT by uid: the caller passes the self
-            # CharId, but the mgr stores the composite playerUuid_, so a uid check
-            # never matched and forced a full heap re-scan EVERY tick (the lag).
-            try:
-                kp = self._resolve_mgr_klass()
-                if kp and self._src.sr.pm.read_u64(self._mgr_addr) == kp:
+        """返回 ZEntityMgr 实例地址. 缓存已找到的 mgr_addr, 用 player_uuid 校验依然有效.
+
+        Phase 4 O(1) steady-state: when the in-memory addr is set, validation is a
+        SINGLE read_u64 + klass compare (no scan, no _resolve_mgr_klass metadata
+        walk). On failure the addr is dropped to the slow Stage-A path. The hot
+        tick therefore pays at most one syscall per call when warm.
+        """
+        if not force_rescan and self._mgr_addr and self._mgr_klass:
+            # Stage-B trust check: one read_u64(addr) == cached klass pointer.
+            # RootPointerCache.validate() contracts exactly this and is the only
+            # Stage-B read that can fail (cross-version / singleton respawn).
+            if self._game_key:
+                if _rpc.validate(self._game_key, _RPC_NAME, self._src.sr.pm):
                     return self._mgr_addr
-            except Exception:
-                pass
+            else:
+                # No version key available (dev/diagnostic path). Keep the O(1)
+                # in-session fast path by validating the in-memory klass sentinel
+                # directly instead of discarding the addr and re-scanning.
+                try:
+                    if self._src.sr.pm.read_u64(self._mgr_addr) == self._mgr_klass:
+                        return self._mgr_addr
+                except Exception:
+                    pass
+            # Cache invalidation (Stage C): singleton respawn / scene reload / patch
+            # → drop both the in-memory addr and the persisted entry, then bootstrap.
+            if self._game_key:
+                _rpc.invalidate(self._game_key, _RPC_NAME)
             self._mgr_addr = 0
+            self._mgr_klass = 0
         # Negative-result backoff: while the mgr can't be located (loading screen /
         # entity-less scene) a 1s entity tick was re-sweeping the whole heap every
         # tick. Skip the scan until the cooldown elapses (cleared on success).
@@ -403,8 +443,21 @@ class EntityMgrReader:
         addr = self._scan_for_mgr(player_uuid)
         if addr:
             self._mgr_addr = addr
+            self._mgr_klass = self._mgr_klass or 0
             self._last_uuid = player_uuid
             self._miss_backoff = 1.0
+            # Stage A → write through RootPointerCache so the next session's
+            # bootstrap is one pointer-chase (no full heap scan). klass_addr is
+            # required for the Stage-B trust check above.
+            if self._game_key and self._mgr_klass:
+                try:
+                    _rpc.set(self._game_key, _RPC_NAME,
+                             addr=addr, klass_addr=self._mgr_klass,
+                             klass_name="ZEntityMgr",
+                             extras={"hint_region_base": self._hint_base})
+                    _rpc.persist(self._game_key)
+                except Exception:
+                    pass
             return addr
         self._miss_until = now + self._miss_backoff
         self._miss_backoff = min(self._miss_backoff * 2.0, 8.0)
