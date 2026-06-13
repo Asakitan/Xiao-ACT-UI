@@ -2,6 +2,24 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.132: Web BossRaid 阶段触发补齐 5 个机制/技能类型 + 字符串触发值修复(双端 1:1).
+
+  延续 batch 266 的 allowlist/类型 parity 修, 这次是 BossRaid 阶段触发:
+  - Tk 阶段编辑器用全 14 种 `TRIGGER_TYPES`(profile_editors.py), engine
+    (`boss_raid_engine.py` normalize_phase) 也支持; 但 web 阶段触发下拉只有 10 种,
+    **缺 `boss_mechanic`/`boss_mechanic_family`/`boss_skill`/`boss_mechanic_skill`/
+    `ultimate_skill` 5 种**——web 端无法新建/正确显示这些阶段触发(含这些触发的
+    profile 在 web 打开时下拉错显为「手动」)。
+  - 且这 5 类的 `value` 是**字符串**(机制 key / 技能 id 文本, 见 engine
+    normalize_phase `_string(value)` 分支), 而 web 触发值框是 `type=number`,
+    会把字符串触发值清成数字。
+  - 修(仅 `web/menu.html`): 下拉补 5 个 `<option>`; 触发值框按
+    `stringValueTriggers` 集判定渲染 text 框(字符串类)还是 number 框;
+    `_brDraftTriggerValue` 对这 5 类存原始字符串(不 `_clampNum`)。load 是
+    JSON 深拷无归一, 字符串往返不丢。web 现可建/改这 5 类阶段触发, 与 Tk/engine 1:1。
+
+  注: Tk 阶段触发缺 web/engine 有的 `buff_event`(反向小缺口), 留后续。基线 81/81 绿。
+
 ## v4.6.131: Web AutoKey 4 类触发条件不再被静默改写(防数据损坏) + Tk 档案列表删除按钮.
 
   1) **Web 条件类型数据损坏修复(重要)** — `web/menu.html` `_akConditionType` 的

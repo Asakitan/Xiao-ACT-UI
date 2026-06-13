@@ -7492,6 +7492,9 @@ function _brRenderPhases() {
     if (!container || !_brDraftProfile) return;
     var phases = _brEditorPhases();
     var noValueTriggers = { manual: 1, breaking: 1, overdrive: 1, shield_broken: 1 };
+    // 这些触发类型的 value 是字符串(机制 key / 技能 id 文本), 与 boss_raid_engine
+    // normalize_phase 的 _string(value) 分支对齐; 其余 value 是数值。
+    var stringValueTriggers = { boss_mechanic: 1, boss_mechanic_family: 1, boss_skill: 1, boss_mechanic_skill: 1, ultimate_skill: 1 };
     if (!phases.length) {
         container.innerHTML = '<div class="boss-raid-empty compact">还没有阶段。点击上面的“新增阶段”开始配置。<br>No phases yet. Click "Add Phase" to start building the timeline.</div>';
         return;
@@ -7520,8 +7523,16 @@ function _brRenderPhases() {
                     '<option value="overdrive"' + (trigger.type === 'overdrive' ? ' selected' : '') + '>暴走 Overdrive</option>' +
                     '<option value="extinction_pct"' + (trigger.type === 'extinction_pct' ? ' selected' : '') + '>破灭条% Extinction%</option>' +
                     '<option value="breaking_stage"' + (trigger.type === 'breaking_stage' ? ' selected' : '') + '>破防阶段 Break Stage</option>' +
+                    '<option value="boss_mechanic"' + (trigger.type === 'boss_mechanic' ? ' selected' : '') + '>Boss机制 Mechanic</option>' +
+                    '<option value="boss_mechanic_family"' + (trigger.type === 'boss_mechanic_family' ? ' selected' : '') + '>Boss机制族 Mech Family</option>' +
+                    '<option value="boss_skill"' + (trigger.type === 'boss_skill' ? ' selected' : '') + '>Boss技能 Boss Skill</option>' +
+                    '<option value="boss_mechanic_skill"' + (trigger.type === 'boss_mechanic_skill' ? ' selected' : '') + '>机制技能 Mech Skill</option>' +
+                    '<option value="ultimate_skill"' + (trigger.type === 'ultimate_skill' ? ' selected' : '') + '>奥义技能 Ultimate</option>' +
                 '</select></div>' +
-                (!(trigger.type in noValueTriggers) ? '<div class="boss-raid-field"><label>触发值 Value</label><input type="number" min="0" value="' + _brNumAttr(trigger.value, 0, (trigger.type === 'hp_pct' || trigger.type === 'extinction_pct') ? 100 : null) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>' : '') +
+                (trigger.type in noValueTriggers ? '' :
+                    (trigger.type in stringValueTriggers ?
+                        '<div class="boss-raid-field"><label>触发值 Value</label><input type="text" value="' + _escHtml(_profileText(trigger.value, '')) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>' :
+                        '<div class="boss-raid-field"><label>触发值 Value</label><input type="number" min="0" value="' + _brNumAttr(trigger.value, 0, (trigger.type === 'hp_pct' || trigger.type === 'extinction_pct') ? 100 : null) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>')) +
             '</div>' +
             '<div class="br-phase-tl-list">' +
                 (timelines.length ? timelines.map(function(rawTl, ti) {
@@ -7579,8 +7590,14 @@ function _brDraftTriggerValue(pi, val) {
     var phases = _brEditorPhases();
     if (!phases[pi]) return;
     var trig = phases[pi].trigger;
-    var pctLike = trig.type === 'hp_pct' || trig.type === 'extinction_pct';
-    trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);
+    // 机制/技能类触发的 value 是字符串(key / id 文本), 与 boss_raid_engine
+    // normalize_phase 对齐; 不能 _clampNum 否则丢字符串。
+    if (trig.type === 'boss_mechanic' || trig.type === 'boss_mechanic_family' || trig.type === 'boss_skill' || trig.type === 'boss_mechanic_skill' || trig.type === 'ultimate_skill') {
+        trig.value = (val == null ? '' : String(val));
+    } else {
+        var pctLike = trig.type === 'hp_pct' || trig.type === 'extinction_pct';
+        trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);
+    }
     _brDraftDirty = true;
 }
 function _brDraftTlField(pi, ti, field, val, type) {
