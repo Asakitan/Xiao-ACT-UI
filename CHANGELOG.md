@@ -2,6 +2,25 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.127: Tk BossRaid 机制写操作失败反馈 + 反应保存成功反馈(双端 1:1).
+
+  诚实反馈脉最后一处(bossraid), 补 `gui_modules/sao_gui_bossraid.py` 两处与
+  web `raid_editor.html` 不一致的反馈:
+
+  1) **机制写操作失败被吞** — web `_mechReply` 在 save_mech/delete_mech 失败时弹
+    `_mechNotice('操作失败')`, Tk `_mech_call` 此前 `except: return None` 静默吞,
+    4 处写调用(机制启停 L826 / 新建 L895 / 删除 L939 / 详情保存 L1523)失败都无
+    提示。`_mech_call` 加 `_toast_error` 仅写操作传 True, 失败弹「操作失败: {exc}」。
+    读操作(load/test/search)不传保持静默。
+
+  2) **反应保存成功无反馈** — web `saveReaction` 成功弹「Boss 反应已保存」, Tk
+    `_save_reaction_row` 此前只在接口缺失/异常时弹错误、成功完全静默(只重渲)。
+    补 else 成功分支弹「Boss 反应已保存」。`upsert_mapping` 成功返回 config、
+    失败抛异常, 故 异常=失败 / 无异常=成功 判定成立。
+
+  注: bossraid 删除早有二次确认(SAODialog 不可撤销提示); 机制创建/保存成功两端
+    均靠重渲(无成功 toast)对称, 不动。基线 81/81 绿(含并发方 boss 引擎改动)。
+
 ## v4.6.126: Tk 插件卡片补 LOADED 标记(双端 1:1 渲染补全).
 
   `gui_modules/sao_gui_plugin_manager.py` `_format_meta` 的 flags 行补 `LOADED`

@@ -406,6 +406,9 @@ class _BossReactionsEditorMixin:
             self._save_reaction(mapping)
         except Exception as exc:
             self._mech_toast(f'反应保存失败: {exc}', error=True)
+        else:
+            # Web saveReaction 成功弹「Boss 反应已保存」, Tk 此前成功静默 → 补齐双端 1:1。
+            self._mech_toast('Boss 反应已保存')
         self._rx_rerender()
 
 
@@ -607,9 +610,13 @@ class _MechanicsEditorMixin:
         否则「选了A档编辑, 实际改的是B档」。"""
         return ''
 
-    def _mech_call(self, name: str, *args, **kw):
+    def _mech_call(self, name: str, *args, _toast_error: bool = False, **kw):
+        # _toast_error=True 用于写操作(save_mech/delete_mech 等): 失败时弹错误条,
+        # 与 Web raid_editor._mechReply 的失败 _mechNotice 对称(此前 Tk 静默吞)。
         fn = self._mech_api.get(name)
         if not fn:
+            if _toast_error:
+                self._mech_toast('操作失败: 接口不可用', error=True)
             return None
         if name in self._MECH_PROFILE_OPS:
             pid = self._mech_profile_id()
@@ -617,7 +624,9 @@ class _MechanicsEditorMixin:
                 kw.setdefault('profile_id', pid)
         try:
             return fn(*args, **kw)
-        except Exception:
+        except Exception as exc:
+            if _toast_error:
+                self._mech_toast(f'操作失败: {exc}', error=True)
             return None
 
     def _mx_empty(self, title: str, subtitle: str = '') -> None:
@@ -823,7 +832,7 @@ class _MechanicsEditorMixin:
             m2.pop('summary', None)
             m2.pop('skill_names', None)
             m2['enabled'] = bool(_v.get())
-            self._mech_call('save_mech', m2)
+            self._mech_call('save_mech', m2, _toast_error=True)
             self._mech_bump()
         _tk.Checkbutton(head, variable=en_var, command=_flip_enable, bg=PANEL_CARD,
                         selectcolor=PANEL_CARD_ALT, activebackground=PANEL_CARD
@@ -892,7 +901,7 @@ class _MechanicsEditorMixin:
                       'enabled': True},
             'dodge': {'enabled': False, 'linkage_id': '', 'inline': {}},
         }
-        cfg = self._mech_call('save_mech', draft)
+        cfg = self._mech_call('save_mech', draft, _toast_error=True)
         self._mech_bump()
         self._mech_sec_open = {}
         # 进入新机制的编辑态: 从返回配置里找到刚插入的 id
@@ -936,7 +945,7 @@ class _MechanicsEditorMixin:
     def _mech_delete_confirmed(self, mid: str) -> None:
         if self._mech_editing and self._mech_editing != mid:
             self._mech_collect_draft()
-        self._mech_call('delete_mech', mid)
+        self._mech_call('delete_mech', mid, _toast_error=True)
         if self._mech_editing == mid:
             self._mech_editing = None
             self._mech_draft = {}
@@ -1520,7 +1529,7 @@ class _MechanicsEditorMixin:
         if inline.get('sequence'):
             inline['sequence'] = [s for s in inline['sequence']
                                   if (s.get('key') or '').strip()]
-        self._mech_call('save_mech', draft)
+        self._mech_call('save_mech', draft, _toast_error=True)
         self._mech_editing = None
         self._mech_draft = {}
         self._mech_bump()
