@@ -282,6 +282,28 @@ button.close {
 }
 .panel-card-head { color: var(--line2); font-size: 11px; letter-spacing: .12em; margin-bottom: 6px; }
 </style>
+<style>
+/* Flat + token migration (ACT panel): drop the bespoke dark chrome so Plugin Manager reads
+   flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
+   resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
+   no bevels, no glow) and re-tokenise the custom tab / panel-card / card-more classes the
+   shared theme does not target, so light mode stays legible. Last style block in <head>
+   so it wins source-order over the shared theme's !important chrome. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+.kicker{text-shadow:none!important;}
+button,input,select,.action-btn{clip-path:none!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.plugin-actions select.card-more{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge)!important;border-radius:3px!important;color:var(--act-text)!important;}
+.plugin-actions select.card-more option{background:var(--act-shell-bg-2)!important;color:var(--act-text)!important;}
+.pm-tab{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge-soft)!important;border-bottom:none!important;color:var(--act-muted)!important;border-radius:4px 4px 0 0!important;}
+.pm-tab:hover{background:var(--act-card-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-text)!important;}
+.pm-tab.active{background:var(--act-shell-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-gold)!important;}
+.panel-card{border:1px solid var(--act-edge-soft)!important;border-left:3px solid var(--act-cyan)!important;border-radius:4px!important;background:var(--act-card-bg)!important;box-shadow:none!important;}
+.panel-card-head{color:var(--act-gold)!important;}
+</style>
 </head>
 <body>
 <div class="plugin-shell" id="shell">

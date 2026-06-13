@@ -2,6 +2,25 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.141: ACT 面板扁平化补全 —— 4 个落后 web 面板迁成 flat + token, 13 面板全部跟随主题(web↔Tk 1:1).
+
+  落地 Claude Design 交付包 (`f5jEugrT73vywN82htRd7g`, 设计系统本就从本仓 3.0.0 逆出, flat
+  是钦定方向) 的"实现设计"。此前 9 个 `act_*.html` 已带 per-page flat 覆盖, 但 4 个面板漏了:
+
+  - **mem_scope.html**: 本就用 `--act-*` 令牌, 仅缺 flat 覆盖块 → 补上同 9 个兄弟一致的
+    flat block(去共享 `act_panel_theme.css` 的角标 `::before/::after` + 按钮 clip-path 斜切
+    + 辉光), Tk 孪生本就 flat → 恢复 1:1。
+  - **plugin_manager.html / trigger_timer_manager.html**: 原 bespoke 暗色 → 加 flat block +
+    把共享主题管不到的自定义类(`.pm-tab` / `.panel-card` / `select.card-more` /
+    `.message`)改用 `var(--act-*)`。共享主题靠 `!important` 早把通用类拽到令牌, 故暗色面板
+    大半已跟随, 只缺 flat + 少数字面亮色字。
+  - **data_source_health.html**: **不再 force-dark**。原先强制暗底是因有字面亮色字
+    (`pre` / `.diag-item.error/.warn`)在浅底看不见; 现把这几处改令牌(`pre` 用 gold 对齐
+    Tk self-state `fg=_SAO_PANEL_GOLD`), 删暗底强制 → 浅暗两套都可读。
+  - **零外溢**: 只动 4 个 web html 的 per-page `<style>`(各面板独立 WebView 文档), 共享
+    `act_panel_theme.css` 与 Tk `.py` 一字未改; `git status` 仅这 4 文件。Tk 端早就 flat +
+    跟随主题(`sao_panel_ui._apply_sao_panel_palette` 切色板, tk.Frame 1px 无角标)。
+
 ## v4.6.140: 修复切换场景不更新服务器 / 抓不到 full sync / 地图横幅不弹(net/packet_capture.py).
 
   抓包链路严重回归 + 切换瞬间 full-sync 丢失(直连/加速器都受影响):

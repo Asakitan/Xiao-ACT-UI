@@ -135,17 +135,21 @@ pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; user-selec
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <style>
-/* Flat override (ACT panel only) — this page is dark-bespoke (own palette, not act tokens):
-   flatten gradients/glow/scanlines/clip to solid dark; keep its dark identity + the .card left rail. */
-.shell{background:rgba(13,22,36,.97)!important;box-shadow:none!important;}
-.shell::before{display:none!important;content:none!important;}
-.header{background:rgba(15,32,52,.82)!important;}
+/* Flat + token migration (ACT panel): follow the host light/dark theme 1:1 with the Tk
+   twin. The bespoke palette dark-forced the shell so its literal light text stayed legible;
+   instead we re-tokenise those few spots (pre / diag colors) and let the shared var(--act-*)
+   tokens drive bg + text, so both light and dark read correctly. Chrome is flattened
+   (no corner brackets, no scanline, no bevels, no glow). */
+.shell,.panel{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after{display:none!important;content:none!important;}
+.header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
 .kicker{text-shadow:none!important;}
-button{background:rgba(34,72,108,.50)!important;box-shadow:none!important;clip-path:none!important;}
-button:hover{box-shadow:none!important;transform:none!important;background:rgba(46,90,130,.55)!important;}
-.card{background:rgba(18,32,50,.86)!important;}
-.diag-item{background:rgba(12,20,32,.50)!important;}
-.pill,.badge{box-shadow:none!important;}
+button,input,select,.action-btn{clip-path:none!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;}
+.pill,.badge{background:transparent!important;}
+pre{color:var(--act-gold)!important;}
+.diag-item.error{color:var(--act-danger)!important;}
+.diag-item.warn{color:var(--act-gold)!important;}
 </style>
 <script src="act_panel_theme.js"></script>
 </head>

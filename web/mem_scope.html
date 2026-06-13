@@ -48,6 +48,17 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
 .toast.on { opacity: 1; }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only): kill the shared decorative chrome (corner brackets,
+   button bevel, glow) so Mem Scope matches the flat ACT reference like its 9 token-based
+   siblings. Colors still come from var(--act-*) so light/dark stays 1:1 with the Tk twin. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+button,input,select,.action-btn{clip-path:none!important;border-radius:3px!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;background:var(--act-card-bg-2)!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+</style>
 <script src="act_panel_theme.js"></script>
 </head>
 <body>

@@ -141,6 +141,21 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 ::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat + token migration (ACT panel): drop the bespoke dark chrome so this panel reads
+   flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
+   resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
+   no bevels, no glow) and re-tokenise the one literal light-text spot so light mode stays
+   legible. */
+.shell,.panel{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after{display:none!important;content:none!important;}
+.header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+.kicker{text-shadow:none!important;}
+button,input,select,.action-btn{clip-path:none!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;}
+.pill,.badge{background:transparent!important;}
+.message{color:var(--act-text)!important;}
+</style>
 <script src="act_panel_theme.js"></script>
 </head>
 <body>
