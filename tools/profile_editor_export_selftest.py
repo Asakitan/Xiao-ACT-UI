@@ -33,10 +33,12 @@ def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
 
     guarded_export = "self._set_status(f'Export failed: {exc}', ok=False)"
+    # 3 guarded export paths: AutoKey _export_selected, AutoKey _export_profile
+    # (list-card export, v4.6.133), BossRaid _export_selected.
     check(
         "both editors surface export failures",
-        source.count(guarded_export) == 2,
-        f"expected 2 guarded export paths, found {source.count(guarded_export)}",
+        source.count(guarded_export) == 3,
+        f"expected 3 guarded export paths, found {source.count(guarded_export)}",
     )
     check(
         "autokey export call stays guarded",

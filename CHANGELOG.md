@@ -2,6 +2,25 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.133: Tk BossRaid 阶段触发补 buff_event + Tk AutoKey 档案列表导出按钮(双端 1:1 收尾).
+
+  清 enum/列表 parity queue 两小项:
+
+  1) **Tk 阶段触发补 `buff_event`** — web/engine(`boss_raid_engine.py` L459)有,
+    Tk `BossRaidDetailPanel.TRIGGER_TYPES` 漏(batch 267 的反向缺口)。加进
+    TRIGGER_TYPES(在 breaking 后, 对齐 engine 顺序); 其 value 走 float 保存,
+    engine 端 `_coerce_int` 接收(buff_event value=event_type int), 无碍。
+    现 BossRaid 阶段触发两端 15 类型全 1:1。
+
+  2) **Tk AutoKey 档案列表导出按钮** — web AutoKey 档案卡有「导出」
+    (`_akExportProfile(id)`), Tk 档案列表(batch 266 后 OPEN/ON/COPY/DEL)无,
+    导出只在打开后的编辑器里。档案卡加 EXP 按钮(COPY 与 DEL 之间, 同 web 顺序)
+    + 新 `_export_profile(pid)`(用 `find_auto_key_profile` 按 id 取存档版本 →
+    normalize → export, 不必先打开)。Tk 列表现 OPEN/ON/COPY/EXP/DEL, 与 web
+    五按钮 1:1。
+
+  基线 81/81 绿。
+
 ## v4.6.132: Web BossRaid 阶段触发补齐 5 个机制/技能类型 + 字符串触发值修复(双端 1:1).
 
   延续 batch 266 的 allowlist/类型 parity 修, 这次是 BossRaid 阶段触发:

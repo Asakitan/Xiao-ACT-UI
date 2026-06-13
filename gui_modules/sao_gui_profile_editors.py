@@ -425,6 +425,9 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             make_action_button(row, 'COPY',
                                lambda pid=pid: self._copy_profile(pid),
                                width=4).pack(side=tk.LEFT, padx=(5, 0))
+            make_action_button(row, 'EXP',
+                               lambda pid=pid: self._export_profile(pid),
+                               width=3).pack(side=tk.LEFT, padx=(5, 0))
             make_action_button(row, 'DEL',
                                lambda pid=pid: self._delete_profile(pid),
                                kind='danger', width=3).pack(side=tk.LEFT, padx=(5, 0))
@@ -736,6 +739,24 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             return
         self._set_status(f'Exported: {path}')
 
+    def _export_profile(self, profile_id: str) -> None:
+        # Export straight from the profile list (parity with web list 导出 button);
+        # exports the saved profile by id, no need to open it in the editor first.
+        if not profile_id:
+            return
+        profile = find_auto_key_profile(self._load() or {}, profile_id)
+        if not profile:
+            self._set_status('Profile not found', ok=False)
+            return
+        normalized = normalize_auto_key_profile(profile,
+                                               author_snapshot=self._author_fn())
+        try:
+            path = export_auto_key_profile(normalized)
+        except Exception as exc:
+            self._set_status(f'Export failed: {exc}', ok=False)
+            return
+        self._set_status(f'Exported: {path}')
+
     def _import_profile(self) -> None:
         path = filedialog.askopenfilename(
             parent=self._win,
@@ -827,6 +848,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         'hp_pct',
         'dps_total',
         'breaking',
+        'buff_event',
         'shield_broken',
         'overdrive',
         'extinction_pct',
