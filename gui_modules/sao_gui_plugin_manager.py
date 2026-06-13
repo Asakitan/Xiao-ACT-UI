@@ -30,7 +30,8 @@ from act_platform.runtime import (
 )
 from gui_modules import sao_panel_ui as _panel_ui
 from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
-from gui_modules.sao_panel_components import keep_canvas_scroll
+from gui_modules.sao_panel_components import keep_canvas_scroll, sao_option_menu, sao_scrollbar
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -194,7 +195,7 @@ class PluginManagerPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
         tabs = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         tabs.pack(fill='x', padx=12, pady=(0, 4))
@@ -203,7 +204,7 @@ class PluginManagerPanel:
                 tabs, text=label, command=lambda k=key: self._show_tab(k),
                 bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
                 activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
-                relief='flat', bd=0, padx=14, pady=4, font=('Segoe UI', 9, 'bold'),
+                relief='flat', bd=0, padx=14, pady=4, font=get_cjk_font(9, True),
             )
             btn.pack(side='left', padx=(0, 6))
             self._tab_buttons[key] = btn
@@ -214,14 +215,14 @@ class PluginManagerPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         )
         status.pack(fill='x', padx=12, pady=(0, 6))
 
         # ── Manage tab: scrollable plugin cards (existing surface) ──
         self._manage_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         canvas = tk.Canvas(self._manage_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(self._manage_wrap, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(self._manage_wrap, canvas.yview)
         self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
@@ -234,7 +235,7 @@ class PluginManagerPanel:
         # ── Panels tab: auto-redrawing plugin UI panels ──
         self._panels_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         pcanvas = tk.Canvas(self._panels_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        pscroll = tk.Scrollbar(self._panels_wrap, orient='vertical', command=pcanvas.yview)
+        pscroll = sao_scrollbar(self._panels_wrap, pcanvas.yview)
         panels_inner = tk.Frame(pcanvas, bg=_SAO_PANEL_BODY_BG)
         panels_inner.bind('<Configure>', lambda _e: pcanvas.configure(scrollregion=pcanvas.bbox('all')))
         _pid = pcanvas.create_window((0, 0), window=panels_inner, anchor='nw')
@@ -298,7 +299,7 @@ class PluginManagerPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
-            font=('Segoe UI', 10),
+            font=get_cjk_font(10),
             pady=28,
         ).pack(fill='x')
 
@@ -324,7 +325,7 @@ class PluginManagerPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_VALUE_FG,
             anchor='w',
-            font=('Segoe UI', 11, 'bold'),
+            font=get_cjk_font(11, True),
         ).pack(side='left', fill='x', expand=True)
         state = 'ACTIVE' if active else ('ENABLED' if enabled else 'DISABLED')
         _sao_pill(top, state).pack(side='right')
@@ -350,7 +351,7 @@ class PluginManagerPanel:
                 anchor='w',
                 justify='left',
                 wraplength=690,
-                font=('Segoe UI', 9),
+                font=get_cjk_font(9),
                 padx=8,
                 pady=5,
             ).pack(fill='x', padx=10, pady=(0, 6))
@@ -702,7 +703,7 @@ class PluginDetachedPanel:
         body = _sao_panel_body(win)
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
         canvas = tk.Canvas(body, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(body, canvas.yview)
         inner = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         inner.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _wid = canvas.create_window((0, 0), window=inner, anchor='nw')
@@ -755,7 +756,7 @@ class PluginDetachedPanel:
                 self._placeholder = tk.Label(
                     host, text='插件未提供面板或未激活\n(enable it in the manager)',
                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center',
-                    font=('Segoe UI', 10), pady=20)
+                    font=get_cjk_font(10), pady=20)
                 self._placeholder.pack(fill='x')
             self._last_render_sig = ''
             return
@@ -823,7 +824,7 @@ class PluginDetachedPanel:
             return
         tk.Frame(host, bg=_SAO_PANEL_SEP, height=1).pack(fill='x', pady=(2, 6))
         tk.Label(host, text='快捷键 Hotkeys', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
-                 anchor='w', font=('Segoe UI', 10, 'bold')).pack(fill='x', pady=(0, 4))
+                 anchor='w', font=get_cjk_font(10, True)).pack(fill='x', pady=(0, 4))
         for hk in hotkeys:
             action = str(hk.get('action') or '')
             cur = str(hk.get('current_key') or '').upper()
@@ -831,12 +832,12 @@ class PluginDetachedPanel:
             row.pack(fill='x', pady=2)
             tk.Label(row, text=str(hk.get('label') or hk.get('hotkey_id') or action),
                      bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w',
-                     font=('Segoe UI', 9)).pack(side='left', fill='x', expand=True)
+                     font=get_cjk_font(9)).pack(side='left', fill='x', expand=True)
             var = tk.StringVar(value=(cur if cur in _HK_CHOICES else _HK_DEFAULT))
-            opt = tk.OptionMenu(row, var, _HK_DEFAULT, *_HK_CHOICES,
+            opt = sao_option_menu(row, var, _HK_DEFAULT, *_HK_CHOICES,
                                 command=lambda v, a=action: self._set_hotkey(a, v))
             opt.configure(bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, relief='flat',
-                          bd=0, highlightthickness=0, font=('Segoe UI', 9), padx=8)
+                          bd=0, highlightthickness=0, font=get_cjk_font(9), padx=8)
             # 三列布局 (F / CTRL+F / ALT+F); 被占用的键置灰并标注归属
             # (动作自身现值豁免)。entry 0 是「默认」— 声明默认键被别的
             # 动作占走时同样置灰 (set_hotkey 的清除分支会拒绝)。

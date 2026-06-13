@@ -14,7 +14,8 @@ from act_platform.runtime import (
     act_combatant_drilldown_focus_target,
     act_combatant_drilldown_status,
 )
-from gui_modules.sao_panel_components import keep_canvas_scroll, more_indicator
+from gui_modules.sao_panel_components import keep_canvas_scroll, more_indicator, sao_entry, sao_scrollbar
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -207,24 +208,24 @@ class CombatantDrilldownPanel:
         for label, cmd in (('打开 Open', self.refresh), ('过滤 Filter', self.filter), ('返回 Back', self.back), ('关闭 Close', self.hide)):
             tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
         # summary 含未截断玩家名 — 按钮先 pack 防被长名挤出窗口(后包者只分剩余空间)
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
+        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._combatant_var, width=14).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Target', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._focus_var, width=16).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._combatant_var, width=14).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Target', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._focus_var, width=16).pack(side='left', padx=(6, 8))
         tk.Button(control, text='Focus', command=self.focus_target, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=2).pack(side='left')
 
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=12, pady=(0, 6))
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(outer, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -265,7 +266,7 @@ class CombatantDrilldownPanel:
             return
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', pady=8, padx=4)
-        tk.Label(box, text='请输入 combatant UID\n可从 DPS 面板或 ACT 数据中选择角色。', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center', font=('Segoe UI', 10), pady=36).pack(fill='x')
+        tk.Label(box, text='请输入 combatant UID\n可从 DPS 面板或 ACT 数据中选择角色。', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center', font=get_cjk_font(10), pady=36).pack(fill='x')
 
     def _render_summary(self, summary: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -283,8 +284,8 @@ class CombatantDrilldownPanel:
         for label, value in items:
             card = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             card.pack(side='left', fill='x', expand=True, padx=2)
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8)).pack(anchor='w', padx=6, pady=(5, 0))
-            tk.Label(card, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=6, pady=(1, 5))
+            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8)).pack(anchor='w', padx=6, pady=(5, 0))
+            tk.Label(card, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(10, True)).pack(anchor='w', padx=6, pady=(1, 5))
 
     def _render_skills(self, skills: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
@@ -292,7 +293,7 @@ class CombatantDrilldownPanel:
         header = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
         header.pack(fill='x', pady=(0, 2), padx=4)
         for text, width in (('Skill', 34), ('Kind', 10), ('Amount', 14), ('Hits', 8), ('Crit', 8)):
-            tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
+            tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True)).pack(side='left', padx=3, pady=5)
         max_amount = max(1, *[_finite_int(skill.get('amount'), 0, lo=0) for skill in skills])
         for idx, skill in enumerate(skills[:40]):
             amount = _finite_int(skill.get('amount'), 0, lo=0)
@@ -319,7 +320,7 @@ class CombatantDrilldownPanel:
             line = tk.Frame(row, bg=color)
             line.pack(fill='x')
             for text, width, fg in values:
-                label = tk.Label(line, text=text, width=width, anchor='w', bg=color, fg=fg, font=('Segoe UI', 9), cursor='hand2')
+                label = tk.Label(line, text=text, width=width, anchor='w', bg=color, fg=fg, font=get_cjk_font(9), cursor='hand2')
                 label.pack(side='left', padx=3, pady=5)
                 label.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
             row.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
@@ -371,9 +372,9 @@ class CombatantDrilldownPanel:
             return
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text='OUTGOING / INCOMING / FOCUS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
+        tk.Label(box, text='OUTGOING / INCOMING / FOCUS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True), anchor='w').pack(fill='x')
         for kind, name, amount in rows:
-            tk.Label(box, text=f'{kind}: {name} {amount}', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9), anchor='w').pack(fill='x', padx=8, pady=3)
+            tk.Label(box, text=f'{kind}: {name} {amount}', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9), anchor='w').pack(fill='x', padx=8, pady=3)
 
     @staticmethod
     def _fmt(value: Any) -> str:

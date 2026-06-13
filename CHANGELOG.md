@@ -2,6 +2,22 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.143: ACT entity(Tk) 面板向 webview/design 视觉对齐 —— 圆角化 + SAO 字体 + 控件统一(全13面板).
+
+  目标: entity(Tk) 面板外观贴近 webview(=design, HTML)。webview 用 [[design]] 设计稿渲染为
+  参考(13 张 `.act-shell` 截图), entity 用离屏 Tk 截图谐架(`_panel_preview*.py`)逐面板核对。
+
+  - **共享组件圆角化**(sao_panel_components.py): 新增 canvas 圆角底板 `rounded_panel`(定高/自适应高
+    两种), `metric_tile`(KPI 卡)、`section_card`(分组框, pack 代理保持旧调用)、`status_badge`(药丸)、
+    `action_button`(`_RoundedButton`, 支持 `configure(command=)` 兼容 dropdown_button) 全部改 canvas
+    圆角; 原生 `tk.Scrollbar` 在 Windows 不可着色 → 自绘暗色细圆角滚动条 `_SaoScroll`(内容不溢出自动隐藏);
+    新增 `sao_entry` / `sao_option_menu` 扁平暗色输入/下拉。
+  - **字体**: KPI 数值走 SAOUI(get_sao_font), 标签/CJK 走 ZhuZi(get_cjk_font), 替换面板内 `('Segoe UI',…)`。
+  - **逐面板清扫**(13 个 sao_gui_*): `tk.Scrollbar/OptionMenu/Entry` → `sao_scrollbar/sao_option_menu/sao_entry`;
+    Aggregate 旗舰补 3×2 KPI 网格(不溢出)+ OVERVIEW/SOURCE-MIX 右侧栏 + 双语主标题, 去除 COCKPIT 药丸/汇总行/调试行。
+  - 离屏谐架实测 13 面板全部正常构建(无破坏)。**注**: Tk 与 HTML 渲染内核不同(字形栅格/抗锯齿/亚像素),
+    像素级逐点对齐有物理上限; 本版把可还原的结构/圆角/配色/字体/控件全部对齐, 细节继续逐面板打磨。
+
 ## v4.6.142: ACT entity(Tk) 端补 flat 同步 —— 3 面板漏传 flat=True 修复 + 4 面板令牌化(承接 v4.6.141 web).
 
   v4.6.141 只改了 web 端, entity(Tk) 端这 4 个面板还停在老装饰 chrome(金色条 / ◇ 标记 /

@@ -28,10 +28,14 @@ from gui_modules.sao_panel_components import (
     fmt_dur,
     keep_canvas_scroll,
     metric_tile,
+    sao_entry,
+    sao_option_menu,
+    sao_scrollbar,
     section_card,
     source_cn,
     topic_cn,
 )
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -238,21 +242,21 @@ class TimelineVcrPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='筛选', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        query_entry = tk.Entry(control, textvariable=self._query_var, width=22)
+        tk.Label(control, text='筛选', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        query_entry = sao_entry(control, textvariable=self._query_var, width=22)
         query_entry.pack(side='left', padx=(6, 10))
         # 输入即筛选（300ms 防抖，对齐 Web 端即时搜索），回车立即生效
         query_entry.bind('<KeyRelease>', lambda _e: self._schedule_filter())
         query_entry.bind('<Return>', lambda _e: self.apply_filter())
         # 倍速换成预设下拉，选中即生效（对齐 Web 端 0.5x/1x/2x/4x select）
-        tk.Label(control, text='倍速', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._speed_var, '0.5', '1.0', '2.0', '4.0',
-                      command=lambda _v: self.set_speed()).pack(side='left', padx=(6, 10))
+        tk.Label(control, text='倍速', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._speed_var, '0.5', '1.0', '2.0', '4.0',
+                        command=lambda _v: self.set_speed()).pack(side='left', padx=(6, 10))
         for label, cmd, tip in (
             ('-1s', self.step_back, '后退 1 秒'),
             ('+1s', self.step_forward, '前进 1 秒'),
@@ -268,13 +272,13 @@ class TimelineVcrPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(outer, canvas.yview)
         self._events = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._events.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._events, anchor='nw')
@@ -373,7 +377,7 @@ class TimelineVcrPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
-            font=('Segoe UI', 10),
+            font=get_cjk_font(10),
             pady=28,
         ).pack(fill='x')
 
@@ -397,7 +401,7 @@ class TimelineVcrPanel:
         ).pack(fill='x', pady=2)
         if open_event:
             payload = json.dumps(event.get('payload') or {}, ensure_ascii=False, default=str)
-            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=760, font=('Segoe UI', 8)).pack(fill='x', padx=22, pady=(0, 6))
+            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=760, font=get_cjk_font(8)).pack(fill='x', padx=22, pady=(0, 6))
 
     def _toggle_event(self, event_id: str) -> None:
         if event_id in self._expanded_events:

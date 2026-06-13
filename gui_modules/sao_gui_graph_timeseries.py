@@ -24,9 +24,12 @@ from gui_modules.sao_panel_components import (
     fmt_dur,
     fmt_rel,
     metric_tile,
+    sao_entry,
+    sao_option_menu,
     section_card,
     status_badge,
 )
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -254,19 +257,19 @@ class GraphTimeseriesPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='Metric', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct', command=lambda _v: self.select_metric()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._topic_var, '', 'damage', 'heal', 'boss', 'skill', command=lambda _v: self.filter()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Metric', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct', command=lambda _v: self.select_metric()).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._topic_var, '', 'damage', 'heal', 'boss', 'skill', command=lambda _v: self.filter()).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
         action_button(control, '过滤 Filter', self.filter, kind='gold').pack(side='left', padx=(0, 8))
-        tk.Label(control, text='Range ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000', command=lambda _v: self.zoom()).pack(side='left', padx=(6, 0))
+        tk.Label(control, text='Range ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000', command=lambda _v: self.zoom()).pack(side='left', padx=(6, 0))
         tk.Checkbutton(
             control,
             text='RAW points',
@@ -277,7 +280,7 @@ class GraphTimeseriesPanel:
             selectcolor=_SAO_PANEL_HEADER_BG,
             activebackground=_SAO_PANEL_BODY_BG,
             activeforeground=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(side='left', padx=(10, 0))
 
         tk.Label(
@@ -286,7 +289,7 @@ class GraphTimeseriesPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -361,7 +364,7 @@ class GraphTimeseriesPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
-            font=('Segoe UI', 10),
+            font=get_cjk_font(10),
             pady=48,
         ).pack(fill='both', expand=True)
 
@@ -380,12 +383,12 @@ class GraphTimeseriesPanel:
             row.pack(fill='x', padx=8, pady=3)
             time_label = fmt_rel(point.get('time_ms'), first_ms)
             value = _finite_float(point.get('value'), 0.0, lo=0.0)
-            tk.Label(row, text=time_label, width=10, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8)).pack(side='left')
+            tk.Label(row, text=time_label, width=10, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8)).pack(side='left')
             bar_wrap = tk.Frame(row, bg='#eeeeee', height=8)
             bar_wrap.pack(side='left', fill='x', expand=True, padx=(6, 8))
             width = max(4, min(220, int(220 * value / max_value)))
             tk.Frame(bar_wrap, bg=color, width=width, height=8).pack(side='left')
-            tk.Label(row, text=self._fmt(value), width=10, anchor='e', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=('Segoe UI', 8, 'bold')).pack(side='left')
+            tk.Label(row, text=self._fmt(value), width=10, anchor='e', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(8, True)).pack(side='left')
 
     def _render_points(self, metric: str, points: list[Mapping[str, Any]]) -> None:
         if self._rows is None:

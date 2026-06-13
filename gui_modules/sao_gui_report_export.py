@@ -21,6 +21,7 @@ from act_platform.runtime import (
     act_selective_parsing_status,
 )
 from gui_modules import sao_panel_components as components
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -325,7 +326,7 @@ class ReportExportPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
 
         tk.Label(
@@ -334,7 +335,7 @@ class ReportExportPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -346,7 +347,7 @@ class ReportExportPanel:
         right.pack_propagate(False)
 
         canvas = tk.Canvas(left, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(left, orient='vertical', command=canvas.yview)
+        scroll = components.sao_scrollbar(left, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -362,7 +363,7 @@ class ReportExportPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(fill='x', pady=(2, 8))
         clear_btn = components.action_button(right, '清空历史 Clear All', None, kind='danger')
         clear_btn.pack(fill='x', pady=(0, 8))
@@ -462,7 +463,7 @@ class ReportExportPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_VALUE_FG,
             anchor='w',
-            font=('Segoe UI', 12, 'bold'),
+            font=get_cjk_font(12, True),
             padx=10,
             pady=8,
         ).pack(fill='x')
@@ -478,8 +479,8 @@ class ReportExportPanel:
             # 浅色 LABEL_FG 灰字打上去对比度不足 (web 端 .metric 走变量, 无此问题)
             cell = tk.Frame(metrics, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_SEP)
             cell.pack(side='left', fill='x', expand=True, padx=(0, 6))
-            tk.Label(cell, text=label, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), pady=3).pack(fill='x')
-            tk.Label(cell, text=str(value), bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 11, 'bold'), pady=4).pack(fill='x')
+            tk.Label(cell, text=label, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8), pady=3).pack(fill='x')
+            tk.Label(cell, text=str(value), bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(11, True), pady=4).pack(fill='x')
         rows = list(preview.get('top_rows') or [])
         if not rows:
             self._empty_box('暂无战斗成员数据 / No combatants')
@@ -498,7 +499,7 @@ class ReportExportPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_VALUE_FG,
             anchor='w',
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
             padx=9,
             pady=4,
         ).pack(fill='x')
@@ -523,7 +524,7 @@ class ReportExportPanel:
                 bg=_SAO_PANEL_BODY_BG,
                 fg=_SAO_PANEL_LABEL_FG,
                 justify='center',
-                font=('Segoe UI', 9),
+                font=get_cjk_font(9),
                 pady=20,
             ).pack(fill='x')
             return
@@ -544,7 +545,7 @@ class ReportExportPanel:
                 fg=_SAO_PANEL_LABEL_FG,
                 anchor='w',
                 justify='left',
-                font=('Segoe UI', 9),
+                font=get_cjk_font(9),
                 padx=8,
                 pady=7,
             ).pack(fill='x')
@@ -568,6 +569,6 @@ class ReportExportPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
-            font=('Segoe UI', 10),
+            font=get_cjk_font(10),
             pady=28,
         ).pack(fill='x')

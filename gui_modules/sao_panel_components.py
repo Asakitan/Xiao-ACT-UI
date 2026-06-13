@@ -12,9 +12,11 @@ from __future__ import annotations
 import math
 import time as _time
 import tkinter as tk
+import tkinter.font as tkfont
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from gui_modules import sao_panel_ui as ui
+from utils.sao_sound import get_sao_font, get_cjk_font
 
 
 # ── 统一间距刻度（替代散落的 2/3/5/7/9 魔法值）──
@@ -265,35 +267,75 @@ def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
     row.bind('<Leave>', _leave, add='+')
 
 
-def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Label:
-    fg = _accent_text(kind)
-    bg = _accent_soft(kind)
-    return tk.Label(
-        parent, text=str(text or "-"), bg=bg, fg=fg, font=FONT_SMALL,
-        padx=SP_SM, pady=2, bd=0, relief='flat',
-        highlightthickness=1, highlightbackground=_accent(kind), highlightcolor=_accent(kind),
-    )
+def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Canvas:
+    """Rounded pill badge (canvas) — matches the web .act-badge / .act-pill."""
+    fontspec = get_cjk_font(8)
+    f = tkfont.Font(font=fontspec)
+    txt = str(text or "-")
+    w = f.measure(txt) + 2 * 9
+    h = f.metrics('linespace') + 2 * 3
+    c = tk.Canvas(parent, width=w, height=h, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
+                  highlightthickness=0, bd=0)
+    c.create_polygon(_round_pts(1, 1, w - 1, h - 1, min(9, h / 2)), smooth=True, splinesteps=16,
+                     fill=_accent_soft(kind), outline=_accent(kind), width=1)
+    c.create_text(w // 2, h // 2 + 1, text=txt, fill=_accent_text(kind), font=fontspec)
+    return c
 
 
-def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *, kind: str = "normal") -> tk.Button:
-    bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
-    fg = _pc('header_fg', ui._SAO_PANEL_HEADER_FG)
-    active = _accent(kind)
-    return tk.Button(
-        parent,
-        text=text,
-        command=command,
-        bg=bg,
-        fg=fg,
-        activebackground=active,
-        activeforeground=_pc('active_fg', 'white'),
-        relief='flat',
-        bd=0,
-        padx=SP_MD,
-        pady=SP_XS + 1,
-        font=FONT_BODY_BOLD,
-        cursor='hand2' if callable(command) else '',
-    )
+class _RoundedButton(tk.Canvas):
+    """Rounded flat button (canvas) — Tk has no rounded Button. Matches web .act-btn.
+
+    Supports ``configure(command=…)`` / ``configure(text=…)`` so existing callers
+    (e.g. dropdown_button) keep working.
+    """
+
+    def __init__(self, parent, text='', command=None, *, kind='normal', radius=7, padx=12, pady=5):
+        self._radius = radius
+        self._text = str(text)
+        self._command = command
+        self._font = tkfont.Font(font=get_cjk_font(9, True))
+        self._fill = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+        self._fill_hover = _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+        self._border = _pc('border', ui._SAO_PANEL_BORDER) if kind == 'normal' else _accent(kind)
+        self._fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if kind == 'normal' else _accent_text(kind)
+        w = self._font.measure(self._text) + 2 * padx
+        h = self._font.metrics('linespace') + 2 * pady
+        super().__init__(parent, width=w, height=h, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
+                         highlightthickness=0, bd=0, cursor='hand2' if command else '')
+        self.bind('<Configure>', lambda _e: self._draw())
+        self.bind('<Button-1>', self._on_click)
+        self.bind('<Enter>', lambda _e: self._draw(hover=True))
+        self.bind('<Leave>', lambda _e: self._draw(hover=False))
+        self._draw()
+
+    def _draw(self, hover=False):
+        self.delete('all')
+        w = self.winfo_width() or int(self['width'])
+        h = self.winfo_height() or int(self['height'])
+        self.create_polygon(_round_pts(1, 1, w - 1, h - 1, self._radius), smooth=True, splinesteps=16,
+                            fill=self._fill_hover if hover else self._fill,
+                            outline=_accent('cyan') if hover else self._border, width=1)
+        self.create_text(w // 2, h // 2, text=self._text, fill=self._fg, font=self._font)
+
+    def _on_click(self, _e):
+        if callable(self._command):
+            self._command()
+
+    def configure(self, cnf=None, **kw):
+        if 'command' in kw:
+            self._command = kw.pop('command')
+            tk.Canvas.configure(self, cursor='hand2' if self._command else '')
+        if 'text' in kw:
+            self._text = str(kw.pop('text'))
+            self._draw()
+        if cnf is not None or kw:
+            return tk.Canvas.configure(self, cnf, **kw)
+
+    config = configure
+
+
+def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *, kind: str = "normal"):
+    return _RoundedButton(parent, text, command, kind=kind)
 
 
 def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: str = "normal") -> tk.Button:
@@ -405,36 +447,186 @@ def more_indicator(parent: tk.Misc, hidden_count: int, *, noun: str = "条") -> 
     )
 
 
+def _round_pts(x1, y1, x2, y2, r):
+    """Point list for a smooth (bezier) rounded rectangle on a tk.Canvas."""
+    return [
+        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+
+
+def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None):
+    """Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
+
+    Draws a smooth rounded rect (fill ``bg``, 1px ``border``) and, when ``rail``
+    is set, a flat colored left rail (rounded to follow the corner) like the web
+    ``border-left`` accent. Content goes in the returned ``inner`` frame, inset by
+    ``pad`` so the rounded edge stays visible.
+    """
+    body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    canvas = tk.Canvas(parent, bg=body_bg, highlightthickness=0, bd=0)
+    if height:
+        canvas.configure(height=height)
+    inner = tk.Frame(canvas, bg=bg)
+    canvas.create_window(pad + (rail_w if rail else 0), pad, window=inner, anchor='nw', tags='inner')
+
+    def _redraw(_e=None):
+        w = canvas.winfo_width()
+        h = canvas.winfo_height()
+        if w <= 2 or h <= 2:
+            return
+        canvas.delete('bg')
+        if rail:
+            canvas.create_polygon(_round_pts(1, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+                                  fill=rail, outline=rail, tags='bg')
+            canvas.create_polygon(_round_pts(1 + rail_w, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+                                  fill=bg, outline=border, width=1, tags='bg')
+        else:
+            canvas.create_polygon(_round_pts(1, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+                                  fill=bg, outline=border, width=1, tags='bg')
+        canvas.tag_lower('bg')
+        canvas.coords('inner', pad + (rail_w if rail else 0), pad)
+        if height is not None:
+            canvas.itemconfigure('inner', width=w - 2 * pad - (rail_w if rail else 0), height=h - 2 * pad)
+        else:
+            canvas.itemconfigure('inner', width=w - 2 * pad - (rail_w if rail else 0))
+
+    canvas.bind('<Configure>', _redraw)
+    if height is None:
+        # auto-grow the canvas to the inner content height (variable-height cards/sections)
+        def _fit(_e=None):
+            try:
+                req = inner.winfo_reqheight() + 2 * pad
+                if abs((canvas.winfo_height() or 0) - req) > 1:
+                    canvas.configure(height=req)
+                _redraw()
+            except Exception:
+                pass
+        inner.bind('<Configure>', _fit)
+    return canvas, inner
+
+
+class _SaoScroll(tk.Canvas):
+    """Custom slim, dark, rounded scrollbar (native tk.Scrollbar ignores colors on
+    Windows — it stays white/split). Drop-in: pass as ``yscrollcommand=sb.set`` and
+    ``command=canvas.yview``. Thumb auto-hides when everything fits."""
+
+    def __init__(self, parent, command, *, width=9):
+        super().__init__(parent, width=width, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
+                         highlightthickness=0, bd=0, takefocus=0)
+        self._command = command
+        self._f0, self._f1 = 0.0, 1.0
+        self.bind('<Configure>', lambda _e: self._draw())
+        self.bind('<Button-1>', self._on_drag)
+        self.bind('<B1-Motion>', self._on_drag)
+
+    def set(self, first, last):
+        self._f0 = float(first)
+        self._f1 = float(last)
+        self._draw()
+
+    def _draw(self):
+        self.delete('all')
+        h = self.winfo_height()
+        w = self.winfo_width()
+        if h <= 2 or w <= 2:
+            return
+        if self._f0 <= 0.0 and self._f1 >= 1.0:
+            return  # everything fits — no thumb
+        y1 = max(1.0, self._f0 * h + 1)
+        y2 = min(h - 1.0, self._f1 * h - 1)
+        if y2 - y1 < 12:
+            y2 = min(h - 1.0, y1 + 12)
+        r = max(2.0, (w - 3) / 2.0)
+        self.create_polygon(_round_pts(2, y1, w - 1, y2, r), smooth=True, splinesteps=14,
+                            fill=_pc('border', ui._SAO_PANEL_BORDER), outline='')
+
+    def _on_drag(self, e):
+        h = self.winfo_height() or 1
+        span = max(0.0, self._f1 - self._f0)
+        frac = (e.y / h) - span / 2.0
+        if callable(self._command):
+            self._command('moveto', max(0.0, min(1.0, frac)))
+
+
+def sao_scrollbar(parent, command, *, width=9):
+    return _SaoScroll(parent, command, width=width)
+
+
+def sao_entry(parent, textvariable=None, *, width=14):
+    """Flat dark text input (cyan focus border), matching the web .act-input."""
+    card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    e = tk.Entry(
+        parent, textvariable=textvariable, width=width,
+        bg=card_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+        disabledbackground=card_bg, insertbackground=_pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+        relief='flat', bd=0, highlightthickness=1,
+        highlightbackground=_pc('border', ui._SAO_PANEL_BORDER),
+        highlightcolor=_accent('cyan'), font=get_cjk_font(9),
+    )
+    return e
+
+
+def sao_option_menu(parent, var, *values, command=None):
+    """Flat dark dropdown (replaces the cramped/raised native tk.OptionMenu)."""
+    card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    text = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+    accent = _accent('cyan')
+    om = tk.OptionMenu(parent, var, *values, command=command)
+    om.configure(
+        bg=card_bg, fg=text, activebackground=accent, activeforeground=card_bg,
+        relief='flat', bd=0, highlightthickness=1,
+        highlightbackground=_pc('border', ui._SAO_PANEL_BORDER),
+        font=get_cjk_font(9), anchor='w', padx=8, pady=2, cursor='hand2',
+        indicatoron=True, takefocus=0,
+    )
+    try:
+        om['menu'].configure(
+            bg=card_bg, fg=text, activebackground=accent, activeforeground=card_bg,
+            relief='flat', bd=0, font=get_cjk_font(9),
+        )
+    except Exception:
+        pass
+    return om
+
+
 def metric_tile(parent: tk.Misc, label: str, value: Any, *, sub: str = "", accent: str = "gold") -> tk.Frame:
     color = _accent(accent)
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     border = _pc('border', ui._SAO_PANEL_BORDER)
-    card = tk.Frame(parent, bg=card_bg, highlightthickness=1, highlightbackground=border)
-    tk.Frame(card, bg=color, width=3).pack(side='left', fill='y')   # 3px 左侧强调条（扁平单通道）
-    inner = tk.Frame(card, bg=card_bg)
-    inner.pack(side='left', fill='both', expand=True, padx=SP_MD, pady=(SP_SM, SP_SM))
-    tk.Label(inner, text=str(label or "-").upper(), bg=card_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_SMALL).pack(anchor='w')
-    tk.Label(inner, text=str(value if value not in (None, '') else "0"), bg=card_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=FONT_VALUE).pack(anchor='w', pady=(2, 0))
+    card, inner = rounded_panel(parent, bg=card_bg, border=border, radius=9,
+                                rail=color, rail_w=3, pad=SP_MD, height=98)
+    tk.Label(inner, text=str(label or "-").upper(), bg=card_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=get_cjk_font(8)).pack(anchor='w')
+    tk.Label(inner, text=str(value if value not in (None, '') else "0"), bg=card_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=get_sao_font(20, True)).pack(anchor='w', pady=(2, 0))
     if sub:
-        tk.Label(inner, text=str(sub), bg=card_bg, fg=color, font=FONT_SMALL).pack(anchor='w', pady=(1, 0))
+        tk.Label(inner, text=str(sub), bg=card_bg, fg=color, font=get_cjk_font(8)).pack(anchor='w', pady=(1, 0))
     return card
 
 
 def section_card(parent: tk.Misc, title: str, *, subtitle: str = "", badge: str = "", accent: str = "cyan") -> tk.Frame:
-    body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     header_bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
-    box = tk.Frame(parent, bg=body_bg, highlightthickness=1, highlightbackground=_pc('border', ui._SAO_PANEL_BORDER))
-    head = tk.Frame(box, bg=header_bg)
+    border = _pc('border', ui._SAO_PANEL_BORDER)
+    # Rounded section box (Tk canvas), auto-sized to content, raised card_bg fill to
+    # match the web .act-section. The returned `inner` frame is where the caller adds
+    # the section body; packing it actually packs the rounded canvas (proxy) so existing
+    # callers (`box.pack(...)` + `tk.Frame(box)`) keep working.
+    card, inner = rounded_panel(parent, bg=card_bg, border=border, radius=9, pad=SP_XS, height=None)
+    head = tk.Frame(inner, bg=header_bg)
     head.pack(fill='x')
     tk.Frame(head, bg=_accent(accent), width=3).pack(side='left', fill='y')   # 3px 左侧强调轨（扁平单通道）
     text_box = tk.Frame(head, bg=header_bg)
     text_box.pack(side='left', fill='x', expand=True, padx=(SP_SM, SP_XS), pady=SP_SM)
-    tk.Label(text_box, text=str(title or "SECTION"), bg=header_bg, fg=_pc('gold', ui._SAO_PANEL_GOLD), font=FONT_TITLE, anchor='w').pack(fill='x')
+    tk.Label(text_box, text=str(title or "SECTION"), bg=header_bg, fg=_pc('gold', ui._SAO_PANEL_GOLD), font=get_cjk_font(11, True), anchor='w').pack(fill='x')
     if subtitle:
-        tk.Label(text_box, text=str(subtitle), bg=header_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_SMALL, anchor='w').pack(fill='x')
+        tk.Label(text_box, text=str(subtitle), bg=header_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=get_cjk_font(8), anchor='w').pack(fill='x')
     if badge:
         status_badge(head, badge, kind=accent).pack(side='right', padx=SP_SM, pady=SP_SM)
-    return box
+    inner.pack = lambda **kw: card.pack(**kw)
+    inner.grid = lambda **kw: card.grid(**kw)
+    inner.place = lambda **kw: card.place(**kw)
+    return inner
 
 
 def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "", ratio: float = 0.0,

@@ -10,7 +10,8 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_data_source_diagnose, act_data_source_health
-from gui_modules.sao_panel_components import keep_canvas_scroll
+from gui_modules.sao_panel_components import keep_canvas_scroll, sao_scrollbar
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -196,7 +197,7 @@ class DataSourceHealthPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
         tk.Label(
             body,
@@ -204,7 +205,7 @@ class DataSourceHealthPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -216,7 +217,7 @@ class DataSourceHealthPanel:
         right.pack_propagate(False)
 
         canvas = tk.Canvas(left, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(left, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(left, canvas.yview)
         self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
@@ -232,7 +233,7 @@ class DataSourceHealthPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(fill='x', pady=(2, 8))
         self._diag = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._diag.pack(fill='both', expand=True)
@@ -280,7 +281,7 @@ class DataSourceHealthPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
-            font=('Segoe UI', 10),
+            font=get_cjk_font(10),
             pady=28,
         ).pack(fill='x')
 
@@ -301,7 +302,7 @@ class DataSourceHealthPanel:
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_VALUE_FG,
             anchor='w',
-            font=('Segoe UI', 11, 'bold'),
+            font=get_cjk_font(11, True),
         ).pack(side='left', fill='x', expand=True)
         _sao_pill(top, 'ACTIVE' if active else ('ERROR' if error else 'IDLE')).pack(side='right')
 
@@ -369,7 +370,7 @@ class DataSourceHealthPanel:
                 anchor='w',
                 justify='left',
                 wraplength=230,
-                font=('Segoe UI', 9),
+                font=get_cjk_font(9),
                 padx=8,
                 pady=7,
             ).pack(fill='x')

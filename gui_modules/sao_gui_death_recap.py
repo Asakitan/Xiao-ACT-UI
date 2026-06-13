@@ -19,10 +19,13 @@ from gui_modules.sao_panel_components import (
     fmt_dur,
     fmt_signed,
     metric_tile,
+    sao_entry,
+    sao_scrollbar,
     section_card,
     status_badge,
     topic_cn,
 )
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -196,22 +199,22 @@ class DeathRecapPanel:
         for label, cmd in (('Refresh', self.refresh), ('Copy', self.copy_json), ('Close', self.hide)):
             action_button(toolbar, label, cmd, kind='cyan' if label == 'Copy' else 'gold').pack(side='right', padx=(6, 0))
         # summary 含未截断实体名 — 按钮先 pack 防被长名挤出窗口
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
+        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='Entity', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._entity_var, width=16).pack(side='left', padx=(6, 10))
-        tk.Label(control, text='Window s', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._window_var, width=7).pack(side='left', padx=(6, 10))
+        tk.Label(control, text='Entity', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._entity_var, width=16).pack(side='left', padx=(6, 10))
+        tk.Label(control, text='Window s', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._window_var, width=7).pack(side='left', padx=(6, 10))
         tk.Button(control, text='Apply', command=self.refresh).pack(side='left')
 
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=12, pady=(0, 6))
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(outer, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -293,7 +296,7 @@ class DeathRecapPanel:
         ).pack(fill='x', pady=2)
         if open_row:
             payload = json.dumps(row.get('payload') or {}, ensure_ascii=False, default=str)
-            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=740, font=('Segoe UI', 8)).pack(fill='x', padx=22, pady=(0, 6))
+            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=740, font=get_cjk_font(8)).pack(fill='x', padx=22, pady=(0, 6))
 
     def _toggle_row(self, row_id: str) -> None:
         if row_id in self._expanded_rows:

@@ -14,7 +14,12 @@ from act_platform.runtime import (
     act_offline_import_file,
     act_offline_import_status,
 )
-from gui_modules.sao_panel_components import keep_canvas_scroll
+from gui_modules.sao_panel_components import (
+    keep_canvas_scroll,
+    sao_entry,
+    sao_scrollbar,
+)
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -214,12 +219,12 @@ class OfflineImportPanel:
             textvariable=self._summary_var,
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
-            font=('Segoe UI', 10, 'bold'),
+            font=get_cjk_font(10, True),
         ).pack(side='left', padx=(12, 0))
         path_row = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         path_row.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(path_row, text='Path', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(path_row, textvariable=self._path_var).pack(side='left', fill='x', expand=True, padx=(8, 0))
+        tk.Label(path_row, text='Path', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(path_row, textvariable=self._path_var).pack(side='left', fill='x', expand=True, padx=(8, 0))
 
         tk.Label(
             body,
@@ -227,13 +232,13 @@ class OfflineImportPanel:
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
-            font=('Segoe UI', 9),
+            font=get_cjk_font(9),
         ).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(outer, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -274,7 +279,7 @@ class OfflineImportPanel:
             return
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', pady=(0, 8), padx=4)
-        tk.Label(box, text='IMPORT RESULT', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=('Segoe UI', 9, 'bold')).pack(fill='x', padx=8, pady=(7, 3))
+        tk.Label(box, text='IMPORT RESULT', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=get_cjk_font(9, True)).pack(fill='x', padx=8, pady=(7, 3))
         preview = last.get('preview') if isinstance(last.get('preview'), Mapping) else {}
         report_obj = last.get('report') if isinstance(last.get('report'), Mapping) else {}
         encounter_id = preview.get('encounter_id') or report_obj.get('encounter_id') or ''
@@ -286,14 +291,14 @@ class OfflineImportPanel:
             ('Persisted', 'YES' if last.get('persisted') else 'NO'),
         )
         for label, value in values:
-            tk.Label(box, text=f"{label}: {value}", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=('Segoe UI', 9)).pack(fill='x', padx=8, pady=1)
+            tk.Label(box, text=f"{label}: {value}", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=get_cjk_font(9)).pack(fill='x', padx=8, pady=1)
 
     def _render_history(self, encounters: list[Any]) -> None:
         if self._rows is None:
             return
         title = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
         title.pack(fill='x', pady=(4, 2), padx=4)
-        tk.Label(title, text='HISTORY PLAYBACK', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=('Segoe UI', 9, 'bold')).pack(fill='x', padx=8, pady=5)
+        tk.Label(title, text='HISTORY PLAYBACK', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=get_cjk_font(9, True)).pack(fill='x', padx=8, pady=5)
         if not encounters:
             tk.Label(self._rows, text='暂无历史报告', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, pady=24).pack(fill='x')
             return
@@ -308,7 +313,7 @@ class OfflineImportPanel:
             card = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             card.pack(fill='x', pady=3, padx=4)
             label = f"{item.get('encounter_id') or '#'} · dmg={item.get('total_damage') or 0} · {item.get('completed_local_time') or ''}"
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=('Segoe UI', 9)).pack(side='left', fill='x', expand=True, padx=8, pady=6)
+            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=get_cjk_font(9)).pack(side='left', fill='x', expand=True, padx=8, pady=6)
             tk.Button(card, text='加载 Load', command=lambda i=history_index: self.load_history(i)).pack(side='right', padx=8, pady=5)
 
     @staticmethod

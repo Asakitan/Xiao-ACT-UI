@@ -27,6 +27,9 @@ from act_platform.runtime import (
 )
 from gui_modules.sao_panel_components import (
     keep_canvas_scroll,
+    sao_entry,
+    sao_option_menu,
+    sao_scrollbar,
     SP_SM,
     SP_MD,
     action_button,
@@ -34,6 +37,7 @@ from gui_modules.sao_panel_components import (
     section_card,
     status_badge,
 )
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
@@ -255,16 +259,16 @@ class MemScopePanel:
         action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
         # 按钮先 pack — 窄窗下 summary 不挤按钮
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
-                 font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
+                 font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))
         tk.Label(control, text='类型', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._dtype_var, *_DTYPES).pack(side='left', padx=(6, 8))
+                 font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._dtype_var, *_DTYPES).pack(side='left', padx=(6, 8))
         tk.Label(control, text='搜索值', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=('Segoe UI', 9)).pack(side='left')
-        entry = tk.Entry(control, textvariable=self._query_var, width=22)
+                 font=get_cjk_font(9)).pack(side='left')
+        entry = sao_entry(control, textvariable=self._query_var, width=22)
         entry.pack(side='left', padx=(6, 8))
         entry.bind('<Return>', lambda _e: self.do_search())
         action_button(control, '搜索 Search', self.do_search, kind='gold').pack(side='left', padx=(0, 4))
@@ -272,12 +276,12 @@ class MemScopePanel:
         action_button(control, '清除 Clear', self.do_clear).pack(side='left')
 
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG,
-                 fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=14, pady=(0, 6))
+                 fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        scroll = sao_scrollbar(outer, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -346,9 +350,9 @@ class MemScopePanel:
             avail = bool(c.get('available'))
             status_badge(row, '可用' if avail else '未就绪', kind='ok' if avail else 'warn').pack(side='left', padx=(0, 6))
             tk.Label(row, text=str(c.get('name') or c.get('id') or ''), bg=_SAO_PANEL_BODY_BG,
-                     fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), width=18, anchor='w').pack(side='left')
+                     fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True), width=18, anchor='w').pack(side='left')
             tk.Label(row, text=str(c.get('hint') or ''), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                     font=('Segoe UI', 8), anchor='w', justify='left', wraplength=680).pack(
+                     font=get_cjk_font(8), anchor='w', justify='left', wraplength=680).pack(
                 side='left', fill='x', expand=True)
 
     def _render_self(self, status: Mapping[str, Any]) -> None:
@@ -408,19 +412,19 @@ class MemScopePanel:
         state = str(search.get('state') or '')
         if search.get('error'):
             tk.Label(inner, text=f"错误: {search.get('error')}", bg=_SAO_PANEL_BODY_BG, fg=_theme_color('danger', '#ff6b82'),
-                     font=('Segoe UI', 9), anchor='w').pack(fill='x')
+                     font=get_cjk_font(9), anchor='w').pack(fill='x')
             return
         if state == 'running':
             pct = int(_finite_float(search.get('progress'), 0.0, lo=0.0, hi=1.0) * 100)
             tk.Label(inner, text=f"扫描中… {pct}%", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                     font=('Segoe UI', 9), anchor='w').pack(fill='x')
+                     font=get_cjk_font(9), anchor='w').pack(fill='x')
             return
         if not results:
             empty_state(inner, '无命中', f'未找到匹配（共 {count} 个，可能为 0）。').pack(fill='x')
             return
         if search.get('truncated'):
             tk.Label(inner, text=f"显示 {len(results)} / {count} 条（点行复制地址，点「attr」按地址读属性表）",
-                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), anchor='w').pack(fill='x')
+                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8), anchor='w').pack(fill='x')
         for r in results:
             addr = str(r.get('addr') or '')
             line = _fmt_hint(r)
@@ -455,9 +459,9 @@ class MemScopePanel:
         row = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
         row.pack(fill='x', pady=1)
         tk.Label(row, text=str(label), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=('Segoe UI', 9), anchor='w').pack(side='left')
+                 font=get_cjk_font(9), anchor='w').pack(side='left')
         tk.Label(row, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
-                 font=('Segoe UI', 9, 'bold'), anchor='e').pack(side='right')
+                 font=get_cjk_font(9, True), anchor='e').pack(side='right')
 
     def _table(self, parent: tk.Misc, cols, rows: List[Mapping[str, Any]]) -> None:
         grid = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
@@ -465,7 +469,7 @@ class MemScopePanel:
         for ci, (_key, title, width) in enumerate(cols):
             grid.grid_columnconfigure(ci, weight=(1 if ci <= 1 else 0))
             tk.Label(grid, text=title, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                     font=('Segoe UI', 8, 'bold'), anchor='w').grid(row=0, column=ci, sticky='ew', padx=4, pady=(0, 2))
+                     font=get_cjk_font(8, True), anchor='w').grid(row=0, column=ci, sticky='ew', padx=4, pady=(0, 2))
         for ri, row in enumerate(rows, start=1):
             for ci, (key, _title, width) in enumerate(cols):
                 val = row.get(key)

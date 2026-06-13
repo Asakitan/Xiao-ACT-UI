@@ -14,6 +14,7 @@ from act_platform.runtime import (
     act_graph_timeseries_status,
     act_render_apply_hooks,
 )
+from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_components import (
     SP_XS,
     SP_SM,
@@ -27,6 +28,10 @@ from gui_modules.sao_panel_components import (
     fmt_clock,
     fmt_dur,
     metric_tile,
+    rounded_panel,
+    sao_entry,
+    sao_option_menu,
+    sao_scrollbar,
     section_card,
     source_badges,
     source_cn,
@@ -37,6 +42,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
+    _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
     _SAO_PANEL_HEADER_BG,
     _SAO_PANEL_HEADER_FG,
@@ -237,35 +243,43 @@ class ActAggregatePanel:
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=14, pady=(12, 8))
-        _sao_pill(toolbar, 'COCKPIT').pack(side='left')
+        # 设计版双语主标题(SAO 字体, 对齐 web/design header; kicker 由拖拽条承担)
+        tk.Label(toolbar, text='AGGREGATE 聚合驾驶舱', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True)).pack(side='left')
         action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
         action_button(toolbar, '复制 Copy', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))
-        tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
-        field_entry = tk.Entry(control, textvariable=self._group_field_var, width=14)
+        tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
+        field_entry = sao_entry(control, textvariable=self._group_field_var, width=14)
         field_entry.pack(side='left', padx=(0, 8))
         attach_tooltip(field_entry, '自定义字段维度：聚合维度选「自定义字段」时按此 payload 字段名分组')
         field_entry.bind('<Return>', lambda _e: self.filter())
-        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        query_entry = tk.Entry(control, textvariable=self._query_var, width=18)
+        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        query_entry = sao_entry(control, textvariable=self._query_var, width=18)
         query_entry.pack(side='left', padx=(6, 8))
         # 输入即过滤（300ms 防抖，对齐 Web 端 onChange 自动刷新），回车立即生效
         query_entry.bind('<KeyRelease>', lambda _e: self._schedule_filter())
         query_entry.bind('<Return>', lambda _e: self.filter())
-        tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
+        sao_option_menu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
         action_button(control, '过滤 Filter', self.filter, kind='cyan').pack(side='left')
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=14, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        # 右侧概览栏 (OVERVIEW + SOURCE MIX, 对齐 web act-side 300px 侧栏; 圆角)
+        side_card, side_inner = rounded_panel(outer, bg=_SAO_PANEL_BODY_BG,
+                                              border=_SAO_PANEL_BORDER, radius=10, pad=12)
+        side_card.configure(width=300)
+        side_card.pack(side='right', fill='y', padx=(12, 0))
+        self._side = side_inner
+        # 主区 (左): 可滚动语义分组
+        main_wrap = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG)
+        main_wrap.pack(side='left', fill='both', expand=True)
+        canvas = tk.Canvas(main_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(main_wrap, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -277,6 +291,45 @@ class ActAggregatePanel:
         scroll.pack(side='right', fill='y')
         self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
+
+    def _render_side(self, status: Mapping[str, Any]) -> None:
+        side = getattr(self, '_side', None)
+        if side is None:
+            return
+        for child in list(side.winfo_children()):
+            child.destroy()
+        overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
+        counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
+        errors = list(status.get('errors') or [])
+        span_s = round(_finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0, 1)
+        pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
+        pad.pack(fill='both', expand=True)
+        tk.Label(pad, text='OVERVIEW 概览', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
+        for key, val in (
+            ('当前战斗', overview.get('dungeon_name') or overview.get('mode') or 'live'),
+            ('数据源', status.get('source') or 'live'),
+            ('战斗时长', f"{self._fmt(span_s)} 秒"),
+            ('已持续', f"{self._fmt(overview.get('elapsed_s'))} 秒"),
+            ('事件数', _finite_int(counts.get('rows'), 0, lo=0)),
+            ('错误', len(errors)),
+        ):
+            row = tk.Frame(pad, bg=_SAO_PANEL_BODY_BG)
+            row.pack(fill='x', pady=2)
+            tk.Label(row, text=str(key), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(side='left')
+            tk.Label(row, text=str(val), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                     font=get_sao_font(9), anchor='e').pack(side='right')
+        tk.Label(pad, text='SOURCE MIX 来源', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(14, 6))
+        mix = list(status.get('source_mix') or [])
+        if mix:
+            for src in mix:
+                tk.Label(pad, text=source_cn(src), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                         font=get_cjk_font(9), anchor='w').pack(fill='x', pady=1)
+        else:
+            tk.Label(pad, text='No sources', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(fill='x')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
@@ -296,6 +349,7 @@ class ActAggregatePanel:
         if sig == self._last_sig:
             return
         self._last_sig = sig
+        self._render_side(status)
         # 重建前记滚动位置, 重建后还原 — web 端 setContentHtml(preserveScroll)
         # 同款; 否则每次刷新滚动跳回顶部
         canvas = getattr(self, '_canvas', None)
@@ -340,8 +394,13 @@ class ActAggregatePanel:
             ('怪物数', _finite_int(counts.get('monsters'), 0, lo=0), '个目标', 'danger'),
             ('地牢 / 场景', _finite_int(counts.get('dungeons'), 0, lo=0), overview.get('dungeon_name') or '当前', 'cyan'),
         )
-        for label, value, sub, accent in items:
-            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        # 3 列网格 (与窄主区 + web auto-fit 一致), 避免 6 卡挤一行导致数值出框
+        cols = 3
+        for col in range(cols):
+            grid.columnconfigure(col, weight=1, uniform='kpi')
+        for idx, (label, value, sub, accent) in enumerate(items):
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).grid(
+                row=idx // cols, column=idx % cols, sticky='nsew', padx=3, pady=3)
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
         status_badge(badges, f"模式 {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
