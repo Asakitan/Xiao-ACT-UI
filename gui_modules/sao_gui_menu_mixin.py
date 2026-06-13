@@ -548,6 +548,10 @@ class SAOPlayerGUIMenuMixin:
         # (v4.x: 面板分类回归"开/关面板"职责, 全局开关归到设置)。
         panel_items.extend([
             {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
+            # DPS 面板行为设置(与 web menu DPS 区的「空闲隐藏」数字框对齐); 紧贴
+            # DPS 开关便于发现。命令列表无数字框, 故点一下循环到下一预设档。
+            {'icon': '⏱', 'label': f'DPS空闲隐藏: {self._dps_fade_timeout_label()}',
+             'command': self._cycle_dps_fade_timeout},
             {'icon': '◆' if dps_report_available else '◇',
              'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
              'command': self._show_last_dps_report_menu},

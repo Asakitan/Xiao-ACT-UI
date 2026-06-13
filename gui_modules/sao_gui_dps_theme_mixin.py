@@ -130,6 +130,31 @@ class SAOPlayerGUIDpsThemeMixin:
             return 86400.0
         return float(max(1.0, v))
 
+    # ── DPS 空闲隐藏秒数 (与 web menu #dps-fade-timeout 对齐; web 是自由数字框,
+    #    Tk 菜单是命令列表故走预设循环, 点一下切到下一档)。0 = 常驻不隐藏。 ──
+    _DPS_FADE_PRESETS = (0, 3, 5, 8, 10, 15, 30, 60)
+
+    def _dps_fade_timeout_value(self) -> int:
+        try:
+            return max(0, min(120, int(float(self._get_setting('dps_fade_timeout_s', 5)))))
+        except Exception:
+            return 5
+
+    def _dps_fade_timeout_label(self) -> str:
+        v = self._dps_fade_timeout_value()
+        return '常驻' if v <= 0 else ('%ds' % v)
+
+    def _cycle_dps_fade_timeout(self):
+        cur = self._dps_fade_timeout_value()
+        presets = self._DPS_FADE_PRESETS
+        nxt = next((p for p in presets if p > cur), presets[0])
+        self._set_setting('dps_fade_timeout_s', int(nxt))
+        # 消费者 _combat_damage_timeout_s 实时读该设置, 无需重建面板。
+        try:
+            self._refresh_menu_if_open()
+        except Exception:
+            pass
+
     def _cancel_dps_idle_reset_after(self):
         after_id = getattr(self, '_dps_idle_reset_after_id', None)
         if after_id:

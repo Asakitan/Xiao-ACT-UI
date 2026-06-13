@@ -2,6 +2,26 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.130: Entity 联动 Debug 开关 + DPS 空闲隐藏秒数控件补齐(主菜单设置 parity).
+
+  延续 batch 264, 补两处 web 菜单有控件、entity 端缺的设置:
+
+  1) **联动 Debug Log 开关** — web menu 联动区有 Debug 复选(set_linkage_debug →
+    `debug_log`)。`engines/boss_autokey_linkage.py` `build_boss_reactions_state`
+    新增下发 `debug_log`; `sao_gui_bossraid.py` `_render_reactions` 的「联动」行
+    在 ON/OFF 与全局CD 之间加 Debug 复选, 复用 batch 264 的 `_set_linkage` 回调。
+    至此 entity 联动区与 web 三控件(ON/OFF + Debug + 全局CD)1:1。
+
+  2) **DPS 空闲隐藏秒数** — web menu DPS 区有数字框(`dps_fade_timeout_s`,
+    0-120s, 控制战后多久自动隐藏 DPS 面板); Tk 此前**读**该设置
+    (`_combat_damage_timeout_s` 实时读)但无控件。Tk 菜单是命令列表(无数字框),
+    故在 DPS 开关下方加循环命令「DPS空闲隐藏: Xs」, 点一下切下一预设档
+    (0=常驻/3/5/8/10/15/30/60), 写 `dps_fade_timeout_s` + 刷菜单; 消费者实时读
+    无需重建。新增 `_cycle_dps_fade_timeout`/`_dps_fade_timeout_label` 等
+    (dps_theme_mixin)。
+
+  基线 81/81 绿; boss_reactions_linkage 19/19。
+
 ## v4.6.129: Entity Boss↔AutoKey 联动总开关 + 全局CD 控件补齐(双端 1:1).
 
   web 主菜单一直有「BOSS ↔ AUTOKEY LINKAGE」区(联动 ON/OFF + Debug + 全局CD +

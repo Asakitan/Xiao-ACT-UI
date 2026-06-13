@@ -238,6 +238,19 @@ class _BossReactionsEditorMixin:
                             selectcolor=PANEL_CARD, activebackground=PANEL_BG,
                             activeforeground=TEXT_MAIN, font=panel_font(8),
                             bd=0, highlightthickness=0).pack(side=tk.LEFT, padx=(6, 12))
+            _lk_dbg = _tk.BooleanVar(value=bool(st.get('debug_log', False)))
+
+            def _toggle_lk_debug(_v=_lk_dbg):
+                try:
+                    _set_lk('debug_log', bool(_v.get()))
+                except Exception as exc:
+                    self._mech_toast('Debug 开关保存失败: %s' % exc, error=True)
+
+            _tk.Checkbutton(lk_row, text='Debug', variable=_lk_dbg,
+                            command=_toggle_lk_debug, bg=PANEL_BG, fg=TEXT_MAIN,
+                            selectcolor=PANEL_CARD, activebackground=PANEL_BG,
+                            activeforeground=TEXT_MAIN, font=panel_font(8),
+                            bd=0, highlightthickness=0).pack(side=tk.LEFT, padx=(0, 12))
             tk.Label(lk_row, text='全局CD(s)', bg=PANEL_BG, fg=TEXT_MUTED,
                      font=panel_font(8)).pack(side=tk.LEFT)
             _lk_cd = _tk.StringVar(value=str(st.get('global_cooldown_s', 1.0)))
