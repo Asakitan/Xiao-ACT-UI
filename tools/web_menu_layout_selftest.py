@@ -896,7 +896,7 @@ def main() -> int:
             raise AssertionError("AutoKey condition/action types must normalize enum values before render/save: " + pattern)
     auto_key_condition_type_safe_required = [
         "function _akConditionType(value)",
-        "var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true };",
+        "var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true, dungeon_is: true, last_skill_is: true, boss_mechanic_is: true, boss_mechanic_family_is: true };",
         "function _akSlotState(value)",
         "var allowed = { ready: true, cooldown: true, active: true, insufficient_energy: true, unknown: true };",
         "function _akPressMode(value)",

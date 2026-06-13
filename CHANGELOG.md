@@ -2,6 +2,27 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.131: Web AutoKey 4 类触发条件不再被静默改写(防数据损坏) + Tk 档案列表删除按钮.
+
+  1) **Web 条件类型数据损坏修复(重要)** — `web/menu.html` `_akConditionType` 的
+    allowed 集只含 7 种条件, 其余一律 `return 'hp_pct_gte'`; 而 entity/engine
+    支持 11 种(`auto_key_engine.py` + `AutoKeyDetailPanel.CONDITION_TYPES`)。
+    后果: 在 Tk 建的含 `dungeon_is`/`last_skill_is`/`boss_mechanic_is`/
+    `boss_mechanic_family_is` 条件的 profile, 一旦在 web 菜单打开(normalize 即
+    强制改型)再保存, 这些条件被**静默改写成 hp_pct_gte**(连同其 value 语义丢失)。
+    现把这 4 种(均 string `value`, 同 profession_is/player_name_is)补进
+    `_akConditionType` allowlist + `_akDefaultCondition` + `_akNormalizeCondition`
+    文本分支 + `_akConditionTypeOptions` 下拉 + `_akRenderConditionFields` 文本框,
+    web 端不再损坏且可正常建/改这 4 类条件, 与 Tk/engine 1:1。
+    `web_menu_layout_selftest` 的 allowlist 快照同步更新。
+
+  2) **Tk AutoKey 档案列表删除按钮** — web 档案卡有「删除」, Tk 档案列表只有
+    OPEN/ON/COPY、删除藏在打开后的编辑器工具栏里。`sao_gui_profile_editors.py`
+    `AutoKeyDetailPanel` 档案卡加 DEL 按钮(kind=danger), 新 `_delete_profile(pid)`
+    复用 `_confirm_delete_profile`(SAODialog 二次确认), 不必先打开编辑器。
+
+  基线 81/81 绿; combat_preparse 15/15。
+
 ## v4.6.130: Entity 联动 Debug 开关 + DPS 空闲隐藏秒数控件补齐(主菜单设置 parity).
 
   延续 batch 264, 补两处 web 菜单有控件、entity 端缺的设置:

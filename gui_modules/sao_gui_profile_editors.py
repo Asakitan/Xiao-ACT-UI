@@ -425,6 +425,9 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             make_action_button(row, 'COPY',
                                lambda pid=pid: self._copy_profile(pid),
                                width=4).pack(side=tk.LEFT, padx=(5, 0))
+            make_action_button(row, 'DEL',
+                               lambda pid=pid: self._delete_profile(pid),
+                               kind='danger', width=3).pack(side=tk.LEFT, padx=(5, 0))
             for child in card.winfo_children():
                 child.bind('<Button-1>',
                            lambda _event, pid=pid: self._select_profile(pid),
@@ -667,6 +670,14 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._selected_id = str(copied.get('id') or '')
         self._set_status('Copied profile')
         self._reload(keep_selected=True)
+
+    def _delete_profile(self, profile_id: str) -> None:
+        # Delete straight from the profile list (parity with web menu list card's
+        # 删除 button); Tk previously only had DELETE inside the open editor.
+        if not profile_id:
+            return
+        SAODialog.ask(self._win, 'AutoKey', 'Delete this AutoKey profile?',
+                      on_ok=lambda pid=profile_id: self._confirm_delete_profile(pid))
 
     def _activate_profile(self, profile_id: str) -> None:
         config = self._load() or {}

@@ -5573,7 +5573,7 @@ function _akRenderEditorIdentitySummary(draft) {
 
 function _akConditionType(value) {
     var key = _profileText(value, 'hp_pct_gte');
-    var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true };
+    var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true, dungeon_is: true, last_skill_is: true, boss_mechanic_is: true, boss_mechanic_family_is: true };
     return allowed[key] ? key : 'hp_pct_gte';
 }
 
@@ -5601,7 +5601,7 @@ function _akDefaultCondition(conditionType) {
     var type = _akConditionType(conditionType);
     if (type === 'burst_ready_is') return { type: type, value: true };
     if (type === 'slot_state_is') return { type: type, slot_index: 1, state: 'ready' };
-    if (type === 'profession_is' || type === 'player_name_is') return { type: type, value: '' };
+    if (type === 'profession_is' || type === 'player_name_is' || type === 'dungeon_is' || type === 'last_skill_is' || type === 'boss_mechanic_is' || type === 'boss_mechanic_family_is') return { type: type, value: '' };
     return { type: type, value: 0.5 };
 }
 
@@ -5615,7 +5615,7 @@ function _akNormalizeCondition(condition) {
     } else if (merged.type === 'slot_state_is') {
         merged.slot_index = _akIntValue('slot_index', merged.slot_index);
         merged.state = _akSlotState(merged.state);
-    } else if (merged.type === 'profession_is' || merged.type === 'player_name_is') {
+    } else if (merged.type === 'profession_is' || merged.type === 'player_name_is' || merged.type === 'dungeon_is' || merged.type === 'last_skill_is' || merged.type === 'boss_mechanic_is' || merged.type === 'boss_mechanic_family_is') {
         merged.value = _akTextValue(merged.value);
     } else {
         merged.value = _clampNum(merged.value, 0.5, 0, 1);
@@ -5654,7 +5654,11 @@ function _akConditionTypeOptions(selected) {
         ['burst_ready_is', 'Burst 状态'],
         ['slot_state_is', '槽位状态'],
         ['profession_is', '职业名称匹配'],
-        ['player_name_is', '玩家名称匹配']
+        ['player_name_is', '玩家名称匹配'],
+        ['dungeon_is', '副本匹配 Dungeon'],
+        ['last_skill_is', '上个技能匹配 Last Skill'],
+        ['boss_mechanic_is', 'Boss机制匹配 Mechanic'],
+        ['boss_mechanic_family_is', 'Boss机制族匹配 Family']
     ].map(function(item) {
         return '<option value="' + _escHtml(item[0]) + '"' + (selected === item[0] ? ' selected' : '') + '>' + _escHtml(item[1]) + '</option>';
     }).join('');
@@ -5732,7 +5736,7 @@ function _akRenderConditionFields(index, condIndex, condition) {
                 '<option value="false"' + (!boolValue ? ' selected' : '') + '>未准备 Not Ready</option>' +
             '</select></div>';
     }
-    if (type === 'profession_is' || type === 'player_name_is') {
+    if (type === 'profession_is' || type === 'player_name_is' || type === 'dungeon_is' || type === 'last_skill_is' || type === 'boss_mechanic_is' || type === 'boss_mechanic_family_is') {
         return '' +
             '<div class="auto-key-field span-2"><label>匹配值 Match Value</label><input type="text" value="' + _escHtml(_akTextValue(condition.value)) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value)" /></div>';
     }
