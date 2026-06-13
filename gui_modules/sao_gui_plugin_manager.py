@@ -470,6 +470,21 @@ class PluginManagerPanel:
         self.refresh()
 
     def _uninstall(self, plugin_id: str) -> None:
+        # 卸载移除已安装插件、不可撤销 → 二次确认 (与 web plugin_manager 的
+        # window.confirm 一致; 同 BossRaid/AutoKey 档案删除的 SAODialog 守护)。
+        win = self._win
+        try:
+            from sao_theme.dialogs import SAODialog
+            if win is not None and win.winfo_exists():
+                SAODialog.ask(win, '卸载插件',
+                              '卸载插件「%s」? 此操作不可撤销。' % plugin_id,
+                              on_ok=lambda pid=plugin_id: self._uninstall_confirmed(pid))
+                return
+        except Exception:
+            pass
+        self._uninstall_confirmed(plugin_id)
+
+    def _uninstall_confirmed(self, plugin_id: str) -> None:
         try:
             result = act_plugin_uninstall(self.owner, plugin_id)
         except Exception as exc:

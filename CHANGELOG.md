@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.135: 插件卸载加二次确认(双端; 防误删不可撤销的已装插件).
+
+  交互友好性: 卸载插件会移除已安装插件且不可撤销, 但两端此前都**点一下即卸载、
+  无二次确认**(其他不可逆动作如档案删除两端都已有确认 → 卸载是漏网)。补:
+
+  - `web/plugin_manager.html` `uninstall`: 前置 `window.confirm`(与 menu.html
+    档案删除 `_akDeleteProfile`/`_brDeleteProfile` 的 window.confirm 同款)。
+  - `gui_modules/sao_gui_plugin_manager.py` `_uninstall`: 前置 `SAODialog.ask`
+    二次确认(与 BossRaid/AutoKey 档案删除同款), 确认后走新 `_uninstall_confirmed`
+    执行; 对话框不可用(无窗口/headless)时回退直接执行不挡。
+
+  双端均加确认, parity 不破; 不砍功能(仅加安全门)。基线 81/81 绿;
+  plugin_manager_panel 3/3。
+
 ## v4.6.134: Web BossRaid 时间线条件补比较符控件(双端 1:1; web 之前只能 HP>=).
 
   enum/控件 parity 脉补漏: BossRaid 时间线条件(timeline condition)的 hp_pct 类型
