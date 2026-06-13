@@ -436,9 +436,18 @@ class GameStateManager:
             # (~3.5 µs/call across 47 dataclass fields) with copy.copy which
             # bypasses the dataclass __init__ validation and is ~3.4x faster.
             # Output is equality-identical to the original construction.
-            snapshot = _copy.copy(self._state)
+            # 无订阅者 (启动/关闭窗口/headless) 时跳过整份状态快照 — 没人消费。
+            # listeners 在锁内定格成 tuple: 通知循环在锁外跑, packet 线程迭代时
+            # GUI 线程可能并发 subscribe/unsubscribe live list → "changed size
+            # during iteration"/漏调/重复调; 定格快照消除该跨线程竞态。
+            if self._listeners:
+                snapshot = _copy.copy(self._state)
+                listeners = tuple(self._listeners)
+            else:
+                snapshot = None
+                listeners = ()
         # 通知在锁外执行，避免死锁
-        for cb in self._listeners:
+        for cb in listeners:
             try:
                 cb(snapshot)
             except Exception as e:

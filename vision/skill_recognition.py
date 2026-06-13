@@ -56,9 +56,12 @@ def _prepare_hsv(img_bgr: Optional[np.ndarray]) -> Optional[np.ndarray]:
     return cvt_color(gaussian_blur(img_bgr, (3, 3), 0), cv2.COLOR_BGR2HSV)
 
 
-@_probe.decorate('vision.skill_measure_slot')
 def _measure_slot(img_bgr: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
-    hsv = _prepare_hsv(img_bgr)
+    return _measure_from_hsv(_prepare_hsv(img_bgr))
+
+
+@_probe.decorate('vision.skill_measure_slot')
+def _measure_from_hsv(hsv: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
     if hsv is None:
         return None
     h, w = hsv.shape[:2]
@@ -121,28 +124,22 @@ def _measure_slot(img_bgr: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
 
 
 def _compare_to_baseline(
-    img_bgr: Optional[np.ndarray],
-    baseline_bgr: Optional[np.ndarray],
+    cur_hsv: Optional[np.ndarray],
+    base_hsv: Optional[np.ndarray],
 ) -> Optional[Dict[str, float]]:
-    if img_bgr is None or baseline_bgr is None or img_bgr.size == 0 or baseline_bgr.size == 0:
+    # 接收已预处理的 HSV (当前帧由 analyze 与 _measure_from_hsv 复用、基线由
+    # state_store 缓存), 避免每帧对同一帧 BGR→HSV 重复转换 (旧实现对当前帧转两次
+    # + 对稳定基线每帧重转); base_hsv 已对齐当前帧尺寸。
+    if cur_hsv is None or base_hsv is None:
         return None
-
-    h, w = img_bgr.shape[:2]
-    if baseline_bgr.shape[:2] != (h, w):
-        baseline_bgr = cv2.resize(baseline_bgr, (w, h), interpolation=cv2.INTER_AREA)
-
-    hsv = _prepare_hsv(img_bgr)
-    base_hsv = _prepare_hsv(baseline_bgr)
-    if hsv is None or base_hsv is None:
-        return None
-
+    h, w = cur_hsv.shape[:2]
     masks = _slot_masks(h, w)
     if masks is None:
         return None
     icon_mask, inner_mask, _ring_mask = masks
 
-    cur_v = hsv[:, :, 2].astype(np.float32)
-    cur_s = hsv[:, :, 1].astype(np.float32)
+    cur_v = cur_hsv[:, :, 2].astype(np.float32)
+    cur_s = cur_hsv[:, :, 1].astype(np.float32)
     base_v = base_hsv[:, :, 2].astype(np.float32)
     base_s = base_hsv[:, :, 1].astype(np.float32)
 
@@ -294,6 +291,25 @@ class SkillVisualTracker:
             }
         return self._slot_cache[idx]
 
+    @staticmethod
+    def _baseline_hsv(state_store: Dict[str, Any], cur_shape) -> Optional[np.ndarray]:
+        """基线 HSV 缓存 — 基线 BGR 在一个会话内恒定, 每帧重转纯属浪费。
+        按当前帧 (h, w) 缓存; 尺寸变化才重算 (与旧实现的逐帧 resize+convert 等价);
+        reset() 清空 _slot_cache 时随之失效。"""
+        base_bgr = state_store.get("baseline_img")
+        if base_bgr is None or getattr(base_bgr, "size", 0) == 0:
+            return None
+        h, w = int(cur_shape[0]), int(cur_shape[1])
+        cached = state_store.get("baseline_hsv")
+        if cached is not None and state_store.get("baseline_hsv_shape") == (h, w):
+            return cached
+        if base_bgr.shape[:2] != (h, w):
+            base_bgr = cv2.resize(base_bgr, (w, h), interpolation=cv2.INTER_AREA)
+        base_hsv = _prepare_hsv(base_bgr)
+        state_store["baseline_hsv"] = base_hsv
+        state_store["baseline_hsv_shape"] = (h, w)
+        return base_hsv
+
     def _save_baseline(self, idx: int, img: np.ndarray):
         try:
             os.makedirs(self._baseline_dir, exist_ok=True)
@@ -318,7 +334,8 @@ class SkillVisualTracker:
             idx = int(item["index"])
             bbox = item["bbox"]
             img = capture_region(bbox)
-            metrics = _measure_slot(img)
+            cur_hsv = _prepare_hsv(img)
+            metrics = _measure_from_hsv(cur_hsv)
             state_store = self._ensure_slot_state(idx)
             ready_edge = False
 
@@ -326,11 +343,13 @@ class SkillVisualTracker:
                 state_store["baseline_img"] = img.copy()
                 state_store["baseline"] = dict(metrics)
                 state_store["baseline_state"] = _guess_baseline_state(metrics)
+                state_store["baseline_hsv"] = None
                 self._save_baseline(idx, img)
 
             baseline_cmp = None
-            if img is not None and state_store.get("baseline_img") is not None:
-                baseline_cmp = _compare_to_baseline(img, state_store.get("baseline_img"))
+            if cur_hsv is not None and state_store.get("baseline_img") is not None:
+                base_hsv = self._baseline_hsv(state_store, cur_hsv.shape[:2])
+                baseline_cmp = _compare_to_baseline(cur_hsv, base_hsv)
 
             if metrics is None:
                 raw_state = "unknown"

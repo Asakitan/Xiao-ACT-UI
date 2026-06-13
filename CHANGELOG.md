@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.121: 技能识别 HSV 去重转换 + GameState 无订阅者跳快照.
+
+  1) `vision/skill_recognition.py` 消除每帧冗余 BGR→HSV 转换 —
+    `_compare_to_baseline` 旧实现对同一当前帧再转一次 HSV (analyze 内
+    `_measure_slot` 已转), 又对恒定的基线图每帧重转; 现 analyze 单次
+    `_prepare_hsv(img)` 复用给 `_measure_from_hsv` 与 compare, 基线 HSV
+    按 (h,w) 缓存在 slot state(reset 随 _slot_cache 清空)。10Hz × 9 槽
+    战斗中约省 180 次 cvt_color/秒; compare 输出逐值等价(<1e-9 实测)。
+
+  2) `engines/game_state.py` `update()` 无订阅者(启动/关窗/headless)时
+    跳过整份 47 字段状态 copy.copy — 没人消费; listeners 在锁内定格成
+    tuple 再于锁外通知, 消除 packet 线程迭代 live list 时 GUI 线程并发
+    subscribe/unsubscribe 的跨线程竞态(可致迭代异常/漏调/重复调)。
+
 ## v4.6.120: 工具条按钮防挤尾扫(再 6 面板, 该类收口).
 
   1) v4.6.119 同类尾扫 — mem_scope / data_source_health /
