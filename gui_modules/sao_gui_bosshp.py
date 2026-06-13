@@ -24,8 +24,7 @@ Public API (kept backward-compatible with sao_gui.py):
     hp_pct, current_hp, total_hp, hp_source,
     shield_active, shield_pct,
     breaking_stage, extinction_pct,
-    in_overdrive, invincible,
-    stage_text
+    in_overdrive, invincible
 """
 
 from __future__ import annotations
@@ -567,7 +566,6 @@ class BossHpOverlay:
         self._in_overdrive = False
         self._invincible = False
         self._boss_name = 'Enemy'
-        self._stage_text = ''
         self._current_hp = 0.0
         self._total_hp = 0.0
         self._hp_source = ''
@@ -837,7 +835,6 @@ class BossHpOverlay:
         # ── targets ──
         name = str(data.get('boss_name') or 'Enemy').strip() or 'Enemy'
         self._boss_name = name
-        self._stage_text = str(data.get('stage_text') or '')
 
         hp_pct = _unit_pct(data.get('hp_pct'))
         if hp_pct < self._target_hp_pct - 0.001:

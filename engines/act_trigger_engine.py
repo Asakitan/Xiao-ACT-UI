@@ -185,7 +185,10 @@ class ActTriggerEngine:
                 event = self._build_event(rule, render_spec, now_ts, encounter_id)
                 self._last_fire_ts[global_key] = now_ts
                 self._fired_in_encounter.add(fire_key)
-                self._recent_events.append(copy.deepcopy(event))
+                # event 是 _build_event 产出的扁平 dict（值全为 str/float/int 等
+                # 不可变标量），dict() 浅拷贝与 deepcopy 语义等价但更省，
+                # 隔离存档副本不被调用方对 emitted 的改键影响。
+                self._recent_events.append(dict(event))
                 if len(self._recent_events) > self._max_recent:
                     self._recent_events = self._recent_events[-self._max_recent:]
                 emitted.append(event)
@@ -193,7 +196,9 @@ class ActTriggerEngine:
 
     def snapshot(self, limit: int = 20) -> Dict[str, Any]:
         with self._lock:
-            recent = [copy.deepcopy(e) for e in self._recent_events[-max(0, int(limit or 20)):]][::-1]
+            # 扁平事件 dict（不可变标量值）→ dict() 浅拷贝即可隔离调用方，
+            # 比 deepcopy 省（snapshot 由触发器面板按轮询调用）。
+            recent = [dict(e) for e in self._recent_events[-max(0, int(limit or 20)):]][::-1]
             return {
                 "enabled": bool(self._rules),
                 "rule_count": len(self._rules),

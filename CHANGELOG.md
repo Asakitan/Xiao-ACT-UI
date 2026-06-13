@@ -2,6 +2,22 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.123: ACT 触发器事件浅拷贝替 deepcopy + BossHP 死读字段清理.
+
+  1) `engines/act_trigger_engine.py` 的 `evaluate()` 存档与 `snapshot()` 返回
+    把 `copy.deepcopy(event)` 改为 `dict(event)` — event 是 `_build_event`
+    产出的扁平 dict(值全为 uuid.hex/str/float/int 等不可变标量, 无嵌套容器),
+    浅拷贝与 deepcopy 语义完全等价但省去 memo/递归开销; `snapshot()` 由
+    触发器/计时器面板按轮询调用(可达数 Hz × 至多 20 事件), 是真实重复分配。
+    规则(可嵌套)的 `add_rule` deepcopy 故意不动。trigger 自检 5/5 绿。
+
+  2) `gui_modules/sao_gui_bosshp.py` 删除死读字段 `stage_text` — Tk 侧
+    `update()` 把 `data.get('stage_text')` 读进 `self._stage_text` 并初始化,
+    但全工程无任何生产者下发该键(恒为 ''), 渲染管线也从不引用它; Web 侧的
+    `#stage-text` 徽章另由 `breaking_stage` 派生(且因 breaking_stage 上限 1,
+    `Math.max(1,stage)` 实际恒显 "P1" 的装饰), 不值得在 Tk 复刻该恒定装饰。
+    一并修正 docstring 的 `data` 键清单。纯死代码移除, 不动任何功能。
+
 ## v4.6.122: 渲染 lane 外层守卫防静默死亡 + compose 错误日志限频.
 
   1) `render/overlay_render_worker.py` `_RenderLane._loop` 加外层 try
