@@ -78,8 +78,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     <div class="header">
         <div><div class="kicker">ACT DEATH WINDOW</div><div class="title">DEATH RECAP</div></div>
         <div class="actions">
-            <input id="entity" type="text" placeholder="entity id" />
-            <input id="window" type="number" min="1" value="8" title="window seconds" />
+            <input id="entity" type="text" placeholder="entity id" onkeydown="if(event.key==='Enter') DeathRecap.refresh()" />
+            <input id="window" type="number" min="1" value="8" title="window seconds" onkeydown="if(event.key==='Enter') DeathRecap.refresh()" />
             <button class="primary" type="button" onclick="DeathRecap.refresh()">刷新</button>
             <button class="close" type="button" onclick="DeathRecap.close()">×</button>
         </div>

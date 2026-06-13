@@ -2,6 +2,22 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.138: ACT 面板查询交互一致性补齐(web; 与 Tk 双端及兄弟面板对齐).
+
+  用户交互友好性(交叉验证 6 个 ACT 面板的双端 parity 后, 落两处确认缺口):
+
+  - `web/act_graph_timeseries.html`: 查询框此前只能"按 Enter 过滤"且**无可见过滤
+    按钮**——而它的 Tk 孪生(`sao_gui_graph_timeseries` 第 267 行 `过滤 Filter`)及所有
+    兄弟下钻面板(combatant/skill drilldown web 都已有 Filter 按钮)都有。补一个
+    `<button>Filter</button>` 调既有 `GraphTimeseries.filter()`, 保留 Enter 快捷。
+  - `web/act_death_recap.html`: entity / window 输入框此前**无 Enter 处理**(只能点
+    刷新), 与兄弟面板(combatant/skill/graph 输入框都有 Enter→动作)不一致。给两个
+    输入框加 `onkeydown Enter → DeathRecap.refresh()`(refresh 本就读这两个输入值),
+    增加"回车即应用"友好性, 不删任何功能。
+  - 交叉验证证伪(未动, 避免误改): combatant/skill drilldown web 已有 Filter 按钮;
+    action_log web 已有 搜索/过滤 双按钮; aggregate/timeline web 输入即时过滤(input
+    监听防抖); Tk combatant 的 Focus 按钮在 toolbar 循环外(第 220 行 tk.Button)真实存在。
+
 ## v4.6.137: AutoKey 档案列表按钮聚合(双端 1:1; 5 按钮→2 主+「更多 ▾」, 不删功能).
 
   按钮聚合(用户明列需求): AutoKey 档案卡片此前 Tk 单行 5 个按钮
