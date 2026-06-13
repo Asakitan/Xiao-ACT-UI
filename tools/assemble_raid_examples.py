@@ -77,8 +77,8 @@ def build_profile(boss: dict) -> dict:
                         "范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确"
                         "范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。"
                         % (boss["raid"], boss["boss_name"], len(mechs), geo_n)),
-        "boss_total_hp": 0, "enrage_time_s": 600,
-        "enrage": {"time_s": 600, "anchor": "fight", "phase_id": "",
+        "boss_total_hp": 0, "enrage_time_s": 0,
+        "enrage": {"time_s": 0, "anchor": "fight", "phase_id": "",
                    "warn_threshold_s": 60, "urgent_threshold_s": 30,
                    "tts_milestones": [60, 30, 10]},
         "simple_mode": False, "target_name_pattern": boss["boss_name"],

@@ -6,9 +6,9 @@
   "profile_name": "阴骨之地(骸·修洛特尔) · 机制示例 (全难度通用)",
   "description": "《虚空浮岛·神龙枷所》第二场: 阴骨之地 — 骸·修洛特尔(虚蚀龙) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 8 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
   "boss_total_hp": 0,
-  "enrage_time_s": 600,
+  "enrage_time_s": 0,
   "enrage": {
-   "time_s": 600,
+   "time_s": 0,
    "anchor": "fight",
    "phase_id": "",
    "warn_threshold_s": 60,

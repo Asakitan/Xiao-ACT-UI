@@ -182,11 +182,12 @@ class MechanicsTest(unittest.TestCase):
         evt = self.events[0]
         self.assertEqual(evt["mechanic_id"], "m1")
         self.assertEqual(evt["tts_text"], "测试播报")
-        self.assertEqual(evt["countdown_s"], 8)
+        self.assertEqual(evt["countdown_s"], 3.0)
+        self.assertEqual(evt["configured_countdown_s"], 8)
         fwd = [a for a in self.actions if a.get("mechanic_id")]
         self.assertEqual(len(fwd), 1)
         self.assertEqual(fwd[0]["mechanic_dodge"]["action_key"], "SPACE")
-        self.assertAlmostEqual(fwd[0]["dodge_wait_s"], 7.0, places=2)
+        self.assertAlmostEqual(fwd[0]["dodge_wait_s"], 2.0, places=2)
 
     def test_cooldown_dedup(self):
         eng = self._engine(_profile([_mech()]))
@@ -329,6 +330,15 @@ class MechanicsTest(unittest.TestCase):
         st = eng.get_status(include_entities=False)
         self.assertTrue(st["enrage_armed"])
         self.assertLessEqual(st["enrage_remaining_s"], 300.0)
+
+    def test_runtime_enrage_timer_buff_overrides_profile_fallback(self):
+        eng = self._engine(_profile([], enrage={"time_s": 600, "anchor": "fight"}))
+        eng.on_monster_update(_monster(1000, [(501712, 90000)]))
+        st = eng.get_status(include_entities=False)
+        self.assertEqual(st["enrage_source"], "buff:501712")
+        self.assertTrue(st["enrage_armed"])
+        self.assertLessEqual(st["enrage_remaining_s"], 90.0)
+        self.assertGreater(st["enrage_remaining_s"], 80.0)
 
     # ── GameState push ──
 

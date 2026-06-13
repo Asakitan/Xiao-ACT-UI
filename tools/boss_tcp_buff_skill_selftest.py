@@ -76,6 +76,12 @@ class TcpBuffSkillTest(unittest.TestCase):
         self.assertEqual(len(self.fired), 1)
         self.assertEqual(self.fired[0]["skill_id"], 701)   # 5000ms > 1000ms
 
+    def test_enrage_timer_buff_is_not_reported_as_skill(self):
+        eng = self._engine()
+        eng.on_monster_update(_monster(1000, [(1, -1)]))
+        eng.on_monster_update(_monster(1000, [(1, -1), (501712, 600000)]))
+        self.assertEqual(self.fired, [], "hard-enrage timer buff is not a boss skill")
+
     def test_memory_priority_gate_suppresses_tcp(self):
         eng = self._engine()
         eng.on_monster_update(_monster(1000, [(827170, -1)]))   # seed baseline

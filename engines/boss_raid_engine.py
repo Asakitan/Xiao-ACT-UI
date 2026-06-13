@@ -30,6 +30,12 @@ _EVENT_TAG = {
     51: "super_armor", 58: "breaking", 88: "fracture",
 }
 
+# Boss hard-enrage timer buffs observed in the offline name tables.  These are
+# timer carriers, not mechanics/casts, so they should drive the enrage clock and
+# be ignored by the pure-TCP boss-skill diff path.
+_ENRAGE_TIMER_BUFF_IDS = {501706, 501710, 501712, 501714}
+_ENRAGE_TIMER_NAME_TOKENS = ("硬狂暴计时器",)
+
 from utils.perf_probe import probe as _probe
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
@@ -93,6 +99,16 @@ def _coerce_float(value: Any, default: float = 0.0, minimum: Optional[float] = N
 
 def _string(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _is_enrage_timer_buff(buff: Any) -> bool:
+    if not isinstance(buff, dict):
+        return False
+    bid = _coerce_int(buff.get("buff_id") or buff.get("id"), 0)
+    if bid in _ENRAGE_TIMER_BUFF_IDS:
+        return True
+    name = _string(buff.get("name") or buff.get("buff_name"))
+    return any(token in name for token in _ENRAGE_TIMER_NAME_TOKENS)
 
 
 def _slugify_filename(text: str) -> str:
@@ -928,6 +944,9 @@ class BossRaidEngine:
         self._unbound_skills: Dict[int, Dict[str, Any]] = {}   # binding inbox (≤64)
         self._enrage_anchor_ts: float = 0.0
         self._enrage_milestones_fired: set = set()
+        self._runtime_enrage_total_s: float = 0.0
+        self._runtime_enrage_end_ts: float = 0.0
+        self._runtime_enrage_source: str = ""
         self._pending_mech_forwards: List[Dict[str, Any]] = []
         # last self-buff id snapshot for edge detect; None = no snapshot yet
         # (an empty set is a VALID snapshot — a player with zero buffs must
@@ -1077,6 +1096,9 @@ class BossRaidEngine:
             self._boss_max_hp = 0
             self._boss_invincible = False
             self._immune_streak = 0
+            self._runtime_enrage_total_s = 0.0
+            self._runtime_enrage_end_ts = 0.0
+            self._runtime_enrage_source = ""
             self._clear_last_boss_mechanic_locked()
             self._entities.clear()
             self._entity_order.clear()
@@ -1345,6 +1367,8 @@ class BossRaidEngine:
                 return
 
             self._last_monster_data = monster_data
+            now = time.time()
+            self._update_runtime_enrage_from_buffs_locked(monster_data, now)
             self._boss_base_id = _coerce_int(monster_data.get("template_id"), 0, minimum=0) or self._boss_base_id
             if max_hp > 0:
                 self._boss_hp = hp
@@ -1552,6 +1576,8 @@ class BossRaidEngine:
         cur: Dict[int, int] = {}
         for b in buff_list:
             if isinstance(b, dict):
+                if _is_enrage_timer_buff(b):
+                    continue
                 bid = _coerce_int(b.get("buff_id"), 0)
                 if bid > 0:
                     cur[bid] = _coerce_int(b.get("duration"), 0)
@@ -1658,6 +1684,9 @@ class BossRaidEngine:
             self._unbound_skills.clear()
             self._enrage_anchor_ts = 0.0
             self._enrage_milestones_fired.clear()
+            self._runtime_enrage_total_s = 0.0
+            self._runtime_enrage_end_ts = 0.0
+            self._runtime_enrage_source = ""
             self._pending_mech_forwards = []
             self._self_buff_prev = None
         profile = self._profile or {}
@@ -1704,6 +1733,60 @@ class BossRaidEngine:
             self._enrage_anchor_ts = time.time()
             self._enrage_milestones_fired.clear()
 
+    def _server_now_ms_locked(self) -> float:
+        try:
+            state = getattr(self._state_mgr, "state", None)
+            offset = float(getattr(state, "server_time_offset_ms", 0.0) or 0.0)
+        except Exception:
+            offset = 0.0
+        return time.time() * 1000.0 + offset
+
+    def _update_runtime_enrage_from_buffs_locked(self, monster_data: Dict[str, Any],
+                                                 now: float) -> None:
+        """Use live Boss hard-enrage timer buff when present.
+
+        BuffInfoSync carries BeginTime + Duration for the hard-enrage timer; this
+        is more accurate than profile fallback seconds and survives difficulty HP
+        differences.  Absence in a later partial sync does not clear the clock.
+        """
+        buff_list = monster_data.get("buff_list")
+        if not isinstance(buff_list, list):
+            return
+        server_now_ms = self._server_now_ms_locked()
+        best: Optional[Tuple[float, float, int]] = None
+        for buff in buff_list:
+            if not _is_enrage_timer_buff(buff):
+                continue
+            duration_ms = _coerce_int(
+                buff.get("duration") or buff.get("duration_ms"), 0, 0)
+            if duration_ms <= 0:
+                continue
+            begin_ms = _coerce_int(
+                buff.get("begin_time") or buff.get("begin_ms"), 0, 0)
+            if begin_ms > 0:
+                remaining_ms = begin_ms + duration_ms - server_now_ms
+                # If server_time_offset is not ready yet, BeginTime can be in a
+                # different clock domain.  Keep the timer useful by falling back
+                # to the advertised duration instead of dropping the runtime
+                # enrage signal entirely.
+                if remaining_ms <= 0 or remaining_ms > duration_ms + 60000:
+                    remaining_ms = float(duration_ms)
+            else:
+                remaining_ms = float(duration_ms)
+            if remaining_ms <= 0:
+                continue
+            total_s = duration_ms / 1000.0
+            remaining_s = remaining_ms / 1000.0
+            bid = _coerce_int(buff.get("buff_id") or buff.get("id"), 0, 0)
+            if best is None or remaining_s > best[1]:
+                best = (total_s, remaining_s, bid)
+        if best is None:
+            return
+        total_s, remaining_s, bid = best
+        self._runtime_enrage_total_s = max(total_s, remaining_s)
+        self._runtime_enrage_end_ts = now + remaining_s
+        self._runtime_enrage_source = f"buff:{bid}" if bid else "buff"
+
     def _enrage_state_locked(self, now: float) -> Dict[str, Any]:
         """Unified enrage countdown state for tick + status + HUD tiers."""
         profile = self._profile or {}
@@ -1714,9 +1797,17 @@ class BossRaidEngine:
         urgent_s = _coerce_int(enrage.get("urgent_threshold_s"), 30, 0)
         milestones = [m for m in (enrage.get("tts_milestones") or [])
                       if isinstance(m, int) and m > 0]
+        live_remaining = max(0.0, self._runtime_enrage_end_ts - now) \
+            if self._state == self.STATE_RUNNING else 0.0
         armed = False
         remaining = float(time_s)
-        if time_s > 0 and self._state == self.STATE_RUNNING:
+        source = "profile"
+        if live_remaining > 0:
+            armed = True
+            remaining = live_remaining
+            time_s = int(round(max(self._runtime_enrage_total_s, live_remaining)))
+            source = self._runtime_enrage_source or "buff"
+        elif time_s > 0 and self._state == self.STATE_RUNNING:
             anchor = _string(enrage.get("anchor")) or "fight"
             anchor_ts = self._start_time if anchor != "phase" else self._enrage_anchor_ts
             if anchor_ts > 0:
@@ -1728,8 +1819,14 @@ class BossRaidEngine:
                 urgency = "urgent"
             elif warn_s > 0 and remaining <= warn_s:
                 urgency = "warn"
-        return {"time_s": time_s, "armed": armed, "remaining_s": remaining,
-                "urgency": urgency, "milestones": milestones}
+        return {
+            "time_s": time_s,
+            "armed": armed,
+            "remaining_s": remaining,
+            "urgency": urgency,
+            "milestones": milestones,
+            "source": source,
+        }
 
     def _note_unbound_skill_locked(self, skill_id: int, name: str = "",
                                    dur: Any = None):
@@ -1869,8 +1966,16 @@ class BossRaidEngine:
             return None
         self._mech_last_fire[mid] = now
         name = _string(mech.get("name")) or "机制"
-        countdown_s = _coerce_float(alert.get("countdown_s"), 0.0, 0.0)
+        configured_countdown_s = _coerce_float(alert.get("countdown_s"), 0.0, 0.0)
+        countdown_s = configured_countdown_s
+        if isinstance(cast_duration_ms, (int, float)) and cast_duration_ms > 0:
+            cast_s = max(0.0, float(cast_duration_ms) / 1000.0)
+            if cast_s > 0:
+                countdown_s = cast_s if configured_countdown_s <= 0 else min(
+                    configured_countdown_s, cast_s)
         pre_warn_s = _coerce_float(alert.get("pre_warn_s"), 0.0, 0.0)
+        if countdown_s > 0:
+            pre_warn_s = min(pre_warn_s, countdown_s)
         dodge = mech.get("dodge") if isinstance(mech.get("dodge"), dict) else {}
         phases = list((self._profile or {}).get("phases") or [])
         phase_name = _string(phases[self._current_phase_idx].get("name")) \
@@ -1885,6 +1990,7 @@ class BossRaidEngine:
             "alert_type": _string(alert.get("alert_type")) or "both",
             "alert_enabled": _coerce_bool(alert.get("enabled"), True),
             "countdown_s": countdown_s,
+            "configured_countdown_s": configured_countdown_s,
             "pre_warn_s": pre_warn_s,
             "sound": _string(alert.get("sound")) or "boss_alert",
             "source": _string(source),
@@ -2266,6 +2372,7 @@ class BossRaidEngine:
             "enrage_remaining_s": round(enrage_remaining, 1),
             "enrage_armed": enrage_st["armed"],
             "enrage_urgency": enrage_st["urgency"],
+            "enrage_source": enrage_st.get("source", "profile"),
             "mechanic_event": dict(self._last_mechanic_event or {}),
             "mechanic_countdowns": list(self._mech_countdowns_push),
             "unbound_skill_count": len(self._unbound_skills),
