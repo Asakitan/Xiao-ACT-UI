@@ -2,6 +2,23 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.124: Tk AutoKey 保存诚实反馈补齐(双端 1:1).
+
+  `gui_modules/sao_gui_actions_mixin.py` `_save_autokey_burst_actions` 补齐两处
+  与 web `autokey_editor.saveActions()` 不一致的反馈缺口:
+
+  1) **成功无反馈** — web 保存成功弹「已保存 N 条动作」, Tk 此前只在引擎应用
+    失败时提示、成功完全静默 → 用户点 SAVE 后不知是否保存。现成功弹
+    「已保存 N 条动作」(2s), 与 web 1:1。
+
+  2) **持久化失败被吞** — web 保存异常弹「保存失败」, Tk 此前 `_set_setting`
+    抛异常会被 `_save_actions` 的 `except Exception: pass` 静默吞掉、无任何
+    提示。现 `_set_setting` 包 try, 失败弹「保存失败: {exc}」(4s) 后返回。
+
+  引擎应用失败的「已保存, 但引擎应用失败」分支保持不变(比 web 更细)。本修
+  补全 v4.6.88(web 全反馈)/v4.6.89(Tk 仅错误反馈)未做完的 Tk 成功反馈。
+  回调仅 SAVE 按钮触发(非加载/程序化), 不会误弹。基线 81/81 绿。
+
 ## v4.6.123: ACT 触发器事件浅拷贝替 deepcopy + BossHP 死读字段清理.
 
   1) `engines/act_trigger_engine.py` 的 `evaluate()` 存档与 `snapshot()` 返回

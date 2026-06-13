@@ -312,10 +312,18 @@ class SAOPlayerGUIActionsMixin:
         return list(actions or [])
 
     def _save_autokey_burst_actions(self, actions):
+        # 双端诚实反馈: web autokey_editor.saveActions() 成功弹「已保存 N 条动作」、
+        # 失败弹「保存失败」; Tk 此前只在引擎应用失败时给提示, 成功静默、持久化
+        # 异常被上层 except 吞掉 → 与 web 不一致。补齐成功反馈 + 持久化失败反馈。
         normalized = list(actions or [])
-        self._set_setting('autokey_burst_actions', normalized)
+        try:
+            self._set_setting('autokey_burst_actions', normalized)
+        except Exception as exc:
+            self._show_entity_alert(
+                'BURST SKILLS', f'保存失败: {exc}', display_time=4.0)
+            return
+        apply_err = None
         if self._auto_key_engine:
-            apply_err = None
             try:
                 self._auto_key_engine.set_burst_actions(normalized)
             except Exception as exc:
@@ -325,10 +333,14 @@ class SAOPlayerGUIActionsMixin:
             except Exception as exc:
                 if apply_err is None:
                     apply_err = exc
-            if apply_err is not None:
-                self._show_entity_alert(
-                    'BURST SKILLS', f'已保存, 但引擎应用失败: {apply_err}',
-                    display_time=4.0)
+        if apply_err is not None:
+            self._show_entity_alert(
+                'BURST SKILLS', f'已保存, 但引擎应用失败: {apply_err}',
+                display_time=4.0)
+        else:
+            self._show_entity_alert(
+                'BURST SKILLS', f'已保存 {len(normalized)} 条动作',
+                display_time=2.0)
 
     # ── BossRaid config helpers ──
     def _boss_raid_settings_ref(self):
