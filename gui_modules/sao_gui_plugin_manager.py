@@ -386,6 +386,11 @@ class PluginManagerPanel:
         hk = _finite_int(plugin.get('hotkey_count'), 0, lo=0)
         if hk:
             flags.append(f'热键×{hk}')
+        # Web 卡片有独立 LOADED 徽章(plugin_manager.html: if(plugin.loaded)), 表示
+        # 模块已载入内存(区别于 enabled/active)。Tk 此前完全不渲染 loaded → 无法
+        # 区分「已启用但加载失败」与「已加载未激活」。补 LOADED 标记达成双端 1:1。
+        if plugin.get('loaded'):
+            flags.append('LOADED')
         subscriptions = _finite_int(plugin.get('subscription_count'), 0, lo=0)
         failures = _finite_int(plugin.get('failures'), 0, lo=0)
         event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)

@@ -2,6 +2,21 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.126: Tk 插件卡片补 LOADED 标记(双端 1:1 渲染补全).
+
+  `gui_modules/sao_gui_plugin_manager.py` `_format_meta` 的 flags 行补 `LOADED`
+  标记(当 `plugin.get('loaded')`)。web 卡片一直有独立 `LOADED` 徽章
+  (`plugin_manager.html:521 if(plugin.loaded)`), 表示模块已载入内存——区别于
+  状态牌的 active/enabled。Tk 此前完全不渲染 loaded → 用户无法区分「已启用但
+  加载失败」(enabled 但 loaded=false)与「已加载未激活」(loaded=true,active=false)。
+  补 LOADED 标记后 Tk「ENABLED 牌 + 有/无 LOADED」与 web「LOADED OFF 牌 +
+  有/无 LOADED 徽章」表达一致。
+
+  本轮核净未改: 插件卡片 logs/last_error/failures/event_failures/订阅/版本/
+  entry 均双端已渲染; 更多▾菜单(reload/pin/uninstall, uninstall 按 user_installed
+  门控)与 web select 1:1; data_source_health/mem_scope/offline_import 等剩余面板
+  反馈与渲染对称(详见 batch258 handoff)。基线 81/81 绿。
+
 ## v4.6.125: Tk 插件管理器/触发器面板成功反馈补齐(双端 1:1).
 
   延续 v4.6.124 的诚实反馈线: web 这两个面板的 enable/disable/reload 等动作
