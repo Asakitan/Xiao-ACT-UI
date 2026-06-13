@@ -2184,7 +2184,7 @@ class DpsOverlay:
                                         lx + lw // 2, ly + lh // 2 - 6, 2)
             return
 
-        self._draw_scroll_affordance(draw, lx, ly, lw, lh)
+        self._draw_scroll_affordance(draw, lx, ly, lw, lh, len(view_rows))
 
         margin = self.ROW_MARGIN
         rank_base = self._current_scroll_offset()
@@ -2283,13 +2283,14 @@ class DpsOverlay:
                 width=1,
             )
 
-        # Hit-fx pulse outline
+        # Hit-fx pulse outline. Intensity is shared by the outline (here) and the
+        # name text-shadow below, so compute the decay once per row per frame.
+        fx_int = 0.0
         if row['fx_tier']:
             dur, tint, _ = _HIT_FX_TIERS[row['fx_tier']]
-            age = time.time() - row['fx_start']
-            t = max(0.0, min(1.0, age / max(0.01, dur)))
-            intensity = (1.0 - t) ** 2
-            outline_a = int(220 * intensity)
+            t = max(0.0, min(1.0, (time.time() - row['fx_start']) / max(0.01, dur)))
+            fx_int = max(0.0, (1.0 - t) ** 2)
+            outline_a = int(220 * fx_int)
             if outline_a > 8:
                 self._draw_clip_rect(
                     draw, x, y, w, h,
@@ -2316,19 +2317,15 @@ class DpsOverlay:
         # Hit-FX text color + shadow (web: .entity-row.impact-hit etc.)
         _fx_shadow = None
         if row['fx_tier']:
-            _dur, _tint, _ = _HIT_FX_TIERS[row['fx_tier']]
-            _age = time.time() - row['fx_start']
-            _t = max(0.0, min(1.0, _age / max(0.01, _dur)))
-            _int = max(0.0, (1.0 - _t) ** 2)
             if row['fx_tier'] == 'impact':
                 name_color = (57, 126, 146, 255)
-                _fx_shadow = (104, 228, 255, int(66 * _int))
+                _fx_shadow = (104, 228, 255, int(66 * fx_int))
             elif row['fx_tier'] == 'mega':
                 name_color = (196, 135, 16, 255)
-                _fx_shadow = (255, 220, 112, int(87 * _int))
+                _fx_shadow = (255, 220, 112, int(87 * fx_int))
             elif row['fx_tier'] == 'starburst':
                 name_color = (110, 118, 182, 255)
-                _fx_shadow = (88, 166, 255, int(77 * _int))
+                _fx_shadow = (88, 166, 255, int(77 * fx_int))
 
         self._draw_tracked(draw, (name_x, y + 7), name,
                            name_font, name_color, 0.7,
@@ -2370,7 +2367,8 @@ class DpsOverlay:
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)
 
-    def _draw_scroll_affordance(self, draw: ImageDraw.ImageDraw, lx: int, ly: int, lw: int, lh: int) -> None:
+    def _draw_scroll_affordance(self, draw: ImageDraw.ImageDraw, lx: int, ly: int, lw: int, lh: int,
+                                visible: int) -> None:
         max_off = self._max_scroll_offset()
         if max_off <= 0:
             return
@@ -2388,7 +2386,6 @@ class DpsOverlay:
             (track_x - 1, thumb_y, track_x + 4, thumb_y + thumb_h),
             radius=2, fill=self.CORNER_GOLD,
         )
-        visible = len(self._build_view_rows())
         total = max(self.MAX_ROWS, max_off + self.MAX_ROWS)
         hint = f'{offset + 1}-{offset + visible}/{total}'
         hint_font = _load_font('sao', 8)

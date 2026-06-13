@@ -2,6 +2,21 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.136: DPS 面板每帧热路径去重(滚动计数 + 命中 FX 衰减), 像素零变化.
+
+  性能(战斗热路径, 非 idle): `sao_gui_dps.py` 的 `_draw_row`/`_draw_list_frame`
+  每帧每行执行, 战斗动画期间逐 tick submit, 两处冗余计算每帧重复:
+
+  - **滚动条计数重建**: `_draw_list_frame` 已在 2179 行算出 `view_rows`
+    (`_build_view_rows()` = `list()`+`sort()`+推导, O(N log N)), 但
+    `_draw_scroll_affordance` 又在 2391 行 `len(self._build_view_rows())`
+    把整张排序视图**重建一遍只为取行数**(玩家数 > MAX_ROWS、有滚动时每帧触发)。
+    改为把 `len(view_rows)` 作参数传入(该方法仅一个调用点), 删除二次重建。
+  - **命中 FX 衰减重算**: `_draw_row` 两个 `if row['fx_tier']` 块(轮廓描边 +
+    名字文字阴影)各自 `time.time()` + 同一档 `_HIT_FX_TIERS`/`fx_start` 算同一个
+    衰减强度。命中特效期间每行每帧多一次 syscall + 重复浮点。合并为每行算一次
+    `fx_int` 复用。两改均**像素逐位一致**, 不动行为/不砍功能。
+
 ## v4.6.135: 插件卸载加二次确认(双端; 防误删不可撤销的已装插件).
 
   交互友好性: 卸载插件会移除已安装插件且不可撤销, 但两端此前都**点一下即卸载、
