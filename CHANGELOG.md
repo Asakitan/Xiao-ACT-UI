@@ -2,6 +2,22 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.134: Web BossRaid 时间线条件补比较符控件(双端 1:1; web 之前只能 HP>=).
+
+  enum/控件 parity 脉补漏: BossRaid 时间线条件(timeline condition)的 hp_pct 类型
+  需要比较符。Tk 时间线编辑器有 Cmp 下拉(`COMPARATORS = >=/<=/>/</==`,
+  profile_editors.py), engine `_eval_comparator`(boss_raid_engine.py) 按
+  `cond.comparator or '>='` 求值; 但 **web 时间线条件只有 类型 + 数值, 无比较符
+  控件**——web 用户只能建 `HP >= X` 的时间线条件, 无法建 `<=`/`>`/`<`/`==`。
+
+  修(仅 `web/menu.html`): hp_pct 时间线条件渲染处补比较符 `<select>`(5 种,
+  读 `cond.comparator || '>='`), 新增 `_brDraftTlCondComparator` 写
+  `condition.comparator`(归一到 5 种, 其余回退 '>=')。web 之前已保留(不剥)既有
+  comparator(`_brDraftTlCondType/Value` 只改 type/value), 故非损坏只是编辑残缺;
+  现 web 可建/改全部 5 种比较符, 与 Tk/engine 1:1。menu.html 内联脚本 node 检 0 错。
+
+  基线 81/81 绿。
+
 ## v4.6.133: Tk BossRaid 阶段触发补 buff_event + Tk AutoKey 档案列表导出按钮(双端 1:1 收尾).
 
   清 enum/列表 parity queue 两小项:

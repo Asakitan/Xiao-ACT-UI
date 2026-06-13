@@ -7555,6 +7555,9 @@ function _brRenderPhases() {
                             '<option value="shield_active"' + (cond.type === 'shield_active' ? ' selected' : '') + '>盾存在 Shield</option>' +
                             '<option value="breaking"' + (cond.type === 'breaking' ? ' selected' : '') + '>破防中 Break</option>' +
                         '</select>' +
+                        (cond.type === 'hp_pct' ? '<select title="比较 Comparator" onchange="_brDraftTlCondComparator(' + pi + ',' + ti + ',this.value)" style="width:46px;">' +
+                            ['>=','<=','>','<','=='].map(function(op){ return '<option value="' + _escHtml(op) + '"' + ((cond.comparator || '>=') === op ? ' selected' : '') + '>' + _escHtml(op) + '</option>'; }).join('') +
+                            '</select>' : '') +
                         (cond.type === 'hp_pct' ? '<input type="number" min="0" max="100" value="' + _brNumAttr(cond.value, 0, 100) + '" title="条件值" placeholder="%" style="width:42px;" oninput="_brDraftTlCondValue(' + pi + ',' + ti + ',this.value)" />' : '') +
                         '<button class="boss-raid-btn danger" type="button" onclick="_brRemoveTimeline(' + pi + ',' + ti + '); return false;" style="padding:2px 6px;font-size:11px;">×</button>' +
                     '</div>';
@@ -7655,6 +7658,17 @@ function _brDraftTlCondValue(pi, ti, val) {
     var tls = phases[pi].timelines;
     if (!tls[ti]) return;
     tls[ti].condition.value = _clampNum(val, 0, 0, 100);
+    _brDraftDirty = true;
+}
+function _brDraftTlCondComparator(pi, ti, val) {
+    // 与 Tk 时间线条件 Cmp 下拉 + engine _eval_comparator 对齐(web 此前无比较符控件,
+    // hp_pct 条件只能默认 '>='); 归一到引擎认得的 5 种, 其余回退 '>='。
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
+    if (!tls[ti]) return;
+    var allowed = { '>=': 1, '<=': 1, '>': 1, '<': 1, '==': 1 };
+    tls[ti].condition.comparator = allowed[val] ? val : '>=';
     _brDraftDirty = true;
 }
 
