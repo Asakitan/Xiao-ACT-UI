@@ -158,11 +158,11 @@ class PluginManagerPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT PLUGIN MANAGER', on_close=self.hide)
+        header = _sao_panel_header(win, 'ACT PLUGIN MANAGER', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win)
+        body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -308,9 +308,13 @@ class PluginManagerPanel:
         plugin_id = str(plugin.get('id') or '')
         enabled = bool(plugin.get('enabled'))
         active = bool(plugin.get('active'))
-        border = _SAO_PANEL_GOLD if active else (_SAO_PANEL_BORDER if enabled else _SAO_PANEL_SEP)
-        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=border)
+        # 状态色移到 3px 左侧色条(绿=活动 / 青=启用 / 灰=停用), 边框收敛为中性, 与 web .plugin-card 1:1
+        rail = (_panel_ui._theme_color('ok', '#5cc46a') if active
+                else (_panel_ui._theme_color('accent', '#68e4ff') if enabled
+                      else _panel_ui._theme_color('sep', '#a0a0a0')))
+        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         card.pack(fill='x', pady=6, padx=4)
+        tk.Frame(card, bg=rail, width=3).pack(side='left', fill='y')   # 3px 左侧强调条(扁平单通道)
 
         top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
         top.pack(fill='x', padx=10, pady=(8, 2))
@@ -341,8 +345,8 @@ class PluginManagerPanel:
             tk.Label(
                 card,
                 text=error,
-                bg='#33161f',
-                fg='#ffd8de',
+                bg=_panel_ui._theme_color('card_bg', '#33161f'),
+                fg=_panel_ui._theme_color('danger', '#ff707a'),
                 anchor='w',
                 justify='left',
                 wraplength=690,
@@ -356,8 +360,8 @@ class PluginManagerPanel:
             tk.Label(
                 card,
                 text='\n'.join(str(x) for x in logs),
-                bg='#07111c',
-                fg='#bfe6ff',
+                bg=_panel_ui._theme_color('card_bg', '#07111c'),
+                fg=_panel_ui._theme_color('value_fg', '#bfe6ff'),
                 anchor='w',
                 justify='left',
                 wraplength=690,
@@ -411,7 +415,7 @@ class PluginManagerPanel:
             state=('normal' if enabled else 'disabled'),
             bg=_SAO_PANEL_HEADER_BG,
             fg=_SAO_PANEL_HEADER_FG,
-            disabledforeground='#6e8190',
+            disabledforeground=_panel_ui._theme_color('label_fg', '#6e8190'),
             activebackground=_SAO_PANEL_ACCENT,
             activeforeground='white',
             relief='flat',
@@ -430,7 +434,7 @@ class PluginManagerPanel:
             menu = tk.Menu(btn, tearoff=0,
                            bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
                            activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
-                           disabledforeground='#6e8190', relief='flat', bd=0)
+                           disabledforeground=_panel_ui._theme_color('label_fg', '#6e8190'), relief='flat', bd=0)
             menu.add_command(label='重载 Reload',
                              command=lambda: self._reload(plugin_id),
                              state=('normal' if enabled else 'disabled'))

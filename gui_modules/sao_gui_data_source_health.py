@@ -27,6 +27,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    _theme_color,
 )
 
 
@@ -288,7 +289,7 @@ class DataSourceHealthPanel:
             return
         active = bool(source.get('running') or source.get('alive') or source.get('active') or source.get('started') or source.get('is_memory_active'))
         error = str(source.get('error_msg') or source.get('last_error') or '').strip()
-        border = _SAO_PANEL_GOLD if key == 'memory' and active else (_SAO_PANEL_BORDER if active else (_SAO_PANEL_SEP if not error else '#ff6b82'))
+        border = _SAO_PANEL_GOLD if key == 'memory' and active else (_SAO_PANEL_BORDER if active else (_SAO_PANEL_SEP if not error else _theme_color('danger', '#ff6b82')))
         card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=border)
         card.pack(fill='x', pady=6, padx=4)
 
@@ -320,8 +321,8 @@ class DataSourceHealthPanel:
             tk.Label(
                 card,
                 text=wline,
-                bg='#07111c',
-                fg='#bfe6ff',
+                bg=_SAO_PANEL_BODY_BG,
+                fg=_SAO_PANEL_VALUE_FG,
                 anchor='w',
                 justify='left',
                 wraplength=490,
@@ -357,7 +358,7 @@ class DataSourceHealthPanel:
         for item in items:
             level = str(item.get('level') or 'info').upper() if isinstance(item, Mapping) else 'INFO'
             message = str(item.get('message') or '') if isinstance(item, Mapping) else str(item)
-            color = '#ff6b82' if level == 'ERROR' else (_SAO_PANEL_GOLD if level == 'WARN' else _SAO_PANEL_LABEL_FG)
+            color = _theme_color('danger', '#ff6b82') if level == 'ERROR' else (_SAO_PANEL_GOLD if level == 'WARN' else _SAO_PANEL_LABEL_FG)
             box = tk.Frame(self._diag, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             box.pack(fill='x', pady=4)
             tk.Label(

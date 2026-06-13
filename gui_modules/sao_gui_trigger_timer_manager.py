@@ -137,11 +137,11 @@ class TriggerTimerManagerPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT TRIGGERS / TIMERS', on_close=self.hide)
+        header = _sao_panel_header(win, 'ACT TRIGGERS / TIMERS', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win)
+        body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -277,8 +277,8 @@ class TriggerTimerManagerPanel:
             tk.Label(
                 card,
                 text=message,
-                bg='#07111c',
-                fg='#bfe6ff',
+                bg=_SAO_PANEL_BODY_BG,
+                fg=_SAO_PANEL_VALUE_FG,
                 anchor='w',
                 justify='left',
                 wraplength=730,
@@ -345,7 +345,7 @@ class TriggerTimerManagerPanel:
             state=('normal' if enabled else 'disabled'),
             bg=_SAO_PANEL_HEADER_BG,
             fg=_SAO_PANEL_HEADER_FG,
-            disabledforeground='#6e8190',
+            disabledforeground=_SAO_PANEL_LABEL_FG,
             activebackground=_SAO_PANEL_ACCENT,
             activeforeground='white',
             relief='flat',

@@ -45,6 +45,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    _theme_color,
 )
 
 _DTYPES = ("i32", "u32", "i64", "u64", "f32", "utf16")
@@ -239,11 +240,11 @@ class MemScopePanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'MEM SCOPE · 内存浏览器', on_close=self.hide)
+        header = _sao_panel_header(win, 'MEM SCOPE · 内存浏览器', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win)
+        body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -406,7 +407,7 @@ class MemScopePanel:
             return
         state = str(search.get('state') or '')
         if search.get('error'):
-            tk.Label(inner, text=f"错误: {search.get('error')}", bg=_SAO_PANEL_BODY_BG, fg='#ff6b82',
+            tk.Label(inner, text=f"错误: {search.get('error')}", bg=_SAO_PANEL_BODY_BG, fg=_theme_color('danger', '#ff6b82'),
                      font=('Segoe UI', 9), anchor='w').pack(fill='x')
             return
         if state == 'running':

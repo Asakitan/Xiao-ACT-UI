@@ -2,6 +2,23 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.142: ACT entity(Tk) 端补 flat 同步 —— 3 面板漏传 flat=True 修复 + 4 面板令牌化(承接 v4.6.141 web).
+
+  v4.6.141 只改了 web 端, entity(Tk) 端这 4 个面板还停在老装饰 chrome(金色条 / ◇ 标记 /
+  角块) + 硬编码暗色 → web↔Tk 不再 1:1, entity 端显得"丑的老版本"。根因: 共享
+  `_sao_panel_header` / `_sao_panel_body` 有 `flat=True` 才去装饰, 但
+  mem_scope / plugin_manager / trigger_timer **漏传** (只有 data_source_health 传了)。
+
+  - **3 面板补 `flat=True`**(mem_scope / plugin_manager / trigger_timer): 去金色装饰条 /
+    ◇ 标记 / body 顶部 2px 强调条 / 角标, 与其余 ACT 面板一致。
+  - **硬编码色改令牌跟随浅暗**(`_theme_color()` / `_SAO_PANEL_*`): 危险色 `#ff6b82`→danger;
+    暗码框 `#07111c`/`#bfe6ff`→body_bg/value_fg; 禁用字 `#6e8190`→label_fg;
+    plugin 错误框 `#33161f`/`#ffd8de`→card_bg/danger。
+  - **plugin_manager 卡片**由「整框状态色」改为「中性框 + 3px 左侧状态色条」
+    (绿=活动 / 青=启用 / 灰=停用), 与 web `.plugin-card` 及 Tk metric_tile 扁平单通道一致。
+  - 仅动 gui_modules/ 下 4 个 Tk 文件; py_compile 4 模块通过。共享 sao_panel_ui.py /
+    act_panel_theme.css 未改。
+
 ## v4.6.141: ACT 面板扁平化补全 —— 4 个落后 web 面板迁成 flat + token, 13 面板全部跟随主题(web↔Tk 1:1).
 
   落地 Claude Design 交付包 (`f5jEugrT73vywN82htRd7g`, 设计系统本就从本仓 3.0.0 逆出, flat
