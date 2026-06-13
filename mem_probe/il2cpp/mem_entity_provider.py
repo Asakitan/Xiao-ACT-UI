@@ -75,11 +75,16 @@ class MemEntityProvider:
         live = [(kind, e) for kind, e in ents if combat.get(e)]
         if not live:
             return []
-        # batched id reads: Uuid@0xC0 / ConfigUuid@0xC8 / BaseId@0xE0 (one RPM batch)
-        id_addrs = []
-        for _, e in live:
-            id_addrs += [e + emr.off_ent_uuid, e + emr.off_ent_config, e + emr.off_ent_baseid]
-        idv = self._pm.read_u64_many(id_addrs)
+        # batched id reads: slab (1 RPM/entity) with scatter fallback (3 RPM/entity)
+        id_offsets = [emr.off_ent_uuid, emr.off_ent_config, emr.off_ent_baseid]
+        slab_fn = getattr(self._pm, "read_slab_many", None)
+        if slab_fn is not None:
+            idv = slab_fn([e for _, e in live], id_offsets, 8)
+        else:
+            id_addrs = []
+            for _, e in live:
+                id_addrs += [e + id_offsets[0], e + id_offsets[1], e + id_offsets[2]]
+            idv = self._pm.read_u64_many(id_addrs)
         out: List[dict] = []
         for i, (kind, e) in enumerate(live):
             c = combat[e]
@@ -130,10 +135,15 @@ class MemEntityProvider:
                 ents.append((kind, ent))
         if not ents:
             return []
-        id_addrs = []
-        for _, e in ents:
-            id_addrs += [e + emr.off_ent_uuid, e + emr.off_ent_baseid]
-        idv = self._pm.read_u64_many(id_addrs)
+        id_offsets = [emr.off_ent_uuid, emr.off_ent_baseid]
+        slab_fn = getattr(self._pm, "read_slab_many", None)
+        if slab_fn is not None:
+            idv = slab_fn([e for _, e in ents], id_offsets, 8)
+        else:
+            id_addrs = []
+            for _, e in ents:
+                id_addrs += [e + id_offsets[0], e + id_offsets[1]]
+            idv = self._pm.read_u64_many(id_addrs)
         out: List[dict] = []
         for i, (kind, e) in enumerate(ents):
             uuid = idv[2 * i] or 0

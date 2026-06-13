@@ -100,6 +100,8 @@ def backend_info() -> dict:
         "features": features,
         "readonly_buffers_supported": _READONLY_OK,
         "bytes_copy_required": (_fast is not None) and (not _READONLY_OK),
+        "read_backend": mem_read_backend(),
+        "slab_read": has_slab_read(),
     }
 
 
@@ -126,6 +128,29 @@ def read_words_many(handle: int, addrs, word_size: int):
 
 def has_batch_read() -> bool:
     return _fast is not None and hasattr(_fast, "read_words_many")
+
+
+def read_slab_many(handle: int, base_addrs, offsets, word_size: int = 8):
+    """Slab batch read: one RPM per base covering all offsets.
+
+    Returns flat list of ``len(base_addrs) * len(offsets)`` values, or None
+    when the Cython extension lacks it.
+    """
+    if _fast is not None and hasattr(_fast, "read_slab_many"):
+        return _fast.read_slab_many(int(handle), list(base_addrs),
+                                     list(offsets), int(word_size))
+    return None
+
+
+def has_slab_read() -> bool:
+    return _fast is not None and hasattr(_fast, "read_slab_many")
+
+
+def mem_read_backend() -> str:
+    """Return which cross-process read backend is active ('ntrvm' or 'rpm')."""
+    if _fast is not None and hasattr(_fast, "mem_read_backend"):
+        return _fast.mem_read_backend()
+    return "rpm-python"
 
 
 def read_entity_combat_many(handle: int, ent_addrs,

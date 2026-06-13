@@ -17,11 +17,15 @@
 
 from __future__ import annotations
 
+import os
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, List, Sequence
 
 from mem_probe import cy_memscan as _cy
 from .process import StarProcess
+
+_SCAN_WORKERS = max(2, min(os.cpu_count() or 4, 8) - 1)
 
 # ───────────────────────── 编码 ─────────────────────────
 # dtype 字符串 → struct 格式; 'utf16' 单独处理
@@ -128,6 +132,35 @@ def scan(
     return hits
 
 
+def _scan_one_region(pm, region_base, region_size, v, find_fn, chunk, max_per):
+    """Worker: scan one region, return list of absolute addresses."""
+    hits: List[int] = []
+    read_into = getattr(pm, "read_bytes_into", None)
+    scratch = bytearray(chunk) if read_into is not None else None
+    off = 0
+    while off < region_size:
+        n = min(chunk, region_size - off)
+        if read_into is not None:
+            got = read_into(region_base + off, scratch, n)
+            if got <= 0:
+                break
+            buf = memoryview(scratch)[:got]
+        else:
+            blob = pm.read_bytes(region_base + off, n)
+            if blob is None:
+                break
+            buf = blob
+        remaining = max_per - len(hits)
+        if remaining <= 0:
+            break
+        for o in find_fn(buf, v, max_hits=remaining):
+            hits.append(region_base + off + o)
+        if len(hits) >= max_per:
+            break
+        off += n
+    return hits
+
+
 def _scan_aligned_int(
     pm: StarProcess,
     value: int,
@@ -140,42 +173,50 @@ def _scan_aligned_int(
 
     分块 + read_bytes_into 复用 scratch 零拷贝喂内核 (取代每 region 整块 read_bytes
     的两次拷贝), 与 fingerprint_v2.locate_v2 同款姿势。
+    多 region 时并行扫描 + PrefetchVirtualMemory 预取。
     """
-    hits: List[int] = []
     if width == 8:
         v = value & 0xFFFFFFFFFFFFFFFF
         find_fn = _cy.find_aligned_u64
     else:
         v = value & 0xFFFFFFFF
         find_fn = _cy.find_aligned_u32
-    read_into = getattr(pm, "read_bytes_into", None)
     chunk = 16 * 1024 * 1024
-    scratch = bytearray(chunk) if read_into is not None else None
-    for region in pm.iter_regions():
-        if region.size > max_region_size:
-            continue
-        off = 0
-        while off < region.size:
-            n = min(chunk, region.size - off)
-            if read_into is not None:
-                got = read_into(region.base + off, scratch, n)
-                if got <= 0:
-                    break
-                buf = memoryview(scratch)[:got]
-            else:
-                blob = pm.read_bytes(region.base + off, n)
-                if blob is None:
-                    break
-                buf = blob
-                got = n
-            remaining = max_hits - len(hits)
-            if remaining <= 0:
-                return hits
-            for o in find_fn(buf, v, max_hits=remaining):
-                hits.append(region.base + off + o)
-            if len(hits) >= max_hits:
-                return hits
-            off += n
+    # region cache + prefetch
+    if hasattr(pm, "cached_regions"):
+        regions = [r for r in pm.cached_regions() if r.size <= max_region_size]
+    else:
+        regions = [r for r in pm.iter_regions() if r.size <= max_region_size]
+    if not regions:
+        return []
+    if hasattr(pm, "prefetch_regions"):
+        pm.prefetch_regions(regions)
+    # parallel scan when enough regions
+    if len(regions) >= 4 and _SCAN_WORKERS >= 2:
+        all_hits: List[int] = []
+        max_per = max(max_hits // max(len(regions), 1) + 1, 1000)
+        with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
+            futures = [
+                pool.submit(_scan_one_region, pm, r.base, r.size,
+                            v, find_fn, chunk, max_per)
+                for r in regions
+            ]
+            for f in futures:
+                try:
+                    all_hits.extend(f.result(timeout=60))
+                    if len(all_hits) >= max_hits:
+                        break
+                except Exception:
+                    continue
+        return all_hits[:max_hits]
+    # sequential fallback
+    hits: List[int] = []
+    for region in regions:
+        region_hits = _scan_one_region(pm, region.base, region.size,
+                                       v, find_fn, chunk, max_hits - len(hits))
+        hits.extend(region_hits)
+        if len(hits) >= max_hits:
+            return hits[:max_hits]
     return hits
 
 

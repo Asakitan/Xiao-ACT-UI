@@ -13,6 +13,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Iterator, List, Optional
 
@@ -66,6 +67,51 @@ _RPM_DIRECT.argtypes = [
     ctypes.POINTER(ctypes.c_size_t),
 ]
 _RPM_DIRECT.restype = wintypes.BOOL
+
+# NtReadVirtualMemory from ntdll — bypasses kernel32 parameter validation layer
+try:
+    _NTRVM = ctypes.WinDLL("ntdll").NtReadVirtualMemory
+    _NTRVM.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    _NTRVM.restype = ctypes.c_long  # NTSTATUS
+except Exception:
+    _NTRVM = None
+
+
+class _MEMORY_RANGE_ENTRY(ctypes.Structure):
+    _fields_ = [
+        ("VirtualAddress", ctypes.c_void_p),
+        ("NumberOfBytes", ctypes.c_size_t),
+    ]
+
+
+try:
+    _PrefetchVM = ctypes.windll.kernel32.PrefetchVirtualMemory
+    _PrefetchVM.argtypes = [
+        wintypes.HANDLE, ctypes.c_size_t,
+        ctypes.POINTER(_MEMORY_RANGE_ENTRY), wintypes.DWORD,
+    ]
+    _PrefetchVM.restype = wintypes.BOOL
+except Exception:
+    _PrefetchVM = None
+
+
+def _mem_read(handle, addr, buf, size, p_got):
+    """Unified read — NtReadVirtualMemory with ReadProcessMemory fallback."""
+    if _NTRVM is not None:
+        return _NTRVM(
+            ctypes.c_void_p(handle), ctypes.c_void_p(addr),
+            buf, ctypes.c_size_t(size), p_got,
+        ) >= 0
+    return bool(_RPM_DIRECT(
+        ctypes.c_void_p(handle), ctypes.c_void_p(addr),
+        buf, ctypes.c_size_t(size), p_got,
+    ))
 
 
 class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
@@ -238,6 +284,8 @@ class StarProcess:
         self._attached_name = attached_name
         self._pid = int(self._pm.process_id)
         self._handle = int(self._pm.process_handle)
+        self._region_cache: Optional[List[MemoryRegion]] = None
+        self._region_cache_time: float = 0.0
 
     # ───── 基本属性 ─────
     @property
@@ -335,8 +383,15 @@ class StarProcess:
 
     # ───── 安全读取 ─────
     def read_bytes(self, addr: int, n: int) -> Optional[bytes]:
+        if n <= 0:
+            return b""
         try:
-            return self._pm.read_bytes(addr, n)
+            buf = ctypes.create_string_buffer(n)
+            got = ctypes.c_size_t(0)
+            ok = _mem_read(self._handle, int(addr), buf, n, ctypes.byref(got))
+            if ok and got.value > 0:
+                return buf.raw[: int(got.value)]
+            return None
         except Exception:
             return None
 
@@ -356,13 +411,7 @@ class StarProcess:
             return 0
         got = ctypes.c_size_t(0)
         try:
-            ok = _RPM_DIRECT(
-                ctypes.c_void_p(self._handle),
-                ctypes.c_void_p(int(addr)),
-                c_buf,
-                ctypes.c_size_t(want),
-                ctypes.byref(got),
-            )
+            ok = _mem_read(self._handle, int(addr), c_buf, want, ctypes.byref(got))
         except Exception:
             return 0
         return int(got.value) if ok else 0
@@ -414,8 +463,7 @@ class StarProcess:
                 return res
         except Exception:
             pass
-        # direct-ctypes fallback (skips pymem's per-call overhead; still per-syscall)
-        RPM = ctypes.windll.kernel32.ReadProcessMemory
+        # direct-ctypes fallback using NtRVM/RPM
         h = self._handle
         buf = (ctypes.c_uint64 if word_size == 8 else ctypes.c_uint32)()
         got = ctypes.c_size_t()
@@ -424,7 +472,8 @@ class StarProcess:
         out: list = []
         for a in addrs:
             try:
-                if RPM(h, ctypes.c_void_p(int(a)), pbuf, word_size, pgot) and got.value == word_size:
+                ok = _mem_read(h, int(a), pbuf, word_size, pgot)
+                if ok and got.value == word_size:
                     out.append(int(buf.value))
                 else:
                     out.append(None)
@@ -473,6 +522,59 @@ class StarProcess:
             return b[:end].decode("utf-16-le", errors="replace")
         except Exception:
             return None
+
+    # ───── 区域缓存 / 预取 / 批量 slab ─────
+    def cached_regions(
+        self, *, ttl: float = 5.0, only_readable: bool = True, only_private: bool = True,
+    ) -> List[MemoryRegion]:
+        """Return cached region list (refreshed every *ttl* seconds)."""
+        now = time.monotonic()
+        if self._region_cache is not None and now - self._region_cache_time < ttl:
+            return self._region_cache
+        self._region_cache = list(
+            self.iter_regions(only_readable=only_readable, only_private=only_private)
+        )
+        self._region_cache_time = now
+        return self._region_cache
+
+    def invalidate_region_cache(self) -> None:
+        self._region_cache = None
+        self._region_cache_time = 0.0
+
+    def prefetch_regions(self, regions, *, max_entries: int = 64) -> None:
+        """Hint the OS to page-in target memory before batch reads (Win8+)."""
+        if _PrefetchVM is None or not regions:
+            return
+        n = min(len(regions), max_entries)
+        entries = (_MEMORY_RANGE_ENTRY * n)()
+        for i in range(n):
+            r = regions[i]
+            entries[i].VirtualAddress = ctypes.c_void_p(r.base)
+            entries[i].NumberOfBytes = r.size
+        try:
+            _PrefetchVM(self._handle, n, entries, 0)
+        except Exception:
+            pass
+
+    def read_slab_many(self, base_addrs, offsets, word_size: int = 8) -> list:
+        """For each base addr, read one block covering all offsets, extract values.
+
+        Returns flat list of ``len(base_addrs) * len(offsets)`` values (None on fail).
+        Cython-accelerated when available; fallback to individual reads.
+        """
+        try:
+            from mem_probe import cy_memscan as _cy
+            res = _cy.read_slab_many(self._handle, list(base_addrs), list(offsets), word_size)
+            if res is not None:
+                return res
+        except Exception:
+            pass
+        out: list = []
+        read_fn = self.read_u64 if word_size == 8 else self.read_u32
+        for base in base_addrs:
+            for off in offsets:
+                out.append(read_fn(int(base) + int(off)))
+        return out
 
     # ───── 关闭 ─────
     def close(self) -> None:
