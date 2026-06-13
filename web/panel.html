@@ -240,6 +240,10 @@ body:not(.opening):not(.closing) .panel {
     color: #646364;
     padding-left: 10px;
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-ui);
     letter-spacing: 1px;
 }

@@ -2026,6 +2026,8 @@ html, body {
     height: 44px;
     margin-bottom: 3px;
     width: 238px;
+    min-width: 0;
+    box-sizing: border-box;
     background: var(--child-bg);
     color: var(--child-text);
     display: flex;
@@ -2058,9 +2060,10 @@ html, body {
 }
 
 .child-menu li span {
-    display: inline-block;
+    display: block;
     flex: 1;
     min-width: 0;
+    max-width: 100%;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
@@ -2069,6 +2072,7 @@ html, body {
 .child-menu li i {
     font-style: normal;
     margin-right: 8px;
+    flex: 0 0 auto;
 }
 
 .menu-glyph {
@@ -2145,6 +2149,10 @@ html, body {
     color: rgba(160, 158, 158, 0.7);
     margin-left: auto;
     margin-right: 8px;
+    flex: 0 0 auto;
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--font-ui);
     letter-spacing: 0;
@@ -3332,6 +3340,8 @@ html, body {
     min-width: min(76vw, 1180px);
     max-width: calc(100vw - 220px);
     max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    box-sizing: border-box;
+    overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior-y: none;
     top: -189px; /* lift panel above the left arrow zone */
@@ -3344,12 +3354,76 @@ html, body {
 .child-menu#sub-panels li,
 .child-menu#sub-act li {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
 }
 .child-menu#sub-panels .widget-row,
 .child-menu#sub-act .widget-row {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
 }
 
+/* ACT/menu text overflow guard: compact commands ellipsize, explanatory widgets wrap. */
+.child-menu#sub-panels li > span,
+.child-menu#sub-act li > span {
+    min-width: 0;
+}
+#sub-panels .widget-label,
+#sub-act .widget-label,
+#sub-panels .widget-note,
+#sub-act .widget-note,
+#sub-panels .source-summary,
+#sub-act .source-summary {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+#sub-panels .widget-label,
+#sub-act .widget-label {
+    line-height: 1.35;
+}
+#sub-panels .widget-note,
+#sub-act .widget-note,
+#sub-panels .source-summary,
+#sub-act .source-summary {
+    line-height: 1.55;
+}
+#sub-panels .sao-toggle,
+#sub-act .sao-toggle,
+#sub-panels .mode-group,
+#sub-act .mode-group,
+#sub-panels .boss-bar-mode-group,
+#sub-act .boss-bar-mode-group,
+#sub-panels .mem-source-group,
+#sub-act .mem-source-group {
+    max-width: 100%;
+    min-width: 0;
+}
+#sub-panels .sao-toggle > span,
+#sub-act .sao-toggle > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+#sub-panels .mode-btn,
+#sub-act .mode-btn,
+#sub-panels .boss-bar-mode-btn,
+#sub-act .boss-bar-mode-btn {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.35;
+}
 /* ─── Text clarity: disable blur / motion-heavy transitions on the menu shell ─── */
 .info,
 .info.visible,
