@@ -410,12 +410,37 @@ class _RenderLane:
         self._workers: list[int] = []
         self._cursor = 0
         self._affinity_slot = _next_affinity_slot()
+        # 60s 限频日志哨兵: compose 单帧失败 + 外层守卫捕获
+        self._compose_err_log_at = 0.0
+        self._loop_err_log_at = 0.0
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
             name=f'overlay-compose-{index + 1}',
         )
         self._thread.start()
+
+    def _log_compose_error(self, exc: Exception) -> None:
+        # 旧实现每个失败帧都 print 一次 → compose_fn 持续失败时按帧率(可达 60Hz)
+        # 刷屏; 改 60s 限频, 每窗口首帧仍记。
+        now = time.monotonic()
+        if now - self._compose_err_log_at >= 60.0:
+            self._compose_err_log_at = now
+            try:
+                print(f'[RenderWorker] lane{self.index + 1} compose error (60s 限频): {exc}')
+            except Exception:
+                pass
+
+    def _log_loop_error(self, exc: Exception) -> None:
+        now = time.monotonic()
+        if now - self._loop_err_log_at >= 60.0:
+            self._loop_err_log_at = now
+            try:
+                import traceback
+                print(f'[RenderWorker] lane{self.index + 1} loop guard caught '
+                      f'(60s 限频): {exc}\n{traceback.format_exc()}')
+            except Exception:
+                pass
 
     def register(self, worker_id: int) -> None:
         with self._lock:
@@ -482,55 +507,60 @@ class _RenderLane:
         except Exception:
             pass
         while True:
-            with self._lock:
-                while not self._pending:
-                    self._cond.wait(timeout=0.1)
-                picked = self._next_job_locked()
-            if picked is None:
-                continue
-            worker_id, job = picked
-            compose_fn, now, hwnd, x, y = job
+            # 外层守卫: compose 之外的取锁/cond.wait/取 job 若抛异常, 旧实现会让
+            # 该 lane 线程静默退出 → 对应面板永久停帧、无重启、无日志。现捕获+
+            # 60s 限频日志+短暂退避, 线程存活继续处理后续帧。
             try:
-                _phase_trace(
-                    'render.lane.compose.begin',
-                    f'worker={worker_id} hwnd={hwnd} fn={getattr(compose_fn, "__name__", compose_fn.__class__.__name__)}',
-                )
-                # v2.2.21: wall-time tracking feeds scheduler.set_wall_pressure
-                # so HP/DPS idle ticks back off when SkillFX/BOSSHP composes
-                # blow past the frame budget without any FX reduction.
-                _t0 = time.perf_counter()
-                result = compose_fn(now)
-                # v2.2.11 Phase 1: panels that fully migrated to the GPU
-                # compositor may return a FrameBuffer directly, skipping
-                # the PIL → numpy → premultiply step entirely.
-                if isinstance(result, FrameBuffer):
-                    fb = result
-                    # Honor caller-supplied placement when overlay moved.
-                    if fb.x != x or fb.y != y:
-                        fb = FrameBuffer(
-                            fb.bgra_bytes, fb.width, fb.height, x, y,
-                        )
-                else:
-                    img = result
-                    w, h = img.size
-                    bgra = _premultiply_to_bgra(img)
-                    fb = FrameBuffer(bgra, w, h, x, y)
-                _wall_ms = (time.perf_counter() - _t0) * 1000.0
-                _record_worker_wall(worker_id, _wall_ms)
-                _phase_trace(
-                    'render.lane.compose.end',
-                    f'worker={worker_id} hwnd={hwnd} ms={_wall_ms:.2f}',
-                )
                 with self._lock:
-                    if worker_id in self._workers:
-                        self._results[worker_id] = fb
-                        _perf_gauge(f'render.lane{self.index + 1}.pending', len(self._pending))
-                        _perf_gauge(f'render.lane{self.index + 1}.results', len(self._results))
-            except Exception as exc:
+                    while not self._pending:
+                        self._cond.wait(timeout=0.1)
+                    picked = self._next_job_locked()
+                if picked is None:
+                    continue
+                worker_id, job = picked
+                compose_fn, now, hwnd, x, y = job
                 try:
-                    print(f'[RenderWorker] compose error: {exc}')
-                except Exception:
-                    pass
+                    _phase_trace(
+                        'render.lane.compose.begin',
+                        f'worker={worker_id} hwnd={hwnd} fn={getattr(compose_fn, "__name__", compose_fn.__class__.__name__)}',
+                    )
+                    # v2.2.21: wall-time tracking feeds scheduler.set_wall_pressure
+                    # so HP/DPS idle ticks back off when SkillFX/BOSSHP composes
+                    # blow past the frame budget without any FX reduction.
+                    _t0 = time.perf_counter()
+                    result = compose_fn(now)
+                    # v2.2.11 Phase 1: panels that fully migrated to the GPU
+                    # compositor may return a FrameBuffer directly, skipping
+                    # the PIL → numpy → premultiply step entirely.
+                    if isinstance(result, FrameBuffer):
+                        fb = result
+                        # Honor caller-supplied placement when overlay moved.
+                        if fb.x != x or fb.y != y:
+                            fb = FrameBuffer(
+                                fb.bgra_bytes, fb.width, fb.height, x, y,
+                            )
+                    else:
+                        img = result
+                        w, h = img.size
+                        bgra = _premultiply_to_bgra(img)
+                        fb = FrameBuffer(bgra, w, h, x, y)
+                    _wall_ms = (time.perf_counter() - _t0) * 1000.0
+                    _record_worker_wall(worker_id, _wall_ms)
+                    _phase_trace(
+                        'render.lane.compose.end',
+                        f'worker={worker_id} hwnd={hwnd} ms={_wall_ms:.2f}',
+                    )
+                    with self._lock:
+                        if worker_id in self._workers:
+                            self._results[worker_id] = fb
+                            _perf_gauge(f'render.lane{self.index + 1}.pending', len(self._pending))
+                            _perf_gauge(f'render.lane{self.index + 1}.results', len(self._results))
+                except Exception as exc:
+                    # 单帧 compose 失败: 跳过该帧 (下一帧重试), 60s 限频记日志。
+                    self._log_compose_error(exc)
+            except Exception as exc:
+                self._log_loop_error(exc)
+                time.sleep(0.05)
 
 
 class _SharedRenderBackend:

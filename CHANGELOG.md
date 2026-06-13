@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.122: 渲染 lane 外层守卫防静默死亡 + compose 错误日志限频.
+
+  1) `render/overlay_render_worker.py` `_RenderLane._loop` 加外层 try
+    守卫 — 旧实现仅 compose 工作有 try, 而取锁/`cond.wait`/取 job 抛异常
+    会让该 lane 线程静默退出 → 对应面板永久停帧、无重启、无日志(GUI 下
+    console 也看不到)。现捕获 + 60s 限频日志 + 0.05s 退避, 线程存活继续。
+
+  2) 同文件单帧 compose 失败的 `print` 改 60s 限频 — 旧实现每个失败帧都
+    print 一次, compose_fn 持续失败时按帧率(可达 60Hz)刷屏; 现每 60s 窗口
+    首帧记一次(含 lane 号), 既给停层信号又不淹没日志。冒烟: lane 在抛异常
+    compose 后存活并继续产帧, 两类日志均 60s 限频。
+
 ## v4.6.121: 技能识别 HSV 去重转换 + GameState 无订阅者跳快照.
 
   1) `vision/skill_recognition.py` 消除每帧冗余 BGR→HSV 转换 —
