@@ -69,6 +69,8 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
             <button class="primary" type="button" onclick="MemScope.search()">搜索</button>
             <button type="button" onclick="MemScope.narrow()">收敛</button>
             <button type="button" onclick="MemScope.clear()">清除</button>
+            <button type="button" onclick="MemScope.refresh()">刷新</button>
+            <button type="button" onclick="MemScope.copy()">复制</button>
             <button class="close" type="button" onclick="MemScope.close()">×</button>
         </div>
     </div>
@@ -370,8 +372,16 @@ button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, trans
         if (a && a.toggle_mem_scope) a.toggle_mem_scope();
     }
 
+    // 复制整张扫描快照 JSON（与 Tk 端 copy_json 1:1；行内「复制」只复制单个地址）
+    function doCopy() {
+        if (!lastData) { toast('暂无快照可复制'); return; }
+        copyText(JSON.stringify(lastData, null, 2))
+            .then(function () { toast('已复制内存快照 JSON'); })
+            .catch(function () { toast('快照复制失败'); });
+    }
+
     window.MemScope = {
-        refresh: refresh, search: doSearch, narrow: doNarrow, clear: doClear, close: close,
+        refresh: refresh, search: doSearch, narrow: doNarrow, clear: doClear, copy: doCopy, close: close,
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };

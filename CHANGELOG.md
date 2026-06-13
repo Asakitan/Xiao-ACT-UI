@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.139: mem_scope web 补「复制快照 / 刷新」按钮(双端 parity; web 此前缺失).
+
+  渲染不全 / 功能缺失(web mem_scope 工具栏比 Tk 少两个动作):
+
+  - **复制快照**: Tk `copy_json`(sao_gui_mem_scope.py:191)有工具栏「复制 Copy」把整张
+    扫描快照 `_last_status` 转 JSON 进剪贴板; web 此前**只有行内「复制」(复制单个地址)**,
+    无法复制整张快照。补 `MemScope.copy()`→`doCopy()`(复用既有 `lastData` 快照 +
+    `copyText` 剪贴板助手), 加「复制」按钮。
+  - **刷新**: Tk 工具栏有「刷新 Refresh」; web 虽会自动轮询(搜索时)/dtype 改/加载时
+    刷新, 但无手动刷新钮。补「刷新」钮调既有 `MemScope.refresh()`。
+  - 两钮均 web/mem_scope.html, 复用既有函数/数据, 不删功能, 恢复与 Tk 1:1。
+
 ## v4.6.138: ACT 面板查询交互一致性补齐(web; 与 Tk 双端及兄弟面板对齐).
 
   用户交互友好性(交叉验证 6 个 ACT 面板的双端 parity 后, 落两处确认缺口):
