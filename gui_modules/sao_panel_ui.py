@@ -616,6 +616,147 @@ def _sao_panel_body(parent, *, flat=False):
     return body
 
 
+def _is_cjk_char(ch: str) -> bool:
+    cp = ord(ch)
+    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
+            0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF or
+            0x2E80 <= cp <= 0x2FDF or 0xF900 <= cp <= 0xFAFF or
+            0xFE30 <= cp <= 0xFE4F or 0x20000 <= cp <= 0x2FA1F)
+
+
+def _split_mixed_text(text: str):
+    if not text:
+        return [('latin', text)]
+    segments = []
+    cur_script = 'cjk' if _is_cjk_char(text[0]) else 'latin'
+    cur_chars = [text[0]]
+    for ch in text[1:]:
+        script = 'cjk' if _is_cjk_char(ch) else 'latin'
+        if script != cur_script:
+            segments.append((cur_script, ''.join(cur_chars)))
+            cur_script = script
+            cur_chars = [ch]
+        else:
+            cur_chars.append(ch)
+    segments.append((cur_script, ''.join(cur_chars)))
+    return segments
+
+
+def _has_mixed_scripts(text: str) -> bool:
+    has_latin = False
+    has_cjk = False
+    for ch in (text or ''):
+        if _is_cjk_char(ch):
+            has_cjk = True
+        elif ch.isalpha() or ch.isdigit():
+            has_latin = True
+        if has_latin and has_cjk:
+            return True
+    return False
+
+
+def _apply_auto_font(widget):
+    """Set font on a non-Label widget: pure English→SAO, otherwise→CJK."""
+    import tkinter.font as _tkfont
+    try:
+        f = _tkfont.Font(font=widget.cget('font'))
+        fam = f.actual('family')
+    except Exception:
+        fam = ''
+    if fam and 'SAO' in fam or '筑紫' in fam:
+        return
+    text = str(widget.cget('text') or '')
+    has_cjk = any(_is_cjk_char(ch) for ch in text)
+    try:
+        size = int(f.actual('size') or 9) if fam else 9
+        bold = f.actual('weight') == 'bold' if fam else False
+    except Exception:
+        size, bold = 9, False
+    size = abs(size) or 9
+    if has_cjk:
+        widget.configure(font=get_cjk_font(size, bold))
+    else:
+        widget.configure(font=get_sao_font(size, bold))
+
+
+def _auto_split_label_fonts(label):
+    """Replace a mixed-script Label with a Frame of split Labels (SAO+CJK).
+
+    Skips multi-line text, wrapped text, and image labels to avoid breaking
+    complex layouts like JSON previews.
+    """
+    import tkinter.font as _tkfont
+    try:
+        f = _tkfont.Font(font=label.cget('font'))
+        fam = f.actual('family')
+    except Exception:
+        fam = ''
+    if fam and ('SAO' in fam or '筑紫' in fam):
+        return
+    text = str(label.cget('text') or '')
+    if not text.strip():
+        return
+    try:
+        size = abs(int(f.actual('size') or 9)) or 9
+        bold = f.actual('weight') == 'bold'
+    except Exception:
+        size, bold = 9, False
+    # Skip multi-line / wrapped / justify labels — splitting breaks their layout
+    if '\n' in text:
+        _apply_auto_font(label)
+        return
+    try:
+        wl = int(label.cget('wraplength') or 0)
+        if wl > 0:
+            _apply_auto_font(label)
+            return
+    except Exception:
+        pass
+    if not _has_mixed_scripts(text):
+        has_cjk = any(_is_cjk_char(ch) for ch in text)
+        try:
+            label.configure(font=get_cjk_font(size, bold) if has_cjk else get_sao_font(size, bold))
+        except Exception:
+            pass
+        return
+    # Single-line mixed text: split into SAO (Latin) + CJK segments
+    try:
+        bg = str(label.cget('bg'))
+        fg = str(label.cget('fg'))
+        pack_info = label.pack_info()
+        grid_info = None
+    except Exception:
+        try:
+            bg = str(label.cget('bg'))
+            fg = str(label.cget('fg'))
+            grid_info = label.grid_info()
+            pack_info = None
+        except Exception:
+            _apply_auto_font(label)
+            return
+    parent = label.master
+    if parent is None:
+        return
+    frame = tk.Frame(parent, bg=bg)
+    segments = _split_mixed_text(text)
+    for script, seg_text in segments:
+        font = get_sao_font(size, bold) if script == 'latin' else get_cjk_font(size, bold)
+        tk.Label(frame, text=seg_text, bg=bg, fg=fg, font=font).pack(side='left')
+    try:
+        label.pack_forget()
+    except Exception:
+        try:
+            label.grid_forget()
+        except Exception:
+            _apply_auto_font(label)
+            return
+    if pack_info:
+        frame.pack(**{k: v for k, v in pack_info.items() if k in ('side', 'fill', 'expand', 'padx', 'pady', 'anchor', 'ipadx', 'ipady')})
+    elif grid_info:
+        frame.grid(**{k: v for k, v in grid_info.items() if k in ('row', 'column', 'sticky', 'padx', 'pady', 'columnspan', 'rowspan')})
+    label.destroy()
+
+
 def _style_panel_descendants(root):
     """Apply one-shot SAO styling to simple Tk controls created in a panel."""
     try:
@@ -706,18 +847,12 @@ def _style_panel_descendants(root):
                 )
         except Exception:
             pass
-        # Force SAO/CJK font: any widget still on system default gets CJK font
+        # Auto font split: English/digits → SAO UI, Chinese → ZHUZIYUAN
         try:
-            if cls in ('Label', 'Button', 'Checkbutton', 'Radiobutton',
-                       'Menubutton', 'Message'):
-                import tkinter.font as _tkfont
-                try:
-                    f = _tkfont.Font(font=child.cget('font'))
-                    fam = f.actual('family')
-                except Exception:
-                    fam = ''
-                if fam and 'SAO' not in fam and '筑紫' not in fam and 'ZhuZi' not in fam:
-                    child.configure(font=get_cjk_font(9))
+            if cls == 'Label':
+                _auto_split_label_fonts(child)
+            elif cls in ('Button', 'Checkbutton', 'Radiobutton', 'Menubutton', 'Message'):
+                _apply_auto_font(child)
         except Exception:
             pass
         _style_panel_descendants(child)
