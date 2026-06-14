@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -418,8 +419,8 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             make_action_button(row, 'OPEN',
                                lambda pid=pid: self._select_profile(pid),
                                width=4).pack(side=tk.LEFT)
-            make_action_button(row, 'ON',
-                               lambda pid=pid: self._activate_profile(pid),
+            make_action_button(row, 'OFF' if active else 'ON',
+                               lambda pid=pid, act=active: self._toggle_profile(pid, act),
                                kind='ready' if active else 'default',
                                width=3).pack(side=tk.LEFT, padx=(5, 0))
             # 把同类的「档案文件管理」动作(复制/导出/删除)聚合进「更多 ▾」下拉,
@@ -717,6 +718,22 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._set_status('Activated profile')
         self._reload(keep_selected=True)
 
+    def _toggle_profile(self, profile_id: str, currently_active: bool) -> None:
+        config = self._load() or {}
+        if currently_active:
+            config['active_profile_id'] = ''
+            self._save(config)
+            self._set_status('Deactivated profile')
+        else:
+            if not find_auto_key_profile(config, profile_id):
+                self._set_status('Profile not found', ok=False)
+                return
+            config['active_profile_id'] = str(profile_id or '')
+            self._save(config)
+            self._set_status('Activated profile')
+        self._selected_id = str(profile_id or '')
+        self._reload(keep_selected=True)
+
     def _delete_selected(self) -> None:
         if not self._draft:
             return
@@ -982,8 +999,8 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             make_action_button(row, 'OPEN',
                                lambda pid=pid: self._select_profile(pid),
                                width=4).pack(side=tk.LEFT)
-            make_action_button(row, 'ON',
-                               lambda pid=pid: self._activate_profile(pid),
+            make_action_button(row, 'OFF' if active else 'ON',
+                               lambda pid=pid, act=active: self._toggle_profile(pid, act),
                                kind='ready' if active else 'default',
                                width=3).pack(side=tk.LEFT, padx=(5, 0))
             make_action_button(row, 'COPY',
@@ -1260,6 +1277,22 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._set_status('Activated profile')
         self._reload(keep_selected=True)
 
+    def _toggle_profile(self, profile_id: str, currently_active: bool) -> None:
+        config = self._load() or {}
+        if currently_active:
+            config['active_profile_id'] = ''
+            self._save(config)
+            self._set_status('Deactivated profile')
+        else:
+            if not find_boss_raid_profile(config, profile_id):
+                self._set_status('Profile not found', ok=False)
+                return
+            config['active_profile_id'] = str(profile_id or '')
+            self._save(config)
+            self._set_status('Activated profile')
+        self._selected_id = str(profile_id or '')
+        self._reload(keep_selected=True)
+
     def _delete_selected(self) -> None:
         if not self._draft:
             return
@@ -1318,9 +1351,17 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._set_status(f'Exported: {path}')
 
     def _import_profile(self) -> None:
+        try:
+            from config import BASE_DIR
+            default_dir = os.path.join(BASE_DIR, 'assets', 'boss_raids')
+            if not os.path.isdir(default_dir):
+                default_dir = ''
+        except Exception:
+            default_dir = ''
         path = filedialog.askopenfilename(
             parent=self._win,
             title='Import BossRaid Profile',
+            initialdir=default_dir or None,
             filetypes=(('JSON files', '*.json'), ('All files', '*.*')),
         )
         if not path:

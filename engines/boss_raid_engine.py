@@ -626,9 +626,42 @@ def normalize_boss_raid_config(raw: Any,
     return result
 
 
+def _seed_from_assets(config: Dict[str, Any]) -> bool:
+    """首次启动: 把 assets/boss_raids/ 下的 *_机制示例.json 自动导入 (仅在0个档案时)。"""
+    if config.get("profiles"):
+        return False
+    try:
+        assets_dir = os.path.join(BASE_DIR, "assets", "boss_raids")
+        if not os.path.isdir(assets_dir):
+            return False
+        added = False
+        for fn in sorted(os.listdir(assets_dir)):
+            if not fn.endswith(".json") or not fn[0].isdigit():
+                continue
+            path = os.path.join(assets_dir, fn)
+            try:
+                profile = import_profile_from_path(path)
+                config.setdefault("profiles", []).append(profile)
+                added = True
+            except Exception:
+                continue
+        if added and not config.get("active_profile_id"):
+            config["active_profile_id"] = config["profiles"][0]["id"]
+        return added
+    except Exception:
+        return False
+
+
 def load_boss_raid_config(settings, state_snapshot=None) -> Dict[str, Any]:
-    return normalize_boss_raid_config(settings.get("boss_raid", {}),
-                                       state_snapshot=state_snapshot)
+    config = normalize_boss_raid_config(settings.get("boss_raid", {}),
+                                         state_snapshot=state_snapshot)
+    if _seed_from_assets(config):
+        settings.set("boss_raid", config)
+        try:
+            settings.save()
+        except Exception:
+            pass
+    return config
 
 
 def save_boss_raid_config(settings, config: Dict[str, Any]) -> Dict[str, Any]:

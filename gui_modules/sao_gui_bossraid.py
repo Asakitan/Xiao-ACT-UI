@@ -985,16 +985,21 @@ class _MechanicsEditorMixin:
         name = next((str(m.get('name') or mid)
                      for m in (self._mech_state.get('mechanics') or [])
                      if str(m.get('id')) == str(mid)), str(mid))
+        win = getattr(self, '_win', None)
         try:
             from sao_theme.dialogs import SAODialog
-            win = getattr(self, '_win', None)
             if win is not None and win.winfo_exists():
                 SAODialog.ask(win, '删除机制', '删除机制「%s」? 此操作不可撤销。' % name,
                               on_ok=lambda: self._mech_delete_confirmed(mid))
                 return
         except Exception:
             pass
-        self._mech_delete_confirmed(mid)
+        # SAODialog 不可用时用 Tk 内置 (不弹 Windows 原生框)
+        import tkinter.messagebox as _mb
+        parent = win if (win and win.winfo_exists()) else None
+        if _mb.askyesno('删除机制', '删除机制「%s」? 此操作不可撤销。' % name,
+                        parent=parent):
+            self._mech_delete_confirmed(mid)
 
     def _mech_delete_confirmed(self, mid: str) -> None:
         if self._mech_editing and self._mech_editing != mid:
