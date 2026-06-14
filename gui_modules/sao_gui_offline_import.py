@@ -215,13 +215,13 @@ class OfflineImportPanel:
 
         control = tk.Frame(toolbar, bg=body_bg)
         control.pack(side='right', anchor='n', pady=(10, 0))
-        status_badge(control, f'STEP {self._current_step}/{len(_STEP_LABELS)}',
-                     kind='gold').pack(side='left', padx=(0, 12))
-        action_button(control, '选择 Choose', self.choose_file, kind='normal').pack(
+        self._step_badge_frame = tk.Frame(control, bg=body_bg)
+        self._step_badge_frame.pack(side='left', padx=(0, 12))
+        self._refresh_step_badge()
+        action_button(control, '上一步', self._prev_step, kind='normal').pack(
             side='left', padx=(0, SP_SM))
-        action_button(control, '导入', self.import_file, kind='gold').pack(
-            side='left', padx=(0, SP_SM))
-        action_button(control, '刷新', self.refresh, kind='normal').pack(side='left')
+        action_button(control, '下一步', self._next_step, kind='gold').pack(
+            side='left')
         _make_panel_close_button(control, self.hide, bg=body_bg, flat=True).pack(
             side='left', padx=(6, 0))
 
@@ -280,6 +280,41 @@ class OfflineImportPanel:
         self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
+
+    # ── step navigation ──
+
+    def _prev_step(self) -> None:
+        if self._current_step > 1:
+            self._current_step -= 1
+            self._refresh_step_badge()
+            self._last_rows_sig = ""
+            self.refresh()
+
+    def _next_step(self) -> None:
+        max_step = len(_STEP_LABELS)
+        if self._current_step < max_step:
+            # Auto-trigger step actions
+            if self._current_step == 1:
+                result = self.choose_file()
+                if not result.get('ok'):
+                    return
+            elif self._current_step == 3:
+                result = self.import_file()
+                if not result.get('ok'):
+                    return
+            self._current_step += 1
+            self._refresh_step_badge()
+            self._last_rows_sig = ""
+            self.refresh()
+
+    def _refresh_step_badge(self) -> None:
+        frame = getattr(self, '_step_badge_frame', None)
+        if frame is None:
+            return
+        for ch in list(frame.winfo_children()):
+            ch.destroy()
+        status_badge(frame, f'STEP {self._current_step}/{len(_STEP_LABELS)}',
+                     kind='gold').pack(side='left')
 
     def _reset_render_cache(self) -> None:
         self._last_rows_sig = ""

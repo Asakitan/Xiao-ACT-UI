@@ -229,9 +229,9 @@ class SkillDrilldownPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        # Title area (matches aggregate two-line pattern)
+        # ── Row 1: toolbar (webref layout) ─────────────────────────────────
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        toolbar.pack(fill='x', padx=14, pady=(7, 2))
         title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         title_box.pack(side='left', anchor='n')
         tk.Label(title_box, text='ACT SKILL', bg=_SAO_PANEL_BODY_BG,
@@ -239,22 +239,25 @@ class SkillDrilldownPanel:
         tk.Label(title_box, text='SKILL DRILLDOWN 技能钻取', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # Control buttons (right side of toolbar)
-        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        control.pack(side='right', anchor='n', pady=(10, 0))
-        self._badge_frame_sd = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
+        # Right side: [READY badge] [技能名/Skill search] [刷新] [×]
+        tb_right = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        tb_right.pack(side='right', anchor='n', pady=(10, 0))
+        self._badge_frame_sd = tk.Frame(tb_right, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame_sd.pack(side='left', padx=(0, 12), anchor='n')
-        tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._combatant_var, width=13).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Skill', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._skill_var, width=13).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(6, 8))
-        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
-        action_button(control, '过滤', self.filter).pack(side='left', padx=(0, 6))
-        action_button(control, '复制', self.copy).pack(side='left', padx=(0, 6))
-        action_button(control, '返回', self.back).pack(side='left', padx=(0, 6))
-        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
+        sao_entry(tb_right, textvariable=self._query_var, width=18).pack(side='left', padx=(0, 8))
+        action_button(tb_right, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        _make_panel_close_button(tb_right, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
+
+        # ── Row 2: secondary controls ──────────────────────────────────────
+        ctrl2 = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        ctrl2.pack(fill='x', padx=14, pady=(0, 10))
+        tk.Label(ctrl2, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(ctrl2, textvariable=self._combatant_var, width=13).pack(side='left', padx=(6, 8))
+        tk.Label(ctrl2, text='Skill', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(ctrl2, textvariable=self._skill_var, width=13).pack(side='left', padx=(6, 8))
+        action_button(ctrl2, '过滤', self.filter).pack(side='left', padx=(0, 6))
+        action_button(ctrl2, '复制', self.copy).pack(side='left', padx=(0, 6))
+        action_button(ctrl2, '返回', self.back).pack(side='left', padx=(0, 6))
 
         # Status bar
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))
@@ -495,7 +498,7 @@ class SkillDrilldownPanel:
         box = tk.Frame(target, bg=box_bg, highlightthickness=1, highlightbackground=_SAO_PANEL_GOLD)
         box.pack(fill='x', padx=12, pady=(0, 4))
         text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-        tk.Label(box, text=text, bg=box_bg, fg=_pc('value_fg', '#d7f7ff'), font=('Consolas', 9),
+        tk.Label(box, text=text, bg=box_bg, fg=_pc('value_fg', '#d7f7ff'), font=get_sao_font(9),
                  anchor='w', justify='left', wraplength=560).pack(fill='x', padx=8, pady=6)
 
     @staticmethod

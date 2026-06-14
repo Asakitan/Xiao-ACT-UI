@@ -25,6 +25,7 @@ from gui_modules.sao_panel_components import (
     more_indicator,
     rounded_panel,
     sao_entry,
+    sao_option_menu,
     sao_scrollbar,
     section_card,
     status_badge,
@@ -93,6 +94,7 @@ class CombatantDrilldownPanel:
         self._combatant_var = tk.StringVar(value="")
         self._query_var = tk.StringVar(value="")
         self._focus_var = tk.StringVar(value="")
+        self._mode_var = tk.StringVar(value="Live")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_request_key: tuple[Any, ...] = ()
@@ -214,7 +216,7 @@ class CombatantDrilldownPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        # ── title area (matches aggregate cockpit pattern) ──
+        # ── toolbar: title (left) + [READY] [Live▼] [刷新] [×] (right) ──
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=14, pady=(7, 10))
         title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
@@ -223,24 +225,26 @@ class CombatantDrilldownPanel:
                  fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='COMBATANT 成员钻取', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        sao_option_menu(toolbar, self._mode_var, 'Live', 'Encounter',
+                        command=lambda _v: self.refresh()).pack(side='right', padx=(6, 0))
+        self._badge_frame_cd = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_cd.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
-        # ── control bar (right-aligned) ──
-        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        control.pack(side='right', anchor='n', pady=(10, 0))
-        self._badge_frame_cd = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_cd.pack(side='left', padx=(0, 12), anchor='n')
+        # ── second control row: UID / 搜索 / 目标 inputs + 聚焦 / 返回 ──
+        control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        control.pack(fill='x', padx=14, pady=(0, 8))
         tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._combatant_var, width=14).pack(side='left', padx=(6, 8))
+        sao_entry(control, textvariable=self._combatant_var, width=14).pack(side='left', padx=(6, 10))
         tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         query_entry = sao_entry(control, textvariable=self._query_var, width=14)
-        query_entry.pack(side='left', padx=(6, 8))
+        query_entry.pack(side='left', padx=(6, 10))
         query_entry.bind('<Return>', lambda _e: self.filter())
         tk.Label(control, text='目标', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._focus_var, width=12).pack(side='left', padx=(6, 8))
-        action_button(control, '聚焦', self.focus_target, kind='gold').pack(side='left', padx=(0, 6))
-        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
-        action_button(control, '返回', self.back).pack(side='left', padx=(0, 6))
-        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
+        sao_entry(control, textvariable=self._focus_var, width=12).pack(side='left', padx=(6, 10))
+        action_button(control, '聚焦', self.focus_target, kind='gold').pack(side='left', padx=(6, 0))
+        action_button(control, '返回', self.back).pack(side='left', padx=(6, 0))
 
         # ── combatant identity label ──
         self._identity_label = tk.Label(body, textvariable=self._summary_var, anchor='w',
