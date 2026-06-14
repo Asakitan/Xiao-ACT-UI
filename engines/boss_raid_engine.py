@@ -631,7 +631,8 @@ def _seed_from_assets(config: Dict[str, Any]) -> bool:
     if config.get("profiles"):
         return False
     try:
-        assets_dir = os.path.join(BASE_DIR, "assets", "boss_raids")
+        from config import resource_path
+        assets_dir = resource_path("assets", "boss_raids")
         if not os.path.isdir(assets_dir):
             return False
         added = False

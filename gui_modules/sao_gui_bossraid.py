@@ -235,7 +235,7 @@ class _BossReactionsEditorMixin:
 
             _tk.Checkbutton(lk_row, text='ON/OFF', variable=_lk_en,
                             command=_toggle_lk_enabled, bg=PANEL_BG, fg=TEXT_MAIN,
-                            selectcolor=PANEL_CARD, activebackground=PANEL_BG,
+                            selectcolor=PANEL_CARD_ALT, activebackground=PANEL_BG,
                             activeforeground=TEXT_MAIN, font=panel_font(8),
                             bd=0, highlightthickness=0).pack(side=tk.LEFT, padx=(6, 12))
             _lk_dbg = _tk.BooleanVar(value=bool(st.get('debug_log', False)))
@@ -248,7 +248,7 @@ class _BossReactionsEditorMixin:
 
             _tk.Checkbutton(lk_row, text='Debug', variable=_lk_dbg,
                             command=_toggle_lk_debug, bg=PANEL_BG, fg=TEXT_MAIN,
-                            selectcolor=PANEL_CARD, activebackground=PANEL_BG,
+                            selectcolor=PANEL_CARD_ALT, activebackground=PANEL_BG,
                             activeforeground=TEXT_MAIN, font=panel_font(8),
                             bd=0, highlightthickness=0).pack(side=tk.LEFT, padx=(0, 12))
             tk.Label(lk_row, text='全局CD(s)', bg=PANEL_BG, fg=TEXT_MUTED,

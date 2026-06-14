@@ -711,6 +711,25 @@ def build_boss_reactions_state(settings, engine, state_mgr,
                    "dungeon_id": cur_dungeon_id,
                    "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id),
                    "boss_count": 0, "last_seen": 0.0}] + scenes
+    # surface dungeon_ids from imported profiles so scenes appear before any obs;
+    # use profile_name as scene label since dungeon names are the top-level raid
+    # name (e.g. "决战！虚空浮岛·神龙枷所") while profiles know their sub-map name
+    try:
+        from engines.boss_raid_engine import load_boss_raid_config
+        raid_cfg = load_boss_raid_config(settings)
+        existing_keys = {str(s.get("scene_key")) for s in scenes}
+        for prof in raid_cfg.get("profiles") or []:
+            did = _int(prof.get("dungeon_id"), 0)
+            dk = str(did)
+            if did and dk not in existing_keys:
+                existing_keys.add(dk)
+                pname = _s(prof.get("profile_name"))
+                scenes.append({"scene_key": dk, "scene_id": 0,
+                               "dungeon_id": did,
+                               "name": pname or _resolve_scene_name(nm, 0, did),
+                               "boss_count": 0, "last_seen": 0.0})
+    except Exception:
+        pass
     try:
         bosses = [dict(b) for b in (engine.get_observed_bosses(selected) if engine else [])]
     except Exception:

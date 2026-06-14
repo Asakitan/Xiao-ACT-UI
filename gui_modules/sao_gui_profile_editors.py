@@ -419,7 +419,7 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             make_action_button(row, 'OPEN',
                                lambda pid=pid: self._select_profile(pid),
                                width=4).pack(side=tk.LEFT)
-            make_action_button(row, 'OFF' if active else 'ON',
+            make_action_button(row, 'ON' if active else 'OFF',
                                lambda pid=pid, act=active: self._toggle_profile(pid, act),
                                kind='ready' if active else 'default',
                                width=3).pack(side=tk.LEFT, padx=(5, 0))
@@ -999,7 +999,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             make_action_button(row, 'OPEN',
                                lambda pid=pid: self._select_profile(pid),
                                width=4).pack(side=tk.LEFT)
-            make_action_button(row, 'OFF' if active else 'ON',
+            make_action_button(row, 'ON' if active else 'OFF',
                                lambda pid=pid, act=active: self._toggle_profile(pid, act),
                                kind='ready' if active else 'default',
                                width=3).pack(side=tk.LEFT, padx=(5, 0))
