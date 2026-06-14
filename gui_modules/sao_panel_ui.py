@@ -706,6 +706,20 @@ def _style_panel_descendants(root):
                 )
         except Exception:
             pass
+        # Force SAO/CJK font: any widget still on system default gets CJK font
+        try:
+            if cls in ('Label', 'Button', 'Checkbutton', 'Radiobutton',
+                       'Menubutton', 'Message'):
+                import tkinter.font as _tkfont
+                try:
+                    f = _tkfont.Font(font=child.cget('font'))
+                    fam = f.actual('family')
+                except Exception:
+                    fam = ''
+                if fam and 'SAO' not in fam and '筑紫' not in fam and 'ZhuZi' not in fam:
+                    child.configure(font=get_cjk_font(9))
+        except Exception:
+            pass
         _style_panel_descendants(child)
 
 
