@@ -10286,10 +10286,9 @@ class SAOWebViewGUI:
                     _bb_mem_break = mem_boss_break_override(
                         getattr(self, '_packet_engine', None))
                     if _bb_mem_break is not None:
-                        _bb_breaking, _bb_has_break, _bb_extinction = _bb_mem_break
+                        _bb_breaking, _bb_has_break, _bb_extinction, _bb_stop_ticking = _bb_mem_break
                         _bb_extinction_raw = 0
                         _bb_max_extinction = 0
-                        _bb_stop_ticking = False
 
                     # Resolve the boss name BEFORE the push-gate signature so a
                     # late-arriving name (MEM nameplate harvest / tracker uuid map)
@@ -10322,6 +10321,14 @@ class SAOWebViewGUI:
                     )
                     if _bb_sig != getattr(self, '_last_boss_bar_sig', None):
                         self._last_boss_bar_sig = _bb_sig
+                        _bb_break_time = 0.0
+                        try:
+                            _bb_tid = int((_bb_direct_data or {}).get('template_id') or 0)
+                            if _bb_tid > 0:
+                                from engines.break_time_lookup import get_break_recovery_time as _brt
+                                _bb_break_time = _brt(_bb_tid)
+                        except Exception:
+                            pass
                         _bb_data = {
                             'active': _bb_show,
                             'hp_pct': _bb_sig[1],
@@ -10336,6 +10343,7 @@ class SAOWebViewGUI:
                             'extinction': _bb_sig[10],
                             'max_extinction': _bb_sig[11],
                             'stop_breaking_ticking': _bb_sig[12],
+                            'break_recovery_time': _bb_break_time,
                             'in_overdrive': _bb_sig[13],
                             'invincible': _bb_sig[14],
                             'boss_name': _bb_boss_name,

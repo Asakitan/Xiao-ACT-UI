@@ -546,12 +546,14 @@ class BossHpOverlay:
         self._break_state = 'normal'    # 'normal' | 'broken' | 'recovering' | 'refilled'
         self._has_break_data = False
         self._last_break_pct = 1.0
+        self._stop_breaking_ticking = False
+        self._break_recovery_time = 0.0  # from MonsterTable BreakingContinueTime (seconds)
 
         # Break timing state
         self._break_entered_ts = 0.0
         self._refill_completed_ts = 0.0
 
-        # Recovering sub-phases: 'idle'|'filling'|'capped'|'slowtail'|'fastfill'
+        # Recovering sub-phases: 'idle'|'filling'|'capped'|'slowtail'|'fastfill'|'timed'
         self._recover_phase = 'idle'
         self._recover_start_ts = 0.0
         self._recover_current_pct = 0.0
@@ -562,6 +564,7 @@ class BossHpOverlay:
         self._fastfill_start_pct = 0.0
         self._recover_raw_peak_pct = 0.0
         self._recover_interpolating = False
+        self._recover_timed_duration = 0.0  # for 'timed' phase (BreakingContinueTime)
 
         self._in_overdrive = False
         self._invincible = False
@@ -881,9 +884,13 @@ class BossHpOverlay:
         stage = _finite_int(data.get('breaking_stage'), -1, lo=-1)
         ext_pct = _unit_pct(data.get('extinction_pct'))
         has_break = bool(data.get('has_break_data', False))
+        stop_ticking = bool(data.get('stop_breaking_ticking', False))
+        break_recovery_time = float(data.get('break_recovery_time') or 0.0)
 
         self._breaking_stage = stage
         self._has_break_data = has_break
+        if break_recovery_time > 0:
+            self._break_recovery_time = break_recovery_time
 
         # Visual locking: don't move the live break gauge while the state machine owns
         # the bar (broken holds 0%, recovering/refilled run the fill animation).
@@ -895,11 +902,12 @@ class BossHpOverlay:
         elif self._break_state == 'broken':
             self._target_break_pct = 0.0
 
-        # Run signal-driven break state machine (breaking_stage transitions only).
-        self._update_break_state(ext_pct, stage)
+        # Run signal-driven break state machine.
+        self._update_break_state(ext_pct, stage, stop_ticking)
 
         self._last_breaking_stage = stage
         self._last_break_pct = ext_pct
+        self._stop_breaking_ticking = stop_ticking
 
         self._in_overdrive = bool(data.get('in_overdrive', False))
         self._invincible = bool(data.get('invincible', False))
@@ -997,6 +1005,21 @@ class BossHpOverlay:
         self._recover_raw_peak_pct = 0.0
         self._trigger_break_recovery_fx('recovering')
 
+    def _begin_timed_recovery(self, duration_s: float) -> None:
+        """Start a single-phase timed recovery (0%→100% over duration_s).
+
+        Used when BreakingContinueTime is known from MonsterTable, giving
+        an accurate visual countdown of the break window.
+        """
+        self._break_state = 'recovering'
+        self._recover_phase = 'timed'
+        self._recover_start_ts = time.time()
+        self._recover_timed_duration = max(1.0, duration_s)
+        self._recover_current_pct = 0.0
+        self._recover_interpolating = True
+        self._recover_raw_peak_pct = 0.0
+        self._trigger_break_recovery_fx('recovering')
+
     def _trigger_recover_fastfill(self) -> None:
         """Jump to fastfill sub-phase (final 420ms cubic ease to 100%)."""
         if self._recover_phase == 'fastfill':
@@ -1025,38 +1048,42 @@ class BossHpOverlay:
         # Schedule transition back to normal.
         self._refill_completed_ts = time.time() + self.REFILLED_HOLD_S
 
-    def _update_break_state(self, break_pct: float, stage: int) -> None:
+    def _update_break_state(self, break_pct: float, stage: int, stop_ticking: bool = False) -> None:
         """Signal-driven break state machine.
 
-        Driven purely by ``breaking_stage`` transitions — 0 = Breaking (broken),
-        1 = BreakEnd (normal), -1 = no data. No stale/cooldown/raw-pct heuristics:
-        the source signal (TCP packet or per-tick MEM read) is trusted directly.
+        Primary trigger: ``stop_breaking_ticking`` False→True = boss just broke,
+        immediately start timed recovery animation using ``_break_recovery_time``
+        (from MonsterTable BreakingContinueTime).
+
+        Fallback trigger: ``breaking_stage`` transitions (0 = Breaking, 1 = BreakEnd)
+        used when stop_breaking_ticking is unavailable.
         """
         now = time.time()
         prev_stage = self._last_breaking_stage
+        ticking_entered = (not self._stop_breaking_ticking and stop_ticking)
 
         if self._break_state == 'normal':
-            # Enter broken when the boss transitions into the Breaking stage.
-            if stage == 0 and prev_stage != 0:
+            if ticking_entered:
+                self._enter_broken()
+                if self._break_recovery_time > 0:
+                    self._begin_timed_recovery(self._break_recovery_time)
+            elif stage == 0 and prev_stage != 0:
                 self._enter_broken()
 
         elif self._break_state == 'broken':
-            # Leave broken the moment the break signal clears (stage back to 1/-1).
-            if stage != 0:
+            if ticking_entered and self._break_recovery_time > 0:
+                self._begin_timed_recovery(self._break_recovery_time)
+            elif stage != 0:
                 self._begin_recovery()
                 self._trigger_recover_fastfill()
-            # Anti-stuck failsafe (not a data heuristic): if the signal goes silent
-            # while still reading 0, don't stay broken forever.
             elif now - self._break_entered_ts > self.BREAK_STUCK_FAILSAFE_S:
                 self._begin_recovery()
                 self._trigger_recover_fastfill()
 
         elif self._break_state == 'recovering':
-            # Re-break during the recovery animation: stage dropped back to 0.
-            if stage == 0 and prev_stage != 0:
+            if stage == 0 and prev_stage != 0 and not stop_ticking:
                 self._cancel_recover()
                 self._enter_broken()
-            # (fill-animation completion → _enter_refilled in _advance_recovery)
 
         elif self._break_state == 'refilled':
             if self._refill_completed_ts > 0 and now >= self._refill_completed_ts:
@@ -1106,6 +1133,20 @@ class BossHpOverlay:
             t = min(1.0, elapsed / self.RECOVER_FASTFILL_S)
             ease = 1.0 - (1.0 - t) ** 3  # cubic ease-out
             pct = self._fastfill_start_pct + (1.0 - self._fastfill_start_pct) * ease
+            self._recover_current_pct = pct
+            self._disp_break_pct = pct
+            self._target_break_pct = pct
+            if t >= 1.0:
+                self._recover_interpolating = False
+                self._recover_phase = 'idle'
+                self._enter_refilled()
+
+        elif phase == 'timed':
+            elapsed = now - self._recover_start_ts
+            dur = self._recover_timed_duration
+            t = min(1.0, elapsed / dur) if dur > 0 else 1.0
+            ease = 1.0 - (1.0 - t) ** 2  # ease-out quadratic
+            pct = ease
             self._recover_current_pct = pct
             self._disp_break_pct = pct
             self._target_break_pct = pct

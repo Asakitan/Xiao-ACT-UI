@@ -1034,6 +1034,9 @@ var _breakState = 'normal';   // 'normal' | 'broken' | 'recovering' | 'refilled'
 var _recoverEndTimer = null;
 var _breakEnteredTs = 0;      // timestamp when entered broken state
 var _refillCompletedTs = 0;   // timestamp when entered refilled (cleared on new break)
+var _lastStopBreakingTicking = false;
+var _breakRecoveryTime = 0;   // BreakingContinueTime from MonsterTable (seconds)
+var _recoverTimedDurationMs = 0;  // for 'timed' phase (ms)
 
 /* ── Client-side recovery interpolation ──
  * The protocol has no dedicated break-recovery-rate attr (IDs 446-449 unassigned).
@@ -1188,6 +1191,24 @@ function _recoverFrame() {
             _recoverInterpolating = false;
             _recoverPhase = 'idle';
             fill.classList.remove('fast-filling');
+            _recoverFill = null;
+            _enterRefilled(fill, fill.parentElement);
+            return;
+        }
+        break;
+
+    case 'timed':
+        elapsed = Date.now() - _recoverStartTs;
+        t = Math.min(1, elapsed / _recoverTimedDurationMs);
+        ease = 1 - Math.pow(1 - t, 2);  // ease-out quadratic
+        pct = ease;
+        _recoverCurrentPct = pct;
+        fill.style.width = Math.round(pct * 100) + '%';
+        breakText.textContent = Math.round(pct * 100) + '%';
+        if (t >= 1) {
+            _recoverRafId = 0;
+            _recoverInterpolating = false;
+            _recoverPhase = 'idle';
             _recoverFill = null;
             _enterRefilled(fill, fill.parentElement);
             return;
@@ -1377,6 +1398,7 @@ function _hideBossBar() {
         _lastShieldPct = 0;
         _lastBreakingStage = -1;
         _lastBreakPct = -1;
+        _lastStopBreakingTicking = false;
         _lastHpPct = 1;
         _breakState = 'normal';
         _refillCompletedTs = 0;
@@ -1706,11 +1728,17 @@ function updateBossBar(data) {
         document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
     }
 
-    // ── Signal-driven break state machine (breaking_stage transitions only) ──
-    _updateBreakState(breakPct, stage, breakFill, breakTrack);
+    // ── stop_breaking_ticking + break_recovery_time ──
+    var stopTicking = !!data.stop_breaking_ticking;
+    var brt = parseFloat(data.break_recovery_time) || 0;
+    if (brt > 0) _breakRecoveryTime = brt;
+
+    // ── Signal-driven break state machine ──
+    _updateBreakState(breakPct, stage, breakFill, breakTrack, stopTicking);
 
     _lastBreakingStage = stage;
     _lastBreakPct = breakPct;
+    _lastStopBreakingTicking = stopTicking;
 
     root.classList.toggle('invincible', !!data.invincible);
     root.classList.toggle('overdrive', !!data.in_overdrive && !data.invincible);
@@ -1744,11 +1772,10 @@ window.addEventListener('resize', function() {
 });
 
 /* ── Signal-driven break state machine ──
- * Driven purely by breaking_stage transitions — 0 = Breaking (broken), 1 = BreakEnd
- * (normal), -1 = no data. No stale/cooldown/raw-pct heuristics: the source signal
- * (TCP packet or per-tick MEM read) is trusted directly.
+ * Primary trigger: stop_breaking_ticking false→true = boss broke, start timed recovery.
+ * Fallback: breaking_stage transitions (0 = Breaking, 1 = BreakEnd).
  */
-var BREAK_STUCK_FAILSAFE_MS = 30000;  // anti-stuck: force recovery if break signal goes silent
+var BREAK_STUCK_FAILSAFE_MS = 30000;
 
 function _beginBreakRecovery(fill, track) {
     if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
@@ -1760,38 +1787,58 @@ function _beginBreakRecovery(fill, track) {
     _triggerRecoverFastFill();
 }
 
-function _updateBreakState(breakPct, stage, fill, track) {
+function _beginTimedRecovery(fill, track, durationS) {
+    if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
+    _breakState = 'recovering';
+    _recoverTimedDurationMs = Math.max(1000, durationS * 1000);
+    fill.classList.add('recovering');
+    track.classList.add('recovering');
+    _triggerBreakRecovery('recovering');
+    _cancelRecoverInterpolation();
+    _recoverFill = fill;
+    _recoverStartTs = Date.now();
+    _recoverStartPct = 0;
+    _recoverCurrentPct = 0;
+    _recoverInterpolating = true;
+    _recoverPhase = 'timed';
+    _recoverRafId = requestAnimationFrame(_recoverFrame);
+}
+
+function _updateBreakState(breakPct, stage, fill, track, stopTicking) {
+    var tickingEntered = (!_lastStopBreakingTicking && stopTicking);
+
     switch (_breakState) {
     case 'normal':
-        // Enter broken when the boss transitions into the Breaking stage.
-        if (stage === 0 && _lastBreakingStage !== 0) {
+        if (tickingEntered) {
+            _enterBroken(fill, track);
+            if (_breakRecoveryTime > 0) {
+                _beginTimedRecovery(fill, track, _breakRecoveryTime);
+            }
+        } else if (stage === 0 && _lastBreakingStage !== 0) {
             _enterBroken(fill, track);
         }
         break;
 
     case 'broken':
-        // Leave broken the moment the break signal clears (stage back to 1/-1).
-        if (stage !== 0) {
+        if (tickingEntered && _breakRecoveryTime > 0) {
+            _beginTimedRecovery(fill, track, _breakRecoveryTime);
+        } else if (stage !== 0) {
             _beginBreakRecovery(fill, track);
         } else if ((Date.now() - _breakEnteredTs) > BREAK_STUCK_FAILSAFE_MS) {
-            // Anti-stuck failsafe (not a data heuristic): break signal went silent.
             _beginBreakRecovery(fill, track);
         }
         break;
 
     case 'recovering':
-        // Re-break during the recovery animation: stage dropped back to 0.
-        if (stage === 0 && _lastBreakingStage !== 0) {
+        if (stage === 0 && _lastBreakingStage !== 0 && !stopTicking) {
             _cancelRecoverInterpolation();
             fill.classList.remove('recovering', 'fast-filling');
             track.classList.remove('broken', 'recovering');
             _enterBroken(fill, track);
         }
-        // (fill-animation completion → _enterRefilled handled by the interpolation RAF)
         break;
 
     case 'refilled':
-        // Handled by timer in _enterRefilled — no action needed
         break;
     }
 }

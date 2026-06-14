@@ -172,12 +172,11 @@ def boss_state_from_monster_update(monster_data: Optional[Dict[str, Any]]) -> Di
 def mem_boss_break_override(bridge: Any):
     """Resolve the MEM boss-break override for the boss-HP feeders.
 
-    Returns ``(breaking_stage, has_break_data, extinction_pct)`` when MEM currently
-    owns the boss break signal (hybrid/auto/memory + correct base acquired) AND has a
-    live boss, else ``None``. Callers keep TCP shield untouched — shield is never
-    sourced from MEM. A ``None`` result means "leave the existing TCP break fields as-is"
-    (this is the case in TCP mode, before base acquisition, or with no live MEM boss),
-    so wiring this in is a no-op until MEM is authoritative.
+    Returns ``(breaking_stage, has_break_data, extinction_pct, stop_breaking_ticking)``
+    when MEM currently owns the boss break signal (hybrid/auto/memory + correct base
+    acquired) AND has a live boss, else ``None``. Callers keep TCP shield untouched —
+    shield is never sourced from MEM. A ``None`` result means "leave the existing TCP
+    break fields as-is" (TCP mode, before base acquisition, or no live MEM boss).
     """
     if not bridge:
         return None
@@ -193,6 +192,7 @@ def mem_boss_break_override(bridge: Any):
         _safe_int(mb.get('breaking_stage'), -1),
         bool(mb.get('has_break_data', False)),
         max(0.0, min(1.0, _safe_float(mb.get('extinction_pct'), 0.0))),
+        bool(mb.get('stop_breaking_ticking', False)),
     )
 
 
