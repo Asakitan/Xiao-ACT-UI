@@ -25,14 +25,14 @@ SP_XS, SP_SM, SP_MD, SP_LG, SP_XL = 4, 8, 12, 16, 24
 PAD_X = SP_MD
 PAD_Y = SP_SM
 
-FONT_SMALL = ('Segoe UI', 8)
-FONT_META = ('Segoe UI', 8)
-FONT_BODY = ('Segoe UI', 9)
-FONT_BODY_BOLD = ('Segoe UI', 9, 'bold')
-FONT_VALUE = ('Segoe UI', 18, 'bold')       # 指标卡数值（醒目，原 13 太弱）
-FONT_VALUE_SM = ('Segoe UI', 11, 'bold')    # 行内数值
-FONT_TITLE = ('Segoe UI', 10, 'bold')
-FONT_CARET = ('Segoe UI', 9)
+FONT_SMALL = get_cjk_font(8)
+FONT_META = get_cjk_font(8)
+FONT_BODY = get_cjk_font(9)
+FONT_BODY_BOLD = get_cjk_font(9, True)
+FONT_VALUE = get_sao_font(18, True)       # 指标卡数值（醒目，原 13 太弱）
+FONT_VALUE_SM = get_sao_font(11, True)    # 行内数值
+FONT_TITLE = get_cjk_font(10, True)
+FONT_CARET = get_sao_font(9)
 
 
 def _pc(key: str, fallback: str = '') -> str:
@@ -131,7 +131,8 @@ _TOPIC_CN = {
     "encounter_started": "战斗开始", "encounter_reset": "战斗重置",
 }
 _SOURCE_CN = {
-    "tcp": "封包", "packet": "封包", "entity": "实体", "mem": "内存", "memory": "内存", "history": "历史",
+    "tcp": "封包", "packet": "封包", "entity": "实体", "mem": "内存", "memory": "内存",
+    "live": "实时", "hybrid": "混合", "history": "历史",
     "replay": "回放", "ui": "界面", "offline_import": "离线导入", "plugin": "插件",
     "unknown": "未知",
 }

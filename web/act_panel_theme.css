@@ -1,6 +1,60 @@
 /* Shared SAO light/dark chrome for standalone ACT WebView panels. */
+@font-face {
+    font-family: 'sao';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'SAOUI';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'saoLatin';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+}
+
+@font-face {
+    font-family: 'yuanJWD';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'yuanJWDCJK';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+@font-face {
+    font-family: 'ZHUZHIYUAN';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
 :root {
     color-scheme: light;
+    --font-sao: 'SAOUI', 'saoLatin', 'sao', 'Segoe UI', sans-serif;
+    --font-cjk: 'ZHUZHIYUAN', 'yuanJWDCJK', 'yuanJWD', 'Microsoft YaHei UI', sans-serif;
+    --font-ui: 'SAOUI', 'saoLatin', 'sao', 'ZHUZHIYUAN', 'yuanJWDCJK', 'yuanJWD', 'Microsoft YaHei UI', sans-serif;
     --act-viewport-bg: rgb(248, 248, 248);
     --act-shell-bg: rgba(248, 248, 248, 0.88);
     --act-shell-bg-2: rgba(236, 236, 235, 0.86);
@@ -62,7 +116,7 @@ html,
 body {
     background: var(--act-viewport-bg) !important;
     color: var(--act-text) !important;
-    font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif !important;
+    font-family: var(--font-ui) !important;
 }
 
 body {
@@ -307,7 +361,10 @@ small {
 .empty,
 pre,
 .log-box,
-.error-box {
+.error-box,
+.aca-raw,
+.ms-res {
+    font-family: var(--font-ui) !important;
     max-width: 100% !important;
     min-width: 0 !important;
     overflow-wrap: anywhere !important;
@@ -328,6 +385,7 @@ button,
 input,
 select,
 .action-btn {
+    font-family: var(--font-ui) !important;
     max-width: 100% !important;
     min-width: 0 !important;
     border: 1px solid rgba(182, 186, 192, 0.58) !important;

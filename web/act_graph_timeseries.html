@@ -247,7 +247,7 @@
       const barW = Math.max(3, Math.min(16, Math.floor(slot * 0.84)));
       const maxH = Math.min(46, Math.max(4, plot.base - plot.top - 48));
       ctx.fillStyle = color;
-      ctx.font = '12px Microsoft YaHei, sans-serif';
+      ctx.font = '12px SAOUI, saoLatin, sao, ZHUZHIYUAN, yuanJWDCJK, yuanJWD, sans-serif';
       ctx.fillText(lane.title, plot.l + 4, plot.top + 14);
       ctx.strokeStyle = cssVar('--act-edge-soft', 'rgba(72,239,255,0.18)');
       ctx.lineWidth = 1;
@@ -258,7 +258,7 @@
         ctx.fillRect(x, plot.base - height, barW, height);
       });
       ctx.fillStyle = cssVar('--act-muted', 'rgba(223,250,255,0.55)');
-      ctx.font = '11px Microsoft YaHei, sans-serif';
+      ctx.font = '11px SAOUI, saoLatin, sao, ZHUZHIYUAN, yuanJWDCJK, yuanJWD, sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText(fmt(maxV), w - 26, plot.top + 14);
       ctx.textAlign = 'left';
@@ -288,7 +288,7 @@
       if (!lanes.length && fallback.length) lanes.push({ id: metric, title: metricLabel(metrics, metric, metric), points: fallback });
       if (!lanes.length) {
         ctx.fillStyle = muted;
-        ctx.font = '14px Microsoft YaHei, sans-serif';
+        ctx.font = '14px SAOUI, saoLatin, sao, ZHUZHIYUAN, yuanJWDCJK, yuanJWD, sans-serif';
         ctx.fillText('No timeseries data', 48, h / 2);
         return;
       }

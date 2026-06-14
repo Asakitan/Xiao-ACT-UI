@@ -492,11 +492,22 @@ def _font_available(name):
         return False
 
 
+def _tk_font_query_ready():
+    """Return whether tkinter can enumerate font families right now."""
+    try:
+        return tk._default_root is not None
+    except Exception:
+        return False
+
+
 def get_sao_font(size: int = 12, bold: bool = False):
     """获取 SAO 字体族名 (回退到 Segoe UI)"""
     load_sao_fonts()
-    family = 'SAO UI' if _font_available('SAO UI') else (
-             'SAOUI' if _font_available('SAOUI') else 'Segoe UI')
+    if not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'SAOUI.ttf')):
+        family = 'SAO UI'
+    else:
+        family = 'SAO UI' if _font_available('SAO UI') else (
+                 'SAOUI' if _font_available('SAOUI') else 'Segoe UI')
     weight = 'bold' if bold else ''
     return (family, size, weight) if weight else (family, size)
 
@@ -504,11 +515,14 @@ def get_sao_font(size: int = 12, bold: bool = False):
 def get_cjk_font(size: int = 10, bold: bool = False):
     """获取中文圆体字体 (回退到 Microsoft YaHei UI)"""
     load_sao_fonts()
-    for name in ['方正FW筑紫A圆 简 D', 'ZhuZiAYuanJWD', 'Microsoft YaHei UI']:
-        if _font_available(name):
-            family = name
-            break
+    if not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'ZhuZiAYuanJWD.ttf')):
+        family = '方正FW筑紫A圆 简 D'
     else:
-        family = 'Microsoft YaHei UI'
+        for name in ['方正FW筑紫A圆 简 D', 'ZhuZiAYuanJWD', 'Microsoft YaHei UI']:
+            if _font_available(name):
+                family = name
+                break
+        else:
+            family = 'Microsoft YaHei UI'
     weight = 'bold' if bold else ''
     return (family, size, weight) if weight else (family, size)
