@@ -56,6 +56,28 @@ from gui_modules.sao_panel_ui import (
 )
 
 
+# ── Category derivation for plugin cards (webref shows short lowercase tags) ──
+_CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str, str]] = [
+    # (id substrings, label, badge kind)
+    (('overlay', 'dps', 'reaction', 'boss', 'combat', 'battle', 'resolver'), 'core', 'cyan'),
+    (('mem', 'memory', 'bridge', 'lrp'), 'mem', 'gold'),
+    (('net', 'upload', 'log', 'damage_uploader', 'resonance'), 'net', 'cyan'),
+    (('key', 'input', 'macro', 'hotkey'), 'input', 'gold'),
+    (('vision', 'ocr', 'infer', 'beta'), 'beta', 'cyan'),
+    (('midi', 'piano', 'music'), 'music', 'gold'),
+]
+
+
+def _plugin_category(plugin_id: str, plugin: Mapping[str, Any]) -> tuple[str, str]:
+    """Derive a short category label + badge kind from plugin id/capabilities."""
+    pid = plugin_id.lower()
+    for keywords, label, kind in _CATEGORY_KEYWORDS:
+        for kw in keywords:
+            if kw in pid:
+                return label, kind
+    return 'plugin', 'cyan'
+
+
 def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
     try:
         num = float(default if value is None or value == '' else value)
@@ -300,7 +322,8 @@ class PluginManagerPanel:
         active = _finite_int(status.get('active_count'), 0, lo=0)
         enabled_count = sum(1 for p in plugins if p.get('enabled'))
         disabled_count = total - enabled_count
-        self._summary_var.set(f'{active} / {total} ACTIVE')
+        # Webref shows the count only in the badge pill — no separate text label
+        self._summary_var.set(f'{enabled_count} 已启用 · {disabled_count} 已停用')
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
 
@@ -311,7 +334,7 @@ class PluginManagerPanel:
                 if isinstance(child, tk.Canvas) and not isinstance(child, tk.Entry):
                     child.destroy()
                     break
-            b = status_badge(badge_parent, f'{active}/{total}', kind='gold')
+            b = status_badge(badge_parent, f'{enabled_count}/{total}', kind='gold')
             b.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         # ── Update tag pills row ──
@@ -407,24 +430,17 @@ class PluginManagerPanel:
         bottom = tk.Frame(inner, bg=card_bg)
         bottom.pack(fill='x', pady=(SP_XS, 0))
 
-        # Category pill
-        category = 'PLUGIN'
-        if plugin.get('declares_panel'):
-            category = '面板'
-        if pinned:
-            category = '★ PINNED'
-        status_badge(bottom, category, kind='cyan').pack(side='left', padx=(0, SP_XS))
+        # Category pill — derive short label from plugin id keywords (webref
+        # shows lowercase tags like core/input/mem/net/beta).
+        category, cat_kind = _plugin_category(plugin_id, plugin)
+        status_badge(bottom, category, kind=cat_kind).pack(side='left', padx=(0, SP_XS))
 
-        # ON/OFF badge
+        # ON/OFF badge — webref: ON is cyan, OFF is gold (muted)
         state_text = 'ON' if enabled else 'OFF'
-        state_kind = 'ok' if active else ('gold' if enabled else 'danger')
+        state_kind = 'cyan' if enabled else 'gold'
         status_badge(bottom, state_text, kind=state_kind).pack(side='left', padx=(0, SP_XS))
 
-        # LOADED badge (web parity: distinguish enabled-but-load-failed from loaded-not-active)
-        if plugin.get('loaded'):
-            status_badge(bottom, 'LOADED', kind='ok').pack(side='left', padx=(0, SP_XS))
-
-        # Failure badges
+        # Failure badges (only when errors present)
         failures = _finite_int(plugin.get('failures'), 0, lo=0)
         event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)
         if failures > 0:
@@ -432,7 +448,7 @@ class PluginManagerPanel:
         if event_failures > 0:
             status_badge(bottom, f'EVT {event_failures}', kind='danger').pack(side='left', padx=(0, SP_XS))
 
-        # Reload button (right side)
+        # Reload button (right side) + 更多 dropdown
         dropdown_button(bottom, '更多', [
             ('启用 Enable', lambda pid=plugin_id: self._enable(pid)) if not enabled else
             ('禁用 Disable', lambda pid=plugin_id: self._disable(pid)),
@@ -446,6 +462,14 @@ class PluginManagerPanel:
 
         action_button(bottom, '重载', lambda pid=plugin_id: self._reload(pid),
                       kind='cyan').pack(side='right', padx=(0, SP_XS))
+
+        # ── Disabled banner (webref: "已停用" strip below buttons) ──
+        if not enabled:
+            tk.Label(inner, text='已停用',
+                     bg=_pc('danger_soft', '#33161f'),
+                     fg=_pc('danger', '#ff707a'),
+                     anchor='w', font=get_cjk_font(9),
+                     padx=6, pady=3).pack(fill='x', pady=(SP_XS, 0))
 
         # ── Error box ──
         error = str(plugin.get('last_error') or '').strip()

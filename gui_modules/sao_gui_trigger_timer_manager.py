@@ -19,7 +19,7 @@ from gui_modules.sao_panel_components import (
     SP_SM, SP_MD, SP_XL,
     _pc, _accent, _accent_text,
     action_button, keep_canvas_scroll, rounded_panel,
-    sao_scrollbar, section_card, status_badge,
+    sao_entry, sao_scrollbar, section_card, status_badge,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
@@ -192,7 +192,29 @@ class TriggerTimerManagerPanel:
         active_count = sum(1 for r in rules if r.get('enabled'))
         for child in list(self._badge_frame.winfo_children()):
             child.destroy()
-        status_badge(self._badge_frame, f'{active_count} ACTIVE', kind='cyan').pack(side='left')
+        status_badge(self._badge_frame, f'{active_count} ACTIVE', kind='cyan').pack(side='left', padx=(0, SP_SM))
+        if not hasattr(self, '_search_var'):
+            self._search_var = tk.StringVar(value='')
+        _placeholder = '搜索触发器'
+        search = sao_entry(self._badge_frame, textvariable=self._search_var, width=16)
+        search.pack(side='left', padx=(0, 4))
+        try:
+            is_empty = not self._search_var.get().strip()
+            if is_empty:
+                self._search_var.set(_placeholder)
+            search.configure(fg=_pc('label_fg' if is_empty else 'value_fg', _SAO_PANEL_LABEL_FG if is_empty else _SAO_PANEL_VALUE_FG))
+            def _on_focus_in(_e: Any, _ph: str = _placeholder) -> None:
+                if self._search_var.get() == _ph:
+                    self._search_var.set('')
+                    search.configure(fg=_pc('value_fg', _SAO_PANEL_VALUE_FG))
+            def _on_focus_out(_e: Any, _ph: str = _placeholder) -> None:
+                if not self._search_var.get().strip():
+                    self._search_var.set(_ph)
+                    search.configure(fg=_pc('label_fg', _SAO_PANEL_LABEL_FG))
+            search.bind('<FocusIn>', _on_focus_in)
+            search.bind('<FocusOut>', _on_focus_out)
+        except Exception:
+            pass
         if self._list is None:
             return
         render_sig = self._render_signature(status)
@@ -202,7 +224,7 @@ class TriggerTimerManagerPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
         for child in list(self._list.winfo_children()):
             child.destroy()
-        box = section_card(self._list, '触发器 Triggers', badge=str(len(rules)), accent='gold')
+        box = section_card(self._list, '▼ 触发器 Triggers', badge=str(len(rules)), accent='gold')
         box.pack(fill='x', pady=SP_SM)
         if not rules:
             bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
@@ -241,6 +263,36 @@ class TriggerTimerManagerPanel:
 
     _TIMER_COLORS = ['#ef684e', '#3bb4e5', '#5cc46a', '#e5b43b']
 
+    @staticmethod
+    def _timer_countdown(item: Mapping[str, Any]) -> str:
+        """Format a timer item's remaining/duration as MM:SS countdown text."""
+        import time as _time
+        dur = _finite_float(item.get('duration_s') or item.get('threshold'), 0.0, lo=0.0)
+        created = _finite_float(item.get('created_at'), 0.0, lo=0.0)
+        if dur > 0 and created > 0:
+            elapsed = max(0.0, _time.time() - created)
+            remaining = max(0.0, dur - elapsed)
+        elif dur > 0:
+            remaining = dur
+        else:
+            remaining = 0.0
+        mins = int(remaining) // 60
+        secs = int(remaining) % 60
+        return f'{mins:02d}:{secs:02d}'
+
+    @staticmethod
+    def _timer_ratio(item: Mapping[str, Any]) -> float:
+        """Compute progress ratio (0..1) for a timer bar."""
+        import time as _time
+        dur = _finite_float(item.get('duration_s') or item.get('threshold'), 0.0, lo=0.0)
+        if dur <= 0:
+            return 0.0
+        created = _finite_float(item.get('created_at'), 0.0, lo=0.0)
+        if created > 0:
+            elapsed = max(0.0, _time.time() - created)
+            return max(0.0, min(1.0, (dur - elapsed) / dur))
+        return 0.5
+
     def _render_timers(self, status: Mapping[str, Any]) -> None:
         bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
         tk.Label(self._right, text='ACTIVE TIMERS 计时', bg=bg,
@@ -250,7 +302,7 @@ class TriggerTimerManagerPanel:
         items = timers + [r for r in recent if r.get('rule_id') not in {t.get('id') for t in timers}]
         for i, item in enumerate(items[:4]):
             label = str(item.get('label') or item.get('rule_id') or item.get('id') or '').strip()
-            msg = str(item.get('message') or '').strip()
+            countdown = self._timer_countdown(item)
             color = self._TIMER_COLORS[i % len(self._TIMER_COLORS)]
             bar_frame = tk.Frame(self._right, bg=bg)
             bar_frame.pack(fill='x', pady=SP_SM)
@@ -258,11 +310,10 @@ class TriggerTimerManagerPanel:
             top.pack(fill='x')
             tk.Label(top, text=label, bg=bg, fg=_pc('value_fg', _SAO_PANEL_VALUE_FG),
                      font=get_cjk_font(9, True), anchor='w').pack(side='left')
-            if msg:
-                tk.Label(top, text=msg, bg=bg, fg=color, font=get_cjk_font(9, True), anchor='e').pack(side='right')
+            tk.Label(top, text=countdown, bg=bg, fg=color, font=get_cjk_font(9, True), anchor='e').pack(side='right')
             bar = tk.Canvas(bar_frame, bg=bg, height=6, highlightthickness=0, bd=0)
             bar.pack(fill='x', pady=(2, 0))
-            ratio = 0.6 if i == 0 else (0.15 if i == 1 else 0.05)
+            ratio = self._timer_ratio(item)
             bar.bind('<Configure>', lambda e, c=bar, r=ratio, col=color: (
                 c.delete('all'),
                 c.create_rectangle(0, 0, max(1, int(e.width * r)), 6, fill=col, outline=''),

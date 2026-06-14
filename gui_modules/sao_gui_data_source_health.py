@@ -214,6 +214,12 @@ class DataSourceHealthPanel:
         last_event_ms = _finite_int(status.get('last_event_ms'), 0, lo=0)
         encounter = str(summary.get('encounter') or '--')
 
+        # Legacy summary line for headless / test callers
+        self._status_var.set(f'source={source_label} latency={latency_ms}ms last_event={last_event_ms}ms')
+
+        if not hasattr(self, '_badge_frame'):
+            return
+
         for child in list(self._badge_frame.winfo_children()):
             child.destroy()
         status_badge(self._badge_frame, source_label, kind='cyan').pack(side='left')
@@ -262,7 +268,8 @@ class DataSourceHealthPanel:
             source = sources[key]
             active = bool(source.get('running') or source.get('alive') or source.get('active'))
             error = str(source.get('error_msg') or source.get('last_error') or '').strip()
-            if error:
+            degraded = bool(error) or (key == 'vision' and _finite_int(source.get('missed'), 0, lo=0) > 0)
+            if degraded:
                 badge_text, badge_kind = 'DEGRADED', 'gold'
             else:
                 badge_text, badge_kind = self._SOURCE_STATUS.get(active, ('OFFLINE', 'danger'))
@@ -303,9 +310,54 @@ class DataSourceHealthPanel:
         bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
         box = section_card(self._list, '快照 Snapshot', accent='cyan')
         box.pack(fill='x', padx=SP_MD, pady=SP_SM)
-        snapshot_text = json.dumps(status, ensure_ascii=False, indent=2, default=str)
+        snapshot_text = json.dumps(self._condensed_snapshot(status), ensure_ascii=False, indent=2, default=str)
         tk.Label(box, text=snapshot_text, bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG),
                  font=('Consolas', 8), anchor='nw', justify='left', wraplength=700).pack(fill='x', padx=SP_SM, pady=SP_SM)
+
+    @staticmethod
+    def _condensed_snapshot(status: Mapping[str, Any]) -> dict:
+        """Build a compact summary matching the webref snapshot format."""
+        sources = status.get('sources') or {}
+        summary = sources.get('summary') or {}
+        packet = sources.get('packet') or {}
+        memory = sources.get('memory') or {}
+        vision = sources.get('vision') or {}
+        out: dict[str, Any] = {
+            'data_source': summary.get('data_source') or status.get('requested_mode') or '--',
+        }
+        if packet:
+            tcp: dict[str, Any] = {}
+            if packet.get('hz') is not None:
+                try:
+                    tcp['hz'] = round(float(packet['hz']), 1)
+                except (ValueError, TypeError):
+                    pass
+            tcp['drops'] = _finite_int(packet.get('dropped'), 0, lo=0)
+            out['tcp'] = tcp
+        if memory:
+            mem: dict[str, Any] = {}
+            mode = str(memory.get('mode') or '').strip()
+            if mode:
+                mem['mode'] = mode
+            if memory.get('gated') is not None:
+                mem['gated'] = bool(memory.get('gated'))
+            out['memory'] = mem
+        if vision:
+            vis: dict[str, Any] = {}
+            vmode = str(vision.get('mode') or '').strip()
+            if vmode:
+                vis['mode'] = vmode
+            if vision.get('missed') is not None:
+                vis['missed'] = _finite_int(vision.get('missed'), 0, lo=0)
+            out['vision'] = vis
+        out['latency_ms'] = _finite_int(status.get('latency_ms'), 0, lo=0)
+        encounter = str(summary.get('encounter') or '').strip()
+        if encounter:
+            out['encounter'] = encounter
+        events = status.get('events_emitted')
+        if events is not None:
+            out['events_emitted'] = _finite_int(events, 0, lo=0)
+        return out
 
     def _reset_render_cache(self) -> None:
         self._last_sources_sig = ""
@@ -314,7 +366,7 @@ class DataSourceHealthPanel:
     @staticmethod
     def _sources_signature(sources: Mapping[str, Any]) -> str:
         compact = {}
-        for key in ('packet', 'memory', 'summary'):
+        for key in ('packet', 'memory', 'vision', 'summary'):
             source = sources.get(key) if isinstance(sources, Mapping) else None
             if not isinstance(source, Mapping):
                 continue
@@ -348,25 +400,38 @@ class DataSourceHealthPanel:
     def _source_subtitle(key: str, source: Mapping[str, Any]) -> str:
         parts: list[str] = []
         if key == 'packet':
-            packets = _finite_int(source.get('packets'), 0, lo=0)
-            dropped = _finite_int(source.get('dropped'), 0, lo=0)
+            # Prefer driver/backend label (e.g. "Npcap"); fall back to mode
+            driver = str(source.get('driver') or source.get('backend') or '').strip()
             mode = str(source.get('mode') or '').strip()
-            if mode:
+            if driver:
+                parts.append(driver)
+            elif mode:
                 parts.append(mode.capitalize())
-            if packets:
-                parts.append(f'{packets} 封包')
-            if dropped:
-                parts.append(f'{dropped} 丢包')
-            elif packets:
-                parts.append('0 丢包')
+            # Prefer Hz rate over raw packet count
+            hz = source.get('hz')
+            if hz is not None:
+                try:
+                    hz_val = float(hz)
+                    parts.append(f'{hz_val:g} Hz')
+                except (ValueError, TypeError):
+                    pass
+            dropped = _finite_int(source.get('dropped'), 0, lo=0)
+            parts.append(f'{dropped} 丢包')
         elif key == 'memory':
-            mode = str(source.get('mode') or '').strip()
-            if mode:
-                parts.append(f'IL2CPP · {mode}')
-            if source.get('active'):
+            # Show data_source / requested_mode (e.g. "hybrid") not raw mode
+            ds = str(source.get('data_source') or source.get('requested_mode') or '').strip()
+            parts.append('IL2CPP')
+            if ds:
+                parts.append(ds)
+            if source.get('gated') or source.get('active'):
                 parts.append('已授权 · 只读')
         elif key == 'vision':
             mode = str(source.get('mode') or '').strip()
+            missed = source.get('missed')
             if mode:
-                parts.append(f'识图推断 · {mode}')
+                parts.append('识图推断')
+            if missed is not None:
+                parts.append(f'{_finite_int(missed, 0, lo=0)} 帧未命中')
+            elif mode:
+                parts.append(mode)
         return ' · '.join(parts) if parts else ''

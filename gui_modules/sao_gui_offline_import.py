@@ -20,7 +20,6 @@ from gui_modules.sao_panel_components import (
     _pc,
     action_button,
     keep_canvas_scroll,
-    metric_tile,
     sao_entry,
     sao_scrollbar,
     section_card,
@@ -323,50 +322,63 @@ class OfflineImportPanel:
         card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
         label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
         value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+        gold_fg = _pc('gold', _SAO_PANEL_GOLD)
 
         preview = last.get('preview') if isinstance(last.get('preview'), Mapping) else {}
-        report_obj = last.get('report') if isinstance(last.get('report'), Mapping) else {}
-        encounter_id = preview.get('encounter_id') or report_obj.get('encounter_id') or ''
         event_count = _finite_int(last.get('event_count'), 0, lo=0)
+        top_rows = list(preview.get('top_rows') or [])[:4]
 
-        # ── metric tiles row ──
-        tile_row = tk.Frame(self._rows, bg=_pc('body_bg', _SAO_PANEL_BODY_BG))
-        tile_row.pack(fill='x', pady=(0, SP_SM))
-        for col, (lbl, val, acc) in enumerate((
-            ('ENCOUNTER', encounter_id or '--', 'gold'),
-            ('FORMAT', str(last.get('format') or '--').upper(), 'cyan'),
-            ('EVENTS', f'{event_count:,}' if event_count else '0', 'gold'),
-            ('PERSISTED', 'YES' if last.get('persisted') else 'NO',
-             'ok' if last.get('persisted') else 'danger'),
-        )):
-            tile_row.columnconfigure(col, weight=1)
-            metric_tile(tile_row, lbl, val, accent=acc).grid(
-                row=0, column=col, sticky='nsew', padx=(0 if col == 0 else SP_SM, 0))
-
-        # ── preview table section ──
+        # ── preview table section (webref: columnar table with gold headers) ──
         sec = section_card(self._rows, 'PREVIEW · 前 4 行',
                            subtitle=str(last.get('importer') or ''),
                            badge=f'{event_count} events' if event_count else '',
                            accent='cyan')
         sec.pack(fill='x', pady=(0, SP_SM))
 
-        values = (
-            ('Encounter', encounter_id),
-            ('Format', last.get('format') or '--'),
-            ('Importer', last.get('importer') or '--'),
-            ('Events', event_count),
-            ('Persisted', 'YES' if last.get('persisted') else 'NO'),
+        # Column definitions: (header, key, width_weight, formatter)
+        _COLUMNS = (
+            ('time_ms', 'rank', 1, str),
+            ('topic', '_topic', 1, str),
+            ('actor', 'name', 2, str),
+            ('target', '_target', 2, str),
+            ('value', 'damage', 1, lambda v: f'{_finite_int(v, 0):,}' if v else '0'),
         )
-        for idx, (label, value) in enumerate(values):
-            row_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else card_bg
+
+        # ── header row ──
+        hdr_frame = tk.Frame(sec, bg=card_bg)
+        hdr_frame.pack(fill='x')
+        for col_idx, (header, _key, weight, _fmt) in enumerate(_COLUMNS):
+            hdr_frame.columnconfigure(col_idx, weight=weight)
+            tk.Label(hdr_frame, text=header, bg=card_bg, fg=gold_fg,
+                     font=get_cjk_font(9, True), anchor='w').grid(
+                row=0, column=col_idx, sticky='ew',
+                padx=(SP_SM if col_idx == 0 else SP_SM, SP_SM), pady=(4, 2))
+
+        # ── data rows ──
+        for row_idx, row_data in enumerate(top_rows):
+            if not isinstance(row_data, Mapping):
+                continue
+            row_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if row_idx % 2 else card_bg
             row_frame = tk.Frame(sec, bg=row_bg)
             row_frame.pack(fill='x')
-            tk.Label(row_frame, text=str(label), bg=row_bg, fg=label_fg,
-                     font=get_cjk_font(9), anchor='w', width=12).pack(
-                side='left', padx=(SP_SM, SP_SM), pady=2)
-            tk.Label(row_frame, text=str(value), bg=row_bg, fg=value_fg,
-                     font=get_cjk_font(9), anchor='w').pack(
-                side='left', fill='x', expand=True, padx=(0, SP_SM), pady=2)
+            # Derive topic from row data (damage vs heal)
+            dmg = _finite_int(row_data.get('damage'), 0)
+            heal = _finite_int(row_data.get('heal'), 0)
+            topic = 'heal' if heal > dmg else 'damage'
+            enriched = dict(row_data)
+            enriched['_topic'] = topic
+            enriched['_target'] = '—'
+            for col_idx, (_header, key, weight, fmt) in enumerate(_COLUMNS):
+                row_frame.columnconfigure(col_idx, weight=weight)
+                cell_val = enriched.get(key, '—')
+                try:
+                    display = fmt(cell_val) if cell_val is not None else '—'
+                except Exception:
+                    display = str(cell_val)
+                tk.Label(row_frame, text=display, bg=row_bg, fg=value_fg,
+                         font=get_cjk_font(9), anchor='w').grid(
+                    row=0, column=col_idx, sticky='ew',
+                    padx=(SP_SM if col_idx == 0 else SP_SM, SP_SM), pady=3)
 
     def _render_history(self, encounters: list[Any]) -> None:
         if self._rows is None:

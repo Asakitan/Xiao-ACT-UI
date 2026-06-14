@@ -278,8 +278,8 @@ class CombatantDrilldownPanel:
         if hasattr(self, '_badge_frame_cd'):
             for child in list(self._badge_frame_cd.winfo_children()):
                 child.destroy()
-            badge_text = 'OK' if status.get('ok', True) and not list(status.get('errors') or []) else 'ERROR'
-            badge_kind = 'ok' if badge_text == 'OK' else 'danger'
+            badge_text = 'READY' if status.get('ok', True) and not list(status.get('errors') or []) else 'ERROR'
+            badge_kind = 'ok' if badge_text == 'READY' else 'danger'
             status_badge(self._badge_frame_cd, badge_text, kind=badge_kind).pack(side='left')
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         skills = _mapping_items(status.get('skills'))
@@ -288,8 +288,13 @@ class CombatantDrilldownPanel:
         if cid and self._combatant_var.get() != cid:
             self._combatant_var.set(cid)
         name = summary.get('name') or cid or '--'
+        profession = str(summary.get('profession') or '')
         uid_display = cid or '--'
-        self._summary_var.set(f"呫 {name} · UID {uid_display}")
+        identity_parts = [name]
+        if profession:
+            identity_parts.append(profession)
+        identity_parts.append(f"UID {uid_display}")
+        self._summary_var.set(" · ".join(identity_parts))
         self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={_list_count(status.get('errors'))}")
         if self._rows is None:
             return
@@ -306,7 +311,6 @@ class CombatantDrilldownPanel:
             return
         self._render_metrics(summary)
         self._render_skills(skills)
-        self._render_interactions(status)
 
     def _render_empty(self) -> None:
         if self._rows is None:
@@ -322,9 +326,9 @@ class CombatantDrilldownPanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('总伤害', self._fmt(summary.get('damage')), self._pct(summary.get('damage_pct')) + ' 占比', 'gold'),
-            ('DPS', self._fmt(summary.get('dps')), '/s', 'cyan'),
-            ('暴击率', self._pct(summary.get('crit_rate')), '', 'gold'),
+            ('总伤害', self._fmt(summary.get('damage')), '', 'gold'),
+            ('DPS', self._fmt(summary.get('dps')) + '/s', '', 'cyan'),
+            ('暴击率', self._pct_int(summary.get('crit_rate')), '', 'gold'),
             ('命中', f"{hits:,}" if hits else '0', '', 'cyan'),
         )
         cols = len(items)
@@ -333,20 +337,13 @@ class CombatantDrilldownPanel:
         for idx, (label, value, sub, accent) in enumerate(items):
             metric_tile(grid, label, value, sub=sub, accent=accent).grid(
                 row=0, column=idx, sticky='nsew', padx=3, pady=3)
-        # heal + share badges below metrics
-        heal_val = _finite_float(summary.get('heal'), 0.0, lo=0.0)
-        if heal_val > 0:
-            badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
-            badges.pack(fill='x', padx=4, pady=(0, 8))
-            status_badge(badges, f"治疗 {self._fmt(heal_val)}", kind='heal').pack(side='left', padx=(0, SP_SM))
-            status_badge(badges, f"占比 {self._pct(summary.get('damage_pct'))}", kind='gold').pack(side='left')
 
     def _render_skills(self, skills: list[Mapping[str, Any]]) -> None:
         """Render collapsible skill breakdown section using aggregate_row."""
         if self._rows is None:
             return
         box = section_card(self._rows,
-                           f'▼ 技能贡献 Skill breakdown ({len(skills)})',
+                           '▼ 技能贡献 Skill breakdown',
                            subtitle='',
                            badge=str(len(skills)),
                            accent='gold')
@@ -360,14 +357,13 @@ class CombatantDrilldownPanel:
         for idx, skill in enumerate(skills[:40]):
             amount = _finite_int(skill.get('amount'), 0, lo=0)
             hits = _finite_int(skill.get('hits'), 0, lo=0)
-            crit = self._pct(skill.get('crit_rate'))
-            kind = topic_cn(skill.get('kind'), default='伤害')
+            crit = self._pct_int(skill.get('crit_rate'))
             is_heal = skill.get('kind') == 'heal'
             accent = 'heal' if is_heal else 'gold'
             row = aggregate_row(
                 body,
                 title=str(skill.get('name') or '-'),
-                meta=f"{kind} · 暴击率 {crit} · 命中 {hits}",
+                meta=f"暴击率{crit}·命中 {hits}",
                 value=f"{self._fmt(amount)} · {hits}x",
                 ratio=amount / max_amount if max_amount else 0.0,
                 accent=accent,
@@ -457,7 +453,7 @@ class CombatantDrilldownPanel:
                 ).pack(fill='x', pady=1)
 
     def _render_sidebar(self, status: Mapping[str, Any]) -> None:
-        """Render the right sidebar with combatant cards."""
+        """Render the right sidebar with party member cards (name + class + damage)."""
         side = getattr(self, '_side', None)
         if side is None:
             return
@@ -467,33 +463,77 @@ class CombatantDrilldownPanel:
         pad.pack(fill='both', expand=True)
         tk.Label(pad, text='COMBATANTS 成员', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
-        # combatants from outgoing (players the drilldown target interacts with)
-        combatants = _mapping_items(status.get('outgoing'))
-        if not combatants:
-            combatants = _mapping_items(status.get('incoming'))
-        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
-        if summary:
-            # show the current combatant as the first highlighted card
-            self._sidebar_card(pad, summary.get('name') or '--', self._fmt(summary.get('damage')),
-                               highlight=True)
-        for item in combatants[:12]:
-            name = str(item.get('name') or item.get('topic') or '-')
-            raw_amt = item.get('amount') if item.get('amount') is not None else item.get('value')
-            self._sidebar_card(pad, name, self._fmt(raw_amt))
-        if not summary and not combatants:
-            tk.Label(pad, text='无成员数据', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                     font=get_cjk_font(9), anchor='w').pack(fill='x', pady=6)
+        # Gather party members from the DPS report (sorted by damage desc)
+        combatants = self._gather_party_members(status)
+        current_uid = str(status.get('combatant_id') or self._combatant_var.get() or '')
+        if combatants:
+            for member in combatants[:12]:
+                m_uid = str(member.get('uid') or member.get('id') or '')
+                m_name = str(member.get('name') or member.get('display_name') or '--')
+                m_prof = str(member.get('profession') or member.get('profession_name') or '')
+                m_dmg = self._fmt(member.get('damage') or member.get('damage_total') or 0)
+                highlight = bool(current_uid and m_uid == current_uid)
+                self._sidebar_card(pad, m_name, m_dmg, profession=m_prof, highlight=highlight)
+        else:
+            # Fallback: show just the current combatant if no party data
+            summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
+            if summary:
+                self._sidebar_card(pad, summary.get('name') or '--',
+                                   self._fmt(summary.get('damage')),
+                                   profession=str(summary.get('profession') or ''),
+                                   highlight=True)
+            else:
+                tk.Label(pad, text='无成员数据', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                         font=get_cjk_font(9), anchor='w').pack(fill='x', pady=6)
 
-    def _sidebar_card(self, parent: tk.Misc, name: str, value: str, *, highlight: bool = False) -> None:
-        """One player card in the sidebar: name + damage value."""
+    def _gather_party_members(self, status: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Collect party member list from the DPS tracker / report for sidebar display."""
+        members: list[dict[str, Any]] = []
+        try:
+            tracker = getattr(self.owner, '_dps_tracker', None)
+            get_last = getattr(tracker, 'get_last_report', None) if tracker else None
+            report = get_last() if callable(get_last) else None
+            if isinstance(report, Mapping):
+                for row in list(report.get('entities') or []):
+                    if isinstance(row, Mapping):
+                        members.append(dict(row))
+        except Exception:
+            pass
+        if not members:
+            # Fallback: try the DPS history store
+            try:
+                store = getattr(self.owner, '_dps_history_store', None)
+                latest = getattr(store, 'latest_report', None) if store else None
+                report = latest() if callable(latest) else None
+                if isinstance(report, Mapping):
+                    for row in list(report.get('entities') or []):
+                        if isinstance(row, Mapping):
+                            members.append(dict(row))
+            except Exception:
+                pass
+        # Sort by damage descending
+        members.sort(key=lambda m: int(m.get('damage') or m.get('damage_total') or 0), reverse=True)
+        return members
+
+    def _sidebar_card(self, parent: tk.Misc, name: str, value: str, *,
+                       profession: str = '', highlight: bool = False) -> None:
+        """One player card in the sidebar: name + class subtitle + right-aligned damage."""
         bg = _SAO_PANEL_HEADER_BG if highlight else _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=bg, highlightthickness=1,
                         highlightbackground=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_BORDER)
         card.pack(fill='x', pady=2)
-        tk.Label(card, text=str(name), bg=bg, fg=_SAO_PANEL_VALUE_FG,
-                 font=get_cjk_font(9, True), anchor='w').pack(fill='x', padx=8, pady=(5, 0))
-        tk.Label(card, text=str(value), bg=bg, fg=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(9), anchor='w').pack(fill='x', padx=8, pady=(1, 5))
+        # Top row: name (left) + damage value (right)
+        top = tk.Frame(card, bg=bg)
+        top.pack(fill='x', padx=8, pady=(5, 0))
+        tk.Label(top, text=str(name), bg=bg, fg=_SAO_PANEL_VALUE_FG,
+                 font=get_cjk_font(9, True), anchor='w').pack(side='left')
+        tk.Label(top, text=str(value), bg=bg,
+                 fg=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_LABEL_FG,
+                 font=get_sao_font(9), anchor='e').pack(side='right')
+        # Subtitle: profession / class
+        sub_text = str(profession) if profession else ''
+        tk.Label(card, text=sub_text, bg=bg, fg=_SAO_PANEL_LABEL_FG,
+                 font=get_cjk_font(8), anchor='w').pack(fill='x', padx=8, pady=(1, 5))
 
     @staticmethod
     def _fmt(value: Any) -> str:
@@ -507,6 +547,11 @@ class CombatantDrilldownPanel:
     @staticmethod
     def _pct(value: Any) -> str:
         return f"{_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100:.1f}%"
+
+    @staticmethod
+    def _pct_int(value: Any) -> str:
+        """Integer-format percentage (e.g. 38%) matching the webref tile style."""
+        return f"{int(round(_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100))}%"
 
     @staticmethod
     def _signature(status: Mapping[str, Any]) -> str:

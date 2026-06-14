@@ -296,6 +296,24 @@ class ActAggregatePanel:
         self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
+    @staticmethod
+    def _source_display(source_value: str) -> str:
+        """Translate source identifier to display label (parity with JS ActText.source)."""
+        return source_cn(source_value)
+
+    @staticmethod
+    def _source_mix_label(mix: list[Any]) -> str:
+        """Build a combined data-source label from source_mix list, e.g. 'TCP+内存'."""
+        names: list[str] = []
+        for item in (mix or []):
+            if isinstance(item, Mapping):
+                n = source_cn(item.get('source'))
+            else:
+                n = source_cn(item)
+            if n and n not in names:
+                names.append(n)
+        return '+'.join(names) if names else '未知'
+
     def _render_side(self, status: Mapping[str, Any]) -> None:
         side = getattr(self, '_side', None)
         if side is None:
@@ -306,35 +324,48 @@ class ActAggregatePanel:
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         errors = list(status.get('errors') or [])
         span_s = round(_finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0, 1)
+        mix = list(status.get('source_mix') or [])
+        event_count = _finite_int(counts.get('rows'), 0, lo=0)
         pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
         pad.pack(fill='both', expand=True)
         tk.Label(pad, text='OVERVIEW 概览', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
-        for key, val in (
-            ('当前战斗', overview.get('dungeon_name') or overview.get('mode') or 'live'),
-            ('数据源', status.get('source') or 'live'),
-            ('战斗时长', f"{self._fmt(span_s)} 秒"),
-            ('已持续', f"{self._fmt(overview.get('elapsed_s'))} 秒"),
-            ('事件数', _finite_int(counts.get('rows'), 0, lo=0)),
-            ('错误', len(errors)),
-        ):
+        # sidebar value: (label, display_text, badge_kind_or_None)
+        # badge_kind != None -> render as status_badge pill on the right (match webref)
+        side_rows: list[tuple[str, str, str | None]] = [
+            ('当前战斗', str(status.get('encounter_id') or 'live'), 'cyan'),
+            ('数据源', self._source_mix_label(mix), 'gold'),
+            ('战斗时长', f"{self._fmt(span_s)} 秒", None),
+            ('已持续', f"{self._fmt(overview.get('elapsed_s'))} 秒", None),
+            ('事件数', f"{event_count:,}", None),
+            ('错误', str(len(errors)), None),
+        ]
+        for key, val, badge_kind in side_rows:
             row = tk.Frame(pad, bg=_SAO_PANEL_BODY_BG)
             row.pack(fill='x', pady=2)
             tk.Label(row, text=str(key), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                      font=get_cjk_font(9), anchor='w').pack(side='left')
-            tk.Label(row, text=str(val), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
-                     font=get_sao_font(9), anchor='e').pack(side='right')
+            if badge_kind:
+                status_badge(row, str(val), kind=badge_kind).pack(side='right')
+            else:
+                tk.Label(row, text=str(val), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                         font=get_sao_font(9), anchor='e').pack(side='right')
         tk.Label(pad, text='SOURCE MIX 来源', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(14, 6))
-        mix = list(status.get('source_mix') or [])
         if mix:
             for src in mix:
                 if isinstance(src, Mapping):
-                    text = f"{source_cn(src.get('source'))}  {src.get('count') or 0}"
+                    label = source_cn(src.get('source'))
+                    count = _finite_int(src.get('count'), 0, lo=0)
+                    row = tk.Frame(pad, bg=_SAO_PANEL_BODY_BG)
+                    row.pack(fill='x', pady=2)
+                    tk.Label(row, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                             font=get_cjk_font(9), anchor='w').pack(side='left')
+                    status_badge(row, f"{count:,}", kind='cyan').pack(side='right')
                 else:
-                    text = source_cn(src)
-                tk.Label(pad, text=text, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
-                         font=get_cjk_font(9), anchor='w').pack(fill='x', pady=1)
+                    tk.Label(pad, text=source_cn(src), bg=_SAO_PANEL_BODY_BG,
+                             fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(9),
+                             anchor='w').pack(fill='x', pady=1)
         else:
             tk.Label(pad, text='No sources', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                      font=get_cjk_font(9), anchor='w').pack(fill='x')
@@ -401,7 +432,7 @@ class ActAggregatePanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('总伤害', self._fmt(overview.get('damage')), f"{_finite_int(counts.get('rows'), 0, lo=0)} 次事件", 'gold'),
+            ('总伤害', self._fmt(overview.get('damage')), f"{_finite_int(counts.get('rows'), 0, lo=0):,} 次事件", 'gold'),
             ('每秒伤害 DPS', self._fmt(overview.get('dps')), f"持续 {self._fmt(overview.get('elapsed_s'))} 秒", 'cyan'),
             ('治疗 / 每秒治疗', f"{self._fmt(overview.get('heal'))} / {self._fmt(overview.get('hps'))}", '辅助治疗', 'heal'),
             ('技能种类', _finite_int(counts.get('skills'), 0, lo=0), '种技能', 'gold'),
@@ -507,7 +538,7 @@ class ActAggregatePanel:
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
-        box = section_card(self._rows, '趋势预览', subtitle='', badge=str(graph.get('row_count') or 0))
+        box = section_card(self._rows, '趋势预览 / TREND', subtitle='', badge=str(graph.get('row_count') or 0))
         box.pack(fill='x', padx=4, pady=(9, 0))
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)

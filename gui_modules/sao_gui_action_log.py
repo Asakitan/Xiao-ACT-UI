@@ -34,6 +34,7 @@ from gui_modules.sao_panel_components import (
     sao_option_menu,
     sao_scrollbar,
     section_card,
+    source_cn,
     status_badge,
     topic_cn,
 )
@@ -56,6 +57,69 @@ from gui_modules.sao_panel_ui import (
     _sao_pill,
     _theme_color,
 )
+
+
+# ── Source dropdown display labels (internal value → UI label) ──
+_SRC_DISPLAY = {'live': 'LIVE EVENT BUS', 'history': 'HISTORY'}
+_SRC_INTERNAL = {v: k for k, v in _SRC_DISPLAY.items()}
+
+# ── Table source column display (raw source → short label matching webref) ──
+_TABLE_SOURCE: Dict[str, str] = {
+    'memory': '内存', 'mem': '内存',
+    'packet': 'TCP', 'tcp': 'TCP',
+    'act': 'ACT', 'entity': '实体',
+    'history': '历史', 'replay': '回放',
+    'plugin': '插件', 'ui': '界面',
+}
+
+# ── Topic text colors (matching webref row coloring) ──
+_TOPIC_FG: Dict[str, str] = {
+    'heal': '#5cc46a',
+    'boss': '#ef684e',
+    'boss_state': '#ef684e',
+    'boss_mechanic': '#ef684e',
+    'death': '#ef684e',
+    'trigger': '#68e4ff',
+    'system': '#68e4ff',
+}
+
+
+def _fmt_rel_ms(ms_value: Any) -> str:
+    """Relative milliseconds → MM:SS.mmm display (e.g. 4182 → '00:04.182')."""
+    try:
+        ms = max(0, int(ms_value or 0))
+    except Exception:
+        ms = 0
+    if ms <= 0:
+        return '--'
+    minutes = ms // 60000
+    seconds = (ms % 60000) // 1000
+    millis = ms % 1000
+    return f"{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+
+def _fmt_comma(value: Any) -> str:
+    """Format a numeric value with comma separators (e.g. 126000 → '126,000').
+
+    Returns '---' for None/empty, and formats floats to 2 decimal places.
+    """
+    if value is None or value == '':
+        return '---'
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    if not math.isfinite(number):
+        return '0'
+    if number == int(number):
+        return f"{int(number):,}"
+    return f"{number:,.2f}"
+
+
+def _table_source(value: Any) -> str:
+    """Source field → table display label (memory→内存, packet→TCP, etc.)."""
+    text = str(value or '').strip().lower()
+    return _TABLE_SOURCE.get(text, str(value or '---'))
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -361,18 +425,40 @@ class ActionLogPanel:
 
         tk.Label(side, text='LOG CONTROL', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 8))
-        sao_option_menu(side, self._source_var, 'live', 'history', command=lambda _v: self._refresh_from_start()).pack(fill='x', pady=(0, 8))
+        # Source dropdown: display labels (LIVE EVENT BUS / HISTORY) separate from internal values
+        _src_display_var = tk.StringVar(value=_SRC_DISPLAY.get(self._source_var.get(), self._source_var.get()))
+        def _on_src_display(_v: str) -> None:
+            internal = _SRC_INTERNAL.get(_src_display_var.get(), _src_display_var.get())
+            self._source_var.set(internal)
+            self._refresh_from_start()
+        sao_option_menu(side, _src_display_var, *_SRC_DISPLAY.values(), command=_on_src_display).pack(fill='x', pady=(0, 8))
         enc_entry = sao_entry(side, textvariable=self._encounter_var, width=18)
         enc_entry.pack(fill='x', pady=(0, 8))
+        # Placeholder text for encounter entry
+        if not self._encounter_var.get():
+            enc_entry.insert(0, 'encounter id (optional)')
+            enc_entry.configure(fg=_SAO_PANEL_LABEL_FG)
+            def _enc_focus_in(_e: Any) -> None:
+                if enc_entry.get() == 'encounter id (optional)':
+                    enc_entry.delete(0, 'end')
+                    enc_entry.configure(fg=_SAO_PANEL_VALUE_FG)
+            def _enc_focus_out(_e: Any) -> None:
+                if not enc_entry.get().strip():
+                    enc_entry.delete(0, 'end')
+                    enc_entry.insert(0, 'encounter id (optional)')
+                    enc_entry.configure(fg=_SAO_PANEL_LABEL_FG)
+                    self._encounter_var.set('')
+            enc_entry.bind('<FocusIn>', _enc_focus_in)
+            enc_entry.bind('<FocusOut>', _enc_focus_out)
         attach_tooltip(enc_entry, '按战斗 (encounter) ID 过滤日志；留空显示全部')
-        action_button(side, '搜索 Search', self.search).pack(fill='x', pady=(0, 6))
-        action_button(side, '过滤 Filter', self.filter_topic).pack(fill='x', pady=(0, 6))
-        action_button(side, '跳转 Jump', self.jump_to_time, kind='gold').pack(fill='x', pady=(0, 6))
-        action_button(side, '复制 Copy JSON', self.copy_json, kind='cyan').pack(fill='x', pady=(0, 8))
+        action_button(side, '搜索', self.search).pack(fill='x', pady=(0, 6))
+        action_button(side, '过滤', self.filter_topic).pack(fill='x', pady=(0, 6))
+        action_button(side, '跳转', self.jump_to_time, kind='gold').pack(fill='x', pady=(0, 6))
+        action_button(side, '复制 JSON', self.copy_json, kind='cyan').pack(fill='x', pady=(0, 8))
         pager = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
         pager.pack(fill='x', pady=(0, 8))
-        action_button(pager, '上一页 Prev', self.previous_page).pack(side='left', fill='x', expand=True, padx=(0, 4))
-        action_button(pager, '下一页 Next', self.next_page).pack(side='left', fill='x', expand=True)
+        action_button(pager, '上一页', self.previous_page).pack(side='left', fill='x', expand=True, padx=(0, 4))
+        action_button(pager, '下一页', self.next_page).pack(side='left', fill='x', expand=True)
         raw_check = tk.Checkbutton(
             side, text='RAW 行', variable=self._show_raw_rows, command=self._toggle_raw_rows,
             bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, selectcolor=_SAO_PANEL_HEADER_BG,
@@ -384,22 +470,35 @@ class ActionLogPanel:
 
         tk.Label(side, text='STATUS', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 8))
+        # Top Topic with count from analytics
+        group_info_s = analytics.get('groups') if isinstance(analytics.get('groups'), Mapping) else {}
+        topic_groups_s = list(group_info_s.get('topics') or []) if isinstance(group_info_s.get('topics'), list) else []
+        top_topic_count = topic_groups_s[0].get('count', 0) if topic_groups_s and isinstance(topic_groups_s[0], Mapping) else 0
+        top_topic_display = f"{top_topic} x{top_topic_count}" if top_topic_count else str(top_topic)
+        # Cursor as relative time format (MM:SS.mmm)
+        cursor_ms_val = _finite_int(cursor.get('time_ms'), 0, lo=0)
         status_rows = (
             ('Encounter', status.get('encounter_id') or source),
             ('Rows', len(rows)),
-            ('Total', total_rows),
+            ('Total', f'{total_rows:,}'),
             ('Page', f'{page_index}/{page_count}'),
-            ('Top Topic', f'{top_topic}'),
-            ('Cursor', fmt_clock(cursor.get('time_ms'))),
-            ('Filter', f"{(filters.get('source') or source).upper()} · {filters.get('topic') or 'ALL'}"),
+            ('Top Topic', top_topic_display),
+            ('Cursor', _fmt_rel_ms(cursor_ms_val)),
+            ('Filter', filters.get('topic') or 'ALL'),
             ('Errors', len(errors)),
         )
+        # Determine per-row value colors for status section
+        _status_fg: Dict[str, str] = {
+            'Top Topic': _TOPIC_FG.get(str(top_topic).lower(), _SAO_PANEL_GOLD),
+            'Encounter': _SAO_PANEL_ACCENT,
+        }
         for label, value in status_rows:
             row = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
             row.pack(fill='x', pady=(0, 5))
             tk.Label(row, text=str(label), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                      font=get_cjk_font(9), anchor='w').pack(side='left')
-            tk.Label(row, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+            val_fg = _status_fg.get(label, _SAO_PANEL_VALUE_FG)
+            tk.Label(row, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=val_fg,
                      font=get_cjk_font(9, True), anchor='e').pack(side='right')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
@@ -420,12 +519,12 @@ class ActionLogPanel:
         page_count = _finite_int(page.get('page_count') or cursor.get('page_count'), 0, lo=0)
         self._set_offset(_finite_int(page.get('offset') or cursor.get('offset'), self._current_offset(), lo=0))
         self._summary_var.set(
-            f"{len(rows)}/{total_rows} ROWS · {source.upper()} · PAGE {page_index}/{page_count} · {filters.get('topic') or 'ALL'}"
+            f"{len(rows):,}/{total_rows:,} ROWS · {source.upper()} · PAGE {page_index}/{page_count} · {filters.get('topic') or 'ALL'}"
         )
         errors = list(status.get('errors') or [])
         cursor_ms = _finite_int(cursor.get('time_ms'), 0, lo=0)
         self._status_var.set(
-            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={fmt_clock(cursor_ms) if cursor_ms else '--'} · query={filters.get('query') or '-'} · errors={len(errors)}"
+            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={_fmt_rel_ms(cursor_ms) if cursor_ms else '--'} · query={filters.get('query') or '-'} · errors={len(errors)}"
         )
         if self._rows is None:
             return
@@ -491,10 +590,10 @@ class ActionLogPanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
         items = (
-            ('Rows', f"{len(rows)}/{total_rows}", source.upper(), 'cyan'),
+            ('Rows', f"{len(rows):,}/{total_rows:,}", source.upper(), 'cyan'),
             ('Value', self._fmt(totals.get('value')), 'all filtered rows', 'gold'),
-            ('Groups', len(groups), f"top {top_topic}", 'gold'),
-            ('Page', f"{page_index}/{page_count}", f"offset {page_offset}", 'cyan'),
+            ('Groups', f"{len(groups):,}", f"top {top_topic}", 'gold'),
+            ('Page', f"{page_index}/{page_count}", f"offset {page_offset:,}", 'cyan'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
@@ -642,14 +741,18 @@ class ActionLogPanel:
         box.pack(fill='x', pady=3, padx=12)
         top = tk.Frame(box, bg=_SAO_PANEL_HEADER_BG)
         top.pack(fill='x', padx=8, pady=(5, 2))
+        detail_topic = str(row.get('topic') or '').strip().lower()
+        detail_topic_fg = _TOPIC_FG.get(detail_topic, _SAO_PANEL_GOLD)
+        detail_val = row.get('value')
+        detail_val_display = _fmt_comma(detail_val) if detail_val not in (None, '', 0, '0') else '---'
         for text, width, fg in (
-            (f"{_finite_int(row.get('time_ms'), 0, lo=0)}ms", 10, _SAO_PANEL_LABEL_FG),
-            (str(row.get('topic') or '-'), 12, _SAO_PANEL_GOLD),
+            (_fmt_rel_ms(row.get('time_ms')), 10, _SAO_PANEL_LABEL_FG),
+            (str(row.get('topic') or '-'), 12, detail_topic_fg),
             (str(row.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
-            (str(row.get('value') or ''), 14, _SAO_PANEL_VALUE_FG),
+            (detail_val_display, 14, _SAO_PANEL_VALUE_FG),
         ):
             tk.Label(top, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=fg, font=get_cjk_font(8)).pack(side='left', padx=2)
-        meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'} · uid={uid} · dungeon={dungeon} · source={row.get('source') or '-'}"
+        meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'} · uid={uid} · dungeon={dungeon} · source={_table_source(row.get('source'))}"
         tk.Label(box, text=meta, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=get_cjk_font(8)).pack(fill='x', padx=8, pady=(0, 5))
 
     def _render_header(self, parent: Optional[tk.Misc] = None) -> None:
@@ -680,18 +783,31 @@ class ActionLogPanel:
         parent = parent or self._rows
         if parent is None:
             return
+        # boss rows get a subtle highlight background (matching webref gold-tinted row)
+        raw_topic = str(row.get('topic') or '').strip().lower()
+        is_boss = raw_topic in {'boss', 'boss_state', 'boss_mechanic'}
         # 游标行用主题 warn_soft 淡金底（旧 '#2b2a1a' 深橄榄色在浅色主题下是黑块）
-        bg = _theme_color('warn_soft', '#fff8e5') if row.get('is_cursor') else _SAO_PANEL_BODY_BG
+        if row.get('is_cursor'):
+            bg = _theme_color('warn_soft', '#fff8e5')
+        elif is_boss:
+            bg = _theme_color('warn_soft', '#fff8e5')
+        else:
+            bg = _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=bg, highlightthickness=0 if compact else 1, highlightbackground=_SAO_PANEL_BORDER)
         card.pack(fill='x', pady=0 if compact else 3, padx=0 if compact else 4)
         top = tk.Frame(card, bg=bg)
         top.pack(fill='x', padx=8, pady=(7, 2) if compact else (6, 2))
+        # Topic-specific text color (heal=green, boss/death=red, trigger=cyan)
+        topic_fg = _TOPIC_FG.get(raw_topic, _SAO_PANEL_GOLD)
+        # Value: comma-formatted number
+        raw_val = row.get('value')
+        val_display = _fmt_comma(raw_val) if raw_val not in (None, '', 0, '0') else '---'
         values = (
-            (fmt_clock(row.get('time_ms')), 10, _SAO_PANEL_LABEL_FG),
-            (str(row.get('topic') or '-'), 8, _SAO_PANEL_GOLD),
+            (_fmt_rel_ms(row.get('time_ms')), 10, _SAO_PANEL_LABEL_FG),
+            (str(row.get('topic') or '-'), 8, topic_fg),
             (str(row.get('label') or '-'), 18, _SAO_PANEL_VALUE_FG),
-            (str(row.get('value') or ''), 8, _SAO_PANEL_VALUE_FG),
-            (str(row.get('source') or '-'), 10, _SAO_PANEL_LABEL_FG),
+            (val_display, 8, _SAO_PANEL_VALUE_FG),
+            (_table_source(row.get('source')), 10, _SAO_PANEL_LABEL_FG),
         )
         for text, width, fg in values:
             tk.Label(top, text=text, width=width, anchor='w', bg=bg, fg=fg, font=get_cjk_font(9)).pack(side='left', padx=3)
@@ -765,14 +881,4 @@ class ActionLogPanel:
 
     @staticmethod
     def _fmt(value: Any) -> str:
-        try:
-            number = float(value or 0.0)
-        except Exception:
-            return str(value or '0')
-        if not math.isfinite(number):
-            number = 0.0
-        if abs(number) >= 1_000_000:
-            return f"{number / 1_000_000:.2f}m"
-        if abs(number) >= 1_000:
-            return f"{number / 1_000:.1f}k"
-        return str(int(number)) if number == int(number) else f"{number:.2f}"
+        return _fmt_comma(value)

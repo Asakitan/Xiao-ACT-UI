@@ -298,12 +298,13 @@ class SkillDrilldownPanel:
         casts = _finite_int(status.get('casts'), 0, lo=0)
         hits = _finite_int(status.get('hits'), 0, lo=0)
         self._summary_var.set(f"{summary.get('name') or sid or 'NONE'} · {casts} CASTS · {hits} HITS")
-        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · refs={len(refs)} · errors={_list_count(status.get('errors'))}")
+        # Minimal status text (webref shows no status bar)
+        self._status_var.set('')
         if hasattr(self, '_badge_frame_sd'):
             for child in list(self._badge_frame_sd.winfo_children()):
                 child.destroy()
-            badge_text = 'OK' if status.get('ok', True) and not list(status.get('errors') or []) else 'ERROR'
-            badge_kind = 'ok' if badge_text == 'OK' else 'danger'
+            badge_text = 'READY' if status.get('ok', True) and not list(status.get('errors') or []) else 'ERROR'
+            badge_kind = 'ok' if badge_text == 'READY' else 'danger'
             status_badge(self._badge_frame_sd, badge_text, kind=badge_kind).pack(side='left')
         if self._rows is None:
             return
@@ -333,31 +334,12 @@ class SkillDrilldownPanel:
         pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
         pad.pack(fill='both', expand=True)
         tk.Label(pad, text='SKILLS 技能', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
-                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
-        # Skill facts as sidebar key-value rows
-        facts = (
-            ('Combatant', str(status.get('combatant_id') or '-')),
-            ('Skill ID', str(status.get('skill_id') or '-')),
-            ('类型', topic_cn(summary.get('kind'), default='-')),
-            ('伤害', self._fmt(summary.get('damage'))),
-            ('治疗', self._fmt(summary.get('heal'))),
-            ('施放', str(_finite_int(status.get('casts'), 0, lo=0))),
-            ('命中', str(_finite_int(status.get('hits'), 0, lo=0))),
-            ('暴击率', self._pct(status.get('crit_rate'))),
-            ('时间线', str(len(_mapping_items(status.get('timeline_refs'))))),
-        )
-        for key, val in facts:
-            row = tk.Frame(pad, bg=_SAO_PANEL_BODY_BG)
-            row.pack(fill='x', pady=2)
-            tk.Label(row, text=str(key), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                     font=get_cjk_font(9), anchor='w').pack(side='left')
-            tk.Label(row, text=str(val), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
-                     font=get_sao_font(9), anchor='e').pack(side='right')
-        # Skill name badge (bottom of sidebar)
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 8))
+        # Skill cards: show current skill as a card with damage pill (webref style)
         skill_name = str(summary.get('name') or status.get('skill_id') or '-')
+        skill_amount = _finite_float(summary.get('amount') or summary.get('damage'), 0.0)
         if skill_name and skill_name != '-':
-            tk.Frame(pad, bg=_SAO_PANEL_BORDER, height=1).pack(fill='x', pady=(12, 8))
-            status_badge(pad, skill_name, kind='gold').pack(anchor='w')
+            self._render_skill_card(pad, skill_name, skill_amount, active=True)
         errors = list(status.get('errors') or [])
         if errors:
             tk.Frame(pad, bg=_SAO_PANEL_BORDER, height=1).pack(fill='x', pady=(12, 8))
@@ -366,6 +348,17 @@ class SkillDrilldownPanel:
             for err in errors[:5]:
                 tk.Label(pad, text=str(err), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                          font=get_cjk_font(8), anchor='w', wraplength=220).pack(fill='x', pady=1)
+
+    def _render_skill_card(self, parent: tk.Frame, name: str, amount: float, *, active: bool = False) -> None:
+        """Render a sidebar skill card row with name and damage pill (webref style)."""
+        card_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if active else _SAO_PANEL_BODY_BG
+        card = tk.Frame(parent, bg=card_bg, highlightthickness=1,
+                        highlightbackground=_SAO_PANEL_BORDER)
+        card.pack(fill='x', pady=2)
+        tk.Label(card, text=name, bg=card_bg, fg=_SAO_PANEL_VALUE_FG,
+                 font=get_cjk_font(10), anchor='w').pack(side='left', padx=8, pady=6)
+        pill_text = self._fmt(amount)
+        status_badge(card, pill_text, kind='gold').pack(side='right', padx=8, pady=6)
 
     # ── Empty state ──────────────────────────────────────────────────────
     def _render_empty(self) -> None:
@@ -383,8 +376,6 @@ class SkillDrilldownPanel:
         name_frame.pack(fill='x', padx=4, pady=(0, 6))
         tk.Label(name_frame, text=skill_name, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
                  font=get_sao_font(13, True), anchor='w').pack(side='left')
-        kind_text = topic_cn(summary.get('kind'), default='damage')
-        status_badge(name_frame, kind_text, kind='cyan').pack(side='left', padx=(SP_SM, 0))
 
     # ── Metric tiles ─────────────────────────────────────────────────────
     def _render_metrics(self, status: Mapping[str, Any], summary: Mapping[str, Any]) -> None:
@@ -394,14 +385,14 @@ class SkillDrilldownPanel:
         hits = _finite_int(status.get('hits'), 0, lo=0)
         crit_rate = _finite_float(status.get('crit_rate'), 0.0, lo=0.0, hi=1.0)
         avg_hit = amount / hits if hits > 0 else 0.0
-        casts = _finite_int(status.get('casts'), 0, lo=0)
         kind = str(summary.get('kind') or 'damage')
         amount_label = '总治疗' if kind == 'heal' else '总伤害'
         amount_accent = 'ok' if kind == 'heal' else 'gold'
+        crit_pct = int(round(crit_rate * 100))
         items = (
-            (amount_label, self._fmt(amount), f'{casts} casts', amount_accent),
+            (amount_label, self._fmt(amount), '', amount_accent),
             ('命中', str(hits), '', 'cyan'),
-            ('暴击率', self._pct(crit_rate), '', 'danger' if crit_rate >= 0.5 else 'cyan'),
+            ('暴击率', f'{crit_pct}%', '', 'danger' if crit_rate >= 0.5 else 'cyan'),
             ('单次均伤', self._fmt(avg_hit), '', 'gold'),
         )
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
@@ -418,13 +409,24 @@ class SkillDrilldownPanel:
         if self._rows is None:
             return
         ref_count = len(refs)
-        box = section_card(self._rows, f'逐次命中 Hit log ({ref_count})',
-                           subtitle='点击行展开 payload', badge=str(ref_count), accent='cyan')
+        box = section_card(self._rows, '逐次命中 Hit log',
+                           subtitle='', badge=str(ref_count), accent='cyan')
         box.pack(fill='x', padx=4, pady=(0, 8))
         if not refs:
             tk.Label(box, text='暂无命中记录', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                      font=get_cjk_font(10), pady=20).pack(fill='x')
             return
+        # Determine encounter base time for relative offsets
+        base_ms = 0
+        for r in refs:
+            t = 0
+            try:
+                t = int(r.get('time_ms') or 0)
+            except Exception:
+                pass
+            if t > 0:
+                if base_ms == 0 or t < base_ms:
+                    base_ms = t
         # Table header
         table = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         table.pack(fill='x', padx=SP_SM, pady=(SP_SM, 0))
@@ -448,12 +450,20 @@ class SkillDrilldownPanel:
             # Determine if this hit is a crit based on label/payload
             payload = ref.get('payload') if isinstance(ref.get('payload'), Mapping) else {}
             is_crit = bool(payload.get('crit') or payload.get('is_crit') or payload.get('critical'))
-            crit_text = 'CRIT' if is_crit else '-'
+            # Type column: crit type label (webref: 暴击/普通)
+            type_text = '暴击' if is_crit else '普通'
+            # Crit indicator column (webref: checkmark/dash)
+            crit_text = '✓' if is_crit else '—'
+            # Relative time MM:SS.mmm
+            rel_time = self._fmt_rel_ms(ref.get('time_ms'), base_ms)
+            # Damage with comma separators
+            dmg_val = _finite_float(ref.get('value'), 0.0)
+            dmg_text = f'{int(dmg_val):,}'
             cols = (
-                (fmt_clock(ref.get('time_ms')), 10, _SAO_PANEL_GOLD),
+                (rel_time, 10, _SAO_PANEL_GOLD),
                 (str(ref.get('label') or ref.get('target') or '-'), 14, _SAO_PANEL_VALUE_FG),
-                (self._fmt(ref.get('value')), 12, _SAO_PANEL_VALUE_FG),
-                (topic_cn(ref.get('topic'), default='-'), 10, _SAO_PANEL_LABEL_FG),
+                (dmg_text, 12, _SAO_PANEL_VALUE_FG),
+                (type_text, 10, _SAO_PANEL_LABEL_FG),
                 (crit_text, 6, _pc('danger', '#ef684e') if is_crit else _SAO_PANEL_LABEL_FG),
             )
             for text, w, fg in cols:
@@ -500,6 +510,20 @@ class SkillDrilldownPanel:
     @staticmethod
     def _pct(value: Any) -> str:
         return f"{_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100:.1f}%"
+
+    @staticmethod
+    def _fmt_rel_ms(time_ms: Any, base_ms: int) -> str:
+        """Format time_ms as relative offset MM:SS.mmm from base_ms."""
+        try:
+            ms = int(time_ms or 0)
+        except Exception:
+            ms = 0
+        if ms <= 0:
+            return '--'
+        delta = max(0, ms - base_ms)
+        total_s, frac_ms = divmod(delta, 1000)
+        minutes, seconds = divmod(int(total_s), 60)
+        return f'{minutes:02d}:{seconds:02d}.{frac_ms:03d}'
 
     def _signature(self, status: Mapping[str, Any]) -> str:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}

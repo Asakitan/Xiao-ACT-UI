@@ -443,9 +443,13 @@ class GraphTimeseriesPanel:
         if not math.isfinite(number):
             number = 0.0
         if abs(number) >= 1_000_000:
-            return f"{number / 1_000_000:.2f}m"
+            s = f"{number / 1_000_000:.2f}"
+            s = s.rstrip('0').rstrip('.')
+            return f"{s}m"
         if abs(number) >= 1_000:
-            return f"{number / 1_000:.1f}k"
+            s = f"{number / 1_000:.1f}"
+            s = s.rstrip('0').rstrip('.')
+            return f"{s}k"
         if number == int(number):
             return str(int(number))
         return f"{number:.2f}"

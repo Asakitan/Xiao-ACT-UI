@@ -237,7 +237,10 @@ class DeathRecapPanel:
         rows = _mapping_rows(status.get('rows'))
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         death = status.get('death') if isinstance(status.get('death'), Mapping) else {}
-        death_count = int(summary.get('death_events') or len([r for r in rows if str(r.get('kind') or r.get('topic') or '') == 'death']) or 0)
+        death_rows = [r for r in rows if r.get('is_death') or str(r.get('kind') or '') == 'death']
+        timeline_rows = [r for r in rows if not (r.get('is_death') or str(r.get('kind') or '') == 'death')]
+        death_count = int(summary.get('death_events') or len(death_rows) or 0)
+        resurrect_count = sum(1 for r in rows if 'heal' in str(r.get('kind') or '').lower() and str(r.get('label') or '').find('复活') >= 0)
         if hasattr(self, '_badge_frame_dr'):
             for child in list(self._badge_frame_dr.winfo_children()):
                 child.destroy()
@@ -256,35 +259,80 @@ class DeathRecapPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
-        self._render_metrics(status, rows, summary, death)
+        self._render_metrics(status, rows, summary, death, death_count, resurrect_count)
         if not rows:
             empty_state(self._rows, '暂无死亡回放', '等待 death/is_dead/hp=0 事件。').pack(fill='x', pady=8, padx=4)
             return
-        box = section_card(self._rows, '死亡前后事件摘要', subtitle='默认显示 compact rows；点击单行展开 payload/raw detail。', badge=str(len(rows)))
+        # -- Section 1: death table --
+        if death_rows:
+            self._render_death_table(death_rows)
+        # -- Section 2: timeline --
+        tl_rows = timeline_rows if timeline_rows else rows
+        box = section_card(self._rows, '回放时间线 Timeline', badge=str(len(tl_rows)))
         box.pack(fill='x', padx=4, pady=(0, 8))
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)
-        for row in rows[:120]:
+        for row in tl_rows[:120]:
             self._render_row(row, parent=body)
 
-    def _render_metrics(self, status: Mapping[str, Any], rows: list[Any], summary: Mapping[str, Any], death: Mapping[str, Any]) -> None:
+    # ── Metric tiles ──────────────────────────────────────────────────────
+    def _render_metrics(self, status: Mapping[str, Any], rows: list[Any], summary: Mapping[str, Any],
+                        death: Mapping[str, Any], death_count: int, resurrect_count: int) -> None:
         if self._rows is None:
             return
-        window = status.get('window') if isinstance(status.get('window'), Mapping) else {}
+        # Wipe risk heuristic: >=4 high, >=2 mid, else low
+        if death_count >= 4:
+            wipe_risk = '高'
+        elif death_count >= 2:
+            wipe_risk = '中'
+        else:
+            wipe_risk = '低'
+        # First death time as MM:SS
+        first_death_ms = int(death.get('time_ms') or 0)
+        first_death_str = self._fmt_mmss(first_death_ms) if first_death_ms > 0 else '--'
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
         items = (
-            ('Incoming', self._fmt(summary.get('incoming_damage')), f"{_finite_int(summary.get('death_events'), 0, lo=0)} death", 'danger'),
-            ('Healing', self._fmt(summary.get('healing')), f"shield {self._fmt(summary.get('shield'))}", 'heal'),
-            ('Rows', len(rows), f"window {fmt_dur(window.get('before_ms'))}", 'cyan'),
-            ('Death', death.get('name') or death.get('entity_id') or '-', f"@ {fmt_clock(death.get('time_ms'))}", 'gold'),
+            ('总死亡', str(death_count), '', 'danger'),
+            ('团灭风险', wipe_risk, '', 'gold'),
+            ('首次死亡', first_death_str, '', 'cyan'),
+            ('复活', str(resurrect_count), '', 'heal'),
         )
         for label, value, sub, accent in items:
-            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
-        badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
-        badges.pack(fill='x', padx=4, pady=(0, 8))
-        status_badge(badges, f"ENCOUNTER {status.get('encounter_id') or 'live'}", kind='cyan').pack(side='left', padx=(0, 6))
-        status_badge(badges, f"ERRORS {len(status.get('errors') or [])}", kind='danger' if status.get('errors') else 'cyan').pack(side='left', padx=(0, 6))
+            metric_tile(grid, label, value, sub=sub, accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+
+    # ── Death events table ────────────────────────────────────────────────
+    def _render_death_table(self, death_rows: list[Mapping[str, Any]]) -> None:
+        if self._rows is None:
+            return
+        box = section_card(self._rows, '死亡事件 Deaths', badge=str(len(death_rows)))
+        box.pack(fill='x', padx=4, pady=(0, 8))
+        table = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        table.pack(fill='x', padx=8, pady=8)
+        # Column headers
+        columns = ('时间', '成员', '致死技能', '伤害', '生命变化')
+        weights = (1, 1, 1, 1, 2)
+        for i in range(len(columns)):
+            table.columnconfigure(i, weight=weights[i])
+        for ci, col in enumerate(columns):
+            tk.Label(table, text=col, bg=_SAO_PANEL_BODY_BG, fg='#ef684e',
+                     font=get_cjk_font(9, True), anchor='w').grid(row=0, column=ci, sticky='w', padx=(4, 8), pady=(0, 4))
+        # Data rows
+        for ri, dr in enumerate(death_rows[:30], start=1):
+            time_ms = int(dr.get('time_ms') or 0)
+            time_str = self._fmt_mmss(time_ms)
+            member = str(dr.get('target') or dr.get('actor') or '-')
+            skill = str(dr.get('label') or '-')
+            amount = _finite_int(dr.get('amount'), 0)
+            amount_str = f"-{abs(amount):,}" if amount else '0'
+            # HP change from payload
+            payload = dr.get('payload') if isinstance(dr.get('payload'), Mapping) else {}
+            hp_str = self._fmt_hp_change(payload)
+            vals = (time_str, member, skill, amount_str, hp_str)
+            fgs = (_SAO_PANEL_VALUE_FG, _SAO_PANEL_VALUE_FG, _SAO_PANEL_VALUE_FG, '#ef684e', _SAO_PANEL_LABEL_FG)
+            for ci, (val, fg) in enumerate(zip(vals, fgs)):
+                tk.Label(table, text=val, bg=_SAO_PANEL_BODY_BG, fg=fg,
+                         font=get_cjk_font(9), anchor='w').grid(row=ri, column=ci, sticky='w', padx=(4, 8), pady=2)
 
     def _render_row(self, row: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
         parent = parent or self._rows
@@ -292,15 +340,39 @@ class DeathRecapPanel:
             return
         row_id = str(row.get('id') or f"{row.get('kind')}:{row.get('time_ms')}:{row.get('index')}")
         open_row = row_id in self._expanded_rows
-        rel = _finite_int(row.get('relative_ms'), 0)
-        detail = f"{row.get('actor') or '-'} -> {row.get('target') or '-'} · {row.get('label') or ''}"
+        time_ms = int(row.get('time_ms') or 0)
+        time_str = self._fmt_mmss(time_ms)
+        actor = row.get('actor') or ''
+        target = row.get('target') or ''
+        label = row.get('label') or ''
         kind = str(row.get('kind') or row.get('topic') or 'event')
-        accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' else 'gold')
+        # Build descriptive single-line text matching webref style
+        parts = []
+        if actor:
+            parts.append(str(actor))
+        kind_label = topic_cn(kind)
+        if kind == 'death':
+            if target:
+                parts.append(f"阵亡: {label}" if label else "阵亡")
+            else:
+                parts.append(f"阵亡: {label}" if label else "阵亡")
+        elif 'heal' in kind:
+            if target and actor:
+                parts.append(f"复活 {target}({label})" if '复活' in str(label) else f"{kind_label}: {label}")
+            else:
+                parts.append(f"{kind_label}: {label}" if label else kind_label)
+        else:
+            if label:
+                parts.append(f"施放 {label}" if kind in ('incoming_damage', 'damage', 'skill') else f"{kind_label}: {label}")
+            else:
+                parts.append(kind_label)
+        detail_text = ' '.join(parts)
+        accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' or '复活' in str(label) else 'gold')
         aggregate_row(
             parent,
-            title=f"{fmt_signed(rel)} · {topic_cn(kind)}",
-            meta=detail,
-            value=self._fmt(row.get('amount')),
+            title=f"{time_str}    {detail_text}",
+            meta='',
+            value='',
             ratio=1.0 if row.get('is_death') else 0.35,
             accent=accent,
             command=lambda key=row_id: self._toggle_row(key),
@@ -371,3 +443,65 @@ class DeathRecapPanel:
         if abs(number) >= 1_000:
             return f"{number / 1_000:.1f}k"
         return str(int(number)) if number == int(number) else f"{number:.2f}"
+
+    @staticmethod
+    def _fmt_comma(value: Any) -> str:
+        """Format number with comma separators (e.g. -42,800)."""
+        try:
+            number = int(float(value or 0))
+        except Exception:
+            return str(value or '0')
+        return f"{number:,}"
+
+    @staticmethod
+    def _fmt_mmss(time_ms: Any) -> str:
+        """Epoch-ms or relative-ms to MM:SS.f display (e.g. 00:48.2)."""
+        try:
+            ms = int(time_ms or 0)
+        except Exception:
+            return '--'
+        if ms <= 0:
+            return '--'
+        # If ms looks like an epoch (> year-2000-ish), convert to seconds-from-midnight
+        # Otherwise treat as relative ms from encounter start
+        if ms > 1_000_000_000_000:
+            import time as _t
+            lt = _t.localtime(ms / 1000.0)
+            total_s = lt.tm_min * 60 + lt.tm_sec + (ms % 1000) / 1000.0
+            minutes = lt.tm_hour * 60 + lt.tm_min
+            seconds = lt.tm_sec
+            frac = (ms % 1000) // 100
+            return f"{minutes:02d}:{seconds:02d}.{frac}"
+        total_s = ms / 1000.0
+        minutes = int(total_s) // 60
+        seconds = int(total_s) % 60
+        frac = int((total_s * 10) % 10)
+        return f"{minutes:02d}:{seconds:02d}.{frac}"
+
+    @staticmethod
+    def _fmt_hp_change(payload: Mapping[str, Any]) -> str:
+        """Format HP change from payload: 'HP 22% -> 0' style."""
+        hp_keys = ('hp', 'current_hp', 'target_hp', 'player_hp')
+        max_hp_keys = ('max_hp', 'target_max_hp', 'player_max_hp')
+        hp = 0
+        max_hp = 0
+        for k in hp_keys:
+            v = payload.get(k)
+            if v is not None:
+                try:
+                    hp = int(v)
+                except Exception:
+                    pass
+                break
+        for k in max_hp_keys:
+            v = payload.get(k)
+            if v is not None:
+                try:
+                    max_hp = int(v)
+                except Exception:
+                    pass
+                break
+        if max_hp > 0:
+            pct = max(0, min(100, int(round(hp / max_hp * 100))))
+            return f"HP {pct}% → 0"
+        return "HP → 0"

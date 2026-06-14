@@ -452,53 +452,72 @@ class ReportExportPanel:
             components.keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
             for child in list(self._rows.winfo_children()):
                 child.destroy()
-            self._render_preview(preview, errors)
-        history_sig = json.dumps(history[:12], ensure_ascii=False, sort_keys=True, default=str)
+            self._render_preview(preview, errors, fmt=fmt)
+        history_sig = json.dumps(
+            {'h': history[:12], 'p_title': preview.get('title'), 'p_events': preview.get('combatant_count')},
+            ensure_ascii=False, sort_keys=True, default=str,
+        )
         if self._history is not None and history_sig != self._last_history_sig:
             self._last_history_sig = history_sig
             for child in list(self._history.winfo_children()):
                 child.destroy()
-            self._render_history(history)
+            self._render_history(history, preview=preview)
 
-    def _render_preview(self, preview: Mapping[str, Any], errors: list[Any]) -> None:
+    def _render_preview(self, preview: Mapping[str, Any], errors: list[Any], *, fmt: str = "JSON") -> None:
         if self._rows is None:
             return
         if errors and not preview.get('top_rows'):
             self._empty_box('\n'.join(str(err) for err in errors))
             return
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=6, padx=4)
-        title = str(preview.get('title') or 'Last Encounter')
+        # "PREVIEW - {FORMAT}" header
         tk.Label(
-            box,
-            text=title,
+            self._rows,
+            text=f'PREVIEW · {fmt}',
             bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_VALUE_FG,
+            fg=_SAO_PANEL_GOLD,
             anchor='w',
-            font=get_cjk_font(12, True),
-            padx=10,
-            pady=8,
-        ).pack(fill='x')
-        metrics = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        metrics.pack(fill='x', padx=10, pady=(0, 8))
-        for label, value in (
-            ('Damage', preview.get('total_damage') or 0),
-            ('DPS', preview.get('total_dps') or 0),
-            ('Heal', preview.get('total_heal') or 0),
-            ('Duration', f"{preview.get('elapsed_s') or 0}s"),
-        ):
-            # 指标卡用主题常量 — 旧硬编码 '#07111c' 近黑底是扁平化前残留,
-            # 浅色 LABEL_FG 灰字打上去对比度不足 (web 端 .metric 走变量, 无此问题)
-            cell = tk.Frame(metrics, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_SEP)
-            cell.pack(side='left', fill='x', expand=True, padx=(0, 6))
-            tk.Label(cell, text=label, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8), pady=3).pack(fill='x')
-            tk.Label(cell, text=str(value), bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(11, True), pady=4).pack(fill='x')
+            font=get_cjk_font(10, True),
+            padx=4,
+        ).pack(fill='x', pady=(0, 4))
+        # JSON code block preview
         rows = list(preview.get('top_rows') or [])
-        if not rows:
-            self._empty_box('暂无战斗成员数据 / No combatants')
-            return
-        for row in rows[:12]:
-            self._render_row(row)
+        preview_obj: dict[str, Any] = {"encounter": str(preview.get('title') or 'Last Encounter')}
+        elapsed = preview.get('elapsed_s') or 0
+        try:
+            preview_obj["duration_s"] = round(float(elapsed))
+        except Exception:
+            preview_obj["duration_s"] = 0
+        total_dps = _finite_int(preview.get('total_dps'), 0)
+        if total_dps:
+            preview_obj["party_dps"] = total_dps
+        if rows:
+            preview_obj["combatants"] = [
+                {"name": str(r.get('name') or r.get('uid') or '-'),
+                 "damage": _finite_int(r.get('damage'), 0),
+                 "dps": _finite_int(r.get('dps'), 0)}
+                for r in rows[:8]
+            ]
+        deaths = _finite_int(preview.get('deaths'), 0)
+        if deaths:
+            preview_obj["deaths"] = deaths
+        event_count = _finite_int(preview.get('combatant_count'), 0)
+        if event_count:
+            preview_obj["events"] = event_count
+        code_text = json.dumps(preview_obj, ensure_ascii=False, indent=2)
+        code_box = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        code_box.pack(fill='x', pady=(0, 8), padx=4)
+        tk.Label(
+            code_box,
+            text=code_text,
+            bg=_SAO_PANEL_HEADER_BG,
+            fg=_SAO_PANEL_VALUE_FG,
+            anchor='nw',
+            justify='left',
+            font=('Consolas', 9),
+            padx=14,
+            pady=12,
+            wraplength=560,
+        ).pack(fill='x')
 
     def _render_row(self, row: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -515,9 +534,12 @@ class ReportExportPanel:
             padx=9,
             pady=4,
         ).pack(fill='x')
+        dmg = _finite_int(row.get('damage'), 0)
+        dps = _finite_int(row.get('dps'), 0)
+        heal = _finite_int(row.get('heal'), 0)
         tk.Label(
             card,
-            text=f"damage={row.get('damage') or 0} · dps={row.get('dps') or 0} · heal={row.get('heal') or 0}",
+            text=f"damage={dmg:,} · dps={dps:,} · heal={heal:,}",
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             anchor='w',
@@ -526,19 +548,38 @@ class ReportExportPanel:
             pady=0,
         ).pack(fill='x', pady=(0, 6))
 
-    def _render_history(self, history: list[Any]) -> None:
+    def _render_history(self, history: list[Any], *, preview: Mapping[str, Any] | None = None) -> None:
         if self._history is None:
             return
+        # Info card (Encounter / 事件数 / 大小估计) matching webref sidebar
+        p = preview or {}
+        title = str(p.get('title') or 'Last Encounter')
+        event_count = _finite_int(p.get('combatant_count'), 0)
+        # Rough size estimate from preview JSON
+        try:
+            size_bytes = len(json.dumps(p, ensure_ascii=False, default=str).encode('utf-8'))
+            if size_bytes >= 1024 * 1024:
+                size_text = f"~{size_bytes / (1024 * 1024):.1f} MB"
+            elif size_bytes >= 1024:
+                size_text = f"~{size_bytes // 1024} KB"
+            else:
+                size_text = f"~{size_bytes} B"
+        except Exception:
+            size_text = "--"
+        info_card = tk.Frame(self._history, bg=_SAO_PANEL_HEADER_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        info_card.pack(fill='x', pady=(0, 8))
+        for info_label, info_value, info_fg in (
+            ('Encounter', title, _SAO_PANEL_GOLD),
+            ('事件数', f"{event_count:,}", _SAO_PANEL_VALUE_FG),
+            ('大小估计', size_text, _SAO_PANEL_VALUE_FG),
+        ):
+            row_frame = tk.Frame(info_card, bg=_SAO_PANEL_HEADER_BG)
+            row_frame.pack(fill='x', padx=10, pady=4)
+            tk.Label(row_frame, text=info_label, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(side='left')
+            tk.Label(row_frame, text=info_value, bg=_SAO_PANEL_HEADER_BG, fg=info_fg,
+                     font=get_cjk_font(9, True), anchor='e').pack(side='right')
         if not history:
-            tk.Label(
-                self._history,
-                text='暂无历史报告',
-                bg=_SAO_PANEL_BODY_BG,
-                fg=_SAO_PANEL_LABEL_FG,
-                justify='center',
-                font=get_cjk_font(9),
-                pady=20,
-            ).pack(fill='x')
             return
         for idx, item in enumerate(history[:12]):
             if not isinstance(item, Mapping):
@@ -548,11 +589,13 @@ class ReportExportPanel:
                 idx,
                 lo=0,
             )
+            dmg = _finite_int(item.get('total_damage'), 0)
+            dps = _finite_int(item.get('total_dps'), 0)
             box = tk.Frame(self._history, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             box.pack(fill='x', pady=4)
             tk.Label(
                 box,
-                text=f"{item.get('completed_local_time') or item.get('report_reason') or 'Encounter'}\nDMG {item.get('total_damage') or 0} · DPS {item.get('total_dps') or 0}",
+                text=f"{item.get('completed_local_time') or item.get('report_reason') or 'Encounter'}\nDMG {dmg:,} · DPS {dps:,}",
                 bg=_SAO_PANEL_BODY_BG,
                 fg=_SAO_PANEL_LABEL_FG,
                 anchor='w',

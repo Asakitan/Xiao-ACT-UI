@@ -323,6 +323,10 @@ class MemScopePanel:
                      kind='ok' if active else 'warn').pack(side='left', padx=(0, SP_SM))
         if st.get('provider_mode'):
             status_badge(badges, f"reader={st.get('provider_mode')}", kind='cyan').pack(side='left', padx=(0, SP_SM))
+        if st.get('process'):
+            status_badge(badges, str(st['process']), kind='cyan').pack(side='left', padx=(0, SP_SM))
+        if st.get('module_base'):
+            status_badge(badges, f"GA {st['module_base']}", kind='cyan').pack(side='left', padx=(0, SP_SM))
         if st.get('armed'):
             status_badge(badges, 'armed', kind='gold').pack(side='left')
 
@@ -367,11 +371,40 @@ class MemScopePanel:
         box.pack(fill='x', padx=4, pady=(SP_MD, 0))
         inner = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         inner.pack(fill='x', padx=SP_SM, pady=SP_SM)
-        skip = {'ok', 'reason', 'hint', 'resources'}
+        skip = {'ok', 'reason', 'hint', 'resources', 'attr_level', 'season_level', 'name'}
+        # Fields whose numeric values should display with comma separators
+        _COMMA_FIELDS = {'hp', 'max_hp', 'cur_hp', 'damage', 'total'}
+        # Fields that are identifiers (no comma formatting)
+        _ID_FIELDS = {'uid', 'base_id', 'id'}
+        # Collect key-value pairs with formatted values
+        pairs: List[tuple] = []
+        level_val = self_.get('level')
+        attr_lv = self_.get('attr_level') or self_.get('season_level')
         for k, v in self_.items():
             if k in skip:
                 continue
-            self._kv(inner, k, v)
+            if k == 'level' and attr_lv is not None:
+                pairs.append((k, f"{level_val} (+{attr_lv})"))
+            elif k in _COMMA_FIELDS:
+                pairs.append((k, _fmt_num(v)))
+            elif k in _ID_FIELDS:
+                pairs.append((k, str(v) if v is not None else ''))
+            else:
+                pairs.append((k, _fmt_self_val(v)))
+        # 2-column grid layout matching webref
+        grid = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x')
+        grid.grid_columnconfigure(0, weight=1)
+        grid.grid_columnconfigure(1, weight=0)
+        grid.grid_columnconfigure(2, weight=1)
+        grid.grid_columnconfigure(3, weight=0)
+        for idx, (k, v) in enumerate(pairs):
+            r = idx // 2
+            c = (idx % 2) * 2
+            tk.Label(grid, text=str(k), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').grid(row=r, column=c, sticky='w', padx=(0, 8), pady=1)
+            tk.Label(grid, text=str(v), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                     font=get_cjk_font(9, True), anchor='e').grid(row=r, column=c + 1, sticky='e', padx=(0, 20 if c == 0 else 0), pady=1)
 
     def _render_entities(self, status: Mapping[str, Any]) -> None:
         ents = status.get('entities') if isinstance(status.get('entities'), Mapping) else {}
@@ -383,9 +416,21 @@ class MemScopePanel:
         if not rows:
             empty_state(inner, '暂无实体', '当前没有可见战斗实体（开怪后出现）。').pack(fill='x')
             return
+        # Format entity rows: commas for HP, hex for base_id, abbreviated addr
+        fmt_rows = []
+        for e in rows[:40]:
+            fmt_rows.append({
+                'kind': e.get('kind', ''),
+                'name': e.get('name', ''),
+                'cur_hp': _fmt_num(e.get('cur_hp')),
+                'max_hp': _fmt_num(e.get('max_hp')),
+                'hp_pct': _fmt_pct(e.get('hp_pct')),
+                'base_id': _fmt_hex(e.get('base_id')),
+                'obj': _fmt_addr(e.get('obj')),
+            })
         cols = (('kind', '类型', 7), ('name', '名字', 14), ('cur_hp', 'HP', 10),
-                ('max_hp', 'MaxHP', 10), ('hp_pct', '%', 6), ('base_id', 'BaseId', 8), ('obj', '地址', 16))
-        self._table(inner, cols, rows[:40])
+                ('max_hp', 'MaxHP', 10), ('hp_pct', '%', 6), ('base_id', 'BaseId', 8), ('obj', '地址', 12))
+        self._table(inner, cols, fmt_rows)
 
     def _render_damage(self, status: Mapping[str, Any]) -> None:
         dmg = status.get('damage') if isinstance(status.get('damage'), Mapping) else {}
@@ -398,7 +443,7 @@ class MemScopePanel:
             empty_state(inner, '暂无伤害数据', '开始战斗后游戏会聚合每玩家伤害。').pack(fill='x')
             return
         items = sorted(totals.items(), key=lambda kv: -_to_num(kv[1]))[:20]
-        rows = [{'uid': k, 'total': v} for k, v in items]
+        rows = [{'uid': k, 'total': _fmt_num(v)} for k, v in items]
         self._table(inner, (('uid', 'UID', 18), ('total', '总伤害', 16)), rows)
 
     def _render_search(self, status: Mapping[str, Any]) -> None:
@@ -545,6 +590,80 @@ class MemScopePanel:
                 'results': search_results,
             },
         }, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _fmt_num(v: Any) -> str:
+    """Format a numeric value with comma separators (963721 -> '963,721')."""
+    if v is None:
+        return ''
+    try:
+        n = int(float(v))
+        return f"{n:,}"
+    except (ValueError, TypeError, OverflowError):
+        return str(v)
+
+
+def _fmt_self_val(v: Any) -> str:
+    """Format a self-section value: integers get commas, floats get 2 decimals."""
+    if v is None:
+        return ''
+    try:
+        f = float(v)
+        if f != f:  # NaN
+            return str(v)
+        if f == int(f) and not isinstance(v, float):
+            return f"{int(f):,}"
+        # float: show 2 decimal places
+        return f"{f:,.2f}"
+    except (ValueError, TypeError, OverflowError):
+        return str(v)
+
+
+def _fmt_hex(v: Any) -> str:
+    """Format an integer as hex (1001 -> '0x1A2'). Already-hex strings pass through."""
+    if v is None:
+        return ''
+    s = str(v)
+    if s.startswith('0x') or s.startswith('0X'):
+        return s
+    try:
+        n = int(float(v))
+        return f"0x{n:X}"
+    except (ValueError, TypeError, OverflowError):
+        return s
+
+
+def _fmt_addr(v: Any) -> str:
+    """Abbreviate a long hex address (0x185000010 -> '0x185..010')."""
+    if v is None:
+        return ''
+    s = str(v)
+    if not s.startswith('0x') and not s.startswith('0X'):
+        try:
+            n = int(float(v))
+            s = f"0x{n:X}"
+        except (ValueError, TypeError, OverflowError):
+            return s
+    # Abbreviate addresses longer than 7 hex digits (0x + 7+)
+    prefix = s[:2]
+    hexpart = s[2:]
+    if len(hexpart) > 7:
+        return f"{prefix}{hexpart[:3]}..{hexpart[-3:]}"
+    return s
+
+
+def _fmt_pct(v: Any) -> str:
+    """Format a percentage value. If already ends with %, pass through."""
+    if v is None:
+        return ''
+    s = str(v)
+    if s.endswith('%'):
+        return s
+    try:
+        n = int(float(v))
+        return f"{n}%"
+    except (ValueError, TypeError, OverflowError):
+        return s
 
 
 def _to_num(v: Any) -> float:

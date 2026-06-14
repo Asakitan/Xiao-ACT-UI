@@ -10,7 +10,6 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import (
-    act_aggregate_status,
     act_timeline_filter,
     act_timeline_pause,
     act_timeline_play,
@@ -21,20 +20,14 @@ from act_platform.runtime import (
 )
 from gui_modules.sao_panel_components import (
     action_button,
-    aggregate_row,
     attach_tooltip,
     empty_state,
-    fmt_clock,
     fmt_dur,
     keep_canvas_scroll,
-    metric_tile,
     sao_entry,
     sao_option_menu,
     sao_scrollbar,
-    section_card,
-    source_cn,
     status_badge,
-    topic_cn,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
@@ -43,8 +36,6 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_BODY_BG,
     _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
@@ -52,7 +43,6 @@ from gui_modules.sao_panel_ui import (
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
-    _sao_pill,
 )
 
 
@@ -312,62 +302,122 @@ class TimelineVcrPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._events)
         for child in list(self._events.winfo_children()):
             child.destroy()
-        self._render_metrics(status, events)
+        self._render_transport(status, events)
+        self._render_summary_pills(status, events)
         if not events:
             empty_state(self._events, '暂无 ACT 时间线事件', '开始识别或 replay 后会出现事件。').pack(fill='x', pady=8, padx=4)
             return
-        self._render_timeline_clusters()
-        box = section_card(self._events, '事件流摘要', subtitle='默认只显示时间、主题、标签和值；点击行展开 payload。', badge=str(len(events)))
-        box.pack(fill='x', pady=(0, 8), padx=4)
-        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        body.pack(fill='x', padx=8, pady=8)
-        for event in events[:80]:
-            self._render_event(event, parent=body)
+        self._render_keyframes_section(events)
 
-    def _render_metrics(self, status: Mapping[str, Any], events: list[Any]) -> None:
+    def _render_transport(self, status: Mapping[str, Any], events: list[Any]) -> None:
+        """Playback transport bar: |<< [PLAY] >>| cursor ===o=== total."""
         if self._events is None:
             return
         cursor_ms = _finite_int(status.get('cursor_ms'), 0, lo=0)
-        speed = _finite_float(status.get('speed'), 1.0, lo=0.1, hi=8.0)
-        topics = sorted({str(event.get('topic') or '-') for event in events if isinstance(event, Mapping)})
-        grid = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG)
-        grid.pack(fill='x', padx=4, pady=(0, 8))
-        items = (
-            ('Events', len(events), f"topics {len(topics)}", 'cyan'),
-            ('Cursor', fmt_dur(cursor_ms), 'VCR position', 'gold'),
-            ('Speed', f"{speed:g}x", 'playing' if status.get('playing') else 'paused', 'cyan'),
-            ('Errors', len(status.get('errors') or []), status.get('encounter_id') or 'live', 'danger' if status.get('errors') else 'gold'),
-        )
-        for label, value, sub, accent in items:
-            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        # Total duration = max event time_ms relative to first event, or cursor
+        base_ms = self._events_base_ms(events)
+        total_ms = 0
+        if events:
+            max_time = max(_finite_int(e.get('time_ms'), 0, lo=0) for e in events if isinstance(e, Mapping))
+            total_ms = max(0, max_time - base_ms)
+        total_ms = max(total_ms, cursor_ms)
 
-    def _render_timeline_clusters(self) -> None:
+        bar = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG, highlightthickness=1,
+                       highlightbackground=_SAO_PANEL_BORDER)
+        bar.pack(fill='x', padx=4, pady=(0, 8))
+        inner = tk.Frame(bar, bg=_SAO_PANEL_BODY_BG)
+        inner.pack(fill='x', padx=10, pady=8)
+
+        # Prev / Play / Next buttons
+        btn_prev = action_button(inner, '◁◁', self.step_back)
+        btn_prev.pack(side='left', padx=(0, 4))
+        attach_tooltip(btn_prev, '后退 1 秒')
+        playing = bool(status.get('playing'))
+        btn_play = action_button(inner, '▶' if not playing else '❚❚',
+                                 self.pause if playing else self.play,
+                                 kind='gold')
+        btn_play.pack(side='left', padx=(0, 4))
+        attach_tooltip(btn_play, '暂停' if playing else '播放')
+        btn_next = action_button(inner, '▷▷', self.step_forward)
+        btn_next.pack(side='left', padx=(0, 8))
+        attach_tooltip(btn_next, '前进 1 秒')
+
+        # Current time label
+        tk.Label(inner, text=self._fmt_kf_time(cursor_ms),
+                 bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(11, True)).pack(side='left', padx=(4, 8))
+
+        # End time label (right side)
+        tk.Label(inner, text=self._fmt_kf_time(total_ms),
+                 bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                 font=get_sao_font(10)).pack(side='right', padx=(8, 0))
+
+        # Slider track
+        track_frame = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
+        track_frame.pack(side='left', fill='x', expand=True, padx=(4, 4))
+        ratio = (cursor_ms / total_ms) if total_ms > 0 else 0.0
+        ratio = max(0.0, min(1.0, ratio))
+        track = tk.Canvas(track_frame, bg=_SAO_PANEL_BODY_BG, height=14,
+                          highlightthickness=0, bd=0)
+        track.pack(fill='x')
+
+        def _draw_track(_e=None):
+            w = track.winfo_width()
+            if w < 10:
+                return
+            track.delete('all')
+            y = 7
+            # Filled portion (accent/gold)
+            fill_w = max(0, int(w * ratio))
+            if fill_w > 0:
+                track.create_line(0, y, fill_w, y, fill=_SAO_PANEL_GOLD, width=4)
+            # Remaining portion (border/dim)
+            if fill_w < w:
+                track.create_line(fill_w, y, w, y, fill=_SAO_PANEL_BORDER, width=4)
+            # Thumb circle
+            cx = max(6, min(w - 6, fill_w))
+            track.create_oval(cx - 6, y - 6, cx + 6, y + 6,
+                              fill=_SAO_PANEL_ACCENT, outline='')
+
+        track.bind('<Configure>', _draw_track)
+        track.after(10, _draw_track)
+
+    def _render_summary_pills(self, status: Mapping[str, Any], events: list[Any]) -> None:
+        """Summary pills row: N 个事件 | N 个关键帧 | N 次死亡."""
         if self._events is None:
             return
-        try:
-            aggregate = act_aggregate_status(self.owner, limit=500, query=self._query_var.get(), source='live', window_ms=1000, top_n=8)
-        except Exception:
-            aggregate = {}
-        clusters = [item for item in list(aggregate.get('timeline_clusters') or []) if isinstance(item, Mapping)]
-        if not clusters:
+        n_events = len(events)
+        # Keyframe = events with notable topics (not generic log/event)
+        kf_topics = {'damage', 'death', 'boss', 'boss_state', 'boss_mechanic',
+                     'boss_mechanic_skill', 'skill', 'actor_skill', 'heal',
+                     'scene', 'encounter_started', 'encounter_finalized',
+                     'shield', 'buff'}
+        n_keyframes = sum(1 for e in events
+                          if isinstance(e, Mapping) and str(e.get('topic') or '').lower() in kf_topics)
+        n_deaths = sum(1 for e in events
+                       if isinstance(e, Mapping) and str(e.get('topic') or '').lower() == 'death')
+        row = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG)
+        row.pack(fill='x', padx=4, pady=(0, 6))
+        status_badge(row, f"{n_events} 个事件", kind='gold').pack(side='left', padx=(0, 6))
+        if n_keyframes:
+            status_badge(row, f"{n_keyframes} 个关键帧", kind='cyan').pack(side='left', padx=(0, 6))
+        if n_deaths:
+            status_badge(row, f"{n_deaths} 次死亡", kind='danger').pack(side='left', padx=(0, 6))
+
+    def _render_keyframes_section(self, events: list[Any]) -> None:
+        """KEYFRAMES section: colored dot + relative time + label per event."""
+        if self._events is None:
             return
-        box = section_card(self._events, '时间桶聚合', subtitle='按 1s 语义时间桶汇总，避免逐条时间线刷屏。', badge=str(len(clusters)))
-        box.pack(fill='x', pady=(0, 8), padx=4)
-        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[_finite_float(item.get('damage') or item.get('total_value'), 0.0, lo=0.0) for item in clusters])
-        for idx, group in enumerate(clusters[:8]):
-            topics = ', '.join(str(item.get('key') or '-') for item in list(group.get('topics_top') or [])[:3] if isinstance(item, Mapping))
-            value = _finite_float(group.get('damage') or group.get('total_value'), 0.0, lo=0.0)
-            aggregate_row(
-                body,
-                title=str(group.get('name') or group.get('key') or '-'),
-                meta=f"{_finite_int(group.get('count'), 0, lo=0)} events · {topics or 'mixed'}",
-                value=self._fmt(value),
-                ratio=value / max_value if max_value else 0.0,
-                accent='cyan',
-                zebra=bool(idx % 2),
-            ).pack(fill='x', pady=2)
+        # Section header
+        hdr = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG)
+        hdr.pack(fill='x', padx=4, pady=(4, 6))
+        tk.Label(hdr, text='KEYFRAMES 关键帧', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_ACCENT, font=get_sao_font(10, True),
+                 anchor='w').pack(fill='x')
+        # Compute base_ms for relative times
+        base_ms = self._events_base_ms(events)
+        for event in events[:80]:
+            self._render_keyframe(event, parent=self._events, base_ms=base_ms)
 
     def _render_empty(self) -> None:
         if self._events is None:
@@ -384,27 +434,94 @@ class TimelineVcrPanel:
             pady=28,
         ).pack(fill='x')
 
-    def _render_event(self, event: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
+    # ── Keyframe dot color mapping ──
+    _KF_DOT_COLORS: Dict[str, str] = {
+        'encounter_started': '#dea620',   # gold — battle start
+        'encounter_finalized': '#dea620',
+        'scene': '#dea620',
+        'damage': '#5cc46a',              # green — damage/crit
+        'skill': '#5cc46a',
+        'actor_skill': '#5cc46a',
+        'heal': '#5cc46a',
+        'boss': '#e08a3c',               # orange — boss action
+        'boss_state': '#e08a3c',
+        'boss_mechanic': '#e08a3c',
+        'boss_mechanic_skill': '#e08a3c',
+        'death': '#ef684e',              # red — death
+        'shield': '#68e4ff',             # cyan — defensive/milestone
+        'buff': '#68e4ff',
+    }
+
+    def _render_keyframe(self, event: Mapping[str, Any], parent: Optional[tk.Misc] = None,
+                         base_ms: int = 0) -> None:
+        """Render a single keyframe card: colored dot + relative time + label."""
         parent = parent or self._events
         if parent is None:
             return
         topic = str(event.get('topic') or '-')
         event_id = str(event.get('id') or f"{topic}:{event.get('time_ms')}")
         open_event = event_id in self._expanded_events
-        accent = 'danger' if topic in {'damage', 'death'} else ('heal' if topic == 'heal' else 'gold')
-        aggregate_row(
-            parent,
-            title=str(event.get('label') or topic),
-            meta=f"{topic_cn(topic)} · {fmt_clock(event.get('time_ms'))} · 来源 {source_cn(event.get('source'))}",
-            value=self._fmt(event.get('value')) if event.get('value') not in (None, '') else '',
-            ratio=1.0 if event.get('value') else 0.12,
-            accent=accent,
-            command=lambda key=event_id: self._toggle_event(key),
-            expanded=open_event,
-        ).pack(fill='x', pady=2)
+        dot_color = self._KF_DOT_COLORS.get(topic.lower(), _SAO_PANEL_ACCENT)
+
+        # Relative time from encounter base
+        event_ms = _finite_int(event.get('time_ms'), 0, lo=0)
+        rel_ms = max(0, event_ms - base_ms)
+
+        # Card container with left border
+        card = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG, highlightthickness=1,
+                        highlightbackground=_SAO_PANEL_BORDER,
+                        cursor='hand2')
+        card.pack(fill='x', padx=4, pady=3)
+        inner = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
+        inner.pack(fill='x', padx=8, pady=7)
+
+        # Colored dot (canvas circle)
+        dot = tk.Canvas(inner, width=10, height=10, bg=_SAO_PANEL_BODY_BG,
+                        highlightthickness=0, bd=0)
+        dot.create_oval(1, 1, 9, 9, fill=dot_color, outline='')
+        dot.pack(side='left', padx=(0, 8), pady=2)
+
+        # Timestamp in gold (MM:SS.d relative format)
+        tk.Label(inner, text=self._fmt_kf_time(rel_ms),
+                 bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(10, True)).pack(side='left', padx=(0, 14))
+
+        # Label text
+        tk.Label(inner, text=str(event.get('label') or topic),
+                 bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                 font=get_cjk_font(10), anchor='w').pack(side='left', fill='x', expand=True)
+
+        # Click to expand
+        def _toggle(key=event_id):
+            self._toggle_event(key)
+        card.bind('<Button-1>', lambda _e: _toggle())
+        for child in inner.winfo_children():
+            child.bind('<Button-1>', lambda _e: _toggle())
+
         if open_event:
             payload = json.dumps(event.get('payload') or {}, ensure_ascii=False, default=str)
-            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=760, font=get_cjk_font(8)).pack(fill='x', padx=22, pady=(0, 6))
+            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     anchor='w', justify='left', wraplength=760,
+                     font=get_cjk_font(8)).pack(fill='x', padx=22, pady=(0, 6))
+
+    @staticmethod
+    def _fmt_kf_time(ms: int) -> str:
+        """Format milliseconds as MM:SS.d (e.g. 01:10.4) for keyframe timestamps."""
+        total_s = max(0.0, ms / 1000.0)
+        minutes = int(total_s // 60)
+        seconds = total_s - minutes * 60
+        return f"{minutes:02d}:{seconds:04.1f}"
+
+    @staticmethod
+    def _events_base_ms(events: list[Any]) -> int:
+        """Return the earliest event time_ms as the encounter base for relative times."""
+        base = 0
+        for e in events:
+            if isinstance(e, Mapping):
+                t = _finite_int(e.get('time_ms'), 0, lo=0)
+                if t > 0 and (base == 0 or t < base):
+                    base = t
+        return base
 
     def _toggle_event(self, event_id: str) -> None:
         if event_id in self._expanded_events:
