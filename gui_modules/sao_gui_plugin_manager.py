@@ -213,7 +213,7 @@ class PluginManagerPanel:
 
         # All right-side controls in ONE frame, bottom-aligned with title
         controls = tk.Frame(toolbar, bg=body_bg)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._controls = controls  # store for re-rendering the badge
 
         badge_frame = tk.Frame(controls, bg=body_bg)

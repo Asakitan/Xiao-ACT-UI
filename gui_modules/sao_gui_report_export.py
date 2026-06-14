@@ -311,7 +311,7 @@ class ReportExportPanel:
         tk.Label(title_box, text='REPORT / EXPORT 报告导出', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._badge_frame = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame.pack(side='left', padx=(0, 8))
         components.action_button(controls, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))

@@ -380,7 +380,7 @@ class ActionLogPanel:
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        control.pack(side='right', anchor='s', pady=(0, 4))
+        control.pack(side='right', anchor='center')
         self._badge_frame_al = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame_al.pack(side='left', padx=(0, 12))
         sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(0, 8))

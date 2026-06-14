@@ -161,7 +161,7 @@ class TriggerTimerManagerPanel:
         tk.Label(title_box, text='TRIGGER / TIMER 触发计时', bg=bg,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         controls = tk.Frame(toolbar, bg=bg)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._badge_frame = tk.Frame(controls, bg=bg)
         self._badge_frame.pack(side='left', padx=(0, 8))
         action_button(controls, '刷新', self.refresh).pack(side='left', padx=(0, 6))

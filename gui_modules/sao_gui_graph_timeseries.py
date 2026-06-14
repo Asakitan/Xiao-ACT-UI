@@ -255,7 +255,7 @@ class GraphTimeseriesPanel:
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
         controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         tk.Label(controls, text='范围', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                  font=get_cjk_font(9)).pack(side='left')
         sao_option_menu(controls, self._zoom_var, '0', '5000', '15000', '30000', '60000',

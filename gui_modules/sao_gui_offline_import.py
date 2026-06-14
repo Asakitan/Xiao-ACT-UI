@@ -214,7 +214,7 @@ class OfflineImportPanel:
                  anchor='w').pack(fill='x', pady=(1, 0))
 
         control = tk.Frame(toolbar, bg=body_bg)
-        control.pack(side='right', anchor='s', pady=(0, 4))
+        control.pack(side='right', anchor='center')
         self._step_badge_frame = tk.Frame(control, bg=body_bg)
         self._step_badge_frame.pack(side='left', padx=(0, 12))
         self._refresh_step_badge()

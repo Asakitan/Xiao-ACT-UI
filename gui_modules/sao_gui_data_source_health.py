@@ -185,7 +185,7 @@ class DataSourceHealthPanel:
         tk.Label(title_box, text='SOURCE HEALTH 数据源健康', bg=bg,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         controls = tk.Frame(toolbar, bg=bg)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._badge_frame = tk.Frame(controls, bg=bg)
         self._badge_frame.pack(side='left', padx=(0, 8))
         action_button(controls, '复制快照', self.copy_snapshot).pack(side='left', padx=(0, 6))

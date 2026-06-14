@@ -227,7 +227,7 @@ class CombatantDrilldownPanel:
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         # ALL right-side controls in ONE frame, bottom-aligned with title
         controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._badge_frame_cd = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame_cd.pack(side='left', padx=(0, 8))
         sao_option_menu(controls, self._mode_var, 'Live', 'Encounter',

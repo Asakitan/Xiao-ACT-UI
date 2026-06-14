@@ -241,7 +241,7 @@ class SkillDrilldownPanel:
 
         # ALL right-side controls in ONE frame, bottom-aligned with title
         controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        controls.pack(side='right', anchor='s', pady=(0, 4))
+        controls.pack(side='right', anchor='center')
         self._badge_frame_sd = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame_sd.pack(side='left', padx=(0, 8))
         sao_entry(controls, textvariable=self._query_var, width=18).pack(side='left', padx=(0, 8))
