@@ -1,920 +1,1004 @@
 {
- "schema_version": 2,
- "profile": {
-  "id": "boss_example_102721_auto",
   "schema_version": 2,
-  "profile_name": "天启的神槛(光·托纳蒂乌) · 机制示例",
-  "description": "《虚空浮岛·神龙枷所》第三场: 天启的神槛 — 光·托纳蒂乌(光龙) 机制示例: 14 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 10 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
-  "boss_total_hp": 0,
-  "enrage_time_s": 0,
-  "enrage": {
-   "time_s": 0,
-   "anchor": "fight",
-   "phase_id": "",
-   "warn_threshold_s": 60,
-   "urgent_threshold_s": 30,
-   "tts_milestones": [
-    60,
-    30,
-    10
-   ]
-  },
-  "simple_mode": false,
-  "target_name_pattern": "光·托纳蒂乌",
-  "dungeon_id": 13003,
-  "difficulty": "nightmare",
-  "phases": [
-   {
-    "id": "p1",
-    "name": "全程",
-    "trigger": {
-     "type": "manual",
-     "value": 0.0
+  "profile": {
+    "id": "boss_example_102721_auto",
+    "schema_version": 2,
+    "profile_name": "天启的神槛(光·托纳蒂乌) · 机制示例",
+    "description": "《虚空浮岛·神龙枷所》第三场: 天启的神槛 — 光·托纳蒂乌(光龙) 机制示例: 14 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 10 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+    "boss_total_hp": 0,
+    "enrage_time_s": 0,
+    "enrage": {
+      "time_s": 0,
+      "anchor": "fight",
+      "phase_id": "",
+      "warn_threshold_s": 60,
+      "urgent_threshold_s": 30,
+      "tts_milestones": [
+        60,
+        30,
+        10
+      ]
     },
-    "timelines": []
-   }
-  ],
-  "mechanics": [
-   {
-    "id": "mech_10270106",
-    "name": "光龙吐息",
-    "kind": "吐息",
-    "enabled": true,
-    "notes": "机制：光龙吐息\n躲法：侧身绕到Boss身侧躲开正面锥形吐息",
-    "color": "#e67e22",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270106
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "龙息 · 侧身绕到Boss身侧躲开正面",
-     "tts_text": "龙息",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "cone",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    "simple_mode": false,
+    "target_name_pattern": "光·托纳蒂乌",
+    "dungeon_id": 13003,
+    "difficulty": "nightmare",
+    "phases": [
+      {
+        "id": "p1",
+        "name": "全程",
+        "trigger": {
+          "type": "manual",
+          "value": 0.0
+        },
+        "timelines": []
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10270107",
-    "name": "红光扫尾接砸地",
-    "kind": "横扫",
-    "enabled": true,
-    "notes": "机制：红光扫尾接砸地\n躲法：贴近Boss内圈或绕背躲开扇形扫尾再让开砸地",
-    "color": "#e67e22",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270107
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "扫尾砸地 · 贴近Boss内圈或绕背躲开扇",
-     "tts_text": "扫尾砸地",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "cone",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    ],
+    "mechanics": [
+      {
+        "id": "mech_10270106",
+        "name": "光龙吐息",
+        "kind": "吐息",
+        "enabled": true,
+        "notes": "机制：光龙吐息\n躲法：侧身绕到Boss身侧躲开正面锥形吐息",
+        "color": "#e67e22",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270106
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "龙息 · 侧身绕到Boss身侧躲开正面",
+          "tts_text": "龙息",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "cone",
+              "radius": 15.0,
+              "inner": 0.0,
+              "angle": 90.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                5,
+                7,
+                20
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270107",
+        "name": "红光扫尾接砸地",
+        "kind": "横扫",
+        "enabled": true,
+        "notes": "机制：红光扫尾接砸地\n躲法：贴近Boss内圈或绕背躲开扇形扫尾再让开砸地",
+        "color": "#e67e22",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270107
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "扫尾砸地 · 贴近Boss内圈或绕背躲开扇",
+          "tts_text": "扫尾砸地",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "cone",
+              "radius": 8.0,
+              "inner": 0.0,
+              "angle": 120.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                3,
+                5,
+                20
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270108",
+        "name": "追击跳砸",
+        "kind": "砸地",
+        "enabled": true,
+        "notes": "机制：追击跳砸\n躲法：看落点圈被点名后立刻向圈外位移",
+        "color": "#d35400",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270108
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "跳砸 · 看落点圈被点名后立刻向圈外位",
+          "tts_text": "跳砸",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 8.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                0,
+                18,
+                20
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270115",
+        "name": "召唤小怪",
+        "kind": "召唤",
+        "enabled": true,
+        "notes": "机制：召唤小怪\n躲法：集火清掉刷出的小怪别让其叠场",
+        "color": "#27ae60",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270115
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "召唤 · 集火清掉刷出的小怪别让其叠场",
+          "tts_text": "召唤",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "",
+              "radius": 0.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": ""
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270116",
+        "name": "时空坍缩（致死）",
+        "kind": "致死",
+        "enabled": true,
+        "notes": "机制：时空坍缩（致死）\n躲法：全场致死机制按要求处理(打断/读盾/进安全区)别硬吃",
+        "color": "#c0392b",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270116
+          ],
+          "buff_ids": [
+            882301
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "坍缩致死 · 全场致死机制按要求处理(打断",
+          "tts_text": "坍缩致死",
+          "alert_type": "both",
+          "countdown_s": 6.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 4.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270117",
+        "name": "虚空双契",
+        "kind": "特殊",
+        "enabled": true,
+        "notes": "机制：虚空双契\n躲法：双人契约机制按连线配对站位执行别落单",
+        "color": "#34495e",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270117
+          ],
+          "buff_ids": [
+            882305,
+            882306,
+            882353
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "虚空双契 · 双人契约机制按连线配对站位执",
+          "tts_text": "虚空双契",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 0.5,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "bullet_shape"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270118",
+        "name": "净化之光-扩散",
+        "kind": "环形AOE",
+        "enabled": true,
+        "notes": "机制：净化之光-扩散\n躲法：光环向外扩散时往内圈Boss脚下收拢躲开扩散波",
+        "color": "#ef684e",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270118
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "净化扩散 · 光环向外扩散时往内圈Boss",
+          "tts_text": "净化扩散",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 10.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.1,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270119",
+        "name": "时空闪击",
+        "kind": "点名",
+        "enabled": true,
+        "notes": "机制：时空闪击\n躲法：被标记后远离被点名落点把伤害甩出去",
+        "color": "#8e44ad",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270119
+          ],
+          "buff_ids": [
+            882328
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "时空闪击 · 被标记后远离被点名落点把伤害",
+          "tts_text": "时空闪击",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 6.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270120",
+        "name": "时空的终焉",
+        "kind": "全场AOE",
+        "enabled": true,
+        "notes": "机制：时空的终焉\n躲法：全场AOE不可躲提前拉满减伤/护盾硬抗",
+        "color": "#c0392b",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270120
+          ],
+          "buff_ids": [
+            882329,
+            882350
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "终焉 · 全场AOE不可躲提前拉满减伤",
+          "tts_text": "终焉",
+          "alert_type": "both",
+          "countdown_s": 7.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "",
+              "radius": 0.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": ""
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270122",
+        "name": "芒辉之种",
+        "kind": "落点",
+        "enabled": true,
+        "notes": "机制：芒辉之种\n躲法：地面种子落点扩圈前快速远离避开爆炸范围",
+        "color": "#d35400",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270122
+          ],
+          "buff_ids": [
+            882324,
+            882327
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "芒辉之种 · 地面种子落点扩圈前快速远离避",
+          "tts_text": "芒辉之种",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 0.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": ""
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270123",
+        "name": "净化之光-收缩",
+        "kind": "环形AOE",
+        "enabled": true,
+        "notes": "机制：净化之光-收缩\n躲法：光环向内收缩时往外圈跑到安全外环",
+        "color": "#ef684e",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270123
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "净化收缩 · 光环向内收缩时往外圈跑到安全",
+          "tts_text": "净化收缩",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "ring",
+              "radius": 12.0,
+              "inner": 7.199999999999999,
+              "angle": 0.0,
+              "width": 0.1,
+              "center": "boss",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270124",
+        "name": "净化之光-扩散后收缩",
+        "kind": "环形AOE",
+        "enabled": true,
+        "notes": "机制：净化之光-扩散后收缩\n躲法：先躲扩散往内收拢再立刻往外圈跑躲收缩两段连躲",
+        "color": "#ef684e",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270124
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "扩散后收缩 · 先躲扩散往内收拢再立刻往外圈",
+          "tts_text": "扩散后收缩",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 10.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.1,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270125",
+        "name": "净化之光-收缩后扩散",
+        "kind": "环形AOE",
+        "enabled": true,
+        "notes": "机制：净化之光-收缩后扩散\n躲法：先往外躲收缩再回内圈躲扩散两段反向连躲",
+        "color": "#ef684e",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270125
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "收缩后扩散 · 先往外躲收缩再回内圈躲扩散两",
+          "tts_text": "收缩后扩散",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 10.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.1,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10270126",
+        "name": "光陨",
+        "kind": "落点",
+        "enabled": true,
+        "notes": "机制：光陨\n躲法：看天降光陨落点圈快速离开砸落范围",
+        "color": "#d35400",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10270126
+          ],
+          "buff_ids": [
+            882340
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "光陨 · 看天降光陨落点圈快速离开砸落",
+          "tts_text": "光陨",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 7.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_48d809da",
+        "name": "暗耀水晶连线",
+        "kind": "连线",
+        "enabled": true,
+        "notes": "暗耀水晶连线机制",
+        "color": "",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [],
+          "buff_ids": [
+            882317,
+            829318
+          ],
+          "source": "any",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "暗耀水晶连线",
+          "tts_text": "水晶连线",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "geometry": {
+              "shape": "line",
+              "radius": 20.0,
+              "source": "semantic",
+              "width": 2.0,
+              "center": "self"
+            }
+          }
+        }
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10270108",
-    "name": "追击跳砸",
-    "kind": "砸地",
-    "enabled": true,
-    "notes": "机制：追击跳砸\n躲法：看落点圈被点名后立刻向圈外位移",
-    "color": "#d35400",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270108
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
+    ],
+    "source": "local",
+    "remote_id": null,
+    "created_at": "2026-06-11T17:44:28Z",
+    "updated_at": "2026-06-11T17:44:28Z",
+    "author_snapshot": {
+      "player_uid": "",
+      "player_name": "",
+      "profession_id": 0,
+      "profession_name": ""
     },
-    "alert": {
-     "enabled": true,
-     "banner_text": "跳砸 · 看落点圈被点名后立刻向圈外位",
-     "tts_text": "跳砸",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    "boss_combat_meta": {
+      "102720": {
+        "breaking_s": 15.0,
+        "fracture_s": 5.0,
+        "weakness_s": 1.0
+      },
+      "102721": {
+        "breaking_s": 15.0,
+        "fracture_s": 5.0,
+        "weakness_s": 1.0
+      },
+      "102701": {
+        "breaking_s": 15.0,
+        "fracture_s": 5.0,
+        "weakness_s": 1.0
       }
-     }
     }
-   },
-   {
-    "id": "mech_10270115",
-    "name": "召唤小怪",
-    "kind": "召唤",
-    "enabled": true,
-    "notes": "机制：召唤小怪\n躲法：集火清掉刷出的小怪别让其叠场",
-    "color": "#27ae60",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270115
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "召唤 · 集火清掉刷出的小怪别让其叠场",
-     "tts_text": "召唤",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270116",
-    "name": "时空坍缩（致死）",
-    "kind": "致死",
-    "enabled": true,
-    "notes": "机制：时空坍缩（致死）\n躲法：全场致死机制按要求处理(打断/读盾/进安全区)别硬吃",
-    "color": "#c0392b",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270116
-     ],
-     "buff_ids": [
-      882301
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "坍缩致死 · 全场致死机制按要求处理(打断",
-     "tts_text": "坍缩致死",
-     "alert_type": "both",
-     "countdown_s": 6.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270117",
-    "name": "虚空双契",
-    "kind": "特殊",
-    "enabled": true,
-    "notes": "机制：虚空双契\n躲法：双人契约机制按连线配对站位执行别落单",
-    "color": "#34495e",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270117
-     ],
-     "buff_ids": [
-      882305,
-      882306,
-      882353
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "虚空双契 · 双人契约机制按连线配对站位执",
-     "tts_text": "虚空双契",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270118",
-    "name": "净化之光-扩散",
-    "kind": "环形AOE",
-    "enabled": true,
-    "notes": "机制：净化之光-扩散\n躲法：光环向外扩散时往内圈Boss脚下收拢躲开扩散波",
-    "color": "#ef684e",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270118
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "净化扩散 · 光环向外扩散时往内圈Boss",
-     "tts_text": "净化扩散",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "ring",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270119",
-    "name": "时空闪击",
-    "kind": "点名",
-    "enabled": true,
-    "notes": "机制：时空闪击\n躲法：被标记后远离被点名落点把伤害甩出去",
-    "color": "#8e44ad",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270119
-     ],
-     "buff_ids": [
-      882328
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "时空闪击 · 被标记后远离被点名落点把伤害",
-     "tts_text": "时空闪击",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270120",
-    "name": "时空的终焉",
-    "kind": "全场AOE",
-    "enabled": true,
-    "notes": "机制：时空的终焉\n躲法：全场AOE不可躲提前拉满减伤/护盾硬抗",
-    "color": "#c0392b",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270120
-     ],
-     "buff_ids": [
-      882329,
-      882350
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "终焉 · 全场AOE不可躲提前拉满减伤",
-     "tts_text": "终焉",
-     "alert_type": "both",
-     "countdown_s": 7.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270122",
-    "name": "芒辉之种",
-    "kind": "落点",
-    "enabled": true,
-    "notes": "机制：芒辉之种\n躲法：地面种子落点扩圈前快速远离避开爆炸范围",
-    "color": "#d35400",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270122
-     ],
-     "buff_ids": [
-      882324,
-      882327
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "芒辉之种 · 地面种子落点扩圈前快速远离避",
-     "tts_text": "芒辉之种",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270123",
-    "name": "净化之光-收缩",
-    "kind": "环形AOE",
-    "enabled": true,
-    "notes": "机制：净化之光-收缩\n躲法：光环向内收缩时往外圈跑到安全外环",
-    "color": "#ef684e",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270123
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "净化收缩 · 光环向内收缩时往外圈跑到安全",
-     "tts_text": "净化收缩",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "ring",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270124",
-    "name": "净化之光-扩散后收缩",
-    "kind": "环形AOE",
-    "enabled": true,
-    "notes": "机制：净化之光-扩散后收缩\n躲法：先躲扩散往内收拢再立刻往外圈跑躲收缩两段连躲",
-    "color": "#ef684e",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270124
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "扩散后收缩 · 先躲扩散往内收拢再立刻往外圈",
-     "tts_text": "扩散后收缩",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "ring",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270125",
-    "name": "净化之光-收缩后扩散",
-    "kind": "环形AOE",
-    "enabled": true,
-    "notes": "机制：净化之光-收缩后扩散\n躲法：先往外躲收缩再回内圈躲扩散两段反向连躲",
-    "color": "#ef684e",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270125
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "收缩后扩散 · 先往外躲收缩再回内圈躲扩散两",
-     "tts_text": "收缩后扩散",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "ring",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10270126",
-    "name": "光陨",
-    "kind": "落点",
-    "enabled": true,
-    "notes": "机制：光陨\n躲法：看天降光陨落点圈快速离开砸落范围",
-    "color": "#d35400",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10270126
-     ],
-     "buff_ids": [
-      882340
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "光陨 · 看天降光陨落点圈快速离开砸落",
-     "tts_text": "光陨",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   }
-  ],
-  "source": "local",
-  "remote_id": null,
-  "created_at": "2026-06-11T17:44:28Z",
-  "updated_at": "2026-06-11T17:44:28Z",
-  "author_snapshot": {
-   "player_uid": "",
-   "player_name": "",
-   "profession_id": 0,
-   "profession_name": ""
   }
- }
 }
