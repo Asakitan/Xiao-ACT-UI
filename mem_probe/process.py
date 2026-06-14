@@ -82,7 +82,7 @@ try:
 except Exception:
     _NTRVM = None
 
-# r69-driver 内核驱动后端 (可选 — 驱动未加载时自动跳过)
+# XiaoACTprocessReading 内核驱动后端 (可选 — 驱动未加载时自动跳过)
 try:
     from mem_probe import driver_backend as _drv
     _DRIVER_OK = _drv.probe()
