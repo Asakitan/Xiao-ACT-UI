@@ -85,10 +85,10 @@ except Exception:
 # XiaoACTprocessReading 内核驱动后端 (可选 — 驱动未加载时自动跳过)
 try:
     from mem_probe import driver_backend as _drv
-    _DRIVER_OK = _drv.ensure_loaded()
 except Exception:
     _drv = None
-    _DRIVER_OK = False
+_DRIVER_OK = False
+_DRIVER_TRIED = False
 
 
 class _MEMORY_RANGE_ENTRY(ctypes.Structure):
@@ -110,10 +110,25 @@ except Exception:
 
 
 def _mem_read(handle, addr, buf, size, p_got):
-    """Unified read — driver / NtReadVirtualMemory / ReadProcessMemory fallback."""
-    if _DRIVER_OK:
-        if _drv.driver_mem_read(handle, addr, buf, size, p_got):
-            return True
+    """Unified read — driver / NtReadVirtualMemory / ReadProcessMemory fallback.
+
+    Driver is probed lazily on first call. If driver read fails or isn't
+    available, falls through to NtReadVirtualMemory then ReadProcessMemory.
+    """
+    global _DRIVER_OK, _DRIVER_TRIED
+    if _drv is not None:
+        if _DRIVER_OK:
+            if _drv.driver_mem_read(handle, addr, buf, size, p_got):
+                return True
+        elif not _DRIVER_TRIED:
+            _DRIVER_TRIED = True
+            try:
+                _DRIVER_OK = _drv.ensure_loaded()
+            except Exception:
+                _DRIVER_OK = False
+            if _DRIVER_OK:
+                if _drv.driver_mem_read(handle, addr, buf, size, p_got):
+                    return True
     if _NTRVM is not None:
         return _NTRVM(
             ctypes.c_void_p(handle), ctypes.c_void_p(addr),
@@ -297,9 +312,17 @@ class StarProcess:
         self._handle = int(self._pm.process_handle)
         self._region_cache: Optional[List[MemoryRegion]] = None
         self._region_cache_time: float = 0.0
-        if _DRIVER_OK and _drv is not None:
-            if _drv.attach(self._pid):
-                print(f"[StarProcess] driver backend attached (pid={self._pid})")
+        global _DRIVER_OK, _DRIVER_TRIED
+        if _drv is not None:
+            if not _DRIVER_OK:
+                try:
+                    _DRIVER_OK = _drv.ensure_loaded()
+                except Exception:
+                    _DRIVER_OK = False
+                _DRIVER_TRIED = True
+            if _DRIVER_OK:
+                if _drv.attach(self._pid):
+                    print(f"[StarProcess] driver backend attached (pid={self._pid})")
 
     # ───── 基本属性 ─────
     @property
