@@ -85,7 +85,7 @@ except Exception:
 # XiaoACTprocessReading 内核驱动后端 (可选 — 驱动未加载时自动跳过)
 try:
     from mem_probe import driver_backend as _drv
-    _DRIVER_OK = _drv.probe()
+    _DRIVER_OK = _drv.ensure_loaded()
 except Exception:
     _drv = None
     _DRIVER_OK = False

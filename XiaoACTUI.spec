@@ -165,6 +165,8 @@ a = Analysis(
         # klass pointers from process memory (no dump) and StaticResolver self-heals.
         ('mem_probe/il2cpp/_cache/bundle.json', 'mem_probe/il2cpp/_cache'),
         ('mem_probe/il2cpp/_cache/bundles', 'mem_probe/il2cpp/_cache/bundles'),
+        # 内核驱动 (物理内存直读; 启动时自动 sc create+start, 失败回退 NtRVM)
+        ('drivers', 'drivers'),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
