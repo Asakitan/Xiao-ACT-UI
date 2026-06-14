@@ -152,6 +152,7 @@ pre{color:var(--act-gold)!important;}
 .diag-item.warn{color:var(--act-gold)!important;}
 </style>
 <script src="act_panel_theme.js"></script>
+<script src="act_panel_util.js"></script>
 </head>
 <body>
 <div class="shell" id="shell">
@@ -285,7 +286,7 @@ pre{color:var(--act-gold)!important;}
         var self = objectValue(source.self);
         var extra = self.uid ? '<pre>self uid=' + esc(self.uid) + ' hp=' + esc(self.hp) + '/' + esc(self.max_hp) + ' name=' + esc(self.name || '') + '</pre>' : '';
         return '<article class="' + cls + '">' +
-            '<div class="card-top"><div><div class="name">' + esc(key.toUpperCase()) + '</div><div class="sub">' + esc(source.data_source || source.mode || '-') + '</div></div>' +
+            '<div class="card-top"><div><div class="name">' + esc(key.toUpperCase()) + '</div><div class="sub">' + esc(ActText.source(source.data_source || key, source.mode || '-')) + '</div></div>' +
             '<div>' + badge(source.running || source.alive ? 'ACTIVE' : 'IDLE', statusClass(source)) + '</div></div>' +
             '<div class="grid">' +
             '<div>Status: <span>' + esc(source.status || source.mode || '-') + '</span></div>' +
@@ -333,7 +334,7 @@ pre{color:var(--act-gold)!important;}
         statusPill.style.color = status === 'running' ? 'var(--ok)' : (status === 'error' || status === 'missing' ? 'var(--bad)' : 'var(--warn)');
         document.getElementById('sum-status').textContent = status;
         document.getElementById('sum-mode').textContent = payload.requested_mode || '--';
-        document.getElementById('sum-source').textContent = summary.data_source || '--';
+        document.getElementById('sum-source').textContent = ActText.source(summary.data_source, '--');
         document.getElementById('sum-latency').textContent = metricText(payload.latency_ms, ' ms');
         document.getElementById('sum-event').textContent = metricText(payload.last_event_ms, ' ms');
         document.getElementById('sum-errors').textContent = String(errorCount);

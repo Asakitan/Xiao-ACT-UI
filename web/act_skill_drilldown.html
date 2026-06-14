@@ -178,7 +178,7 @@
         if (filters.query != null && document.activeElement !== document.getElementById('query')) document.getElementById('query').value = filters.query || '';
         document.getElementById('encounter').textContent = 'encounter: ' + (status.encounter_id || 'unknown');
         document.getElementById('summary').innerHTML = [
-          ['Skill', s.name || '-'], ['Kind', s.kind || '-'], ['Amount', fmt(s.amount)], ['Casts', fmt(status.casts)], ['Hits', fmt(status.hits)], ['Crit', pct(status.crit_rate)]
+          ['Skill', s.name || '-'], ['Kind', ActText.topic(s.kind, '-')], ['Amount', fmt(s.amount)], ['Casts', fmt(status.casts)], ['Hits', fmt(status.hits)], ['Crit', pct(status.crit_rate)]
         ].map(([k,v]) => '<div class="card"><div class="label">'+esc(k)+'</div><div class="value">'+esc(v)+'</div></div>').join('');
         let timelineHtml = '<div class="empty">No timeline refs</div>';
         if (refs.length) {
@@ -186,7 +186,7 @@
           const key = this._refKey(ref, idx);
           const open = !!this.expandedRefs[key];
           const payload = objectValue(ref.payload);
-          return '<div class="event-wrap" data-key="'+esc(key)+'" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time"><span class="event-caret">'+(open ? '▾' : '▸')+'</span> '+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="'+(open ? '' : 'display:none;')+'">'+esc(JSON.stringify(payload))+'</pre></div>';
+          return '<div class="event-wrap" data-key="'+esc(key)+'" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time"><span class="event-caret">'+(open ? '▾' : '▸')+'</span> '+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ActText.topic(ref.topic, '-'))+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="'+(open ? '' : 'display:none;')+'">'+esc(JSON.stringify(payload))+'</pre></div>';
           }).join('');
         }
         this._setTimelineHtml(timelineHtml, preserveScroll);

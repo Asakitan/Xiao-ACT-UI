@@ -235,7 +235,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             var key = eventKey(ev, idx);
             var open = !!expandedEvents[key];
             var payload = objectValue(ev.payload);
-            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(looseValueText(ev.value, '')) + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
+            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ActText.topic(ev.topic, '-')) + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ActText.source(ev.source, '-')) + ' · value=' + esc(looseValueText(ev.value, '')) + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
         }).join(''), preserveScroll);
     }
     window.TimelineVcr = {

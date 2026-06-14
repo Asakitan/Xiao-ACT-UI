@@ -141,7 +141,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 <option value="topic">事件类型</option>
                 <option value="field">自定义字段</option>
             </select>
-            <input id="groupField" type="text" placeholder="字段名" style="width:96px;" />
+            <input id="groupField" type="text" placeholder="字段名" style="width:96px;" hidden />
             <input id="query" type="text" placeholder="搜索 / Search" />
             <select id="source"><option value="live" selected>Live</option><option value="history">History</option></select>
             <button class="primary" type="button" onclick="ActAggregate.refresh()">刷新</button>
@@ -180,6 +180,17 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var lastGraph = null;   // last graph payload
 
     var ACCENTS = { cyan: 'var(--act-cyan)', gold: 'var(--act-gold)', danger: 'var(--act-danger)', ok: 'var(--act-ok)' };
+    function setStatus(text, cls) {
+        statusPill.textContent = text;
+        statusPill.classList.remove('ok', 'warn', 'bad');
+        if (cls) statusPill.classList.add(cls);
+    }
+    function syncGroupFieldVisibility() {
+        var visible = groupBySelect.value === 'field';
+        groupFieldInput.hidden = !visible;
+        groupFieldInput.disabled = !visible;
+        groupFieldInput.style.display = visible ? '' : 'none';
+    }
     function acc(kind) { return ACCENTS[kind] || ACCENTS.cyan; }
 
     function esc(s) {
@@ -450,13 +461,14 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
     function refresh(options) {
         options = options || {};
-        statusPill.textContent = 'LOADING';
+        syncGroupFieldVisibility();
+        setStatus('LOADING', 'warn');
         var query = queryInput.value || '';
         var source = sourceSelect.value || 'live';
         var groupBy = groupBySelect.value || 'skill';
-        var groupField = groupFieldInput.value || '';
+        var groupField = groupBy === 'field' ? (groupFieldInput.value || '') : '';
         var api = window.pywebview && window.pywebview.api;
-        if (!api || !api.get_aggregate_status) { render(null, null, { preserveScroll: false }); statusPill.textContent = 'NO API'; return; }
+        if (!api || !api.get_aggregate_status) { render(null, null, { preserveScroll: false }); setStatus('NO API', 'bad'); return; }
         var graphP = (api.get_graph_timeseries_status)
             ? Promise.resolve(api.get_graph_timeseries_status(null, 120, query, null, null)).then(function (j) { try { return JSON.parse(j); } catch (e) { return null; } }).catch(function () { return null; })
             : Promise.resolve(null);
@@ -471,9 +483,9 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 });
             }
             render(lastData, lastGraph, { preserveScroll: options.preserveScroll !== false });
-            statusPill.textContent = lastData && lastData.ok ? 'OK' : 'ERROR';
+            setStatus(lastData && lastData.ok ? 'OK' : 'ERROR', lastData && lastData.ok ? 'ok' : 'bad');
         }).catch(function () {
-            render(null, null, { preserveScroll: false }); statusPill.textContent = 'API ERROR';
+            render(null, null, { preserveScroll: false }); setStatus('API ERROR', 'bad');
         });
     }
 
@@ -499,9 +511,10 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var qTimer = null;
     queryInput.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(function () { refresh({ preserveScroll: false }); }, 300); });
     sourceSelect.addEventListener('change', function () { refresh({ preserveScroll: false }); });
-    groupBySelect.addEventListener('change', function () { refresh({ preserveScroll: false }); });
+    groupBySelect.addEventListener('change', function () { syncGroupFieldVisibility(); refresh({ preserveScroll: false }); });
     groupFieldInput.addEventListener('change', function () { refresh({ preserveScroll: false }); });
 
+    syncGroupFieldVisibility();
     setTimeout(function () { shell.classList.add('visible'); refresh(); }, 80);
 })();
 </script>

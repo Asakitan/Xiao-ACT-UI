@@ -300,7 +300,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var storage = objectValue(payload.storage_status);
         statusPill.textContent = payload.ok ? 'READY' : 'MISSING';
         statusPill.style.color = payload.ok ? 'var(--act-ok)' : 'var(--act-danger)';
-        document.getElementById('sum-id').textContent = payload.encounter_id || '--';
+        document.getElementById('sum-id').textContent = payload.encounter_id || p.encounter_id || p.title || '--';
         document.getElementById('sum-format').textContent = (payload.selected_format || fmt()).toUpperCase();
         document.getElementById('sum-count').textContent = firstCountText(storage.count, historyItems.length);
         // sqlite/archive 出错时不能继续装 READY (DB 锁死/损坏 → 空历史 + READY 误导)

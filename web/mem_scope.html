@@ -106,6 +106,12 @@ table.ms-table{table-layout:fixed!important;}
     var pollTimer = null;
     var lastData = null;
 
+    function setStatus(text, cls) {
+        statusPill.textContent = text;
+        statusPill.classList.remove('ok', 'warn', 'bad');
+        if (cls) statusPill.classList.add(cls);
+    }
+
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -181,7 +187,7 @@ table.ms-table{table-layout:fixed!important;}
         d = objectValue(d);
         var st = objectValue(d.status);
         var active = !!st.active;
-        statusPill.textContent = active ? 'HYBRID' : 'TCP-ONLY';
+        setStatus(active ? 'HYBRID' : 'TCP-ONLY', active ? 'ok' : 'warn');
         var html = '<div class="ms-badges">';
         html += '<span class="ms-badge" style="--acc:' + (active ? 'var(--act-cyan)' : '#ffb454') + '">'
             + (active ? 'HYBRID' : 'TCP-ONLY') + '</span>';
@@ -326,7 +332,7 @@ table.ms-table{table-layout:fixed!important;}
 
     function refresh() {
         var a = api();
-        if (!a || !a.get_mem_scope_status) { statusPill.textContent = 'NO API'; return Promise.resolve(null); }
+        if (!a || !a.get_mem_scope_status) { setStatus('NO API', 'bad'); return Promise.resolve(null); }
         return Promise.resolve(a.get_mem_scope_status(queryInput.value || '', dtypeSelect.value || 'i32', jobId))
             .then(function (j) { return JSON.parse(j); })
             .then(function (data) {
@@ -336,7 +342,7 @@ table.ms-table{table-layout:fixed!important;}
                 }
                 render(lastData);
                 return lastData;
-            }).catch(function () { statusPill.textContent = 'API ERROR'; return null; });
+            }).catch(function () { setStatus('API ERROR', 'bad'); return null; });
     }
 
     function startPoll() {
@@ -357,7 +363,7 @@ table.ms-table{table-layout:fixed!important;}
     function doSearch() {
         var a = api(); var value = (queryInput.value || '').trim();
         if (!value) { toast('请输入搜索值'); return; }
-        if (!a || !a.mem_search) { statusPill.textContent = 'NO API'; toast('搜索 API 不可用'); return; }
+        if (!a || !a.mem_search) { setStatus('NO API', 'bad'); toast('搜索 API 不可用'); return; }
         Promise.resolve(a.mem_search(value, dtypeSelect.value || 'i32', 0)).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) { jobId = res.job_id || ''; startPoll(); refresh(); }
@@ -368,7 +374,7 @@ table.ms-table{table-layout:fixed!important;}
     function doNarrow() {
         var a = api();
         if (!jobId) { toast('请先完成一次搜索'); return; }
-        if (!a || !a.mem_narrow) { statusPill.textContent = 'NO API'; toast('收敛 API 不可用'); return; }
+        if (!a || !a.mem_narrow) { setStatus('NO API', 'bad'); toast('收敛 API 不可用'); return; }
         Promise.resolve(a.mem_narrow(jobId, (queryInput.value || '').trim())).then(function (j) {
             var res = JSON.parse(j);
             if (res.ok) { startPoll(); refresh(); } else { toast('收敛失败: ' + (res.hint || res.reason)); }
