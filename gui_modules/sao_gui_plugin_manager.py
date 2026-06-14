@@ -471,9 +471,9 @@ class PluginManagerPanel:
                      anchor='w', font=get_cjk_font(9),
                      padx=6, pady=3).pack(fill='x', pady=(SP_XS, 0))
 
-        # ── Error box ──
+        # ── Error box (skip when error == disabled banner to avoid duplicate) ──
         error = str(plugin.get('last_error') or '').strip()
-        if error:
+        if error and error != '已停用':
             tk.Label(inner, text=error,
                      bg=_pc('danger_soft', '#33161f'),
                      fg=_pc('danger', '#ff707a'),
