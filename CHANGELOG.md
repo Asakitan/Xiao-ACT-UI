@@ -2,6 +2,75 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.6.154: BossRaid profile + 机制示例 JSON 加 map_name 字段, 场景跟随 JSON 走.
+
+  - **`engines/boss_raid_engine.py`**: profile 加 `map_name` 字段; reactions 场景下拉从 imported
+    profiles 的 `dungeon_id` + `map_name` 派生 label, 没进本也能看到对应 raid 名字 (commit `3563151`)。
+  - **机制示例 JSON**(`assets/boss_raids/*.json`): 同步加 `map_name` 字段 (commit `3d3fd0e`)。
+  - **`engines/boss_raid_engine.py`**: `_seed_from_assets` 改用 `config.resource_path` 查找 assets 目录,
+    修打包后路径不一致 (commit `56e2e16`)。
+
+## v4.6.144 – v4.6.153: driver 内核后端 / BossRaid 机制全量 / ACT 13 面板视觉对齐 / 内存加速 / boss break / hide_seek 修复.
+
+  本区间共 10 个版本, 跨 2026-06-14 ~ 06-15, commit 数 30+, 按主题合并如下 (精确版本号与 commit 对应见 git log):
+
+  ### 1. Driver 内核后端 (XiaoACTprocessReading)
+  - **Phase 1 kernel backend**(`1a8a619`): 内核驱动初步接入 mem_probe, 提供 CR3 通信 `XiaoACTprocessReading`(`a6c6d4c`, 跨 Python + C++ 工程)。
+  - **Auto-load + 打包**(`a43b98f`): `driver_backend.ensure_loaded()` 三层查找(顶层 `drivers/` / PyInstaller
+    `runtime/drivers/` / 根目录兜底) + `sc create+start`; `XiaoACTUI.spec` datas 加 `('drivers','drivers')`;
+    首次 `import process` 即触发驱动加载。
+  - **`StarProcess` 自动 probe+attach + fallback**(`9318820`): 构造时强制 `probe()+attach()`,
+    失败 fallback 到 NtRVM/RPM; 修 `driver_mem_read` 的 `ctypes.byref()` item assignment TypeError。
+
+  ### 2. BossRaid 机制全量 dump + 几何重写 (`54fce0f`)
+  - `MemConfigTableReader` 扩 `col_f32`/`col_i64`/`col_f32_array` + 7 个新 TABLE_CLASS。
+  - 9 个 raid 全量 dump: 360 技能 + SkillEffect 链 + AI 范围; BulletShapeTable 722 弹道;
+    Boss combat 元数据 9/9 (breaking 8/15/18s, fracture 5s)。
+  - 几何重写 132/148 (89% 填充率, 来源 semantic/bullet_shape/ai_range/reverse);
+    mechanic skill 覆盖 14/33 → 33/33 (100%)。
+
+  ### 3. ACT 13 面板 entity(Tk) → webview/design 视觉 1:1 对齐
+  - **共享组件圆角化**(承接 v4.6.143): `rounded_panel`/`metric_tile`/`section_card`/`status_badge`/
+    `action_button`; `_SaoScroll` 自绘暗色滚动条; `sao_entry`/`sao_option_menu`。
+  - **字体分割**(`c7a041d`/`3543d84`): 英文走 SAO UI, 中文走 ZHUZIYUAN; 修处理包含 explicit CJK 字体
+    label 的遗漏。
+  - **Title bar alignment**(`8ea1c64`/`20f1562`): 13 面板统一标题栏 + 居中对齐(替代底部对齐)。
+  - **Toolbar 清扫 + status badges**(`8825314`/`cd10b64`/`8e4ae4d`/`6833bcc`/`024261c`/`e9f7719`):
+    橙色 × 关闭按钮 + 状态徽标; 简化 cluttered 工具栏; content-level 渲染对齐 webref。
+  - **小修**(`43fa724`/`e74a0ff`/`4013948`/`3c75222`): death_recap 重复关闭按钮 / plugin_manager
+    重复占位符; SAO 字体应用; webview 详情对齐。
+
+  ### 4. 内存读取加速 (`2658e60` + `51fcc71`)
+  - **6 项用户态优化**(`2658e60`): NtReadVirtualMemory 直调; attrs slab read; `read_slab_many`;
+    VQ 区域缓存(5s TTL); PrefetchVirtualMemory; ThreadPoolExecutor 并行扫描(≥4 region)。
+  - **Cython 全量 rebuild**(`4897c85`): 统一 toolchain metadata。
+  - **boss_cast_loop GIL 优化**(`51fcc71`): 三阶段 nogil batch reads 消除 GIL 争用。
+
+  ### 5. Boss Break 系统 (`58472f9` + `7fde65e`)
+  - **新 trigger** `stop_breaking_ticking`(attr 453) False→True; 新恢复阶段 `'timed'` 单阶段 ease-out
+    quadratic 0%→100%; 时间源 `BreakingContinueTime` from MonsterTable。
+  - **双端 1:1**: Tk(`sao_gui_bosshp.py`) + Web(`boss_hp.html`) + Hybrid MEM entity combat reader。
+  - **三级查找**(`engines/break_time_lookup.py`): cache 文件 → raid dump 种子 → live MEM fallback;
+    cache miss 实时单条读 + 自动回写; bridge `_base_acquired` 后自动后台 build 全 cache。
+  - **全表 cache**: 3018 个怪物的 BreakingContinueTime → `assets/break_time_cache.json`。
+
+  ### 6. 其他修复
+  - **update server fullpack fix**(`2ad6013`): 自愈 `_load_versions_index` + 新增 fullpack gate 步骤,
+    修跳过链路中 fullpack 版本的 bug。
+  - **hide_seek 插件修复**(`41f201d`): `_stopped` flag + `_deferred_dismiss` 修 alert 不消失;
+    `_CLICK_GLOBAL_CD_S=2.0` + `_verify_color_presence()` 修 step3/4 误判; step1 ESC fallback。
+  - **BossRaid 体验修复**(`16f0606` + `56e2e16`): assets 自动导入; ON↔OFF 可切换 + 文案纠正;
+    机制卡片删除 fallback messagebox; 技能名解析 fallback; 联动勾选可见(`PANEL_CARD_ALT`);
+    reactions 场景下拉补充 imported profiles 的 dungeon_id; `_seed_from_assets` 改用 `resource_path`。
+  - **BossRaid profile map_name**(`3563151`): profile 加 `map_name` 字段, 场景跟随 JSON 走。
+
+  ### 已知遗留
+  - **selftest baseline 回归**: 8 个 panel-related selftest 失败(`act_combatant_drilldown` /
+    `act_death_recap` / `act_graph_timeseries` / `act_skill_drilldown` / `panel_components` /
+    `plugin_manager_panel` / `report_export_panel` / `trigger_timer_panel`), 多与 `_badge_frame` 有关,
+    疑似 v4.6.143 共享组件重构后未同步 fixture。需补齐后再发起 release。
+  - 实战验证: boss break 动画 / driver 加载 / BossRaid 9 个 raid 几何 / hide_seek 步骤循环, 均需进游戏确认。
+
 ## v4.6.143: ACT entity(Tk) 面板向 webview/design 视觉对齐 —— 圆角化 + SAO 字体 + 控件统一(全13面板).
 
   目标: entity(Tk) 面板外观贴近 webview(=design, HTML)。webview 用 [[design]] 设计稿渲染为
