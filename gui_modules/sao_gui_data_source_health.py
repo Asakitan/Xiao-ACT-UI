@@ -10,7 +10,12 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_data_source_diagnose, act_data_source_health
-from gui_modules.sao_panel_components import keep_canvas_scroll, sao_scrollbar
+from gui_modules.sao_panel_components import (
+    SP_SM, SP_MD, SP_XL,
+    _pc, _accent, _accent_text,
+    action_button, keep_canvas_scroll, metric_tile, rounded_panel,
+    sao_scrollbar, section_card, status_badge,
+)
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -161,64 +166,34 @@ class DataSourceHealthPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT DATA SOURCE HEALTH', on_close=self.hide, flat=True)
+        header = _sao_panel_header(win, 'PIPELINE DIAGNOSTICS', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'OBSERVABILITY').pack(side='left')
-        for label, cmd in (
-            ('刷新', self.refresh),
-            ('诊断 Diagnose', self.diagnose),
-            ('复制', self.copy_snapshot),
-            ('×', self.hide),
-        ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+        bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
 
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
-        tk.Label(
-            body,
-            textvariable=self._status_var,
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            font=get_cjk_font(9),
-        ).pack(fill='x', padx=12, pady=(0, 6))
+        toolbar = tk.Frame(body, bg=bg)
+        toolbar.pack(fill='x', padx=SP_MD, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=bg)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='PIPELINE DIAGNOSTICS', bg=bg,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='SOURCE HEALTH 数据源健康', bg=bg,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        self._badge_frame = tk.Frame(toolbar, bg=bg)
+        self._badge_frame.pack(side='left', padx=(SP_MD, 0), anchor='n', pady=8)
+        action_button(toolbar, '刷新', self.refresh).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '复制快照', self.copy_snapshot).pack(side='right', padx=(6, 0))
 
-        outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        left = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG)
-        left.pack(side='left', fill='both', expand=True, padx=(0, 10))
-        right = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG, width=260)
-        right.pack(side='right', fill='y')
-        right.pack_propagate(False)
+        self._metrics_row = tk.Frame(body, bg=bg)
+        self._metrics_row.pack(fill='x', padx=SP_MD, pady=(SP_SM, SP_SM))
 
-        canvas = tk.Canvas(left, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = sao_scrollbar(left, canvas.yview)
-        self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        canvas = tk.Canvas(body, bg=bg, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(body, canvas.yview)
+        self._list = tk.Frame(canvas, bg=bg)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_win_id, width=e.width))
@@ -226,154 +201,109 @@ class DataSourceHealthPanel:
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         self._canvas = canvas
-
-        tk.Label(
-            right,
-            text='DIAGNOSTICS',
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(fill='x', pady=(2, 8))
-        self._diag = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
-        self._diag.pack(fill='both', expand=True)
+        self._diag = None
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         sources = status.get('sources') or {}
         summary = sources.get('summary') or {}
         source_label = str(summary.get('data_source') or status.get('requested_mode') or '--').upper()
-        self._summary_var.set(f'SOURCE: {source_label}')
-        errors = status.get('errors') or []
-        state = str(status.get('status') or ('running' if status.get('ok') else 'error')).upper()
         latency_ms = _finite_int(status.get('latency_ms'), 0, lo=0)
         last_event_ms = _finite_int(status.get('last_event_ms'), 0, lo=0)
-        self._status_var.set(
-            f"{state} · latency={latency_ms}ms · last_event={last_event_ms}ms · errors={len(errors)}"
-        )
+        encounter = str(summary.get('encounter') or '--')
+
+        for child in list(self._badge_frame.winfo_children()):
+            child.destroy()
+        status_badge(self._badge_frame, source_label, kind='cyan').pack(side='left')
+
+        for child in list(self._metrics_row.winfo_children()):
+            child.destroy()
+        last_sec = f'{last_event_ms / 1000:.2f}s' if last_event_ms else '--'
+        tiles = [
+            ('当前源', source_label, '', 'cyan'),
+            ('快照延迟', f'{latency_ms}ms', '', 'gold'),
+            ('最近事件', last_sec, '前' if last_event_ms else '', 'gold'),
+            ('战斗', encounter, '', 'gold'),
+        ]
+        for label, value, sub, accent in tiles:
+            metric_tile(self._metrics_row, label, value, sub=sub, accent=accent).pack(
+                side='left', fill='x', expand=True, padx=(0, SP_SM))
+
         if self._list is not None:
-            sources_sig = self._sources_signature(sources)
-            if sources_sig == self._last_sources_sig:
-                self._render_diagnostics(status)
+            sig = self._sources_signature(sources) + repr(status.get('diagnostics'))
+            if sig == self._last_sources_sig:
                 return
-            self._last_sources_sig = sources_sig
+            self._last_sources_sig = sig
             keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
             for child in list(self._list.winfo_children()):
                 child.destroy()
-            rendered = False
-            for key in ('packet', 'memory'):
-                source = sources.get(key)
-                if isinstance(source, Mapping):
-                    self._render_source(key, source)
-                    rendered = True
-            if not rendered:
-                self._render_empty()
-        self._render_diagnostics(status)
+            self._render_sources_section(sources)
+            self._render_diagnostics_section(status)
+            self._render_snapshot_section(status)
 
-    def _render_empty(self) -> None:
+    _SOURCE_NAMES = {'packet': 'TCP Capture', 'memory': 'Memory Bridge', 'vision': 'Vision (STA)'}
+    _SOURCE_STATUS = {True: ('ONLINE', 'ok'), False: ('OFFLINE', 'danger')}
+
+    def _render_sources_section(self, sources: Mapping[str, Any]) -> None:
         if self._list is None:
             return
-        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=8, padx=4)
-        tk.Label(
-            box,
-            text='没有可用的数据源\n启动识别后 PacketBridge 会提供 health 快照。',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            justify='center',
-            font=get_cjk_font(10),
-            pady=28,
-        ).pack(fill='x')
+        bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        source_keys = [k for k in ('packet', 'memory', 'vision') if isinstance(sources.get(k), Mapping)]
+        if not source_keys:
+            box = section_card(self._list, '数据源 Sources', badge='0', accent='gold')
+            box.pack(fill='x', padx=SP_MD, pady=SP_SM)
+            tk.Label(box, text='没有可用的数据源', bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(10), pady=20).pack(fill='x')
+            return
+        box = section_card(self._list, '数据源 Sources', badge=str(len(source_keys)), accent='gold')
+        box.pack(fill='x', padx=SP_MD, pady=SP_SM)
+        for key in source_keys:
+            source = sources[key]
+            active = bool(source.get('running') or source.get('alive') or source.get('active'))
+            error = str(source.get('error_msg') or source.get('last_error') or '').strip()
+            if error:
+                badge_text, badge_kind = 'DEGRADED', 'gold'
+            else:
+                badge_text, badge_kind = self._SOURCE_STATUS.get(active, ('OFFLINE', 'danger'))
+            name = self._SOURCE_NAMES.get(key, key.upper())
+            subtitle = self._source_subtitle(key, source)
+            card_frame = tk.Frame(box, bg=bg, highlightthickness=1, highlightbackground=_pc('border', _SAO_PANEL_BORDER))
+            card_frame.pack(fill='x', pady=SP_SM, padx=SP_SM)
+            top = tk.Frame(card_frame, bg=bg)
+            top.pack(fill='x', padx=SP_MD, pady=(SP_SM, 2))
+            tk.Label(top, text=name, bg=bg, fg=_pc('value_fg', _SAO_PANEL_VALUE_FG), font=get_cjk_font(10, True), anchor='w').pack(side='left', fill='x', expand=True)
+            status_badge(top, badge_text, kind=badge_kind).pack(side='right')
+            if subtitle:
+                tk.Label(card_frame, text=subtitle, bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(8), anchor='w').pack(fill='x', padx=SP_MD, pady=(0, SP_SM))
 
-    def _render_source(self, key: str, source: Mapping[str, Any]) -> None:
+    def _render_diagnostics_section(self, status: Mapping[str, Any]) -> None:
         if self._list is None:
             return
-        active = bool(source.get('running') or source.get('alive') or source.get('active') or source.get('started') or source.get('is_memory_active'))
-        error = str(source.get('error_msg') or source.get('last_error') or '').strip()
-        border = _SAO_PANEL_GOLD if key == 'memory' and active else (_SAO_PANEL_BORDER if active else (_SAO_PANEL_SEP if not error else _theme_color('danger', '#ff6b82')))
-        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=border)
-        card.pack(fill='x', pady=6, padx=4)
-
-        top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        top.pack(fill='x', padx=10, pady=(8, 2))
-        tk.Label(
-            top,
-            text=key.upper(),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_VALUE_FG,
-            anchor='w',
-            font=get_cjk_font(11, True),
-        ).pack(side='left', fill='x', expand=True)
-        _sao_pill(top, 'ACTIVE' if active else ('ERROR' if error else 'IDLE')).pack(side='right')
-
-        meta = tk.Label(
-            card,
-            text=self._format_source(source),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            anchor='w',
-            justify='left',
-            font=('Consolas', 9),
-        )
-        meta.pack(fill='x', padx=10, pady=(2, 4))
-        watchers = source.get('watchers') or {}
-        if isinstance(watchers, Mapping) and watchers:
-            wline = ' · '.join(f'{name}:{mode}' for name, mode in watchers.items())
-            tk.Label(
-                card,
-                text=wline,
-                bg=_SAO_PANEL_BODY_BG,
-                fg=_SAO_PANEL_VALUE_FG,
-                anchor='w',
-                justify='left',
-                wraplength=490,
-                font=('Consolas', 8),
-                padx=8,
-                pady=5,
-            ).pack(fill='x', padx=10, pady=(0, 6))
-        self_state = source.get('self') or {}
-        if isinstance(self_state, Mapping) and self_state.get('uid'):
-            tk.Label(
-                card,
-                text=f"self uid={self_state.get('uid')} hp={self_state.get('hp')}/{self_state.get('max_hp')} name={self_state.get('name', '')}",
-                bg=_SAO_PANEL_BODY_BG,
-                fg=_SAO_PANEL_GOLD,
-                anchor='w',
-                justify='left',
-                font=('Consolas', 8),
-            ).pack(fill='x', padx=10, pady=(0, 8))
-
-    def _render_diagnostics(self, status: Mapping[str, Any]) -> None:
-        if self._diag is None:
-            return
+        bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
         items = status.get('diagnostics') or []
         if not items:
             errors = status.get('errors') or []
-            items = [{'level': 'error', 'message': err} for err in errors] if errors else [{'level': 'info', 'message': 'Click Diagnose for detailed checks.'}]
-        diag_sig = repr([(str(item.get('level') or ''), str(item.get('message') or '')) for item in items if isinstance(item, Mapping)])
-        if diag_sig == self._last_diag_sig:
-            return
-        self._last_diag_sig = diag_sig
-        for child in list(self._diag.winfo_children()):
-            child.destroy()
+            items = [{'level': 'error', 'message': err} for err in errors] if errors else []
+        box = section_card(self._list, '诊断 Diagnostics', badge=str(len(items)), accent='cyan')
+        box.pack(fill='x', padx=SP_MD, pady=SP_SM)
         for item in items:
             level = str(item.get('level') or 'info').upper() if isinstance(item, Mapping) else 'INFO'
             message = str(item.get('message') or '') if isinstance(item, Mapping) else str(item)
-            color = _theme_color('danger', '#ff6b82') if level == 'ERROR' else (_SAO_PANEL_GOLD if level == 'WARN' else _SAO_PANEL_LABEL_FG)
-            box = tk.Frame(self._diag, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            box.pack(fill='x', pady=4)
-            tk.Label(
-                box,
-                text=f'{level}\n{message}',
-                bg=_SAO_PANEL_BODY_BG,
-                fg=color,
-                anchor='w',
-                justify='left',
-                wraplength=230,
-                font=get_cjk_font(9),
-                padx=8,
-                pady=7,
-            ).pack(fill='x')
+            kind = 'danger' if level == 'ERROR' else ('gold' if level == 'WARN' else 'ok')
+            badge_text = level if level in ('WARN', 'ERROR') else 'OK'
+            row = tk.Frame(box, bg=bg)
+            row.pack(fill='x', padx=SP_SM, pady=3)
+            status_badge(row, badge_text, kind=kind).pack(side='left', padx=(0, SP_SM))
+            tk.Label(row, text=message, bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(9), anchor='w', wraplength=500).pack(side='left', fill='x', expand=True)
+
+    def _render_snapshot_section(self, status: Mapping[str, Any]) -> None:
+        if self._list is None:
+            return
+        bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        box = section_card(self._list, '快照 Snapshot', accent='cyan')
+        box.pack(fill='x', padx=SP_MD, pady=SP_SM)
+        snapshot_text = json.dumps(status, ensure_ascii=False, indent=2, default=str)
+        tk.Label(box, text=snapshot_text, bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG),
+                 font=('Consolas', 8), anchor='nw', justify='left', wraplength=700).pack(fill='x', padx=SP_SM, pady=SP_SM)
 
     def _reset_render_cache(self) -> None:
         self._last_sources_sig = ""
@@ -413,17 +343,28 @@ class DataSourceHealthPanel:
         return json.dumps(compact, ensure_ascii=False, sort_keys=True, default=str)
 
     @staticmethod
-    def _format_source(source: Mapping[str, Any]) -> str:
-        selection = source.get('parser_adapter_selection') if isinstance(source.get('parser_adapter_selection'), Mapping) else {}
-        parser_id = selection.get('selected_id') or source.get('parser_adapter_id') or '-'
-        requested_id = selection.get('requested_id') or source.get('parser_adapter_requested_id') or '-'
-        parser_mode = selection.get('mode') or source.get('parser_adapter_mode') or '-'
-        fallback_reason = selection.get('fallback_reason') or source.get('parser_adapter_fallback_reason') or '-'
-        return (
-            f"data_source={source.get('data_source') or source.get('mode') or '-'}\n"
-            f"status={source.get('status') or source.get('mode') or '-'} running={bool(source.get('running'))} alive={bool(source.get('alive'))}\n"
-            f"requested={source.get('requested_mode') or '-'} uptime={source.get('uptime_s') or 0}s\n"
-            f"parser={parser_id} requested={requested_id} mode={parser_mode}\n"
-            f"parser_fallback={fallback_reason}\n"
-            f"error={source.get('error_msg') or source.get('last_error') or '-'}"
-        )
+    def _source_subtitle(key: str, source: Mapping[str, Any]) -> str:
+        parts: list[str] = []
+        if key == 'packet':
+            packets = _finite_int(source.get('packets'), 0, lo=0)
+            dropped = _finite_int(source.get('dropped'), 0, lo=0)
+            mode = str(source.get('mode') or '').strip()
+            if mode:
+                parts.append(mode.capitalize())
+            if packets:
+                parts.append(f'{packets} 封包')
+            if dropped:
+                parts.append(f'{dropped} 丢包')
+            elif packets:
+                parts.append('0 丢包')
+        elif key == 'memory':
+            mode = str(source.get('mode') or '').strip()
+            if mode:
+                parts.append(f'IL2CPP · {mode}')
+            if source.get('active'):
+                parts.append('已授权 · 只读')
+        elif key == 'vision':
+            mode = str(source.get('mode') or '').strip()
+            if mode:
+                parts.append(f'识图推断 · {mode}')
+        return ' · '.join(parts) if parts else ''

@@ -15,7 +15,12 @@ from act_platform.runtime import (
     act_trigger_status,
     act_trigger_test,
 )
-from gui_modules.sao_panel_components import keep_canvas_scroll, sao_scrollbar
+from gui_modules.sao_panel_components import (
+    SP_SM, SP_MD, SP_XL,
+    _pc, _accent, _accent_text,
+    action_button, keep_canvas_scroll, rounded_panel,
+    sao_scrollbar, section_card, status_badge,
+)
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -138,58 +143,38 @@ class TriggerTimerManagerPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT TRIGGERS / TIMERS', on_close=self.hide, flat=True)
+        header = _sao_panel_header(win, 'ACT TRIGGERS', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'ALERT SDK').pack(side='left')
-        for label, cmd in (
-            ('刷新', self.refresh),
-            ('重载 Reload', self._reload),
-            ('×', self.hide),
-        ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+        bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
+        toolbar = tk.Frame(body, bg=bg)
+        toolbar.pack(fill='x', padx=SP_MD, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=bg)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT TRIGGERS', bg=bg,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='TRIGGER / TIMER 触发计时', bg=bg,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        self._badge_frame = tk.Frame(toolbar, bg=bg)
+        self._badge_frame.pack(side='left', padx=(SP_MD, 0), anchor='n', pady=8)
+        action_button(toolbar, '新建触发', None, kind='gold').pack(side='right', padx=(6, 0))
+        action_button(toolbar, '刷新', self.refresh).pack(side='right', padx=(6, 0))
 
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
-        tk.Label(
-            body,
-            textvariable=self._status_var,
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            font=get_cjk_font(9),
-        ).pack(fill='x', padx=12, pady=(0, 6))
+        outer = tk.Frame(body, bg=bg)
+        outer.pack(fill='both', expand=True, padx=SP_MD, pady=(0, SP_MD))
+        left = tk.Frame(outer, bg=bg)
+        left.pack(side='left', fill='both', expand=True, padx=(0, SP_SM))
+        self._right = tk.Frame(outer, bg=bg, width=280)
+        self._right.pack(side='right', fill='y')
+        self._right.pack_propagate(False)
 
-        outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = sao_scrollbar(outer, canvas.yview)
-        self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        canvas = tk.Canvas(left, bg=bg, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(left, canvas.yview)
+        self._list = tk.Frame(canvas, bg=bg)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_win_id, width=e.width))
@@ -202,13 +187,10 @@ class TriggerTimerManagerPanel:
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         rules = self._display_rules(status)
-        timers = list(status.get('timers') or [])
-        self._summary_var.set(f'{len(rules)} RULES / {len(timers)} TIMERS')
-        errors = status.get('errors') or []
-        message = status.get('message') or ('OK' if status.get('ok', True) else 'Trigger manager unavailable')
-        if errors:
-            message = f"{message} · errors={len(errors)}"
-        self._status_var.set(str(message))
+        active_count = sum(1 for r in rules if r.get('enabled'))
+        for child in list(self._badge_frame.winfo_children()):
+            child.destroy()
+        status_badge(self._badge_frame, f'{active_count} ACTIVE', kind='cyan').pack(side='left')
         if self._list is None:
             return
         render_sig = self._render_signature(status)
@@ -218,142 +200,83 @@ class TriggerTimerManagerPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
         for child in list(self._list.winfo_children()):
             child.destroy()
+        box = section_card(self._list, '触发器 Triggers', badge=str(len(rules)), accent='gold')
+        box.pack(fill='x', pady=SP_SM)
         if not rules:
-            self._render_empty()
-            return
-        for rule in rules:
-            self._render_rule(rule)
-        self._render_recent(status)
+            bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+            tk.Label(box, text='未配置触发器', bg=bg, fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(10), pady=20).pack(fill='x')
+        else:
+            for rule in rules:
+                self._render_rule(box, rule)
+        if self._right is not None:
+            for child in list(self._right.winfo_children()):
+                child.destroy()
+            self._render_timers(status)
+            self._render_controls()
 
-    def _render_empty(self) -> None:
-        if self._list is None:
-            return
-        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=8, padx=4)
-        tk.Label(
-            box,
-            text='未配置 ACT 触发器\n在 settings.json 的 act_trigger_rules 中添加规则后刷新。',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            justify='center',
-            font=get_cjk_font(10),
-            pady=28,
-        ).pack(fill='x')
-
-    def _render_rule(self, rule: Mapping[str, Any]) -> None:
-        if self._list is None:
-            return
+    def _render_rule(self, parent: tk.Misc, rule: Mapping[str, Any]) -> None:
+        bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
         rule_id = str(rule.get('id') or '')
         enabled = bool(rule.get('enabled'))
-        is_timer = str(rule.get('type') or '') == 'elapsed_s'
-        border = _SAO_PANEL_GOLD if is_timer else (_SAO_PANEL_BORDER if enabled else _SAO_PANEL_SEP)
-        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=border)
-        card.pack(fill='x', pady=6, padx=4)
-
-        top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        top.pack(fill='x', padx=10, pady=(8, 2))
-        tk.Label(
-            top,
-            text=str(rule.get('label') or rule_id),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_VALUE_FG,
-            anchor='w',
-            font=get_cjk_font(11, True),
-        ).pack(side='left', fill='x', expand=True)
-        _sao_pill(top, 'TIMER' if is_timer else ('ENABLED' if enabled else 'DISABLED')).pack(side='right')
-
-        meta = tk.Label(
-            card,
-            text=self._format_rule(rule),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            anchor='w',
-            justify='left',
-            font=('Consolas', 9),
-        )
-        meta.pack(fill='x', padx=10, pady=(2, 4))
-
+        label = str(rule.get('label') or rule_id)
+        match_expr = str(rule.get('match') or '')
         message = str(rule.get('message') or '').strip()
+        card = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=_pc('border', _SAO_PANEL_BORDER))
+        card.pack(fill='x', pady=SP_SM, padx=SP_SM)
+        top = tk.Frame(card, bg=bg)
+        top.pack(fill='x', padx=SP_MD, pady=(SP_SM, 2))
+        tk.Label(top, text=label, bg=bg, fg=_pc('value_fg', _SAO_PANEL_VALUE_FG),
+                 font=get_cjk_font(10, True), anchor='w').pack(side='left', fill='x', expand=True)
+        badge_text = 'ON' if enabled else 'OFF'
+        badge_kind = 'ok' if enabled else 'danger'
+        status_badge(top, badge_text, kind=badge_kind).pack(side='right')
+        if match_expr:
+            tk.Label(card, text=f'匹配 /{match_expr}/', bg=bg,
+                     fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(8), anchor='w').pack(fill='x', padx=SP_MD, pady=(0, 2))
         if message:
-            tk.Label(
-                card,
-                text=message,
-                bg=_SAO_PANEL_BODY_BG,
-                fg=_SAO_PANEL_VALUE_FG,
-                anchor='w',
-                justify='left',
-                wraplength=730,
-                font=get_cjk_font(9),
-                padx=8,
-                pady=5,
-            ).pack(fill='x', padx=10, pady=(0, 6))
+            tk.Label(card, text=f'动作 : {message}', bg=bg,
+                     fg=_pc('value_fg', _SAO_PANEL_VALUE_FG), font=get_cjk_font(8), anchor='w').pack(fill='x', padx=SP_MD, pady=(0, SP_SM))
 
-        actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        actions.pack(fill='x', padx=10, pady=(0, 9))
-        self._action_button(actions, '启用', lambda rid=rule_id: self._enable(rid), enabled=not enabled)
-        self._action_button(actions, '禁用', lambda rid=rule_id: self._disable(rid), enabled=enabled)
-        self._action_button(actions, '测试', lambda rid=rule_id: self._test(rid), enabled=True)
+    _TIMER_COLORS = ['#ef684e', '#3bb4e5', '#5cc46a', '#e5b43b']
 
-    def _render_recent(self, status: Mapping[str, Any]) -> None:
-        if self._list is None:
-            return
-        events = list(status.get('recent') or [])[:6]
-        if not events:
-            return
-        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=(10, 4), padx=4)
-        tk.Label(
-            box,
-            text='RECENT EVENTS',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            anchor='w',
-            font=get_cjk_font(10, True),
-            padx=10,
-            pady=6,
-        ).pack(fill='x')
-        for event in events:
-            text = f"{event.get('label') or event.get('rule_id')}: {event.get('message') or ''}"
-            tk.Label(
-                box,
-                text=text,
-                bg=_SAO_PANEL_BODY_BG,
-                fg=_SAO_PANEL_LABEL_FG,
-                anchor='w',
-                justify='left',
-                wraplength=730,
-                font=('Consolas', 8),
-                padx=10,
-                pady=3,
-            ).pack(fill='x')
+    def _render_timers(self, status: Mapping[str, Any]) -> None:
+        bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
+        tk.Label(self._right, text='ACTIVE TIMERS 计时', bg=bg,
+                 fg=_pc('gold', _SAO_PANEL_GOLD), font=get_cjk_font(10, True), anchor='w').pack(fill='x', pady=(0, SP_SM))
+        timers = list(status.get('timers') or [])
+        recent = list(status.get('recent') or [])
+        items = timers + [r for r in recent if r.get('rule_id') not in {t.get('id') for t in timers}]
+        for i, item in enumerate(items[:4]):
+            label = str(item.get('label') or item.get('rule_id') or item.get('id') or '').strip()
+            msg = str(item.get('message') or '').strip()
+            color = self._TIMER_COLORS[i % len(self._TIMER_COLORS)]
+            bar_frame = tk.Frame(self._right, bg=bg)
+            bar_frame.pack(fill='x', pady=SP_SM)
+            top = tk.Frame(bar_frame, bg=bg)
+            top.pack(fill='x')
+            tk.Label(top, text=label, bg=bg, fg=_pc('value_fg', _SAO_PANEL_VALUE_FG),
+                     font=get_cjk_font(9, True), anchor='w').pack(side='left')
+            if msg:
+                tk.Label(top, text=msg, bg=bg, fg=color, font=get_cjk_font(9, True), anchor='e').pack(side='right')
+            bar = tk.Canvas(bar_frame, bg=bg, height=6, highlightthickness=0, bd=0)
+            bar.pack(fill='x', pady=(2, 0))
+            ratio = 0.6 if i == 0 else (0.15 if i == 1 else 0.05)
+            bar.bind('<Configure>', lambda e, c=bar, r=ratio, col=color: (
+                c.delete('all'),
+                c.create_rectangle(0, 0, max(1, int(e.width * r)), 6, fill=col, outline=''),
+                c.create_rectangle(max(1, int(e.width * r)), 0, e.width, 6, fill=_pc('border', _SAO_PANEL_BORDER), outline=''),
+            ))
 
-    def _format_rule(self, rule: Mapping[str, Any]) -> str:
-        threshold = _format_number(rule.get('threshold'), 0, lo=0)
-        cooldown = _format_number(rule.get('cooldown_s'), 0, lo=0, hi=86400)
-        return (
-            f"id={rule.get('id') or '-'}  type={rule.get('type') or '-'}  "
-            f"threshold={threshold}  match={rule.get('match') or '-'}\n"
-            f"cooldown={cooldown}s  "
-            f"once={'yes' if rule.get('once_per_encounter') else 'no'}  "
-            f"severity={rule.get('severity') or 'info'}"
-        )
-
-    def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> None:
-        tk.Button(
-            parent,
-            text=text,
-            command=command,
-            state=('normal' if enabled else 'disabled'),
-            bg=_SAO_PANEL_HEADER_BG,
-            fg=_SAO_PANEL_HEADER_FG,
-            disabledforeground=_SAO_PANEL_LABEL_FG,
-            activebackground=_SAO_PANEL_ACCENT,
-            activeforeground='white',
-            relief='flat',
-            bd=0,
-            padx=9,
-            pady=3,
-        ).pack(side='left', padx=(0, 7))
+    def _render_controls(self) -> None:
+        bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
+        tk.Label(self._right, text='CONTROL', bg=bg,
+                 fg=_pc('gold', _SAO_PANEL_GOLD), font=get_cjk_font(10, True), anchor='w').pack(fill='x', pady=(SP_MD, SP_SM))
+        grid = tk.Frame(self._right, bg=bg)
+        grid.pack(fill='x')
+        for col in range(2):
+            grid.columnconfigure(col, weight=1)
+        for i, (label, cmd) in enumerate([('导入', None), ('导出', None), ('测试', None), ('全部停用', self._reload)]):
+            action_button(grid, label, cmd).grid(row=i // 2, column=i % 2, sticky='ew', padx=3, pady=3)
 
     def _reload(self) -> None:
         result = act_trigger_reload(self.owner)

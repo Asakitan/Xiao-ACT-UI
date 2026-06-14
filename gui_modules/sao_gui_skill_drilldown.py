@@ -16,29 +16,34 @@ from act_platform.runtime import (
     act_skill_drilldown_status,
 )
 from gui_modules.sao_panel_components import (
+    SP_SM,
+    _pc,
+    action_button,
+    empty_state,
     fmt_clock,
     keep_canvas_scroll,
+    metric_tile,
     more_indicator,
+    rounded_panel,
     sao_entry,
     sao_scrollbar,
+    section_card,
+    status_badge,
+    topic_cn,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
     _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
     _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _sao_panel_body,
     _sao_panel_header,
-    _sao_pill,
-    _theme_color,
 )
 
 
@@ -223,29 +228,49 @@ class SkillDrilldownPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
+        # Title area (matches aggregate two-line pattern)
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'SKILL').pack(side='left')
-        for label, cmd in (('打开', self.refresh), ('过滤', self.filter), ('复制', self.copy), ('返回', self.back), ('×', self.hide)):
-            tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
-        # summary 含未截断技能名 — 按钮先 pack 防被长名挤出窗口
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT SKILL', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='SKILL DRILLDOWN 技能钻取', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=12, pady=(0, 8))
+        # Control buttons (right side of toolbar)
+        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        control.pack(side='right', anchor='n', pady=(10, 0))
         tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._combatant_var, width=13).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Skill', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._skill_var, width=13).pack(side='left', padx=(6, 8))
         tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._query_var, width=22).pack(side='left', padx=(6, 8))
+        sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(6, 8))
+        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(control, '过滤', self.filter).pack(side='left', padx=(0, 6))
+        action_button(control, '复制', self.copy).pack(side='left', padx=(0, 6))
+        action_button(control, '返回', self.back).pack(side='left', padx=(0, 6))
 
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
+        # Status bar
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))
 
+        # Two-column layout: main (left scrollable) + sidebar (right)
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = sao_scrollbar(outer, canvas.yview)
+        outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+
+        # Right sidebar
+        side_card, side_inner = rounded_panel(outer, bg=_SAO_PANEL_BODY_BG,
+                                              border=_SAO_PANEL_BORDER, radius=10, pad=12)
+        side_card.configure(width=260)
+        side_card.pack(side='right', fill='y', padx=(12, 0))
+        self._side = side_inner
+
+        # Main area (left): scrollable content
+        main_wrap = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG)
+        main_wrap.pack(side='left', fill='both', expand=True)
+        canvas = tk.Canvas(main_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(main_wrap, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -279,75 +304,159 @@ class SkillDrilldownPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
+        self._render_side(status)
         if not summary:
             self._render_empty()
             return
-        self._render_summary(status, summary)
-        self._render_timeline(refs)
-        self._render_payload(status)
+        self._render_skill_label(summary)
+        self._render_metrics(status, summary)
+        self._render_hitlog(refs)
 
+    # ── Sidebar ──────────────────────────────────────────────────────────
+    def _render_side(self, status: Mapping[str, Any]) -> None:
+        side = getattr(self, '_side', None)
+        if side is None:
+            return
+        for child in list(side.winfo_children()):
+            child.destroy()
+        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
+        pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
+        pad.pack(fill='both', expand=True)
+        tk.Label(pad, text='SKILLS 技能', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
+        # Skill facts as sidebar key-value rows
+        facts = (
+            ('Combatant', str(status.get('combatant_id') or '-')),
+            ('Skill ID', str(status.get('skill_id') or '-')),
+            ('类型', topic_cn(summary.get('kind'), default='-')),
+            ('伤害', self._fmt(summary.get('damage'))),
+            ('治疗', self._fmt(summary.get('heal'))),
+            ('施放', str(_finite_int(status.get('casts'), 0, lo=0))),
+            ('命中', str(_finite_int(status.get('hits'), 0, lo=0))),
+            ('暴击率', self._pct(status.get('crit_rate'))),
+            ('时间线', str(len(_mapping_items(status.get('timeline_refs'))))),
+        )
+        for key, val in facts:
+            row = tk.Frame(pad, bg=_SAO_PANEL_BODY_BG)
+            row.pack(fill='x', pady=2)
+            tk.Label(row, text=str(key), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(side='left')
+            tk.Label(row, text=str(val), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                     font=get_sao_font(9), anchor='e').pack(side='right')
+        # Skill name badge (bottom of sidebar)
+        skill_name = str(summary.get('name') or status.get('skill_id') or '-')
+        if skill_name and skill_name != '-':
+            tk.Frame(pad, bg=_SAO_PANEL_BORDER, height=1).pack(fill='x', pady=(12, 8))
+            status_badge(pad, skill_name, kind='gold').pack(anchor='w')
+        errors = list(status.get('errors') or [])
+        if errors:
+            tk.Frame(pad, bg=_SAO_PANEL_BORDER, height=1).pack(fill='x', pady=(12, 8))
+            tk.Label(pad, text='ERRORS', bg=_SAO_PANEL_BODY_BG, fg=_pc('danger', '#ef684e'),
+                     font=get_sao_font(9, True), anchor='w').pack(fill='x')
+            for err in errors[:5]:
+                tk.Label(pad, text=str(err), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                         font=get_cjk_font(8), anchor='w', wraplength=220).pack(fill='x', pady=1)
+
+    # ── Empty state ──────────────────────────────────────────────────────
     def _render_empty(self) -> None:
         if self._rows is None:
             return
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=8, padx=4)
-        tk.Label(box, text='请输入 combatant UID 与 skill ID\n可从成员钻取或 DPS 技能行中选择。', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center', font=get_cjk_font(10), pady=36).pack(fill='x')
+        empty_state(self._rows, '请输入 combatant UID 与 skill ID',
+                    '可从成员钻取或 DPS 技能行中选择。').pack(fill='x', pady=8, padx=4)
 
-    def _render_summary(self, status: Mapping[str, Any], summary: Mapping[str, Any]) -> None:
+    # ── Skill name label ─────────────────────────────────────────────────
+    def _render_skill_label(self, summary: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
+        skill_name = str(summary.get('name') or '-')
+        name_frame = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        name_frame.pack(fill='x', padx=4, pady=(0, 6))
+        tk.Label(name_frame, text=skill_name, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                 font=get_sao_font(13, True), anchor='w').pack(side='left')
+        kind_text = topic_cn(summary.get('kind'), default='damage')
+        status_badge(name_frame, kind_text, kind='cyan').pack(side='left', padx=(SP_SM, 0))
+
+    # ── Metric tiles ─────────────────────────────────────────────────────
+    def _render_metrics(self, status: Mapping[str, Any], summary: Mapping[str, Any]) -> None:
+        if self._rows is None:
+            return
+        amount = _finite_float(summary.get('amount'), 0.0)
+        hits = _finite_int(status.get('hits'), 0, lo=0)
+        crit_rate = _finite_float(status.get('crit_rate'), 0.0, lo=0.0, hi=1.0)
+        avg_hit = amount / hits if hits > 0 else 0.0
+        casts = _finite_int(status.get('casts'), 0, lo=0)
+        kind = str(summary.get('kind') or 'damage')
+        amount_label = '总治疗' if kind == 'heal' else '总伤害'
+        amount_accent = 'ok' if kind == 'heal' else 'gold'
+        items = (
+            (amount_label, self._fmt(amount), f'{casts} casts', amount_accent),
+            ('命中', str(hits), '', 'cyan'),
+            ('暴击率', self._pct(crit_rate), '', 'danger' if crit_rate >= 0.5 else 'cyan'),
+            ('单次均伤', self._fmt(avg_hit), '', 'gold'),
+        )
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
-        items = (
-            ('Skill', summary.get('name') or '-'),
-            ('Kind', summary.get('kind') or '-'),
-            ('Amount', self._fmt(summary.get('amount'))),
-            ('Casts', self._fmt(status.get('casts'))),
-            ('Hits', self._fmt(status.get('hits'))),
-            ('Crit', self._pct(status.get('crit_rate'))),
-        )
-        for label, value in items:
-            card = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            card.pack(side='left', fill='x', expand=True, padx=2)
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8)).pack(anchor='w', padx=6, pady=(5, 0))
-            tk.Label(card, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(10, True)).pack(anchor='w', padx=6, pady=(1, 5))
+        cols = 3
+        for col in range(cols):
+            grid.columnconfigure(col, weight=1, uniform='kpi')
+        for idx, (label, value, sub, accent) in enumerate(items):
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).grid(
+                row=idx // cols, column=idx % cols, sticky='nsew', padx=3, pady=3)
 
-    def _render_timeline(self, refs: list[Mapping[str, Any]]) -> None:
+    # ── Hit log section (collapsible section_card) ───────────────────────
+    def _render_hitlog(self, refs: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
             return
-        header = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
-        header.pack(fill='x', pady=(0, 2), padx=4)
-        for text, width in (('Time', 12), ('Topic', 12), ('Label', 34), ('Value', 14)):
-            tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True)).pack(side='left', padx=3, pady=5)
+        ref_count = len(refs)
+        box = section_card(self._rows, f'逐次命中 Hit log ({ref_count})',
+                           subtitle='点击行展开 payload', badge=str(ref_count), accent='cyan')
+        box.pack(fill='x', padx=4, pady=(0, 8))
         if not refs:
-            tk.Label(self._rows, text='No timeline refs', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(10), pady=20).pack(fill='x')
+            tk.Label(box, text='暂无命中记录', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(10), pady=20).pack(fill='x')
             return
+        # Table header
+        table = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        table.pack(fill='x', padx=SP_SM, pady=(SP_SM, 0))
+        hdr_bg = _pc('header_bg', _SAO_PANEL_HEADER_BG)
+        hdr = tk.Frame(table, bg=hdr_bg)
+        hdr.pack(fill='x')
+        for text, w in (('时间', 10), ('目标', 14), ('伤害', 12), ('类型', 10), ('暴击', 6)):
+            tk.Label(hdr, text=text, width=w, anchor='w', bg=hdr_bg, fg=_SAO_PANEL_GOLD,
+                     font=get_cjk_font(9, True)).pack(side='left', padx=3, pady=5)
+        # Table rows
         for idx, ref in enumerate(refs[:80]):
             ref_id = str(ref.get('id') or f"ref:{idx}:{ref.get('time_ms')}")
             expanded = ref_id in self._expanded_refs
-            row_bg = _theme_color('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else _SAO_PANEL_BODY_BG
-            row = tk.Frame(self._rows, bg=row_bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            row.pack(fill='x', pady=2, padx=4)
-            row.configure(cursor='hand2')
-            caret = tk.Label(row, text=('▾' if expanded else '▸'), bg=row_bg, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9), cursor='hand2')
-            caret.pack(side='left', padx=(4, 0), pady=5)
+            row_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else _SAO_PANEL_BODY_BG
+            row = tk.Frame(table, bg=row_bg, cursor='hand2')
+            row.pack(fill='x', pady=1)
+            caret = tk.Label(row, text=('▾' if expanded else '▸'), bg=row_bg, fg=_SAO_PANEL_GOLD,
+                             font=get_cjk_font(9), cursor='hand2')
+            caret.pack(side='left', padx=(4, 0), pady=4)
             caret.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
-            values = (
-                (fmt_clock(ref.get('time_ms')), 12, _SAO_PANEL_GOLD),
-                (str(ref.get('topic') or '-'), 12, _SAO_PANEL_LABEL_FG),
-                (str(ref.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
-                (self._fmt(ref.get('value')), 14, _SAO_PANEL_VALUE_FG),
+            # Determine if this hit is a crit based on label/payload
+            payload = ref.get('payload') if isinstance(ref.get('payload'), Mapping) else {}
+            is_crit = bool(payload.get('crit') or payload.get('is_crit') or payload.get('critical'))
+            crit_text = 'CRIT' if is_crit else '-'
+            cols = (
+                (fmt_clock(ref.get('time_ms')), 10, _SAO_PANEL_GOLD),
+                (str(ref.get('label') or ref.get('target') or '-'), 14, _SAO_PANEL_VALUE_FG),
+                (self._fmt(ref.get('value')), 12, _SAO_PANEL_VALUE_FG),
+                (topic_cn(ref.get('topic'), default='-'), 10, _SAO_PANEL_LABEL_FG),
+                (crit_text, 6, _pc('danger', '#ef684e') if is_crit else _SAO_PANEL_LABEL_FG),
             )
-            for text, width, fg in values:
-                label = tk.Label(row, text=text, width=width, anchor='w', bg=row_bg, fg=fg, font=get_cjk_font(9), cursor='hand2')
-                label.pack(side='left', padx=3, pady=5)
-                label.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
+            for text, w, fg in cols:
+                lbl = tk.Label(row, text=text, width=w, anchor='w', bg=row_bg, fg=fg,
+                               font=get_cjk_font(9), cursor='hand2')
+                lbl.pack(side='left', padx=3, pady=4)
+                lbl.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
             row.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
             if expanded:
-                self._render_ref_payload(ref)
+                self._render_ref_payload(ref, parent=table)
         hidden = len(refs) - 80
         if hidden > 0:
-            more_indicator(self._rows, hidden).pack(fill='x', padx=4, pady=(2, 0))
+            more_indicator(table, hidden).pack(fill='x', padx=4, pady=(2, 0))
 
     def _toggle_ref(self, ref_id: str) -> None:
         if ref_id in self._expanded_refs:
@@ -357,44 +466,17 @@ class SkillDrilldownPanel:
         self._last_sig = ""
         self._render_status(self._last_status)
 
-    def _render_ref_payload(self, ref: Mapping[str, Any]) -> None:
-        if self._rows is None:
+    def _render_ref_payload(self, ref: Mapping[str, Any], *, parent: Optional[tk.Frame] = None) -> None:
+        target = parent if parent is not None else self._rows
+        if target is None:
             return
         payload = ref.get('payload') if isinstance(ref.get('payload'), Mapping) else ref
-        box = tk.Frame(self._rows, bg='#0f1720', highlightthickness=1, highlightbackground=_SAO_PANEL_GOLD)
+        box_bg = _pc('header_bg', '#0f1720')
+        box = tk.Frame(target, bg=box_bg, highlightthickness=1, highlightbackground=_SAO_PANEL_GOLD)
         box.pack(fill='x', padx=12, pady=(0, 4))
         text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-        tk.Label(box, text=text, bg='#0f1720', fg='#d7f7ff', font=('Consolas', 9), anchor='w', justify='left', wraplength=760).pack(fill='x', padx=8, pady=6)
-
-    def _render_payload(self, status: Mapping[str, Any]) -> None:
-        if self._rows is None:
-            return
-        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text='技能事实 / SKILL FACTS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True), anchor='w').pack(fill='x')
-        # Clean labeled key/value grid instead of a raw JSON blob (the previous
-        # "COPY PAYLOAD PREVIEW" dump was the unreadable part). The Copy button
-        # still copies the full payload.
-        facts = (
-            ('Combatant', status.get('combatant_id') or '-'),
-            ('Skill ID', status.get('skill_id') or '-'),
-            ('Damage', self._fmt(summary.get('damage'))),
-            ('Heal', self._fmt(summary.get('heal'))),
-            ('Casts', _finite_int(status.get('casts'), 0, lo=0)),
-            ('Hits', _finite_int(status.get('hits'), 0, lo=0)),
-            ('Crit', self._pct(status.get('crit_rate'))),
-            ('Refs', len(_mapping_items(status.get('timeline_refs')))),
-        )
-        grid = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        grid.pack(fill='x', padx=8, pady=6)
-        for idx in range(4):
-            grid.grid_columnconfigure(idx, weight=1, uniform='facts')
-        for i, (key, value) in enumerate(facts):
-            cell = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG)
-            cell.grid(row=i // 4, column=i % 4, sticky='ew', padx=(0, 14), pady=3)
-            tk.Label(cell, text=key.upper(), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8), anchor='w').pack(fill='x')
-            tk.Label(cell, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(11, True), anchor='w').pack(fill='x')
+        tk.Label(box, text=text, bg=box_bg, fg=_pc('value_fg', '#d7f7ff'), font=('Consolas', 9),
+                 anchor='w', justify='left', wraplength=560).pack(fill='x', padx=8, pady=6)
 
     @staticmethod
     def _fmt(value: Any) -> str:

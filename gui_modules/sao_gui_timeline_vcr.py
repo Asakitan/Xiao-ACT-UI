@@ -227,23 +227,18 @@ class TimelineVcrPanel:
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'VCR').pack(side='left')
-        for label, cmd in (
-            ('刷新', self.refresh),
-            ('播放 Play', self.play),
-            ('暂停 Pause', self.pause),
-            ('×', self.hide),
-        ):
-            action_button(toolbar, label, cmd, kind='cyan' if '播放' in label else 'gold').pack(side='right', padx=(6, 0))
-        # 按钮先 pack — 窄窗下 summary 不挤按钮
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
+        toolbar.pack(fill='x', padx=12, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT REPLAY', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='TIMELINE / VCR 时间线', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        self._badge_frame_vcr = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_vcr.pack(side='left', padx=(12, 0), anchor='n', pady=8)
+        action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '导出片段', None).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))

@@ -15,26 +15,30 @@ from act_platform.runtime import (
     act_offline_import_status,
 )
 from gui_modules.sao_panel_components import (
+    SP_SM,
+    SP_MD,
+    _pc,
+    action_button,
     keep_canvas_scroll,
+    metric_tile,
     sao_entry,
     sao_scrollbar,
+    section_card,
+    status_badge,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
     _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
     _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _sao_panel_body,
     _sao_panel_header,
-    _sao_pill,
 )
 
 
@@ -53,6 +57,9 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
     return result
 
 
+_STEP_LABELS = ('① 选择文件', '② 解析预览', '③ 映射字段', '④ 导入')
+
+
 class OfflineImportPanel:
     """SAO-styled standalone ACT offline import/history playback wizard."""
 
@@ -66,6 +73,7 @@ class OfflineImportPanel:
         self._status_var = tk.StringVar(value="Ready")
         self._last_status: Dict[str, Any] = {}
         self._last_rows_sig = ""
+        self._current_step = 1  # 1-based step index for the wizard
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -190,56 +198,77 @@ class OfflineImportPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'IMPORT WIZARD').pack(side='left')
-        for label, cmd in (
-            ('刷新', self.refresh),
-            ('选择 Choose', self.choose_file),
-            ('导入', self.import_file),
-            ('×', self.hide),
-        ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+        body_bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
 
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
-        path_row = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        path_row.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(path_row, text='Path', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(path_row, textvariable=self._path_var).pack(side='left', fill='x', expand=True, padx=(8, 0))
+        # ── toolbar: dual-line title (webref) + step badge + nav buttons ──
+        toolbar = tk.Frame(body, bg=body_bg)
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
 
+        title_box = tk.Frame(toolbar, bg=body_bg)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT IMPORT', bg=body_bg,
+                 fg=_pc('gold', _SAO_PANEL_GOLD), font=get_sao_font(8, True),
+                 anchor='w').pack(fill='x')
+        tk.Label(title_box, text='OFFLINE IMPORT 离线导入', bg=body_bg,
+                 fg=_pc('value_fg', _SAO_PANEL_VALUE_FG), font=get_sao_font(15, True),
+                 anchor='w').pack(fill='x', pady=(1, 0))
+
+        control = tk.Frame(toolbar, bg=body_bg)
+        control.pack(side='right', anchor='n', pady=(10, 0))
+        status_badge(control, f'STEP {self._current_step}/{len(_STEP_LABELS)}',
+                     kind='gold').pack(side='left', padx=(0, SP_SM))
+        action_button(control, '选择 Choose', self.choose_file, kind='normal').pack(
+            side='left', padx=(0, SP_SM))
+        action_button(control, '导入', self.import_file, kind='gold').pack(
+            side='left', padx=(0, SP_SM))
+        action_button(control, '刷新', self.refresh, kind='normal').pack(side='left')
+
+        # ── step indicator row ──
+        step_row = tk.Frame(body, bg=body_bg)
+        step_row.pack(fill='x', padx=14, pady=(0, SP_SM))
+        for idx, step_text in enumerate(_STEP_LABELS, start=1):
+            is_active = (idx == self._current_step)
+            fg = _pc('gold', _SAO_PANEL_GOLD) if is_active else _pc('label_fg', _SAO_PANEL_LABEL_FG)
+            font = get_cjk_font(9, True) if is_active else get_cjk_font(9)
+            lbl = tk.Label(step_row, text=step_text, bg=body_bg, fg=fg, font=font)
+            lbl.pack(side='left', padx=(0, SP_MD))
+            if is_active:
+                # gold underline accent for active step
+                accent_bar = tk.Frame(step_row, bg=_pc('gold', _SAO_PANEL_GOLD),
+                                      height=2, width=0)
+                # place under the label using the label's own frame
+                accent_bar.place(in_=lbl, relx=0, rely=1.0, relwidth=1.0, height=2)
+
+        # ── file drop zone card ──
+        drop_sec = section_card(body, 'FILE 文件', subtitle='拖入 ACT 日志 / SQLite / JSON 文件', accent='cyan')
+        drop_sec.pack(fill='x', padx=14, pady=(0, SP_SM))
+        path_row = tk.Frame(drop_sec, bg=_pc('card_bg', _SAO_PANEL_BODY_BG))
+        path_row.pack(fill='x', padx=SP_SM, pady=SP_SM)
+        tk.Label(path_row, text='Path', bg=_pc('card_bg', _SAO_PANEL_BODY_BG),
+                 fg=_pc('label_fg', _SAO_PANEL_LABEL_FG), font=get_cjk_font(9)).pack(side='left')
+        sao_entry(path_row, textvariable=self._path_var).pack(
+            side='left', fill='x', expand=True, padx=(SP_SM, 0))
+
+        # ── tag pills row ──
+        self._pill_row = tk.Frame(drop_sec, bg=_pc('card_bg', _SAO_PANEL_BODY_BG))
+        self._pill_row.pack(fill='x', padx=SP_SM, pady=(0, SP_SM))
+
+        # ── status line ──
         tk.Label(
             body,
             textvariable=self._status_var,
             anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
+            bg=body_bg,
+            fg=_pc('label_fg', _SAO_PANEL_LABEL_FG),
             font=get_cjk_font(9),
-        ).pack(fill='x', padx=12, pady=(0, 6))
+        ).pack(fill='x', padx=14, pady=(0, 6))
 
-        outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        # ── scrollable content area ──
+        outer = tk.Frame(body, bg=body_bg)
+        outer.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+        canvas = tk.Canvas(outer, bg=body_bg, highlightthickness=0, bd=0)
         scroll = sao_scrollbar(outer, canvas.yview)
-        self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        self._rows = tk.Frame(canvas, bg=body_bg)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_win_id, width=e.width))
@@ -262,6 +291,17 @@ class OfflineImportPanel:
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(str(status.get('message') or 'Ready') + f" · errors={len(errors)}")
+        # ── tag pills (format / row count / encoding) ──
+        pill_row = getattr(self, '_pill_row', None)
+        if pill_row is not None:
+            for ch in list(pill_row.winfo_children()):
+                ch.destroy()
+            fmt = str(last.get('format') or '--').upper()
+            event_count = _finite_int(last.get('event_count'), 0, lo=0)
+            count_str = f'{event_count:,}' if event_count else '--'
+            status_badge(pill_row, f'格式 {fmt}', kind='cyan').pack(side='left', padx=(0, SP_SM))
+            status_badge(pill_row, f'{count_str} 行', kind='cyan').pack(side='left', padx=(0, SP_SM))
+            status_badge(pill_row, '编码 UTF-8', kind='cyan').pack(side='left')
         if self._rows is None:
             return
         sig = self._rows_signature(status)
@@ -277,30 +317,69 @@ class OfflineImportPanel:
     def _render_import_preview(self, last: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=(0, 8), padx=4)
-        tk.Label(box, text='IMPORT RESULT', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=get_cjk_font(9, True)).pack(fill='x', padx=8, pady=(7, 3))
+        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
+        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+
         preview = last.get('preview') if isinstance(last.get('preview'), Mapping) else {}
         report_obj = last.get('report') if isinstance(last.get('report'), Mapping) else {}
         encounter_id = preview.get('encounter_id') or report_obj.get('encounter_id') or ''
+        event_count = _finite_int(last.get('event_count'), 0, lo=0)
+
+        # ── metric tiles row ──
+        tile_row = tk.Frame(self._rows, bg=_pc('body_bg', _SAO_PANEL_BODY_BG))
+        tile_row.pack(fill='x', pady=(0, SP_SM))
+        for col, (lbl, val, acc) in enumerate((
+            ('ENCOUNTER', encounter_id or '--', 'gold'),
+            ('FORMAT', str(last.get('format') or '--').upper(), 'cyan'),
+            ('EVENTS', f'{event_count:,}' if event_count else '0', 'gold'),
+            ('PERSISTED', 'YES' if last.get('persisted') else 'NO',
+             'ok' if last.get('persisted') else 'danger'),
+        )):
+            tile_row.columnconfigure(col, weight=1)
+            metric_tile(tile_row, lbl, val, accent=acc).grid(
+                row=0, column=col, sticky='nsew', padx=(0 if col == 0 else SP_SM, 0))
+
+        # ── preview table section ──
+        sec = section_card(self._rows, 'PREVIEW · 前 4 行',
+                           subtitle=str(last.get('importer') or ''),
+                           badge=f'{event_count} events' if event_count else '',
+                           accent='cyan')
+        sec.pack(fill='x', pady=(0, SP_SM))
+
         values = (
             ('Encounter', encounter_id),
             ('Format', last.get('format') or '--'),
             ('Importer', last.get('importer') or '--'),
-            ('Events', last.get('event_count') or 0),
+            ('Events', event_count),
             ('Persisted', 'YES' if last.get('persisted') else 'NO'),
         )
-        for label, value in values:
-            tk.Label(box, text=f"{label}: {value}", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=get_cjk_font(9)).pack(fill='x', padx=8, pady=1)
+        for idx, (label, value) in enumerate(values):
+            row_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else card_bg
+            row_frame = tk.Frame(sec, bg=row_bg)
+            row_frame.pack(fill='x')
+            tk.Label(row_frame, text=str(label), bg=row_bg, fg=label_fg,
+                     font=get_cjk_font(9), anchor='w', width=12).pack(
+                side='left', padx=(SP_SM, SP_SM), pady=2)
+            tk.Label(row_frame, text=str(value), bg=row_bg, fg=value_fg,
+                     font=get_cjk_font(9), anchor='w').pack(
+                side='left', fill='x', expand=True, padx=(0, SP_SM), pady=2)
 
     def _render_history(self, encounters: list[Any]) -> None:
         if self._rows is None:
             return
-        title = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
-        title.pack(fill='x', pady=(4, 2), padx=4)
-        tk.Label(title, text='HISTORY PLAYBACK', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=get_cjk_font(9, True)).pack(fill='x', padx=8, pady=5)
+        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
+        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+
+        sec = section_card(self._rows, 'HISTORY PLAYBACK 历史回放',
+                           badge=f'{len(encounters)}' if encounters else '',
+                           accent='gold')
+        sec.pack(fill='x', pady=(SP_SM, 0))
+
         if not encounters:
-            tk.Label(self._rows, text='暂无历史报告', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, pady=24).pack(fill='x')
+            tk.Label(sec, text='暂无历史报告', bg=card_bg,
+                     fg=label_fg, font=get_cjk_font(9), pady=SP_MD).pack(fill='x')
             return
         for idx, item in enumerate(encounters[:20]):
             if not isinstance(item, Mapping):
@@ -310,11 +389,26 @@ class OfflineImportPanel:
                 idx,
                 lo=0,
             )
-            card = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            card.pack(fill='x', pady=3, padx=4)
-            label = f"{item.get('encounter_id') or '#'} · dmg={item.get('total_damage') or 0} · {item.get('completed_local_time') or ''}"
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=get_cjk_font(9)).pack(side='left', fill='x', expand=True, padx=8, pady=6)
-            tk.Button(card, text='加载 Load', command=lambda i=history_index: self.load_history(i)).pack(side='right', padx=8, pady=5)
+            row_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if idx % 2 else card_bg
+            row_frame = tk.Frame(sec, bg=row_bg)
+            row_frame.pack(fill='x')
+            enc_id = str(item.get('encounter_id') or '#')
+            dmg = _finite_int(item.get('total_damage'), 0, lo=0)
+            ts = str(item.get('completed_local_time') or '')
+            tk.Label(row_frame, text=enc_id, bg=row_bg, fg=value_fg,
+                     font=get_cjk_font(9, True), anchor='w').pack(
+                side='left', padx=(SP_SM, SP_SM), pady=4)
+            tk.Label(row_frame, text=f'dmg={dmg:,}', bg=row_bg,
+                     fg=_pc('gold', _SAO_PANEL_GOLD),
+                     font=get_cjk_font(8), anchor='w').pack(
+                side='left', padx=(0, SP_SM), pady=4)
+            tk.Label(row_frame, text=ts, bg=row_bg, fg=label_fg,
+                     font=get_cjk_font(8), anchor='w').pack(
+                side='left', fill='x', expand=True, pady=4)
+            action_button(row_frame, '加载 Load',
+                          lambda i=history_index: self.load_history(i),
+                          kind='normal').pack(
+                side='right', padx=SP_SM, pady=3)
 
     @staticmethod
     def _rows_signature(status: Mapping[str, Any]) -> str:

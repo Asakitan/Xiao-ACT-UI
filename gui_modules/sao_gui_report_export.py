@@ -294,7 +294,7 @@ class ReportExportPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT REPORT / EXPORT', on_close=self.hide, flat=True)
+        header = _sao_panel_header(win, 'ACT REPORT', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
@@ -302,41 +302,32 @@ class ReportExportPanel:
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'REPORT SDK').pack(side='left')
+        toolbar.pack(fill='x', padx=12, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT REPORT', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='REPORT / EXPORT 报告导出', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        self._badge_frame = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame.pack(side='left', padx=(12, 0), anchor='n', pady=8)
         components.action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
-        components.dropdown_button(toolbar, '复制', (
-            ('复制报告 Copy Report', self.copy_snapshot),
-            ('复制 Mini-Parse', self.copy_mini_parse),
-        ), kind='cyan').pack(side='right', padx=(6, 0))
-        components.dropdown_button(toolbar, '导出 Export', (
-            ('JSON', self.export_json),
-            ('CSV', self.export_csv),
-            ('HTML', self.export_html),
-            '-',
-            ('XML', self.export_xml),
-            ('XML.GZ', self.export_xml_gzip),
-            ('XML.ZIP', self.export_xml_zip),
-        ), kind='gold').pack(side='right', padx=(6, 0))
-        components.action_button(toolbar, '导入', self.import_offline_file).pack(side='right', padx=(6, 0))
         components.action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
 
-        tk.Label(
-            body,
-            textvariable=self._status_var,
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            font=get_cjk_font(9),
-        ).pack(fill='x', padx=12, pady=(0, 6))
+        fmt_row = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        fmt_row.pack(fill='x', padx=12, pady=(0, 8))
+        for fmt_id, fmt_label, fmt_sub in (
+            ('json', 'JSON', '完整事件+聚合'),
+            ('csv', 'CSV', '逐行事件表'),
+            ('markdown', 'Markdown', '战斗简报'),
+            ('html', 'HTML', '可分享报告'),
+        ):
+            cmd = {'json': self.export_json, 'csv': self.export_csv, 'html': self.export_html}.get(fmt_id)
+            tile = components.metric_tile(fmt_row, fmt_label, fmt_sub, accent='gold' if fmt_id == 'json' else 'cyan')
+            tile.pack(side='left', fill='x', expand=True, padx=(0, 6))
+            if cmd:
+                tile.bind('<Button-1>', lambda _e, c=cmd: c(), add='+')
+                tile.configure(cursor='hand2')
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
@@ -359,15 +350,32 @@ class ReportExportPanel:
 
         tk.Label(
             right,
-            text='HISTORY',
+            text='OPTIONS 选项',
             anchor='w',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_GOLD,
             font=get_cjk_font(10, True),
         ).pack(fill='x', pady=(2, 8))
-        clear_btn = components.action_button(right, '清空历史 Clear All', None, kind='danger')
-        clear_btn.pack(fill='x', pady=(0, 8))
-        self._wire_clear_confirm(clear_btn)
+        opts_frame = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
+        opts_frame.pack(fill='x', pady=(0, 12))
+        self._opt_vars: dict[str, tk.BooleanVar] = {}
+        for opt_key, opt_label, default in (
+            ('include_raw', '含原始事件', True),
+            ('include_aggregate', '含聚合', True),
+            ('include_graph', '含图表', True),
+            ('include_death', '含死亡回放', False),
+            ('anonymize', '匿名化 UID', False),
+        ):
+            var = tk.BooleanVar(value=default)
+            self._opt_vars[opt_key] = var
+            tk.Checkbutton(opts_frame, text=opt_label, variable=var, bg=_SAO_PANEL_BODY_BG,
+                           fg=_SAO_PANEL_VALUE_FG, selectcolor=_SAO_PANEL_HEADER_BG,
+                           activebackground=_SAO_PANEL_BODY_BG, activeforeground=_SAO_PANEL_VALUE_FG,
+                           font=get_cjk_font(9), anchor='w').pack(fill='x', pady=1)
+        tk.Label(right, text='EXPORT', anchor='w', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(fill='x', pady=(0, 8))
+        components.action_button(right, '导出文件', self.export_json, kind='gold').pack(fill='x', pady=(0, 4))
+        components.action_button(right, '复制到剪贴板', self.copy_snapshot).pack(fill='x', pady=(0, 12))
         self._history = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._history.pack(fill='both', expand=True)
         win.protocol('WM_DELETE_WINDOW', self.hide)
@@ -413,7 +421,10 @@ class ReportExportPanel:
         history = status.get('history') or []
         errors = status.get('errors') or []
         fmt = str(status.get('selected_format') or self._format_var.get() or 'json').upper()
-        self._summary_var.set(f"{fmt} · {_finite_int(preview.get('total_damage'), 0, lo=0)} DMG")
+        for child in list(self._badge_frame.winfo_children()):
+            child.destroy()
+        components.status_badge(self._badge_frame, 'READY' if status.get('ok', True) else 'ERROR',
+                                kind='ok' if status.get('ok', True) else 'danger').pack(side='left')
         try:
             selective = act_selective_parsing_status(self.owner)
         except Exception:

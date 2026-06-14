@@ -252,14 +252,17 @@ class MemScopePanel:
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=14, pady=(12, 8))
-        _sao_pill(toolbar, 'MEM').pack(side='left')
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='MEMORY SCANNER', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='MEM SCOPE 内存浏览器', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '复制', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
-        # 按钮先 pack — 窄窗下 summary 不挤按钮
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
-                 font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
+        self._badge_frame_ms = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_ms.pack(side='left', padx=(12, 0), anchor='n', pady=8)
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))

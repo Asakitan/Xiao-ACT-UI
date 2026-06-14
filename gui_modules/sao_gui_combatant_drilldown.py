@@ -14,24 +14,35 @@ from act_platform.runtime import (
     act_combatant_drilldown_focus_target,
     act_combatant_drilldown_status,
 )
-from gui_modules.sao_panel_components import keep_canvas_scroll, more_indicator, sao_entry, sao_scrollbar
+from gui_modules.sao_panel_components import (
+    SP_SM,
+    SP_MD,
+    action_button,
+    aggregate_row,
+    empty_state,
+    keep_canvas_scroll,
+    metric_tile,
+    more_indicator,
+    rounded_panel,
+    sao_entry,
+    sao_scrollbar,
+    section_card,
+    status_badge,
+    topic_cn,
+)
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
     _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
     _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _sao_panel_body,
     _sao_panel_header,
-    _sao_pill,
-    _theme_color,
 )
 
 
@@ -202,30 +213,54 @@ class CombatantDrilldownPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
+        # ── title area (matches aggregate cockpit pattern) ──
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'DRILLDOWN').pack(side='left')
-        for label, cmd in (('打开', self.refresh), ('过滤', self.filter), ('返回', self.back), ('×', self.hide)):
-            tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
-        # summary 含未截断玩家名 — 按钮先 pack 防被长名挤出窗口(后包者只分剩余空间)
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT COMBATANT', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='COMBATANT 成员钻取', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=12, pady=(0, 8))
+        # ── control bar (right-aligned) ──
+        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        control.pack(side='right', anchor='n', pady=(10, 0))
         tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._combatant_var, width=14).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Target', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._focus_var, width=16).pack(side='left', padx=(6, 8))
-        tk.Button(control, text='Focus', command=self.focus_target, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=2).pack(side='left')
+        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        query_entry = sao_entry(control, textvariable=self._query_var, width=14)
+        query_entry.pack(side='left', padx=(6, 8))
+        query_entry.bind('<Return>', lambda _e: self.filter())
+        tk.Label(control, text='目标', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        sao_entry(control, textvariable=self._focus_var, width=12).pack(side='left', padx=(6, 8))
+        action_button(control, '聚焦', self.focus_target, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(control, '返回', self.back).pack(side='left', padx=(0, 6))
+        action_button(control, '×', self.hide).pack(side='left')
 
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
+        # ── combatant identity label ──
+        self._identity_label = tk.Label(body, textvariable=self._summary_var, anchor='w',
+                                        bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                                        font=get_cjk_font(10, True))
+        self._identity_label.pack(fill='x', padx=14, pady=(0, 6))
 
+        # ── two-column layout: left main + right sidebar 280px ──
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = sao_scrollbar(outer, canvas.yview)
+        outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+
+        # right sidebar (combatants list)
+        side_card, side_inner = rounded_panel(outer, bg=_SAO_PANEL_BODY_BG,
+                                              border=_SAO_PANEL_BORDER, radius=10, pad=12)
+        side_card.configure(width=280)
+        side_card.pack(side='right', fill='y', padx=(12, 0))
+        self._side = side_inner
+
+        # left main area (scrollable)
+        main_wrap = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG)
+        main_wrap.pack(side='left', fill='both', expand=True)
+        canvas = tk.Canvas(main_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(main_wrap, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -243,7 +278,9 @@ class CombatantDrilldownPanel:
         cid = str(status.get('combatant_id') or self._combatant_var.get() or '')
         if cid and self._combatant_var.get() != cid:
             self._combatant_var.set(cid)
-        self._summary_var.set(f"{summary.get('name') or cid or 'NONE'} · {len(skills)} SKILLS · {self._fmt(summary.get('damage'))} DMG")
+        name = summary.get('name') or cid or '--'
+        uid_display = cid or '--'
+        self._summary_var.set(f"呫 {name} · UID {uid_display}")
         self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={_list_count(status.get('errors'))}")
         if self._rows is None:
             return
@@ -254,79 +291,84 @@ class CombatantDrilldownPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
+        self._render_sidebar(status)
         if not summary:
             self._render_empty()
             return
-        self._render_summary(summary)
+        self._render_metrics(summary)
         self._render_skills(skills)
-        self._render_side(status)
+        self._render_interactions(status)
 
     def _render_empty(self) -> None:
         if self._rows is None:
             return
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', pady=8, padx=4)
-        tk.Label(box, text='请输入 combatant UID\n可从 DPS 面板或 ACT 数据中选择角色。', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center', font=get_cjk_font(10), pady=36).pack(fill='x')
+        empty_state(self._rows, '请输入 combatant UID',
+                    '可从 DPS 面板或 ACT 数据中选择角色。').pack(fill='x', padx=4, pady=10)
 
-    def _render_summary(self, summary: Mapping[str, Any]) -> None:
+    def _render_metrics(self, summary: Mapping[str, Any]) -> None:
+        """Render the 4 KPI metric tiles row."""
         if self._rows is None:
             return
+        hits = _finite_int(summary.get('hits'), 0, lo=0)
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
-        grid.pack(fill='x', padx=4, pady=(0, 8))
+        grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('Name', summary.get('name') or '-'),
-            ('Damage', self._fmt(summary.get('damage'))),
-            ('DPS', self._fmt(summary.get('dps'))),
-            ('Heal', self._fmt(summary.get('heal'))),
-            ('Crit', self._pct(summary.get('crit_rate'))),
-            ('Share', self._pct(summary.get('damage_pct'))),
+            ('总伤害', self._fmt(summary.get('damage')), self._pct(summary.get('damage_pct')) + ' 占比', 'gold'),
+            ('DPS', self._fmt(summary.get('dps')), '/s', 'cyan'),
+            ('暴击率', self._pct(summary.get('crit_rate')), '', 'gold'),
+            ('命中', f"{hits:,}" if hits else '0', '', 'cyan'),
         )
-        for label, value in items:
-            card = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            card.pack(side='left', fill='x', expand=True, padx=2)
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8)).pack(anchor='w', padx=6, pady=(5, 0))
-            tk.Label(card, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(10, True)).pack(anchor='w', padx=6, pady=(1, 5))
+        cols = len(items)
+        for col in range(cols):
+            grid.columnconfigure(col, weight=1, uniform='kpi')
+        for idx, (label, value, sub, accent) in enumerate(items):
+            metric_tile(grid, label, value, sub=sub, accent=accent).grid(
+                row=0, column=idx, sticky='nsew', padx=3, pady=3)
+        # heal + share badges below metrics
+        heal_val = _finite_float(summary.get('heal'), 0.0, lo=0.0)
+        if heal_val > 0:
+            badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+            badges.pack(fill='x', padx=4, pady=(0, 8))
+            status_badge(badges, f"治疗 {self._fmt(heal_val)}", kind='heal').pack(side='left', padx=(0, SP_SM))
+            status_badge(badges, f"占比 {self._pct(summary.get('damage_pct'))}", kind='gold').pack(side='left')
 
     def _render_skills(self, skills: list[Mapping[str, Any]]) -> None:
+        """Render collapsible skill breakdown section using aggregate_row."""
         if self._rows is None:
             return
-        header = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
-        header.pack(fill='x', pady=(0, 2), padx=4)
-        for text, width in (('Skill', 34), ('Kind', 10), ('Amount', 14), ('Hits', 8), ('Crit', 8)):
-            tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True)).pack(side='left', padx=3, pady=5)
-        max_amount = max(1, *[_finite_int(skill.get('amount'), 0, lo=0) for skill in skills])
+        box = section_card(self._rows,
+                           f'▼ 技能贡献 Skill breakdown ({len(skills)})',
+                           subtitle='',
+                           badge=str(len(skills)),
+                           accent='gold')
+        box.pack(fill='x', padx=4, pady=(SP_MD, 0))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=SP_SM, pady=SP_SM)
+        if not skills:
+            empty_state(body, '暂无技能数据').pack(fill='x')
+            return
+        max_amount = max(1, *[_finite_int(sk.get('amount'), 0, lo=0) for sk in skills])
         for idx, skill in enumerate(skills[:40]):
             amount = _finite_int(skill.get('amount'), 0, lo=0)
             hits = _finite_int(skill.get('hits'), 0, lo=0)
+            crit = self._pct(skill.get('crit_rate'))
+            kind = topic_cn(skill.get('kind'), default='伤害')
             is_heal = skill.get('kind') == 'heal'
-            if is_heal:
-                color = _theme_color('ok_soft', '#e6f6ea')
-            elif idx % 2:
-                color = _theme_color('card_bg_alt', _SAO_PANEL_HEADER_BG)
-            else:
-                color = _SAO_PANEL_BODY_BG
-            row = tk.Frame(self._rows, bg=color, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            row.pack(fill='x', pady=2, padx=4)
-            row.configure(cursor='hand2')
-            bar_width = max(4, min(160, int(160 * amount / max_amount)))
-            tk.Frame(row, bg=(_theme_color('ok', '#2ebf86') if is_heal else _SAO_PANEL_GOLD), width=bar_width, height=3).pack(fill='x', anchor='w')
-            values = (
-                (str(skill.get('name') or '-'), 34, _SAO_PANEL_VALUE_FG),
-                (str(skill.get('kind') or '-'), 10, _SAO_PANEL_LABEL_FG),
-                (self._fmt(amount), 14, _SAO_PANEL_VALUE_FG),
-                (str(hits), 8, _SAO_PANEL_LABEL_FG),
-                (self._pct(skill.get('crit_rate')), 8, _SAO_PANEL_LABEL_FG),
+            accent = 'heal' if is_heal else 'gold'
+            row = aggregate_row(
+                body,
+                title=str(skill.get('name') or '-'),
+                meta=f"{kind} · 暴击率 {crit} · 命中 {hits}",
+                value=f"{self._fmt(amount)} · {hits}x",
+                ratio=amount / max_amount if max_amount else 0.0,
+                accent=accent,
+                zebra=bool(idx % 2),
+                command=lambda sk=skill: self._open_skill(sk),
             )
-            line = tk.Frame(row, bg=color)
-            line.pack(fill='x')
-            for text, width, fg in values:
-                label = tk.Label(line, text=text, width=width, anchor='w', bg=color, fg=fg, font=get_cjk_font(9), cursor='hand2')
-                label.pack(side='left', padx=3, pady=5)
-                label.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
-            row.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
+            row.pack(fill='x', pady=2)
         hidden = len(skills) - 40
         if hidden > 0:
-            more_indicator(self._rows, hidden, noun='个技能').pack(fill='x', padx=4, pady=(2, 0))
+            more_indicator(body, hidden, noun='个技能').pack(fill='x', padx=4, pady=(2, 0))
 
     def _open_skill(self, skill: Mapping[str, Any]) -> None:
         sid = str(skill.get('skill_id') or skill.get('base_skill_id') or skill.get('source_skill_id') or '')
@@ -353,28 +395,96 @@ class CombatantDrilldownPanel:
                 pass
         self._status_var.set(f'OPEN SKILL {sid}')
 
-    def _render_side(self, status: Mapping[str, Any]) -> None:
+    def _render_interactions(self, status: Mapping[str, Any]) -> None:
+        """Render outgoing / incoming / focus section using section_card + aggregate_row."""
         if self._rows is None:
             return
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
-        rows = []
-        if filters.get('focus_target'):
-            rows.append(('focus', filters.get('focus_target'), ''))
-        for item in _mapping_items(status.get('outgoing'))[:8]:
-            rows.append((item.get('kind') or 'out', item.get('name') or '-', self._fmt(item.get('amount'))))
-        for item in _mapping_items(status.get('incoming'))[:5]:
-            rows.append((
-                item.get('kind') or 'in',
-                item.get('name') or item.get('topic') or '-',
-                self._fmt(item.get('amount') if item.get('amount') is not None else item.get('value')),
-            ))
-        if not rows:
+        outgoing = _mapping_items(status.get('outgoing'))[:8]
+        incoming = _mapping_items(status.get('incoming'))[:5]
+        focus = filters.get('focus_target')
+        if not outgoing and not incoming and not focus:
             return
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text='OUTGOING / INCOMING / FOCUS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True), anchor='w').pack(fill='x')
-        for kind, name, amount in rows:
-            tk.Label(box, text=f'{kind}: {name} {amount}', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9), anchor='w').pack(fill='x', padx=8, pady=3)
+        # outgoing section
+        if outgoing or focus:
+            out_items = []
+            if focus:
+                out_items.append({'kind': 'focus', 'name': str(focus), 'amount': 0})
+            out_items.extend(outgoing)
+            box = section_card(self._rows, '输出目标 Outgoing', badge=str(len(out_items)), accent='cyan')
+            box.pack(fill='x', padx=4, pady=(SP_MD, 0))
+            body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+            body.pack(fill='x', padx=SP_SM, pady=SP_SM)
+            max_out = max(1, *[_finite_int(i.get('amount'), 0, lo=0) for i in out_items])
+            for idx, item in enumerate(out_items):
+                amt = _finite_int(item.get('amount'), 0, lo=0)
+                aggregate_row(
+                    body,
+                    title=str(item.get('name') or '-'),
+                    meta=topic_cn(item.get('kind'), default='输出'),
+                    value=self._fmt(amt) if amt else '',
+                    ratio=amt / max_out if max_out else 0.0,
+                    accent='cyan',
+                    zebra=bool(idx % 2),
+                ).pack(fill='x', pady=1)
+        # incoming section
+        if incoming:
+            box = section_card(self._rows, '承受来源 Incoming', badge=str(len(incoming)), accent='danger')
+            box.pack(fill='x', padx=4, pady=(SP_MD, 0))
+            body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+            body.pack(fill='x', padx=SP_SM, pady=SP_SM)
+            max_in = max(1, *[_finite_int(i.get('amount', i.get('value')), 0, lo=0) for i in incoming])
+            for idx, item in enumerate(incoming):
+                raw_amt = item.get('amount') if item.get('amount') is not None else item.get('value')
+                amt = _finite_int(raw_amt, 0, lo=0)
+                aggregate_row(
+                    body,
+                    title=str(item.get('name') or item.get('topic') or '-'),
+                    meta=topic_cn(item.get('kind'), default='承受'),
+                    value=self._fmt(amt) if amt else '',
+                    ratio=amt / max_in if max_in else 0.0,
+                    accent='danger',
+                    zebra=bool(idx % 2),
+                ).pack(fill='x', pady=1)
+
+    def _render_sidebar(self, status: Mapping[str, Any]) -> None:
+        """Render the right sidebar with combatant cards."""
+        side = getattr(self, '_side', None)
+        if side is None:
+            return
+        for child in list(side.winfo_children()):
+            child.destroy()
+        pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
+        pad.pack(fill='both', expand=True)
+        tk.Label(pad, text='COMBATANTS 成员', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 6))
+        # combatants from outgoing (players the drilldown target interacts with)
+        combatants = _mapping_items(status.get('outgoing'))
+        if not combatants:
+            combatants = _mapping_items(status.get('incoming'))
+        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
+        if summary:
+            # show the current combatant as the first highlighted card
+            self._sidebar_card(pad, summary.get('name') or '--', self._fmt(summary.get('damage')),
+                               highlight=True)
+        for item in combatants[:12]:
+            name = str(item.get('name') or item.get('topic') or '-')
+            raw_amt = item.get('amount') if item.get('amount') is not None else item.get('value')
+            self._sidebar_card(pad, name, self._fmt(raw_amt))
+        if not summary and not combatants:
+            tk.Label(pad, text='无成员数据', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(fill='x', pady=6)
+
+    def _sidebar_card(self, parent: tk.Misc, name: str, value: str, *, highlight: bool = False) -> None:
+        """One player card in the sidebar: name + damage value."""
+        bg = _SAO_PANEL_HEADER_BG if highlight else _SAO_PANEL_BODY_BG
+        card = tk.Frame(parent, bg=bg, highlightthickness=1,
+                        highlightbackground=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_BORDER)
+        card.pack(fill='x', pady=2)
+        tk.Label(card, text=str(name), bg=bg, fg=_SAO_PANEL_VALUE_FG,
+                 font=get_cjk_font(9, True), anchor='w').pack(fill='x', padx=8, pady=(5, 0))
+        tk.Label(card, text=str(value), bg=bg, fg=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_LABEL_FG,
+                 font=get_sao_font(9), anchor='w').pack(fill='x', padx=8, pady=(1, 5))
 
     @staticmethod
     def _fmt(value: Any) -> str:

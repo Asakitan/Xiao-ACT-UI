@@ -12,7 +12,7 @@ import json
 import math
 import tkinter as tk
 from tkinter import filedialog
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from act_platform.runtime import (
     act_plugin_disable,
@@ -30,10 +30,15 @@ from act_platform.runtime import (
 )
 from gui_modules import sao_panel_ui as _panel_ui
 from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
-from gui_modules.sao_panel_components import keep_canvas_scroll, sao_option_menu, sao_scrollbar
+from gui_modules.sao_panel_components import (
+    SP_SM, SP_MD, SP_XS,
+    _pc, _accent,
+    action_button, dropdown_button, keep_canvas_scroll,
+    rounded_panel, sao_entry, sao_option_menu, sao_scrollbar,
+    status_badge,
+)
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
     _SAO_PANEL_BORDER,
@@ -45,10 +50,8 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
-    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
-    _sao_pill,
 )
 
 
@@ -144,6 +147,14 @@ class PluginManagerPanel:
             return False
 
     def _build(self) -> None:
+        body_bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
+        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        header_bg = _pc('header_bg', _SAO_PANEL_HEADER_BG)
+        border = _pc('border', _SAO_PANEL_BORDER)
+        gold = _pc('gold', _SAO_PANEL_GOLD)
+        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
+        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Plugin Manager')
@@ -166,64 +177,57 @@ class PluginManagerPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'PYTHON SDK').pack(side='left')
-        for label, cmd in (
-            ('刷新', self.refresh),
-            ('导入', self._import_plugin),
-            ('全部重载 Reload', self._reload_all),
-            ('×', self.hide),
-        ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+        # ── Title block (aggregate pattern: subtitle gold + title white large) ──
+        title_area = tk.Frame(body, bg=body_bg)
+        title_area.pack(fill='x', padx=14, pady=(7, 0))
+        title_left = tk.Frame(title_area, bg=body_bg)
+        title_left.pack(side='left', anchor='n')
+        tk.Label(title_left, text='ACT PLUGINS', bg=body_bg,
+                 fg=gold, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_left, text='PLUGIN MANAGER 插件管理', bg=body_bg,
+                 fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
-        tabs = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        tabs.pack(fill='x', padx=12, pady=(0, 4))
+        # ── Toolbar: count badge + search + buttons ──
+        toolbar = tk.Frame(body, bg=body_bg)
+        toolbar.pack(fill='x', padx=14, pady=(8, 4))
+
+        status_badge(toolbar, '0/0', kind='gold').pack(side='left', padx=(0, SP_SM))
+        self._count_badge_parent = toolbar  # store for re-rendering the badge
+
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add('write', lambda *_a: self._on_search())
+        search = sao_entry(toolbar, textvariable=self._search_var, width=16)
+        search.pack(side='left', padx=(0, SP_SM))
+
+        # Right-side buttons (pack right → visually left-to-right: reload, import)
+        action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='right', padx=(SP_XS, 0))
+        action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='right', padx=(SP_XS, 0))
+        action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='right', padx=(SP_XS, 0))
+
+        tk.Label(toolbar, textvariable=self._summary_var, bg=body_bg,
+                 fg=gold, font=get_cjk_font(10, True)).pack(side='left', padx=(SP_MD, 0))
+
+        # ── Tag pills row ──
+        self._pills_row = tk.Frame(body, bg=body_bg)
+        self._pills_row.pack(fill='x', padx=14, pady=(2, 4))
+
+        # ── Tabs ──
+        tabs = tk.Frame(body, bg=body_bg)
+        tabs.pack(fill='x', padx=14, pady=(0, 4))
         for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels')):
-            btn = tk.Button(
-                tabs, text=label, command=lambda k=key: self._show_tab(k),
-                bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
-                relief='flat', bd=0, padx=14, pady=4, font=get_cjk_font(9, True),
-            )
+            btn = action_button(tabs, label, lambda k=key: self._show_tab(k), kind='normal')
             btn.pack(side='left', padx=(0, 6))
             self._tab_buttons[key] = btn
 
-        status = tk.Label(
-            body,
-            textvariable=self._status_var,
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            font=get_cjk_font(9),
-        )
-        status.pack(fill='x', padx=12, pady=(0, 6))
+        # ── Status message ──
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=body_bg,
+                 fg=label_fg, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 4))
 
-        # ── Manage tab: scrollable plugin cards (existing surface) ──
-        self._manage_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        canvas = tk.Canvas(self._manage_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        # ── Manage tab: scrollable 3-column plugin card grid ──
+        self._manage_wrap = tk.Frame(body, bg=body_bg)
+        canvas = tk.Canvas(self._manage_wrap, bg=body_bg, highlightthickness=0, bd=0)
         scroll = sao_scrollbar(self._manage_wrap, canvas.yview)
-        self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        self._list = tk.Frame(canvas, bg=body_bg)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
         canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_win_id, width=e.width))
@@ -233,10 +237,10 @@ class PluginManagerPanel:
         self._canvas = canvas
 
         # ── Panels tab: auto-redrawing plugin UI panels ──
-        self._panels_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        pcanvas = tk.Canvas(self._panels_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        self._panels_wrap = tk.Frame(body, bg=body_bg)
+        pcanvas = tk.Canvas(self._panels_wrap, bg=body_bg, highlightthickness=0, bd=0)
         pscroll = sao_scrollbar(self._panels_wrap, pcanvas.yview)
-        panels_inner = tk.Frame(pcanvas, bg=_SAO_PANEL_BODY_BG)
+        panels_inner = tk.Frame(pcanvas, bg=body_bg)
         panels_inner.bind('<Configure>', lambda _e: pcanvas.configure(scrollregion=pcanvas.bbox('all')))
         _pid = pcanvas.create_window((0, 0), window=panels_inner, anchor='nw')
         pcanvas.bind('<Configure>', lambda e: pcanvas.itemconfigure(_pid, width=e.width))
@@ -252,7 +256,11 @@ class PluginManagerPanel:
         self._active_tab = name if name in ('manage', 'panels') else 'manage'
         for key, btn in self._tab_buttons.items():
             try:
-                btn.configure(fg=(_SAO_PANEL_GOLD if key == self._active_tab else _SAO_PANEL_HEADER_FG))
+                is_active = (key == self._active_tab)
+                # _RoundedButton uses internal _fg / _border for drawing
+                btn._fg = _pc('gold', _SAO_PANEL_GOLD) if is_active else _pc('value_fg', _SAO_PANEL_VALUE_FG)
+                btn._border = _accent('gold') if is_active else _pc('border', _SAO_PANEL_BORDER)
+                btn._draw()
             except Exception:
                 pass
         if self._manage_wrap is not None:
@@ -270,186 +278,184 @@ class PluginManagerPanel:
                 if self._panel_list is not None:
                     self._panel_list.stop()
 
+    def _on_search(self) -> None:
+        """Re-render the card grid filtered by the search term."""
+        self._render_status(self._last_status)
+
+    def _cycle_next(self) -> None:
+        """Toggle the next disabled plugin on (or first enabled off if all on)."""
+        plugins = list(self._last_status.get('plugins') or [])
+        for p in plugins:
+            if not p.get('enabled'):
+                self._enable(str(p.get('id') or ''))
+                return
+        # All enabled — disable the first one
+        if plugins:
+            self._disable(str(plugins[0].get('id') or ''))
+
     def _render_status(self, status: Mapping[str, Any]) -> None:
         plugins = list(status.get('plugins') or [])
         total = _finite_int(status.get('plugin_count'), len(plugins), lo=0)
         active = _finite_int(status.get('active_count'), 0, lo=0)
+        enabled_count = sum(1 for p in plugins if p.get('enabled'))
+        disabled_count = total - enabled_count
         self._summary_var.set(f'{active} / {total} ACTIVE')
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
+
+        # ── Update count badge in toolbar ──
+        badge_parent = getattr(self, '_count_badge_parent', None)
+        if badge_parent is not None:
+            for child in list(badge_parent.winfo_children()):
+                if isinstance(child, tk.Canvas) and not isinstance(child, tk.Entry):
+                    child.destroy()
+                    break
+            b = status_badge(badge_parent, f'{active}/{total}', kind='gold')
+            # Insert at position 0 (left side)
+            b.pack(side='left', padx=(0, SP_SM), before=list(badge_parent.winfo_children())[0]
+                   if badge_parent.winfo_children() else None)
+
+        # ── Update tag pills row ──
+        pills_row = getattr(self, '_pills_row', None)
+        if pills_row is not None:
+            for child in list(pills_row.winfo_children()):
+                child.destroy()
+            status_badge(pills_row, f'{enabled_count}已启用', kind='gold').pack(side='left', padx=(0, SP_SM))
+            if disabled_count > 0:
+                status_badge(pills_row, f'{disabled_count}已停用', kind='danger').pack(side='left', padx=(0, SP_SM))
+            status_badge(pills_row, 'API v1', kind='cyan').pack(side='left', padx=(0, SP_SM))
+
         if self._list is None:
             return
+
+        # ── Filter by search term ──
+        query = getattr(self, '_search_var', tk.StringVar()).get().strip().lower()
+        if query:
+            plugins = [p for p in plugins if query in str(p.get('name') or '').lower()
+                       or query in str(p.get('id') or '').lower()]
+
         keep_canvas_scroll(getattr(self, '_canvas', None), self._list)
         for child in list(self._list.winfo_children()):
             child.destroy()
         if not plugins:
             self._render_empty()
             return
-        for plugin in plugins:
-            self._render_plugin(plugin)
+        self._render_grid(plugins)
 
     def _render_empty(self) -> None:
         if self._list is None:
             return
-        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        from gui_modules.sao_panel_components import empty_state
+        box = empty_state(self._list,
+                          '未发现 ACT 插件',
+                          '将 plugin.json 与 plugin.py 放入 plugins/<plugin_id>/ 后刷新。')
         box.pack(fill='x', pady=8, padx=4)
-        tk.Label(
-            box,
-            text='未发现 ACT 插件\n将 plugin.json 与 plugin.py 放入 plugins/<plugin_id>/ 后刷新。',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            justify='center',
-            font=get_cjk_font(10),
-            pady=28,
-        ).pack(fill='x')
 
-    def _render_plugin(self, plugin: Mapping[str, Any]) -> None:
+    def _render_grid(self, plugins: List[Mapping[str, Any]]) -> None:
+        """Render plugin cards in a 3-column grid layout."""
         if self._list is None:
             return
+        cols = 3
+        for idx, plugin in enumerate(plugins):
+            row_idx = idx // cols
+            col_idx = idx % cols
+            self._render_card(self._list, plugin, row_idx, col_idx)
+        # Configure grid columns to expand equally
+        for c in range(cols):
+            self._list.columnconfigure(c, weight=1, uniform='plugcol')
+
+    def _render_card(self, parent: tk.Frame, plugin: Mapping[str, Any],
+                     row_idx: int, col_idx: int) -> None:
+        """Render one plugin card as a rounded panel in the grid."""
+        body_bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
+        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
+        border = _pc('border', _SAO_PANEL_BORDER)
+        gold = _pc('gold', _SAO_PANEL_GOLD)
+        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
+        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+
         plugin_id = str(plugin.get('id') or '')
         enabled = bool(plugin.get('enabled'))
         active = bool(plugin.get('active'))
-        # 状态色移到 3px 左侧色条(绿=活动 / 青=启用 / 灰=停用), 边框收敛为中性, 与 web .plugin-card 1:1
-        rail = (_panel_ui._theme_color('ok', '#5cc46a') if active
-                else (_panel_ui._theme_color('accent', '#68e4ff') if enabled
-                      else _panel_ui._theme_color('sep', '#a0a0a0')))
-        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        card.pack(fill='x', pady=6, padx=4)
-        tk.Frame(card, bg=rail, width=3).pack(side='left', fill='y')   # 3px 左侧强调条(扁平单通道)
-
-        top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        top.pack(fill='x', padx=10, pady=(8, 2))
-        tk.Label(
-            top,
-            text=str(plugin.get('name') or plugin_id),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_VALUE_FG,
-            anchor='w',
-            font=get_cjk_font(11, True),
-        ).pack(side='left', fill='x', expand=True)
-        state = 'ACTIVE' if active else ('ENABLED' if enabled else 'DISABLED')
-        _sao_pill(top, state).pack(side='right')
-
-        meta = tk.Label(
-            card,
-            text=self._format_meta(plugin),
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            anchor='w',
-            justify='left',
-            font=('Consolas', 9),
-        )
-        meta.pack(fill='x', padx=10, pady=(2, 4))
-
-        error = str(plugin.get('last_error') or '').strip()
-        if error:
-            tk.Label(
-                card,
-                text=error,
-                bg=_panel_ui._theme_color('card_bg', '#33161f'),
-                fg=_panel_ui._theme_color('danger', '#ff707a'),
-                anchor='w',
-                justify='left',
-                wraplength=690,
-                font=get_cjk_font(9),
-                padx=8,
-                pady=5,
-            ).pack(fill='x', padx=10, pady=(0, 6))
-
-        logs = list(plugin.get('logs') or [])[-4:]
-        if logs:
-            tk.Label(
-                card,
-                text='\n'.join(str(x) for x in logs),
-                bg=_panel_ui._theme_color('card_bg', '#07111c'),
-                fg=_panel_ui._theme_color('value_fg', '#bfe6ff'),
-                anchor='w',
-                justify='left',
-                wraplength=690,
-                font=('Consolas', 8),
-                padx=8,
-                pady=5,
-            ).pack(fill='x', padx=10, pady=(0, 6))
-
         pinned = bool(plugin.get('pinned'))
-        actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        actions.pack(fill='x', padx=10, pady=(0, 9))
-        self._action_button(actions, '启用', lambda pid=plugin_id: self._enable(pid), enabled=not enabled)
-        self._action_button(actions, '禁用', lambda pid=plugin_id: self._disable(pid), enabled=enabled)
-        # 重载/置顶/卸载收进「更多 ▾」菜单 (与 Web plugin_manager 卡片 1:1)
-        self._more_button(actions, plugin_id, enabled=enabled, pinned=pinned,
-                          user_installed=bool(plugin.get('user_installed')))
+        name = str(plugin.get('name') or plugin_id)
+        version = str(plugin.get('version') or '-')
 
-    def _format_meta(self, plugin: Mapping[str, Any]) -> str:
-        games = ','.join(str(x) for x in (plugin.get('game_ids') or [])) or '-'
-        perms = ','.join(str(x) for x in (plugin.get('permissions') or [])) or '-'
-        caps = ','.join(str(x) for x in (plugin.get('capability_ids') or [])) or '-'
-        flags = []
-        if plugin.get('pinned'):
-            flags.append('★PINNED')
-        flags.append('面板' if plugin.get('declares_panel') else '无面板')
-        hk = _finite_int(plugin.get('hotkey_count'), 0, lo=0)
-        if hk:
-            flags.append(f'热键×{hk}')
-        # Web 卡片有独立 LOADED 徽章(plugin_manager.html: if(plugin.loaded)), 表示
-        # 模块已载入内存(区别于 enabled/active)。Tk 此前完全不渲染 loaded → 无法
-        # 区分「已启用但加载失败」与「已加载未激活」。补 LOADED 标记达成双端 1:1。
+        # Rail color: green=active, gold=enabled, grey=disabled
+        rail = (_pc('ok', '#5cc46a') if active
+                else (gold if enabled
+                      else _pc('sep', '#a0a0a0')))
+        card_border = gold if enabled else _pc('sep', '#a0a0a0')
+
+        card, inner = rounded_panel(parent, bg=card_bg, border=card_border, radius=8,
+                                    rail=rail, rail_w=3, pad=SP_SM)
+        card.grid(row=row_idx, column=col_idx, padx=4, pady=4, sticky='nsew')
+
+        # ── Name + version ──
+        top = tk.Frame(inner, bg=card_bg)
+        top.pack(fill='x', pady=(0, 2))
+        tk.Label(top, text=name, bg=card_bg, fg=value_fg,
+                 anchor='w', font=get_cjk_font(11, True)).pack(side='left', fill='x', expand=True)
+        tk.Label(top, text=f'v{version}', bg=card_bg, fg=label_fg,
+                 anchor='e', font=get_cjk_font(9)).pack(side='right')
+
+        # ── Description / ID subtitle ──
+        desc = str(plugin.get('description') or plugin_id)
+        tk.Label(inner, text=desc, bg=card_bg, fg=label_fg,
+                 anchor='w', font=get_cjk_font(9), wraplength=260).pack(fill='x', pady=(0, SP_XS))
+
+        # ── Category pill + ON/OFF badge + reload button ──
+        bottom = tk.Frame(inner, bg=card_bg)
+        bottom.pack(fill='x', pady=(SP_XS, 0))
+
+        # Category pill
+        category = 'PLUGIN'
+        if plugin.get('declares_panel'):
+            category = '面板'
+        if pinned:
+            category = '★ PINNED'
+        status_badge(bottom, category, kind='cyan').pack(side='left', padx=(0, SP_XS))
+
+        # ON/OFF badge
+        state_text = 'ON' if enabled else 'OFF'
+        state_kind = 'ok' if active else ('gold' if enabled else 'danger')
+        status_badge(bottom, state_text, kind=state_kind).pack(side='left', padx=(0, SP_XS))
+
+        # LOADED badge (web parity: distinguish enabled-but-load-failed from loaded-not-active)
         if plugin.get('loaded'):
-            flags.append('LOADED')
-        subscriptions = _finite_int(plugin.get('subscription_count'), 0, lo=0)
+            status_badge(bottom, 'LOADED', kind='ok').pack(side='left', padx=(0, SP_XS))
+
+        # Failure badges
         failures = _finite_int(plugin.get('failures'), 0, lo=0)
         event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)
-        return (
-            f"id={plugin.get('id') or '-'}  v{plugin.get('version') or '-'}  "
-            f"subs={subscriptions}  "
-            f"fail={failures}/{event_failures}\n"
-            f"{' · '.join(flags)}\n"
-            f"games={games}  perms={perms}  caps={caps}\n"
-            f"entry={plugin.get('entry') or '-'}"
-        )
+        if failures > 0:
+            status_badge(bottom, f'FAIL {failures}', kind='danger').pack(side='left', padx=(0, SP_XS))
+        if event_failures > 0:
+            status_badge(bottom, f'EVT {event_failures}', kind='danger').pack(side='left', padx=(0, SP_XS))
 
-    def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> tk.Button:
-        btn = tk.Button(
-            parent,
-            text=text,
-            command=command,
-            state=('normal' if enabled else 'disabled'),
-            bg=_SAO_PANEL_HEADER_BG,
-            fg=_SAO_PANEL_HEADER_FG,
-            disabledforeground=_panel_ui._theme_color('label_fg', '#6e8190'),
-            activebackground=_SAO_PANEL_ACCENT,
-            activeforeground='white',
-            relief='flat',
-            bd=0,
-            padx=9,
-            pady=3,
-        )
-        btn.pack(side='left', padx=(0, 7))
-        return btn
+        # Reload button (right side)
+        dropdown_button(bottom, '更多', [
+            ('启用 Enable', lambda pid=plugin_id: self._enable(pid)) if not enabled else
+            ('禁用 Disable', lambda pid=plugin_id: self._disable(pid)),
+            ('重载 Reload', lambda pid=plugin_id: self._reload(pid)),
+            ('-',),
+            ('★ 取消置顶' if pinned else '☆ 置顶 Pin',
+             lambda pid=plugin_id, p=pinned: self._pin(pid, not p)),
+        ] + ([('-',), ('卸载 Uninstall', lambda pid=plugin_id: self._uninstall(pid))]
+             if plugin.get('user_installed') else []),
+            kind='normal').pack(side='right')
 
-    def _more_button(self, parent: tk.Frame, plugin_id: str, *, enabled: bool,
-                     pinned: bool, user_installed: bool) -> None:
-        btn = self._action_button(parent, '更多 ▾', None)
+        action_button(bottom, '重载', lambda pid=plugin_id: self._reload(pid),
+                      kind='cyan').pack(side='right', padx=(0, SP_XS))
 
-        def _post() -> None:
-            menu = tk.Menu(btn, tearoff=0,
-                           bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
-                           activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
-                           disabledforeground=_panel_ui._theme_color('label_fg', '#6e8190'), relief='flat', bd=0)
-            menu.add_command(label='重载 Reload',
-                             command=lambda: self._reload(plugin_id),
-                             state=('normal' if enabled else 'disabled'))
-            menu.add_command(label=('★ 取消置顶' if pinned else '☆ 置顶 Pin'),
-                             command=lambda: self._pin(plugin_id, not pinned))
-            if user_installed:
-                menu.add_command(label='卸载 Uninstall',
-                                 command=lambda: self._uninstall(plugin_id))
-            try:
-                menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
-            finally:
-                menu.grab_release()
-
-        btn.configure(command=_post)
+        # ── Error box ──
+        error = str(plugin.get('last_error') or '').strip()
+        if error:
+            tk.Label(inner, text=error,
+                     bg=_pc('danger_soft', '#33161f'),
+                     fg=_pc('danger', '#ff707a'),
+                     anchor='w', justify='left', wraplength=260,
+                     font=get_cjk_font(9), padx=6, pady=4).pack(fill='x', pady=(SP_XS, 0))
 
     def _import_plugin(self) -> None:
         try:

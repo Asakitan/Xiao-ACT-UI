@@ -195,12 +195,17 @@ class DeathRecapPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'DEATH').pack(side='left')
-        for label, cmd in (('刷新', self.refresh), ('复制', self.copy_json), ('×', self.hide)):
-            action_button(toolbar, label, cmd, kind='cyan' if label == '复制' else 'gold').pack(side='right', padx=(6, 0))
-        # summary 含未截断实体名 — 按钮先 pack 防被长名挤出窗口
-        tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
+        toolbar.pack(fill='x', padx=12, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT DEATH', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='DEATH RECAP 死亡回放', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+        self._badge_frame_dr = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_dr.pack(side='left', padx=(12, 0), anchor='n', pady=8)
+        for label, cmd in (('刷新', self.refresh), ('×', self.hide)):
+            action_button(toolbar, label, cmd, kind='gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
@@ -230,9 +235,13 @@ class DeathRecapPanel:
         rows = _mapping_rows(status.get('rows'))
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         death = status.get('death') if isinstance(status.get('death'), Mapping) else {}
-        self._summary_var.set(
-            f"{len(rows)} EVENTS · DMG {_finite_int(summary.get('incoming_damage'), 0, lo=0)} · HEAL {_finite_int(summary.get('healing'), 0, lo=0)}"
-        )
+        death_count = int(summary.get('death_events') or len([r for r in rows if str(r.get('kind') or r.get('topic') or '') == 'death']) or 0)
+        if hasattr(self, '_badge_frame_dr'):
+            for child in list(self._badge_frame_dr.winfo_children()):
+                child.destroy()
+            from gui_modules.sao_panel_components import status_badge as _sb
+            _sb(self._badge_frame_dr, f'{death_count} DEATHS' if death_count else 'NO DEATHS',
+                kind='danger' if death_count else 'ok').pack(side='left')
         self._status_var.set(
             f"death={death.get('name') or death.get('entity_id') or '-'} · encounter={status.get('encounter_id') or 'live'}"
         )
