@@ -562,6 +562,7 @@ def normalize_profile(raw: Any, author_snapshot: Optional[Dict[str, Any]] = None
         "simple_mode": _coerce_bool(base.get("simple_mode"), True),
         "target_name_pattern": _string(base.get("target_name_pattern")),
         "dungeon_id": _coerce_int(base.get("dungeon_id"), 0, 0),
+        "map_name": _string(base.get("map_name")),
         "difficulty": _string(base.get("difficulty")),
         "phases": phases,
         "mechanics": mechanics,
@@ -626,10 +627,27 @@ def normalize_boss_raid_config(raw: Any,
     return result
 
 
+def _backfill_map_names(config: Dict[str, Any]) -> bool:
+    """给旧版导入的 profile 补 map_name (从 profile_name 取括号前的地图名)。"""
+    changed = False
+    for p in config.get("profiles") or []:
+        if _string(p.get("map_name")):
+            continue
+        pname = _string(p.get("profile_name"))
+        if not pname:
+            continue
+        # profile_name 格式: "天启的神槛(光·托纳蒂乌) · 机制示例" → 取括号前
+        idx = pname.find("(")
+        if idx > 0:
+            p["map_name"] = pname[:idx].strip()
+            changed = True
+    return changed
+
+
 def _seed_from_assets(config: Dict[str, Any]) -> bool:
     """首次启动: 把 assets/boss_raids/ 下的 *_机制示例.json 自动导入 (仅在0个档案时)。"""
     if config.get("profiles"):
-        return False
+        return _backfill_map_names(config)
     try:
         from config import resource_path
         assets_dir = resource_path("assets", "boss_raids")
@@ -867,6 +885,12 @@ def import_profile_from_path(path: str, author_snapshot=None) -> Dict[str, Any]:
     profile_data = data.get("profile") if isinstance(data, dict) else {}
     if not profile_data and isinstance(data, dict):
         profile_data = data
+    # 从文件名解析 map_name (格式: 13003_天启的神槛_机制示例.json → 天启的神槛)
+    if not _string(profile_data.get("map_name")):
+        basename = os.path.splitext(os.path.basename(path))[0]
+        parts = basename.split("_", 2)
+        if len(parts) >= 2 and parts[0].isdigit():
+            profile_data["map_name"] = parts[1]
     profile = normalize_profile(profile_data, author_snapshot=author_snapshot, source="local")
     profile["id"] = _new_id("boss")
     profile["remote_id"] = None
