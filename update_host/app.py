@@ -292,17 +292,34 @@ def _load_versioned_manifest(channel: str, target: str, version: str) -> Optiona
 
 def _load_versions_index(channel: str, target: str) -> list:
     safe_ch, safe_tg = _safe_channel_target(channel, target)
-    path = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg, "versions.json")
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return sorted(data, key=lambda v: _parse_version(v))
-        return []
-    except Exception:
-        return []
+    target_dir = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
+    versions: set[str] = set()
+
+    path = os.path.join(target_dir, "versions.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                versions.update(v for v in data if isinstance(v, str) and v.strip())
+        except Exception:
+            pass
+
+    # Self-heal: discover versions from per-version manifest files so that
+    # manually-placed or out-of-band published versions are never invisible.
+    _PREFIX = "manifest-"
+    _SUFFIX = ".json"
+    if os.path.isdir(target_dir):
+        try:
+            for entry in os.listdir(target_dir):
+                if entry.startswith(_PREFIX) and entry.endswith(_SUFFIX):
+                    ver = entry[len(_PREFIX):-len(_SUFFIX)]
+                    if ver:
+                        versions.add(ver)
+        except Exception:
+            pass
+
+    return sorted(versions, key=lambda v: _parse_version(v))
 
 
 def _save_versions_index(channel: str, target: str, versions: list):
@@ -527,8 +544,10 @@ def latest(
       1. current 未提供 → 返回最新 manifest (向后兼容)
       2. current >= latest.version → available=false (已是最新)
       3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
-      4. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
-      5. 找不到 / 文件缺失 → 回退返回最新 manifest
+      4. 尝试累积 delta (全链 runtime-delta 时合并成一个 zip)
+      5. 链中存在 full-package → 返回最后一个 fullpack (它覆盖之前所有版本)
+      6. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
+      7. 找不到 / 文件缺失 → 回退返回最新 manifest
     """
     safe_ch, safe_tg = _safe_channel_target(channel, target)
     latest_manifest = _load_manifest(safe_ch, safe_tg)
@@ -569,15 +588,37 @@ def latest(
     if cumulative_manifest:
         return _finalize(cumulative_manifest)
 
-    # (4) Sequential: find next version after current
+    # (4) Fullpack gate: if any full-package version sits between current
+    #     and latest, the client MUST install it before runtime-deltas that
+    #     follow — a fullpack is a complete client replacement and cannot be
+    #     skipped.  Jump to the LAST fullpack in the chain (it supersedes
+    #     all prior versions including earlier fullpacks).
     versions = _load_versions_index(safe_ch, safe_tg)
+    chain = [
+        v for v in versions
+        if compare_versions(v, current_ver) > 0
+        and compare_versions(v, latest_ver) <= 0
+    ]
+    last_fullpack_manifest = None
+    for ver in chain:
+        vm = (
+            latest_manifest
+            if ver == latest_ver
+            else _load_versioned_manifest(safe_ch, safe_tg, ver)
+        )
+        if vm and str(vm.get("package_type") or "") == "full-package":
+            last_fullpack_manifest = vm
+    if last_fullpack_manifest:
+        return _finalize(last_fullpack_manifest)
+
+    # (5) Sequential: find next version after current
     next_ver = _find_next_version(versions, current_ver)
     if next_ver and next_ver != latest_ver:
         versioned = _load_versioned_manifest(safe_ch, safe_tg, next_ver)
         if versioned:
             return _finalize(versioned)
 
-    # (5) Fallback to latest
+    # (6) Fallback to latest
     return _finalize(latest_manifest)
 
 
