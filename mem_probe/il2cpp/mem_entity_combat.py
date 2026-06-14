@@ -66,10 +66,11 @@ A_NAME = 1                   # AttrType.NAME -> the entity's resolved display-na
 A_HP, A_MAX_HP = 11310, 11320
 A_MAX_EXT, A_EXT, A_MAX_STUN, A_STUN = 440, 441, 442, 443
 A_OVERDRIVE, A_BREAK_STAGE = 444, 455
+A_STOP_TICKING = 453         # AttrStopBreakingBarTickingFlag (break recovery frozen)
 A_SKILL_ID = 100             # current cast skill id (present only while casting)
 # attrs read every tick for the combat snapshot — only these are resolved (not all 107)
 COMBAT_ATTR_IDS = (A_HP, A_MAX_HP, A_BREAK_STAGE, A_OVERDRIVE, A_STUN, A_EXT,
-                   A_MAX_EXT, A_SKILL_ID)
+                   A_MAX_EXT, A_STOP_TICKING, A_SKILL_ID)
 _TYPE_CHAR = {"LongAttr": "L", "IntAttr": "I", "FloatAttr": "F", "BoolAttr": "B"}
 
 MAX_HP_PLAUSIBLE = 5_000_000_000   # exclude server-time longs (~1.7e12)
@@ -400,6 +401,7 @@ class EntityCombatReader:
             return int(v) if isinstance(v, (int, float)) else None
 
         sk = amap.get(A_SKILL_ID)
+        st = amap.get(A_STOP_TICKING)
         return {
             "cur_hp": int(cur), "max_hp": int(mx),
             "hp_pct": (cur / mx) if mx else 0.0,
@@ -408,6 +410,7 @@ class EntityCombatReader:
             "stun": _n(A_STUN),
             "extinction": _n(A_EXT),
             "max_extinction": _n(A_MAX_EXT),
+            "stop_breaking_ticking": bool(st) if isinstance(st, (int, float)) else False,
             "cast_skill_id": (int(sk) if isinstance(sk, (int, float)) and sk else None),
         }
 

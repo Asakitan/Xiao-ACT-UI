@@ -30,6 +30,7 @@ import time
 from typing import Any, Dict, List
 
 from engines.combat_analytics import mem_boss_break_override
+from engines.break_time_lookup import get_break_recovery_time
 
 
 def _finite_float(
@@ -607,6 +608,7 @@ class SAOPlayerGUIStateMixin:
 
             if _bb_direct_data and not _bb_raid_active:
                 _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
+                _bb_template_id = _finite_int(_bb_direct_data.get('template_id'), 0, lo=0)
                 _bb_data = {
                     'active': _bb_show,
                     'hp_pct': round(_bb_hp_pct, 3),
@@ -621,6 +623,7 @@ class SAOPlayerGUIStateMixin:
                     'extinction': _finite_int(_bb_direct_data.get('extinction'), 0, lo=0),
                     'max_extinction': _finite_int(_bb_direct_data.get('max_extinction'), 0, lo=0),
                     'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
+                    'break_recovery_time': get_break_recovery_time(_bb_template_id),
                     'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
                     'invincible': False,
                     'boss_name': _bb_resolve_unit_name(
@@ -686,13 +689,13 @@ class SAOPlayerGUIStateMixin:
             # motion-sig / build_boss_bar_sig push gate so MEM-only break changes still push.
             _bb_mem_break = mem_boss_break_override(_bridge)
             if _bb_mem_break is not None:
-                (_bb_stage, _bb_has_break, _bb_ext_pct) = _bb_mem_break
+                (_bb_stage, _bb_has_break, _bb_ext_pct, _bb_stop_tick) = _bb_mem_break
                 _bb_data['breaking_stage'] = _finite_int(_bb_stage, -1, lo=-1)
                 _bb_data['has_break_data'] = bool(_bb_has_break)
                 _bb_data['extinction_pct'] = _unit_pct(_bb_ext_pct)
                 _bb_data['extinction'] = 0
                 _bb_data['max_extinction'] = 0
-                _bb_data['stop_breaking_ticking'] = False
+                _bb_data['stop_breaking_ticking'] = bool(_bb_stop_tick)
             if _bb_show and not _bb_raid_active:
                 _bb_hp_motion_sig = (
                     _finite_int(self._bb_last_target_uuid, 0, lo=0),
