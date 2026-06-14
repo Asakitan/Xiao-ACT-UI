@@ -239,14 +239,14 @@ class SkillDrilldownPanel:
         tk.Label(title_box, text='SKILL DRILLDOWN 技能钻取', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # Right side: [READY badge] [技能名/Skill search] [刷新] [×]
-        tb_right = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        tb_right.pack(side='right', anchor='n', pady=(10, 0))
-        self._badge_frame_sd = tk.Frame(tb_right, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_sd.pack(side='left', padx=(0, 12), anchor='n')
-        sao_entry(tb_right, textvariable=self._query_var, width=18).pack(side='left', padx=(0, 8))
-        action_button(tb_right, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
-        _make_panel_close_button(tb_right, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
+        # ALL right-side controls in ONE frame, bottom-aligned with title
+        controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        controls.pack(side='right', anchor='s', pady=(0, 4))
+        self._badge_frame_sd = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_sd.pack(side='left', padx=(0, 8))
+        sao_entry(controls, textvariable=self._query_var, width=18).pack(side='left', padx=(0, 8))
+        action_button(controls, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        _make_panel_close_button(controls, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         # ── Row 2: secondary controls ──────────────────────────────────────
         ctrl2 = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)

@@ -254,22 +254,22 @@ class GraphTimeseriesPanel:
         tk.Label(title_box, text='GRAPH / 图表曲线', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        control.pack(side='right', anchor='n', pady=(10, 0))
-        self._ready_badge_frame = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
-        self._ready_badge_frame.pack(side='left', padx=(0, 12))
+        controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        controls.pack(side='right', anchor='s', pady=(0, 4))
+        tk.Label(controls, text='范围', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                 font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(controls, self._zoom_var, '0', '5000', '15000', '30000', '60000',
+                        command=lambda _v: self.zoom()).pack(side='left', padx=(0, 8))
+        tk.Label(controls, text='指标', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                 font=get_cjk_font(9)).pack(side='left')
+        sao_option_menu(controls, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct',
+                        command=lambda _v: self.select_metric()).pack(side='left', padx=(0, 8))
+        self._ready_badge_frame = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
+        self._ready_badge_frame.pack(side='left', padx=(0, 8))
         status_badge(self._ready_badge_frame, 'READY', kind='ok').pack(side='left')
-        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
-        action_button(control, '导出 Export', self.export_json, kind='cyan').pack(side='right', padx=(6, 0))
-        action_button(control, '刷新', self.refresh, kind='gold').pack(side='right', padx=(0, 6))
-        sao_option_menu(control, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct',
-                        command=lambda _v: self.select_metric()).pack(side='right', padx=(0, 8))
-        tk.Label(control, text='指标', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_cjk_font(9)).pack(side='right')
-        sao_option_menu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000',
-                        command=lambda _v: self.zoom()).pack(side='right', padx=(0, 8))
-        tk.Label(control, text='范围', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_cjk_font(9)).pack(side='right')
+        action_button(controls, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(controls, '导出 Export', self.export_json, kind='cyan').pack(side='left', padx=(0, 6))
+        _make_panel_close_button(controls, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         # ── tag pills row ──
         pills = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)

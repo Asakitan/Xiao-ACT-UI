@@ -225,12 +225,15 @@ class CombatantDrilldownPanel:
                  fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='COMBATANT 成员钻取', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
-        _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
-        sao_option_menu(toolbar, self._mode_var, 'Live', 'Encounter',
-                        command=lambda _v: self.refresh()).pack(side='right', padx=(6, 0))
-        self._badge_frame_cd = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_cd.pack(side='right', padx=(0, 12), anchor='n', pady=8)
+        # ALL right-side controls in ONE frame, bottom-aligned with title
+        controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        controls.pack(side='right', anchor='s', pady=(0, 4))
+        self._badge_frame_cd = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_cd.pack(side='left', padx=(0, 8))
+        sao_option_menu(controls, self._mode_var, 'Live', 'Encounter',
+                        command=lambda _v: self.refresh()).pack(side='left', padx=(0, 6))
+        action_button(controls, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        _make_panel_close_button(controls, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         # ── second control row: UID / 搜索 / 目标 inputs + 聚焦 / 返回 ──
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)

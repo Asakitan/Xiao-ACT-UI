@@ -226,11 +226,13 @@ class TimelineVcrPanel:
                  fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='TIMELINE / VCR 时间线', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
-        _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '导出片段', None).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
-        self._badge_frame_vcr = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_vcr.pack(side='right', padx=(0, 12), anchor='n', pady=8)
+        controls = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        controls.pack(side='right', anchor='s', pady=(0, 4))
+        self._badge_frame_vcr = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_vcr.pack(side='left', padx=(0, 8))
+        action_button(controls, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(controls, '导出片段', None).pack(side='left', padx=(0, 6))
+        _make_panel_close_button(controls, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))

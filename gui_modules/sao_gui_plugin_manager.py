@@ -200,35 +200,38 @@ class PluginManagerPanel:
         body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        # ── Title block (aggregate pattern: subtitle gold + title white large) ──
-        title_area = tk.Frame(body, bg=body_bg)
-        title_area.pack(fill='x', padx=14, pady=(7, 0))
-        title_left = tk.Frame(title_area, bg=body_bg)
-        title_left.pack(side='left', anchor='n')
-        tk.Label(title_left, text='ACT PLUGINS', bg=body_bg,
+        # ── Title bar (title left + controls right, bottom-aligned) ──
+        toolbar = tk.Frame(body, bg=body_bg)
+        toolbar.pack(fill='x', padx=14, pady=(7, 4))
+
+        title_box = tk.Frame(toolbar, bg=body_bg)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT PLUGINS', bg=body_bg,
                  fg=gold, font=get_sao_font(8, True), anchor='w').pack(fill='x')
-        tk.Label(title_left, text='PLUGIN MANAGER 插件管理', bg=body_bg,
+        tk.Label(title_box, text='PLUGIN MANAGER 插件管理', bg=body_bg,
                  fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # ── Toolbar: count badge + search + buttons ──
-        toolbar = tk.Frame(body, bg=body_bg)
-        toolbar.pack(fill='x', padx=14, pady=(8, 4))
+        # All right-side controls in ONE frame, bottom-aligned with title
+        controls = tk.Frame(toolbar, bg=body_bg)
+        controls.pack(side='right', anchor='s', pady=(0, 4))
+        self._controls = controls  # store for re-rendering the badge
+
+        badge_frame = tk.Frame(controls, bg=body_bg)
+        badge_frame.pack(side='left', padx=(0, 8))
+        status_badge(badge_frame, '0/0', kind='gold').pack()
+        self._count_badge_parent = badge_frame
+
+        tk.Label(controls, textvariable=self._summary_var, bg=body_bg,
+                 fg=gold, font=get_cjk_font(10, True)).pack(side='left', padx=(0, SP_SM))
 
         self._search_var = tk.StringVar()
         self._search_var.trace_add('write', lambda *_a: self._on_search())
-        search = sao_entry(toolbar, textvariable=self._search_var, width=16)
-        search.pack(side='left', padx=(0, SP_SM))
+        sao_entry(controls, textvariable=self._search_var, width=16).pack(side='left', padx=(0, SP_SM))
 
-        # Right-side buttons (pack right → visually left-to-right: badge, import, reload, cycle, close)
-        _make_panel_close_button(toolbar, self.hide, bg=body_bg, flat=True).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='right', padx=(SP_XS, 0))
-        action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='right', padx=(SP_XS, 0))
-        action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='right', padx=(SP_XS, 0))
-        status_badge(toolbar, '0/0', kind='gold').pack(side='right', padx=(0, 12), anchor='n', pady=8)
-        self._count_badge_parent = toolbar  # store for re-rendering the badge
-
-        tk.Label(toolbar, textvariable=self._summary_var, bg=body_bg,
-                 fg=gold, font=get_cjk_font(10, True)).pack(side='left', padx=(SP_MD, 0))
+        action_button(controls, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
+        action_button(controls, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
+        action_button(controls, '切换下个', self._cycle_next, kind='normal').pack(side='left', padx=(0, SP_XS))
+        _make_panel_close_button(controls, self.hide, bg=body_bg, flat=True).pack(side='left', padx=(6, 0))
 
         # ── Tag pills row ──
         self._pills_row = tk.Frame(body, bg=body_bg)
@@ -327,15 +330,12 @@ class PluginManagerPanel:
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
 
-        # ── Update count badge in toolbar (right side, before action buttons) ──
+        # ── Update count badge in its dedicated frame ──
         badge_parent = getattr(self, '_count_badge_parent', None)
         if badge_parent is not None:
             for child in list(badge_parent.winfo_children()):
-                if isinstance(child, tk.Canvas) and not isinstance(child, tk.Entry):
-                    child.destroy()
-                    break
-            b = status_badge(badge_parent, f'{enabled_count}/{total}', kind='gold')
-            b.pack(side='right', padx=(0, 12), anchor='n', pady=8)
+                child.destroy()
+            status_badge(badge_parent, f'{enabled_count}/{total}', kind='gold').pack()
 
         # ── Update tag pills row ──
         pills_row = getattr(self, '_pills_row', None)

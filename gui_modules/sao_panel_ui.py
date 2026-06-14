@@ -711,49 +711,17 @@ def _auto_split_label_fonts(label):
             return
     except Exception:
         pass
-    if not _has_mixed_scripts(text):
-        has_cjk = any(_is_cjk_char(ch) for ch in text)
-        try:
-            label.configure(font=get_cjk_font(size, bold) if has_cjk else get_sao_font(size, bold))
-        except Exception:
-            pass
-        return
-    # Single-line mixed text: split into SAO (Latin) + CJK segments
+    # For all text (mixed or not): set dominant font in-place (no label replacement)
+    cjk_count = sum(1 for ch in text if _is_cjk_char(ch))
+    latin_count = sum(1 for ch in text if ch.isalpha() and not _is_cjk_char(ch))
+    digit_count = sum(1 for ch in text if ch.isdigit())
     try:
-        bg = str(label.cget('bg'))
-        fg = str(label.cget('fg'))
-        pack_info = label.pack_info()
-        grid_info = None
+        if cjk_count > latin_count + digit_count:
+            label.configure(font=get_cjk_font(size, bold))
+        else:
+            label.configure(font=get_sao_font(size, bold))
     except Exception:
-        try:
-            bg = str(label.cget('bg'))
-            fg = str(label.cget('fg'))
-            grid_info = label.grid_info()
-            pack_info = None
-        except Exception:
-            _apply_auto_font(label)
-            return
-    parent = label.master
-    if parent is None:
-        return
-    frame = tk.Frame(parent, bg=bg)
-    segments = _split_mixed_text(text)
-    for script, seg_text in segments:
-        font = get_sao_font(size, bold) if script == 'latin' else get_cjk_font(size, bold)
-        tk.Label(frame, text=seg_text, bg=bg, fg=fg, font=font).pack(side='left')
-    try:
-        label.pack_forget()
-    except Exception:
-        try:
-            label.grid_forget()
-        except Exception:
-            _apply_auto_font(label)
-            return
-    if pack_info:
-        frame.pack(**{k: v for k, v in pack_info.items() if k in ('side', 'fill', 'expand', 'padx', 'pady', 'anchor', 'ipadx', 'ipady')})
-    elif grid_info:
-        frame.grid(**{k: v for k, v in grid_info.items() if k in ('row', 'column', 'sticky', 'padx', 'pady', 'columnspan', 'rowspan')})
-    label.destroy()
+        pass
 
 
 def _style_panel_descendants(root):
