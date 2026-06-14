@@ -1,1153 +1,1154 @@
 {
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_102451_auto",
   "schema_version": 2,
-  "profile": {
-    "id": "boss_example_102451_auto",
-    "schema_version": 2,
-    "profile_name": "阴骨之地(骸·修洛特尔) · 机制示例",
-    "description": "《虚空浮岛·神龙枷所》第二场: 阴骨之地 — 骸·修洛特尔(虚蚀龙) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 8 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
-    "boss_total_hp": 0,
-    "enrage_time_s": 0,
-    "enrage": {
-      "time_s": 0,
-      "anchor": "fight",
-      "phase_id": "",
-      "warn_threshold_s": 60,
-      "urgent_threshold_s": 30,
-      "tts_milestones": [
-        60,
-        30,
-        10
-      ]
+  "profile_name": "阴骨之地(骸·修洛特尔) · 机制示例",
+  "description": "《虚空浮岛·神龙枷所》第二场: 阴骨之地 — 骸·修洛特尔(虚蚀龙) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 8 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 0,
+  "enrage": {
+   "time_s": 0,
+   "anchor": "fight",
+   "phase_id": "",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "骸·修洛特尔",
+  "dungeon_id": 13003,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "p1",
+    "name": "全程",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
     },
-    "simple_mode": false,
-    "target_name_pattern": "骸·修洛特尔",
-    "dungeon_id": 13003,
-    "difficulty": "nightmare",
-    "phases": [
-      {
-        "id": "p1",
-        "name": "全程",
-        "trigger": {
-          "type": "manual",
-          "value": 0.0
-        },
-        "timelines": []
-      }
-    ],
-    "mechanics": [
-      {
-        "id": "mech_10240102",
-        "name": "虚蚀龙-远程虚蚀球",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-远程虚蚀球\n躲法：远离虚蚀球落点圆圈",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240102
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "虚蚀球 · 远离虚蚀球落点圆圈",
-          "tts_text": "虚蚀球",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 12.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                3,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240104",
-        "name": "虚蚀龙-分摊",
-        "kind": "分摊",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-分摊\n躲法：靠拢队友一起分摊伤害",
-        "color": "#3aa0ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240104
-          ],
-          "buff_ids": [
-            882230
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "分摊 · 靠拢队友一起分摊伤害",
-          "tts_text": "分摊",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 6.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240105",
-        "name": "虚蚀龙-点T",
-        "kind": "点名",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-点T\n躲法：被点名拉开人群独自承伤",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240105
-          ],
-          "buff_ids": [
-            882231
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "点T · 被点名拉开人群独自承伤",
-          "tts_text": "点T",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 2.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "bullet_shape",
-              "ai_range": [
-                0,
-                5,
-                7,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240106",
-        "name": "虚蚀龙-压团血",
-        "kind": "分摊",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-压团血\n躲法：全员抱团压低分摊伤害",
-        "color": "#3aa0ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240106
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "压团 · 全员抱团压低分摊伤害",
-          "tts_text": "压团",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 2.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                3,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240110",
-        "name": "虚蚀龙-翅膀飞天吐息",
-        "kind": "吐息",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-翅膀飞天吐息\n躲法：飞天后躲开正前方吐息锥",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240110
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "飞天吐息 · 飞天后躲开正前方吐息锥",
-          "tts_text": "飞天吐息",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "cone",
-              "radius": 15.0,
-              "inner": 0.0,
-              "angle": 90.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240111",
-        "name": "虚蚀龙-旋转子弹",
-        "kind": "环形AOE",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-旋转子弹\n躲法：看准弹幕空隙绕开旋转子弹",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240111
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "旋转子弹 · 看准弹幕空隙绕开旋转子弹",
-          "tts_text": "旋转子弹",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 12.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                10,
-                12,
-                30
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240112",
-        "name": "虚蚀龙-尾巴扫尾",
-        "kind": "横扫",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-尾巴扫尾\n躲法：躲到龙身侧前避开尾巴扫尾",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240112
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "扫尾 · 躲到龙身侧前避开尾巴扫尾",
-          "tts_text": "扫尾",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "cone",
-              "radius": 8.0,
-              "inner": 0.0,
-              "angle": 120.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                0,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240113",
-        "name": "虚蚀龙-爪子拍地",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-爪子拍地\n躲法：远离爪子拍地落点",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240113
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "拍地 · 远离爪子拍地落点",
-          "tts_text": "拍地",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 8.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                3,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240114",
-        "name": "虚蚀龙-头部吐息",
-        "kind": "吐息",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-头部吐息\n躲法：绕到侧后避开头部吐息锥",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240114
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "头部吐息 · 绕到侧后避开头部吐息锥",
-          "tts_text": "头部吐息",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "cone",
-              "radius": 15.0,
-              "inner": 0.0,
-              "angle": 90.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                5,
-                7,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240115",
-        "name": "虚蚀龙-召唤虚蚀残影",
-        "kind": "召唤",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-召唤虚蚀残影\n躲法：优先集火清掉虚蚀残影",
-        "color": "#27ae60",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240115
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "召唤残影 · 优先集火清掉虚蚀残影",
-          "tts_text": "召唤残影",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 2.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "bullet_shape"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240116",
-        "name": "虚蚀龙-回旋刀",
-        "kind": "横扫",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-回旋刀\n躲法：贴身或拉远避开回旋刀扇形",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240116
-          ],
-          "buff_ids": [
-            882216
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "回旋刀 · 贴身或拉远避开回旋刀扇形",
-          "tts_text": "回旋刀",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 12.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240117",
-        "name": "虚蚀龙-虚雾喷洒",
-        "kind": "吐息",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-虚雾喷洒\n躲法：躲开正面虚雾喷洒锥范围",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240117
-          ],
-          "buff_ids": [
-            882213,
-            882214,
-            882215
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "虚雾喷洒 · 躲开正面虚雾喷洒锥范围",
-          "tts_text": "虚雾喷洒",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "cone",
-              "radius": 15.0,
-              "inner": 0.0,
-              "angle": 90.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                3,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240118",
-        "name": "虚蚀龙-传染虚雾",
-        "kind": "连线",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-传染虚雾\n躲法：带虚雾的人远离队友别传染",
-        "color": "#16a085",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240118
-          ],
-          "buff_ids": [
-            882218
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "传染虚雾 · 带虚雾的人远离队友别传染",
-          "tts_text": "传染虚雾",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 2.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "bullet_shape"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240130",
-        "name": "虚蚀龙-虚蚀毁灭",
-        "kind": "全场AOE",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-虚蚀毁灭\n躲法：全场AOE开减伤抗读条",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240130
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "虚蚀毁灭 · 全场AOE开减伤抗读条",
-          "tts_text": "虚蚀毁灭",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 100.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10240131",
-        "name": "虚蚀龙-虚蚀放逐",
-        "kind": "致死",
-        "enabled": true,
-        "notes": "机制：虚蚀龙-虚蚀放逐\n躲法：放逐宣告按机制处理别强抗",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10240131
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "虚蚀放逐 · 放逐宣告按机制处理别强抗",
-          "tts_text": "虚蚀放逐",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 2.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 1.0,
-              "center": "boss",
-              "source": "bullet_shape"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_shield_bearer",
-        "name": "虚蚀龙-持盾者(四元素盾)",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "机制：持盾者点名(火/冰/风/雷, buff 882220/882222/882224/882226)\n躲法：被点名持盾按团队分配就位; 盾领域半径3米(FieldTable实测), 中心锚待进本确认",
-        "color": "#34495e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            882220,
-            882222,
-            882224,
-            882226
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "持盾点名 · 按团队分配就位(盾领域3米)",
-          "tts_text": "持盾点名",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 3.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "reverse"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_6e5cc780",
-        "name": "光陨点名",
-        "kind": "陨石",
-        "enabled": true,
-        "notes": "光陨 → 被点名远离队友",
-        "color": "",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            882340
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "光陨点名",
-          "tts_text": "光陨",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "geometry": {
-              "shape": "circle",
-              "radius": 6.0,
-              "source": "semantic",
-              "center": "self"
-            }
-          }
-        }
-      }
-    ],
-    "source": "local",
-    "remote_id": null,
-    "created_at": "2026-06-11T17:44:28Z",
-    "updated_at": "2026-06-11T17:44:28Z",
-    "author_snapshot": {
-      "player_uid": "",
-      "player_name": "",
-      "profession_id": 0,
-      "profession_name": ""
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_10240102",
+    "name": "虚蚀龙-远程虚蚀球",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-远程虚蚀球\n躲法：远离虚蚀球落点圆圈",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240102
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
     },
-    "boss_combat_meta": {
-      "102401": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
-      },
-      "102450": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
-      },
-      "102451": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
+    "alert": {
+     "enabled": true,
+     "banner_text": "虚蚀球 · 远离虚蚀球落点圆圈",
+     "tts_text": "虚蚀球",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 12.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        3,
+        5,
+        20
+       ]
       }
+     }
     }
-  }
+   },
+   {
+    "id": "mech_10240104",
+    "name": "虚蚀龙-分摊",
+    "kind": "分摊",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-分摊\n躲法：靠拢队友一起分摊伤害",
+    "color": "#3aa0ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240104
+     ],
+     "buff_ids": [
+      882230
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "分摊 · 靠拢队友一起分摊伤害",
+     "tts_text": "分摊",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 6.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240105",
+    "name": "虚蚀龙-点T",
+    "kind": "点名",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-点T\n躲法：被点名拉开人群独自承伤",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240105
+     ],
+     "buff_ids": [
+      882231
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "点T · 被点名拉开人群独自承伤",
+     "tts_text": "点T",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 2.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "bullet_shape",
+       "ai_range": [
+        0,
+        5,
+        7,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240106",
+    "name": "虚蚀龙-压团血",
+    "kind": "分摊",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-压团血\n躲法：全员抱团压低分摊伤害",
+    "color": "#3aa0ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240106
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "压团 · 全员抱团压低分摊伤害",
+     "tts_text": "压团",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 2.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        3,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240110",
+    "name": "虚蚀龙-翅膀飞天吐息",
+    "kind": "吐息",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-翅膀飞天吐息\n躲法：飞天后躲开正前方吐息锥",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240110
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "飞天吐息 · 飞天后躲开正前方吐息锥",
+     "tts_text": "飞天吐息",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "cone",
+       "radius": 15.0,
+       "inner": 0.0,
+       "angle": 90.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240111",
+    "name": "虚蚀龙-旋转子弹",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-旋转子弹\n躲法：看准弹幕空隙绕开旋转子弹",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240111
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "旋转子弹 · 看准弹幕空隙绕开旋转子弹",
+     "tts_text": "旋转子弹",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 12.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        10,
+        12,
+        30
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240112",
+    "name": "虚蚀龙-尾巴扫尾",
+    "kind": "横扫",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-尾巴扫尾\n躲法：躲到龙身侧前避开尾巴扫尾",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240112
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "扫尾 · 躲到龙身侧前避开尾巴扫尾",
+     "tts_text": "扫尾",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "cone",
+       "radius": 8.0,
+       "inner": 0.0,
+       "angle": 120.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        0,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240113",
+    "name": "虚蚀龙-爪子拍地",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-爪子拍地\n躲法：远离爪子拍地落点",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240113
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "拍地 · 远离爪子拍地落点",
+     "tts_text": "拍地",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 8.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        3,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240114",
+    "name": "虚蚀龙-头部吐息",
+    "kind": "吐息",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-头部吐息\n躲法：绕到侧后避开头部吐息锥",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240114
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "头部吐息 · 绕到侧后避开头部吐息锥",
+     "tts_text": "头部吐息",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "cone",
+       "radius": 15.0,
+       "inner": 0.0,
+       "angle": 90.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        5,
+        7,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240115",
+    "name": "虚蚀龙-召唤虚蚀残影",
+    "kind": "召唤",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-召唤虚蚀残影\n躲法：优先集火清掉虚蚀残影",
+    "color": "#27ae60",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240115
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "召唤残影 · 优先集火清掉虚蚀残影",
+     "tts_text": "召唤残影",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 2.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "bullet_shape"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240116",
+    "name": "虚蚀龙-回旋刀",
+    "kind": "横扫",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-回旋刀\n躲法：贴身或拉远避开回旋刀扇形",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240116
+     ],
+     "buff_ids": [
+      882216
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "回旋刀 · 贴身或拉远避开回旋刀扇形",
+     "tts_text": "回旋刀",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 12.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240117",
+    "name": "虚蚀龙-虚雾喷洒",
+    "kind": "吐息",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-虚雾喷洒\n躲法：躲开正面虚雾喷洒锥范围",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240117
+     ],
+     "buff_ids": [
+      882213,
+      882214,
+      882215
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "虚雾喷洒 · 躲开正面虚雾喷洒锥范围",
+     "tts_text": "虚雾喷洒",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "cone",
+       "radius": 15.0,
+       "inner": 0.0,
+       "angle": 90.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        3,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240118",
+    "name": "虚蚀龙-传染虚雾",
+    "kind": "连线",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-传染虚雾\n躲法：带虚雾的人远离队友别传染",
+    "color": "#16a085",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240118
+     ],
+     "buff_ids": [
+      882218
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "传染虚雾 · 带虚雾的人远离队友别传染",
+     "tts_text": "传染虚雾",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 2.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "bullet_shape"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240130",
+    "name": "虚蚀龙-虚蚀毁灭",
+    "kind": "全场AOE",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-虚蚀毁灭\n躲法：全场AOE开减伤抗读条",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240130
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "虚蚀毁灭 · 全场AOE开减伤抗读条",
+     "tts_text": "虚蚀毁灭",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 100.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10240131",
+    "name": "虚蚀龙-虚蚀放逐",
+    "kind": "致死",
+    "enabled": true,
+    "notes": "机制：虚蚀龙-虚蚀放逐\n躲法：放逐宣告按机制处理别强抗",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10240131
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "虚蚀放逐 · 放逐宣告按机制处理别强抗",
+     "tts_text": "虚蚀放逐",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 2.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 1.0,
+       "center": "boss",
+       "source": "bullet_shape"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_shield_bearer",
+    "name": "虚蚀龙-持盾者(四元素盾)",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：持盾者点名(火/冰/风/雷, buff 882220/882222/882224/882226)\n躲法：被点名持盾按团队分配就位; 盾领域半径3米(FieldTable实测), 中心锚待进本确认",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      882220,
+      882222,
+      882224,
+      882226
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "持盾点名 · 按团队分配就位(盾领域3米)",
+     "tts_text": "持盾点名",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 3.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "reverse"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_6e5cc780",
+    "name": "光陨点名",
+    "kind": "陨石",
+    "enabled": true,
+    "notes": "光陨 → 被点名远离队友",
+    "color": "",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      882340
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "光陨点名",
+     "tts_text": "光陨",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "geometry": {
+       "shape": "circle",
+       "radius": 6.0,
+       "source": "semantic",
+       "center": "self"
+      }
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T17:44:28Z",
+  "updated_at": "2026-06-11T17:44:28Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  },
+  "boss_combat_meta": {
+   "102401": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   },
+   "102450": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   },
+   "102451": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   }
+  },
+  "map_name": "阴骨之地"
+ }
 }
