@@ -87,6 +87,7 @@ ZLOADER_CLS = "Bokura.Table.ZLoader"
 ZLOADER_MEM_OBJ_OFF = 0x108          # ZLoader.Memory._object (byte[])
 ZLOADER_MEM_IDX_OFF = 0x110          # ZLoader.Memory._index
 ZLOADER_INTARRAYPOOL_OFF = 0x18      # ZLoader.IntArrayPool (inline Pool struct)
+ZLOADER_NUMBERARRAYPOOL_OFF = 0x48   # ZLoader.NumberArrayPool (float[] pool, same Pool layout)
 ZLOADER_STRINGPOOL_OFF = 0xF0        # ZLoader.StringPool (i16 len + utf8 bytes payload)
 ZLOADER_DATASIZE_OFF = 0x118         # ZLoader.DataSize (fixed row record size in bytes)
 ZLOADER_BUFRANGE_OFF = 0x128         # ZLoader._bufferRange (offset@0, len@4) over Memory
@@ -112,6 +113,13 @@ TABLE_CLASS = {
     "buff": "Bokura.BuffTableBase",
     "monster": "Bokura.MonsterTableBase",
     "scene": "Bokura.SceneTableBase",
+    "skill_effect": "Bokura.SkillEffectTableBase",
+    "bullet": "Bokura.BulletTableBase",
+    "bullet_shape": "Bokura.BulletShapeTableBase",
+    "field": "Bokura.FieldTableBase",
+    "dungeon_stage": "Bokura.DungeonStageTableBase",
+    "dungeons": "Bokura.DungeonsTableBase",
+    "trap": "Bokura.TrapTableBase",
 }
 
 _ARRAY_MAX_COUNT = 4096               # hard sanity cap for Int32Array column decode
@@ -153,6 +161,7 @@ class MemConfigTableReader:
             out.update(auto_offsets.resolve(self._src, ZLOADER_CLS, {
                 "zloader_mem": ("Memory", ZLOADER_MEM_OBJ_OFF),
                 "zloader_int_pool": ("IntArrayPool", ZLOADER_INTARRAYPOOL_OFF),
+                "zloader_num_pool": ("NumberArrayPool", ZLOADER_NUMBERARRAYPOOL_OFF),
                 "zloader_str_pool": ("StringPool", ZLOADER_STRINGPOOL_OFF),
                 "zloader_data_size": ("DataSize", ZLOADER_DATASIZE_OFF),
                 "zloader_buf_range": ("_bufferRange", ZLOADER_BUFRANGE_OFF),
@@ -167,6 +176,7 @@ class MemConfigTableReader:
                 "proxies": PROXIES_OFF, "loaders": LOADERS_OFF,
                 "zloader_mem": ZLOADER_MEM_OBJ_OFF,
                 "zloader_int_pool": ZLOADER_INTARRAYPOOL_OFF,
+                "zloader_num_pool": ZLOADER_NUMBERARRAYPOOL_OFF,
                 "zloader_str_pool": ZLOADER_STRINGPOOL_OFF,
                 "zloader_data_size": ZLOADER_DATASIZE_OFF,
                 "zloader_buf_range": ZLOADER_BUFRANGE_OFF,
@@ -317,6 +327,19 @@ class MemConfigTableReader:
         b = self.pm.read_bytes(blob + col, 1)
         return b[0] if b else None
 
+    def col_f32(self, blob: int, col: Optional[int]) -> Optional[float]:
+        if not blob or col is None or col < 0:
+            return None
+        data = self.pm.read_bytes(blob + col, 4)
+        if not data or len(data) < 4:
+            return None
+        return struct.unpack("<f", data)[0]
+
+    def col_i64(self, blob: int, col: Optional[int]) -> Optional[int]:
+        if not blob or col is None or col < 0:
+            return None
+        return self.pm.read_i64(blob + col)
+
     def col_bool(self, blob: int, col: Optional[int]) -> Optional[bool]:
         v = self.col_u8(blob, col)
         return None if v is None else bool(v)
@@ -351,6 +374,32 @@ class MemConfigTableReader:
         if not data or len(data) < count * dsize:
             return []
         return list(struct.unpack(f"<{count}i", data))
+
+    def col_f32_array(self, zloader: int, blob: int, col: Optional[int]) -> List[float]:
+        """NumberArray column: same layout as Int32Array but in NumberArrayPool
+        and values are IEEE 754 floats. Pool at ZLoader+0x48."""
+        pool_off = self.col_i32(blob, col)
+        if pool_off is None or pool_off < 0 or not _plaus(zloader):
+            return []
+        off = self._offsets()
+        pool = zloader + off["zloader_num_pool"]
+        pobj = self.pm.read_u64(pool + POOL_MEM_OBJ_OFF)
+        pidx = self.pm.read_i32(pool + POOL_MEM_IDX_OFF) or 0
+        plen = (self.pm.read_i32(pool + POOL_MEM_LEN_OFF) or 0) & 0x7FFFFFFF
+        dsize = self.pm.read_i32(pool + POOL_DATASIZE_OFF) or 0
+        if not _plaus(pobj) or dsize != 4 or pool_off + 2 > plen:
+            return []
+        base = pobj + ARRAY_ELEMS_OFF + pidx + pool_off
+        raw = self.pm.read_bytes(base, 2)
+        if not raw or len(raw) < 2:
+            return []
+        count = struct.unpack("<h", raw)[0]
+        if count <= 0 or count > _ARRAY_MAX_COUNT or pool_off + 2 + count * dsize > plen:
+            return []
+        data = self.pm.read_bytes(base + 2, count * dsize)
+        if not data or len(data) < count * dsize:
+            return []
+        return [round(v, 6) for v in struct.unpack(f"<{count}f", data)]
 
     def col_string(self, zloader: int, blob: int, col: Optional[int]) -> str:
         """String column: the i32 at blob+col is an offset into the row's

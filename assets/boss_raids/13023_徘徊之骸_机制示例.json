@@ -1,856 +1,912 @@
 {
- "schema_version": 2,
- "profile": {
-  "id": "boss_example_103208_auto",
   "schema_version": 2,
-  "profile_name": "徘徊之骸(悖与灾的机骸·继) · 机制示例",
-  "description": "《遗忘幻梦之野》第二场: 徘徊之骸 — 悖与灾的机骸·继 机制示例: 13 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 6 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
-  "boss_total_hp": 0,
-  "enrage_time_s": 0,
-  "enrage": {
-   "time_s": 0,
-   "anchor": "fight",
-   "phase_id": "",
-   "warn_threshold_s": 60,
-   "urgent_threshold_s": 30,
-   "tts_milestones": [
-    60,
-    30,
-    10
-   ]
-  },
-  "simple_mode": false,
-  "target_name_pattern": "悖与灾的机骸·继",
-  "dungeon_id": 13023,
-  "difficulty": "nightmare",
-  "phases": [
-   {
-    "id": "p1",
-    "name": "全程",
-    "trigger": {
-     "type": "manual",
-     "value": 0.0
+  "profile": {
+    "id": "boss_example_103208_auto",
+    "schema_version": 2,
+    "profile_name": "徘徊之骸(悖与灾的机骸·继) · 机制示例",
+    "description": "《遗忘幻梦之野》第二场: 徘徊之骸 — 悖与灾的机骸·继 机制示例: 13 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 6 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+    "boss_total_hp": 0,
+    "enrage_time_s": 0,
+    "enrage": {
+      "time_s": 0,
+      "anchor": "fight",
+      "phase_id": "",
+      "warn_threshold_s": 60,
+      "urgent_threshold_s": 30,
+      "tts_milestones": [
+        60,
+        30,
+        10
+      ]
     },
-    "timelines": []
-   }
-  ],
-  "mechanics": [
-   {
-    "id": "mech_10320001",
-    "name": "释放轨道炮（幻）",
-    "kind": "落点",
-    "enabled": true,
-    "notes": "机制：释放轨道炮（幻）\n躲法：脚下出现轨道炮落点圈，立刻往外侧离开光圈范围",
-    "color": "#d35400",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320001
-     ],
-     "buff_ids": [
-      829201,
-      829210
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "轨道炮 · 脚下出现轨道炮落点圈，立刻往",
-     "tts_text": "轨道炮",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    "simple_mode": false,
+    "target_name_pattern": "悖与灾的机骸·继",
+    "dungeon_id": 13023,
+    "difficulty": "nightmare",
+    "phases": [
+      {
+        "id": "p1",
+        "name": "全程",
+        "trigger": {
+          "type": "manual",
+          "value": 0.0
+        },
+        "timelines": []
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10320003",
-    "name": "相位映射",
-    "kind": "时停",
-    "enabled": true,
-    "notes": "机制：相位映射\n躲法：相位延时机制，记住此刻站位，延迟生效前提前错开映射位置",
-    "color": "#2c3e50",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320003
-     ],
-     "buff_ids": [
-      829214,
-      829215
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "相位映射 · 相位延时机制，记住此刻站位，",
-     "tts_text": "相位映射",
-     "alert_type": "both",
-     "countdown_s": 6.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    ],
+    "mechanics": [
+      {
+        "id": "mech_10320001",
+        "name": "释放轨道炮（幻）",
+        "kind": "落点",
+        "enabled": true,
+        "notes": "机制：释放轨道炮（幻）\n躲法：脚下出现轨道炮落点圈，立刻往外侧离开光圈范围",
+        "color": "#d35400",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320001
+          ],
+          "buff_ids": [
+            829201,
+            829210
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "轨道炮 · 脚下出现轨道炮落点圈，立刻往",
+          "tts_text": "轨道炮",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "line",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 3.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                10,
+                15,
+                30
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320003",
+        "name": "相位映射",
+        "kind": "时停",
+        "enabled": true,
+        "notes": "机制：相位映射\n躲法：相位延时机制，记住此刻站位，延迟生效前提前错开映射位置",
+        "color": "#2c3e50",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320003
+          ],
+          "buff_ids": [
+            829214,
+            829215
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "相位映射 · 相位延时机制，记住此刻站位，",
+          "tts_text": "相位映射",
+          "alert_type": "both",
+          "countdown_s": 6.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 0.4,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "bullet_shape"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320004",
+        "name": "点名光柱",
+        "kind": "点名",
+        "enabled": true,
+        "notes": "机制：点名光柱\n躲法：被点名头顶光柱，带着光柱远离人群到空旷处释放",
+        "color": "#8e44ad",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320004
+          ],
+          "buff_ids": [
+            829217
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "点名光柱 · 被点名头顶光柱，带着光柱远离",
+          "tts_text": "点名光柱",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320005",
+        "name": "史诗狂怒",
+        "kind": "狂暴",
+        "enabled": true,
+        "notes": "机制：史诗狂怒\n躲法：全场狂怒AOE无法躲避，开减伤抗住并加速输出",
+        "color": "#c0392b",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320005
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "狂怒 · 全场狂怒AOE无法躲避，开减",
+          "tts_text": "狂怒",
+          "alert_type": "both",
+          "countdown_s": 8.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 100.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320007",
+        "name": "第75次冲锋（长时）",
+        "kind": "冲锋",
+        "enabled": true,
+        "notes": "机制：第75次冲锋（长时）\n躲法：Boss锁定目标直线冲锋，向侧面垂直避开冲锋路径",
+        "color": "#f39c12",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320007
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "冲锋 · Boss锁定目标直线冲锋，向",
+          "tts_text": "冲锋",
+          "alert_type": "both",
+          "countdown_s": 4.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "line",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 4.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                0,
+                50,
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320008",
+        "name": "第75次冲锋（幻象短时）",
+        "kind": "冲锋",
+        "enabled": true,
+        "notes": "机制：第75次冲锋（幻象短时）\n躲法：幻象短时冲锋来得快，提前向侧面闪开直线路径",
+        "color": "#f39c12",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320008
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "幻象冲锋 · 幻象短时冲锋来得快，提前向侧",
+          "tts_text": "幻象冲锋",
+          "alert_type": "both",
+          "countdown_s": 3.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "line",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 4.0,
+              "center": "boss",
+              "source": "semantic"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320009",
+        "name": "召唤场边幻象",
+        "kind": "召唤",
+        "enabled": true,
+        "notes": "机制：召唤场边幻象\n躲法：场边刷出幻象，集火优先清掉防止叠伤",
+        "color": "#27ae60",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320009
+          ],
+          "buff_ids": [
+            829218,
+            829220
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "召唤幻象 · 场边刷出幻象，集火优先清掉防",
+          "tts_text": "召唤幻象",
+          "alert_type": "both",
+          "countdown_s": 6.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "ai_range"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320011",
+        "name": "真实承诺（召唤dummy）",
+        "kind": "召唤",
+        "enabled": true,
+        "notes": "机制：真实承诺（召唤dummy）\n躲法：召唤dummy分身，按机制处理或清掉召唤物",
+        "color": "#27ae60",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320011
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "真实承诺 · 召唤dummy分身，按机制处",
+          "tts_text": "真实承诺",
+          "alert_type": "both",
+          "countdown_s": 6.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "ai_range"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320012",
+        "name": "召唤机械守卫",
+        "kind": "召唤",
+        "enabled": true,
+        "notes": "机制：召唤机械守卫\n躲法：召唤机械守卫，分出火力优先清守卫",
+        "color": "#27ae60",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320012
+          ],
+          "buff_ids": [
+            829221
+          ],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "机械守卫 · 召唤机械守卫，分出火力优先清",
+          "tts_text": "机械守卫",
+          "alert_type": "both",
+          "countdown_s": 6.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": false,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 50.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "ai_range"
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320015",
+        "name": "毁灭光线",
+        "kind": "吐息",
+        "enabled": true,
+        "notes": "机制：毁灭光线\n躲法：Boss正面发射毁灭光线，迅速绕到侧后避开直线光束",
+        "color": "#e67e22",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320015
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "毁灭光线 · Boss正面发射毁灭光线，迅",
+          "tts_text": "毁灭光线",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 100.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                0,
+                30,
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320016",
+        "name": "光束炮",
+        "kind": "吐息",
+        "enabled": true,
+        "notes": "机制：光束炮\n躲法：光束炮沿直线扫射，向侧面移出炮线范围",
+        "color": "#e67e22",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320016
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "光束炮 · 光束炮沿直线扫射，向侧面移出",
+          "tts_text": "光束炮",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_boss",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "line",
+              "radius": 6.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 3.0,
+              "center": "boss",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                15,
+                30,
+                60
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320018",
+        "name": "贯穿轰击（分摊）",
+        "kind": "分摊",
+        "enabled": true,
+        "notes": "机制：贯穿轰击（分摊）\n躲法：贯穿轰击为分摊伤害，全队抱团一起均摊",
+        "color": "#3aa0ff",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320018
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "贯穿分摊 · 贯穿轰击为分摊伤害，全队抱团",
+          "tts_text": "贯穿分摊",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "goto_teammate",
+            "move_ms": 4000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "circle",
+              "radius": 20.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 0.0,
+              "center": "self",
+              "source": "semantic",
+              "ai_range": [
+                0,
+                3,
+                5,
+                20
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "mech_10320027",
+        "name": "电磁连线",
+        "kind": "连线",
+        "enabled": true,
+        "notes": "机制：电磁连线\n躲法：被电磁连线标记，远离队友拉断连线避免共享伤害",
+        "color": "#16a085",
+        "phase_ids": [],
+        "detect": {
+          "skill_ids": [
+            10320027
+          ],
+          "buff_ids": [],
+          "source": "self",
+          "boss_base_id": 0,
+          "hp_pct": 0.0,
+          "time_into_phase_s": 0.0,
+          "time_into_fight_s": 0.0,
+          "repeat_interval_s": 0.0,
+          "event": ""
+        },
+        "alert": {
+          "enabled": true,
+          "banner_text": "电磁连线 · 被电磁连线标记，远离队友拉断",
+          "tts_text": "电磁连线",
+          "alert_type": "both",
+          "countdown_s": 5.0,
+          "pre_warn_s": 2.0,
+          "cooldown_s": 4.0,
+          "sound": "boss_alert"
+        },
+        "dodge": {
+          "enabled": true,
+          "linkage_id": "",
+          "inline": {
+            "action_key": "",
+            "action_label": "",
+            "press_mode": "tap",
+            "hold_ms": 600,
+            "press_count": 1,
+            "sequence": [],
+            "delay_ms": 0,
+            "lead_ms": 300,
+            "cooldown_s": 3.0,
+            "direction": "away_nearest",
+            "move_ms": 2000,
+            "fallback_direction": "back",
+            "exit_margin_m": 6.0,
+            "arrive_m": 2.0,
+            "geometry": {
+              "shape": "line",
+              "radius": 20.0,
+              "inner": 0.0,
+              "angle": 0.0,
+              "width": 2.0,
+              "center": "self",
+              "source": "semantic"
+            }
+          }
+        }
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10320004",
-    "name": "点名光柱",
-    "kind": "点名",
-    "enabled": true,
-    "notes": "机制：点名光柱\n躲法：被点名头顶光柱，带着光柱远离人群到空旷处释放",
-    "color": "#8e44ad",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320004
-     ],
-     "buff_ids": [
-      829217
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
+    ],
+    "source": "local",
+    "remote_id": null,
+    "created_at": "2026-06-11T17:44:28Z",
+    "updated_at": "2026-06-11T17:44:28Z",
+    "author_snapshot": {
+      "player_uid": "",
+      "player_name": "",
+      "profession_id": 0,
+      "profession_name": ""
     },
-    "alert": {
-     "enabled": true,
-     "banner_text": "点名光柱 · 被点名头顶光柱，带着光柱远离",
-     "tts_text": "点名光柱",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "circle",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    "boss_combat_meta": {
+      "103200": {
+        "breaking_s": 8.0,
+        "fracture_s": 5.0
+      },
+      "103208": {
+        "breaking_s": 8.0,
+        "fracture_s": 5.0
+      },
+      "103207": {
+        "breaking_s": 8.0,
+        "fracture_s": 5.0
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10320005",
-    "name": "史诗狂怒",
-    "kind": "狂暴",
-    "enabled": true,
-    "notes": "机制：史诗狂怒\n躲法：全场狂怒AOE无法躲避，开减伤抗住并加速输出",
-    "color": "#c0392b",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320005
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
     },
-    "alert": {
-     "enabled": true,
-     "banner_text": "狂怒 · 全场狂怒AOE无法躲避，开减",
-     "tts_text": "狂怒",
-     "alert_type": "both",
-     "countdown_s": 8.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
+    "hidden_sub_skills": [
+      {
+        "id": 10320501,
+        "name": "机械守卫atk1",
+        "notes": "机械守卫普攻"
+      },
+      {
+        "id": 10320502,
+        "name": "机械守卫atk2",
+        "notes": "机械守卫攻击, AI范围20-50m"
       }
-     }
-    }
-   },
-   {
-    "id": "mech_10320007",
-    "name": "第75次冲锋（长时）",
-    "kind": "冲锋",
-    "enabled": true,
-    "notes": "机制：第75次冲锋（长时）\n躲法：Boss锁定目标直线冲锋，向侧面垂直避开冲锋路径",
-    "color": "#f39c12",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320007
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "冲锋 · Boss锁定目标直线冲锋，向",
-     "tts_text": "冲锋",
-     "alert_type": "both",
-     "countdown_s": 4.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "line",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320008",
-    "name": "第75次冲锋（幻象短时）",
-    "kind": "冲锋",
-    "enabled": true,
-    "notes": "机制：第75次冲锋（幻象短时）\n躲法：幻象短时冲锋来得快，提前向侧面闪开直线路径",
-    "color": "#f39c12",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320008
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "幻象冲锋 · 幻象短时冲锋来得快，提前向侧",
-     "tts_text": "幻象冲锋",
-     "alert_type": "both",
-     "countdown_s": 3.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "line",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320009",
-    "name": "召唤场边幻象",
-    "kind": "召唤",
-    "enabled": true,
-    "notes": "机制：召唤场边幻象\n躲法：场边刷出幻象，集火优先清掉防止叠伤",
-    "color": "#27ae60",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320009
-     ],
-     "buff_ids": [
-      829218,
-      829220
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "召唤幻象 · 场边刷出幻象，集火优先清掉防",
-     "tts_text": "召唤幻象",
-     "alert_type": "both",
-     "countdown_s": 6.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320011",
-    "name": "真实承诺（召唤dummy）",
-    "kind": "召唤",
-    "enabled": true,
-    "notes": "机制：真实承诺（召唤dummy）\n躲法：召唤dummy分身，按机制处理或清掉召唤物",
-    "color": "#27ae60",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320011
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "真实承诺 · 召唤dummy分身，按机制处",
-     "tts_text": "真实承诺",
-     "alert_type": "both",
-     "countdown_s": 6.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320012",
-    "name": "召唤机械守卫",
-    "kind": "召唤",
-    "enabled": true,
-    "notes": "机制：召唤机械守卫\n躲法：召唤机械守卫，分出火力优先清守卫",
-    "color": "#27ae60",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320012
-     ],
-     "buff_ids": [
-      829221
-     ],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "机械守卫 · 召唤机械守卫，分出火力优先清",
-     "tts_text": "机械守卫",
-     "alert_type": "both",
-     "countdown_s": 6.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": false,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320015",
-    "name": "毁灭光线",
-    "kind": "吐息",
-    "enabled": true,
-    "notes": "机制：毁灭光线\n躲法：Boss正面发射毁灭光线，迅速绕到侧后避开直线光束",
-    "color": "#e67e22",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320015
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "毁灭光线 · Boss正面发射毁灭光线，迅",
-     "tts_text": "毁灭光线",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "line",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320016",
-    "name": "光束炮",
-    "kind": "吐息",
-    "enabled": true,
-    "notes": "机制：光束炮\n躲法：光束炮沿直线扫射，向侧面移出炮线范围",
-    "color": "#e67e22",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320016
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "光束炮 · 光束炮沿直线扫射，向侧面移出",
-     "tts_text": "光束炮",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_boss",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "line",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320018",
-    "name": "贯穿轰击（分摊）",
-    "kind": "分摊",
-    "enabled": true,
-    "notes": "机制：贯穿轰击（分摊）\n躲法：贯穿轰击为分摊伤害，全队抱团一起均摊",
-    "color": "#3aa0ff",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320018
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "贯穿分摊 · 贯穿轰击为分摊伤害，全队抱团",
-     "tts_text": "贯穿分摊",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "goto_teammate",
-      "move_ms": 4000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   },
-   {
-    "id": "mech_10320027",
-    "name": "电磁连线",
-    "kind": "连线",
-    "enabled": true,
-    "notes": "机制：电磁连线\n躲法：被电磁连线标记，远离队友拉断连线避免共享伤害",
-    "color": "#16a085",
-    "phase_ids": [],
-    "detect": {
-     "skill_ids": [
-      10320027
-     ],
-     "buff_ids": [],
-     "source": "self",
-     "boss_base_id": 0,
-     "hp_pct": 0.0,
-     "time_into_phase_s": 0.0,
-     "time_into_fight_s": 0.0,
-     "repeat_interval_s": 0.0,
-     "event": ""
-    },
-    "alert": {
-     "enabled": true,
-     "banner_text": "电磁连线 · 被电磁连线标记，远离队友拉断",
-     "tts_text": "电磁连线",
-     "alert_type": "both",
-     "countdown_s": 5.0,
-     "pre_warn_s": 2.0,
-     "cooldown_s": 4.0,
-     "sound": "boss_alert"
-    },
-    "dodge": {
-     "enabled": true,
-     "linkage_id": "",
-     "inline": {
-      "action_key": "",
-      "action_label": "",
-      "press_mode": "tap",
-      "hold_ms": 600,
-      "press_count": 1,
-      "sequence": [],
-      "delay_ms": 0,
-      "lead_ms": 300,
-      "cooldown_s": 3.0,
-      "direction": "away_nearest",
-      "move_ms": 2000,
-      "fallback_direction": "back",
-      "exit_margin_m": 6.0,
-      "arrive_m": 2.0,
-      "geometry": {
-       "shape": "",
-       "radius": 0.0,
-       "inner": 0.0,
-       "angle": 0.0,
-       "width": 0.0,
-       "center": "boss",
-       "source": ""
-      }
-     }
-    }
-   }
-  ],
-  "source": "local",
-  "remote_id": null,
-  "created_at": "2026-06-11T17:44:28Z",
-  "updated_at": "2026-06-11T17:44:28Z",
-  "author_snapshot": {
-   "player_uid": "",
-   "player_name": "",
-   "profession_id": 0,
-   "profession_name": ""
+    ]
   }
- }
 }
