@@ -28,6 +28,7 @@ _ctx = None
 _engine = None
 _refresh_token = ""
 _engine_class = None
+_stopped = False  # guards against late timer callbacks re-showing the alert
 
 
 def on_load(ctx):
@@ -91,9 +92,10 @@ def _running():
 
 
 def _start():
-    global _engine, _refresh_token
+    global _engine, _refresh_token, _stopped
     if _running():
         return
+    _stopped = False
     cls = _get_engine_class()
     _engine = cls(locator=_get_locator(), on_status=_on_status)
     _engine.start()
@@ -104,7 +106,8 @@ def _start():
 
 
 def _stop(reason=""):
-    global _engine, _refresh_token
+    global _engine, _refresh_token, _stopped
+    _stopped = True
     if _refresh_token and _ctx:
         _ctx.clear_timer(_refresh_token)
         _refresh_token = ""
@@ -119,11 +122,24 @@ def _stop(reason=""):
         _ctx.dismiss_notify()
         _ctx.request_redraw("hide_seek")
         _ctx.log(f"hide_seek stopped ({reason})")
+        # Belt-and-suspenders: a racing timer callback that slipped past
+        # clear_timer can re-show the alert between dismiss and the 0.52 s
+        # close animation.  A delayed second dismiss catches that.
+        import threading
+        threading.Timer(1.0, _deferred_dismiss).start()
+
+
+def _deferred_dismiss():
+    if _stopped and _ctx:
+        try:
+            _ctx.dismiss_notify()
+        except Exception:
+            pass
 
 
 def _refresh_alert():
-    # Keep the persistent alert visible; NEVER touch the engine thread (a
-    # detection phase can idle for minutes — interrupting it would reset it).
+    if _stopped:
+        return
     if _ctx and _running():
         _ctx.notify("AUTO HIDE & SEEK", "自动躲猫猫运行中", duration_s=60.0, kind="hide_seek")
         _ctx.request_redraw("hide_seek")

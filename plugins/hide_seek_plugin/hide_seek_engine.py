@@ -38,6 +38,7 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 VK_MENU = 0x12  # Alt key
+VK_ESCAPE = 0x1B  # Escape key
 SM_XVIRTUALSCREEN = 76
 SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
@@ -149,6 +150,10 @@ STEPS: List[Dict] = [
 _MATCH_THRESHOLD = 0.70
 # TM_SQDIFF_NORMED threshold (lower = more similar; catches white-on-white buttons)
 _SQDIFF_THRESHOLD = 0.10
+# Minimum fraction of ROI pixels that must match expected colors for a valid detection
+_COLOR_PRESENCE_MIN = 0.03
+# Global cooldown (seconds) after ANY click before allowing next detection
+_CLICK_GLOBAL_CD_S = 2.0
 
 
 class HideSeekEngine:
@@ -328,12 +333,21 @@ class HideSeekEngine:
             return
 
         cur = self._current_step
+        since_click = time.time() - self._last_click_ts
+
+        # Global post-click cooldown: skip ALL detection briefly after any
+        # click so the game UI has time to transition.
+        if since_click < _CLICK_GLOBAL_CD_S:
+            self._fire_status(
+                f'Step {cur} ({STEPS[cur]["name"]}): click CD ({since_click:.1f}s) …',
+                cur,
+            )
+            return
 
         # After a click, ALL earlier steps' UI may still linger on screen
         # for a few seconds.  Skip fallback to ANY earlier step during the
         # cooldown period to prevent looping (0→1→2→0→1→2…).
         # The current step itself is always checked — no timeout limit.
-        since_click = time.time() - self._last_click_ts
         fallback_allowed = (since_click >= self.STEP_COOLDOWN_S)
 
         # 1) Always try current step (no cooldown restriction)
@@ -355,6 +369,13 @@ class HideSeekEngine:
                         f'({STEPS[step_idx]["name"]}) while on Step {cur}',
                         step_idx,
                     )
+                    # Step 1 fallback to step 0: press ESC first to dismiss
+                    # any lingering dialog from a mis-click
+                    if cur == 1 and step_idx == 0:
+                        self._send_key(VK_ESCAPE, up=False)
+                        time.sleep(0.05)
+                        self._send_key(VK_ESCAPE, up=True)
+                        time.sleep(0.3)
                     with self._lock:
                         self._current_step = step_idx
                     self._execute_step(step_idx, click_x, click_y, conf)
@@ -474,6 +495,9 @@ class HideSeekEngine:
                 # Debug save (success)
                 self._debug_save_step(step_idx, roi_img, filtered, tpl_resized,
                                       confidence, match_method, True)
+                # Color presence gate (same as below)
+                if not self._verify_color_presence(roi_img, colors, step_idx):
+                    return None
                 return (step_idx, click_x, click_y, confidence)
 
         # Debug save (rate-limited)
@@ -482,6 +506,13 @@ class HideSeekEngine:
                               confidence, match_method, detected)
 
         if not detected:
+            return None
+
+        # Post-match color verification: the ROI must contain a minimum
+        # fraction of pixels that match the expected colors.  This prevents
+        # SQDIFF / raw fallbacks from triggering when the dialog hasn't
+        # actually appeared yet.
+        if not self._verify_color_presence(roi_img, colors, step_idx):
             return None
 
         # Compute click position in screen coordinates
@@ -524,6 +555,24 @@ class HideSeekEngine:
                   f'({method}, conf={confidence:.2f})')
         except Exception as e:
             print(f'[HideSeek][DEBUG] Save error: {e}')
+
+    # ── Post-match color presence verification ──
+
+    def _verify_color_presence(self, roi_img: np.ndarray, colors: list,
+                               step_idx: int) -> bool:
+        """Check that the ROI contains enough pixels matching the step's
+        expected colors.  Returns False if the dialog is not actually present
+        (e.g. SQDIFF matched against a blank/wrong area)."""
+        mask = self._build_color_mask(roi_img, colors)
+        total = max(1, mask.shape[0] * mask.shape[1])
+        hits = int(cv2.countNonZero(mask))
+        ratio = hits / total
+        if ratio < _COLOR_PRESENCE_MIN:
+            self._log(
+                f'color gate REJECTED step={step_idx} '
+                f'ratio={ratio:.4f} (<{_COLOR_PRESENCE_MIN})')
+            return False
+        return True
 
     # ── Multi-scale template matching ──
 
