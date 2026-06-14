@@ -147,12 +147,12 @@ class PluginManagerPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Plugin Manager')
-        win.geometry('760x540+160+120')
+        win.geometry('960x862+160+120')
         win.minsize(620, 420)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -164,16 +164,16 @@ class PluginManagerPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'PYTHON SDK').pack(side='left')
         for label, cmd in (
-            ('刷新 Refresh', self.refresh),
-            ('导入 Import', self._import_plugin),
+            ('刷新', self.refresh),
+            ('导入', self._import_plugin),
             ('全部重载 Reload', self._reload_all),
-            ('关闭 Close', self.hide),
+            ('×', self.hide),
         ):
             tk.Button(
                 toolbar,
@@ -374,8 +374,8 @@ class PluginManagerPanel:
         pinned = bool(plugin.get('pinned'))
         actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
         actions.pack(fill='x', padx=10, pady=(0, 9))
-        self._action_button(actions, '启用 Enable', lambda pid=plugin_id: self._enable(pid), enabled=not enabled)
-        self._action_button(actions, '禁用 Disable', lambda pid=plugin_id: self._disable(pid), enabled=enabled)
+        self._action_button(actions, '启用', lambda pid=plugin_id: self._enable(pid), enabled=not enabled)
+        self._action_button(actions, '禁用', lambda pid=plugin_id: self._disable(pid), enabled=enabled)
         # 重载/置顶/卸载收进「更多 ▾」菜单 (与 Web plugin_manager 卡片 1:1)
         self._more_button(actions, plugin_id, enabled=enabled, pinned=pinned,
                           user_installed=bool(plugin.get('user_installed')))
@@ -701,7 +701,7 @@ class PluginDetachedPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
         canvas = tk.Canvas(body, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
         scroll = sao_scrollbar(body, canvas.yview)
         inner = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)

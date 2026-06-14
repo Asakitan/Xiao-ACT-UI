@@ -131,7 +131,7 @@ _TOPIC_CN = {
     "encounter_started": "战斗开始", "encounter_reset": "战斗重置",
 }
 _SOURCE_CN = {
-    "tcp": "封包", "entity": "实体", "mem": "内存", "memory": "内存", "history": "历史",
+    "tcp": "封包", "packet": "封包", "entity": "实体", "mem": "内存", "memory": "内存", "history": "历史",
     "replay": "回放", "ui": "界面", "offline_import": "离线导入", "plugin": "插件",
     "unknown": "未知",
 }
@@ -294,7 +294,7 @@ class _RoundedButton(tk.Canvas):
         self._text = str(text)
         self._command = command
         self._font = tkfont.Font(font=get_cjk_font(9, True))
-        self._fill = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+        self._fill = _pc('control_bg', _pc('card_bg', ui._SAO_PANEL_BODY_BG))
         self._fill_hover = _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
         self._border = _pc('border', ui._SAO_PANEL_BORDER) if kind == 'normal' else _accent(kind)
         self._fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if kind == 'normal' else _accent_text(kind)
@@ -635,15 +635,7 @@ def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "
     color = _accent(accent)
     base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     hover_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG) if zebra else _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG)
-    row = tk.Frame(parent, bg=base_bg, highlightthickness=1, highlightbackground=_pc('sep', ui._SAO_PANEL_SEP),
-                   cursor='hand2' if callable(command) else '')
-
-    # 全宽进度槽 + 比例填充（替代原本最多 280px 的像素条，随窗口缩放）
-    track = tk.Frame(row, bg=_pc('track_bg', base_bg), height=5)
-    track.pack(fill='x', side='top')
-    track.pack_propagate(False)
-    fill = tk.Frame(track, bg=color)
-    fill.place(x=0, y=0, relheight=1.0, relwidth=max(0.0, min(1.0, float(ratio or 0.0))))
+    row = tk.Frame(parent, bg=base_bg, cursor='hand2' if callable(command) else '')
 
     body = tk.Frame(row, bg=base_bg)
     body.pack(fill='x', padx=SP_SM, pady=SP_XS + 1)
@@ -656,6 +648,12 @@ def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "
         tk.Label(left, text=str(meta), bg=base_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_META, anchor='w').pack(fill='x')
     if value:
         tk.Label(body, text=str(value), bg=base_bg, fg=color, font=FONT_VALUE_SM, anchor='e').pack(side='right', padx=(SP_SM, 0))
+
+    track = tk.Frame(row, bg=_pc('track_bg', base_bg), height=6)
+    track.pack(fill='x', side='top', padx=(18, SP_SM), pady=(0, SP_XS + 2))
+    track.pack_propagate(False)
+    fill = tk.Frame(track, bg=color)
+    fill.place(x=0, y=0, relheight=1.0, relwidth=max(0.0, min(1.0, float(ratio or 0.0))))
 
     # Only advertise interactivity (hand cursor + hover-lighten) when the row
     # actually has a handler — a hovering-but-dead row reads as "click me" and

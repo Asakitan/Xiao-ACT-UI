@@ -126,12 +126,12 @@ class TriggerTimerManagerPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Trigger Timer Manager')
-        win.geometry('820x560+190+140')
+        win.geometry('960x862+190+140')
         win.minsize(660, 430)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -143,15 +143,15 @@ class TriggerTimerManagerPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'ALERT SDK').pack(side='left')
         for label, cmd in (
-            ('刷新 Refresh', self.refresh),
+            ('刷新', self.refresh),
             ('重载 Reload', self._reload),
-            ('关闭 Close', self.hide),
+            ('×', self.hide),
         ):
             tk.Button(
                 toolbar,
@@ -290,9 +290,9 @@ class TriggerTimerManagerPanel:
 
         actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
         actions.pack(fill='x', padx=10, pady=(0, 9))
-        self._action_button(actions, '启用 Enable', lambda rid=rule_id: self._enable(rid), enabled=not enabled)
-        self._action_button(actions, '禁用 Disable', lambda rid=rule_id: self._disable(rid), enabled=enabled)
-        self._action_button(actions, '测试 Test', lambda rid=rule_id: self._test(rid), enabled=True)
+        self._action_button(actions, '启用', lambda rid=rule_id: self._enable(rid), enabled=not enabled)
+        self._action_button(actions, '禁用', lambda rid=rule_id: self._disable(rid), enabled=enabled)
+        self._action_button(actions, '测试', lambda rid=rule_id: self._test(rid), enabled=True)
 
     def _render_recent(self, status: Mapping[str, Any]) -> None:
         if self._list is None:

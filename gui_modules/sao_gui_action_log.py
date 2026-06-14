@@ -29,6 +29,7 @@ from gui_modules.sao_panel_components import (
     keep_canvas_scroll,
     metric_tile,
     readable_event_line,
+    rounded_panel,
     sao_entry,
     sao_option_menu,
     sao_scrollbar,
@@ -87,6 +88,7 @@ class ActionLogPanel:
         self.owner = owner
         self._win: Optional[tk.Toplevel] = None
         self._rows: Optional[tk.Frame] = None
+        self._side: Optional[tk.Frame] = None
         self._summary_var = tk.StringVar(value="ACTION LOG: --")
         self._status_var = tk.StringVar(value="Ready")
         self._query_var = tk.StringVar(value="")
@@ -284,12 +286,12 @@ class ActionLogPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Action Log')
-        win.geometry('900x560+230+165')
+        win.geometry('960x862+230+165')
         win.minsize(720, 430)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -301,84 +303,37 @@ class ActionLogPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'ACTION LOG').pack(side='left')
-        for label, cmd in (
-            ('刷新 Refresh', self.refresh),
-            ('搜索 Search', self.search),
-            ('复制 Copy', self.copy_json),
-            ('关闭 Close', self.hide),
-        ):
-            action_button(toolbar, label, cmd, kind='cyan' if '复制' in label else 'gold').pack(side='right', padx=(6, 0))
-        # 按钮先 pack — 窄窗下 summary 不挤按钮
-        tk.Label(
-            toolbar,
-            textvariable=self._summary_var,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_GOLD,
-            font=get_cjk_font(10, True),
-        ).pack(side='left', padx=(12, 0))
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT ACTION STREAM', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='ACTION LOG 行为日志', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # 筛选行：来源 / 搜索 / 类型 / 战斗 ID + 过滤（原 10+ 控件单行拆成两行分组）
-        control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=12, pady=(0, 4))
-        tk.Label(control, text='来源', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_option_menu(control, self._source_var, 'live', 'history', command=lambda _v: self._refresh_from_start()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='类型', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        sao_option_menu(control, self._topic_var, '', 'damage', 'skill', 'boss', 'trigger', command=lambda _v: self.filter_topic()).pack(side='left', padx=(6, 8))
-        enc_label = tk.Label(control, text='战斗 ID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9))
-        enc_label.pack(side='left')
-        enc_entry = sao_entry(control, textvariable=self._encounter_var, width=14)
-        enc_entry.pack(side='left', padx=(6, 8))
-        for w in (enc_label, enc_entry):
-            attach_tooltip(w, '按战斗 (encounter) ID 过滤日志；留空显示全部')
-        action_button(control, '过滤 Filter', self.filter_topic, kind='cyan').pack(side='left', padx=(0, 8))
-
-        # 导航行：游标跳转 / 翻页 / RAW 行模式
-        nav = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        nav.pack(fill='x', padx=12, pady=(0, 8))
-        cursor_label = tk.Label(nav, text='游标 ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9))
-        cursor_label.pack(side='left')
-        cursor_entry = sao_entry(nav, textvariable=self._cursor_var, width=10)
-        cursor_entry.pack(side='left', padx=(6, 6))
-        for w in (cursor_label, cursor_entry):
-            attach_tooltip(w, '跳转到该时间点 (epoch 毫秒)；跳转后日志定位到此游标')
-        action_button(nav, '跳转 Jump', self.jump_to_time, kind='gold').pack(side='left', padx=(0, 12))
-        action_button(nav, '上一页 Prev', self.previous_page).pack(side='left', padx=(0, 6))
-        action_button(nav, '下一页 Next', self.next_page).pack(side='left')
-        raw_check = tk.Checkbutton(
-            nav,
-            text='RAW 行',
-            variable=self._show_raw_rows,
-            command=self._toggle_raw_rows,
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            selectcolor=_SAO_PANEL_HEADER_BG,
-            activebackground=_SAO_PANEL_BODY_BG,
-            activeforeground=_SAO_PANEL_GOLD,
-            font=get_cjk_font(9),
-        )
-        raw_check.pack(side='left', padx=(12, 0))
-        attach_tooltip(raw_check, '显示未聚合的原始事件行（默认按动作聚合展示）')
-
-        tk.Label(
-            body,
-            textvariable=self._status_var,
-            anchor='w',
-            bg=_SAO_PANEL_BODY_BG,
-            fg=_SAO_PANEL_LABEL_FG,
-            font=get_cjk_font(9),
-        ).pack(fill='x', padx=12, pady=(0, 6))
+        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        control.pack(side='right', anchor='n', pady=(10, 0))
+        sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(0, 8))
+        sao_option_menu(control, self._topic_var, '', 'damage', 'skill', 'boss', 'trigger', command=lambda _v: self.filter_topic()).pack(side='left', padx=(0, 8))
+        cursor_entry = sao_entry(control, textvariable=self._cursor_var, width=9)
+        cursor_entry.pack(side='left', padx=(0, 8))
+        attach_tooltip(cursor_entry, '跳转到该时间点 (epoch 毫秒)；跳转后日志定位到此游标')
+        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(control, '×', self.hide).pack(side='left')
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
-        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = sao_scrollbar(outer, canvas.yview)
+        side_card, side_inner = rounded_panel(outer, bg=_SAO_PANEL_BODY_BG, border=_SAO_PANEL_BORDER, radius=8, pad=12)
+        side_card.configure(width=300)
+        side_card.pack(side='right', fill='y', padx=(12, 0))
+        self._side = side_inner
+        main = tk.Frame(outer, bg=_SAO_PANEL_BODY_BG)
+        main.pack(side='left', fill='both', expand=True)
+        canvas = tk.Canvas(main, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = sao_scrollbar(main, canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
@@ -388,6 +343,61 @@ class ActionLogPanel:
         scroll.pack(side='right', fill='y')
         self._canvas = canvas
         win.protocol('WM_DELETE_WINDOW', self.hide)
+
+    def _render_side(self, status: Mapping[str, Any], rows: list[Any], analytics: Mapping[str, Any],
+                     cursor: Mapping[str, Any], source: str, total_rows: int,
+                     page_index: int, page_count: int, top_topic: Any, errors: list[Any]) -> None:
+        side = getattr(self, '_side', None)
+        if side is None:
+            return
+        for child in list(side.winfo_children()):
+            child.destroy()
+        filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
+        page = analytics.get('page') if isinstance(analytics.get('page'), Mapping) else {}
+        page_offset = _finite_int(page.get('offset') or cursor.get('offset'), self._current_offset(), lo=0)
+
+        tk.Label(side, text='LOG CONTROL', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 8))
+        sao_option_menu(side, self._source_var, 'live', 'history', command=lambda _v: self._refresh_from_start()).pack(fill='x', pady=(0, 8))
+        enc_entry = sao_entry(side, textvariable=self._encounter_var, width=18)
+        enc_entry.pack(fill='x', pady=(0, 8))
+        attach_tooltip(enc_entry, '按战斗 (encounter) ID 过滤日志；留空显示全部')
+        action_button(side, '搜索 Search', self.search).pack(fill='x', pady=(0, 6))
+        action_button(side, '过滤 Filter', self.filter_topic).pack(fill='x', pady=(0, 6))
+        action_button(side, '跳转 Jump', self.jump_to_time, kind='gold').pack(fill='x', pady=(0, 6))
+        action_button(side, '复制 Copy JSON', self.copy_json, kind='cyan').pack(fill='x', pady=(0, 8))
+        pager = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
+        pager.pack(fill='x', pady=(0, 8))
+        action_button(pager, '上一页 Prev', self.previous_page).pack(side='left', fill='x', expand=True, padx=(0, 4))
+        action_button(pager, '下一页 Next', self.next_page).pack(side='left', fill='x', expand=True)
+        raw_check = tk.Checkbutton(
+            side, text='RAW 行', variable=self._show_raw_rows, command=self._toggle_raw_rows,
+            bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, selectcolor=_SAO_PANEL_HEADER_BG,
+            activebackground=_SAO_PANEL_BODY_BG, activeforeground=_SAO_PANEL_GOLD,
+            font=get_cjk_font(9),
+        )
+        raw_check.pack(fill='x', pady=(0, 12))
+        attach_tooltip(raw_check, '显示未聚合的原始事件行（默认按动作聚合展示）')
+
+        tk.Label(side, text='STATUS', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 font=get_sao_font(9, True), anchor='w').pack(fill='x', pady=(0, 8))
+        status_rows = (
+            ('Encounter', status.get('encounter_id') or source),
+            ('Rows', len(rows)),
+            ('Total', total_rows),
+            ('Page', f'{page_index}/{page_count}'),
+            ('Top Topic', f'{top_topic}'),
+            ('Cursor', fmt_clock(cursor.get('time_ms'))),
+            ('Filter', f"{(filters.get('source') or source).upper()} · {filters.get('topic') or 'ALL'}"),
+            ('Errors', len(errors)),
+        )
+        for label, value in status_rows:
+            row = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
+            row.pack(fill='x', pady=(0, 5))
+            tk.Label(row, text=str(label), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                     font=get_cjk_font(9), anchor='w').pack(side='left')
+            tk.Label(row, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                     font=get_cjk_font(9, True), anchor='e').pack(side='right')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         rows = list(status.get('rows') or [])
@@ -415,6 +425,7 @@ class ActionLogPanel:
         group_info = analytics.get('groups') if isinstance(analytics.get('groups'), Mapping) else {}
         topic_groups = list(group_info.get('topics') or []) if isinstance(group_info.get('topics'), list) else []
         top_topic = topic_groups[0].get('key') if topic_groups and isinstance(topic_groups[0], Mapping) else '-'
+        self._render_side(status, rows, analytics, cursor, source, total_rows, page_index, page_count, top_topic, errors)
         sig = repr((
             self._rows_signature(rows),
             self._groups_signature(groups, self._expanded_groups),
@@ -439,10 +450,13 @@ class ActionLogPanel:
         keep_canvas_scroll(getattr(self, '_canvas', None), self._rows)
         for child in list(self._rows.winfo_children()):
             child.destroy()
-        self._render_metrics(status, rows, groups, analytics, cursor, source)
         if not rows:
             empty_state(self._rows, '暂无 ACT 行为日志', 'live 模式等待事件；history 模式需要 SQLite actions。').pack(fill='x', pady=8, padx=4)
             return
+        if self._show_raw_rows.get():
+            self._render_raw_table(rows)
+            return
+        self._render_metrics(status, rows, groups, analytics, cursor, source)
         if groups and not self._show_raw_rows.get():
             self._render_group_section(groups)
             return
@@ -531,6 +545,14 @@ class ActionLogPanel:
             detail_row(parent, readable_event_line(row, value_fmt=self._fmt), accent=accent, zebra=bool(ridx % 2)).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
         if group.get('has_more_rows'):
             detail_row(parent, '还有更多明细，请缩小筛选或翻页查看。', accent=accent).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
+
+    def _render_raw_table(self, rows: list[Any]) -> None:
+        if self._rows is None:
+            return
+        self._render_header(self._rows)
+        for row in rows[:80]:
+            if isinstance(row, Mapping):
+                self._render_row(row, parent=self._rows, compact=True)
 
     def _render_raw_section(self, rows: list[Any]) -> None:
         if self._rows is None:
@@ -628,7 +650,7 @@ class ActionLogPanel:
             return
         header = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG)
         header.pack(fill='x', pady=(0, 2))
-        for text, width in (('Time', 10), ('Topic', 12), ('Action', 34), ('Value', 14), ('Source', 16)):
+        for text, width in (('Time', 10), ('Topic', 8), ('Action', 18), ('Value', 8), ('Source', 10), ('Payload', 28)):
             tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(9, True)).pack(side='left', padx=3, pady=5)
 
     def _render_empty(self) -> None:
@@ -646,27 +668,30 @@ class ActionLogPanel:
             pady=28,
         ).pack(fill='x')
 
-    def _render_row(self, row: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
+    def _render_row(self, row: Mapping[str, Any], parent: Optional[tk.Misc] = None, *, compact: bool = False) -> None:
         parent = parent or self._rows
         if parent is None:
             return
         # 游标行用主题 warn_soft 淡金底（旧 '#2b2a1a' 深橄榄色在浅色主题下是黑块）
         bg = _theme_color('warn_soft', '#fff8e5') if row.get('is_cursor') else _SAO_PANEL_BODY_BG
-        card = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        card.pack(fill='x', pady=3, padx=4)
+        card = tk.Frame(parent, bg=bg, highlightthickness=0 if compact else 1, highlightbackground=_SAO_PANEL_BORDER)
+        card.pack(fill='x', pady=0 if compact else 3, padx=0 if compact else 4)
         top = tk.Frame(card, bg=bg)
-        top.pack(fill='x', padx=8, pady=(6, 2))
+        top.pack(fill='x', padx=8, pady=(7, 2) if compact else (6, 2))
         values = (
             (fmt_clock(row.get('time_ms')), 10, _SAO_PANEL_LABEL_FG),
-            (str(row.get('topic') or '-'), 12, _SAO_PANEL_GOLD),
-            (str(row.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
-            (str(row.get('value') or ''), 14, _SAO_PANEL_VALUE_FG),
-            (str(row.get('source') or '-'), 16, _SAO_PANEL_LABEL_FG),
+            (str(row.get('topic') or '-'), 8, _SAO_PANEL_GOLD),
+            (str(row.get('label') or '-'), 18, _SAO_PANEL_VALUE_FG),
+            (str(row.get('value') or ''), 8, _SAO_PANEL_VALUE_FG),
+            (str(row.get('source') or '-'), 10, _SAO_PANEL_LABEL_FG),
         )
         for text, width, fg in values:
             tk.Label(top, text=text, width=width, anchor='w', bg=bg, fg=fg, font=get_cjk_font(9)).pack(side='left', padx=3)
         meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'}"
-        tk.Label(card, text=meta, bg=bg, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=get_cjk_font(8)).pack(fill='x', padx=8, pady=(0, 6))
+        if compact:
+            tk.Label(top, text=meta, width=28, anchor='w', bg=bg, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left', padx=3)
+        else:
+            tk.Label(card, text=meta, bg=bg, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=get_cjk_font(8)).pack(fill='x', padx=8, pady=(0, 6))
 
     @staticmethod
     def _rows_signature(rows: list[Any]) -> str:

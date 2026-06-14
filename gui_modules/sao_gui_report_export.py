@@ -282,12 +282,12 @@ class ReportExportPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Report Export')
-        win.geometry('840x560+230+165')
+        win.geometry('960x862+230+165')
         win.minsize(680, 430)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -299,13 +299,13 @@ class ReportExportPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'REPORT SDK').pack(side='left')
-        components.action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
-        components.dropdown_button(toolbar, '复制 Copy', (
+        components.action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
+        components.dropdown_button(toolbar, '复制', (
             ('复制报告 Copy Report', self.copy_snapshot),
             ('复制 Mini-Parse', self.copy_mini_parse),
         ), kind='cyan').pack(side='right', padx=(6, 0))
@@ -318,8 +318,8 @@ class ReportExportPanel:
             ('XML.GZ', self.export_xml_gzip),
             ('XML.ZIP', self.export_xml_zip),
         ), kind='gold').pack(side='right', padx=(6, 0))
-        components.action_button(toolbar, '导入 Import', self.import_offline_file).pack(side='right', padx=(6, 0))
-        components.action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        components.action_button(toolbar, '导入', self.import_offline_file).pack(side='right', padx=(6, 0))
+        components.action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
         # 按钮先 pack — 窄窗下 summary 不挤按钮(后包者只分剩余空间)
         tk.Label(
             toolbar,
@@ -511,8 +511,8 @@ class ReportExportPanel:
             anchor='w',
             font=('Consolas', 9),
             padx=9,
-            pady=(0, 6),
-        ).pack(fill='x')
+            pady=0,
+        ).pack(fill='x', pady=(0, 6))
 
     def _render_history(self, history: list[Any]) -> None:
         if self._history is None:

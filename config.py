@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.6.143"
+APP_VERSION = "4.6.145"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -472,6 +472,32 @@ DEFAULT_DATA_SOURCE_MAP = {
 # Memory / hybrid defaults. These are intentionally read-through defaults: they do
 # not rewrite an existing settings.json until the user changes a setting, preserving
 # backward compatibility while giving new memory-mode features stable knobs.
+DEFAULT_PANEL_THEMES = {
+    "dps": "dark",
+    "hp": "dark",
+    "bosshp": "dark",
+    "skillfx": "dark",
+    "alert": "dark",
+    "act": "dark",
+    "buffmon": "dark",
+}
+
+
+def normalize_panel_theme(theme: Any, default: str = "dark") -> str:
+    fallback = "light" if str(default or "").strip().lower() == "light" else "dark"
+    return "light" if str(theme or "").strip().lower() == "light" else fallback
+
+
+def normalize_panel_themes(raw: Any) -> dict:
+    themes = dict(DEFAULT_PANEL_THEMES)
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            name = str(key or "").strip().lower()
+            if name in themes:
+                themes[name] = normalize_panel_theme(value, themes[name])
+    return themes
+
+
 DEFAULT_SETTINGS = {
     "mem_persist_names": True,
     "mem_per_field_authority": True,
@@ -480,6 +506,7 @@ DEFAULT_SETTINGS = {
     "mem_overlay_flush_interval_s": 5.0,
     "mem_root_ptr_cache_enabled": True,
     "mem_enforce_o1_poll_contract": True,
+    "panel_themes": dict(DEFAULT_PANEL_THEMES),
 }
 
 
@@ -793,6 +820,10 @@ class SettingsManager:
             self._data = {}
 
     def get(self, key: str, default: Any = None) -> Any:
+        if key == "panel_themes":
+            if key in self._data:
+                return normalize_panel_themes(self._data.get(key))
+            return normalize_panel_themes(default if default is not None else DEFAULT_SETTINGS.get(key))
         if key in self._data:
             return self._data.get(key)
         if default is not None:
@@ -800,6 +831,8 @@ class SettingsManager:
         return DEFAULT_SETTINGS.get(key, default)
 
     def set(self, key: str, value: Any):
+        if key == "panel_themes":
+            value = normalize_panel_themes(value)
         self._data[key] = value
 
     def save(self):

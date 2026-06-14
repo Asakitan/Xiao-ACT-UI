@@ -55,6 +55,13 @@ _BAR_COLORS = {
     "boss_hp_pct": "#e85c7a",
 }
 
+_DEFAULT_METRICS = (
+    {"id": "damage", "label": "Damage"},
+    {"id": "heal", "label": "Heal"},
+    {"id": "event_count", "label": "Events"},
+    {"id": "boss_hp_pct", "label": "Boss HP %"},
+)
+
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
     try:
@@ -222,12 +229,12 @@ class GraphTimeseriesPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Graph Timeseries')
-        win.geometry('820x540+260+150')
+        win.geometry('960x862+260+150')
         win.minsize(680, 410)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -239,15 +246,15 @@ class GraphTimeseriesPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'GRAPH').pack(side='left')
         for label, cmd in (
-            ('刷新 Refresh', self.refresh),
+            ('刷新', self.refresh),
             ('导出 Export', self.export_json),
-            ('关闭 Close', self.hide),
+            ('×', self.hide),
         ):
             action_button(toolbar, label, cmd, kind='cyan' if '导出' in label else 'gold').pack(side='right', padx=(6, 0))
 
@@ -265,9 +272,9 @@ class GraphTimeseriesPanel:
         sao_option_menu(control, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct', command=lambda _v: self.select_metric()).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_option_menu(control, self._topic_var, '', 'damage', 'heal', 'boss', 'skill', command=lambda _v: self.filter()).pack(side='left', padx=(6, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
+        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
-        action_button(control, '过滤 Filter', self.filter, kind='gold').pack(side='left', padx=(0, 8))
+        action_button(control, '过滤', self.filter, kind='gold').pack(side='left', padx=(0, 8))
         tk.Label(control, text='Range ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_option_menu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000', command=lambda _v: self.zoom()).pack(side='left', padx=(6, 0))
         tk.Checkbutton(
@@ -320,11 +327,10 @@ class GraphTimeseriesPanel:
         self._last_series_sig = sig
         for child in list(self._rows.winfo_children()):
             child.destroy()
-        self._render_metrics(status, metric, points, latest)
         if not points:
             empty_state(self._rows, '暂无 ACT 图表数据', '开始识别或 replay 后会出现曲线点。').pack(fill='both', expand=True, pady=8, padx=4)
             return
-        self._render_chart(metric, points)
+        self._render_chart(status, metric, points, latest)
         self._render_points(metric, points)
 
     def _toggle_raw_points(self) -> None:
@@ -368,54 +374,93 @@ class GraphTimeseriesPanel:
             pady=48,
         ).pack(fill='both', expand=True)
 
-    def _render_chart(self, metric: str, points: list[Mapping[str, Any]]) -> None:
+    def _metric_defs(self, status: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        metrics = status.get('metrics')
+        if isinstance(metrics, list):
+            valid = [item for item in metrics if isinstance(item, Mapping) and item.get('id')]
+            if valid:
+                return valid
+        return list(_DEFAULT_METRICS)
+
+    def _metric_label(self, status: Mapping[str, Any], metric: str) -> str:
+        for item in self._metric_defs(status):
+            if str(item.get('id') or '') == metric:
+                return str(item.get('label') or metric)
+        return metric
+
+    def _render_chart(self, status: Mapping[str, Any], metric: str, points: list[Mapping[str, Any]], latest: Any) -> None:
         if self._rows is None:
             return
-        chart = section_card(self._rows, '趋势图表', subtitle='', badge=metric.upper())
-        chart.pack(fill='x', pady=(0, 8), padx=4)
-        chart_body = tk.Frame(chart, bg=_SAO_PANEL_BODY_BG)
-        chart_body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[_finite_float(point.get('value'), 0.0, lo=0.0) for point in points])
-        color = _BAR_COLORS.get(metric, _SAO_PANEL_ACCENT)
-        first_ms = _finite_int(points[0].get('time_ms'), 0, lo=0) if points else 0
-        for point in points[-24:]:
-            row = tk.Frame(chart_body, bg=_SAO_PANEL_BODY_BG)
-            row.pack(fill='x', padx=8, pady=3)
-            time_label = fmt_rel(point.get('time_ms'), first_ms)
-            value = _finite_float(point.get('value'), 0.0, lo=0.0)
-            tk.Label(row, text=time_label, width=10, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(8)).pack(side='left')
-            bar_wrap = tk.Frame(row, bg='#eeeeee', height=8)
-            bar_wrap.pack(side='left', fill='x', expand=True, padx=(6, 8))
-            width = max(4, min(220, int(220 * value / max_value)))
-            tk.Frame(bar_wrap, bg=color, width=width, height=8).pack(side='left')
-            tk.Label(row, text=self._fmt(value), width=10, anchor='e', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=get_cjk_font(8, True)).pack(side='left')
+        chart_wrap = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        chart_wrap.pack(fill='x', pady=(0, 12))
+        canvas = tk.Canvas(chart_wrap, height=360, bg=_SAO_PANEL_BODY_BG, bd=0, highlightthickness=0)
+        canvas.pack(fill='x', expand=False, padx=4, pady=4)
+        series = status.get('series') if isinstance(status.get('series'), Mapping) else {}
+
+        def _series(metric_id: str) -> list[Mapping[str, Any]]:
+            entry = series.get(metric_id) if isinstance(series.get(metric_id), Mapping) else {}
+            return _mapping_points(entry.get('points'))
+
+        lanes: list[tuple[str, str, list[Mapping[str, Any]]]] = [
+            ('伤害 Damage', 'damage', _series('damage') or points),
+            ('治疗 Heal', 'heal', _series('heal')),
+        ]
+        lanes = [lane for lane in lanes if lane[2]]
+        if not lanes:
+            lanes = [(self._metric_label(status, metric), metric, points)]
+
+        def _draw(_event: Any = None) -> None:
+            w = max(1, canvas.winfo_width())
+            h = max(1, canvas.winfo_height())
+            canvas.delete('all')
+            lane_height = max(120, h // max(1, len(lanes)))
+            for lane_index, (label, metric_id, lane_points) in enumerate(lanes):
+                top = 18 + lane_index * lane_height
+                base = min(h - 28, top + lane_height - 74)
+                color = _BAR_COLORS.get(metric_id, _SAO_PANEL_ACCENT)
+                canvas.create_text(48, top, text=label, fill=color, font=get_cjk_font(11, True), anchor='nw')
+                canvas.create_line(44, base, w - 24, base, fill='#274555', width=1)
+                max_v = max(1.0, *[_finite_float(point.get('value'), 0.0, lo=0.0) for point in lane_points])
+                max_bar_height = min(46, max(4, base - (top + 48)))
+                plot_l, plot_r = 44, max(60, w - 24)
+                slot = (plot_r - plot_l) / max(1, len(lane_points))
+                bar_w = max(3, min(16, int(slot * 0.84)))
+                for idx, point in enumerate(lane_points):
+                    value = _finite_float(point.get('value'), 0.0, lo=0.0)
+                    height = max(4, int(max_bar_height * value / max_v))
+                    x = plot_l + idx * slot + max(0, (slot - bar_w) / 2)
+                    canvas.create_rectangle(x, base - height, x + bar_w, base, fill=color, outline=color)
+                canvas.create_text(w - 26, top + 2, text=self._fmt(max_v), fill=_SAO_PANEL_LABEL_FG,
+                                   font=get_cjk_font(8), anchor='ne')
+
+        canvas.bind('<Configure>', _draw)
+        canvas.after_idle(_draw)
 
     def _render_points(self, metric: str, points: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
             return
-        box = section_card(self._rows, '点位摘要', subtitle='按时间倒序显示关键点；raw row id 只在 RAW 模式显示。', badge=str(len(points)))
-        box.pack(fill='x', pady=(0, 2), padx=4)
-        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[_finite_float(point.get('value'), 0.0, lo=0.0) for point in points])
+        body = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x')
         first_ms = _finite_int(points[0].get('time_ms'), 0, lo=0) if points else 0
-        for idx, point in enumerate(reversed(points[-16:])):
+        for idx, point in enumerate(reversed(points[-6:])):
             row_id = str(point.get('row_id') or '-')
             time_ms = _finite_int(point.get('time_ms'), 0, lo=0)
             topic = str(point.get('topic') or '-').upper()
-            meta = f"{topic} · {fmt_clock(time_ms)} ({fmt_rel(time_ms, first_ms)})"
-            if self._show_raw_points.get():
-                meta += f" · row={row_id}"
-            aggregate_row(
-                body,
-                title=f"{metric.upper()} {self._fmt(point.get('value'))}",
-                meta=meta,
-                value=row_id if self._show_raw_points.get() else self._fmt(point.get('value')),
-                ratio=_finite_float(point.get('value'), 0.0, lo=0.0) / max_value if max_value else 0.0,
-                accent='gold' if metric == 'damage' else 'cyan',
-                zebra=bool(idx % 2),
-                command=lambda t=time_ms, tp=str(point.get('topic') or ''): self._open_action_log_at(t, tp),
-            ).pack(fill='x', pady=2)
+            val_cell = row_id if self._show_raw_points.get() else self._fmt(point.get('value'))
+            row_bg = _SAO_PANEL_BODY_BG if idx % 2 == 0 else _SAO_PANEL_HEADER_BG
+            row = tk.Frame(body, bg=row_bg, cursor='hand2')
+            row.pack(fill='x', pady=(0, 4))
+            row.bind('<Button-1>', lambda _e, t=time_ms, tp=str(point.get('topic') or ''): self._open_action_log_at(t, tp))
+            hint = fmt_rel(time_ms, first_ms) + (f' · row={row_id}' if self._show_raw_points.get() else '')
+            for text, width, fg in (
+                (fmt_clock(time_ms), 12, _SAO_PANEL_LABEL_FG),
+                (topic, 34, _SAO_PANEL_LABEL_FG),
+                (str(val_cell), 14, _SAO_PANEL_VALUE_FG),
+            ):
+                lbl = tk.Label(row, text=text, width=width, bg=row_bg, fg=fg, font=get_cjk_font(9), anchor='w')
+                lbl.pack(side='left', padx=(8, 0), pady=4)
+                lbl.bind('<Button-1>', lambda _e, t=time_ms, tp=str(point.get('topic') or ''): self._open_action_log_at(t, tp))
+            row._tooltip_text = hint  # type: ignore[attr-defined]
 
     def _open_action_log_at(self, time_ms: int, topic: str) -> None:
         """Drill a graph point into the Action Log focused at that point's time."""

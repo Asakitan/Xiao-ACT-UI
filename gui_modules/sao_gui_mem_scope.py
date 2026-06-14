@@ -232,12 +232,12 @@ class MemScopePanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO Mem Scope')
-        win.geometry('980x720+200+90')
+        win.geometry('960x862+200+90')
         win.minsize(760, 480)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -249,14 +249,14 @@ class MemScopePanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=14, pady=(12, 8))
         _sao_pill(toolbar, 'MEM').pack(side='left')
-        action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '复制 Copy', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
-        action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '复制', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
+        action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
         # 按钮先 pack — 窄窗下 summary 不挤按钮
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                  font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
@@ -271,9 +271,9 @@ class MemScopePanel:
         entry = sao_entry(control, textvariable=self._query_var, width=22)
         entry.pack(side='left', padx=(6, 8))
         entry.bind('<Return>', lambda _e: self.do_search())
-        action_button(control, '搜索 Search', self.do_search, kind='gold').pack(side='left', padx=(0, 4))
-        action_button(control, '收敛 Narrow', self.do_narrow, kind='cyan').pack(side='left', padx=(0, 4))
-        action_button(control, '清除 Clear', self.do_clear).pack(side='left')
+        action_button(control, '搜索', self.do_search, kind='gold').pack(side='left', padx=(0, 4))
+        action_button(control, '收敛', self.do_narrow, kind='cyan').pack(side='left', padx=(0, 4))
+        action_button(control, '清除', self.do_clear).pack(side='left')
 
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))

@@ -171,12 +171,12 @@ class OfflineImportPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Offline Import')
-        win.geometry('840x560+245+175')
+        win.geometry('960x862+245+175')
         win.minsize(700, 430)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -188,16 +188,16 @@ class OfflineImportPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'IMPORT WIZARD').pack(side='left')
         for label, cmd in (
-            ('刷新 Refresh', self.refresh),
+            ('刷新', self.refresh),
             ('选择 Choose', self.choose_file),
-            ('导入 Import', self.import_file),
-            ('关闭 Close', self.hide),
+            ('导入', self.import_file),
+            ('×', self.hide),
         ):
             tk.Button(
                 toolbar,

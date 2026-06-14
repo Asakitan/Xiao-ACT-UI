@@ -222,12 +222,12 @@ class ActAggregatePanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Cockpit')
-        win.geometry('1040x720+180+95')
+        win.geometry('960x862+180+95')
         win.minsize(820, 520)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -239,33 +239,34 @@ class ActAggregatePanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=14, pady=(12, 8))
-        # 设计版双语主标题(SAO 字体, 对齐 web/design header; kicker 由拖拽条承担)
-        tk.Label(toolbar, text='AGGREGATE 聚合驾驶舱', bg=_SAO_PANEL_BODY_BG,
-                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True)).pack(side='left')
-        action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
-        action_button(toolbar, '复制 Copy', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
-        action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
+        toolbar.pack(fill='x', padx=14, pady=(7, 10))
+        title_box = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        title_box.pack(side='left', anchor='n')
+        tk.Label(title_box, text='ACT SEMANTIC COCKPIT', bg=_SAO_PANEL_BODY_BG,
+             fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+        tk.Label(title_box, text='AGGREGATE 聚合驾驶舱', bg=_SAO_PANEL_BODY_BG,
+             fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=14, pady=(0, 8))
+        control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        control.pack(side='right', anchor='n', pady=(10, 0))
         tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_option_menu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
-        field_entry = sao_entry(control, textvariable=self._group_field_var, width=14)
+        field_entry = sao_entry(control, textvariable=self._group_field_var, width=8)
         field_entry.pack(side='left', padx=(0, 8))
         attach_tooltip(field_entry, '自定义字段维度：聚合维度选「自定义字段」时按此 payload 字段名分组')
         field_entry.bind('<Return>', lambda _e: self.filter())
         tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
-        query_entry = sao_entry(control, textvariable=self._query_var, width=18)
+        query_entry = sao_entry(control, textvariable=self._query_var, width=14)
         query_entry.pack(side='left', padx=(6, 8))
         # 输入即过滤（300ms 防抖，对齐 Web 端 onChange 自动刷新），回车立即生效
         query_entry.bind('<KeyRelease>', lambda _e: self._schedule_filter())
         query_entry.bind('<Return>', lambda _e: self.filter())
         sao_option_menu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
-        action_button(control, '过滤 Filter', self.filter, kind='cyan').pack(side='left')
+        action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
+        action_button(control, '×', self.hide).pack(side='left')
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
@@ -325,7 +326,11 @@ class ActAggregatePanel:
         mix = list(status.get('source_mix') or [])
         if mix:
             for src in mix:
-                tk.Label(pad, text=source_cn(src), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                if isinstance(src, Mapping):
+                    text = f"{source_cn(src.get('source'))}  {src.get('count') or 0}"
+                else:
+                    text = source_cn(src)
+                tk.Label(pad, text=text, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
                          font=get_cjk_font(9), anchor='w').pack(fill='x', pady=1)
         else:
             tk.Label(pad, text='No sources', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,

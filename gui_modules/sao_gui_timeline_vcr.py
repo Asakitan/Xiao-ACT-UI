@@ -207,12 +207,12 @@ class TimelineVcrPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Timeline VCR')
-        win.geometry('840x540+250+175')
+        win.geometry('960x862+250+175')
         win.minsize(680, 420)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -224,16 +224,16 @@ class TimelineVcrPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'VCR').pack(side='left')
         for label, cmd in (
-            ('刷新 Refresh', self.refresh),
+            ('刷新', self.refresh),
             ('播放 Play', self.play),
             ('暂停 Pause', self.pause),
-            ('关闭 Close', self.hide),
+            ('×', self.hide),
         ):
             action_button(toolbar, label, cmd, kind='cyan' if '播放' in label else 'gold').pack(side='right', padx=(6, 0))
         # 按钮先 pack — 窄窗下 summary 不挤按钮

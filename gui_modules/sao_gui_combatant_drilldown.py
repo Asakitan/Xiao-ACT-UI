@@ -183,12 +183,12 @@ class CombatantDrilldownPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Combatant Drilldown')
-        win.geometry('840x540+280+155')
+        win.geometry('960x862+280+155')
         win.minsize(680, 420)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 0.97)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -200,12 +200,12 @@ class CombatantDrilldownPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'DRILLDOWN').pack(side='left')
-        for label, cmd in (('打开 Open', self.refresh), ('过滤 Filter', self.filter), ('返回 Back', self.back), ('关闭 Close', self.hide)):
+        for label, cmd in (('打开', self.refresh), ('过滤', self.filter), ('返回', self.back), ('×', self.hide)):
             tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
         # summary 含未截断玩家名 — 按钮先 pack 防被长名挤出窗口(后包者只分剩余空间)
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))

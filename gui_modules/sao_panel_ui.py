@@ -199,21 +199,21 @@ _SAO_PANEL_PALETTES = {
         'active_fg': '#ffffff',
     },
     'dark': {
-        'bg': '#0c141f',
-        'header_bg': '#16243a',
+        'bg': '#14202b',
+        'header_bg': '#111b28',
         'header_fg': '#e6f4ff',
-        'border': '#2c4861',
+        'border': '#2d5e6f',
         'accent': '#68e4ff',
         'accent_strong': '#7fe9ff',
         'gold': '#f0c456',
-        'sep': '#22384c',
-        'body_bg': '#0e1825',         # 内容区背景
-        'card_bg': '#172739',         # 卡片背景（抬升）
-        'card_bg_alt': '#1d3147',     # 斑马行/嵌套
+        'sep': '#1c3743',
+        'body_bg': '#101823',         # 内容区背景（对齐 webref shell 主色）
+        'card_bg': '#162233',         # 卡片背景（抬升）
+        'card_bg_alt': '#1a283b',     # 斑马行/嵌套
         'label_fg': '#9fb4c4',
         'value_fg': '#eaf6ff',
-        'control_bg': '#16263a',
-        'track_bg': '#1b2c3e',        # 进度条底槽
+        'control_bg': '#172436',
+        'track_bg': '#224253',        # 进度条底槽
         'accent_soft': '#15303f',     # 青色淡底（徽章/标签）
         'gold_soft': '#2f2916',
         'danger': '#ff707a',
@@ -479,6 +479,40 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
         title_text = str(title_icon or '')
         title_icon = '◉'
     close_cb = on_close or close_cmd or (lambda: None)
+    if flat:
+        try:
+            _remember_sao_panel_root(parent.winfo_toplevel())
+        except Exception:
+            pass
+        hdr = tk.Canvas(parent, bg=_SAO_PANEL_BG, height=1, bd=0, highlightthickness=0)
+        hdr.pack(fill=tk.X)
+        close_lbl = tk.Frame(hdr, bg=_SAO_PANEL_BG, width=0, height=0, bd=0, highlightthickness=0)
+
+        def _draw_flat_top(_event=None):
+            try:
+                width = max(1, hdr.winfo_width())
+                hdr.delete('flat-top')
+                hdr.create_rectangle(2, 0, max(2, width - 3), 1,
+                                     fill=_SAO_PANEL_BORDER, outline='', tags='flat-top')
+            except Exception:
+                pass
+
+        hdr.bind('<Configure>', _draw_flat_top)
+        hdr.after(1, _draw_flat_top)
+
+        class _FlatHeaderProxy:
+            def __init__(self, frame, close_button):
+                self.frame = frame
+                self.close_label = close_button
+
+            def __iter__(self):
+                yield self.frame
+                yield self.close_label
+
+            def __getattr__(self, name):
+                return getattr(self.frame, name)
+
+        return _FlatHeaderProxy(hdr, close_lbl)
     try:
         _enable_frameless_panel(parent.winfo_toplevel())
     except Exception:
@@ -556,7 +590,8 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
 
 def _sao_panel_body(parent, *, flat=False):
     """创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平 ACT 面板）。"""
-    tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
+    if not flat:
+        tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
     if not flat:
         tk.Frame(parent, bg=_SAO_PANEL_ACCENT, height=2).pack(fill=tk.X)
     body = tk.Frame(
@@ -566,7 +601,7 @@ def _sao_panel_body(parent, *, flat=False):
         highlightbackground=_SAO_PANEL_BORDER,
         highlightcolor=_SAO_PANEL_BORDER if flat else _SAO_PANEL_ACCENT,
     )
-    body.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
+    body.pack(fill=tk.BOTH, expand=True, padx=0 if flat else 1, pady=0 if flat else (0, 1))
     if not flat:
         try:
             tk.Frame(body, bg=_SAO_PANEL_ACCENT, width=34, height=2).place(x=0, y=0)

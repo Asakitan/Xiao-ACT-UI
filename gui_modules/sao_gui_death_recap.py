@@ -176,11 +176,12 @@ class DeathRecapPanel:
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Death Recap')
-        win.geometry('820x520+250+180')
+        win.geometry('960x862+250+180')
         win.minsize(680, 400)
         win.configure(bg=_SAO_PANEL_BG)
         try:
-            win.attributes('-alpha', 0.97)
+            win.overrideredirect(True)
+            win.attributes('-alpha', 1.0)
         except Exception:
             pass
         try:
@@ -192,12 +193,12 @@ class DeathRecapPanel:
         _bind_panel_drag(win, header)
 
         body = _sao_panel_body(win, flat=True)
-        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        body.pack(fill='both', expand=True, padx=0, pady=0)
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         toolbar.pack(fill='x', padx=12, pady=(10, 8))
         _sao_pill(toolbar, 'DEATH').pack(side='left')
-        for label, cmd in (('Refresh', self.refresh), ('Copy', self.copy_json), ('Close', self.hide)):
-            action_button(toolbar, label, cmd, kind='cyan' if label == 'Copy' else 'gold').pack(side='right', padx=(6, 0))
+        for label, cmd in (('刷新', self.refresh), ('复制', self.copy_json), ('×', self.hide)):
+            action_button(toolbar, label, cmd, kind='cyan' if label == '复制' else 'gold').pack(side='right', padx=(6, 0))
         # summary 含未截断实体名 — 按钮先 pack 防被长名挤出窗口
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(side='left', padx=(12, 0))
 
@@ -207,7 +208,7 @@ class DeathRecapPanel:
         sao_entry(control, textvariable=self._entity_var, width=16).pack(side='left', padx=(6, 10))
         tk.Label(control, text='Window s', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._window_var, width=7).pack(side='left', padx=(6, 10))
-        tk.Button(control, text='Apply', command=self.refresh).pack(side='left')
+        tk.Button(control, text='应用', command=self.refresh).pack(side='left')
 
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
 
