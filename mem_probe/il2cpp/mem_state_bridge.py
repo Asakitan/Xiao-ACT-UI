@@ -358,6 +358,7 @@ class MemStateBridge:
                     # non-empty snapshot -> ZEntityMgr base is correct and entities
                     # are readable. Latch sticky (never resets for this bridge).
                     self._base_acquired = True
+                    self._maybe_build_break_cache()
                 # resolve display names from MEM: ZEntity.BaseId -> offline name table
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
@@ -745,6 +746,17 @@ class MemStateBridge:
         src = getattr(self._provider, "_src", None)
         sr = getattr(src, "sr", None)
         return getattr(sr, "pm", None)
+
+    def _maybe_build_break_cache(self) -> None:
+        """One-shot background build of the full MonsterTable BreakingContinueTime cache."""
+        try:
+            import threading
+            from engines.break_time_lookup import build_full_cache, _cache
+            if len(_cache) > 50:
+                return
+            threading.Thread(target=build_full_cache, name="break-cache-build", daemon=True).start()
+        except Exception:
+            pass
 
     def _maybe_harvest_nameplates(self, snap) -> None:
         """Trigger a (throttled, background) nameplate name harvest.
