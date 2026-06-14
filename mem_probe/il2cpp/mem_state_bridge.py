@@ -519,9 +519,12 @@ class MemStateBridge:
                 traceback.print_exc()
 
     def _boss_cast_loop(self):
-        """Low-latency boss-only cast poll (~12.5Hz). Reads just the current boss's
-        combat snapshot (cached obj-ptr layout -> ~7 RPM) + state-machine actor state,
-        so a cast-start edge reaches auto-dodge within ~50-100ms instead of ~1s."""
+        """Low-latency boss-only cast poll (~12.5Hz).
+
+        Three-phase nogil batch: all RPM calls go through Cython read_u64_many /
+        read_u32_many / read_combat_batch so the GIL is never held during cross-
+        process reads.  The UI thread (Tk mainloop) is never blocked by this loop.
+        """
         while not self._boss_cast_stop.is_set():
             try:
                 tr = self._boss_action_tracker
@@ -531,32 +534,101 @@ class MemStateBridge:
                     obj = int(boss.get("obj") or 0)
                     uuid = int(boss.get("uuid") or 0)
                     if obj and uuid:
-                        ecr = getattr(prov, "_ecr", None)
-                        c = ecr.read_combat(obj) if ecr is not None else None
-                        if c is not None and self._boss_obj_is(prov, obj, uuid):
-                            # supplement modes (TCP-primary): this O(1) boss read carries
-                            # the live boss bar / break so the entity loop's O(N) scan can
-                            # back off. memory mode: the 1Hz entity loop owns the bar.
-                            if self._mem_is_supplement():
-                                self._boss_fast_push(boss, c)
-                            skill = int(c.get("cast_skill_id") or 0)
-                            # cast_skill_id(attr)对很多boss不可靠/常空 → 用状态机 curSkillId_
-                            # 兜底(ZStateSkillComp, 实测稳定; comp ptr 缓存=O(1))。两套id可
-                            # 共存(机制各自绑)。这让"圈是ECS的boss"的出招也能被检测。
-                            if not skill:
-                                ss = self._boss_skill_state()
-                                if ss is not None:
-                                    skill = ss.current_skill_id(obj) or 0
-                            actor = None
-                            probe = getattr(tr, "_probe", None)
-                            if probe is not None:
-                                actor = probe.read_actor_state(obj)
-                            rec = tr.update_fast(uuid, skill, actor, obj=obj)
-                            if rec is not None:   # cast edge -> forward low-latency
-                                self._on_boss_action_event(rec)
+                        self._boss_cast_tick(obj, uuid, boss, prov, tr)
             except Exception:
                 pass
             self._boss_cast_stop.wait(self._boss_cast_interval)
+
+    def _boss_cast_tick(self, obj: int, uuid: int, boss: dict, prov, tr) -> None:
+        """Single boss-cast tick with batched nogil RPM reads.
+
+        Phase 1: read_combat_batch([obj]) — Cython nogil full combat decode
+        Phase 2: read_u64_many([uuid_addr, sm_addr, comp_addr]) — nogil batch
+        Phase 3: read_u32_many([curstate_addr, skill_addr, stage_addr]) — nogil batch
+        """
+        _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
+        ecr = getattr(prov, "_ecr", None)
+        pm = getattr(prov, "_pm", None)
+        if ecr is None or pm is None:
+            return
+
+        # ── Phase 1: Cython nogil combat decode (replaces 11 GIL-holding RPM) ──
+        batch = ecr.read_combat_batch([obj])
+        c = batch.get(obj) if batch else None
+        if c is None:
+            return
+
+        # ── Phase 2: batch u64 reads (uuid + sm + optional comp klass) ──
+        emr = getattr(prov, "_emr", None)
+        off_uuid = int(getattr(emr, "off_ent_uuid", 0xC0)) if emr is not None else 0xC0
+        probe = getattr(tr, "_probe", None)
+        off_sm = int(getattr(probe, "off_statemachine", 0x70)) if probe is not None else 0x70
+
+        ss = self._boss_skill_state()
+        comp, comp_klass = ss.cached_comp(obj) if ss is not None else (0, 0)
+
+        aux_addrs = [obj + off_uuid, obj + off_sm]
+        if comp:
+            aux_addrs.append(comp)          # klass ptr at comp+0x0
+        aux = pm.read_u64_many(aux_addrs)
+        if aux is None or len(aux) < 2:
+            return
+
+        # uuid validation
+        if int(aux[0] or 0) != uuid:
+            return
+
+        sm_ptr = int(aux[1] or 0)
+        klass_now = int(aux[2] or 0) if comp and len(aux) > 2 else 0
+
+        # comp klass fast validation (0 RPM — value already in aux)
+        comp_ok = (comp != 0 and comp_klass != 0
+                   and klass_now != 0 and klass_now == comp_klass)
+
+        # supplement modes: push boss bar / break from combat dict
+        if self._mem_is_supplement():
+            self._boss_fast_push(boss, c)
+
+        skill = int(c.get("cast_skill_id") or 0)
+
+        # ── Phase 3: batch u32 reads (curstate + conditional skill fields) ──
+        seq_addrs = []
+        seq_keys = []       # track what's at each index
+
+        if probe is not None and _MINP <= sm_ptr <= _MAXP:
+            off_curstate = int(getattr(probe, "off_sm_curstate", 0x20))
+            seq_addrs.append(sm_ptr + off_curstate)
+            seq_keys.append("actor")
+
+        if not skill and comp_ok and ss is not None:
+            ss.ensure_offsets(comp)
+            if ss._off_skill:
+                seq_addrs.append(comp + ss._off_skill)
+                seq_keys.append("skill")
+            if ss._off_stage:
+                seq_addrs.append(comp + ss._off_stage)
+                seq_keys.append("stage")
+
+        actor = None
+        if seq_addrs:
+            seq = pm.read_u32_many(seq_addrs)
+            if seq and len(seq) == len(seq_addrs):
+                for i, key in enumerate(seq_keys):
+                    v = seq[i]
+                    if v is None:
+                        continue
+                    iv = int(v)
+                    if iv >= (1 << 31):
+                        iv -= (1 << 32)
+                    if key == "actor":
+                        actor = iv
+                    elif key == "skill":
+                        if iv and iv not in (0, 1):
+                            skill = iv
+
+        rec = tr.update_fast(uuid, skill, actor, obj=obj)
+        if rec is not None:
+            self._on_boss_action_event(rec)
 
     def stop(self):
         self._entity_stop.set()

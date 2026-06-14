@@ -37,7 +37,8 @@ class BossSkillStateReader:
         self._off_ent_complist = int(ent.get("off_ent_complist", 0x60))
         self._off_skill = 0
         self._off_stage = 0
-        self._comp_cache: Dict[int, int] = {}   # ent_obj → ZStateSkillComp ptr (热路径缓存)
+        # (comp_ptr, klass_ptr) — klass ptr 用于 O(1) 快速验证(替代每 tick 3-RPM name 验证)
+        self._comp_cache: Dict[int, tuple] = {}
 
     def _kname(self, obj: int) -> str:
         try:
@@ -49,18 +50,43 @@ class BossSkillStateReader:
         except Exception:
             return ""
 
+    def _read_klass_ptr(self, obj: int) -> int:
+        try:
+            return int(self._pm.read_u64(obj) or 0)
+        except Exception:
+            return 0
+
+    def cached_comp(self, ent_obj: int) -> tuple:
+        """返回缓存的 (comp_ptr, klass_ptr)，无缓存返回 (0, 0)。"""
+        return self._comp_cache.get(ent_obj, (0, 0))
+
+    def validate_comp_fast(self, comp: int, klass_val: int) -> bool:
+        """O(1) klass 指针比较验证 (0 RPM — klass_val 由调用方 batch 读出)。
+        klass ptr 变化(entity 池化复用)时返回 False, 调用方走完整 _skill_comp 重扫。"""
+        for _k, (cp, kp) in self._comp_cache.items():
+            if cp == comp:
+                return kp != 0 and kp == klass_val
+        return False
+
     def _skill_comp(self, ent_obj: int) -> int:
-        # 热路径(12.5Hz)缓存 comp ptr; 失效(klass名变=池化复用)重扫
-        cached = self._comp_cache.get(ent_obj)
-        if cached and self._kname(cached) == SKILLCOMP_NAME:
-            return cached
+        # 热路径(12.5Hz)缓存 comp ptr; klass ptr 快验 → 失效时重扫
+        entry = self._comp_cache.get(ent_obj)
+        if entry:
+            comp, klass = entry
+            klass_now = self._read_klass_ptr(comp)
+            if klass_now and klass_now == klass:
+                return comp
+            if klass_now and self._kname(comp) == SKILLCOMP_NAME:
+                self._comp_cache[ent_obj] = (comp, klass_now)
+                return comp
         cl = self._pm.read_u64(ent_obj + self._off_ent_complist) or 0
         if not (_MINP <= cl <= _MAXP):
             return 0
         for i in range(40):
             cp = self._pm.read_u64(cl + ARRAY_ELEMS_OFF + i * 8) or 0
             if _MINP <= cp <= _MAXP and self._kname(cp) == SKILLCOMP_NAME:
-                self._comp_cache[ent_obj] = cp
+                kp = self._read_klass_ptr(cp)
+                self._comp_cache[ent_obj] = (cp, kp)
                 return cp
         return 0
 
@@ -74,6 +100,17 @@ class BossSkillStateReader:
         except Exception:
             self._off_skill = 0x40
             self._off_stage = 0x64
+
+    def ensure_offsets(self, comp: int = 0) -> None:
+        """确保 _off_skill/_off_stage 已解析 (供外部 batch 路径调用)。"""
+        self._resolve_offsets(comp)
+
+    def read_skill_fields(self, comp: int) -> tuple:
+        """直接读 skill/stage 字段, 不做 comp 验证 (调用方已验证)。返回 (skill_id, stage_id)。"""
+        self._resolve_offsets(comp)
+        sid = self._pm.read_i32(comp + self._off_skill)
+        stage = self._pm.read_i32(comp + self._off_stage)
+        return (int(sid) if sid is not None else 0, int(stage or 0))
 
     def read_skill_cast(self, ent_obj: int) -> Optional[Dict]:
         """返回 {skill_id, stage_id} (boss 当前出招); 待机/读不到返回 None。"""
