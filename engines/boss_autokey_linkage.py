@@ -711,23 +711,28 @@ def build_boss_reactions_state(settings, engine, state_mgr,
                    "dungeon_id": cur_dungeon_id,
                    "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id),
                    "boss_count": 0, "last_seen": 0.0}] + scenes
-    # surface dungeon_ids from imported profiles so scenes appear before any obs;
-    # use profile_name as scene label since dungeon names are the top-level raid
-    # name (e.g. "决战！虚空浮岛·神龙枷所") while profiles know their sub-map name
+    # surface profile map names so scenes appear before any in-game obs;
+    # each profile carries dungeon_id + map_name (sub-map, e.g. 天启的神槛)
+    # — same dungeon_id can have multiple sub-maps, each gets its own entry
     try:
         from engines.boss_raid_engine import load_boss_raid_config
         raid_cfg = load_boss_raid_config(settings)
         existing_keys = {str(s.get("scene_key")) for s in scenes}
         for prof in raid_cfg.get("profiles") or []:
             did = _int(prof.get("dungeon_id"), 0)
-            dk = str(did)
-            if did and dk not in existing_keys:
-                existing_keys.add(dk)
-                pname = _s(prof.get("profile_name"))
-                scenes.append({"scene_key": dk, "scene_id": 0,
-                               "dungeon_id": did,
-                               "name": pname or _resolve_scene_name(nm, 0, did),
-                               "boss_count": 0, "last_seen": 0.0})
+            map_name = _s(prof.get("map_name"))
+            pid = _s(prof.get("id"))
+            # scene_key = "dungeon_id:profile_id" so each sub-map is distinct
+            dk = "%d:%s" % (did, pid) if map_name else str(did)
+            if not did or dk in existing_keys:
+                continue
+            existing_keys.add(dk)
+            label = map_name or _s(prof.get("profile_name")) or \
+                _resolve_scene_name(nm, 0, did)
+            scenes.append({"scene_key": dk, "scene_id": 0,
+                           "dungeon_id": did, "map_name": map_name,
+                           "name": label,
+                           "boss_count": 0, "last_seen": 0.0})
     except Exception:
         pass
     try:

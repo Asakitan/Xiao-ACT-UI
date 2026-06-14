@@ -987,8 +987,10 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             tk.Label(card, text=str(profile.get('profile_name') or 'Boss Raid'),
                      bg=card.cget('bg'), fg=TEXT_MAIN,
                      font=panel_font(9, bold=True), anchor='w').pack(fill=tk.X)
+            map_name = str(profile.get('map_name') or '').strip()
             meta = (
-                f'HP {_fmt_int(profile.get("boss_total_hp"))} | '
+                (f'{map_name} · ' if map_name else '')
+                + f'HP {_fmt_int(profile.get("boss_total_hp"))} | '
                 f'P{len(phases)} | TL{timelines}'
             )
             tk.Label(card, text=meta, bg=card.cget('bg'), fg=TEXT_MUTED,
