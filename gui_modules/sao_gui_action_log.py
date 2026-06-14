@@ -315,11 +315,10 @@ class ActionLogPanel:
         tk.Label(title_box, text='ACTION LOG 行为日志', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        self._badge_frame_al = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_al.pack(side='left', padx=(12, 0), anchor='n', pady=10)
-
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
+        self._badge_frame_al = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_al.pack(side='left', padx=(0, 12))
         sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(0, 8))
         sao_option_menu(control, self._topic_var, '', 'damage', 'skill', 'boss', 'trigger', command=lambda _v: self.filter_topic()).pack(side='left', padx=(0, 8))
         cursor_entry = sao_entry(control, textvariable=self._cursor_var, width=9)

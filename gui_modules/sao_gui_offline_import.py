@@ -217,7 +217,7 @@ class OfflineImportPanel:
         control = tk.Frame(toolbar, bg=body_bg)
         control.pack(side='right', anchor='n', pady=(10, 0))
         status_badge(control, f'STEP {self._current_step}/{len(_STEP_LABELS)}',
-                     kind='gold').pack(side='left', padx=(0, SP_SM))
+                     kind='gold').pack(side='left', padx=(0, 12))
         action_button(control, '选择 Choose', self.choose_file, kind='normal').pack(
             side='left', padx=(0, SP_SM))
         action_button(control, '导入', self.import_file, kind='gold').pack(

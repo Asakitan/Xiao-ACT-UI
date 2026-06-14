@@ -160,11 +160,11 @@ class TriggerTimerManagerPanel:
                  fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='TRIGGER / TIMER 触发计时', bg=bg,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
-        self._badge_frame = tk.Frame(toolbar, bg=bg)
-        self._badge_frame.pack(side='left', padx=(SP_MD, 0), anchor='n', pady=8)
         _make_panel_close_button(toolbar, self.hide, bg=bg, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '新建触发', None, kind='gold').pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh).pack(side='right', padx=(6, 0))
+        self._badge_frame = tk.Frame(toolbar, bg=bg)
+        self._badge_frame.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         outer = tk.Frame(body, bg=bg)
         outer.pack(fill='both', expand=True, padx=SP_MD, pady=(0, SP_MD))

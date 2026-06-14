@@ -192,19 +192,18 @@ class PluginManagerPanel:
         toolbar = tk.Frame(body, bg=body_bg)
         toolbar.pack(fill='x', padx=14, pady=(8, 4))
 
-        status_badge(toolbar, '0/0', kind='gold').pack(side='left', padx=(0, SP_SM))
-        self._count_badge_parent = toolbar  # store for re-rendering the badge
-
         self._search_var = tk.StringVar()
         self._search_var.trace_add('write', lambda *_a: self._on_search())
         search = sao_entry(toolbar, textvariable=self._search_var, width=16)
         search.pack(side='left', padx=(0, SP_SM))
 
-        # Right-side buttons (pack right → visually left-to-right: reload, import)
+        # Right-side buttons (pack right → visually left-to-right: badge, import, reload, cycle, close)
         _make_panel_close_button(toolbar, self.hide, bg=body_bg, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='right', padx=(SP_XS, 0))
         action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='right', padx=(SP_XS, 0))
         action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='right', padx=(SP_XS, 0))
+        status_badge(toolbar, '0/0', kind='gold').pack(side='right', padx=(0, 12), anchor='n', pady=8)
+        self._count_badge_parent = toolbar  # store for re-rendering the badge
 
         tk.Label(toolbar, textvariable=self._summary_var, bg=body_bg,
                  fg=gold, font=get_cjk_font(10, True)).pack(side='left', padx=(SP_MD, 0))
@@ -305,7 +304,7 @@ class PluginManagerPanel:
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
 
-        # ── Update count badge in toolbar ──
+        # ── Update count badge in toolbar (right side, before action buttons) ──
         badge_parent = getattr(self, '_count_badge_parent', None)
         if badge_parent is not None:
             for child in list(badge_parent.winfo_children()):
@@ -313,9 +312,7 @@ class PluginManagerPanel:
                     child.destroy()
                     break
             b = status_badge(badge_parent, f'{active}/{total}', kind='gold')
-            # Insert at position 0 (left side)
-            b.pack(side='left', padx=(0, SP_SM), before=list(badge_parent.winfo_children())[0]
-                   if badge_parent.winfo_children() else None)
+            b.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         # ── Update tag pills row ──
         pills_row = getattr(self, '_pills_row', None)

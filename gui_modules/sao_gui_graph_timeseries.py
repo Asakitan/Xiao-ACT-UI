@@ -257,7 +257,7 @@ class GraphTimeseriesPanel:
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
         self._ready_badge_frame = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
-        self._ready_badge_frame.pack(side='left', padx=(0, 8))
+        self._ready_badge_frame.pack(side='left', padx=(0, 12))
         status_badge(self._ready_badge_frame, 'READY', kind='ok').pack(side='left')
         _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         action_button(control, '导出 Export', self.export_json, kind='cyan').pack(side='right', padx=(6, 0))

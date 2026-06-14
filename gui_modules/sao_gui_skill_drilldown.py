@@ -242,6 +242,8 @@ class SkillDrilldownPanel:
         # Control buttons (right side of toolbar)
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
+        self._badge_frame_sd = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_sd.pack(side='left', padx=(0, 12), anchor='n')
         tk.Label(control, text='UID', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_entry(control, textvariable=self._combatant_var, width=13).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Skill', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
@@ -297,6 +299,12 @@ class SkillDrilldownPanel:
         hits = _finite_int(status.get('hits'), 0, lo=0)
         self._summary_var.set(f"{summary.get('name') or sid or 'NONE'} · {casts} CASTS · {hits} HITS")
         self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · refs={len(refs)} · errors={_list_count(status.get('errors'))}")
+        if hasattr(self, '_badge_frame_sd'):
+            for child in list(self._badge_frame_sd.winfo_children()):
+                child.destroy()
+            badge_text = 'OK' if status.get('ok', True) and not list(status.get('errors') or []) else 'ERROR'
+            badge_kind = 'ok' if badge_text == 'OK' else 'danger'
+            status_badge(self._badge_frame_sd, badge_text, kind=badge_kind).pack(side='left')
         if self._rows is None:
             return
         sig = self._signature(status)

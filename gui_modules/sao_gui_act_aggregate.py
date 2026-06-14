@@ -251,11 +251,10 @@ class ActAggregatePanel:
         tk.Label(title_box, text='AGGREGATE 聚合驾驶舱', bg=_SAO_PANEL_BODY_BG,
              fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
-        self._badge_frame_agg = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_agg.pack(side='left', padx=(12, 0), anchor='n', pady=10)
-
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
+        self._badge_frame_agg = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_agg.pack(side='left', padx=(0, 12), anchor='n')
         tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
         sao_option_menu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
         field_entry = sao_entry(control, textvariable=self._group_field_var, width=8)

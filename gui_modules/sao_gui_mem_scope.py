@@ -263,7 +263,7 @@ class MemScopePanel:
         _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
         self._badge_frame_ms = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_ms.pack(side='left', padx=(12, 0), anchor='n', pady=8)
+        self._badge_frame_ms.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))

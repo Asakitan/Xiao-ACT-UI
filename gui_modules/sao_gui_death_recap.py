@@ -204,10 +204,10 @@ class DeathRecapPanel:
         tk.Label(title_box, text='DEATH RECAP 死亡回放', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         self._badge_frame_dr = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
-        self._badge_frame_dr.pack(side='left', padx=(12, 0), anchor='n', pady=8)
         _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         for label, cmd in (('刷新', self.refresh), ('×', self.hide)):
             action_button(toolbar, label, cmd, kind='gold').pack(side='right', padx=(6, 0))
+        self._badge_frame_dr.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))

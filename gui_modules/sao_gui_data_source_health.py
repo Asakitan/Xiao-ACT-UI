@@ -185,10 +185,10 @@ class DataSourceHealthPanel:
         tk.Label(title_box, text='SOURCE HEALTH 数据源健康', bg=bg,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         self._badge_frame = tk.Frame(toolbar, bg=bg)
-        self._badge_frame.pack(side='left', padx=(SP_MD, 0), anchor='n', pady=8)
         _make_panel_close_button(toolbar, self.hide, bg=bg, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh).pack(side='right', padx=(6, 0))
         action_button(toolbar, '复制快照', self.copy_snapshot).pack(side='right', padx=(6, 0))
+        self._badge_frame.pack(side='right', padx=(0, 12), anchor='n', pady=8)
 
         self._metrics_row = tk.Frame(body, bg=bg)
         self._metrics_row.pack(fill='x', padx=SP_MD, pady=(SP_SM, SP_SM))
