@@ -84,6 +84,14 @@ def cpu_features() -> dict:
     return {"avx2": False, "sse42": False, "fallback": "python"}
 
 
+def _driver_status() -> dict:
+    try:
+        from mem_probe import driver_backend as _drv
+        return _drv.status()
+    except Exception:
+        return {"driver_available": False}
+
+
 def backend_info() -> dict:
     """Return JSON-safe diagnostics for the active memscan backend."""
     features = dict(cpu_features() or {})
@@ -94,6 +102,7 @@ def backend_info() -> dict:
         backend = fallback
     else:
         backend = "cython"
+    ds = _driver_status()
     return {
         "extension_loaded": _fast is not None,
         "backend": backend,
@@ -102,6 +111,8 @@ def backend_info() -> dict:
         "bytes_copy_required": (_fast is not None) and (not _READONLY_OK),
         "read_backend": mem_read_backend(),
         "slab_read": has_slab_read(),
+        "driver_available": ds.get("driver_available", False),
+        "driver_pid": ds.get("attached_pid", 0),
     }
 
 
@@ -147,7 +158,10 @@ def has_slab_read() -> bool:
 
 
 def mem_read_backend() -> str:
-    """Return which cross-process read backend is active ('ntrvm' or 'rpm')."""
+    """Return which cross-process read backend is active."""
+    ds = _driver_status()
+    if ds.get("driver_available") and ds.get("attached_pid"):
+        return "driver"
     if _fast is not None and hasattr(_fast, "mem_read_backend"):
         return _fast.mem_read_backend()
     return "rpm-python"
