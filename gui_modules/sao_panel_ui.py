@@ -663,8 +663,6 @@ def _apply_auto_font(widget):
         fam = f.actual('family')
     except Exception:
         fam = ''
-    if fam and 'SAO' in fam or '筑紫' in fam:
-        return
     text = str(widget.cget('text') or '')
     has_cjk = any(_is_cjk_char(ch) for ch in text)
     try:
@@ -691,10 +689,11 @@ def _auto_split_label_fonts(label):
         fam = f.actual('family')
     except Exception:
         fam = ''
-    if fam and ('SAO' in fam or '筑紫' in fam):
-        return
     text = str(label.cget('text') or '')
     if not text.strip():
+        return
+    # Already SAO and no CJK chars → done; already CJK and no Latin → done
+    if fam and 'SAO' in fam and not any(_is_cjk_char(ch) for ch in text):
         return
     try:
         size = abs(int(f.actual('size') or 9)) or 9
