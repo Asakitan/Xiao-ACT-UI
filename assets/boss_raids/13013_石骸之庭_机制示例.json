@@ -1,1033 +1,1034 @@
 {
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_102921_auto",
   "schema_version": 2,
-  "profile": {
-    "id": "boss_example_102921_auto",
-    "schema_version": 2,
-    "profile_name": "石骸之庭(幻花的陈骸) · 机制示例",
-    "description": "《幻花沉眠之地》第二场: 石骸之庭 — 幻花的陈骸(石头人) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 12 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
-    "boss_total_hp": 0,
-    "enrage_time_s": 0,
-    "enrage": {
-      "time_s": 0,
-      "anchor": "fight",
-      "phase_id": "",
-      "warn_threshold_s": 60,
-      "urgent_threshold_s": 30,
-      "tts_milestones": [
-        60,
-        30,
-        10
-      ]
+  "profile_name": "石骸之庭(幻花的陈骸) · 机制示例",
+  "description": "《幻花沉眠之地》第二场: 石骸之庭 — 幻花的陈骸(石头人) 机制示例: 15 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 12 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 0,
+  "enrage": {
+   "time_s": 0,
+   "anchor": "fight",
+   "phase_id": "",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "幻花的陈骸",
+  "dungeon_id": 13013,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "p1",
+    "name": "全程",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
     },
-    "simple_mode": false,
-    "target_name_pattern": "幻花的陈骸",
-    "dungeon_id": 13013,
-    "difficulty": "nightmare",
-    "phases": [
-      {
-        "id": "p1",
-        "name": "全程",
-        "trigger": {
-          "type": "manual",
-          "value": 0.0
-        },
-        "timelines": []
-      }
-    ],
-    "mechanics": [
-      {
-        "id": "mech_10290104",
-        "name": "石头人死刑",
-        "kind": "致死",
-        "enabled": true,
-        "notes": "机制：石头人死刑\n躲法：死刑点名严格执行,被点名按机制减伤/换坦/分摊,不可走位躲",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290104
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "死刑 · 死刑点名严格执行,被点名按机",
-          "tts_text": "死刑",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                4,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290106",
-        "name": "石头人压团血",
-        "kind": "分摊",
-        "enabled": true,
-        "notes": "机制：石头人压团血\n躲法：压团血需全员抱团分摊伤害,迅速向队友靠拢叠位",
-        "color": "#3aa0ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290106,
-            10290154
-          ],
-          "buff_ids": [
-            827246
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "压团 · 压团血需全员抱团分摊伤害,迅",
-          "tts_text": "压团",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 2.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290111",
-        "name": "石头人碎地重拳",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：石头人碎地重拳\n躲法：碎地重拳砸落点圆,远离Boss正前砸点站到拳头范围外",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290111
-          ],
-          "buff_ids": [
-            827229
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "碎地重拳 · 碎地重拳砸落点圆,远离Bos",
-          "tts_text": "碎地重拳",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 8.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                4,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290112",
-        "name": "石头人崩石环",
-        "kind": "环形AOE",
-        "enabled": true,
-        "notes": "机制：石头人崩石环\n躲法：崩石环为环形扩散AOE,远离爆点站到环外安全区",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290112,
-            10290158
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "崩石环 · 崩石环为环形扩散AOE,远离",
-          "tts_text": "崩石环",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "ring",
-              "radius": 40.0,
-              "inner": 12.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                40,
-                0
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290113",
-        "name": "石头人地震波",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：石头人地震波\n躲法：地震波由Boss向外扩散,远离Boss拉开距离待波过",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290113
-          ],
-          "buff_ids": [
-            827220,
-            827221,
-            827222,
-            827223,
-            827224,
-            827270
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "地震波 · 地震波由Boss向外扩散,远",
-          "tts_text": "地震波",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 0.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "reverse"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290114",
-        "name": "石头人裂石风暴",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：石头人裂石风暴\n躲法：裂石风暴地面多点散落,远离最近落点圈快速转移",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290114
-          ],
-          "buff_ids": [
-            827214,
-            827260
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "裂石风暴 · 裂石风暴地面多点散落,远离最",
-          "tts_text": "裂石风暴",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 40.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290115",
-        "name": "石头人疯狂锤地",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：石头人疯狂锤地\n躲法：P2疯狂锤地连续砸地,远离Boss脚下持续走位避连击",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290115
-          ],
-          "buff_ids": [
-            827216
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "疯狂锤地 · P2疯狂锤地连续砸地,远离B",
-          "tts_text": "疯狂锤地",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 40.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290117",
-        "name": "石头人砸碎墙壁",
-        "kind": "击飞",
-        "enabled": true,
-        "notes": "机制：石头人砸碎墙壁\n躲法：砸碎墙壁产生震荡击飞,远离Boss及墙体边缘待落地",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290117
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "砸碎墙壁 · 砸碎墙壁产生震荡击飞,远离B",
-          "tts_text": "砸碎墙壁",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290118",
-        "name": "石头人吸收水晶",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "机制：石头人吸收水晶\n躲法：吸收水晶为增益读条,集火打断或破坏水晶阻止Boss强化",
-        "color": "#34495e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290118
-          ],
-          "buff_ids": [
-            827233
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "吸收水晶 · 吸收水晶为增益读条,集火打断",
-          "tts_text": "吸收水晶",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290119",
-        "name": "石头人撞墙",
-        "kind": "冲锋",
-        "enabled": true,
-        "notes": "机制：石头人撞墙\n躲法：撞墙为直线冲锋,垂直于冲锋方向横向闪开避开线路",
-        "color": "#f39c12",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290119
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "撞墙 · 撞墙为直线冲锋,垂直于冲锋方",
-          "tts_text": "撞墙",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 0.5,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "bullet_shape"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290120",
-        "name": "毁灭之岩",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：毁灭之岩\n躲法：毁灭之岩天降落石,远离最近落点指示圈跑出范围",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290120
-          ],
-          "buff_ids": [
-            827248
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "毁灭之岩 · 毁灭之岩天降落石,远离最近落",
-          "tts_text": "毁灭之岩",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 100.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290121",
-        "name": "飞石冲击",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：飞石冲击\n躲法：飞石冲击为飞石轰击落点,远离最近落点圈侧向规避",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290121
-          ],
-          "buff_ids": [
-            827219,
-            827265
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "飞石冲击 · 飞石冲击为飞石轰击落点,远离",
-          "tts_text": "飞石冲击",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 10.0,
-              "inner": 2.0,
-              "angle": 0.0,
-              "width": 4.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290122",
-        "name": "石头人砸碎最后的墙（击飞玩家并眩晕）",
-        "kind": "击飞",
-        "enabled": true,
-        "notes": "机制：石头人砸碎最后的墙（击飞玩家并眩晕）\n躲法：砸碎最后的墙会击飞并眩晕,远离Boss和墙体提前拉开",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290122
-          ],
-          "buff_ids": [
-            827251
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "砸碎最后的墙 · 砸碎最后的墙会击飞并眩晕,远",
-          "tts_text": "砸碎最后的墙",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290123",
-        "name": "石头人裂石风暴（P3）",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：石头人裂石风暴（P3）\n躲法：P3裂石风暴落点更密更猛,远离最近落点持续快速转移走位",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290123
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "P3裂石风暴 · P3裂石风暴落点更密更猛,远",
-          "tts_text": "P3裂石风暴",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 40.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10290124",
-        "name": "石头人碎地重拳（噩梦）",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：石头人碎地重拳（噩梦）\n躲法：噩梦碎地重拳范围更大伤害更高,远离Boss砸点提前撤出圈",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10290124
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "噩梦碎地重拳 · 噩梦碎地重拳范围更大伤害更高",
-          "tts_text": "噩梦碎地重拳",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 8.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      }
-    ],
-    "source": "local",
-    "remote_id": null,
-    "created_at": "2026-06-11T17:44:28Z",
-    "updated_at": "2026-06-11T17:44:28Z",
-    "author_snapshot": {
-      "player_uid": "",
-      "player_name": "",
-      "profession_id": 0,
-      "profession_name": ""
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_10290104",
+    "name": "石头人死刑",
+    "kind": "致死",
+    "enabled": true,
+    "notes": "机制：石头人死刑\n躲法：死刑点名严格执行,被点名按机制减伤/换坦/分摊,不可走位躲",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290104
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
     },
-    "boss_combat_meta": {
-      "102921": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
-      },
-      "102901": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
-      },
-      "102911": {
-        "breaking_s": 15.0,
-        "fracture_s": 5.0,
-        "weakness_s": 1.0
+    "alert": {
+     "enabled": true,
+     "banner_text": "死刑 · 死刑点名严格执行,被点名按机",
+     "tts_text": "死刑",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        4,
+        5,
+        20
+       ]
       }
+     }
     }
-  }
+   },
+   {
+    "id": "mech_10290106",
+    "name": "石头人压团血",
+    "kind": "分摊",
+    "enabled": true,
+    "notes": "机制：石头人压团血\n躲法：压团血需全员抱团分摊伤害,迅速向队友靠拢叠位",
+    "color": "#3aa0ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290106,
+      10290154
+     ],
+     "buff_ids": [
+      827246
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "压团 · 压团血需全员抱团分摊伤害,迅",
+     "tts_text": "压团",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 2.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290111",
+    "name": "石头人碎地重拳",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：石头人碎地重拳\n躲法：碎地重拳砸落点圆,远离Boss正前砸点站到拳头范围外",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290111
+     ],
+     "buff_ids": [
+      827229
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "碎地重拳 · 碎地重拳砸落点圆,远离Bos",
+     "tts_text": "碎地重拳",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 8.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        4,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290112",
+    "name": "石头人崩石环",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：石头人崩石环\n躲法：崩石环为环形扩散AOE,远离爆点站到环外安全区",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290112,
+      10290158
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "崩石环 · 崩石环为环形扩散AOE,远离",
+     "tts_text": "崩石环",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 40.0,
+       "inner": 12.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        40,
+        0
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290113",
+    "name": "石头人地震波",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：石头人地震波\n躲法：地震波由Boss向外扩散,远离Boss拉开距离待波过",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290113
+     ],
+     "buff_ids": [
+      827220,
+      827221,
+      827222,
+      827223,
+      827224,
+      827270
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "地震波 · 地震波由Boss向外扩散,远",
+     "tts_text": "地震波",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "reverse"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290114",
+    "name": "石头人裂石风暴",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：石头人裂石风暴\n躲法：裂石风暴地面多点散落,远离最近落点圈快速转移",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290114
+     ],
+     "buff_ids": [
+      827214,
+      827260
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "裂石风暴 · 裂石风暴地面多点散落,远离最",
+     "tts_text": "裂石风暴",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 40.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290115",
+    "name": "石头人疯狂锤地",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：石头人疯狂锤地\n躲法：P2疯狂锤地连续砸地,远离Boss脚下持续走位避连击",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290115
+     ],
+     "buff_ids": [
+      827216
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "疯狂锤地 · P2疯狂锤地连续砸地,远离B",
+     "tts_text": "疯狂锤地",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 40.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290117",
+    "name": "石头人砸碎墙壁",
+    "kind": "击飞",
+    "enabled": true,
+    "notes": "机制：石头人砸碎墙壁\n躲法：砸碎墙壁产生震荡击飞,远离Boss及墙体边缘待落地",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290117
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "砸碎墙壁 · 砸碎墙壁产生震荡击飞,远离B",
+     "tts_text": "砸碎墙壁",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290118",
+    "name": "石头人吸收水晶",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：石头人吸收水晶\n躲法：吸收水晶为增益读条,集火打断或破坏水晶阻止Boss强化",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290118
+     ],
+     "buff_ids": [
+      827233
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "吸收水晶 · 吸收水晶为增益读条,集火打断",
+     "tts_text": "吸收水晶",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290119",
+    "name": "石头人撞墙",
+    "kind": "冲锋",
+    "enabled": true,
+    "notes": "机制：石头人撞墙\n躲法：撞墙为直线冲锋,垂直于冲锋方向横向闪开避开线路",
+    "color": "#f39c12",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290119
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "撞墙 · 撞墙为直线冲锋,垂直于冲锋方",
+     "tts_text": "撞墙",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.5,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "bullet_shape"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290120",
+    "name": "毁灭之岩",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：毁灭之岩\n躲法：毁灭之岩天降落石,远离最近落点指示圈跑出范围",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290120
+     ],
+     "buff_ids": [
+      827248
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "毁灭之岩 · 毁灭之岩天降落石,远离最近落",
+     "tts_text": "毁灭之岩",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 100.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290121",
+    "name": "飞石冲击",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：飞石冲击\n躲法：飞石冲击为飞石轰击落点,远离最近落点圈侧向规避",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290121
+     ],
+     "buff_ids": [
+      827219,
+      827265
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "飞石冲击 · 飞石冲击为飞石轰击落点,远离",
+     "tts_text": "飞石冲击",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 10.0,
+       "inner": 2.0,
+       "angle": 0.0,
+       "width": 4.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290122",
+    "name": "石头人砸碎最后的墙（击飞玩家并眩晕）",
+    "kind": "击飞",
+    "enabled": true,
+    "notes": "机制：石头人砸碎最后的墙（击飞玩家并眩晕）\n躲法：砸碎最后的墙会击飞并眩晕,远离Boss和墙体提前拉开",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290122
+     ],
+     "buff_ids": [
+      827251
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "砸碎最后的墙 · 砸碎最后的墙会击飞并眩晕,远",
+     "tts_text": "砸碎最后的墙",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290123",
+    "name": "石头人裂石风暴（P3）",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：石头人裂石风暴（P3）\n躲法：P3裂石风暴落点更密更猛,远离最近落点持续快速转移走位",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290123
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "P3裂石风暴 · P3裂石风暴落点更密更猛,远",
+     "tts_text": "P3裂石风暴",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 40.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10290124",
+    "name": "石头人碎地重拳（噩梦）",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：石头人碎地重拳（噩梦）\n躲法：噩梦碎地重拳范围更大伤害更高,远离Boss砸点提前撤出圈",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10290124
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "噩梦碎地重拳 · 噩梦碎地重拳范围更大伤害更高",
+     "tts_text": "噩梦碎地重拳",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 8.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T17:44:28Z",
+  "updated_at": "2026-06-11T17:44:28Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  },
+  "boss_combat_meta": {
+   "102921": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   },
+   "102901": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   },
+   "102911": {
+    "breaking_s": 15.0,
+    "fracture_s": 5.0,
+    "weakness_s": 1.0
+   }
+  },
+  "map_name": "石骸之庭"
+ }
 }

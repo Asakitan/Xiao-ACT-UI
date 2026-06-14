@@ -1,1205 +1,1206 @@
 {
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_13023_nm_p3",
   "schema_version": 2,
-  "profile": {
-    "id": "boss_example_13023_nm_p3",
-    "schema_version": 2,
-    "profile_name": "失序之骸(悖与灾的机骸·终) · 机制示例",
-    "description": "《遗忘幻梦之野》第三场: 失序之骸 — 悖与灾的机骸·终 机制示例: S3 决战！遗忘幻梦之野（噩梦）P3 悖与灾的机骸·终 全功能档案：16机制语音播报+顶部横幅倒计时+卡片机制/躲法说明; 危险机制已配定向自动躲避(分散/死刑→远离队友+Shift连冲, 神之放逐/横扫激光→远离Boss/E走, 分摊/炸弹/时停→抱团不动)。自动躲避需在机制页打开「定向移动」总开关(默认关, 自动WASD有账号风险自行承担, F12急停)。检测全绑真实id(技能10330xxx/buff829xxx), 导入启用即用。【已升级机制壳子】危险机制留几何范围占位(shape待填), 进本读实体几何或逆向到手后用fill_geometry自动填→精确范围出圈; 未填则招式生命周期兜底。",
-    "boss_total_hp": 0,
-    "enrage_time_s": 0,
-    "enrage": {
-      "time_s": 0,
-      "anchor": "phase",
-      "phase_id": "phase_seed_p3",
-      "warn_threshold_s": 60,
-      "urgent_threshold_s": 30,
-      "tts_milestones": [
-        60,
-        30,
-        10
-      ]
+  "profile_name": "失序之骸(悖与灾的机骸·终) · 机制示例",
+  "description": "《遗忘幻梦之野》第三场: 失序之骸 — 悖与灾的机骸·终 机制示例: S3 决战！遗忘幻梦之野（噩梦）P3 悖与灾的机骸·终 全功能档案：16机制语音播报+顶部横幅倒计时+卡片机制/躲法说明; 危险机制已配定向自动躲避(分散/死刑→远离队友+Shift连冲, 神之放逐/横扫激光→远离Boss/E走, 分摊/炸弹/时停→抱团不动)。自动躲避需在机制页打开「定向移动」总开关(默认关, 自动WASD有账号风险自行承担, F12急停)。检测全绑真实id(技能10330xxx/buff829xxx), 导入启用即用。【已升级机制壳子】危险机制留几何范围占位(shape待填), 进本读实体几何或逆向到手后用fill_geometry自动填→精确范围出圈; 未填则招式生命周期兜底。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 0,
+  "enrage": {
+   "time_s": 0,
+   "anchor": "phase",
+   "phase_id": "phase_seed_p3",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "悖与灾的机骸·终",
+  "dungeon_id": 13023,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "phase_seed_p3",
+    "name": "P3",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
     },
-    "simple_mode": false,
-    "target_name_pattern": "悖与灾的机骸·终",
-    "dungeon_id": 13023,
-    "difficulty": "nightmare",
-    "phases": [
-      {
-        "id": "phase_seed_p3",
-        "name": "P3",
-        "trigger": {
-          "type": "manual",
-          "value": 0.0
-        },
-        "timelines": []
-      }
-    ],
-    "mechanics": [
-      {
-        "id": "mech_red_stack",
-        "name": "红色分摊",
-        "kind": "red_stack",
-        "enabled": true,
-        "notes": "机制：外圈红色、圈内黄色箭头指向中心的即时分摊，一般只在开头出现，特效结束的时候直接炸。\n躲法：大团立刻集合抱团一起分摊，人越多每人吃的伤害越少。弹球前出的红色分摊会在空中炸开，大团一定要站在一起准备弹球。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829304
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "红色分摊 · 集合抱团",
-          "tts_text": "红色分摊",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 6.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_purple_stack",
-        "name": "紫色分摊(延时)",
-        "kind": "purple_stack",
-        "enabled": true,
-        "notes": "机制：外圈和箭头都是紫色的延时分摊。预警消失后不立即结算，延时一段时间后再炸；快结算时被点玩家头顶（名字和称号上方）会出现一行倒计时小字，倒计时结束机制生效。\n躲法：大团保持抱团不要散，等延时结算完再行动。时停期间点的延时分摊，会在时停结束后最先生效。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829305
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "紫色分摊 · 保持抱团等结算",
-          "tts_text": "紫色分摊",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 6.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_yellow_spread",
-        "name": "分散点名(小分散/三角分散)",
-        "kind": "yellow_spread",
-        "enabled": true,
-        "notes": "机制：两种外观共用同一种点名——①红色小分散：场上玩家点名密密麻麻的小红圈，最多可重叠两三个；②黄色三角分散：黄色朝外箭头围绕在玩家身周，一团约点3人。一般出现在开头，开局会从 红分摊/黄三角分散/红小分散 里随机出一种。\n躲法：小红圈→避免集中站位，拉开一点距离（站太密的话愈合和剑盾开大都保不住）；黄三角→被点的立刻远离大团，往板子四角随便走（伤害不高，不会死），或大团聚在一块开两个愈合大招减伤硬吃。",
-        "color": "#dea620",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829308
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "分散点名 · 小圈拉开/三角去板角",
-          "tts_text": "分散点名",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 900,
-            "fallback_direction": "back",
-            "exit_margin_m": 8.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_purple_spread",
-        "name": "延时分散(紫小分散/紫三角)",
-        "kind": "purple_spread",
-        "enabled": true,
-        "notes": "机制：小分散圈或三角箭头变成紫色，即延时分散，一般在时停时点名，需要自己记住有没有被点。\n躲法：时停结束先生效分摊——被点紫三角的立刻E走去板边，不用吃分摊；被点紫小分散的先帮忙分摊，然后互相保持距离等小分散结算，别太密集。紫三角也可以大团聚集躲愈合大招里，能开减伤就开减伤。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829309
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "延时分散 · 记住点名等生效",
-          "tts_text": "延时分散",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 900,
-            "fallback_direction": "back",
-            "exit_margin_m": 8.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_yellow_big_spread",
-        "name": "黄色大扩散(炸弹)",
-        "kind": "yellow_big_spread",
-        "enabled": true,
-        "notes": "机制：非常大范围的蓝圈+黄色朝外箭头（又叫\"屎\"/炸弹/可移动大炎戒）。会一直跟着被点玩家，延迟较长时间后在固定时机放下，扩散落在原地、箭头不再跟人；放下约2秒后爆炸，按距离造成大量伤害。\n躲法：机制出现立刻看自己是否被点。被点了别慌：不要乱走不要跑，保持警惕，严格听团长指挥何时跑位，扩散尽量都放在同一处。配合弹球有两种处理，听团长指挥：①弹完落地的瞬间扩散留在原地，大团所有人立刻E走到另一端规避；②落地不要跑不要E、原地输出，等boss放横扫激光，激光结束瞬间扩散落地留在原地，此时所有人往另一边E走。",
-        "color": "#dea620",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829245,
-            829306
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "黄色大扩散 · 别乱跑听指挥",
-          "tts_text": "黄色大扩散",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 6.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_purple_big_spread",
-        "name": "紫色延时扩散",
-        "kind": "purple_big_spread",
-        "enabled": true,
-        "notes": "机制：紫色延时版的扩散炸弹，倒计时结束才引爆。\n躲法：同黄色大扩散——别乱跑，听团长指挥何时跑位，等倒计时结算。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829307
-          ],
-          "source": "self",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "延时扩散 · 听指挥等结算",
-          "tts_text": "延时扩散",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 6.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_red_execution",
-        "name": "红圈死刑",
-        "kind": "red_execution",
-        "enabled": true,
-        "notes": "机制：按boss第一仇恨目标点名（一般是主T），死刑圈很大、很快就炸。\n躲法：主T接死刑必须单独远离大团，别炸到别人。水晶传送后出的死刑：大团立刻全体往前走，被点死刑的T立刻往大团身后走，这样大团不会被炸到。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330013
-          ],
-          "buff_ids": [
-            829323,
-            829324
-          ],
-          "source": "any",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "红圈死刑 · 主T远离大团",
-          "tts_text": "红圈死刑",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 1100,
-            "fallback_direction": "back",
-            "exit_margin_m": 12.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 4.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_purple_execution",
-        "name": "紫圈死缓(延时)",
-        "kind": "purple_execution",
-        "enabled": true,
-        "notes": "机制：按boss第二仇恨目标点名（一般是副T），死刑圈很大、延时生效。\n躲法：副T被点不着急，远离大团等延时生效；C被点到就自己找个角落默默死掉，不要炸大团。死缓和弹球一起出时：T趁弹球飞去对面并开减伤，落地的瞬间死缓爆炸，飞去对面就炸不到大团。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829326
-          ],
-          "source": "any",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "紫圈死缓 · 远离大团等延时",
-          "tts_text": "紫圈死缓",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 1100,
-            "fallback_direction": "back",
-            "exit_margin_m": 12.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 4.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_blue_ball",
-        "name": "弹球",
-        "kind": "blue_ball",
-        "enabled": true,
-        "notes": "机制：场上出现一个蓝色球，底部有黄色朝外箭头。结算时按你和球的相对位置把你弹飞约1.5块板远；按方向键则按你的方向键方向弹。\n躲法：站到离蓝球较近的位置，一般不按方向键。除了T，所有人都不要提前去对面；所有T趁着弹球飞去对面，开减伤保证自己存活。弹球时可能同时出现幻象大炎戒，提前开减伤应对。",
-        "color": "#68e4ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829316
-          ],
-          "source": "any",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "弹球 · 靠近蓝球准备起飞",
-          "tts_text": "弹球",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 5.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "",
-              "radius": 0.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": ""
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_crystal_teleport",
-        "name": "水晶传送/地波激光",
-        "kind": "crystal_teleport",
-        "enabled": true,
-        "notes": "机制：两次弹球之后出现。按1/2/3顺序点水晶，点完后把全部人依次按顺序传送到相应水晶位置，传送期间大团可以打输出。\n躲法：团长开星盒看水晶顺序，机制出现时立刻指挥分配好的固定人员按顺序点水晶。另一解（疑似bug）：全员对着板边按E，不传送也能躲过激光伤害。第一个水晶传送完会出死刑死缓——大团立刻全体往前走，死刑T往大团身后走，死缓远离大团等延迟生效。",
-        "color": "#68e4ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330009,
-            10330010
-          ],
-          "buff_ids": [
-            829315
-          ],
-          "source": "any",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "水晶传送 · 按顺序点水晶/板边E",
-          "tts_text": "水晶传送",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 8.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 30.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 3.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_cube",
-        "name": "魔方",
-        "kind": "cube",
-        "enabled": true,
-        "notes": "机制：boss的幻象先在地图外显示蓝色魔方的落点，然后场上对应的地板变红闪两下，蓝色魔方砸下来，踩中基本必死。\n躲法：立刻离开标红的地板。团长必须时刻盯着可能出现的魔方，提醒大团走哪块板。",
-        "color": "#2e6fb0",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829327,
-            829328,
-            829329,
-            829330,
-            829331,
-            829332
-          ],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "魔方 · 离开标红地板",
-          "tts_text": "魔方",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 5.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "hold",
-            "hold_ms": 800,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 500,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 800,
-            "fallback_direction": "back",
-            "exit_margin_m": 7.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 0.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": ""
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_god_banishment",
-        "name": "神之放逐",
-        "kind": "god_banishment",
-        "enabled": true,
-        "notes": "机制：地板从6块变成9块，boss到场外沿直线方向不断放地波。有的地波慢有的快，有的只走一半，有的走完全程；同时场上还会随机出现大炎戒。\n躲法：好好跑位躲地波和大炎戒就行。期间boss会放中场大激光，激光结束中场板子会碎——T该留在对面就留在对面，大团留在原来位置。",
-        "color": "#2e6fb0",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330012
-          ],
-          "buff_ids": [
-            829322
-          ],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "神之放逐 · 注意地波走位",
-          "tts_text": "神之放逐",
-          "alert_type": "both",
-          "countdown_s": 10.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 10.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 1200,
-            "fallback_direction": "back",
-            "exit_margin_m": 10.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 0.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": ""
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_time_stop",
-        "name": "时停",
-        "kind": "time_stop",
-        "enabled": true,
-        "notes": "机制：时停期间依次点 延时分摊、延时三角分散、延时小分散。\n躲法：记住自己被点了什么机制。时停结束先生效分摊——被点三角分散的立刻E走去板边不用分摊；被点小分散的先帮忙分摊，然后互相保持距离等小分散结束。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            829320
-          ],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "时停 · 记住延时点名",
-          "tts_text": "时停",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 8.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "",
-              "radius": 0.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": ""
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_mid_laser",
-        "name": "中场大激光",
-        "kind": "mid_laser",
-        "enabled": true,
-        "notes": "机制：神之放逐期间boss放中场大激光，大激光结束后中场板子会碎。\n躲法：T该留在对面就留在对面别回来，大团留在原来位置别过中场。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330011
-          ],
-          "buff_ids": [],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "中场大激光 · 结束中场板碎",
-          "tts_text": "中场大激光",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 3.0,
-          "cooldown_s": 8.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 600,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "line",
-              "radius": 30.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 3.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_sweep_laser",
-        "name": "横扫激光",
-        "kind": "sweep_laser",
-        "enabled": true,
-        "notes": "机制：boss横扫半场的激光。\n躲法：离开被扫的半场。如果场上有黄色大扩散：横扫激光结束的瞬间扩散会落地留在原地，此时所有人立刻往另一边E走。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330004,
-            10330007
-          ],
-          "buff_ids": [],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "横扫激光 · 结束E走另一边",
-          "tts_text": "横扫激光",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 5.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "E",
-            "action_label": "E走规避",
-            "press_mode": "tap",
-            "hold_ms": 80,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "E",
-                "delay_ms": 0,
-                "hold_ms": 80
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 700,
-            "fallback_direction": "back",
-            "exit_margin_m": 8.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "cone",
-              "radius": 8.0,
-              "inner": 0.0,
-              "angle": 120.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_clone_flame_ring",
-        "name": "幻象大炎戒",
-        "kind": "clone_flame_ring",
-        "enabled": true,
-        "notes": "机制：boss幻象在场上随机角落开始蓄力大炎戒，距离越近伤害越高。\n躲法：远离大炎戒蓄力点。近战开减伤的情况下可以跟幻象在同一块板上也不会死。弹球的时候可能同时伴有幻象大炎戒，提前开减伤应对。",
-        "color": "#dea620",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10330008
-          ],
-          "buff_ids": [],
-          "source": "boss",
-          "boss_base_id": 103309,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "幻象大炎戒 · 远离蓄力点",
-          "tts_text": "幻象大炎戒",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 5.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [
-              {
-                "key": "SHIFT",
-                "delay_ms": 0,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              },
-              {
-                "key": "SHIFT",
-                "delay_ms": 300,
-                "hold_ms": 0
-              }
-            ],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 1000,
-            "fallback_direction": "back",
-            "exit_margin_m": 10.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "ring",
-              "radius": 15.0,
-              "inner": 6.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic"
-            }
-          }
-        }
-      }
-    ],
-    "source": "local",
-    "remote_id": null,
-    "created_at": "2026-06-11T17:45:32Z",
-    "updated_at": "2026-06-11T17:45:32Z",
-    "author_snapshot": {
-      "player_uid": "",
-      "player_name": "",
-      "profession_id": 0,
-      "profession_name": ""
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_red_stack",
+    "name": "红色分摊",
+    "kind": "red_stack",
+    "enabled": true,
+    "notes": "机制：外圈红色、圈内黄色箭头指向中心的即时分摊，一般只在开头出现，特效结束的时候直接炸。\n躲法：大团立刻集合抱团一起分摊，人越多每人吃的伤害越少。弹球前出的红色分摊会在空中炸开，大团一定要站在一起准备弹球。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829304
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
     },
-    "boss_combat_meta": {
-      "103308": {
-        "breaking_s": 8.0,
-        "fracture_s": 5.0
-      },
-      "103300": {
-        "breaking_s": 8.0,
-        "fracture_s": 5.0
-      },
-      "103309": {
-        "breaking_s": 8.0,
-        "fracture_s": 5.0
-      }
+    "alert": {
+     "enabled": true,
+     "banner_text": "红色分摊 · 集合抱团",
+     "tts_text": "红色分摊",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
     },
-    "hidden_sub_skills": [
-      {
-        "id": 10330015,
-        "name": "累刑宣告·幻",
-        "notes": "幻版累刑宣告(dummy施放)"
-      },
-      {
-        "id": 10330016,
-        "name": "相位映射·幻",
-        "notes": "幻版相位映射"
-      },
-      {
-        "id": 10330052,
-        "name": "致死射线",
-        "notes": "能量柱致死射线"
-      },
-      {
-        "id": 10330054,
-        "name": "神之放逐",
-        "notes": "放逐机制(非boss直接施放)"
-      },
-      {
-        "id": 10330057,
-        "name": "延迟衰减",
-        "notes": "延迟引爆衰减炸弹"
-      },
-      {
-        "id": 10330101,
-        "name": "开炮-60°扇形aoe",
-        "notes": "能量柱60°扇形aoe, AI范围15m"
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 6.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
       }
-    ]
-  }
+     }
+    }
+   },
+   {
+    "id": "mech_purple_stack",
+    "name": "紫色分摊(延时)",
+    "kind": "purple_stack",
+    "enabled": true,
+    "notes": "机制：外圈和箭头都是紫色的延时分摊。预警消失后不立即结算，延时一段时间后再炸；快结算时被点玩家头顶（名字和称号上方）会出现一行倒计时小字，倒计时结束机制生效。\n躲法：大团保持抱团不要散，等延时结算完再行动。时停期间点的延时分摊，会在时停结束后最先生效。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829305
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "紫色分摊 · 保持抱团等结算",
+     "tts_text": "紫色分摊",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 6.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_yellow_spread",
+    "name": "分散点名(小分散/三角分散)",
+    "kind": "yellow_spread",
+    "enabled": true,
+    "notes": "机制：两种外观共用同一种点名——①红色小分散：场上玩家点名密密麻麻的小红圈，最多可重叠两三个；②黄色三角分散：黄色朝外箭头围绕在玩家身周，一团约点3人。一般出现在开头，开局会从 红分摊/黄三角分散/红小分散 里随机出一种。\n躲法：小红圈→避免集中站位，拉开一点距离（站太密的话愈合和剑盾开大都保不住）；黄三角→被点的立刻远离大团，往板子四角随便走（伤害不高，不会死），或大团聚在一块开两个愈合大招减伤硬吃。",
+    "color": "#dea620",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829308
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "分散点名 · 小圈拉开/三角去板角",
+     "tts_text": "分散点名",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 900,
+      "fallback_direction": "back",
+      "exit_margin_m": 8.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_purple_spread",
+    "name": "延时分散(紫小分散/紫三角)",
+    "kind": "purple_spread",
+    "enabled": true,
+    "notes": "机制：小分散圈或三角箭头变成紫色，即延时分散，一般在时停时点名，需要自己记住有没有被点。\n躲法：时停结束先生效分摊——被点紫三角的立刻E走去板边，不用吃分摊；被点紫小分散的先帮忙分摊，然后互相保持距离等小分散结算，别太密集。紫三角也可以大团聚集躲愈合大招里，能开减伤就开减伤。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829309
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "延时分散 · 记住点名等生效",
+     "tts_text": "延时分散",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 900,
+      "fallback_direction": "back",
+      "exit_margin_m": 8.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_yellow_big_spread",
+    "name": "黄色大扩散(炸弹)",
+    "kind": "yellow_big_spread",
+    "enabled": true,
+    "notes": "机制：非常大范围的蓝圈+黄色朝外箭头（又叫\"屎\"/炸弹/可移动大炎戒）。会一直跟着被点玩家，延迟较长时间后在固定时机放下，扩散落在原地、箭头不再跟人；放下约2秒后爆炸，按距离造成大量伤害。\n躲法：机制出现立刻看自己是否被点。被点了别慌：不要乱走不要跑，保持警惕，严格听团长指挥何时跑位，扩散尽量都放在同一处。配合弹球有两种处理，听团长指挥：①弹完落地的瞬间扩散留在原地，大团所有人立刻E走到另一端规避；②落地不要跑不要E、原地输出，等boss放横扫激光，激光结束瞬间扩散落地留在原地，此时所有人往另一边E走。",
+    "color": "#dea620",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829245,
+      829306
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "黄色大扩散 · 别乱跑听指挥",
+     "tts_text": "黄色大扩散",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 6.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_purple_big_spread",
+    "name": "紫色延时扩散",
+    "kind": "purple_big_spread",
+    "enabled": true,
+    "notes": "机制：紫色延时版的扩散炸弹，倒计时结束才引爆。\n躲法：同黄色大扩散——别乱跑，听团长指挥何时跑位，等倒计时结算。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829307
+     ],
+     "source": "self",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "延时扩散 · 听指挥等结算",
+     "tts_text": "延时扩散",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 6.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_red_execution",
+    "name": "红圈死刑",
+    "kind": "red_execution",
+    "enabled": true,
+    "notes": "机制：按boss第一仇恨目标点名（一般是主T），死刑圈很大、很快就炸。\n躲法：主T接死刑必须单独远离大团，别炸到别人。水晶传送后出的死刑：大团立刻全体往前走，被点死刑的T立刻往大团身后走，这样大团不会被炸到。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330013
+     ],
+     "buff_ids": [
+      829323,
+      829324
+     ],
+     "source": "any",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "红圈死刑 · 主T远离大团",
+     "tts_text": "红圈死刑",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1100,
+      "fallback_direction": "back",
+      "exit_margin_m": 12.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 4.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_purple_execution",
+    "name": "紫圈死缓(延时)",
+    "kind": "purple_execution",
+    "enabled": true,
+    "notes": "机制：按boss第二仇恨目标点名（一般是副T），死刑圈很大、延时生效。\n躲法：副T被点不着急，远离大团等延时生效；C被点到就自己找个角落默默死掉，不要炸大团。死缓和弹球一起出时：T趁弹球飞去对面并开减伤，落地的瞬间死缓爆炸，飞去对面就炸不到大团。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829326
+     ],
+     "source": "any",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "紫圈死缓 · 远离大团等延时",
+     "tts_text": "紫圈死缓",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1100,
+      "fallback_direction": "back",
+      "exit_margin_m": 12.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 4.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_blue_ball",
+    "name": "弹球",
+    "kind": "blue_ball",
+    "enabled": true,
+    "notes": "机制：场上出现一个蓝色球，底部有黄色朝外箭头。结算时按你和球的相对位置把你弹飞约1.5块板远；按方向键则按你的方向键方向弹。\n躲法：站到离蓝球较近的位置，一般不按方向键。除了T，所有人都不要提前去对面；所有T趁着弹球飞去对面，开减伤保证自己存活。弹球时可能同时出现幻象大炎戒，提前开减伤应对。",
+    "color": "#68e4ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829316
+     ],
+     "source": "any",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "弹球 · 靠近蓝球准备起飞",
+     "tts_text": "弹球",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 5.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_crystal_teleport",
+    "name": "水晶传送/地波激光",
+    "kind": "crystal_teleport",
+    "enabled": true,
+    "notes": "机制：两次弹球之后出现。按1/2/3顺序点水晶，点完后把全部人依次按顺序传送到相应水晶位置，传送期间大团可以打输出。\n躲法：团长开星盒看水晶顺序，机制出现时立刻指挥分配好的固定人员按顺序点水晶。另一解（疑似bug）：全员对着板边按E，不传送也能躲过激光伤害。第一个水晶传送完会出死刑死缓——大团立刻全体往前走，死刑T往大团身后走，死缓远离大团等延迟生效。",
+    "color": "#68e4ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330009,
+      10330010
+     ],
+     "buff_ids": [
+      829315
+     ],
+     "source": "any",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "水晶传送 · 按顺序点水晶/板边E",
+     "tts_text": "水晶传送",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 8.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 30.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 3.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_cube",
+    "name": "魔方",
+    "kind": "cube",
+    "enabled": true,
+    "notes": "机制：boss的幻象先在地图外显示蓝色魔方的落点，然后场上对应的地板变红闪两下，蓝色魔方砸下来，踩中基本必死。\n躲法：立刻离开标红的地板。团长必须时刻盯着可能出现的魔方，提醒大团走哪块板。",
+    "color": "#2e6fb0",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829327,
+      829328,
+      829329,
+      829330,
+      829331,
+      829332
+     ],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "魔方 · 离开标红地板",
+     "tts_text": "魔方",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 5.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "hold",
+      "hold_ms": 800,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 500,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 800,
+      "fallback_direction": "back",
+      "exit_margin_m": 7.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_god_banishment",
+    "name": "神之放逐",
+    "kind": "god_banishment",
+    "enabled": true,
+    "notes": "机制：地板从6块变成9块，boss到场外沿直线方向不断放地波。有的地波慢有的快，有的只走一半，有的走完全程；同时场上还会随机出现大炎戒。\n躲法：好好跑位躲地波和大炎戒就行。期间boss会放中场大激光，激光结束中场板子会碎——T该留在对面就留在对面，大团留在原来位置。",
+    "color": "#2e6fb0",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330012
+     ],
+     "buff_ids": [
+      829322
+     ],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "神之放逐 · 注意地波走位",
+     "tts_text": "神之放逐",
+     "alert_type": "both",
+     "countdown_s": 10.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 10.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 1200,
+      "fallback_direction": "back",
+      "exit_margin_m": 10.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_time_stop",
+    "name": "时停",
+    "kind": "time_stop",
+    "enabled": true,
+    "notes": "机制：时停期间依次点 延时分摊、延时三角分散、延时小分散。\n躲法：记住自己被点了什么机制。时停结束先生效分摊——被点三角分散的立刻E走去板边不用分摊；被点小分散的先帮忙分摊，然后互相保持距离等小分散结束。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      829320
+     ],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "时停 · 记住延时点名",
+     "tts_text": "时停",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 8.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_mid_laser",
+    "name": "中场大激光",
+    "kind": "mid_laser",
+    "enabled": true,
+    "notes": "机制：神之放逐期间boss放中场大激光，大激光结束后中场板子会碎。\n躲法：T该留在对面就留在对面别回来，大团留在原来位置别过中场。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330011
+     ],
+     "buff_ids": [],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "中场大激光 · 结束中场板碎",
+     "tts_text": "中场大激光",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 3.0,
+     "cooldown_s": 8.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 600,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "line",
+       "radius": 30.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 3.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_sweep_laser",
+    "name": "横扫激光",
+    "kind": "sweep_laser",
+    "enabled": true,
+    "notes": "机制：boss横扫半场的激光。\n躲法：离开被扫的半场。如果场上有黄色大扩散：横扫激光结束的瞬间扩散会落地留在原地，此时所有人立刻往另一边E走。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330004,
+      10330007
+     ],
+     "buff_ids": [],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "横扫激光 · 结束E走另一边",
+     "tts_text": "横扫激光",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 5.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "E",
+      "action_label": "E走规避",
+      "press_mode": "tap",
+      "hold_ms": 80,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "E",
+        "delay_ms": 0,
+        "hold_ms": 80
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 700,
+      "fallback_direction": "back",
+      "exit_margin_m": 8.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "cone",
+       "radius": 8.0,
+       "inner": 0.0,
+       "angle": 120.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_clone_flame_ring",
+    "name": "幻象大炎戒",
+    "kind": "clone_flame_ring",
+    "enabled": true,
+    "notes": "机制：boss幻象在场上随机角落开始蓄力大炎戒，距离越近伤害越高。\n躲法：远离大炎戒蓄力点。近战开减伤的情况下可以跟幻象在同一块板上也不会死。弹球的时候可能同时伴有幻象大炎戒，提前开减伤应对。",
+    "color": "#dea620",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10330008
+     ],
+     "buff_ids": [],
+     "source": "boss",
+     "boss_base_id": 103309,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "幻象大炎戒 · 远离蓄力点",
+     "tts_text": "幻象大炎戒",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 5.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [
+       {
+        "key": "SHIFT",
+        "delay_ms": 0,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       },
+       {
+        "key": "SHIFT",
+        "delay_ms": 300,
+        "hold_ms": 0
+       }
+      ],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 1000,
+      "fallback_direction": "back",
+      "exit_margin_m": 10.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 15.0,
+       "inner": 6.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic"
+      }
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T17:45:32Z",
+  "updated_at": "2026-06-11T17:45:32Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  },
+  "boss_combat_meta": {
+   "103308": {
+    "breaking_s": 8.0,
+    "fracture_s": 5.0
+   },
+   "103300": {
+    "breaking_s": 8.0,
+    "fracture_s": 5.0
+   },
+   "103309": {
+    "breaking_s": 8.0,
+    "fracture_s": 5.0
+   }
+  },
+  "hidden_sub_skills": [
+   {
+    "id": 10330015,
+    "name": "累刑宣告·幻",
+    "notes": "幻版累刑宣告(dummy施放)"
+   },
+   {
+    "id": 10330016,
+    "name": "相位映射·幻",
+    "notes": "幻版相位映射"
+   },
+   {
+    "id": 10330052,
+    "name": "致死射线",
+    "notes": "能量柱致死射线"
+   },
+   {
+    "id": 10330054,
+    "name": "神之放逐",
+    "notes": "放逐机制(非boss直接施放)"
+   },
+   {
+    "id": 10330057,
+    "name": "延迟衰减",
+    "notes": "延迟引爆衰减炸弹"
+   },
+   {
+    "id": 10330101,
+    "name": "开炮-60°扇形aoe",
+    "notes": "能量柱60°扇形aoe, AI范围15m"
+   }
+  ],
+  "map_name": "失序之骸"
+ }
 }

@@ -1,1118 +1,1119 @@
 {
+ "schema_version": 2,
+ "profile": {
+  "id": "boss_example_103021_auto",
   "schema_version": 2,
-  "profile": {
-    "id": "boss_example_103021_auto",
-    "schema_version": 2,
-    "profile_name": "蚀影之渊(蚀花的残影) · 机制示例",
-    "description": "《幻花沉眠之地》第三场: 蚀影之渊 — 蚀花的残影 机制示例: 14 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 6 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
-    "boss_total_hp": 0,
-    "enrage_time_s": 0,
-    "enrage": {
-      "time_s": 0,
-      "anchor": "fight",
-      "phase_id": "",
-      "warn_threshold_s": 60,
-      "urgent_threshold_s": 30,
-      "tts_milestones": [
-        60,
-        30,
-        10
-      ]
+  "profile_name": "蚀影之渊(蚀花的残影) · 机制示例",
+  "description": "《幻花沉眠之地》第三场: 蚀影之渊 — 蚀花的残影 机制示例: 14 条机制, 检测绑真实技能id(跨难度通用), 按真实技能名分析配 TTS 播报+横幅+定向躲避; 6 条需自动躲避的机制已留几何范围占位(壳子), 范围到手(进本读实体/逆向)用 fill_geometry 自动填→按精确范围出圈, 未填则招式生命周期兜底。躲避默认关(机制页开总开关, F12急停)。",
+  "boss_total_hp": 0,
+  "enrage_time_s": 0,
+  "enrage": {
+   "time_s": 0,
+   "anchor": "fight",
+   "phase_id": "",
+   "warn_threshold_s": 60,
+   "urgent_threshold_s": 30,
+   "tts_milestones": [
+    60,
+    30,
+    10
+   ]
+  },
+  "simple_mode": false,
+  "target_name_pattern": "蚀花的残影",
+  "dungeon_id": 13013,
+  "difficulty": "nightmare",
+  "phases": [
+   {
+    "id": "p1",
+    "name": "全程",
+    "trigger": {
+     "type": "manual",
+     "value": 0.0
     },
-    "simple_mode": false,
-    "target_name_pattern": "蚀花的残影",
-    "dungeon_id": 13013,
-    "difficulty": "nightmare",
-    "phases": [
-      {
-        "id": "p1",
-        "name": "全程",
-        "trigger": {
-          "type": "manual",
-          "value": 0.0
-        },
-        "timelines": []
-      }
-    ],
-    "mechanics": [
-      {
-        "id": "mech_10300102",
-        "name": "砸地冲击",
-        "kind": "砸地",
-        "enabled": true,
-        "notes": "机制：砸地冲击\n躲法：Boss砸地产生冲击波, 立刻远离Boss脚下范围。",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300102
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "砸地 · Boss砸地产生冲击波, 立",
-          "tts_text": "砸地",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 2.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300103",
-        "name": "致死",
-        "kind": "致死",
-        "enabled": true,
-        "notes": "机制：致死\n躲法：致死点名/死刑, 严格按指引处理(减伤或交保), 失误即团灭。",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300103,
-            10300203
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "致死 · 致死点名/死刑, 严格按指引",
-          "tts_text": "致死",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range",
-              "ai_range": [
-                0,
-                0,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300105",
-        "name": "幻影湮灭",
-        "kind": "全场AOE",
-        "enabled": true,
-        "notes": "机制：幻影湮灭\n躲法：幻影爆发湮灭, 全场范围不可硬躲, 抱团减伤扛过读条。",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300105
-          ],
-          "buff_ids": [
-            828105
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "幻影湮灭 · 幻影爆发湮灭, 全场范围不可",
-          "tts_text": "幻影湮灭",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300106",
-        "name": "大炎戒",
-        "kind": "环形AOE",
-        "enabled": true,
-        "notes": "机制：大炎戒\n躲法：炎环范围AOE, 远离圈中心出圈站到环外。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300106
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "大炎戒 · 炎环范围AOE, 远离圈中心",
-          "tts_text": "大炎戒",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "ring",
-              "radius": 10.0,
-              "inner": 4.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                7,
-                10,
-                30
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300107",
-        "name": "心神剥夺",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "机制：心神剥夺\n躲法：心神剥夺为控制/夺魂debuff, 备好解控或保命, 按提示处理。",
-        "color": "#34495e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300107
-          ],
-          "buff_ids": [
-            828152
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "心神剥夺 · 心神剥夺为控制/夺魂debu",
-          "tts_text": "心神剥夺",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 4.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range",
-              "ai_range": [
-                0,
-                5,
-                7,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300108",
-        "name": "终焉化身",
-        "kind": "狂暴",
-        "enabled": true,
-        "notes": "机制：终焉化身\n躲法：终焉化身转阶段/狂怒全屏大招, 不可躲, 抱团减伤按读条扛。",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300108,
-            10300111,
-            10300355,
-            10300356
-          ],
-          "buff_ids": [
-            828127,
-            828144
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "终焉 · 终焉化身转阶段/狂怒全屏大招",
-          "tts_text": "终焉",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 4.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300112",
-        "name": "陨星",
-        "kind": "落点",
-        "enabled": true,
-        "notes": "机制：陨星\n躲法：天降陨星落点AOE, 远离红圈落点。",
-        "color": "#d35400",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300112
-          ],
-          "buff_ids": [
-            828142
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "陨星 · 天降陨星落点AOE, 远离红",
-          "tts_text": "陨星",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 7.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "self",
-              "source": "semantic"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300113",
-        "name": "大炎戒-单",
-        "kind": "点名",
-        "enabled": true,
-        "notes": "机制：大炎戒-单\n躲法：单体炎戒点名, 被点者远离人群拉到边上躲圈。",
-        "color": "#8e44ad",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300113
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "炎戒点名 · 单体炎戒点名, 被点者远离人",
-          "tts_text": "炎戒点名",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "ring",
-              "radius": 10.0,
-              "inner": 4.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                10,
-                30
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300114",
-        "name": "环形冲击",
-        "kind": "环形AOE",
-        "enabled": true,
-        "notes": "机制：环形冲击\n躲法：环形冲击波, 远离Boss向圈外移动出环。",
-        "color": "#ef684e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300114
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "环形冲击 · 环形冲击波, 远离Boss向",
-          "tts_text": "环形冲击",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "ring",
-              "radius": 10.0,
-              "inner": 3.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "semantic",
-              "ai_range": [
-                0,
-                0,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300204",
-        "name": "炎弧斩",
-        "kind": "横扫",
-        "enabled": true,
-        "notes": "机制：炎弧斩\n躲法：炎弧扇形劈砍, 侧移出Boss正面扇形或绕到背后。",
-        "color": "#e67e22",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300204
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "炎弧斩 · 炎弧扇形劈砍, 侧移出Bos",
-          "tts_text": "炎弧斩",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300205",
-        "name": "蚀花刻印",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "机制：蚀花刻印\n躲法：身上被打蚀花刻印(延时引爆/印记), 按指引拉开或叠层处理, 别带人群。",
-        "color": "#34495e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300205
-          ],
-          "buff_ids": [
-            828123
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "蚀花刻印 · 身上被打蚀花刻印(延时引爆/",
-          "tts_text": "蚀花刻印",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300206",
-        "name": "狱炎轮回",
-        "kind": "全场AOE",
-        "enabled": true,
-        "notes": "机制：狱炎轮回\n躲法：狱炎轮回为持续/循环全场火域, 走安全区并抱团减伤扛过。",
-        "color": "#c0392b",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300206
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "狱炎轮回 · 狱炎轮回为持续/循环全场火域",
-          "tts_text": "狱炎轮回",
-          "alert_type": "both",
-          "countdown_s": 8.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300207",
-        "name": "共罪之裁",
-        "kind": "分摊",
-        "enabled": true,
-        "notes": "机制：共罪之裁\n躲法：共罪之裁为连坐分摊伤害, 立刻向队友集合抱团一起分摊。",
-        "color": "#3aa0ff",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300207
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "共罪分摊 · 共罪之裁为连坐分摊伤害, 立",
-          "tts_text": "共罪分摊",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "goto_teammate",
-            "move_ms": 4000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range",
-              "ai_range": [
-                0,
-                0,
-                5,
-                20
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_10300214",
-        "name": "蚀心之种",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "机制：蚀心之种\n躲法：种下蚀心之种(延时爆裂/扩散debuff), 按指引远离人群到安全区引爆。",
-        "color": "#34495e",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300214
-          ],
-          "buff_ids": [],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "蚀心之种 · 种下蚀心之种(延时爆裂/扩散",
-          "tts_text": "蚀心之种",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "action_key": "",
-            "action_label": "",
-            "press_mode": "tap",
-            "hold_ms": 600,
-            "press_count": 1,
-            "sequence": [],
-            "delay_ms": 0,
-            "lead_ms": 300,
-            "cooldown_s": 3.0,
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "exit_margin_m": 6.0,
-            "arrive_m": 2.0,
-            "geometry": {
-              "shape": "circle",
-              "radius": 10.0,
-              "inner": 0.0,
-              "angle": 0.0,
-              "width": 0.0,
-              "center": "boss",
-              "source": "ai_range"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_97e3d5ce",
-        "name": "绯狱千斩点名",
-        "kind": "点名",
-        "enabled": true,
-        "notes": "殷红断狱阶段的绯狱千斩 → 被点名远离boss",
-        "color": "",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300306
-          ],
-          "buff_ids": [
-            828132
-          ],
-          "source": "boss",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "绯狱千斩点名",
-          "tts_text": "千斩点名",
-          "alert_type": "both",
-          "countdown_s": 5.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "direction": "away_boss",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "geometry": {
-              "shape": "circle",
-              "radius": 50.0,
-              "source": "semantic",
-              "center": "self"
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_f9e5d1fd",
-        "name": "密码破译",
-        "kind": "特殊",
-        "enabled": true,
-        "notes": "触发密码破译效果 → 特殊机制",
-        "color": "",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [
-            10300354
-          ],
-          "buff_ids": [],
-          "source": "any",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "密码破译",
-          "tts_text": "密码破译",
-          "alert_type": "both",
-          "countdown_s": 6.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": false,
-          "linkage_id": "",
-          "inline": {
-            "direction": "",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "geometry": {
-              "shape": "",
-              "radius": 0.0,
-              "source": ""
-            }
-          }
-        }
-      },
-      {
-        "id": "mech_3c91d13f",
-        "name": "绯红剑影点名",
-        "kind": "点名",
-        "enabled": true,
-        "notes": "被绯红剑影点名 → 远离队友\nP1=828107 P2=828124",
-        "color": "",
-        "phase_ids": [],
-        "detect": {
-          "skill_ids": [],
-          "buff_ids": [
-            828107,
-            828124
-          ],
-          "source": "self",
-          "boss_base_id": 0,
-          "hp_pct": 0.0,
-          "time_into_phase_s": 0.0,
-          "time_into_fight_s": 0.0,
-          "repeat_interval_s": 0.0,
-          "event": ""
-        },
-        "alert": {
-          "enabled": true,
-          "banner_text": "绯红剑影点名",
-          "tts_text": "剑影点名",
-          "alert_type": "both",
-          "countdown_s": 4.0,
-          "pre_warn_s": 2.0,
-          "cooldown_s": 4.0,
-          "sound": "boss_alert"
-        },
-        "dodge": {
-          "enabled": true,
-          "linkage_id": "",
-          "inline": {
-            "direction": "away_nearest",
-            "move_ms": 2000,
-            "fallback_direction": "back",
-            "geometry": {
-              "shape": "circle",
-              "radius": 6.0,
-              "source": "semantic",
-              "center": "self"
-            }
-          }
-        }
-      }
-    ],
-    "source": "local",
-    "remote_id": null,
-    "created_at": "2026-06-11T17:44:28Z",
-    "updated_at": "2026-06-11T17:44:28Z",
-    "author_snapshot": {
-      "player_uid": "",
-      "player_name": "",
-      "profession_id": 0,
-      "profession_name": ""
+    "timelines": []
+   }
+  ],
+  "mechanics": [
+   {
+    "id": "mech_10300102",
+    "name": "砸地冲击",
+    "kind": "砸地",
+    "enabled": true,
+    "notes": "机制：砸地冲击\n躲法：Boss砸地产生冲击波, 立刻远离Boss脚下范围。",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300102
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
     },
-    "boss_combat_meta": {
-      "103001": {
-        "breaking_s": 18.0,
-        "fracture_s": 5.0
-      },
-      "103011": {
-        "breaking_s": 18.0,
-        "fracture_s": 5.0
-      },
-      "103021": {
-        "breaking_s": 18.0,
-        "fracture_s": 5.0
+    "alert": {
+     "enabled": true,
+     "banner_text": "砸地 · Boss砸地产生冲击波, 立",
+     "tts_text": "砸地",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 2.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        5,
+        20
+       ]
       }
+     }
     }
-  }
+   },
+   {
+    "id": "mech_10300103",
+    "name": "致死",
+    "kind": "致死",
+    "enabled": true,
+    "notes": "机制：致死\n躲法：致死点名/死刑, 严格按指引处理(减伤或交保), 失误即团灭。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300103,
+      10300203
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "致死 · 致死点名/死刑, 严格按指引",
+     "tts_text": "致死",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range",
+       "ai_range": [
+        0,
+        0,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300105",
+    "name": "幻影湮灭",
+    "kind": "全场AOE",
+    "enabled": true,
+    "notes": "机制：幻影湮灭\n躲法：幻影爆发湮灭, 全场范围不可硬躲, 抱团减伤扛过读条。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300105
+     ],
+     "buff_ids": [
+      828105
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "幻影湮灭 · 幻影爆发湮灭, 全场范围不可",
+     "tts_text": "幻影湮灭",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300106",
+    "name": "大炎戒",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：大炎戒\n躲法：炎环范围AOE, 远离圈中心出圈站到环外。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300106
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "大炎戒 · 炎环范围AOE, 远离圈中心",
+     "tts_text": "大炎戒",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 10.0,
+       "inner": 4.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        7,
+        10,
+        30
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300107",
+    "name": "心神剥夺",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：心神剥夺\n躲法：心神剥夺为控制/夺魂debuff, 备好解控或保命, 按提示处理。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300107
+     ],
+     "buff_ids": [
+      828152
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "心神剥夺 · 心神剥夺为控制/夺魂debu",
+     "tts_text": "心神剥夺",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 4.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range",
+       "ai_range": [
+        0,
+        5,
+        7,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300108",
+    "name": "终焉化身",
+    "kind": "狂暴",
+    "enabled": true,
+    "notes": "机制：终焉化身\n躲法：终焉化身转阶段/狂怒全屏大招, 不可躲, 抱团减伤按读条扛。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300108,
+      10300111,
+      10300355,
+      10300356
+     ],
+     "buff_ids": [
+      828127,
+      828144
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "终焉 · 终焉化身转阶段/狂怒全屏大招",
+     "tts_text": "终焉",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 4.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300112",
+    "name": "陨星",
+    "kind": "落点",
+    "enabled": true,
+    "notes": "机制：陨星\n躲法：天降陨星落点AOE, 远离红圈落点。",
+    "color": "#d35400",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300112
+     ],
+     "buff_ids": [
+      828142
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "陨星 · 天降陨星落点AOE, 远离红",
+     "tts_text": "陨星",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 7.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "self",
+       "source": "semantic"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300113",
+    "name": "大炎戒-单",
+    "kind": "点名",
+    "enabled": true,
+    "notes": "机制：大炎戒-单\n躲法：单体炎戒点名, 被点者远离人群拉到边上躲圈。",
+    "color": "#8e44ad",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300113
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "炎戒点名 · 单体炎戒点名, 被点者远离人",
+     "tts_text": "炎戒点名",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 10.0,
+       "inner": 4.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        10,
+        30
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300114",
+    "name": "环形冲击",
+    "kind": "环形AOE",
+    "enabled": true,
+    "notes": "机制：环形冲击\n躲法：环形冲击波, 远离Boss向圈外移动出环。",
+    "color": "#ef684e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300114
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "环形冲击 · 环形冲击波, 远离Boss向",
+     "tts_text": "环形冲击",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "ring",
+       "radius": 10.0,
+       "inner": 3.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "semantic",
+       "ai_range": [
+        0,
+        0,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300204",
+    "name": "炎弧斩",
+    "kind": "横扫",
+    "enabled": true,
+    "notes": "机制：炎弧斩\n躲法：炎弧扇形劈砍, 侧移出Boss正面扇形或绕到背后。",
+    "color": "#e67e22",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300204
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "炎弧斩 · 炎弧扇形劈砍, 侧移出Bos",
+     "tts_text": "炎弧斩",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300205",
+    "name": "蚀花刻印",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：蚀花刻印\n躲法：身上被打蚀花刻印(延时引爆/印记), 按指引拉开或叠层处理, 别带人群。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300205
+     ],
+     "buff_ids": [
+      828123
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "蚀花刻印 · 身上被打蚀花刻印(延时引爆/",
+     "tts_text": "蚀花刻印",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300206",
+    "name": "狱炎轮回",
+    "kind": "全场AOE",
+    "enabled": true,
+    "notes": "机制：狱炎轮回\n躲法：狱炎轮回为持续/循环全场火域, 走安全区并抱团减伤扛过。",
+    "color": "#c0392b",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300206
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "狱炎轮回 · 狱炎轮回为持续/循环全场火域",
+     "tts_text": "狱炎轮回",
+     "alert_type": "both",
+     "countdown_s": 8.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300207",
+    "name": "共罪之裁",
+    "kind": "分摊",
+    "enabled": true,
+    "notes": "机制：共罪之裁\n躲法：共罪之裁为连坐分摊伤害, 立刻向队友集合抱团一起分摊。",
+    "color": "#3aa0ff",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300207
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "共罪分摊 · 共罪之裁为连坐分摊伤害, 立",
+     "tts_text": "共罪分摊",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "goto_teammate",
+      "move_ms": 4000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range",
+       "ai_range": [
+        0,
+        0,
+        5,
+        20
+       ]
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_10300214",
+    "name": "蚀心之种",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "机制：蚀心之种\n躲法：种下蚀心之种(延时爆裂/扩散debuff), 按指引远离人群到安全区引爆。",
+    "color": "#34495e",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300214
+     ],
+     "buff_ids": [],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "蚀心之种 · 种下蚀心之种(延时爆裂/扩散",
+     "tts_text": "蚀心之种",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "action_key": "",
+      "action_label": "",
+      "press_mode": "tap",
+      "hold_ms": 600,
+      "press_count": 1,
+      "sequence": [],
+      "delay_ms": 0,
+      "lead_ms": 300,
+      "cooldown_s": 3.0,
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "exit_margin_m": 6.0,
+      "arrive_m": 2.0,
+      "geometry": {
+       "shape": "circle",
+       "radius": 10.0,
+       "inner": 0.0,
+       "angle": 0.0,
+       "width": 0.0,
+       "center": "boss",
+       "source": "ai_range"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_97e3d5ce",
+    "name": "绯狱千斩点名",
+    "kind": "点名",
+    "enabled": true,
+    "notes": "殷红断狱阶段的绯狱千斩 → 被点名远离boss",
+    "color": "",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300306
+     ],
+     "buff_ids": [
+      828132
+     ],
+     "source": "boss",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "绯狱千斩点名",
+     "tts_text": "千斩点名",
+     "alert_type": "both",
+     "countdown_s": 5.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "direction": "away_boss",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "geometry": {
+       "shape": "circle",
+       "radius": 50.0,
+       "source": "semantic",
+       "center": "self"
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_f9e5d1fd",
+    "name": "密码破译",
+    "kind": "特殊",
+    "enabled": true,
+    "notes": "触发密码破译效果 → 特殊机制",
+    "color": "",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [
+      10300354
+     ],
+     "buff_ids": [],
+     "source": "any",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "密码破译",
+     "tts_text": "密码破译",
+     "alert_type": "both",
+     "countdown_s": 6.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": false,
+     "linkage_id": "",
+     "inline": {
+      "direction": "",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "geometry": {
+       "shape": "",
+       "radius": 0.0,
+       "source": ""
+      }
+     }
+    }
+   },
+   {
+    "id": "mech_3c91d13f",
+    "name": "绯红剑影点名",
+    "kind": "点名",
+    "enabled": true,
+    "notes": "被绯红剑影点名 → 远离队友\nP1=828107 P2=828124",
+    "color": "",
+    "phase_ids": [],
+    "detect": {
+     "skill_ids": [],
+     "buff_ids": [
+      828107,
+      828124
+     ],
+     "source": "self",
+     "boss_base_id": 0,
+     "hp_pct": 0.0,
+     "time_into_phase_s": 0.0,
+     "time_into_fight_s": 0.0,
+     "repeat_interval_s": 0.0,
+     "event": ""
+    },
+    "alert": {
+     "enabled": true,
+     "banner_text": "绯红剑影点名",
+     "tts_text": "剑影点名",
+     "alert_type": "both",
+     "countdown_s": 4.0,
+     "pre_warn_s": 2.0,
+     "cooldown_s": 4.0,
+     "sound": "boss_alert"
+    },
+    "dodge": {
+     "enabled": true,
+     "linkage_id": "",
+     "inline": {
+      "direction": "away_nearest",
+      "move_ms": 2000,
+      "fallback_direction": "back",
+      "geometry": {
+       "shape": "circle",
+       "radius": 6.0,
+       "source": "semantic",
+       "center": "self"
+      }
+     }
+    }
+   }
+  ],
+  "source": "local",
+  "remote_id": null,
+  "created_at": "2026-06-11T17:44:28Z",
+  "updated_at": "2026-06-11T17:44:28Z",
+  "author_snapshot": {
+   "player_uid": "",
+   "player_name": "",
+   "profession_id": 0,
+   "profession_name": ""
+  },
+  "boss_combat_meta": {
+   "103001": {
+    "breaking_s": 18.0,
+    "fracture_s": 5.0
+   },
+   "103011": {
+    "breaking_s": 18.0,
+    "fracture_s": 5.0
+   },
+   "103021": {
+    "breaking_s": 18.0,
+    "fracture_s": 5.0
+   }
+  },
+  "map_name": "蚀影之渊"
+ }
 }
