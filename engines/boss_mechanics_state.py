@@ -58,8 +58,15 @@ def _target_profile(config: Dict[str, Any],
 
 
 def _resolve_detect_name(nm, sid: int) -> str:
-    """检测 id 既可能是技能也可能是 buff (点名机制全是 buff), 两类表都查。"""
-    return _resolve_skill_name(nm, sid) or _lookup(nm, "buff", sid)
+    """检测 id 既可能是技能也可能是 buff (点名机制全是 buff), 两类表都查。
+    都查不到也返回前缀名(如 Boss技能#12345), 不留空白让卡片显示裸 #id。"""
+    name = _resolve_skill_name(nm, sid) or _lookup(nm, "buff", sid)
+    if name or not nm or not sid:
+        return name
+    try:
+        return nm.resolve("skill", sid) or ""
+    except Exception:
+        return ""
 
 
 def mechanic_summary(mech: Dict[str, Any],
