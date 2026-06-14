@@ -42,6 +42,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
@@ -251,6 +252,7 @@ class SkillDrilldownPanel:
         action_button(control, '过滤', self.filter).pack(side='left', padx=(0, 6))
         action_button(control, '复制', self.copy).pack(side='left', padx=(0, 6))
         action_button(control, '返回', self.back).pack(side='left', padx=(0, 6))
+        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         # Status bar
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))

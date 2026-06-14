@@ -37,6 +37,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
@@ -222,6 +223,8 @@ class OfflineImportPanel:
         action_button(control, '导入', self.import_file, kind='gold').pack(
             side='left', padx=(0, SP_SM))
         action_button(control, '刷新', self.refresh, kind='normal').pack(side='left')
+        _make_panel_close_button(control, self.hide, bg=body_bg, flat=True).pack(
+            side='left', padx=(6, 0))
 
         # ── step indicator row ──
         step_row = tk.Frame(body, bg=body_bg)

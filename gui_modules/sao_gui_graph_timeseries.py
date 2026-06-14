@@ -36,6 +36,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -258,7 +259,7 @@ class GraphTimeseriesPanel:
         self._ready_badge_frame = tk.Frame(control, bg=_SAO_PANEL_BODY_BG)
         self._ready_badge_frame.pack(side='left', padx=(0, 8))
         status_badge(self._ready_badge_frame, 'READY', kind='ok').pack(side='left')
-        action_button(control, '×', self.hide).pack(side='right', padx=(6, 0))
+        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         action_button(control, '导出 Export', self.export_json, kind='cyan').pack(side='right', padx=(6, 0))
         action_button(control, '刷新', self.refresh, kind='gold').pack(side='right', padx=(0, 6))
         sao_option_menu(control, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct',

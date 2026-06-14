@@ -50,6 +50,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -250,6 +251,9 @@ class ActAggregatePanel:
         tk.Label(title_box, text='AGGREGATE 聚合驾驶舱', bg=_SAO_PANEL_BODY_BG,
              fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
+        self._badge_frame_agg = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_agg.pack(side='left', padx=(12, 0), anchor='n', pady=10)
+
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
         tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(side='left')
@@ -266,7 +270,7 @@ class ActAggregatePanel:
         query_entry.bind('<Return>', lambda _e: self.filter())
         sao_option_menu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
         action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
-        action_button(control, '×', self.hide).pack(side='left')
+        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
@@ -340,6 +344,12 @@ class ActAggregatePanel:
         overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         errors = list(status.get('errors') or [])
+        if hasattr(self, '_badge_frame_agg'):
+            for child in list(self._badge_frame_agg.winfo_children()):
+                child.destroy()
+            badge_text = 'OK' if status.get('ok', True) and not errors else 'ERROR'
+            badge_kind = 'ok' if badge_text == 'OK' else 'danger'
+            status_badge(self._badge_frame_agg, badge_text, kind=badge_kind).pack(side='left')
         self._summary_var.set(
             f"DMG {self._fmt(overview.get('damage'))} · DPS {self._fmt(overview.get('dps'))} · "
             f"EVENTS {_finite_int(counts.get('rows'), 0, lo=0)} · GROUPS {_finite_int(counts.get('skills'), 0, lo=0)}/{_finite_int(counts.get('monsters'), 0, lo=0)}/{_finite_int(counts.get('dungeons'), 0, lo=0)}"

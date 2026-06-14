@@ -35,6 +35,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -161,6 +162,7 @@ class TriggerTimerManagerPanel:
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         self._badge_frame = tk.Frame(toolbar, bg=bg)
         self._badge_frame.pack(side='left', padx=(SP_MD, 0), anchor='n', pady=8)
+        _make_panel_close_button(toolbar, self.hide, bg=bg, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '新建触发', None, kind='gold').pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh).pack(side='right', padx=(6, 0))
 

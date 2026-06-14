@@ -50,6 +50,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -314,6 +315,9 @@ class ActionLogPanel:
         tk.Label(title_box, text='ACTION LOG 行为日志', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
 
+        self._badge_frame_al = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
+        self._badge_frame_al.pack(side='left', padx=(12, 0), anchor='n', pady=10)
+
         control = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         control.pack(side='right', anchor='n', pady=(10, 0))
         sao_entry(control, textvariable=self._query_var, width=14).pack(side='left', padx=(0, 8))
@@ -322,7 +326,7 @@ class ActionLogPanel:
         cursor_entry.pack(side='left', padx=(0, 8))
         attach_tooltip(cursor_entry, '跳转到该时间点 (epoch 毫秒)；跳转后日志定位到此游标')
         action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
-        action_button(control, '×', self.hide).pack(side='left')
+        _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
@@ -400,6 +404,11 @@ class ActionLogPanel:
                      font=get_cjk_font(9, True), anchor='e').pack(side='right')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        if hasattr(self, '_badge_frame_al'):
+            for child in list(self._badge_frame_al.winfo_children()):
+                child.destroy()
+            status_badge(self._badge_frame_al, 'READY' if status.get('ok', True) else 'ERROR',
+                         kind='ok' if status.get('ok', True) else 'danger').pack(side='left')
         rows = list(status.get('rows') or [])
         groups = list(status.get('grouped_rows') or [])
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}

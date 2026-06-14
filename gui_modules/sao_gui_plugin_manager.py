@@ -50,6 +50,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
@@ -200,6 +201,7 @@ class PluginManagerPanel:
         search.pack(side='left', padx=(0, SP_SM))
 
         # Right-side buttons (pack right → visually left-to-right: reload, import)
+        _make_panel_close_button(toolbar, self.hide, bg=body_bg, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='right', padx=(SP_XS, 0))
         action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='right', padx=(SP_XS, 0))
         action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='right', padx=(SP_XS, 0))

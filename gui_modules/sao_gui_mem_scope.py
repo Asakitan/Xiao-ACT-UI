@@ -46,6 +46,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -259,7 +260,7 @@ class MemScopePanel:
                  fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='MEM SCOPE 内存浏览器', bg=_SAO_PANEL_BODY_BG,
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
-        action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
+        _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
         self._badge_frame_ms = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame_ms.pack(side='left', padx=(12, 0), anchor='n', pady=8)

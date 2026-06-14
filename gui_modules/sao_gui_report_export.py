@@ -35,6 +35,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
+    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
@@ -311,7 +312,7 @@ class ReportExportPanel:
                  fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         self._badge_frame = tk.Frame(toolbar, bg=_SAO_PANEL_BODY_BG)
         self._badge_frame.pack(side='left', padx=(12, 0), anchor='n', pady=8)
-        components.action_button(toolbar, '×', self.hide).pack(side='right', padx=(6, 0))
+        _make_panel_close_button(toolbar, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='right', padx=(6, 0))
         components.action_button(toolbar, '刷新', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
 
         fmt_row = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
