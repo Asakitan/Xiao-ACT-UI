@@ -247,7 +247,7 @@ class MemStateBridge:
         entity loop (writes boss_hp_source='memory' only when TCP isn't owning the bar).
         Supplement-mode only; in memory mode the 1Hz entity loop owns these."""
         for k in ("cur_hp", "max_hp", "hp_pct", "breaking_stage", "extinction",
-                  "max_extinction", "stop_breaking_ticking"):
+                  "max_extinction", "stun", "max_stun", "stop_breaking_ticking"):
             if c.get(k) is not None:
                 boss[k] = c[k]
         now = time.monotonic()
@@ -258,6 +258,11 @@ class MemStateBridge:
         ext = c.get("extinction")
         mext = c.get("max_extinction")
         pct = (ext / mext) if (ext and mext and mext > 0) else 0.0
+        if pct == 0.0:
+            stun = c.get("stun")
+            mstun = c.get("max_stun")
+            if mstun and mstun > 0 and stun is not None:
+                pct = max(0.0, min(1.0, stun / mstun))
         sbt = c.get("stop_breaking_ticking")
         if sbt is None:
             sbt = boss.get("stop_breaking_ticking", False)
@@ -396,6 +401,11 @@ class MemStateBridge:
                     ext = boss.get("extinction")
                     mext = boss.get("max_extinction")
                     pct = (ext / mext) if (ext and mext and mext > 0) else 0.0
+                    if pct == 0.0:
+                        stun = boss.get("stun")
+                        mstun = boss.get("max_stun")
+                        if mstun and mstun > 0 and stun is not None:
+                            pct = max(0.0, min(1.0, stun / mstun))
                     self.last_boss_break = {
                         "breaking_stage": int(bs) if isinstance(bs, int) else -1,
                         "extinction_pct": max(0.0, min(1.0, pct)),
