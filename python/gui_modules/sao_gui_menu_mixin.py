@@ -323,6 +323,8 @@ class SAOPlayerGUIMenuMixin:
             session_visible = False
             session_count = 0
 
+        plugin_menu_cat_count = len(self._collect_plugin_menu_categories())
+
         sig = (
             hotkey_sig,
             bool(getattr(self, '_recognition_active', False)),
@@ -353,6 +355,7 @@ class SAOPlayerGUIMenuMixin:
             session_visible,
             session_count,
             session_version,
+            plugin_menu_cat_count,
         )
         self._last_menu_refresh_sig = sig
         self._last_menu_refresh_sig_time = _now
@@ -601,7 +604,7 @@ class SAOPlayerGUIMenuMixin:
 
         plugin_items = self._build_plugin_menu_items()
 
-        return {
+        children = {
             '控制': [
                 {'icon': '⚙', 'label': recog_label + _k('toggle_recognition'), 'command': self._toggle_recognition_menu},
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
@@ -625,6 +628,17 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '✕', 'label': '退出', 'command': self._on_close},
             ],
         }
+        for _ext_id, cat in self._collect_plugin_menu_categories().items():
+            name = str(cat.get('name') or '')
+            builder = cat.get('builder')
+            if name and name not in children and callable(builder):
+                try:
+                    items = builder()
+                    if isinstance(items, list) and items:
+                        children[name] = items
+                except Exception:
+                    pass
+        return children
 
     def _get_act_plugin_menu_status(self):
         try:
@@ -806,19 +820,42 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             pass
 
+    _PLATFORM_MENU_ICONS = [
+        {'name': '控制', 'icon': '⚙', 'can_active': True},
+        {'name': '自动', 'icon': '⚡', 'can_active': True},
+        {'name': 'Boss', 'icon': '⚔', 'can_active': True},
+        {'name': 'Burst', 'icon': 'B', 'can_active': True},
+        {'name': '面板', 'icon': '◆', 'can_active': True},
+        {'name': 'ACT', 'icon': 'A', 'can_active': True},
+        {'name': '插件', 'icon': '⬢', 'can_active': True},
+        {'name': '皮肤', 'icon': 'P', 'can_active': True},
+        {'name': '关于', 'icon': 'ℹ', 'can_active': True},
+    ]
+
+    def _build_menu_icons(self):
+        """平台固定图标 + 插件动态贡献的分类图标。"""
+        icons = list(self._PLATFORM_MENU_ICONS)
+        platform_names = {ic['name'] for ic in icons}
+        for _ext_id, cat in self._collect_plugin_menu_categories().items():
+            name = str(cat.get('name') or '')
+            if name and name not in platform_names:
+                icons.append({'name': name, 'icon': str(cat.get('icon') or '◇'), 'can_active': True})
+                platform_names.add(name)
+        return icons
+
+    def _collect_plugin_menu_categories(self):
+        """从 PluginManager 拉取所有插件贡献的菜单分类。"""
+        pm = getattr(self, '_act_plugin_manager', None)
+        if pm is None:
+            return {}
+        try:
+            return pm.get_menu_categories()
+        except Exception:
+            return {}
+
     def _setup_sao_menu(self):
-        """构建 SAO PopUpMenu 菜单 = 主界面 (7 categories)"""
-        self._menu_icons = [
-            {'name': '控制', 'icon': '⚙', 'can_active': True},
-            {'name': '自动', 'icon': '⚡', 'can_active': True},
-            {'name': 'Boss', 'icon': '⚔', 'can_active': True},
-            {'name': 'Burst', 'icon': 'B', 'can_active': True},
-            {'name': '面板', 'icon': '◆', 'can_active': True},
-            {'name': 'ACT', 'icon': 'A', 'can_active': True},
-            {'name': '插件', 'icon': '⬢', 'can_active': True},
-            {'name': '皮肤', 'icon': 'P', 'can_active': True},
-            {'name': '关于', 'icon': 'ℹ', 'can_active': True},
-        ]
+        """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
+        self._menu_icons = self._build_menu_icons()
 
         self._sao_menu = SAOPopUpMenu(
             self.root, self._menu_icons, self._get_menu_children_cached(force=True),
