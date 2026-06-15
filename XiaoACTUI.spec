@@ -116,6 +116,9 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     # module-level dependency.
     'mem_probe.il2cpp.mem_map_name_reader',
     'mem_probe.il2cpp.mem_string_pool',
+    # 内核驱动后端 (gitignored, 本地存在时打包, 不存在时 PyInstaller 仅 warning)
+    'mem_probe.driver_backend',
+    'mem_probe.driver_bootstrap',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
@@ -166,7 +169,8 @@ a = Analysis(
         ('mem_probe/il2cpp/_cache/bundle.json', 'mem_probe/il2cpp/_cache'),
         ('mem_probe/il2cpp/_cache/bundles', 'mem_probe/il2cpp/_cache/bundles'),
         # 内核驱动 (物理内存直读; 启动时自动 sc create+start, 失败回退 NtRVM)
-        ('drivers', 'drivers'),
+        # drivers/ 是 gitignored 本地目录, GitHub 克隆无此目录 → 条件包含, 缺失时跳过
+        *(([('drivers', 'drivers')] if os.path.isdir(os.path.join(HERE, 'drivers')) else [])),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
