@@ -30,6 +30,8 @@ EXTENSION_KINDS = (
     "report_views",
     "timers",
     "ui_panels",
+    "menu_categories",
+    "data_sources",
 )
 # Render hooks are NOT extension-registry entries — they live in
 # ``PluginManager.render_registry`` and surface via ``render_status()``.
@@ -357,6 +359,13 @@ class EngineAccess:
                 "available": handle is not None,
                 "type": _type_name(handle),
             }
+        for name, engine in self._manager._plugin_engines.items():
+            if name not in out:
+                out[name] = {
+                    "available": engine is not None,
+                    "type": _type_name(engine),
+                    "source": "plugin",
+                }
         return out
 
     def available(self) -> list[str]:
@@ -373,6 +382,10 @@ class EngineAccess:
             return self.plugin_manager
         if key == "settings":
             return self.settings if self.settings is not None else default
+        # Check plugin-contributed engines before falling through to owner attrs.
+        plugin_engine = self._manager._plugin_engines.get(key)
+        if plugin_engine is not None:
+            return plugin_engine
         owner = self.owner
         if owner is None:
             return default
@@ -707,6 +720,76 @@ class PluginContext:
         return self._manager._register_hotkey(
             self._record.plugin_id, hotkey_id, callback, default_key, label)
 
+    def register_menu_category(self, name: str, icon: str,
+                               builder: Callable[[], list],
+                               priority: float = 0.0) -> str:
+        """Register a named menu category populated by a callback.
+
+        ``builder() -> list[dict]`` returns items in the same format as
+        ``_build_menu_children`` entries (icon/label/command dicts). The
+        platform merges plugin-contributed categories into the SAO menu
+        alongside the built-in ones. Returns the extension id.
+        """
+        ext_id = _safe_id(name) or _safe_id(f"{self._record.plugin_id}_{name}")
+        if not ext_id:
+            raise ValueError(f"invalid menu category name: {name!r}")
+        meta: dict[str, Any] = {
+            "title": str(name),
+            "description": f"Menu category from {self._record.name}",
+        }
+        normalized = self._manager._register_extension(
+            "menu_categories", self._record.plugin_id, ext_id, meta, builder)
+        self._manager._menu_categories[ext_id] = {
+            "plugin_id": self._record.plugin_id,
+            "name": str(name),
+            "icon": str(icon or ""),
+            "builder": builder,
+            "priority": float(priority or 0.0),
+        }
+        return ext_id
+
+    def register_engine(self, name: str, engine: Any) -> None:
+        """Register a named engine that the platform and other plugins can query.
+
+        The engine becomes available via ``ctx.get_engine(name)`` for all
+        plugins and via ``EngineAccess.get(name)`` for the platform.
+        Also sets the corresponding owner attribute for backward compatibility.
+        """
+        key = _normalize_engine_name(name)
+        if not key:
+            raise ValueError(f"invalid engine name: {name!r}")
+        self._manager._plugin_engines[key] = engine
+        self._manager._plugin_engine_owners[key] = self._record.plugin_id
+        aliases = _ENGINE_HANDLE_ALIASES.get(key)
+        if aliases:
+            try:
+                self.engine.set_owner_attr(aliases[0], engine)
+            except Exception:
+                pass
+
+    def register_data_source(self, source_id: str,
+                             metadata: Optional[Mapping[str, Any]] = None,
+                             start: Optional[Callable[[], Any]] = None,
+                             stop: Optional[Callable[[], Any]] = None) -> dict[str, Any]:
+        """Register a data source (packet capture, memory reader, etc.).
+
+        ``start()`` / ``stop()`` control the source lifecycle. The platform's
+        data-source-health panel auto-discovers registered sources.
+        """
+        meta = dict(metadata or {}) if isinstance(metadata, Mapping) else {}
+        meta.setdefault("title", str(source_id))
+        meta.setdefault("description", f"Data source from {self._record.name}")
+        normalized = self._manager._register_extension(
+            "data_sources", self._record.plugin_id, source_id, meta, start)
+        self._manager._data_sources[normalized["id"]] = {
+            "plugin_id": self._record.plugin_id,
+            "metadata": meta,
+            "start": start,
+            "stop": stop,
+            "running": False,
+        }
+        return normalized
+
     def request_redraw(self, surface: str = "", reason: str = "") -> dict[str, Any]:
         """Ask all host surfaces (or one) to repaint plugin content."""
         return self.emit("plugin_ui_invalidate", {
@@ -983,6 +1066,14 @@ class PluginManager:
         #: True once load_all() has run — lets ensure_act_plugin_manager(load=True)
         #: be idempotent instead of reloading every plugin on every call.
         self._initial_loaded = False
+        #: Plugin-contributed menu categories: ext_id -> {plugin_id, name, icon, builder, priority}.
+        self._menu_categories: Dict[str, dict[str, Any]] = {}
+        #: Plugin-contributed named engines: engine_name -> engine_instance.
+        self._plugin_engines: Dict[str, Any] = {}
+        #: Reverse map engine_name -> plugin_id for cleanup on unload.
+        self._plugin_engine_owners: Dict[str, str] = {}
+        #: Plugin-contributed data sources: source_id -> {plugin_id, metadata, start_fn, stop_fn, running}.
+        self._data_sources: Dict[str, dict[str, Any]] = {}
 
     def discover(self) -> list[PluginRecord]:
         self._extensions = {kind: {} for kind in EXTENSION_KINDS}
@@ -1191,6 +1282,36 @@ class PluginManager:
             ext_kind: [dict(bucket[key]) for key in sorted(bucket)]
             for ext_kind, bucket in self._extensions.items()
         }
+
+    def get_menu_categories(self) -> dict[str, dict[str, Any]]:
+        """Return all plugin-contributed menu categories sorted by priority.
+
+        Each value: {plugin_id, name, icon, builder, priority}. The ``builder``
+        is a callable ``() -> list[dict]`` that returns items in the same
+        format as ``_build_menu_children`` entries.
+        """
+        active: dict[str, dict[str, Any]] = {}
+        for ext_id, cat in self._menu_categories.items():
+            pid = str(cat.get("plugin_id") or "")
+            rec = self._records.get(pid)
+            if rec and rec.loaded and rec.active and rec.enabled:
+                active[ext_id] = dict(cat)
+        return dict(sorted(active.items(), key=lambda kv: float(kv[1].get("priority") or 0)))
+
+    def list_data_sources(self) -> list[dict[str, Any]]:
+        """Return all plugin-contributed data sources with their status."""
+        out: list[dict[str, Any]] = []
+        for src_id, src in self._data_sources.items():
+            pid = str(src.get("plugin_id") or "")
+            rec = self._records.get(pid)
+            out.append({
+                "id": src_id,
+                "plugin_id": pid,
+                "available": bool(rec and rec.loaded and rec.active),
+                "running": bool(src.get("running")),
+                "metadata": dict(src.get("metadata") or {}),
+            })
+        return out
 
     def invoke_extension(self, kind: str, extension_id: str,
                          payload: Optional[Mapping[str, Any]] = None, *,
@@ -1774,6 +1895,25 @@ class PluginManager:
         self._clear_plugin_timers(str(plugin_id or ""))
         # Drop the plugin's registered hotkeys.
         self._clear_plugin_hotkeys(str(plugin_id or ""))
+        # Drop plugin-contributed menu categories.
+        stale_cats = [k for k, v in self._menu_categories.items() if str(v.get("plugin_id") or "") == str(plugin_id or "")]
+        for k in stale_cats:
+            self._menu_categories.pop(k, None)
+        # Drop plugin-contributed engines.
+        stale_eng = [k for k, pid in self._plugin_engine_owners.items() if pid == str(plugin_id or "")]
+        for k in stale_eng:
+            self._plugin_engines.pop(k, None)
+            self._plugin_engine_owners.pop(k, None)
+        # Stop and drop plugin-contributed data sources.
+        stale_ds = [k for k, v in self._data_sources.items() if str(v.get("plugin_id") or "") == str(plugin_id or "")]
+        for k in stale_ds:
+            ds = self._data_sources.pop(k, {})
+            stop_fn = ds.get("stop")
+            if callable(stop_fn):
+                try:
+                    stop_fn()
+                except Exception:
+                    pass
         if record is not None:
             # Remove modules the plugin loaded via ctx.load_local (no sys.modules leak).
             for mod_name in list(record.loaded_local_modules):
