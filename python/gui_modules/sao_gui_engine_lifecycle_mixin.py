@@ -218,9 +218,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 return
             tracker = getattr(self, '_numbered_zone_tracker', None)
             if tracker is None:
-                from engines.numbered_zone_tracker import NumberedZoneTracker
-                tracker = NumberedZoneTracker()
-                self._numbered_zone_tracker = tracker
+                return
             self._nz_capture_until = _t.time() + 12.0
             if getattr(self, '_nz_capture_thread', None) is not None \
                     and self._nz_capture_thread.is_alive():
@@ -260,42 +258,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
     def _get_auto_dodge_director(self):
         """Lazy AutoDodgeDirector (定向躲避): 自带只读 mem 源, 相机基/玩家位/boss位
         三个已逆向读取器收口。首次创建会开一个只读进程句柄 (与 ACE 兼容)。"""
-        director = getattr(self, '_auto_dodge_director', None)
-        if director is not None:
-            return director
-        try:
-            from engines.auto_dodge_director import AutoDodgeDirector
-            from engines.boss_autokey_linkage import load_linkage_config
-            from mem_probe.il2cpp.mem_dodge_context import DodgeContext
-            from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-            ctx = DodgeContext(StaticDpsSource())
-            fg = getattr(getattr(self, '_auto_key_engine', None),
-                         'is_game_foreground', None)
-
-            def gate():
-                # 前台门 AND 躲避总开关: F12 翻 dodge_enabled 后, 延迟期/在途的闭环
-                # 下一 tick _blocked() 即停 (修审计 P2 急停竞态)
-                try:
-                    if fg is not None and not fg():
-                        return False
-                    return bool(load_linkage_config(self._cfg_settings_ref)
-                                .get('dodge_enabled', True))
-                except Exception:
-                    return True
-            director = AutoDodgeDirector(
-                self._send_key_event,
-                get_cam_basis=ctx.get_cam_basis,
-                get_player_pos=ctx.get_player_pos,
-                gate=gate)
-            self._auto_dodge_director = director
-            self._dodge_context = ctx
-            # 后台预热相机/实体冷定位堆扫(~20s), 否则第一次躲避会迟到
-            import threading as _th
-            _th.Thread(target=ctx.prewarm, daemon=True).start()
-        except Exception as e:
-            print(f'[Dodge] director init failed: {e}')
-            self._auto_dodge_director = None
-        return self._auto_dodge_director
+        return getattr(self, '_auto_dodge_director', None)
 
     def _maybe_directional_dodge(self, action):
         """机制躲避带 direction 时, 把人物按 WASD 挪开 (主开关
@@ -303,8 +266,16 @@ class SAOPlayerGUIEngineLifecycleMixin:
         try:
             if not bool(self._get_setting('directional_dodge_enabled', False)):
                 return
-            from engines.boss_autokey_linkage import load_linkage_config
-            if not bool(load_linkage_config(self._cfg_settings_ref).get('dodge_enabled', True)):
+            linkage = getattr(self, '_boss_autokey_linkage', None)
+            _dodge_on = True
+            if linkage is not None:
+                _lc_fn = getattr(linkage, 'load_config', None)
+                if callable(_lc_fn):
+                    try:
+                        _dodge_on = bool(_lc_fn(self._cfg_settings_ref).get('dodge_enabled', True))
+                    except Exception:
+                        pass
+            if not _dodge_on:
                 return
             inline = action.get('mechanic_dodge') if isinstance(action, dict) else None
             if not isinstance(inline, dict):

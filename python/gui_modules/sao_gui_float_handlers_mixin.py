@@ -209,10 +209,16 @@ class SAOPlayerGUIFloatHandlersMixin:
     def _toggle_auto_dodge(self):
         """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
         try:
-            from engines.boss_autokey_linkage import load_linkage_config, set_dodge_enabled
-            cfg = load_linkage_config(self._cfg_settings_ref)
+            linkage = getattr(self, '_boss_autokey_linkage', None)
+            if linkage is None:
+                return
+            _lc = getattr(linkage, 'load_config', None)
+            _se = getattr(linkage, 'set_dodge_enabled', None)
+            if not (callable(_lc) and callable(_se)):
+                return
+            cfg = _lc(self._cfg_settings_ref)
             new_state = not bool(cfg.get('dodge_enabled', True))
-            set_dodge_enabled(self._cfg_settings_ref, new_state)
+            _se(self._cfg_settings_ref, new_state)
             # 急停: 立刻松开定向躲避按住的所有 WASD 键, 杀掉在途位移
             director = getattr(self, '_auto_dodge_director', None)
             if director is not None:

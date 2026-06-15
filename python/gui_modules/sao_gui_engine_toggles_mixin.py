@@ -179,13 +179,6 @@ class SAOPlayerGUIEngineTogglesMixin:
             monitors, cd_map, server_offset, player_attrs, prev)
 
     def _open_skill_picker(self):
-        try:
-            from gui_modules.sao_gui_skill_picker import SkillPickerPanel
-            if not hasattr(self, '_skill_picker') or self._skill_picker is None:
-                self._skill_picker = SkillPickerPanel(self.root, self)
-            self._skill_picker.show()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self._show_entity_alert('SKILL PICKER', f'打开失败: {e}', display_time=3.0)
+        """技能选择器 — 游戏插件覆盖此方法。"""
+        pass
 
