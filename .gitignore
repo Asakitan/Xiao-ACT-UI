@@ -18,17 +18,17 @@ packet_debug.jsonl
 exports/
 
 # ── Local live name-table diagnostics (regenerated on demand) ───────
-assets/name_tables/live_*.json
-assets/name_tables/live_name_table_scan_report_*.md
-assets/name_tables/_backup_live_scan_*/
-assets/name_tables/tcp_preparse_name_cache.local.json
-assets/name_tables/boss_skill_observations.local.json
-!assets/name_tables/tcp_preparse_name_cache.json
-!assets/name_tables/dungeon.json
-!assets/name_tables/monster.json
-!assets/name_tables/boss.json
-!assets/name_tables/boss_mechanic.json
-!assets/name_tables/buff.json
+python/assets/name_tables/live_*.json
+python/assets/name_tables/live_name_table_scan_report_*.md
+python/assets/name_tables/_backup_live_scan_*/
+python/assets/name_tables/tcp_preparse_name_cache.local.json
+python/assets/name_tables/boss_skill_observations.local.json
+!python/assets/name_tables/tcp_preparse_name_cache.json
+!python/assets/name_tables/dungeon.json
+!python/assets/name_tables/monster.json
+!python/assets/name_tables/boss.json
+!python/assets/name_tables/boss_mechanic.json
+!python/assets/name_tables/buff.json
 
 # ── Build / dist ──────────────────────────────────
 dist/
@@ -49,8 +49,8 @@ build/
 .idea/
 Thumbs.db
 .DS_Store
-server/data/
-server/*.db
+python/server/data/
+python/server/*.db
 temp/
 
 # ── Dev publish tool (local only, contains API key) ───
@@ -58,17 +58,17 @@ dev_publish.py
 dev_publish.bat
 dev_publish_gui.py
 dev_publish_config.json
-update_host/update_host_config.json
+python/update_host/update_host_config.json
 
 # ── Updater runtime artifacts ─────────────────────
 update_state.json
 staging/
 backup/
 update_apply.log
-update_host/releases/
+python/update_host/releases/
 
 # ── mem_probe production: keep code, exclude per-user anchor data ───
-mem_probe/anchors.json
+python/mem_probe/anchors.json
 
 # —— Drivers, local only, not part of the repo ─────────────────────────
 drivers/
