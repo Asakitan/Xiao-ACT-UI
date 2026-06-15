@@ -157,14 +157,61 @@ def has_slab_read() -> bool:
     return _fast is not None and hasattr(_fast, "read_slab_many")
 
 
+def driver_attach(pid: int) -> bool:
+    """Activate driver read for all Cython _rpm() calls."""
+    if _fast is not None and hasattr(_fast, "driver_attach"):
+        return bool(_fast.driver_attach(int(pid)))
+    return False
+
+
+def driver_detach() -> None:
+    """Deactivate driver read in Cython, revert to NtRVM/RPM."""
+    if _fast is not None and hasattr(_fast, "driver_detach"):
+        _fast.driver_detach()
+
+
+def driver_active() -> bool:
+    """Return whether the Cython driver fast-path is active."""
+    if _fast is not None and hasattr(_fast, "driver_active"):
+        return bool(_fast.driver_active())
+    return False
+
+
 def mem_read_backend() -> str:
     """Return which cross-process read backend is active."""
+    if _fast is not None and hasattr(_fast, "mem_read_backend"):
+        return _fast.mem_read_backend()
     ds = _driver_status()
     if ds.get("driver_available") and ds.get("attached_pid"):
         return "driver"
-    if _fast is not None and hasattr(_fast, "mem_read_backend"):
-        return _fast.mem_read_backend()
     return "rpm-python"
+
+
+def read_boss_combat_cached(handle: int, ent_addr: int,
+                            off_attrs: int = 0x48, off_indexpart: int = 0x18,
+                            off_values: int = 0x20):
+    """Boss-only fast path with obj-pointer caching between ticks.
+
+    Returns list of 8 ints [cur_hp, max_hp, break, ...], or None.
+    """
+    if _fast is not None and hasattr(_fast, "read_boss_combat_cached"):
+        try:
+            return _fast.read_boss_combat_cached(
+                int(handle), int(ent_addr),
+                int(off_attrs), int(off_indexpart), int(off_values))
+        except Exception:
+            pass
+    return None
+
+
+def boss_cache_invalidate() -> None:
+    """Invalidate boss combat pointer cache."""
+    if _fast is not None and hasattr(_fast, "boss_cache_invalidate"):
+        _fast.boss_cache_invalidate()
+
+
+def has_boss_combat_cached() -> bool:
+    return _fast is not None and hasattr(_fast, "read_boss_combat_cached")
 
 
 def read_entity_combat_many(handle: int, ent_addrs,

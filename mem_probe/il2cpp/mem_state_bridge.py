@@ -549,7 +549,7 @@ class MemStateBridge:
     def _boss_cast_tick(self, obj: int, uuid: int, boss: dict, prov, tr) -> None:
         """Single boss-cast tick with batched nogil RPM reads.
 
-        Phase 1: read_combat_batch([obj]) — Cython nogil full combat decode
+        Phase 1: read_boss_combat(obj) — cached fast path (9 RPMs hot / ~26 cold)
         Phase 2: read_u64_many([uuid_addr, sm_addr, comp_addr]) — nogil batch
         Phase 3: read_u32_many([curstate_addr, skill_addr, stage_addr]) — nogil batch
         """
@@ -559,9 +559,8 @@ class MemStateBridge:
         if ecr is None or pm is None:
             return
 
-        # ── Phase 1: Cython nogil combat decode (replaces 11 GIL-holding RPM) ──
-        batch = ecr.read_combat_batch([obj])
-        c = batch.get(obj) if batch else None
+        # ── Phase 1: boss combat with obj-pointer caching ──
+        c = ecr.read_boss_combat(obj)
         if c is None:
             return
 

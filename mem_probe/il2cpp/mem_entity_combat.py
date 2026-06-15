@@ -25,10 +25,12 @@ try:
     from mem_probe import cy_memscan as _cymem
     _HAS_BATCH = bool(_cymem.has_batch_read())
     _HAS_FULLDECODE = bool(_cymem.has_full_combat_decode())
+    _HAS_BOSS_CACHED = bool(_cymem.has_boss_combat_cached())
 except Exception:
     _cymem = None
     _HAS_BATCH = False
     _HAS_FULLDECODE = False
+    _HAS_BOSS_CACHED = False
 
 # ZEntity / ZAttrCollection field offsets (verified vs dump fdc7111b / 8144ccfd)
 ENT_ATTRS_OFF = 0x48        # ZEntity.attrs_ -> ZAttrCollection
@@ -480,6 +482,46 @@ class EntityCombatReader:
             if c is not None:
                 out2[e] = c
         return out2
+
+    def read_boss_combat(self, ent_addr: int) -> Optional[dict]:
+        """Boss-only fast path with obj-pointer caching between ticks.
+
+        Hot path: 9 RPMs (verify + 8 leaves).
+        Cold path: ~26 RPMs (full walk, populates cache).
+        Falls back to read_combat_batch([ent_addr]) if kernel unavailable.
+        """
+        if _HAS_BOSS_CACHED and _cymem is not None:
+            try:
+                flat = _cymem.read_boss_combat_cached(
+                    self.pm._handle, int(ent_addr),
+                    self.off_ent_attrs, self.off_coll_indexpart, self.off_coll_values)
+            except Exception:
+                flat = None
+            if flat and len(flat) == 8:
+                cur, mx = flat[0], flat[1]
+                if cur >= 0 and mx > 0:
+                    _v = lambda x: (None if x < 0 else int(x))
+                    sk = flat[6]
+                    return {
+                        "cur_hp": int(cur), "max_hp": int(mx),
+                        "hp_pct": (cur / mx) if mx else 0.0,
+                        "breaking_stage": _v(flat[2]),
+                        "overdrive": _v(flat[3]),
+                        "stun": _v(flat[4]),
+                        "extinction": _v(flat[5]),
+                        "max_extinction": _v(flat[7]),
+                        "cast_skill_id": (int(sk) if sk > 0 else None),
+                    }
+        batch = self.read_combat_batch([ent_addr])
+        return batch.get(ent_addr)
+
+    @staticmethod
+    def boss_cache_invalidate() -> None:
+        if _cymem is not None:
+            try:
+                _cymem.boss_cache_invalidate()
+            except Exception:
+                pass
 
 
 __all__ = ["EntityCombatReader"]
