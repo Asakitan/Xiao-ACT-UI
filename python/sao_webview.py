@@ -2610,8 +2610,6 @@ class SAOWebViewGUI:
         _ensure_webview()
         _set_process_app_id('sao.auto.overlay')
 
-        from engines.character_profile import load_profile
-
         self.settings = SettingsManager()
         self.settings.set('ui_mode', 'webview')
         self.settings.save()
@@ -2625,8 +2623,8 @@ class SAOWebViewGUI:
         except Exception:
             self._sao_sound = None
 
-        # 角色 (从上次保存的 profile 加载用户名/职业, 等级来自抓包)
-        profile = load_profile()
+        # 角色 (游戏插件 on_load 覆盖 _username/_profession)
+        profile = {}
         self._username = profile.get('username', '') or 'Player'
         self._profession = profile.get('profession', '剑士')
         self._level = max(1, int(profile.get('level', 1) or 1))
@@ -6907,7 +6905,7 @@ class SAOWebViewGUI:
                     self._last_buff_cov_sig = 'off'
                     self._eval_buff_coverage('updateBuffCoverage({"buffs":[]})')
                 return
-            from gui_modules.sao_gui_buffmon import is_ultimate_buff
+            is_ultimate_buff = getattr(self, '_is_ultimate_buff', None) or (lambda *a, **k: False)
             upt = tr.get_buff_uptime()
             soff = float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0)
             now_ms = time.time() * 1000.0 + soff
