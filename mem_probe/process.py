@@ -323,6 +323,12 @@ class StarProcess:
             if _DRIVER_OK:
                 if _drv.attach(self._pid):
                     print(f"[StarProcess] driver backend attached (pid={self._pid})")
+                    try:
+                        from mem_probe import cy_memscan as _cy
+                        if _cy.driver_attach(self._pid):
+                            print(f"[StarProcess] cython driver fast-path activated")
+                    except Exception:
+                        pass
 
     # ───── 基本属性 ─────
     @property
