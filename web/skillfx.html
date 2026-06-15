@@ -962,13 +962,101 @@ function update(payload) {
         _burstLatchSlot = 0;
         hideBurstReady();
     }
+
+    if (Array.isArray(payload.custom_slots)) {
+        setCustomSlots(payload.custom_slots);
+    }
+}
+
+/* ── Custom Skill CD Overlay (slots 10-14) ── */
+var _customSlots = [];
+var _customOverlay = null;
+var _customLastSig = '';
+
+function _ensureCustomOverlay() {
+    if (_customOverlay) return _customOverlay;
+    var el = document.createElement('div');
+    el.id = 'custom-cd-overlay';
+    el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);' +
+        'display:flex;gap:4px;z-index:9000;pointer-events:none;';
+    document.body.appendChild(el);
+    _customOverlay = el;
+    return el;
+}
+
+function setCustomSlots(slots) {
+    var visual = (slots || []).filter(function(s) { return s.visual_enabled; });
+    var sig = JSON.stringify(visual.map(function(s) {
+        return [s.index, s.state, s.cooldown_pct, s.remaining_ms, s.parent_slot];
+    }));
+    if (sig === _customLastSig) return;
+    _customLastSig = sig;
+    _customSlots = visual;
+    _renderCustomOverlay();
+}
+
+function _renderCustomOverlay() {
+    if (!_customSlots.length) {
+        if (_customOverlay) { _customOverlay.innerHTML = ''; _customOverlay.style.display = 'none'; }
+        return;
+    }
+    var wrap = _ensureCustomOverlay();
+    wrap.style.display = 'flex';
+    wrap.innerHTML = '';
+
+    _customSlots.forEach(function(slot) {
+        var state = (slot.state || 'unknown').toLowerCase();
+        var pct = Math.max(0, Math.min(1, slot.cooldown_pct || 0));
+        var remMs = Math.max(0, slot.remaining_ms || 0);
+        var name = (slot.name || '').substring(0, 6);
+        var parent = slot.parent_slot || 0;
+        var readyEdge = !!slot.ready_edge;
+
+        var isReady = state === 'ready' || state === 'active';
+        var bg = isReady ? 'rgba(26,58,42,0.92)' : 'rgba(26,38,54,0.92)';
+        var fg = isReady ? '#7df2bf' : '#cfd8e4';
+        var barFill = isReady ? '#3fae5a' : '#68e4ff';
+        var cdText = isReady ? '✓' : (remMs < 100000 ? (remMs/1000).toFixed(1)+'s' : Math.round(remMs/1000)+'s');
+        var borderColor = readyEdge ? '#7df2bf' : '#304050';
+        var borderWidth = readyEdge ? '2px' : '1px';
+
+        var box = document.createElement('div');
+        box.style.cssText = 'width:72px;height:28px;background:' + bg + ';border:' +
+            borderWidth + ' solid ' + borderColor +
+            ';border-radius:3px;position:relative;overflow:hidden;font-family:Segoe UI,sans-serif;';
+
+        var bar = document.createElement('div');
+        bar.style.cssText = 'position:absolute;bottom:0;left:2px;height:3px;background:' +
+            barFill + ';width:' + Math.round((1.0-pct)*68) + 'px;border-radius:1px;';
+        box.appendChild(bar);
+
+        var nameEl = document.createElement('span');
+        nameEl.style.cssText = 'position:absolute;top:2px;left:4px;font-size:9px;font-weight:700;color:' + fg + ';';
+        nameEl.textContent = name;
+        box.appendChild(nameEl);
+
+        var cdEl = document.createElement('span');
+        cdEl.style.cssText = 'position:absolute;top:2px;right:4px;font-size:9px;color:' + fg + ';';
+        cdEl.textContent = cdText;
+        box.appendChild(cdEl);
+
+        if (parent > 0) {
+            var badge = document.createElement('span');
+            badge.style.cssText = 'position:absolute;bottom:2px;right:4px;font-size:8px;color:#f0c456;';
+            badge.textContent = '→' + parent;
+            box.appendChild(badge);
+        }
+
+        wrap.appendChild(box);
+    });
 }
 
 window.SkillFX = {
     setViewport: setViewport,
     update: update,
     showBurstReady: showBurstReady,
-    hideBurstReady: hideBurstReady
+    hideBurstReady: hideBurstReady,
+    setCustomSlots: setCustomSlots
 };
 
 window.addEventListener('resize', function() {

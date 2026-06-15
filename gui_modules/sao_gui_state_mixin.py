@@ -1198,3 +1198,16 @@ class SAOPlayerGUIStateMixin:
                 self.root.after(200, self._recognition_loop)
             except Exception:
                 pass
+
+    def _fire_custom_skill_tts(self, slot_entry: dict):
+        try:
+            from utils import sao_tts
+            if not sao_tts._tts_enabled:
+                return
+            text = slot_entry.get('tts_text') or slot_entry.get('name') or ''
+            if not text:
+                return
+            tts_msg = f'{text} 就绪'
+            sao_tts.speak_text(tts_msg, priority='normal')
+        except Exception:
+            pass
