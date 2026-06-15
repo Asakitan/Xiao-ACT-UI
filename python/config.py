@@ -790,11 +790,8 @@ def _get_config_dir():
 
 CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")
 
-GAME_WINDOW_KEYWORDS = ["Star", "星痕共鸣"]
-GAME_PROCESS_NAMES = ["star.exe"]
-
-CAPTURE_FPS = 5
-CAPTURE_FPS_FAST = 10
+GAME_WINDOW_KEYWORDS: list = ["Star", "星痕共鸣"]
+GAME_PROCESS_NAMES: list = ["star.exe"]
 
 
 class SettingsManager:
