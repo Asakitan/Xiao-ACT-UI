@@ -1,0 +1,1 @@
+# Star Resonance protobuf package
