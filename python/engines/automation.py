@@ -12,16 +12,11 @@ from config import (
     parse_hotkey,
     select_hotkey_match,
 )
-from engines.game_state import GameStateManager
-from net.packet_bridge import PacketBridge
-from vision.recognition import RecognitionEngine
-
-
 class AutomationCore:
-    def __init__(self, state_mgr: GameStateManager, settings: SettingsManager):
+    def __init__(self, state_mgr, settings: SettingsManager):
         self.state_mgr = state_mgr
         self.settings = settings
-        self.packet = PacketBridge(state_mgr, settings)
+        self.packet = None
         self.recognition = RecognitionEngine(state_mgr, settings)
         self.auto_key = AutoKeyEngine(state_mgr, settings)
 

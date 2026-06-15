@@ -44,10 +44,6 @@ from sao_theme import (
     Animator, lerp, lerp_color, ease_out, ease_in_out,
     _close_alert as _sao_close_dialog,
 )
-from engines.character_profile import (
-    load_profile, save_profile, get_or_ask_profile,
-    show_welcome_dialog, PROFESSION_LIST,
-)
 from utils.sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
 from engines.auto_key_engine import (
     AutoKeyEngine,
@@ -58,29 +54,8 @@ from engines.auto_key_engine import (
     save_auto_key_config,
     snapshot_author_from_state,
 )
-from engines.boss_raid_engine import (
-    BossRaidEngine,
-    build_boss_raid_state,
-    load_boss_raid_config,
-    save_boss_raid_config,
-)
-from engines.boss_autokey_linkage import (
-    BossAutoKeyLinkage,
-    load_linkage_config,
-    save_linkage_config,
-)
 from engines.dps_tracker import DpsTracker
-from gui_modules.sao_gui_dps import DpsOverlay
-from gui_modules.sao_gui_bosshp import BossHpOverlay
-from gui_modules.sao_gui_hp import HpOverlay
-from gui_modules.sao_gui_alert import AlertOverlay
-from gui_modules.sao_gui_skillfx import BurstReadyOverlay
-from gui_modules.sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
-from gui_modules.sao_gui_autokey import AutoKeyPanel
-from gui_modules.sao_gui_bossraid import BossRaidPanel
-from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
-from gui_modules.sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
 # Panel UI helpers (constants + builders) extracted in round 49 of the
 # sao_gui split refactor. Re-import the names that the rest of sao_gui.py
 # still uses at the module level — the helpers themselves now live in
@@ -284,9 +259,8 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self.settings.set('ui_mode', 'entity')
         self.settings.save()
 
-        # ── 角色配置 ──
-        profile = load_profile()
-        self._username = profile.get('username', '')
+        # ── 角色配置 (游戏插件 on_load 会覆盖 _username/_profession) ──
+        self._username = ''
         self._profession = profile.get('profession', '')
         self._level = profile.get('level', 1)
         self._level_extra = 0

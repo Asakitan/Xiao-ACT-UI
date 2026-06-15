@@ -64,17 +64,14 @@ from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_action_log import ActionLogPanel
 from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
 from gui_modules.sao_gui_mem_scope import MemScopePanel
-from gui_modules.sao_gui_commander import CommanderPanel, commander_data_signature
-from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
-from gui_modules.sao_gui_death_recap import DeathRecapPanel
 from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 from gui_modules.sao_gui_offline_import import OfflineImportPanel
 from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManagerPanel
 from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
-from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
+# Game panels (Commander/CombatantDrilldown/DeathRecap/TriggerTimer) loaded lazily
 from gui_modules.sao_panel_ui import _set_sao_panel_theme
 
 

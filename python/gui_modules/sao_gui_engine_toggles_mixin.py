@@ -28,18 +28,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-
-from engines.skill_cd_monitor import (
-    validate_monitors,
-    next_available_slot,
-    compute_custom_skill_slots,
-    enumerate_available_skills,
-    CUSTOM_SLOT_MIN,
-    CUSTOM_SLOT_MAX,
-    MAX_CUSTOM_SLOTS,
-    _resolve_skill_name,
-)
+try:
+    import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+except ImportError:
+    _CY_UI = None  # type: ignore[assignment]
 
 
 class SAOPlayerGUIEngineTogglesMixin:
@@ -50,12 +42,17 @@ class SAOPlayerGUIEngineTogglesMixin:
             'watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
         slots = getattr(gs, 'skill_slots', []) or []
         prev_slot = int(getattr(self, '_last_burst_slot', 0) or 0)
-        chosen = int(_CY_UI.pick_burst_trigger_slot(slots, watched, prev_slot))
+        if _CY_UI is not None:
+            chosen = int(_CY_UI.pick_burst_trigger_slot(slots, watched, prev_slot))
+        else:
+            chosen = int(watched[0]) if watched else 1
         self._last_burst_slot = chosen
         return chosen
 
     def _normalize_watched_skill_slots(self, slots):
-        return _CY_UI.normalize_watched_skill_slots(slots)
+        if _CY_UI is not None:
+            return _CY_UI.normalize_watched_skill_slots(slots)
+        return sorted(set(int(s) for s in (slots or []) if 1 <= int(s) <= 9))
 
     def _reset_burst_tracking_state(self):
         self._last_burst_ready = False

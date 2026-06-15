@@ -48,13 +48,8 @@ from engines.auto_key_engine import (
     save_auto_key_config,
     snapshot_author_from_state,
 )
-from engines.boss_raid_engine import (
-    load_boss_raid_config,
-    save_boss_raid_config,
-)
-from gui_modules.sao_gui_autokey import AutoKeyPanel
-from gui_modules.sao_gui_bossraid import BossRaidPanel
-from gui_modules.sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
+# Game panel classes + boss_raid config helpers: loaded lazily inside
+# toggle methods. Returns gracefully if game plugin is absent.
 
 
 class SAOPlayerGUIActionsMixin:

@@ -37,36 +37,9 @@ from engines.auto_key_engine import (
     snapshot_author_from_state,
     upsert_profile,
 )
-from engines.boss_raid_engine import (
-    BossRaidCloudClient,
-    BossRaidEngine,
-    DEFAULT_BOSS_RAID_SERVER_URL,
-    build_boss_raid_state,
-    clone_profile as clone_br_profile,
-    delete_profile as delete_br_profile,
-    export_profile_to_default_path as export_br_profile_path,
-    find_profile as find_br_profile,
-    import_profile_from_path as import_br_profile_path,
-    load_boss_raid_config,
-    make_default_profile as make_default_br_profile,
-    normalize_profile as normalize_br_profile,
-    save_boss_raid_config,
-    upsert_profile as upsert_br_profile,
-)
-from engines.boss_autokey_linkage import (
-    BossAutoKeyLinkage,
-    build_linkage_state,
-    build_boss_reactions_state,
-    upsert_mapping,
-    delete_mapping,
-    default_linkage_config,
-    load_linkage_config,
-    make_default_mapping,
-    normalize_linkage_config,
-    save_linkage_config,
-    set_dodge_enabled as set_linkage_dodge_enabled,
-)
-from engines.mechanic_alert_controller import MechanicAlertController
+# Game engine imports removed in 5.0.0 — plugin creates these.
+# boss_raid_engine, boss_autokey_linkage, mechanic_alert_controller
+# functions are accessed via getattr on the installed engine instances.
 from utils import sao_tts
 from engines.dps_tracker import DpsTracker
 from engines.dps_history import DpsHistoryStore

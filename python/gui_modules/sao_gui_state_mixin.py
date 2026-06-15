@@ -30,7 +30,6 @@ import time
 from typing import Any, Dict, List
 
 from engines.combat_analytics import mem_boss_break_override
-from engines.break_time_lookup import get_break_recovery_time
 
 
 def _finite_float(
