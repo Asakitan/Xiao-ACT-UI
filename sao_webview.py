@@ -10213,6 +10213,7 @@ class SAOWebViewGUI:
                                     _add_name = (_bb_name(d, getattr(m, 'uuid', 0), self._dps_tracker)
                                                  or str(d.get('name', 'Unit'))[:20])
                                     _bb_additional.append({
+                                        'uuid': int(getattr(m, 'uuid', 0) or 0),
                                         'name': _add_name,
                                         'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
                                         'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
@@ -10232,6 +10233,12 @@ class SAOWebViewGUI:
                                     _bb_src = 'packet'
                             except Exception:
                                 pass
+                        if len(_bb_additional) < 4 and _bb_direct_data is not None:
+                            from gui_modules.sao_gui_state_mixin import _mem_supplement_additional
+                            _bb_additional = _mem_supplement_additional(
+                                _bridge, _bb_additional,
+                                getattr(self, '_bb_last_target_uuid', 0),
+                                getattr(self, '_dps_tracker', None))
 
                     # Determine if bar should be visible:
                     # - 'off' mode: never show
