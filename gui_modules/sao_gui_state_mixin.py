@@ -124,6 +124,80 @@ def _bb_resolve_unit_name(direct_data, target_uuid, tracker):
             pass
     return ''
 
+def _mem_supplement_additional(bridge, existing, main_uuid, tracker, max_total=4):
+    """Fill additional-unit slots from MEM entity snapshot.
+
+    TCP recent_targets only has entities the player personally hit.
+    MEM has ALL visible combat entities — use them for sub-boss panels.
+    """
+    if len(existing) >= max_total:
+        return existing
+    try:
+        _mem_src = getattr(bridge, '_mem_source', None)
+        snap = getattr(_mem_src, 'last_entities', None)
+        if not snap:
+            return existing
+    except Exception:
+        return existing
+    existing_uuids = {int(e.get('uuid', 0) or 0) for e in existing if e.get('uuid')}
+    existing_uuids.add(int(main_uuid or 0))
+    candidates = []
+    for ent in snap:
+        uuid = int(ent.get('uuid') or 0)
+        if not uuid or uuid in existing_uuids:
+            continue
+        mhp = int(ent.get('max_hp') or 0)
+        if mhp <= 0:
+            continue
+        candidates.append(ent)
+    candidates.sort(key=lambda e: -int(e.get('max_hp') or 0))
+    result = list(existing)
+    nr = None
+    for ent in candidates:
+        if len(result) >= max_total:
+            break
+        uuid = int(ent.get('uuid') or 0)
+        mhp = int(ent.get('max_hp') or 0)
+        chp = int(ent.get('cur_hp') or 0)
+        hp_pct = (chp / mhp) if mhp > 0 else 0.0
+        bs = ent.get('breaking_stage')
+        ext = ent.get('extinction')
+        mext = ent.get('max_extinction')
+        ext_pct = (ext / mext) if (ext and mext and mext > 0) else 0.0
+        if ext_pct == 0.0:
+            stun = ent.get('stun')
+            mstun = ent.get('max_stun')
+            if mstun and mstun > 0 and stun is not None:
+                ext_pct = max(0.0, min(1.0, stun / mstun))
+        nm = str(ent.get('name') or '')
+        if not nm:
+            bid = int(ent.get('base_id') or 0)
+            if bid > 0:
+                if nr is None:
+                    try:
+                        nr = getattr(_mem_src, '_name_resolver', lambda: None)()
+                    except Exception:
+                        nr = None
+                if nr:
+                    nm = (nr.boss(bid, default='') or nr.monster(bid, default='')) or ''
+        if not nm and tracker is not None:
+            try:
+                nm = tracker.get_target_name(uuid) or ''
+            except Exception:
+                pass
+        result.append({
+            'uuid': uuid,
+            'name': str(nm)[:20] or f'{uuid:X}'[-6:],
+            'hp_pct': round(max(0.0, min(1.0, hp_pct)), 3),
+            'extinction_pct': round(max(0.0, min(1.0, ext_pct)), 3),
+            'has_break_data': bool(isinstance(bs, int) and bs >= 0),
+            'breaking_stage': int(bs) if isinstance(bs, int) else -1,
+            'shield_active': False,
+            'shield_pct': 0.0,
+        })
+    return result
+
+
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from utils.perf_probe import probe as _probe
@@ -548,6 +622,7 @@ class SAOPlayerGUIStateMixin:
                             _add_name = (_bb_resolve_unit_name(d, getattr(m, 'uuid', 0), self._dps_tracker)
                                          or str(d.get('name', 'Unit'))[:20])
                             _bb_additional.append({
+                                'uuid': int(getattr(m, 'uuid', 0) or 0),
                                 'name': _add_name,
                                 'hp_pct': round(_unit_pct(d.get('hp_pct')), 3),
                                 'extinction_pct': round(_unit_pct(d.get('extinction_pct')), 3),
@@ -569,6 +644,11 @@ class SAOPlayerGUIStateMixin:
                             _bb_src = 'packet'
                     except Exception:
                         pass
+                if len(_bb_additional) < 4 and _bb_direct_data is not None:
+                    _bb_additional = _mem_supplement_additional(
+                        _bridge, _bb_additional,
+                        _finite_int(self._bb_last_target_uuid, 0, lo=0),
+                        getattr(self, '_dps_tracker', None))
 
             if _bb_mode == 'off':
                 _bb_show = False
@@ -1011,6 +1091,21 @@ class SAOPlayerGUIStateMixin:
                         except Exception:
                             pass
 
+                    # ── Custom Skill CD Monitor → GameState ──
+                    try:
+                        _custom_slots = self._compute_custom_slots(gs)
+                        if _custom_slots != getattr(gs, 'custom_skill_slots', []):
+                            if hasattr(self, '_state_mgr') and self._state_mgr:
+                                self._state_mgr.update(custom_skill_slots=_custom_slots)
+                            _custom_tts_edges = [
+                                s for s in _custom_slots
+                                if s.get('ready_edge') and s.get('tts_enabled')
+                            ]
+                            for _ce in _custom_tts_edges:
+                                self._fire_custom_skill_tts(_ce)
+                    except Exception:
+                        pass
+
                     # ── SkillFX (Burst Mode Ready) Overlay push ──
                     if self._skillfx_overlay is not None:
                         try:
@@ -1022,6 +1117,15 @@ class SAOPlayerGUIStateMixin:
                             if _new_layout and _new_layout != getattr(self, '_skillfx_layout', None):
                                 self._skillfx_layout = _new_layout
                                 self._skillfx_overlay.set_layout(_new_layout)
+
+                            _custom_visual = [
+                                s for s in getattr(gs, 'custom_skill_slots', [])
+                                if s.get('visual_enabled')
+                            ]
+                            if _new_layout or _custom_visual:
+                                self._skillfx_overlay.set_custom_slots(
+                                    getattr(gs, 'custom_skill_slots', []))
+
                             if _burst_enabled and _burst_now and _burst_slot > 0:
                                 if not _burst_prev or _burst_slot != getattr(self, '_last_burst_slot_shown', 0):
                                     self._skillfx_overlay.show_burst(_burst_slot)
