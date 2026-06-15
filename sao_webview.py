@@ -10194,14 +10194,9 @@ class SAOWebViewGUI:
                                     if self._boss_monster_usable(m):
                                         _recent_monsters.append(m)
                             if _recent_monsters:
-                                # Sort: HP% desc (highest = primary/boss unit), then recent attack time desc
-                                def _sort_key(m):
-                                    hp = getattr(m, 'hp', 0) or 0
-                                    maxhp = getattr(m, 'max_hp', 0) or hp or 1
-                                    hp_pct = hp / maxhp if maxhp > 0 else 0
-                                    last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
-                                    return (-hp_pct, -last_ts)
-                                _recent_monsters.sort(key=_sort_key)
+                                from gui_modules.sao_gui_state_mixin import _boss_bar_main_key
+                                _rt = self._bb_recent_targets
+                                _recent_monsters.sort(key=lambda _m: _boss_bar_main_key(_m, _rt))
                                 main_m = _recent_monsters[0]
                                 self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)  # update target to highest-HP
                                 _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
