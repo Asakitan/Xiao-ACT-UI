@@ -12,8 +12,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
-from packet_parser import PacketParser
-
 from .events import make_event
 
 
@@ -169,77 +167,6 @@ class ParserAdapter:
         }
 
 
-STAR_RESONANCE_PARSER_METADATA = ParserAdapterMetadata(
-    adapter_id="star_resonance_tcp",
-    game_id="star_resonance",
-    display_name="Star Resonance TCP parser",
-    supported_locales=("zh-CN",),
-    source_kinds=("packet",),
-    priority=100.0,
-    version="1",
-    description="Built-in wrapper around packet_parser.PacketParser.",
-)
-
-
-class StarResonanceParserAdapter(ParserAdapter):
-    """Built-in adapter that preserves the existing PacketParser behavior."""
-
-    def __init__(self, metadata: ParserAdapterMetadata = STAR_RESONANCE_PARSER_METADATA) -> None:
-        super().__init__(metadata)
-        self.parser: Optional[PacketParser] = None
-        self.packet_frames = 0
-
-    def create_parser(
-        self,
-        *,
-        on_self_update: Callable[..., Any],
-        preferred_uid: int = 0,
-        on_damage: Optional[Callable[[dict], Any]] = None,
-        on_monster_update: Optional[Callable[[dict], Any]] = None,
-        on_boss_event: Optional[Callable[[dict], Any]] = None,
-        on_scene_change: Optional[Callable[..., Any]] = None,
-        on_skill_event: Optional[Callable[[dict], Any]] = None,
-        on_dungeon_event: Optional[Callable[[dict], Any]] = None,
-    ) -> PacketParser:
-        self.parser = PacketParser(
-            on_self_update=on_self_update,
-            preferred_uid=preferred_uid,
-            on_damage=on_damage,
-            on_monster_update=on_monster_update,
-            on_boss_event=on_boss_event,
-            on_scene_change=on_scene_change,
-            on_skill_event=on_skill_event,
-            on_dungeon_event=on_dungeon_event,
-        )
-        return self.parser
-
-    def parse_packet(self, frame: bytes) -> Any:
-        if self.parser is None:
-            raise RuntimeError("parser is not created")
-        self.packet_frames += 1
-        return self.parser.process_packet(frame)
-
-    process_packet = parse_packet
-
-    def set_subscribed_messages(self, names: Optional[set]) -> None:
-        if self.parser is not None and hasattr(self.parser, "set_subscribed_messages"):
-            self.parser.set_subscribed_messages(names)
-
-    def get_alive_monsters(self) -> list:
-        return self.parser.get_alive_monsters() if self.parser is not None else []
-
-    def get_players(self) -> dict:
-        return self.parser.get_players() if self.parser is not None else {}
-
-    def health(self) -> dict[str, Any]:
-        out = super().health()
-        parser_stats = dict(getattr(self.parser, "stats", {}) or {}) if self.parser is not None else {}
-        out.update({
-            "parser_created": self.parser is not None,
-            "packet_frames": int(self.packet_frames),
-            "parser_stats": parser_stats,
-        })
-        return out
 
 
 class PluginParserAdapter(ParserAdapter):
@@ -456,12 +383,10 @@ class PluginParserAdapter(ParserAdapter):
 
 
 def built_in_parser_adapters() -> list[dict[str, Any]]:
-    return [STAR_RESONANCE_PARSER_METADATA.to_dict()]
+    return []
 
 
-def create_builtin_parser_adapter(adapter_id: str = "star_resonance_tcp") -> ParserAdapter:
-    if str(adapter_id or "") == STAR_RESONANCE_PARSER_METADATA.adapter_id:
-        return StarResonanceParserAdapter()
+def create_builtin_parser_adapter(adapter_id: str = "") -> ParserAdapter:
     raise KeyError(f"unknown built-in parser adapter: {adapter_id}")
 
 
@@ -499,8 +424,6 @@ __all__ = [
     "ParserAdapter",
     "ParserAdapterMetadata",
     "PluginParserAdapter",
-    "STAR_RESONANCE_PARSER_METADATA",
-    "StarResonanceParserAdapter",
     "built_in_parser_adapters",
     "create_builtin_parser_adapter",
     "create_plugin_parser_adapter",
