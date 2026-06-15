@@ -217,6 +217,13 @@ class BurstReadyOverlay:
         self._anchor_radius = 0.0
         self._ring_size = RING_SIZE_DEFAULT
 
+        # Custom skill CD slots (10-14)
+        self._custom_slots: List[Dict[str, Any]] = []
+        self._custom_overlay_visible = False
+        self._custom_overlay_win: Optional[tk.Toplevel] = None
+        self._custom_overlay_canvas: Optional[tk.Canvas] = None
+        self._custom_overlay_last_sig: str = ''
+
         # Timing
         self._show_t = 0.0
         self._exit_t = 0.0                    # when hide was requested
@@ -338,6 +345,13 @@ class BurstReadyOverlay:
             raise
 
     def destroy(self) -> None:
+        if self._custom_overlay_win:
+            try:
+                self._custom_overlay_win.destroy()
+            except Exception:
+                pass
+            self._custom_overlay_win = None
+            self._custom_overlay_canvas = None
         self._cancel_tick()
         self._destroy_glfx()
         self._pending_fb = None
@@ -756,6 +770,123 @@ void main() {
         except Exception:
             pass
         self._schedule_tick(immediate=True)
+
+    def set_custom_slots(self, custom_slots: List[Dict[str, Any]]) -> None:
+        """Push custom skill CD monitor state (slots 10-14).
+
+        Draws a small floating CD indicator overlay near the skill bar.
+        Each custom slot shows: name, CD ring, remaining time.
+        Parent-grouped slots show a small badge on the parent slot.
+        """
+        visual = [s for s in (custom_slots or []) if s.get('visual_enabled')]
+        sig = str([(s.get('index'), s.get('state'), s.get('cooldown_pct'),
+                    s.get('remaining_ms'), s.get('parent_slot')) for s in visual])
+        if sig == self._custom_overlay_last_sig:
+            return
+        self._custom_overlay_last_sig = sig
+        self._custom_slots = list(visual)
+        self._render_custom_overlay()
+
+    def _render_custom_overlay(self):
+        """Render custom CD indicators as a lightweight Tk overlay."""
+        slots = self._custom_slots
+        if not slots:
+            if self._custom_overlay_win:
+                try:
+                    self._custom_overlay_win.destroy()
+                except Exception:
+                    pass
+                self._custom_overlay_win = None
+                self._custom_overlay_canvas = None
+                self._custom_overlay_visible = False
+            return
+
+        SLOT_W, SLOT_H = 72, 28
+        PAD = 4
+        total_w = len(slots) * (SLOT_W + PAD) - PAD + 8
+        total_h = SLOT_H + 8
+
+        if self._custom_overlay_win is None or not self._custom_overlay_visible:
+            try:
+                win = tk.Toplevel(self.root)
+                win.overrideredirect(True)
+                win.attributes('-topmost', True)
+                win.attributes('-alpha', 0.88)
+                try:
+                    win.attributes('-transparentcolor', '#010101')
+                except Exception:
+                    pass
+                win.configure(bg='#010101')
+                self._custom_overlay_win = win
+                self._custom_overlay_visible = True
+            except Exception:
+                return
+
+        win = self._custom_overlay_win
+        skill_bar_bottom = self._win_y + self._win_h
+        skill_bar_center_x = self._win_x + self._win_w // 2
+        ov_x = skill_bar_center_x - total_w // 2
+        ov_y = skill_bar_bottom - 80
+        try:
+            win.geometry(f'{total_w}x{total_h}+{ov_x}+{ov_y}')
+        except Exception:
+            pass
+
+        if self._custom_overlay_canvas:
+            self._custom_overlay_canvas.delete('all')
+        else:
+            c = tk.Canvas(win, width=total_w, height=total_h,
+                          bg='#010101', highlightthickness=0, bd=0)
+            c.pack(fill='both', expand=True)
+            self._custom_overlay_canvas = c
+
+        c = self._custom_overlay_canvas
+        c.configure(width=total_w, height=total_h)
+
+        x_off = 4
+        for slot in slots:
+            state = str(slot.get('state', 'unknown')).lower()
+            pct = max(0.0, min(1.0, float(slot.get('cooldown_pct', 0))))
+            rem_ms = max(0, int(slot.get('remaining_ms', 0)))
+            name = str(slot.get('name', ''))[:6]
+            parent = int(slot.get('parent_slot', 0))
+            ready_edge = bool(slot.get('ready_edge'))
+
+            if state in ('ready', 'active'):
+                bg = '#1a3a2a'
+                fg = '#7df2bf'
+                bar_fill = '#3fae5a'
+                cd_text = '✓'
+            else:
+                bg = '#1a2636'
+                fg = '#cfd8e4'
+                bar_fill = '#68e4ff'
+                rem_s = rem_ms / 1000.0
+                cd_text = f'{rem_s:.1f}s' if rem_s < 100 else f'{int(rem_s)}s'
+
+            c.create_rectangle(x_off, 2, x_off + SLOT_W, 2 + SLOT_H,
+                               fill=bg, outline='#304050', width=1)
+
+            bar_w = int((1.0 - pct) * (SLOT_W - 4))
+            if bar_w > 0:
+                c.create_rectangle(x_off + 2, SLOT_H - 2, x_off + 2 + bar_w, SLOT_H + 1,
+                                   fill=bar_fill, outline='')
+
+            c.create_text(x_off + 4, 6, text=name, anchor='nw',
+                          fill=fg, font=('Segoe UI', 7, 'bold'))
+            c.create_text(x_off + SLOT_W - 4, 6, text=cd_text, anchor='ne',
+                          fill=fg, font=('Segoe UI', 7))
+
+            if parent > 0:
+                badge_text = f'→{parent}'
+                c.create_text(x_off + SLOT_W - 4, SLOT_H - 6, text=badge_text,
+                              anchor='se', fill='#f0c456', font=('Segoe UI', 6))
+
+            if ready_edge:
+                c.create_rectangle(x_off, 2, x_off + SLOT_W, 2 + SLOT_H,
+                                   fill='', outline='#7df2bf', width=2)
+
+            x_off += SLOT_W + PAD
 
     def _try_clear_window(self) -> bool:
         # GPU path — just stage an empty frame.

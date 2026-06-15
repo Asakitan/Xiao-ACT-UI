@@ -131,6 +131,9 @@ class GameState:
     #   'ready_edge': bool,
     # }
 
+    # ── 自定义技能 CD 监控 (slots 10-14) ──
+    custom_skill_slots: List = field(default_factory=list)
+
     # ── Burst Mode Ready (CD 提醒) ──
     burst_ready: bool = False          # 所有监视技能 CD 就绪时为 True
 
@@ -231,6 +234,7 @@ class GameState:
             'stamina_max': self.stamina_max,
             'stamina_pct': round(self.stamina_pct, 4),
             'skill_slots': list(self.skill_slots),
+            'custom_skill_slots': list(self.custom_skill_slots),
             'burst_ready': bool(self.burst_ready),
             'profession_id': self.profession_id,
             'profession_name': self.profession_name,
@@ -414,6 +418,10 @@ class GameStateManager:
                     if not isinstance(v, dict):
                         continue
                     v = dict(v)
+                elif k == 'custom_skill_slots':
+                    if not isinstance(v, list) or len(v) > 5:
+                        continue
+                    v = list(v)
                 setattr(self._state, k, v)
 
             # ── 更新 prev 追踪值 (仅当值有效时) ──

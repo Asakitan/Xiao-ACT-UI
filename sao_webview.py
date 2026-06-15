@@ -10471,6 +10471,10 @@ class SAOWebViewGUI:
                             f"burst_ready={_skillfx_payload['burst_ready']} "
                             f"states={_state_dbg}"
                         )
+                    _custom_css = getattr(gs, 'custom_skill_slots', []) or []
+                    if _custom_css:
+                        _skillfx_payload['custom_slots'] = [
+                            s for s in _custom_css if s.get('visual_enabled')]
                     self._eval_skillfx(f'SkillFX.update({json.dumps(_skillfx_payload, ensure_ascii=False)})')
                     if (not _burst_now) and _burst_prev:
                         self._eval_skillfx('SkillFX.hideBurstReady()')

@@ -495,6 +495,12 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '◇', 'label': 'BossRaid Detail Editor', 'command': self._toggle_bossraid_detail_panel},
         ]
 
+        custom_monitors = self._get_custom_monitors()
+        custom_count = len(custom_monitors)
+        custom_names = ', '.join(m['name'] for m in custom_monitors[:3])
+        if custom_count > 3:
+            custom_names += f' +{custom_count - 3}'
+
         burst_items = [
             {'icon': '◆', 'label': f'爆发提示: {"ON" if burst_on else "OFF"}', 'command': self._toggle_burst_enabled},
             {'icon': '◇', 'label': f'Burst技能槽: [{burst_slots_disp}]',
@@ -507,6 +513,11 @@ class SAOPlayerGUIMenuMixin:
                 'label': f'Burst槽 {slot}' + (' ✓' if slot in burst_slot_set else ''),
                 'command': lambda s=slot: self._toggle_burst_slot(s),
             })
+        burst_items.append({'icon': '─', 'label': '──────────'})
+        burst_items.append({
+            'icon': '✦', 'label': f'自定义技能CD ({custom_count}/5)' + (f': {custom_names}' if custom_names else ''),
+            'command': self._open_skill_picker,
+        })
 
         panel_items = [
             {'icon': '◈', 'label': 'Commander', 'command': self._toggle_commander_panel},
