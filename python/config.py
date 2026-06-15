@@ -629,6 +629,11 @@ def get_skill_bar_roi() -> Dict[str, float]:
     return dict(_SKILL_BAR_ROI)
 
 
+FISHEYE_SOURCE_DESKTOP = "desktop"
+FISHEYE_SOURCE_PREFIX_IMAGE = "image:"
+FISHEYE_SOURCE_PREFIX_COLOR = "color:"
+DEFAULT_FISHEYE_BACKGROUND_SOURCE = FISHEYE_SOURCE_DESKTOP
+
 DEFAULT_HOTKEYS = {
     "toggle_recognition": "F5",
     "toggle_auto_script": "F6",

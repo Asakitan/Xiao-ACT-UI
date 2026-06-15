@@ -1115,10 +1115,35 @@ class SAOPlayerGUIFisheyeMixin:
                 except Exception:
                     return None
 
-            # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
+            # ── 鱼眼背景源: desktop(默认)/image:<path>/color:<hex> ──
+            _fisheye_src = str(self._get_setting('fisheye_background_source', '') or 'desktop').strip()
+            _static_frame = None
+            if _fisheye_src.startswith('image:'):
+                _img_path = _fisheye_src[6:].strip()
+                try:
+                    _src_img = Image.open(_img_path).convert('RGB').resize((sw, sh), Image.LANCZOS)
+                    _static_frame = _src_img
+                except Exception:
+                    _static_frame = None
+            elif _fisheye_src.startswith('color:'):
+                _hex = _fisheye_src[6:].strip().lstrip('#')
+                try:
+                    r, g, b = int(_hex[0:2], 16), int(_hex[2:4], 16), int(_hex[4:6], 16)
+                    _static_frame = Image.new('RGB', (sw, sh), (r, g, b))
+                except Exception:
+                    _static_frame = None
+
             _cap_fn = None
             _cap_source = ''
-            if ensure_session is not None and get_latest_bgr is not None:
+            if _static_frame is not None:
+                _frozen = _static_frame
+                def _cap_static():
+                    return _frozen
+                _cap_fn = _cap_static
+                _cap_source = 'static'
+
+            # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
+            if _cap_fn is None and ensure_session is not None and get_latest_bgr is not None:
                 def _cap_dxgi_window():
                     hwnd, _game_rect = self._get_game_window_context()
                     hwnd = int(hwnd or 0)
