@@ -56,213 +56,40 @@ class SAOPlayerGUIActionsMixin:
     """Mixin bundling the AutoKey + BossRaid action toggles + config IO."""
 
     def _toggle_autokey_panel(self):
-        """打开/关闭 AutoKey 配置面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._autokey_panel:
-            self._autokey_panel = AutoKeyPanel(
-                master=self.root,
-                load_fn=self._load_auto_key_config,
-                save_fn=self._save_auto_key_config,
-                engine_ref=lambda: self._auto_key_engine,
-                on_toggle=self._toggle_auto_script,
-                author_fn=getattr(self, '_auto_key_author_snapshot', None),
-                load_burst_actions=self._load_autokey_burst_actions,
-                save_burst_actions=self._save_autokey_burst_actions,
-            )
-        self._autokey_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._autokey_panel))
+        """打开/关闭 AutoKey 配置面板 — 游戏插件覆盖此方法。"""
+        pass
 
     def _toggle_bossraid_panel(self):
-        """打开/关闭 BossRaid 配置面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._bossraid_panel:
-            self._bossraid_panel = BossRaidPanel(
-                master=self.root,
-                load_fn=self._load_boss_raid_config,
-                save_fn=self._save_boss_raid_config,
-                engine_ref=lambda: self._boss_raid_engine,
-                on_toggle=self._toggle_boss_raid,
-                on_start=self._toggle_boss_raid,
-                on_next=self._boss_raid_next_phase,
-                on_reset=lambda: (
-                    self._boss_raid_engine.reset() if self._boss_raid_engine else None
-                ),
-                load_reactions_fn=self._load_boss_reactions_state,
-                save_reaction_fn=self._save_boss_reaction,
-                set_linkage_fn=self._set_linkage_field,
-                mechanics_api=self._mechanics_editor_api(),
-            )
-        self._bossraid_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
+        """打开/关闭 BossRaid 配置面板 — 游戏插件覆盖此方法。"""
+        pass
 
     def _mechanics_editor_api(self) -> Dict[str, Any]:
-        """机制编辑器回调集 (简单面板 + 详细面板共用同一契约)。"""
-        from engines import boss_mechanics_state as bms
-
-        def _load(scene_key=None, boss_base_id=None, profile_id=None):
-            return bms.build_mechanics_state(
-                self._cfg_settings_ref,
-                getattr(self, '_boss_raid_engine', None),
-                getattr(self, '_state_mgr', None),
-                scene_key=scene_key, boss_base_id=boss_base_id,
-                profile_id=profile_id)
-
-        def _hot_apply():
-            bms.hot_apply_to_engine(self._cfg_settings_ref,
-                                    getattr(self, '_boss_raid_engine', None))
-
-        def _save_mech(mech, profile_id=None):
-            cfg = bms.upsert_mechanic(self._cfg_settings_ref, mech,
-                                      profile_id=profile_id)
-            self._presynthesize_active_profile()
-            _hot_apply()
-            return cfg
-
-        def _delete_mech(mid, profile_id=None):
-            cfg = bms.delete_mechanic(self._cfg_settings_ref, mid,
-                                      profile_id=profile_id)
-            _hot_apply()
-            return cfg
-
-        def _create_from_skill(sid, nm='', dur=None, profile_id=None):
-            cfg = bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur,
-                                                 profile_id=profile_id)
-            _hot_apply()
-            return cfg
-
-        def _bind(mid, sid, profile_id=None):
-            cfg = bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid,
-                                             profile_id=profile_id)
-            _hot_apply()
-            return cfg
-
-        def _unbind(mid, sid, profile_id=None):
-            cfg = bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid,
-                                                 profile_id=profile_id)
-            _hot_apply()
-            return cfg
-
-        _TTS_FEEDBACK = {'played': 'TTS已播', 'queued': 'TTS排队中',
-                         'synthesizing': 'TTS合成中(首次稍候再试)',
-                         'disabled': 'TTS未启用或静音', 'error': 'TTS失败'}
-
-        def _test(mech, kinds):
-            # 每种试发都给出可见结果 — 沉默的失败表现为「点了没反应」
-            kinds = tuple(kinds or ())
-            msgs = []
-            controller = getattr(self, '_mech_alert_controller', None)
-            if {'tts', 'banner'} & set(kinds):
-                if controller is None:
-                    msgs.append('提醒控制器未就绪')
-                else:
-                    res = controller.test_mechanic(mech, kinds) or {}
-                    if 'tts' in kinds:
-                        msgs.append(_TTS_FEEDBACK.get(res.get('tts'),
-                                                      str(res.get('tts') or 'TTS无结果')))
-                    if 'banner' in kinds:
-                        msgs.append('横幅已显示' if res.get('banner') else '横幅未显示')
-            if 'dodge' in kinds:
-                linkage = getattr(self, '_boss_autokey_linkage', None)
-                inline = ((mech.get('dodge') or {}).get('inline')
-                          if isinstance(mech, dict) else None)
-                if linkage is None or not isinstance(inline, dict):
-                    msgs.append('按键联动不可用')
-                elif linkage.fire_mapping_test(inline):
-                    msgs.append('按键已发到当前前台窗口')
-                else:
-                    msgs.append('按键未配置(无键/无序列)')
-            msg = ' · '.join(msgs)
-            if msg and self._alert_overlay:
-                try:
-                    self._alert_overlay.show_alert('机制试发', msg)
-                except Exception:
-                    pass
-            return {'ok': True, 'message': msg}
-
-        return {
-            'load': _load,
-            'save_mech': _save_mech,
-            'delete_mech': _delete_mech,
-            'test': _test,
-            'set_master': lambda flags: bms.set_mechanics_master(self._cfg_settings_ref, flags),
-            'create_from_skill': _create_from_skill,
-            'bind': _bind,
-            'unbind': _unbind,
-            'search_catalog': bms.search_skill_catalog,
-        }
+        """机制编辑器回调集 — 游戏插件覆盖此方法。"""
+        return {}
 
     def _presynthesize_active_profile(self):
-        controller = getattr(self, '_mech_alert_controller', None)
-        if controller is None:
-            return
-        try:
-            cfg = self._load_boss_raid_config()
-            from engines.boss_raid_engine import active_profile
-            profile = active_profile(cfg)
-            if profile:
-                controller.presynthesize_profile(profile)
-        except Exception:
-            pass
+        """预合成 boss profile — 游戏插件覆盖此方法。"""
+        pass
 
     def _load_boss_reactions_state(self, scene_key=None, boss_base_id=None) -> Dict[str, Any]:
-        """Data contract for the BossRaid panel's Boss 反应 tab (mem-driven editor).
-        `scene_key` selects which map/scene to browse (None = live scene);
-        `boss_base_id` selects which boss within it (None = first/live)."""
-        from engines.boss_autokey_linkage import build_boss_reactions_state
-        return build_boss_reactions_state(
-            self._cfg_settings_ref,
-            getattr(self, '_boss_raid_engine', None),
-            getattr(self, '_state_mgr', None),
-            scene_key=scene_key,
-            boss_base_id=boss_base_id)
+        """Boss 反应状态 — 游戏插件覆盖此方法。"""
+        return {}
 
     def _save_boss_reaction(self, mapping: Dict[str, Any]) -> Any:
-        """Upsert one boss-reaction linkage mapping (boss_cast / offensive window)."""
-        from engines.boss_autokey_linkage import upsert_mapping
-        return upsert_mapping(self._cfg_settings_ref, mapping)
+        """保存 boss 反应映射 — 游戏插件覆盖此方法。"""
+        return None
 
     def _set_linkage_field(self, field: str, value: Any) -> Any:
-        """Set one top-level Boss↔AutoKey linkage config field and persist.
-        Mirrors web AutoKeyEditorAPI.set_linkage_enabled / set_linkage_global_cooldown
-        so the entity reactions editor reaches parity with the web menu's linkage
-        section (which previously had no entity-side control)."""
-        from engines.boss_autokey_linkage import load_linkage_config, save_linkage_config
-        config = load_linkage_config(self._cfg_settings_ref)
-        if field == 'global_cooldown_s':
-            config[field] = max(0.0, min(60.0, float(value)))
-        else:
-            config[field] = bool(value)
-        return save_linkage_config(self._cfg_settings_ref, config)
+        """设置联动字段 — 游戏插件覆盖此方法。"""
+        return None
 
     def _toggle_autokey_detail_panel(self):
-        """Open/close the full AutoKey profile editor."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._autokey_detail_panel:
-            self._autokey_detail_panel = AutoKeyDetailPanel(
-                master=self.root,
-                load_fn=self._load_auto_key_config,
-                save_fn=self._save_auto_key_config,
-                author_fn=getattr(self, '_auto_key_author_snapshot', None),
-            )
-        self._autokey_detail_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._autokey_detail_panel))
+        """AutoKey 详细编辑器 — 游戏插件覆盖此方法。"""
+        pass
 
     def _toggle_bossraid_detail_panel(self):
-        """Open/close the full BossRaid profile editor."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._bossraid_detail_panel:
-            self._bossraid_detail_panel = BossRaidDetailPanel(
-                master=self.root,
-                load_fn=self._load_boss_raid_config,
-                save_fn=self._save_boss_raid_config,
-                author_fn=getattr(self, '_boss_raid_author_snapshot', None),
-                load_reactions_fn=self._load_boss_reactions_state,
-                save_reaction_fn=self._save_boss_reaction,
-                set_linkage_fn=self._set_linkage_field,
-                mechanics_api=self._mechanics_editor_api(),
-            )
-        self._bossraid_detail_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_detail_panel))
+        """BossRaid 详细编辑器 — 游戏插件覆盖此方法。"""
+        pass
 
     def _toggle_auto_script(self, force_enabled=None):
         """切换 AutoKey 脚本开关."""
