@@ -14,7 +14,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.auto_dodge_director import (                       # noqa: E402
+from plugins.star_resonance_plugin.engines.auto_dodge_director import (                       # noqa: E402
     AutoDodgeDirector, resolve_dodge_keys, world_vec_to_keys, direction_label,
 )
 from mem_probe.il2cpp.mem_camera_reader import (                # noqa: E402

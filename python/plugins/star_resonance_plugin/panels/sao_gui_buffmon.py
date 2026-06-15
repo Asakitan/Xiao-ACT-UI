@@ -21,7 +21,7 @@ import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from gui_modules.sao_gui_dps import (
+from plugins.star_resonance_plugin.panels.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,

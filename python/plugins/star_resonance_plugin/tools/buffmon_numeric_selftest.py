@@ -11,7 +11,7 @@ import unittest
 
 from PIL import Image, ImageDraw
 
-from gui_modules.sao_gui_buffmon import BossBuffOverlay, SelfBuffOverlay, _BuffPanelBase, _finite_float, _finite_int
+from plugins.star_resonance_plugin.panels.sao_gui_buffmon import BossBuffOverlay, SelfBuffOverlay, _BuffPanelBase, _finite_float, _finite_int
 
 
 class BuffMonNumericTests(unittest.TestCase):

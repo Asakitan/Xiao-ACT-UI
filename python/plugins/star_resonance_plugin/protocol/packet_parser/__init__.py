@@ -18,7 +18,7 @@ all of them):
 """
 
 # ── enums / constants ──────────────────────────────────────────────────────
-from packet_parser.enums import (
+from plugins.star_resonance_plugin.protocol.packet_parser.enums import (
     MessageType,
     NotifyMethod,
     _NOTIFY_METHOD_NAMES,
@@ -42,7 +42,7 @@ from packet_parser.enums import (
 )
 
 # ── skills / profession tables ─────────────────────────────────────────────
-from packet_parser.skills import (
+from plugins.star_resonance_plugin.protocol.packet_parser.skills import (
     PROFESSION_NAMES,
     PROFESSION_NORMAL_ATTACK,
     PROFESSION_SKILL,
@@ -56,13 +56,13 @@ from packet_parser.skills import (
 )
 
 # ── data classes ───────────────────────────────────────────────────────────
-from packet_parser.data import (
+from plugins.star_resonance_plugin.protocol.packet_parser.data import (
     MonsterData,
     PlayerData,
 )
 
 # ── main parser ────────────────────────────────────────────────────────────
-from packet_parser.parser import PacketParser
+from plugins.star_resonance_plugin.protocol.packet_parser.parser import PacketParser
 
 __all__ = [
     # core (must work for external imports)

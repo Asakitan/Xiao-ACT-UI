@@ -17,12 +17,12 @@ import threading
 
 from PIL import Image, ImageDraw
 
-from gui_modules.sao_gui_alert import (
+from plugins.star_resonance_plugin.panels.sao_gui_alert import (
     _load_font,
     _draw_tracked,
     _tracked_text_width,
 )
-from gui_modules.sao_gui_dps import _ulw_update
+from plugins.star_resonance_plugin.panels.sao_gui_dps import _ulw_update
 
 import tkinter as tk
 

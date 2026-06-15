@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache, shared_cache_path
+from plugins.star_resonance_plugin.net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache, shared_cache_path
 
 
 def main(argv: list[str] | None = None) -> int:

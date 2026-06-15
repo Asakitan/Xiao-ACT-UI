@@ -11,7 +11,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.numbered_zone_tracker import NumberedZoneTracker     # noqa: E402
+from plugins.star_resonance_plugin.engines.numbered_zone_tracker import NumberedZoneTracker     # noqa: E402
 
 
 def _z(uuid, members, group_id=10, base_id=1100, zone_type=1):

@@ -42,7 +42,7 @@ class _Settings:
 
 
 def _seed_settings():
-    from engines.boss_raid_engine import (
+    from plugins.star_resonance_plugin.engines.boss_raid_engine import (
         load_boss_raid_config, save_boss_raid_config, normalize_profile)
     s = _Settings()
     payload = json.load(open(EXAMPLE, encoding="utf-8"))
@@ -136,7 +136,7 @@ def main():
     root.geometry("1600x1000+0+0")
     root.update_idletasks()
 
-    from gui_modules.sao_gui_bossraid import BossRaidPanel
+    from plugins.star_resonance_plugin.panels.sao_gui_bossraid import BossRaidPanel
     from gui_modules.sao_gui_profile_editors import BossRaidDetailPanel
 
     api = _mech_api(settings)

@@ -6,8 +6,8 @@ PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
 通过 Npcap 抓包获取游戏数据，更新到 GameStateManager。
 
 用法:
-    from engines.game_state import GameStateManager
-    from net.packet_bridge import PacketBridge
+    from plugins.star_resonance_plugin.engines.game_state import GameStateManager
+    from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
 
     mgr = GameStateManager()
     bridge = PacketBridge(mgr)
@@ -26,7 +26,7 @@ from typing import Any
 
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
-from engines.game_state import GameStateManager, compute_burst_ready
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager, compute_burst_ready
 from act_platform.adapters import (
     StarResonanceParserAdapter,
     create_plugin_parser_adapter,
@@ -41,8 +41,8 @@ from packet_parser import (PlayerData, MonsterData,
                            PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
                            _SKILL_TO_PROFESSION,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
-from net.packet_capture import PacketCapture, list_devices, auto_select_device, select_capture_devices
-from net.tcp_name_cache import TcpNameCache, runtime_cache_path, shared_cache_path
+from plugins.star_resonance_plugin.net.packet_capture import PacketCapture, list_devices, auto_select_device, select_capture_devices
+from plugins.star_resonance_plugin.net.tcp_name_cache import TcpNameCache, runtime_cache_path, shared_cache_path
 from tools.tablekit.name_tables import names as _NAME_RESOLVER
 from tools.tablekit.combat_preparse import (
     enrich_boss_event,

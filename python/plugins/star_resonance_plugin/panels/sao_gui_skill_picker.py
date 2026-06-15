@@ -36,7 +36,7 @@ except Exception:
         return tkfont.Font(family=family, size=size,
                            weight='bold' if bold else 'normal')
 
-from engines.skill_cd_monitor import (
+from plugins.star_resonance_plugin.engines.skill_cd_monitor import (
     validate_monitors, next_available_slot, MAX_CUSTOM_SLOTS,
     CUSTOM_SLOT_MIN, CUSTOM_SLOT_MAX, _resolve_skill_name,
 )

@@ -12,8 +12,8 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.boss_raid_engine import BossRaidEngine          # noqa: E402
-from engines.game_state import GameStateManager              # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_raid_engine import BossRaidEngine          # noqa: E402
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager              # noqa: E402
 
 
 def _monster(uuid, buffs, **kw):

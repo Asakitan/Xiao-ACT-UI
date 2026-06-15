@@ -1,10 +1,10 @@
 ﻿# -*- coding: utf-8 -*-
-"""MonsterData / PlayerData state dataclasses extracted from packet_parser.
+"""MonsterData / PlayerData state dataclasses extracted from plugins.star_resonance_plugin.protocol.packet_parser.
 """
 
 from typing import Optional, Dict, Any
 
-from packet_parser.helpers import _uuid_to_uid
+from plugins.star_resonance_plugin.protocol.packet_parser.helpers import _uuid_to_uid
 
 
 class MonsterData:

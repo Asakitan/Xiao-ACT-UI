@@ -24,7 +24,7 @@ from config import (
     get_visual_rect_bbox,
 )
 from render.render_capture_sync import capture_section
-from vision.vision_accel import cvt_color, gaussian_blur
+from plugins.star_resonance_plugin.vision.vision_accel import cvt_color, gaussian_blur
 from utils.window_locator import WindowLocator
 
 try:

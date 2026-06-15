@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 try:
-    from packet_parser.enums import BuffEventType
+    from plugins.star_resonance_plugin.protocol.packet_parser.enums import BuffEventType
 except Exception:  # pragma: no cover - standalone tool fallback
     class BuffEventType:  # type: ignore[no-redef]
         HOST_DEATH = 12
@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - standalone tool fallback
         INTO_FRACTURE_STATE = 88
 
 try:
-    from packet_parser.skills import (
+    from plugins.star_resonance_plugin.protocol.packet_parser.skills import (
         PROFESSION_NORMAL_ATTACK,
         PROFESSION_SKILL,
         PROFESSION_ULTIMATE,

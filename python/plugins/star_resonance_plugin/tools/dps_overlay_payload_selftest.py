@@ -11,7 +11,7 @@ import _bootstrap  # noqa: F401
 
 from PIL import Image, ImageDraw
 
-from gui_modules.sao_gui_dps import DpsOverlay, _RowState
+from plugins.star_resonance_plugin.panels.sao_gui_dps import DpsOverlay, _RowState
 
 
 class _FakeSettings:

@@ -12,10 +12,10 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.mechanic_intelligence import (                         # noqa: E402
+from plugins.star_resonance_plugin.engines.mechanic_intelligence import (                         # noqa: E402
     MechanicClassifier, build_mechanic_shell, fill_geometry)
-from engines.boss_raid_engine import normalize_mechanic             # noqa: E402
-from engines.auto_dodge_director import AutoDodgeDirector           # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_raid_engine import normalize_mechanic             # noqa: E402
+from plugins.star_resonance_plugin.engines.auto_dodge_director import AutoDodgeDirector           # noqa: E402
 from mem_probe.il2cpp.mem_dodge_context import DodgeContext         # noqa: E402
 
 
@@ -77,7 +77,7 @@ class ShellTest(unittest.TestCase):
         m = build_mechanic_shell(10280006, "炎光环形aoe")
         nm = normalize_mechanic(m) if False else m
         # geometry 经引擎 normalize 往返 (壳子可被引擎接受)
-        from engines.boss_raid_engine import normalize_dodge
+        from plugins.star_resonance_plugin.engines.boss_raid_engine import normalize_dodge
         d = normalize_dodge(m["dodge"])
         self.assertIn("geometry", d["inline"])
 

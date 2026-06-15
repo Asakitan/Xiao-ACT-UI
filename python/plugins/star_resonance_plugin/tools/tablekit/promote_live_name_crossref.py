@@ -137,7 +137,7 @@ def promote_crossref(input_path: str = _DEFAULT_INPUT, cache_path: str = _DEFAUL
                      confidence: set[str] | None = None, exact_only: bool = True,
                      fill_missing_only: bool = True) -> dict[str, Any]:
     accepted = confidence or {"high"}
-    from net.tcp_name_cache import sanitize_shared_cache
+    from plugins.star_resonance_plugin.net.tcp_name_cache import sanitize_shared_cache
 
     crossref = _load_json(input_path)
     cache = sanitize_shared_cache(_load_json(cache_path))

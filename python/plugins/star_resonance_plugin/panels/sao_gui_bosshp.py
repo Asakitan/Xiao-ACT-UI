@@ -66,7 +66,7 @@ from utils.perf_probe import gauge as _perf_gauge, probe as _probe
 
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
 # premultiply path and font cache.
-from gui_modules.sao_gui_dps import (  # noqa: F401
+from plugins.star_resonance_plugin.panels.sao_gui_dps import (  # noqa: F401
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _has_cjk, _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,

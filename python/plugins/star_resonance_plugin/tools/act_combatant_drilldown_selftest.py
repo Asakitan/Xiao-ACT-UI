@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from act_platform import runtime
-from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel, _finite_int
+from plugins.star_resonance_plugin.panels.sao_gui_combatant_drilldown import CombatantDrilldownPanel, _finite_int
 
 
 class FakeTracker:

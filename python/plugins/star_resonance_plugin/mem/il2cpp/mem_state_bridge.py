@@ -760,7 +760,7 @@ class MemStateBridge:
         """One-shot background build of the full MonsterTable BreakingContinueTime cache."""
         try:
             import threading
-            from engines.break_time_lookup import build_full_cache, _cache
+            from plugins.star_resonance_plugin.engines.break_time_lookup import build_full_cache, _cache
             if len(_cache) > 50:
                 return
             threading.Thread(target=build_full_cache, name="break-cache-build", daemon=True).start()

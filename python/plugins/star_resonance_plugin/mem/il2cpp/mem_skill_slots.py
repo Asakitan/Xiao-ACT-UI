@@ -32,7 +32,7 @@ def _ensure_imports():
     if _build_skill_slots is not None:
         return
     try:
-        from net.packet_bridge import _build_packet_skill_slots as _b
+        from plugins.star_resonance_plugin.net.packet_bridge import _build_packet_skill_slots as _b
     except Exception:
         from packet_bridge import _build_packet_skill_slots as _b
     from packet_parser import PlayerData as _P, PROFESSION_NAMES as _N

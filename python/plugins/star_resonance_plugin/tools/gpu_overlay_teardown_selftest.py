@@ -15,8 +15,8 @@ if ROOT not in sys.path:
 
 from gui_modules.sao_child_bar_gpu import ChildBarGpuPainter
 from gui_modules.sao_child_bar_gpu import BarColors, _ChildBarSnapshot, _RowSnapshot
-from gui_modules.sao_gui_bosshp import BossHpOverlay
-from gui_modules.sao_gui_hp import HpOverlay
+from plugins.star_resonance_plugin.panels.sao_gui_bosshp import BossHpOverlay
+from plugins.star_resonance_plugin.panels.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
 from gui_modules.sao_gui_state_mixin import SAOPlayerGUIStateMixin
 from gui_modules.sao_left_info_gpu import (

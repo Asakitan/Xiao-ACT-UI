@@ -26,11 +26,11 @@ from tools.tablekit.combat_preparse import (  # noqa: E402
     enrich_skill_event,
 )
 from engines.auto_key_engine import AutoKeyEngine, normalize_condition  # noqa: E402
-from engines.boss_raid_engine import BossRaidEngine, normalize_phase_trigger  # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_raid_engine import BossRaidEngine, normalize_phase_trigger  # noqa: E402
 from engines.combat_analytics import build_act_render_spec  # noqa: E402
 from engines.dps_tracker import DpsTracker  # noqa: E402
-from engines.game_state import GameStateManager  # noqa: E402
-from net.packet_bridge import PacketBridge  # noqa: E402
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager  # noqa: E402
+from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge  # noqa: E402
 from net import packet_bridge as packet_bridge_module  # noqa: E402
 
 

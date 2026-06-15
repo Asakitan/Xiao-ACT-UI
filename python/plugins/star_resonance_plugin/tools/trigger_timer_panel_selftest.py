@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 from pathlib import Path
 import unittest
 
-from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel, _format_number
+from plugins.star_resonance_plugin.panels.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel, _format_number
 
 
 class FakeVar:

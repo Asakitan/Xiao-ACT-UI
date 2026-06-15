@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 # RLock: create_mechanic_from_skill 内嵌 upsert_mechanic。
 _MUTATE_LOCK = threading.RLock()
 
-from engines.boss_raid_engine import (
+from plugins.star_resonance_plugin.engines.boss_raid_engine import (
     active_profile,
     find_profile,
     load_boss_raid_config,
@@ -20,7 +20,7 @@ from engines.boss_raid_engine import (
     save_boss_raid_config,
     _utc_now_iso,
 )
-from engines.boss_autokey_linkage import (
+from plugins.star_resonance_plugin.engines.boss_autokey_linkage import (
     load_linkage_config,
     set_dodge_enabled,
     _lookup,
@@ -85,7 +85,7 @@ def mechanic_summary(mech: Dict[str, Any],
         parts = []
         direction = _s(inline.get("direction"))
         if direction:
-            from engines.auto_dodge_director import direction_label
+            from plugins.star_resonance_plugin.engines.auto_dodge_director import direction_label
             lbl = direction_label(direction) or (
                 "远离" if direction.startswith("away") else direction)
             if not directional_on:

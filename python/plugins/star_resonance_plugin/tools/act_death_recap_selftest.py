@@ -13,7 +13,7 @@ from unittest import mock
 from act_platform import runtime
 from act_platform.events import make_event
 from act_platform.runtime import ensure_act_event_bus
-from gui_modules.sao_gui_death_recap import DeathRecapPanel
+from plugins.star_resonance_plugin.panels.sao_gui_death_recap import DeathRecapPanel
 
 
 SELF_UID = 36668136

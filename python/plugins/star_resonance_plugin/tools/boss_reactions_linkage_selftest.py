@@ -17,7 +17,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.boss_autokey_linkage import (  # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_autokey_linkage import (  # noqa: E402
     BossAutoKeyLinkage, normalize_mapping, default_linkage_config,
 )
 

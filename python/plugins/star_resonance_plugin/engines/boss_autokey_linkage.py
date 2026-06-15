@@ -715,7 +715,7 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     # each profile carries dungeon_id + map_name (sub-map, e.g. 天启的神槛)
     # — same dungeon_id can have multiple sub-maps, each gets its own entry
     try:
-        from engines.boss_raid_engine import load_boss_raid_config
+        from plugins.star_resonance_plugin.engines.boss_raid_engine import load_boss_raid_config
         raid_cfg = load_boss_raid_config(settings)
         existing_keys = {str(s.get("scene_key")) for s in scenes}
         for prof in raid_cfg.get("profiles") or []:

@@ -8,8 +8,8 @@ from unittest import mock
 
 import _bootstrap  # noqa: F401
 
-from gui_modules.sao_gui_autokey import AutoKeyPanel
-from gui_modules.sao_gui_bossraid import BossRaidPanel
+from plugins.star_resonance_plugin.panels.sao_gui_autokey import AutoKeyPanel
+from plugins.star_resonance_plugin.panels.sao_gui_bossraid import BossRaidPanel
 
 
 class TkLivePanelSignatureTests(unittest.TestCase):

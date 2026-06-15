@@ -241,7 +241,7 @@ class RaidSkillEnumerator:
 
 def _apply(result: Dict, log=print) -> Dict:
     report: Dict = {}
-    from engines.boss_skill_store import BossSkillStore, KIND_SKILL
+    from plugins.star_resonance_plugin.engines.boss_skill_store import BossSkillStore, KIND_SKILL
     store = BossSkillStore()
     n_obs = 0
     dungeon_id = int(result["dungeon_id"])
@@ -282,7 +282,7 @@ def _apply(result: Dict, log=print) -> Dict:
     # ids go through the live-rows builder (the classifier refines the skill
     # sub-kind); boss names are injected as kind "monster" directly — the same
     # kind the runtime mem name path records boss base ids under.
-    from net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
+    from plugins.star_resonance_plugin.net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
     raw = build_index_from_live_rows(
         {"rows": name_rows}, confidence={"high", "medium", "mem", "tcp", "static"})
     if boss_names:

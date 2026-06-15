@@ -616,7 +616,7 @@ class FullRaidEnumerator:
 
 def _apply(result: Dict, log=print) -> Dict:
     report: Dict = {}
-    from engines.boss_skill_store import BossSkillStore, KIND_SKILL
+    from plugins.star_resonance_plugin.engines.boss_skill_store import BossSkillStore, KIND_SKILL
     store = BossSkillStore()
     name_rows: List[Dict] = []
     boss_names: Dict[int, str] = {}
@@ -660,7 +660,7 @@ def _apply(result: Dict, log=print) -> Dict:
     report["skill_store"] = {"observations": n_obs, "saved": saved}
     log(f"[apply] BossSkillStore: {n_obs} observations (saved={saved})")
 
-    from net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
+    from plugins.star_resonance_plugin.net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
     raw = build_index_from_live_rows(
         {"rows": name_rows}, confidence={"high", "medium", "mem", "tcp", "static"})
     if boss_names:

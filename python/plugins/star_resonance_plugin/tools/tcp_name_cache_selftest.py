@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from net.tcp_name_cache import (
+from plugins.star_resonance_plugin.net.tcp_name_cache import (
     TcpNameCache,
     build_index_from_live_rows,
     runtime_cache_path,

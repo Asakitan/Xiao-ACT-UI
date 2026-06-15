@@ -21,13 +21,13 @@ from PIL import Image, ImageDraw
 from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 
 # 复用 alert overlay 的字体加载 / 字间距绘制工具, 保持渲染风格一致
-from gui_modules.sao_gui_alert import (
+from plugins.star_resonance_plugin.panels.sao_gui_alert import (
     _load_font,
     _draw_tracked,
     _tracked_text_width,
 )
 # 复用 DPS overlay 的 UpdateLayeredWindow 提交函数 (支持整窗 constant alpha)
-from gui_modules.sao_gui_dps import _ulw_update
+from plugins.star_resonance_plugin.panels.sao_gui_dps import _ulw_update
 
 import tkinter as tk
 

@@ -15,14 +15,14 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.boss_raid_engine import (                        # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_raid_engine import (                        # noqa: E402
     BossRaidEngine, normalize_profile, clone_profile,
     bind_mechanic_skill, unbind_mechanic_skill,
 )
-from engines.boss_autokey_linkage import (                    # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_autokey_linkage import (                    # noqa: E402
     BossAutoKeyLinkage, normalize_mapping,
 )
-from engines.game_state import GameStateManager               # noqa: E402
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager               # noqa: E402
 
 
 class _Settings:
@@ -380,8 +380,8 @@ class MechanicsTest(unittest.TestCase):
         self.assertEqual(self.events[0].get("tts_text"), "红色分摊")
 
     def test_dash_dodge_sequence_roundtrip_and_summary(self):
-        from engines.boss_raid_engine import normalize_mechanic
-        from engines.boss_mechanics_state import mechanic_summary
+        from plugins.star_resonance_plugin.engines.boss_raid_engine import normalize_mechanic
+        from plugins.star_resonance_plugin.engines.boss_mechanics_state import mechanic_summary
         dash = [{"key": "SHIFT", "delay_ms": 0, "hold_ms": 0},
                 {"key": "SHIFT", "delay_ms": 300, "hold_ms": 0},
                 {"key": "SHIFT", "delay_ms": 300, "hold_ms": 0}]
@@ -408,10 +408,10 @@ class MechanicsTest(unittest.TestCase):
         self.assertEqual([s[0] for s in self.sent[:3]], ["SHIFT", "SHIFT", "SHIFT"])
 
     def test_state_contract_resolves_buff_names(self):
-        from engines.boss_mechanics_state import (
+        from plugins.star_resonance_plugin.engines.boss_mechanics_state import (
             mechanic_summary, _resolve_detect_name,
         )
-        from engines.boss_autokey_linkage import _name_resolver
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import _name_resolver
         m = _mech(detect={"skill_ids": [], "buff_ids": [829304]})
         self.assertEqual(mechanic_summary(m)["bound_count"], 1)
         nm = _name_resolver()

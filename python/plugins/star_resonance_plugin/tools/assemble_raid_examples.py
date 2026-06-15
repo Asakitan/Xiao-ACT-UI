@@ -17,8 +17,8 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.boss_raid_engine import normalize_profile               # noqa: E402
-from engines.mechanic_intelligence import _MECH_COLOR                # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_raid_engine import normalize_profile               # noqa: E402
+from plugins.star_resonance_plugin.engines.mechanic_intelligence import _MECH_COLOR                # noqa: E402
 
 _OUT_DIR = os.path.join(_ROOT, "assets", "boss_raids")
 

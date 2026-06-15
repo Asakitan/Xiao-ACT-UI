@@ -332,7 +332,7 @@ def _apply(result: Dict, log=print) -> Dict:
     for b in (result.get("mechanic_cluster", {}) or {}).get("buffs", []):
         _add(b)
 
-    from net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
+    from plugins.star_resonance_plugin.net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache
     raw = build_index_from_live_rows(
         {"rows": name_rows}, confidence={"high", "medium", "mem", "tcp", "static"})
     index = sanitize_shared_cache(raw)

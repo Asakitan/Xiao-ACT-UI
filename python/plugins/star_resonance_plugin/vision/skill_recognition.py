@@ -15,7 +15,7 @@ from config import (
     get_skill_slot_client_rects,
     get_skill_slot_rects,
 )
-from vision.vision_accel import cvt_color, gaussian_blur
+from plugins.star_resonance_plugin.vision.vision_accel import cvt_color, gaussian_blur
 
 from utils.perf_probe import probe as _probe
 

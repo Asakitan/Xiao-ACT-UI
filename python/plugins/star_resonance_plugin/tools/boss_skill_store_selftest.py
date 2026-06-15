@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.boss_skill_store import BossSkillStore, KIND_SKILL, KIND_MECHANIC, KIND_STATE  # noqa: E402
+from plugins.star_resonance_plugin.engines.boss_skill_store import BossSkillStore, KIND_SKILL, KIND_MECHANIC, KIND_STATE  # noqa: E402
 
 
 class StoreUnitTest(unittest.TestCase):
@@ -78,8 +78,8 @@ class EngineRecordingTest(unittest.TestCase):
             os.remove(self.path)
 
     def _engine(self, scene_id=101, scene_name="幻华领域"):
-        from engines.boss_raid_engine import BossRaidEngine
-        from engines.game_state import GameStateManager
+        from plugins.star_resonance_plugin.engines.boss_raid_engine import BossRaidEngine
+        from plugins.star_resonance_plugin.engines.game_state import GameStateManager
         sm = GameStateManager()
         sm.update(dungeon_scene_id=scene_id, dungeon_name=scene_name)
         return BossRaidEngine(sm, settings={})
@@ -126,7 +126,7 @@ class EngineRecordingTest(unittest.TestCase):
         self.assertEqual([b["base_id"] for b in eng2.get_observed_bosses("101")], [500])
 
     def test_contract_is_scene_aware_and_tagged(self):
-        from engines.boss_autokey_linkage import build_boss_reactions_state
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import build_boss_reactions_state
         eng = self._engine()
         eng.on_mem_boss_action({"boss_base_id": 500, "boss_name": "苍之冠", "boss_uuid": 1,
                                 "skill_id": 700, "skill_name": "角斗同步", "cast_edge": "start",
@@ -143,7 +143,7 @@ class EngineRecordingTest(unittest.TestCase):
         self.assertTrue(any(o["kind"] == "mechanic" and "shield" in o["tags"] for o in obs))
 
     def test_contract_scene_switch_scopes_bosses(self):
-        from engines.boss_autokey_linkage import build_boss_reactions_state
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import build_boss_reactions_state
         eng = self._engine()
         eng.on_mem_boss_action({"boss_base_id": 500, "skill_id": 700, "cast_edge": "start"})
         eng._state_mgr.update(dungeon_scene_id=202, dungeon_name="另一个场景")
@@ -154,7 +154,7 @@ class EngineRecordingTest(unittest.TestCase):
         self.assertEqual([b["base_id"] for b in st202["bosses"]], [600])
 
     def test_contract_boss_detail_grouped_and_scoped(self):
-        from engines.boss_autokey_linkage import build_boss_reactions_state
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import build_boss_reactions_state
         eng = self._engine()
         eng.on_mem_boss_action({"boss_base_id": 500, "boss_name": "苍之冠", "boss_uuid": 1,
                                 "skill_id": 700, "skill_name": "角斗同步", "cast_edge": "start",
@@ -175,7 +175,7 @@ class EngineRecordingTest(unittest.TestCase):
 
     def test_contract_light_status_has_no_entities(self):
         # the editor path must not pay the O(N) entity build (crowd-lag fix)
-        from engines.boss_autokey_linkage import build_boss_reactions_state
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import build_boss_reactions_state
         eng = self._engine()
         eng.on_mem_boss_action({"boss_base_id": 500, "skill_id": 700, "cast_edge": "start"})
         light = eng.get_status(include_entities=False)
@@ -190,7 +190,7 @@ class ContractUnitTest(unittest.TestCase):
     """Pure-function coverage for the reactions contract (no game/engine)."""
 
     def test_name_helpers_never_throw(self):
-        from engines.boss_autokey_linkage import (
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import (
             _name_resolver, _resolve_skill_name, _resolve_boss_name, _resolve_scene_name)
         nm = _name_resolver()
         self.assertIsInstance(_resolve_skill_name(nm, 700), str)
@@ -200,7 +200,7 @@ class ContractUnitTest(unittest.TestCase):
         self.assertEqual(_resolve_boss_name(None, 0), "")
 
     def test_build_boss_detail_groups_and_sorts_timeline(self):
-        from engines.boss_autokey_linkage import _build_boss_detail
+        from plugins.star_resonance_plugin.engines.boss_autokey_linkage import _build_boss_detail
         obs = [
             {"id": 2, "skill_id": 2, "kind": "skill", "name": "B", "count": 3,
              "elapsed_s": 30.0, "time_fixed_s": 30.0, "last_cast_duration_ms": 1200},

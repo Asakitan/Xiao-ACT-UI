@@ -15,7 +15,7 @@ import time
 import logging
 from typing import Optional, Dict, Any
 
-from packet_parser.enums import AttrType
+from plugins.star_resonance_plugin.protocol.packet_parser.enums import AttrType
 # NOTE: PlayerData appears only in this module's type hints (player: PlayerData).
 # `from __future__ import annotations` above keeps those hints as strings, so we
 # deliberately do NOT import data.py here — that would create an import cycle
@@ -62,7 +62,7 @@ def _ensure_pb():
     _pb_loaded = True
 
     try:
-        from proto import star_resonance_pb2
+        from plugins.star_resonance_plugin.proto import star_resonance_pb2
         _pb = star_resonance_pb2
         logger.info('[Parser] using compiled protobuf')
     except ImportError:

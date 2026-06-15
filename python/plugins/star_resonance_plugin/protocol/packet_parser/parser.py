@@ -2,7 +2,7 @@
 """PacketParser main class extracted from packet_parser (physical split).
 
 All cross-module references use absolute sibling imports
-(``from packet_parser.<sub> import ...``) to avoid the half-initialised
+(``from plugins.star_resonance_plugin.protocol.packet_parser.<sub> import ...``) to avoid the half-initialised
 ``packet_parser/__init__`` import cycle.
 """
 
@@ -14,19 +14,19 @@ import logging
 from typing import Optional, Callable, Dict, Any, List
 
 from packet_parser import helpers as _helpers
-from packet_parser.enums import (
+from plugins.star_resonance_plugin.protocol.packet_parser.enums import (
     MessageType, NotifyMethod, _NOTIFY_METHOD_NAMES, AttrType, BASE_LEVEL_CAP,
     SERVICE_UUID_C3SB, BuffEventType, _BOSS_BUFF_EVENTS, WIPE_BUFF_BASE_ID,
     DamageType, EntityType, SkillCDType, CHAR_FIELD_NAMES,
     _HANDLED_CHAR_FIELDS, _RESET_IGNORE_TARGETS,
 )
-from packet_parser.skills import (
+from plugins.star_resonance_plugin.protocol.packet_parser.skills import (
     PROFESSION_NAMES, PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,
     PROFESSION_ULTIMATE, PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
     _compose_skill_level_id, _SKILL_TO_PROFESSION,
 )
-from packet_parser.data import MonsterData, PlayerData
-from packet_parser.helpers import (
+from plugins.star_resonance_plugin.protocol.packet_parser.data import MonsterData, PlayerData
+from plugins.star_resonance_plugin.protocol.packet_parser.helpers import (
     logger,
     _CY_COMBAT, _CY_PACKET, _ensure_zstd, _ensure_pb,
     _decode_fields, _parse_dungeon_dirty_buffer,

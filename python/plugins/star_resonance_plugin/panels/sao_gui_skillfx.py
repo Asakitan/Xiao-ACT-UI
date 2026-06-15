@@ -66,7 +66,7 @@ except Exception:
 from utils.perf_probe import probe as _probe
 from gui_modules.entity_gpu_policy import require_entity_gpu
 
-from gui_modules.sao_gui_dps import (
+from plugins.star_resonance_plugin.panels.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,

@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR
 from tools.tablekit.combat_preparse import enrich_boss_event
-from engines.boss_skill_store import (
+from plugins.star_resonance_plugin.engines.boss_skill_store import (
     BossSkillStore, KIND_SKILL, KIND_MECHANIC, KIND_STATE,
 )
 

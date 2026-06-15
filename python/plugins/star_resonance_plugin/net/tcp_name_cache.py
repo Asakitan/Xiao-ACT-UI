@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable, Mapping, Optional
 
 try:
-    from packet_parser.skills import PROFESSION_NAMES  # type: ignore
+    from plugins.star_resonance_plugin.protocol.packet_parser.skills import PROFESSION_NAMES  # type: ignore
 except Exception:  # pragma: no cover - import fallback for standalone tools
     PROFESSION_NAMES = {}
 

@@ -24,8 +24,8 @@ from act_platform.adapters import (
 )
 from act_platform.plugins import PluginManager
 from act_platform.runtime import ensure_act_event_bus
-from engines.game_state import GameStateManager
-from net.packet_bridge import PacketBridge
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager
+from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
 
 
 PLUGIN_PARSER_CODE = r'''

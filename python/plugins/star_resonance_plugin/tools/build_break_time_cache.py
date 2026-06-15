@@ -22,7 +22,7 @@ def main():
     except Exception:
         pass
 
-    from engines.break_time_lookup import build_full_cache, _cache, _CACHE_PATH
+    from plugins.star_resonance_plugin.engines.break_time_lookup import build_full_cache, _cache, _CACHE_PATH
 
     print("[build_break_time_cache] Connecting to game process...")
     count = build_full_cache()

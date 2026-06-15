@@ -184,7 +184,7 @@ def test_packet_bridge_helper_with_no_authority_falls_back_to_bool():
 
     b = _BridgeStub()
     # Bind the real helper to the stub
-    from net.packet_bridge import PacketBridge
+    from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
     helper = PacketBridge._component_source_for_publish
     check("legacy bool True => 'memory'",
           helper(b, 'hp') == 'memory')
@@ -202,7 +202,7 @@ def test_packet_bridge_helper_uses_field_authority_when_present():
         _field_authority = fa
         _mem_authoritative = False                          # ignored when FA set
 
-    from net.packet_bridge import PacketBridge
+    from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
     helper = PacketBridge._component_source_for_publish
     check("FA-set hp => memory", helper(_BridgeStub(), 'hp') == 'memory')
     check("FA-set skills => tcp", helper(_BridgeStub(), 'skills') == 'tcp')
