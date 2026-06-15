@@ -287,56 +287,65 @@ class SAOPlayerGUIFloatHandlersMixin:
         return out
 
     def _create_floating_widget(self):
-        """SAO 菜单点击锚点窗口 (不渲染 HP — HP 由 sao_gui_hp.HpOverlay 独立渲染).
+        """NerveGear 按钮 — SAO 菜单可见入口 (64px 圆形, dark/light 主题).
 
-        历史: 本窗口曾以 UpdateLayeredWindow + PIL 方式渲染一个 75% 屏宽
-        的 HP HUD。该渲染已被 ``sao_gui_hp.HpOverlay`` 取代, 故本窗口现
-        仅作为 SAOPopUpMenu 的 anchor_widget 和右键菜单宿主使用, 全透
-        明但保留点击命中测试。
+        左键打开 SAO 菜单, 右键迷你上下文菜单 (主题切换/关于/退出).
+        位置: 屏幕右下角, 可拖动, 位置持久化到 settings.
+        空闲时有呼吸辉光动画.
         """
+        from gui_modules.sao_gui_nervegear_button import SIZE as NG_SIZE, render_button, apply_layered_window
+
         try:
             _sw = self.root.winfo_screenwidth()
             _sh = self.root.winfo_screenheight()
         except Exception:
             _sw, _sh = 1920, 1080
 
-        # ── 锚点窗口尺寸 (保持旧 SAO 菜单定位): 75% 屏宽, 高 140px ──
-        FW = int(_sw * 0.75)
-        FH = 140
+        FW = NG_SIZE
+        FH = NG_SIZE
         self._fw, self._fh = FW, FH
-        self._float_alpha = 0.0
+        self._float_alpha = 0.95
         self._hp_hover = False
+        self._ng_drag_start = None
 
-        # (legacy — no longer rendered here; kept for stub compatibility)
-        self._hp_ox = int(FW * 0.44)
-        self._hp_oy = 38
-        self._id_plate_w = int(FW * 0.40)
+        # Legacy stubs (external code may reference these)
+        self._hp_ox = 0
+        self._hp_oy = 0
+        self._id_plate_w = 0
+        self._hp_shell_normal = None
+        self._hp_shell_hover = None
+        self._hp_bar_x = 0
+        self._hp_bar_y = 0
+        self._hp_bar_right = 0
+        self._hp_bar_bot_top = 0
+        self._hp_bar_bot_full = 0
+        self._hp_bar_step_x = 0
+
+        saved_pos = self._get_setting('nervegear_button_pos', None)
+        if saved_pos and isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2:
+            ng_x, ng_y = int(saved_pos[0]), int(saved_pos[1])
+        else:
+            ng_x = _sw - NG_SIZE - 20
+            ng_y = _sh - NG_SIZE - 60
 
         self._float = tk.Toplevel(self.root)
         self._float.overrideredirect(True)
         self._float.attributes('-topmost', True)
-        self._float.geometry(f'{FW}x{FH}')
-        # 完全透明点击锚点: Tk 的 -alpha=0.0 (底层 LWA_ALPHA=0) 在 Windows
-        # 下窗口不可见, 但 WS_EX_LAYERED + 统一 alpha 模式下点击仍能命中
-        # 窗口矩形 — 这正是我们希望的 (保留 SAO 菜单 anchor + 右键菜单).
+        self._float.geometry(f'{FW}x{FH}+{ng_x}+{ng_y}')
         self._float.configure(bg='#000000')
-        try:
-            self._float.attributes('-alpha', 0.0)
-        except Exception:
-            pass
         _apply_window_icon(self._float)
 
-        # ── 获取 HWND 仅用于 AppBar 样式 (不再用 ULW) ──
         self._float_hwnd = 0
         try:
             self._float.update_idletasks()
             GWL_EXSTYLE = -20
             WS_EX_APPWINDOW = 0x00040000
             WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_LAYERED = 0x00080000
             hwnd = int(_user32.GetParent(ctypes.c_void_p(self._float.winfo_id())))
             self._float_hwnd = hwnd
             style = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
-            style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+            style = (style | WS_EX_APPWINDOW | WS_EX_LAYERED) & ~WS_EX_TOOLWINDOW
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
             _disable_native_window_shadow(self._float)
             try:
@@ -346,33 +355,59 @@ class SAOPlayerGUIFloatHandlersMixin:
         except Exception:
             self._float_hwnd = 0
 
-        # (占位符 — 旧 HP shell 缓存, 已弃用)
-        self._hp_shell_normal = None
-        self._hp_shell_hover = None
-
-        # ── HP 布局常量 (保留 — 外部代码可能仍引用) ──
-        ox, oy = self._hp_ox, self._hp_oy
-        bar_x = ox + 110; bar_y = oy + 10
-        PW, PT, PH, PS = 350, 19, 27, 145
-        self._hp_bar_x        = bar_x + 2
-        self._hp_bar_y        = bar_y + 2
-        self._hp_bar_right    = bar_x + PW - 3
-        self._hp_bar_bot_top  = bar_y + PT - 1
-        self._hp_bar_bot_full = bar_y + PH - 2
-        self._hp_bar_step_x   = bar_x + PS - 2
-
-        # ── 显示名 ──
         display_name = self._username if self._username else 'Player'
         if len(display_name) > 10:
             display_name = display_name[:9] + '…'
         self._hp_display_name = display_name
 
-        # ── 点击交互 (拖拽已禁用 — 固定位置) ──
-        self._float.bind('<Button-1>', lambda e: self._toggle_sao_menu())
+        self._ng_theme = self._get_setting('nervegear_theme', 'dark') or 'dark'
+        self._ng_glow_phase = 0.0
+        self._ng_breath_after = None
+
+        def _render_ng():
+            if self._float_hwnd:
+                img = render_button(self._ng_theme, self._ng_glow_phase)
+                if img:
+                    apply_layered_window(self._float_hwnd, img)
+
+        self._render_ng = _render_ng
+
+        # ── 拖动支持 ──
+        def _start_drag(e):
+            self._ng_drag_start = (e.x_root, e.y_root,
+                                   self._float.winfo_x(), self._float.winfo_y())
+
+        def _do_drag(e):
+            if self._ng_drag_start is None:
+                return
+            sx, sy, wx, wy = self._ng_drag_start
+            dx, dy = e.x_root - sx, e.y_root - sy
+            if abs(dx) < 5 and abs(dy) < 5:
+                return
+            self._float.geometry(f'+{wx + dx}+{wy + dy}')
+
+        def _end_drag(e):
+            if self._ng_drag_start is None:
+                return
+            sx, sy, _, _ = self._ng_drag_start
+            dx, dy = e.x_root - sx, e.y_root - sy
+            self._ng_drag_start = None
+            if abs(dx) < 5 and abs(dy) < 5:
+                self._toggle_sao_menu()
+            else:
+                try:
+                    self._set_setting('nervegear_button_pos',
+                                      [self._float.winfo_x(), self._float.winfo_y()])
+                except Exception:
+                    pass
+
+        self._float.bind('<ButtonPress-1>', _start_drag)
+        self._float.bind('<B1-Motion>', _do_drag)
+        self._float.bind('<ButtonRelease-1>', _end_drag)
         self._float.bind('<Enter>', self._float_enter)
         self._float.bind('<Leave>', self._float_leave)
 
-        # 右键菜单 (SAO Auto — 精简, 深色, 向上弹出)
+        # ── 右键菜单 (精简: 平台操作) ──
         self._float_ctx = tk.Menu(self._float, tearoff=0,
                                   bg='#0f121a', fg='#d0e8f0',
                                   activebackground='#f3af12',
@@ -381,20 +416,16 @@ class SAOPlayerGUIFloatHandlersMixin:
                                   font=get_cjk_font(9))
         self._float_ctx.add_command(label='◆ 打开 SAO 菜单', command=self._toggle_sao_menu)
         self._float_ctx.add_separator()
-        self._float_ctx.add_command(label='◉ 状态面板', command=self._toggle_status_panel)
-        self._float_ctx.add_command(label='⚡ AutoKey Quick', command=self._toggle_autokey_panel)
-        self._float_ctx.add_command(label='⚡ AutoKey Detail', command=self._toggle_autokey_detail_panel)
-        self._float_ctx.add_command(label='⚔ BossRaid Quick', command=self._toggle_bossraid_panel)
-        self._float_ctx.add_command(label='⚔ BossRaid Detail', command=self._toggle_bossraid_detail_panel)
-        self._float_ctx.add_separator()
+        self._float_ctx.add_command(label='🌙 切换主题 Dark/Light',
+                                    command=self._toggle_nervegear_theme)
         self._float_ctx.add_command(label='◈ 隐藏/显示面板', command=self._toggle_hide_all_panels)
         self._float_ctx.add_command(label='◇ WebView UI', command=self._switch_to_webview_ui)
+        self._float_ctx.add_command(label='◇ 关于', command=self._show_about)
         self._float_ctx.add_command(label='✕ 退出', command=self._on_close)
         def _show_ctx_menu(e):
             self._ctx_menu_open = True
             try:
-                # 在点击位置上方弹出菜单
-                menu_h = 165
+                menu_h = 140
                 popup_x = e.x_root
                 popup_y = max(0, e.y_root - menu_h)
                 self._float_ctx.tk_popup(popup_x, popup_y)
@@ -404,15 +435,48 @@ class SAOPlayerGUIFloatHandlersMixin:
                 self._ctx_menu_open = False
         self._float.bind('<Button-3>', _show_ctx_menu)
 
-        # 初始渲染一次 (alpha=0，不可见)
-        try:
-            self._refresh_hp_layered()
-        except Exception:
-            pass
+        _render_ng()
 
-        # 初始隐藏 — LinkStart 完成后才显示
         self._float.withdraw()
 
+
+    def _toggle_nervegear_theme(self):
+        """Toggle NerveGear button between dark and light theme."""
+        self._ng_theme = 'light' if getattr(self, '_ng_theme', 'dark') == 'dark' else 'dark'
+        try:
+            self._set_setting('nervegear_theme', self._ng_theme)
+        except Exception:
+            pass
+        render_fn = getattr(self, '_render_ng', None)
+        if callable(render_fn):
+            render_fn()
+
+    def _start_nervegear_glow(self):
+        """Breathing glow animation for the NerveGear button."""
+        if getattr(self, '_ng_breath_after', None) is not None:
+            return
+        import math
+        def _step():
+            if self._destroyed:
+                return
+            self._ng_glow_phase = (time.time() * 0.8) % (2 * math.pi)
+            render_fn = getattr(self, '_render_ng', None)
+            if callable(render_fn):
+                try:
+                    render_fn()
+                except Exception:
+                    pass
+            self._ng_breath_after = self.root.after(50, _step)
+        self._ng_breath_after = self.root.after(50, _step)
+
+    def _stop_nervegear_glow(self):
+        after_id = getattr(self, '_ng_breath_after', None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._ng_breath_after = None
 
     # ══════════════════════════════════════════════
     #  识别引擎
