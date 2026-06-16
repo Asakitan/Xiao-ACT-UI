@@ -248,6 +248,10 @@ a = Analysis(
     noarchive=True,   # .pyc 散列到 runtime/ 目录, 不打入 PYZ → exe 瘦身 + 可单独更新模块
 )
 
+# driver_backend ships as .pyd ONLY (Cython compiled, source-protected).
+# Strip .py/.pyc from a.pure so the source doesn't leak alongside the .pyd.
+a.pure = [(n, s, p) for (n, s, p) in a.pure if n not in ('mem_probe.driver_backend',)]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 # ── onedir 模式 + 模块化文件夹布局 ──

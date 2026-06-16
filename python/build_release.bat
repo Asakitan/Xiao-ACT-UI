@@ -12,6 +12,10 @@ set "SERVER_DIR=%RELEASE_DIR%\AutoKeyServer"
 echo [1/6] Building Cython accelerators...
 python build_cython_ext.py build_ext --inplace
 if errorlevel 1 goto :fail
+if exist "%ROOT%mem_probe\driver_backend.py" (
+    dir /b "%ROOT%mem_probe\driver_backend*.pyd" >nul 2>&1
+    if errorlevel 1 echo WARNING: driver_backend.pyd not built, source will ship unprotected
+)
 
 echo [2/6] Building XiaoACTUI.exe (onedir + runtime/ contents_directory)...
 pyinstaller --clean --noconfirm XiaoACTUI.spec

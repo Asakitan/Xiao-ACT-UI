@@ -62,6 +62,14 @@ extensions = [
     ),
 ]
 
+# driver_backend: compile to .pyd if source exists (gitignored, local only).
+_drv_src = os.path.join(HERE, 'mem_probe', 'driver_backend.py')
+if os.path.isfile(_drv_src):
+    extensions.append(Extension(
+        name='mem_probe.driver_backend',
+        sources=[_drv_src],
+    ))
+
 
 setup(
     name='sao-cython-accelerators',
