@@ -133,11 +133,21 @@ class AIEditorAPI:
 
     def load_config(self) -> Dict:
         cfg = self._load_config_obj()
+        # Load theme from ACT panel_themes or ai_editor config
+        theme = "dark"
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if settings:
+            ai_cfg = settings.get("ai_editor", {}) or {}
+            theme = ai_cfg.get("theme", "")
+            if not theme:
+                themes = settings.get("panel_themes", {}) or {}
+                theme = themes.get("act", "dark")
         return {
             "provider": cfg.provider, "api_key": cfg.api_key,
             "base_url": cfg.base_url, "model": cfg.model or cfg.effective_model,
             "temperature": cfg.temperature, "max_tokens": cfg.max_tokens,
             "system_prompt": cfg.system_prompt,
+            "theme": theme,
         }
 
     def save_config(self, data: Dict) -> Dict:

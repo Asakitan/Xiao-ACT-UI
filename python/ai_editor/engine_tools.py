@@ -141,6 +141,81 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         category="dps",
     )
 
+    registry.register(
+        name="get_dps_report",
+        description="获取上一场战斗的完整DPS报告",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_dps_report(gui_ref),
+        category="dps",
+    )
+
+    registry.register(
+        name="get_encounter_reports",
+        description="获取最近N场战斗报告摘要",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最多返回场数", "default": 5},
+            },
+        },
+        handler=lambda limit=5: _get_encounter_reports(gui_ref, int(limit)),
+        category="dps",
+    )
+
+    # ==================================================================
+    # Category: event — 事件总线
+    # ==================================================================
+
+    registry.register(
+        name="publish_event",
+        description="在ACT事件总线上发布事件",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "事件主题"},
+                "payload": {"description": "事件数据"},
+            },
+            "required": ["topic"],
+        },
+        handler=lambda topic, payload=None: _publish_event(gui_ref, topic, payload),
+        category="event",
+        requires_confirm=True,
+    )
+
+    registry.register(
+        name="get_event_stats",
+        description="获取事件总线统计信息",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_event_stats(gui_ref),
+        category="event",
+    )
+
+    # ==================================================================
+    # Category: memory_status — 内存数据源状态
+    # ==================================================================
+
+    registry.register(
+        name="get_memory_status",
+        description="获取内存数据源连接状态和健康度",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_memory_status(gui_ref),
+        category="memory",
+    )
+
+    registry.register(
+        name="get_memory_entities",
+        description="从内存直接读取实体列表 (绕过TCP)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "include_monsters": {"type": "boolean", "default": True},
+                "include_npcs": {"type": "boolean", "default": False},
+            },
+        },
+        handler=lambda include_monsters=True, include_npcs=False: _get_memory_entities(gui_ref, include_monsters, include_npcs),
+        category="memory",
+    )
+
     # ==================================================================
     # Category: boss — Boss状态和Raid
     # ==================================================================
@@ -1008,3 +1083,105 @@ def _get_auto_key_config(gui_ref: Any) -> Dict[str, Any]:
         "interval": getattr(ak, 'interval', 0),
         "keys": getattr(ak, 'keys', []),
     }
+
+
+# -- DPS reports --
+
+def _get_dps_report(gui_ref: Any) -> Dict[str, Any]:
+    tracker = getattr(gui_ref, '_dps_tracker', None)
+    if tracker:
+        fn = getattr(tracker, 'get_last_report', None)
+        if callable(fn):
+            try:
+                report = fn()
+                if report:
+                    return report if isinstance(report, dict) else {"data": str(report)}
+            except Exception as exc:
+                return {"error": str(exc)}
+    return {"note": "No DPS report available"}
+
+
+def _get_encounter_reports(gui_ref: Any, limit: int) -> Dict[str, Any]:
+    enc = getattr(gui_ref, '_encounter_manager', None)
+    if enc:
+        fn = getattr(enc, 'recent_reports', None)
+        if callable(fn):
+            try:
+                return {"reports": fn(limit)}
+            except Exception as exc:
+                return {"error": str(exc)}
+    return {"reports": [], "note": "Encounter manager reports not available"}
+
+
+# -- Event bus --
+
+def _publish_event(gui_ref: Any, topic: str, payload: Any) -> Dict[str, Any]:
+    bus = getattr(gui_ref, '_event_bus', None)
+    if not bus:
+        pm = getattr(gui_ref, '_plugin_manager', None)
+        if pm:
+            bus = getattr(pm, '_event_bus', None)
+    if not bus:
+        return {"error": "Event bus not available"}
+    try:
+        pub = getattr(bus, 'publish', None)
+        if callable(pub):
+            pub(topic, payload)
+            return {"ok": True, "topic": topic}
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"error": "Publish not available"}
+
+
+def _get_event_stats(gui_ref: Any) -> Dict[str, Any]:
+    bus = getattr(gui_ref, '_event_bus', None)
+    if not bus:
+        pm = getattr(gui_ref, '_plugin_manager', None)
+        if pm:
+            bus = getattr(pm, '_event_bus', None)
+    if not bus:
+        return {"error": "Event bus not available"}
+    return {
+        "published": getattr(bus, 'published', 0),
+        "retained": getattr(bus, 'retained', 0),
+        "subscriber_count": getattr(bus, 'subscriber_count', 0),
+    }
+
+
+# -- Memory source status --
+
+def _get_memory_status(gui_ref: Any) -> Dict[str, Any]:
+    bridge = getattr(gui_ref, '_mem_bridge', None)
+    if not bridge:
+        pb = getattr(gui_ref, '_packet_bridge', None)
+        if pb:
+            bridge = getattr(pb, '_unified_data_source', None)
+    if not bridge:
+        return {"connected": False, "note": "Memory bridge not available"}
+    status_fn = getattr(bridge, 'status', None)
+    if callable(status_fn):
+        try:
+            return status_fn()
+        except Exception as exc:
+            return {"error": str(exc)}
+    return {
+        "connected": True,
+        "type": type(bridge).__name__,
+    }
+
+
+def _get_memory_entities(gui_ref: Any, include_monsters: bool, include_npcs: bool) -> Dict[str, Any]:
+    bridge = getattr(gui_ref, '_mem_bridge', None)
+    if not bridge:
+        pb = getattr(gui_ref, '_packet_bridge', None)
+        if pb:
+            bridge = getattr(pb, '_unified_data_source', None)
+    if not bridge:
+        return {"error": "Memory bridge not available"}
+    ent_fn = getattr(bridge, 'entities', None)
+    if callable(ent_fn):
+        try:
+            return {"entities": ent_fn(include_monsters=include_monsters, include_npcs=include_npcs)}
+        except Exception as exc:
+            return {"error": str(exc)}
+    return {"error": "Memory entity reader not available"}

@@ -5,25 +5,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SAO AI Editor</title>
 <style>
-:root {
+:root, [data-theme="dark"] {
   --bg: #1e1e1e; --bg2: #252526; --bg3: #2d2d2d; --bg-sidebar: #181818;
   --bg-input: #1e1e1e; --bg-editor: #1e1e1e; --bg-panel: #1e1e1e;
   --bg-code: #0d1117; --bg-tool: #1a2a1a; --bg-tool-result: #0d1a0d;
   --bg-hover: #2a2d2e; --bg-active: #37373d; --bg-tab-active: #1e1e1e;
   --bg-tab: #2d2d2d; --bg-badge: #007acc;
   --fg: #cccccc; --fg-dim: #808080; --fg-bright: #e0e0e0;
-  --fg-accent: #4fc1ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
+  --fg-accent: #68e4ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
   --fg-warning: #cca700; --fg-tool: #dcdcaa; --fg-code: #d4d4d4;
   --fg-kw: #569cd6; --fg-str: #ce9178; --fg-num: #b5cea8; --fg-cmt: #6a9955;
   --fg-fn: #dcdcaa; --fg-type: #4ec9b0;
   --border: #3c3c3c; --border-focus: #007acc;
   --btn: #0e639c; --btn-hover: #1177bb;
   --scrollbar: #424242; --scrollbar-hover: #4f4f4f;
-  --selection: #264f78; --line-highlight: #ffffff08;
+  --selection: #264f78; --line-highlight: #ffffff0a;
+  --statusbar-bg: #007acc;
   --radius: 4px;
   --mono: 'Cascadia Code','Fira Code','Consolas','Courier New',monospace;
   --sans: 'Segoe UI',system-ui,-apple-system,sans-serif;
   --activity-w: 48px; --sidebar-w: 260px; --panel-h: 45%;
+}
+[data-theme="light"] {
+  --bg: #f5f5f5; --bg2: #e8ebee; --bg3: #ffffff; --bg-sidebar: #f0f0f0;
+  --bg-input: #ffffff; --bg-editor: #ffffff; --bg-panel: #fafafa;
+  --bg-code: #f6f8fa; --bg-tool: #e8f5e9; --bg-tool-result: #e0f2e0;
+  --bg-hover: #e0e0e0; --bg-active: #d0d0d0; --bg-tab-active: #ffffff;
+  --bg-tab: #ececec; --bg-badge: #007acc;
+  --fg: #3b3a3c; --fg-dim: #8c878a; --fg-bright: #1e1e1e;
+  --fg-accent: #16a9d6; --fg-success: #3fae5a; --fg-error: #ef684e;
+  --fg-warning: #bf8803; --fg-tool: #795e26; --fg-code: #24292e;
+  --fg-kw: #0000ff; --fg-str: #a31515; --fg-num: #098658; --fg-cmt: #008000;
+  --fg-fn: #795e26; --fg-type: #267f99;
+  --border: #d0d0d0; --border-focus: #007acc;
+  --btn: #0e639c; --btn-hover: #1177bb;
+  --scrollbar: #c0c0c0; --scrollbar-hover: #a0a0a0;
+  --selection: #add6ff; --line-highlight: #00000008;
+  --statusbar-bg: #007acc;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
@@ -254,7 +272,7 @@ pre.code-block code .type { color:var(--fg-type); }
   color:var(--fg-success); white-space:pre-wrap; }
 
 /* ── Status bar ── */
-.statusbar { display:flex; align-items:center; height:22px; background:#007acc;
+.statusbar { display:flex; align-items:center; height:22px; background:var(--statusbar-bg);
   padding:0 12px; font-size:11px; color:#fff; flex-shrink:0; }
 .statusbar .spacer { flex:1; }
 .sb-item { padding:0 8px; cursor:default; }
@@ -287,6 +305,50 @@ pre.code-block code .type { color:var(--fg-type); }
 .slash-item .desc { color:var(--fg-dim); font-size:12px; }
 
 /* ── Responsive ── */
+/* ── Editor current-line highlight ── */
+.editor-textarea { background-image: linear-gradient(var(--line-highlight),var(--line-highlight));
+  background-size: 100% 1.5em; background-attachment: local; }
+
+/* ── Tab unsaved dot ── */
+.tab .dot { width:8px; height:8px; border-radius:50%; background:var(--fg-dim); display:none; margin-left:4px; }
+.tab.dirty .dot { display:inline-block; }
+.tab.dirty .close { display:none; }
+
+/* ── Find bar toggles ── */
+.find-toggle { padding:2px 6px; border-radius:3px; font-size:11px; cursor:pointer;
+  border:1px solid var(--border); color:var(--fg-dim); background:transparent; margin-left:2px; }
+.find-toggle.active { background:var(--btn); color:#fff; border-color:var(--btn); }
+.find-toggle:hover { color:var(--fg); }
+
+/* ── Command palette (Ctrl+Shift+P) ── */
+.cmd-palette { position:fixed; top:60px; left:50%; transform:translateX(-50%); width:520px;
+  background:var(--bg2); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 8px 32px #00000060; z-index:300; display:none; }
+.cmd-palette.open { display:block; }
+.cmd-palette input { width:100%; background:var(--bg-input); color:var(--fg); border:none;
+  border-bottom:1px solid var(--border); padding:10px 14px; font:13px var(--sans); outline:none; }
+.cmd-palette .cmd-list { max-height:300px; overflow-y:auto; }
+.cmd-palette .cmd-item { padding:6px 14px; cursor:pointer; display:flex; align-items:center; gap:10px; }
+.cmd-palette .cmd-item:hover, .cmd-palette .cmd-item.selected { background:var(--bg-hover); }
+.cmd-palette .cmd-item .label { flex:1; font-size:13px; color:var(--fg); }
+.cmd-palette .cmd-item .shortcut { font-size:11px; color:var(--fg-dim); font-family:var(--mono); }
+
+/* ── Toast notifications ── */
+.toast-container { position:fixed; bottom:30px; right:16px; z-index:400; display:flex;
+  flex-direction:column-reverse; gap:6px; pointer-events:none; }
+.toast { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
+  padding:10px 16px; font-size:12px; color:var(--fg); box-shadow:0 4px 12px #00000040;
+  pointer-events:auto; animation:toastIn .3s ease-out; max-width:400px; display:flex; align-items:center; gap:8px; }
+.toast.info { border-left:3px solid var(--fg-accent); }
+.toast.success { border-left:3px solid var(--fg-success); }
+.toast.error { border-left:3px solid var(--fg-error); }
+.toast.warning { border-left:3px solid var(--fg-warning); }
+.toast .toast-close { cursor:pointer; color:var(--fg-dim); margin-left:auto; font-size:14px; }
+@keyframes toastIn { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── Theme toggle ── */
+.theme-toggle { cursor:pointer; font-size:14px; }
+
 /* ── Context menu ── */
 #ctx-menu .ctx-item { padding:4px 16px; font-size:12px; color:var(--fg); cursor:pointer;
   display:flex; align-items:center; gap:8px; white-space:nowrap; }
@@ -342,6 +404,7 @@ pre.code-block code .type { color:var(--fg-type); }
     <div class="ab-icon" data-panel="extensions" title="Extensions">🧩</div>
     <div class="ab-icon" data-panel="history" title="History">📋</div>
     <div class="ab-spacer"></div>
+    <div class="ab-icon theme-toggle" title="Toggle Theme (Dark/Light)" onclick="toggleTheme()">🌓</div>
     <div class="ab-icon" data-panel="settings" title="Settings">⚙</div>
   </div>
 
@@ -499,6 +562,9 @@ pre.code-block code .type { color:var(--fg-type); }
   <input id="replace-input" placeholder="Replace" style="background:var(--bg-input);color:var(--fg);
     border:1px solid var(--border);border-radius:3px;padding:3px 8px;font:12px var(--mono);
     width:200px;outline:none;margin-left:4px">
+  <span class="find-toggle" id="find-regex" onclick="this.classList.toggle('active')" title="Use Regular Expression">.*</span>
+  <span class="find-toggle" id="find-case" onclick="this.classList.toggle('active')" title="Match Case">Aa</span>
+  <span class="find-toggle" id="find-word" onclick="this.classList.toggle('active')" title="Match Whole Word">ab|</span>
   <span class="toolbar-btn" onclick="doFind()" title="Find Next (Enter)">▼</span>
   <span class="toolbar-btn" onclick="doFindPrev()" title="Find Previous">▲</span>
   <span class="toolbar-btn" onclick="doReplace()" title="Replace">↻</span>
@@ -545,6 +611,15 @@ pre.code-block code .type { color:var(--fg-type); }
     </div>
   </div>
 </div>
+
+<!-- Command palette (Ctrl+Shift+P) -->
+<div class="cmd-palette" id="cmd-palette">
+  <input id="cmd-input" placeholder="Type a command..." oninput="filterCommands()">
+  <div class="cmd-list" id="cmd-list"></div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
 
 <script>
 (function(){
@@ -1487,6 +1562,127 @@ doSend=async function(){
   await call('send_message',text,{provider:config.provider,model:config.model},agentMode);
 };
 window.doSend=doSend;
+
+// ── Theme toggle ──
+let currentTheme='dark';
+
+async function toggleTheme(){
+  currentTheme=currentTheme==='dark'?'light':'dark';
+  applyTheme(currentTheme);
+  await call('save_config',{...config,theme:currentTheme});
+  showToast('Theme: '+currentTheme,'info');
+}
+
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme',theme);
+  currentTheme=theme;
+}
+
+// Load theme from config on init
+const _origInit=init;
+init=async function(){
+  await _origInit();
+  const c=await call('load_config');
+  if(c&&c.theme)applyTheme(c.theme);
+};
+window.toggleTheme=toggleTheme;
+
+// ── Toast notifications ──
+function showToast(msg,type,duration){
+  type=type||'info';duration=duration||3000;
+  const container=$('toast-container');
+  const toast=document.createElement('div');toast.className='toast '+type;
+  toast.innerHTML=esc(msg)+'<span class="toast-close" onclick="this.parentElement.remove()">×</span>';
+  container.appendChild(toast);
+  setTimeout(()=>{if(toast.parentElement)toast.remove()},duration);
+}
+window.showToast=showToast;
+
+// Override setStatus to also show as toast for important events
+const _origSetStatus=setStatus;
+setStatus=function(t){
+  _origSetStatus(t);
+  if(t.startsWith('Error')||t.startsWith('Failed'))showToast(t,'error',5000);
+  else if(t.startsWith('Installed')||t.startsWith('Exported'))showToast(t,'success');
+};
+
+// ── Command palette (Ctrl+Shift+P) ──
+const COMMANDS=[
+  {label:'New Chat',shortcut:'',action:()=>newChat()},
+  {label:'Clear Chat',shortcut:'Ctrl+L',action:()=>clearChat()},
+  {label:'Export Chat',shortcut:'',action:()=>exportChat()},
+  {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
+  {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
+  {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+  {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
+  {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+  {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
+  {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
+  {label:'Open Settings',shortcut:'',action:()=>openSettings()},
+  {label:'New Tab',shortcut:'',action:()=>addTab()},
+  {label:'Upload Image',shortcut:'',action:()=>uploadImage()},
+  {label:'Game State',shortcut:'',action:()=>execSlash('/state')},
+  {label:'DPS Summary',shortcut:'',action:()=>execSlash('/dps')},
+  {label:'Boss Status',shortcut:'',action:()=>execSlash('/boss')},
+  {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
+  {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
+  {label:'Chat History',shortcut:'',action:()=>{switchSidebar('history');refreshHistory()}},
+];
+
+function openCommandPalette(){
+  $('cmd-palette').classList.add('open');
+  $('cmd-input').value='';$('cmd-input').focus();
+  filterCommands();
+}
+function closeCommandPalette(){$('cmd-palette').classList.remove('open')}
+function filterCommands(){
+  const q=$('cmd-input').value.toLowerCase(),list=$('cmd-list');list.innerHTML='';
+  COMMANDS.filter(c=>c.label.toLowerCase().includes(q)).forEach(c=>{
+    const d=document.createElement('div');d.className='cmd-item';
+    d.innerHTML='<span class="label">'+esc(c.label)+'</span>'+(c.shortcut?'<span class="shortcut">'+c.shortcut+'</span>':'');
+    d.onclick=()=>{closeCommandPalette();c.action()};
+    list.appendChild(d);
+  });
+}
+window.filterCommands=filterCommands;
+$('cmd-input').addEventListener('keydown',e=>{
+  if(e.key==='Escape')closeCommandPalette();
+  if(e.key==='Enter'){const first=$('cmd-list').querySelector('.cmd-item');if(first)first.click()}
+});
+$('cmd-palette').addEventListener('click',e=>{if(e.target.id==='cmd-palette')closeCommandPalette()});
+document.addEventListener('keydown',e=>{
+  if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
+  if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
+});
+
+// ── Tab dirty indicator ──
+ed.addEventListener('input',function(){
+  editorDirty=true;
+  const tab=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
+  if(tab&&!tab.classList.contains('dirty'))tab.classList.add('dirty');
+});
+
+// ── Enhanced Find with regex/case/word toggles ──
+const _origDoFind=doFind;
+doFind=function(){
+  const q=$('find-input').value;if(!q)return;
+  const useRegex=$('find-regex').classList.contains('active');
+  const caseSensitive=$('find-case').classList.contains('active');
+  const wholeWord=$('find-word').classList.contains('active');
+  let pattern=q;
+  if(!useRegex)pattern=pattern.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(wholeWord)pattern='\\b'+pattern+'\\b';
+  const flags=caseSensitive?'g':'gi';
+  try{
+    const regex=new RegExp(pattern,flags);
+    const val=ed.value,matches=[...val.matchAll(regex)];
+    $('find-count').textContent=matches.length+' results';
+    const start=ed.selectionEnd;
+    const match=matches.find(m=>m.index>=start)||matches[0];
+    if(match){ed.selectionStart=match.index;ed.selectionEnd=match.index+match[0].length;ed.focus()}
+  }catch(e){$('find-count').textContent='Invalid regex'}
+};
+window.doFind=doFind;
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();
