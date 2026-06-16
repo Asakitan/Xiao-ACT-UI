@@ -1,15 +1,19 @@
 """MCP (Model Context Protocol) client for the AI Editor.
 
-Connects to MCP servers via stdio or HTTP/SSE, discovers tools, and
-dispatches tool calls.  Registered MCP tools appear alongside engine
-tools in the LLM's tool list.
+Supports three transport modes:
+  - **stdio** — spawn subprocess, JSON-RPC over stdin/stdout
+  - **sse** — HTTP+SSE to remote endpoint
+  - **internal** — Python-native tools registered directly by plugins
 
-Supports:
-  - stdio transport (spawn subprocess, communicate via stdin/stdout JSON-RPC)
-  - HTTP+SSE transport (POST to endpoint, stream results)
-  - Tool discovery (tools/list)
-  - Tool invocation (tools/call)
-  - Resource reading (resources/read)
+External MCP config sources (in priority order):
+  1. settings ``ai_editor_mcp_servers`` list
+  2. Workspace ``mcp.json`` / ``.mcp/mcp.json`` / ``.vscode/mcp.json``
+  3. User home ``~/.sao/mcp.json``
+  4. Plugin manifests (``plugin.json`` → ``mcpServers``)
+
+Internal (plugin) MCP:
+  Plugins call ``mcp_manager.register_internal(server_id, tools)``
+  to expose Python functions as MCP tools without spawning a process.
 """
 
 from __future__ import annotations
@@ -263,16 +267,72 @@ class McpSseClient:
 # MCP Manager — orchestrates multiple servers
 # ---------------------------------------------------------------------------
 
+class InternalMcpProvider:
+    """Python-native MCP provider — tools registered directly, no subprocess.
+
+    Usage by plugins::
+
+        provider = InternalMcpProvider("my_plugin")
+        provider.add_tool("get_hp", "Read player HP", {"type":"object","properties":{}},
+                          handler=lambda **kw: {"hp": 50000})
+        mcp_manager.register_provider(provider)
+    """
+
+    def __init__(self, server_id: str, name: str = "") -> None:
+        self.config = McpServerConfig(id=server_id, name=name or server_id, transport="internal")
+        self.tools: List[McpToolDef] = []
+        self._handlers: Dict[str, Callable] = {}
+
+    def add_tool(
+        self,
+        name: str,
+        description: str,
+        input_schema: Dict[str, Any],
+        handler: Callable[..., Any],
+    ) -> None:
+        self.tools.append(McpToolDef(
+            name=name,
+            description=description,
+            input_schema=input_schema,
+            server_id=self.config.id,
+        ))
+        self._handlers[name] = handler
+
+    def start(self) -> bool:
+        return True
+
+    def stop(self) -> None:
+        pass
+
+    def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+        handler = self._handlers.get(name)
+        if not handler:
+            return json.dumps({"error": f"Tool not found: {name}"})
+        try:
+            result = handler(**arguments) if isinstance(arguments, dict) else handler(arguments)
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    @property
+    def is_alive(self) -> bool:
+        return True
+
+
 class McpManager:
     """Manages multiple MCP server connections and unified tool dispatch."""
 
     def __init__(self) -> None:
-        self._clients: Dict[str, McpStdioClient | McpSseClient] = {}
+        self._clients: Dict[str, Any] = {}  # McpStdioClient | McpSseClient | InternalMcpProvider
 
     def add_server(self, config: McpServerConfig) -> bool:
         if config.id in self._clients:
             self.remove_server(config.id)
-        if config.transport == "sse":
+        if config.transport == "internal":
+            return False  # use register_provider() for internal
+        elif config.transport == "sse":
             client = McpSseClient(config)
         else:
             client = McpStdioClient(config)
@@ -280,6 +340,35 @@ class McpManager:
         if ok:
             self._clients[config.id] = client
         return ok
+
+    def register_provider(self, provider: InternalMcpProvider) -> None:
+        """Register an internal (Python-native) MCP provider."""
+        self._clients[provider.config.id] = provider
+
+    def register_internal(
+        self,
+        server_id: str,
+        tools: List[Dict[str, Any]],
+        handlers: Optional[Dict[str, Callable]] = None,
+    ) -> InternalMcpProvider:
+        """Convenience: create and register an internal provider from a tools list.
+
+        Each tool dict: {"name": "...", "description": "...", "inputSchema": {...}}
+        handlers: {"tool_name": callable} — if omitted, tools return stubs.
+        """
+        provider = InternalMcpProvider(server_id)
+        handlers = handlers or {}
+        for t in tools:
+            name = t.get("name", "")
+            handler = handlers.get(name, lambda **kw: {"note": f"stub for {name}"})
+            provider.add_tool(
+                name=name,
+                description=t.get("description", ""),
+                input_schema=t.get("inputSchema", {"type": "object", "properties": {}}),
+                handler=handler,
+            )
+        self._clients[server_id] = provider
+        return provider
 
     def remove_server(self, server_id: str) -> None:
         client = self._clients.pop(server_id, None)
@@ -383,4 +472,52 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                         ))
             except Exception:
                 pass
+
+    # From user home ~/.sao/mcp.json
+    try:
+        home_mcp = os.path.join(os.path.expanduser("~"), ".sao", "mcp.json")
+        if os.path.isfile(home_mcp):
+            with open(home_mcp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            servers = data.get("mcpServers") or data.get("servers") or {}
+            for sid, sconf in servers.items():
+                if sid not in {c.id for c in configs}:
+                    configs.append(_parse_server_config(sid, sconf))
+    except Exception:
+        pass
+
+    # From plugin manifests (plugins/*/plugin.json → mcpServers)
+    try:
+        from config import BASE_DIR
+        plugins_dir = os.path.join(BASE_DIR, "plugins")
+    except ImportError:
+        plugins_dir = os.path.join(os.path.dirname(__file__), "..", "plugins")
+    if os.path.isdir(plugins_dir):
+        for pname in os.listdir(plugins_dir):
+            manifest = os.path.join(plugins_dir, pname, "plugin.json")
+            if not os.path.isfile(manifest):
+                continue
+            try:
+                with open(manifest, "r", encoding="utf-8") as f:
+                    pdata = json.load(f)
+                for sid, sconf in (pdata.get("mcpServers") or {}).items():
+                    full_id = f"{pname}.{sid}"
+                    if full_id not in {c.id for c in configs}:
+                        configs.append(_parse_server_config(full_id, sconf))
+            except Exception:
+                continue
+
     return configs
+
+
+def _parse_server_config(sid: str, sconf: Dict[str, Any]) -> McpServerConfig:
+    return McpServerConfig(
+        id=sid,
+        name=sconf.get("name", sid),
+        transport=sconf.get("transport", "stdio"),
+        command=sconf.get("command", ""),
+        args=sconf.get("args", []),
+        env=sconf.get("env", {}),
+        url=sconf.get("url", ""),
+        headers=sconf.get("headers", {}),
+    )

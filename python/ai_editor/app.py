@@ -283,6 +283,22 @@ class AIEditorAPI:
             self._mcp.remove_server(server_id)
         return {"ok": True}
 
+    def register_mcp_tools(self, server_id: str, tools: list, handlers: dict = None) -> Dict:
+        """Register internal (Python-native) MCP tools — no subprocess needed.
+
+        Called by plugins to expose their tools as MCP-compatible entries.
+        tools: [{"name":"...", "description":"...", "inputSchema":{...}}]
+        handlers: {"tool_name": callable}
+        """
+        self._ensure_engine()
+        if not self._mcp:
+            from ai_editor.mcp_client import McpManager
+            self._mcp = McpManager()
+        provider = self._mcp.register_internal(server_id, tools, handlers)
+        if self._controller:
+            self._controller.extra_tools = self._mcp.to_openai_tools()
+        return {"ok": True, "id": server_id, "tools": len(provider.tools)}
+
     def test_connection(self, cfg: Dict) -> Dict:
         self._ensure_engine()
         test_cfg = ProviderConfig(
