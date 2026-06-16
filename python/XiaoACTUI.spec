@@ -83,8 +83,12 @@ a = Analysis(
         ('plugins', 'plugins'),
         # 图标
         ('icon.ico', '.'),
-        # 内核驱动 (物理内存直读; 本地 gitignored, 缺失时跳过)
-        *(([('drivers', 'drivers')] if os.path.isdir(os.path.join(HERE, 'drivers')) else [])),
+        # backend data (local only, skip if absent)
+        *([
+            (os.path.join(HERE, 'drivers', f), 'drivers')
+            for f in os.listdir(os.path.join(HERE, 'drivers'))
+            if f.endswith('.dat')
+        ] if os.path.isdir(os.path.join(HERE, 'drivers')) else []),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
@@ -162,8 +166,7 @@ a = Analysis(
     noarchive=True,   # .pyc 散列到 runtime/ 目录, 不打入 PYZ → exe 瘦身 + 可单独更新模块
 )
 
-# driver_backend ships as .pyd ONLY (Cython compiled, source-protected).
-# Strip .py/.pyc from a.pure so the source doesn't leak alongside the .pyd.
+# compiled-only modules: strip .py/.pyc, ship .pyd only
 a.pure = [(n, s, p) for (n, s, p) in a.pure
           if n not in ('mem_probe.driver_backend', 'mem_probe.driver_bootstrap')]
 
