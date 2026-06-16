@@ -16,6 +16,10 @@ if exist "%ROOT%mem_probe\driver_backend.py" (
     dir /b "%ROOT%mem_probe\driver_backend*.pyd" >nul 2>&1
     if errorlevel 1 echo WARNING: driver_backend.pyd not built, source will ship unprotected
 )
+if exist "%ROOT%drivers\XiaoACTloader.sys" (
+    echo   encrypting drivers...
+    python "%ROOT%mem_probe\_encrypt_drivers.py"
+)
 
 echo [2/6] Building XiaoACTUI.exe (onedir + runtime/ contents_directory)...
 pyinstaller --clean --noconfirm XiaoACTUI.spec
