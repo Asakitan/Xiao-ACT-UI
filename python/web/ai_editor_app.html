@@ -346,6 +346,52 @@ pre.code-block code .type { color:var(--fg-type); }
 .toast .toast-close { cursor:pointer; color:var(--fg-dim); margin-left:auto; font-size:14px; }
 @keyframes toastIn { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
 
+/* ── Code block action toolbar (VSCode: copy/insert/run) ── */
+pre.code-block { position:relative; }
+.cb-toolbar { position:absolute; top:4px; right:8px; display:flex; gap:2px; opacity:0;
+  transition:opacity .15s; }
+pre.code-block:hover .cb-toolbar { opacity:1; }
+.cb-btn { padding:2px 6px; border-radius:3px; font-size:11px; cursor:pointer;
+  background:#21262d; color:var(--fg-dim); border:1px solid #30363d; }
+.cb-btn:hover { background:#30363d; color:var(--fg); }
+
+/* ── Message footer (rate/retry/copy) ── */
+.msg-footer { display:flex; gap:4px; margin-top:6px; opacity:0; transition:opacity .15s; }
+.msg:hover .msg-footer { opacity:1; }
+.msg-footer .mf-btn { padding:2px 6px; border-radius:3px; font-size:11px; cursor:pointer;
+  color:var(--fg-dim); background:transparent; border:1px solid transparent; }
+.msg-footer .mf-btn:hover { color:var(--fg); border-color:var(--border); }
+.msg-footer .mf-btn.active { color:var(--fg-accent); }
+
+/* ── Follow-up suggestions ── */
+.followups { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.followup-btn { padding:4px 12px; border-radius:16px; font-size:12px; cursor:pointer;
+  background:var(--bg3); color:var(--fg-accent); border:1px solid var(--border);
+  transition:background .15s; }
+.followup-btn:hover { background:var(--bg-hover); border-color:var(--fg-accent); }
+
+/* ── File attachments ── */
+.attach-area { display:flex; flex-wrap:wrap; gap:4px; padding:4px 0; }
+.attach-pill { display:inline-flex; align-items:center; gap:4px; padding:2px 8px;
+  background:var(--bg3); border:1px solid var(--border); border-radius:12px;
+  font-size:11px; color:var(--fg-dim); }
+.attach-pill .remove { cursor:pointer; font-size:13px; }
+.attach-pill .remove:hover { color:var(--fg-error); }
+
+/* ── Progress spinner ── */
+.progress-indicator { display:flex; align-items:center; gap:8px; padding:8px 0;
+  color:var(--fg-dim); font-size:12px; }
+.progress-indicator .spinner { width:14px; height:14px; border:2px solid var(--fg-dim);
+  border-top-color:var(--fg-accent); border-radius:50%; animation:spin .8s linear infinite; }
+
+/* ── Drag overlay ── */
+.drag-overlay { position:fixed; inset:0; background:var(--bg);opacity:0.9; z-index:500;
+  display:none; align-items:center; justify-content:center; flex-direction:column;
+  border:3px dashed var(--fg-accent); border-radius:8px; margin:16px; }
+.drag-overlay.active { display:flex; }
+.drag-overlay .icon { font-size:48px; margin-bottom:12px; }
+.drag-overlay .text { font-size:16px; color:var(--fg-accent); }
+
 /* ── Theme toggle ── */
 .theme-toggle { cursor:pointer; font-size:14px; }
 
@@ -515,6 +561,7 @@ pre.code-block code .type { color:var(--fg-type); }
               <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ commands, @ context)"></textarea>
               <button class="send-btn" id="send-btn" onclick="doSend()">Send</button>
             </div>
+            <div class="attach-area" id="attach-area"></div>
             <!-- @-mention popup -->
             <div class="slash-popup" id="at-popup"></div>
           </div>
@@ -618,6 +665,12 @@ pre.code-block code .type { color:var(--fg-type); }
   <div class="cmd-list" id="cmd-list"></div>
 </div>
 
+<!-- Drag-and-drop overlay -->
+<div class="drag-overlay" id="drag-overlay">
+  <span class="icon">📎</span>
+  <span class="text">Drop files to attach</span>
+</div>
+
 <!-- Toast container -->
 <div class="toast-container" id="toast-container"></div>
 
@@ -688,12 +741,19 @@ function renderMd(container,text){
       const pre=document.createElement('pre');pre.className='code-block';
       if(lang){const l=document.createElement('span');l.className='lang';l.textContent=lang;pre.appendChild(l)}
       const code=document.createElement('code');code.innerHTML=highlightCode(inner,lang);pre.appendChild(code);
-      const cp=document.createElement('span');cp.className='copy-btn';cp.textContent='Copy';
-      cp.onclick=()=>{navigator.clipboard.writeText(inner);cp.textContent='✓';setTimeout(()=>cp.textContent='Copy',1500)};
-      pre.appendChild(cp);
+      // VSCode-style code block toolbar
+      const toolbar=document.createElement('div');toolbar.className='cb-toolbar';
+      const _code=inner,_lang=lang;
+      [{t:'Copy',icon:'📋',fn:()=>{navigator.clipboard.writeText(_code);showToast('Copied','success',1500)}},
+       {t:'Insert',icon:'📥',fn:()=>openInEditor(_code,_lang)},
+       {t:'Run',icon:'▶',fn:()=>execTerminalCmd(_code)},
+       {t:'New File',icon:'📄',fn:()=>addTab(_lang||'code',_code,_lang)}
+      ].forEach(a=>{
+        const b=document.createElement('span');b.className='cb-btn';b.textContent=a.icon;b.title=a.t;
+        b.onclick=a.fn;toolbar.appendChild(b);
+      });
+      pre.appendChild(toolbar);
       container.appendChild(pre);
-      // Also open in editor
-      openInEditor(inner,lang);
     } else renderInline(container,p);
   });
 }
@@ -1683,6 +1743,160 @@ doFind=function(){
   }catch(e){$('find-count').textContent='Invalid regex'}
 };
 window.doFind=doFind;
+
+// ── Message footer (rate/retry/copy) — VSCode ChatMessageFooter ──
+function addMessageFooter(msgEl,role){
+  if(role!=='assistant')return;
+  const footer=document.createElement('div');footer.className='msg-footer';
+  [{icon:'👍',title:'Helpful',cls:'rate-up',fn:function(){this.classList.toggle('active');showToast('Feedback saved','success',1500)}},
+   {icon:'👎',title:'Not helpful',cls:'rate-down',fn:function(){this.classList.toggle('active')}},
+   {icon:'📋',title:'Copy response',fn:function(){
+     const body=msgEl.querySelector('.msg-body');
+     if(body)navigator.clipboard.writeText(body.textContent);showToast('Copied','success',1500)}},
+   {icon:'🔄',title:'Retry',fn:function(){
+     const msgs=$('chat-messages').children;
+     // Find the user message before this assistant message
+     for(let i=msgs.length-1;i>=0;i--){
+       const r=msgs[i].querySelector('.msg-role.user');
+       if(r){const text=msgs[i].querySelector('.msg-body').textContent;
+         $('chat-input').value=text;doSend();break}
+     }}},
+  ].forEach(a=>{
+    const b=document.createElement('span');b.className='mf-btn'+(a.cls?' '+a.cls:'');
+    b.textContent=a.icon;b.title=a.title;b.onclick=a.fn;footer.appendChild(b);
+  });
+  msgEl.appendChild(footer);
+}
+
+// ── Follow-up suggestions ──
+function showFollowups(container,suggestions){
+  if(!suggestions||!suggestions.length)return;
+  const div=document.createElement('div');div.className='followups';
+  suggestions.forEach(s=>{
+    const btn=document.createElement('span');btn.className='followup-btn';
+    btn.textContent=s;btn.onclick=()=>{$('chat-input').value=s;doSend()};
+    div.appendChild(btn);
+  });
+  container.appendChild(div);
+}
+
+// Auto-generate follow-ups from assistant response
+function generateFollowups(content){
+  if(!content||content.length<50)return[];
+  const suggestions=[];
+  if(content.includes('```'))suggestions.push('Explain this code');
+  if(content.includes('error')||content.includes('Error'))suggestions.push('How do I fix this?');
+  if(content.includes('file')||content.includes('File'))suggestions.push('Show me the full file');
+  suggestions.push('Continue');
+  return suggestions.slice(0,3);
+}
+
+// ── Patch createMsg to add footer ──
+const _origCreateMsg=createMsg;
+createMsg=function(role,model){
+  const body=_origCreateMsg(role,model);
+  const msgEl=body.parentElement;
+  if(role==='assistant')setTimeout(()=>addMessageFooter(msgEl,'assistant'),100);
+  return body;
+};
+
+// ── Message context menu ──
+$('chat-messages').addEventListener('contextmenu',function(e){
+  const msgEl=e.target.closest('.msg');if(!msgEl)return;
+  e.preventDefault();
+  const menu=$('ctx-menu');menu.innerHTML='';
+  const body=msgEl.querySelector('.msg-body');
+  const text=body?body.textContent:'';
+  [{label:'Copy Message',fn:()=>{navigator.clipboard.writeText(text);showToast('Copied','success',1500)}},
+   {label:'Copy as Markdown',fn:()=>{navigator.clipboard.writeText(text);showToast('Copied','success',1500)}},
+   {sep:true},
+   {label:'Insert into Editor',fn:()=>{if(text)openInEditor(text,'')}},
+   {label:'Run in Terminal',fn:()=>{if(text.includes('`')){
+     const m=text.match(/```[\s\S]*?\n([\s\S]*?)```/);if(m)execTerminalCmd(m[1])}}},
+   {sep:true},
+   {label:'Delete Message',fn:()=>msgEl.remove()},
+  ].forEach(it=>{
+    if(it.sep){const s=document.createElement('div');s.className='ctx-sep';menu.appendChild(s);return}
+    const d=document.createElement('div');d.className='ctx-item';d.textContent=it.label;
+    d.onclick=()=>{menu.style.display='none';it.fn()};menu.appendChild(d);
+  });
+  menu.style.display='block';menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
+});
+
+// ── File drag-and-drop attachments ──
+let attachments=[];
+
+document.addEventListener('dragenter',e=>{e.preventDefault();$('drag-overlay').classList.add('active')});
+document.addEventListener('dragleave',e=>{if(e.target.id==='drag-overlay')$('drag-overlay').classList.remove('active')});
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>{
+  e.preventDefault();$('drag-overlay').classList.remove('active');
+  if(!e.dataTransfer.files.length)return;
+  for(const file of e.dataTransfer.files){
+    if(file.type.startsWith('image/')){
+      const reader=new FileReader();
+      reader.onload=()=>{addAttachment(file.name,'image',reader.result)};
+      reader.readAsDataURL(file);
+    } else {
+      const reader=new FileReader();
+      reader.onload=()=>{addAttachment(file.name,'file',reader.result)};
+      reader.readAsText(file);
+    }
+  }
+});
+
+function addAttachment(name,type,data){
+  attachments.push({name,type,data});
+  renderAttachments();
+}
+function removeAttachment(idx){
+  attachments.splice(idx,1);
+  renderAttachments();
+}
+function renderAttachments(){
+  const area=$('attach-area');area.innerHTML='';
+  attachments.forEach((a,i)=>{
+    const pill=document.createElement('span');pill.className='attach-pill';
+    pill.innerHTML=(a.type==='image'?'🖼':'📄')+' '+esc(a.name.slice(0,20))+
+      '<span class="remove" onclick="removeAttachment('+i+')">×</span>';
+    area.appendChild(pill);
+  });
+}
+window.removeAttachment=removeAttachment;
+
+// Include attachments in send
+const _origDoSend2=doSend;
+doSend=async function(){
+  // If attachments, prepend context
+  if(attachments.length>0){
+    let prefix='';
+    attachments.forEach(a=>{
+      if(a.type==='image')prefix+='[Attached image: '+a.name+']\n';
+      else prefix+='[Attached file: '+a.name+']\n```\n'+a.data.slice(0,3000)+'\n```\n';
+    });
+    const inp=$('chat-input');
+    inp.value=prefix+inp.value;
+    attachments=[];renderAttachments();
+  }
+  return _origDoSend2();
+};
+window.doSend=doSend;
+
+// ── Patch onStreamEnd to show followups ──
+const _origOnStreamEnd=onStreamEnd;
+onStreamEnd=function(d){
+  _origOnStreamEnd(d);
+  // Show follow-up suggestions
+  const msgs=$('chat-messages');const last=msgs.lastElementChild;
+  if(last&&d.content){
+    const body=last.querySelector('.msg-body');
+    if(body){
+      const suggestions=generateFollowups(d.content);
+      showFollowups(body,suggestions);
+    }
+  }
+};
+window.onStreamEnd=onStreamEnd;
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();
