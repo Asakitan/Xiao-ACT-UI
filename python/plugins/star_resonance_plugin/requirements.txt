@@ -1,0 +1,40 @@
+# Star Resonance Plugin — Runtime Dependencies
+#
+# The plugin bootstrap (_prepare_plugin_sys_path) installs these into
+# the plugin's own libs/ directory on first load, keeping them isolated
+# from the platform.
+#
+# For PyInstaller builds, these are already available in runtime/ via
+# the main spec's dependency graph. This file is authoritative for
+# source-run and portable plugin distribution.
+
+# ── Core scientific ──
+numpy>=1.24
+opencv-python-headless>=4.8
+
+# ── GPU rendering ──
+moderngl>=5.8
+glfw>=2.6
+skia-python>=87.0
+
+# ── Network / protocol ──
+protobuf>=4.24
+pymem>=1.13
+
+# ── Compression ──
+zstandard>=0.21
+
+# ── Image processing ──
+Pillow>=10.0
+
+# ── Web API (ACT local server) ──
+fastapi>=0.100
+starlette>=0.27
+uvicorn>=0.23
+
+# ── Input ──
+pynput>=1.7
+keyboard>=0.13
+
+# ── HTTP client (for update checks, API) ──
+httpx>=0.24

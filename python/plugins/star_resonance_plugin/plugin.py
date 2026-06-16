@@ -416,6 +416,9 @@ def on_load(ctx):
     global _ctx
     _ctx = ctx
 
+    # Bootstrap runtime deps from plugin's own libs/vendor/requirements.txt
+    ctx.ensure_requirements(install=True)
+
     _ensure_toplevel_defaults(ctx)
 
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
