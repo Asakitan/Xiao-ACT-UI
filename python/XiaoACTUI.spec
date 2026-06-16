@@ -16,6 +16,36 @@ block_cipher = None
 # ── 项目根目录 ──
 HERE = os.path.dirname(os.path.abspath(SPECPATH))
 
+
+def collect_plugins():
+    """Collect plugins/ tree while excluding dev-only artifacts.
+
+    Skips: il2cpp/out/ (1.8GB dumper output), il2cpp/bin/ (dumper binaries),
+    __pycache__/, .pyc, dev scripts (dump_tool, setup_dumper, diag_dump, etc.)
+    """
+    plugins_dir = os.path.join(HERE, 'plugins')
+    if not os.path.isdir(plugins_dir):
+        return []
+
+    _SKIP_FRAGS = ('/il2cpp/out/', '/il2cpp/bin/', '/__pycache__/')
+    _SKIP_NAMES = {'dump_tool.py', 'setup_dumper.py', 'diag_dump.py',
+                   'mem_dump_metadata.py', '_encrypt_drivers.py', 'memscan_selftest.py'}
+    _SKIP_EXTS = {'.pyc', '.pdb'}
+
+    result = []
+    for root, dirs, files in os.walk(plugins_dir):
+        # Prune directories in-place to skip recursion into them
+        dirs[:] = [d for d in dirs if d != '__pycache__'
+                   and not (d == 'out' and root.replace('\\', '/').endswith('/il2cpp'))
+                   and not (d == 'bin' and root.replace('\\', '/').endswith('/il2cpp'))]
+        rel_root = os.path.relpath(root, HERE)
+        for f in files:
+            if f in _SKIP_NAMES or os.path.splitext(f)[1] in _SKIP_EXTS:
+                continue
+            src = os.path.join(root, f)
+            result.append((src, rel_root))
+    return result
+
 # 5.0.0: 平台 hiddenimports — 游戏模块已搬到 plugins/star_resonance_plugin/,
 # 作为 DATA (.py) 打进包, 由插件加载器运行时 importlib 加载, 不需要 hiddenimports。
 LOCAL_HIDDENIMPORTS = [
@@ -81,8 +111,8 @@ a = Analysis(
         ('web', 'web'),
         # GPU SkillFX SDF 片段着色器
         ('shaders', 'shaders'),
-        # ACT 插件树 (含 star_resonance_plugin 及其 assets/proto/web/cython)
-        ('plugins', 'plugins'),
+        # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
+        *collect_plugins(),
         # 图标
         ('icon.ico', '.'),
         # backend data (local only, skip if absent)
