@@ -50,8 +50,6 @@ Required SAOPlayerGUI attrs:
     self._dps_overlay, self._boss_hp_overlay, self._hp_overlay,
     self._alert_overlay, self._skillfx_overlay,
     self._self_buff_overlay, self._boss_buff_overlay,
-    self._autokey_panel, self._bossraid_panel,
-    self._autokey_detail_panel, self._bossraid_detail_panel,
     self._commander_panel
   * Class attr: SAOPlayerGUI._sao_fx_after_id (accessed via type(self))
 

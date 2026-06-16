@@ -25,7 +25,7 @@ try:
     # tools/mem_probe/process.py -> sao_auto/ 在 sys.path 顶层时直接 import
     from config import GAME_PROCESS_NAMES  # type: ignore
 except Exception:
-    GAME_PROCESS_NAMES = ["star.exe"]
+    GAME_PROCESS_NAMES = []
 
 
 # ───────────────────────── Win32 常量 / 结构体 ─────────────────────────
@@ -178,7 +178,7 @@ def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
     ``pymem.process.process_from_name`` decodes ``PROCESSENTRY32.szExeFile``
     with ``locale.getpreferredencoding()``.  On Windows machines configured for
     UTF-8, unrelated processes with ANSI bytes in their executable name can make
-    that helper raise ``UnicodeDecodeError`` before it ever reaches Star.exe.
+    that helper raise ``UnicodeDecodeError`` before it ever reaches the target.
     The W-suffixed Toolhelp APIs return UTF-16 strings directly, avoiding that
     locale-sensitive decode path.
     """
@@ -287,7 +287,7 @@ class GameProcess:
             last_err = StarProcessError(f"process not found: {name}")
         if found_pid is None:
             raise StarProcessError(
-                f"未找到游戏进程 (尝试候选: {candidates})。请确认 Star.exe 正在运行。"
+                f"未找到游戏进程 (尝试候选: {candidates})。请确认目标进程正在运行。"
                 + (f" 最后错误: {last_err}" if last_err else "")
             )
 

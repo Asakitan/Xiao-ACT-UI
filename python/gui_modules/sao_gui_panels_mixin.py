@@ -13,8 +13,8 @@ Commander cluster (2):
 
 Panel visibility (1):
   * _toggle_hide_all_panels — one-shot withdraw / restore of every
-    floating panel (status, updater, autokey-quick/detail,
-    bossraid-quick/detail, commander). Snapshots which panels were
+    floating panel (status, updater, 
+    ). Snapshots which panels were
     visible so restore can re-show only those.
 
 Recognition (1):
@@ -24,8 +24,6 @@ Recognition (1):
 Settings toggles (7):
   * _toggle_sound_enabled — sound on/off (delegates to sao_sound)
   * _adj_sound_volume(delta) — sound volume +/-
-  * _toggle_buffmon_enabled — toggles buffmon overlays
-  * _cycle_boss_bar_mode — cycles boss_raid / always / off
   * _get_mem_data_source — read mem_data_source setting
   * _cycle_mem_data_source — cycle tcp/hybrid/auto/memory + alert
   * _toggle_topmost — toggles -topmost on the float + status panels
@@ -33,8 +31,6 @@ Settings toggles (7):
 Required SAOPlayerGUI attrs:
   * self._commander_panel, self._last_commander_push_sig
   * self._status_panel, self._update_panel
-  * self._autokey_panel, self._bossraid_panel,
-    self._autokey_detail_panel, self._bossraid_detail_panel
   * self._panels_hidden, self._hidden_panels_snapshot
   * self._self_buff_overlay, self._boss_buff_overlay
   * self._float, self.root, self._packet_engine
@@ -545,11 +541,9 @@ class SAOPlayerGUIPanelsMixin:
         self._set_setting('sound_volume', nv)
 
     def _toggle_buffmon_enabled(self):
-        """Buff 监视器切换 — 游戏插件覆盖。"""
         pass
 
     def _cycle_boss_bar_mode(self):
-        """Boss 血条模式切换 — 游戏插件覆盖。"""
         pass
 
     def _get_mem_data_source(self) -> str:

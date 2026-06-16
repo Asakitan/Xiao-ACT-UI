@@ -48,7 +48,6 @@ from typing import Any, Dict, List, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-get_skill_slot_rects = None  # moved to plugin sr_config; set by plugin on_load
 from utils.sao_sound import play_sound
 from gui_modules.sao_panel_ui import _apply_window_icon, _set_process_app_id
 
@@ -103,34 +102,7 @@ class SAOPlayerGUIMiscMixin:
             return None
         client_left, client_top = int(client_rect[0]), int(client_rect[1])
 
-        slot_rects: List[Dict[str, Any]] = []
-        for slot in list(getattr(gs, 'skill_slots', []) or []) if gs else []:
-            if not isinstance(slot, dict):
-                continue
-            rect = slot.get('rect') or {}
-            try:
-                sx = int(rect.get('x', 0)); sy = int(rect.get('y', 0))
-                sw = int(rect.get('w', 0)); sh = int(rect.get('h', 0))
-                idx = int(slot.get('index', 0) or 0)
-            except Exception:
-                continue
-            if idx <= 0 or sw <= 0 or sh <= 0:
-                continue
-            slot_rects.append({
-                'index': idx,
-                'screen_rect': {'x': client_left + sx, 'y': client_top + sy,
-                                'w': sw, 'h': sh},
-            })
-        fallback: List[Dict[str, Any]] = []
-        if not slot_rects:
-            for item in get_skill_slot_rects(client_rect):
-                left, top, right, bottom = item['bbox']
-                fallback.append({
-                    'index': int(item['index']),
-                    'screen_rect': {'x': left, 'y': top,
-                                    'w': right - left, 'h': bottom - top},
-                })
-        return _CY_UI.compute_skillfx_layout(client_rect, slot_rects, fallback)
+        return None
 
     def _get_game_window_rect(self):
         rect = None

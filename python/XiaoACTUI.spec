@@ -81,7 +81,6 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.pointer_chain',
     'mem_probe.scanner',
     'mem_probe.driver_backend',
-    'mem_probe.driver_bootstrap',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
@@ -200,7 +199,7 @@ a = Analysis(
 
 # compiled-only modules: strip .py/.pyc, ship .pyd only
 a.pure = [(n, s, p) for (n, s, p) in a.pure
-          if n not in ('mem_probe.driver_backend', 'mem_probe.driver_bootstrap')]
+          if n not in ('mem_probe.driver_backend',)]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
