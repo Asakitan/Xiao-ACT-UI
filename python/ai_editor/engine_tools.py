@@ -361,6 +361,94 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         requires_confirm=True,
     )
 
+    # ==================================================================
+    # Category: editor — 编辑器操作 (通过JS bridge控制前端编辑器)
+    # ==================================================================
+
+    registry.register(
+        name="editor_get_content",
+        description="获取编辑器当前内容",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: {"note": "Use window.pywebview.api.editor_get_content() from JS"},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_set_content",
+        description="设置编辑器内容 (替换全部)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "新内容"},
+                "language": {"type": "string", "description": "语言模式 (python/javascript/json等)", "default": ""},
+                "filename": {"type": "string", "description": "文件名 (用于语言检测)", "default": ""},
+            },
+            "required": ["content"],
+        },
+        handler=lambda content, language="", filename="": {"note": "Dispatched to editor via JS bridge", "content_length": len(content)},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_insert_text",
+        description="在编辑器光标位置插入文本",
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "要插入的文本"},
+            },
+            "required": ["text"],
+        },
+        handler=lambda text: {"note": "Dispatched to editor via JS bridge", "text_length": len(text)},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_get_selection",
+        description="获取编辑器当前选中文本",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: {"note": "Use window.pywebview.api.editor_get_selection() from JS"},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_go_to_line",
+        description="跳转到编辑器指定行号",
+        parameters={
+            "type": "object",
+            "properties": {
+                "line": {"type": "integer", "description": "行号 (从1开始)"},
+            },
+            "required": ["line"],
+        },
+        handler=lambda line: {"note": "Dispatched to editor via JS bridge", "line": line},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_find_replace",
+        description="在编辑器中查找替换",
+        parameters={
+            "type": "object",
+            "properties": {
+                "find": {"type": "string", "description": "查找文本"},
+                "replace": {"type": "string", "description": "替换文本"},
+                "all": {"type": "boolean", "description": "是否全部替换", "default": False},
+            },
+            "required": ["find", "replace"],
+        },
+        handler=lambda find, replace, all=False: {"note": "Dispatched to editor via JS bridge"},
+        category="editor",
+    )
+
+    registry.register(
+        name="editor_get_language",
+        description="获取编辑器当前语言模式",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: {"note": "Use window.pywebview.api.editor_get_language() from JS"},
+        category="editor",
+    )
+
 
 # ======================================================================
 # Handler implementations

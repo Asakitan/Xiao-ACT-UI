@@ -313,6 +313,100 @@ class AIEditorAPI:
             evt.set()
         return {"ok": True}
 
+    # ── Editor state API (called by JS, also used by editor tools) ──
+
+    def editor_get_content(self) -> Dict:
+        """Get editor content via JS eval."""
+        if not self._window:
+            return {"content": "", "language": "plaintext"}
+        try:
+            content = self._window.evaluate_js("document.getElementById('editor-text').value")
+            lang = self._window.evaluate_js("editorLang")
+            return {"content": content or "", "language": lang or "plaintext"}
+        except Exception:
+            return {"content": "", "language": "plaintext"}
+
+    def editor_set_content(self, content: str, language: str = "", filename: str = "") -> Dict:
+        """Set editor content."""
+        js = json.dumps(content)
+        self._eval_js(f"openInEditor({js},{json.dumps(language or '')})")
+        if filename:
+            self._eval_js(f"editorFileName={json.dumps(filename)}")
+        return {"ok": True, "length": len(content)}
+
+    def editor_insert_text(self, text: str) -> Dict:
+        """Insert text at cursor position."""
+        js = json.dumps(text)
+        self._eval_js(f"""(function(){{
+            var ed=document.getElementById('editor-text');
+            var s=ed.selectionStart;
+            ed.value=ed.value.substring(0,s)+{js}+ed.value.substring(ed.selectionEnd);
+            ed.selectionStart=ed.selectionEnd=s+{len(text)};
+            updateLineNums();updateCursorPos();
+        }})()""")
+        return {"ok": True}
+
+    def editor_get_selection(self) -> Dict:
+        """Get selected text from editor."""
+        if not self._window:
+            return {"selection": "", "start": 0, "end": 0}
+        try:
+            result = self._window.evaluate_js("""
+                (function(){
+                    var ed=document.getElementById('editor-text');
+                    return JSON.stringify({
+                        selection:ed.value.substring(ed.selectionStart,ed.selectionEnd),
+                        start:ed.selectionStart, end:ed.selectionEnd
+                    });
+                })()
+            """)
+            return json.loads(result) if result else {"selection": "", "start": 0, "end": 0}
+        except Exception:
+            return {"selection": "", "start": 0, "end": 0}
+
+    def editor_go_to_line(self, line: int) -> Dict:
+        """Navigate editor to a specific line."""
+        self._eval_js(f"""(function(){{
+            var ed=document.getElementById('editor-text');
+            var lines=ed.value.split('\\n');
+            var pos=0;for(var i=0;i<Math.min({line}-1,lines.length-1);i++)pos+=lines[i].length+1;
+            ed.selectionStart=ed.selectionEnd=pos;ed.focus();
+            updateCursorPos();ed.scrollTop=Math.max(0,({line}-10)*18);
+        }})()""")
+        return {"ok": True, "line": line}
+
+    def editor_find_replace(self, find: str, replace: str, replace_all: bool = False) -> Dict:
+        """Find and replace in editor."""
+        f = json.dumps(find)
+        r = json.dumps(replace)
+        if replace_all:
+            self._eval_js(f"""(function(){{
+                var ed=document.getElementById('editor-text');
+                ed.value=ed.value.split({f}).join({r});updateLineNums();
+            }})()""")
+        else:
+            self._eval_js(f"""(function(){{
+                var ed=document.getElementById('editor-text');
+                var idx=ed.value.indexOf({f},ed.selectionEnd);
+                if(idx===-1)idx=ed.value.indexOf({f});
+                if(idx>=0){{
+                    ed.value=ed.value.substring(0,idx)+{r}+ed.value.substring(idx+{len(find)});
+                    ed.selectionStart=idx;ed.selectionEnd=idx+{len(replace)};
+                    updateLineNums();
+                }}
+            }})()""")
+        return {"ok": True}
+
+    def editor_get_language(self) -> Dict:
+        """Get current editor language mode."""
+        if not self._window:
+            return {"language": "plaintext"}
+        try:
+            lang = self._window.evaluate_js("editorLang")
+            return {"language": lang or "plaintext"}
+        except Exception:
+            return {"language": "plaintext"}
+
     # ── Events pushed to JS ──
 
     def _eval_js(self, js: str) -> None:

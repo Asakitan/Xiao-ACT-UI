@@ -287,6 +287,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .slash-item .desc { color:var(--fg-dim); font-size:12px; }
 
 /* ── Responsive ── */
+/* ── Context menu ── */
+#ctx-menu .ctx-item { padding:4px 16px; font-size:12px; color:var(--fg); cursor:pointer;
+  display:flex; align-items:center; gap:8px; white-space:nowrap; }
+#ctx-menu .ctx-item:hover { background:var(--bg-hover); }
+#ctx-menu .ctx-item .shortcut { margin-left:auto; color:var(--fg-dim); font-size:11px; }
+#ctx-menu .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
+
+/* ── Find bar ── */
+#find-bar { display:flex !important; }
+#find-bar[style*="display:none"] { display:none !important; }
+
 /* ── Extension cards (VSCode marketplace style) ── */
 .ext-card { display:flex; gap:10px; padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--border); }
 .ext-card:hover { background:var(--bg-hover); }
@@ -464,8 +475,46 @@ pre.code-block code .type { color:var(--fg-type); }
 <div class="statusbar">
   <span class="sb-item" id="status-text">Ready</span>
   <span class="spacer"></span>
+  <span class="sb-item" id="status-cursor" title="Go to Line (Ctrl+G)">Ln 1, Col 1</span>
+  <span class="sb-item" id="status-indent" title="Indentation">Spaces: 4</span>
+  <span class="sb-item" id="status-encoding">UTF-8</span>
+  <span class="sb-item" id="status-eol">LF</span>
+  <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tokens</span>
+</div>
+
+<!-- Find/Replace bar (hidden by default) -->
+<div id="find-bar" style="display:none;position:absolute;top:36px;right:20px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:4px;padding:6px 10px;z-index:150;display:none;
+  box-shadow:0 4px 12px #00000040;gap:6px;align-items:center">
+  <input id="find-input" placeholder="Find" style="background:var(--bg-input);color:var(--fg);
+    border:1px solid var(--border);border-radius:3px;padding:3px 8px;font:12px var(--mono);
+    width:200px;outline:none">
+  <input id="replace-input" placeholder="Replace" style="background:var(--bg-input);color:var(--fg);
+    border:1px solid var(--border);border-radius:3px;padding:3px 8px;font:12px var(--mono);
+    width:200px;outline:none;margin-left:4px">
+  <span class="toolbar-btn" onclick="doFind()" title="Find Next (Enter)">▼</span>
+  <span class="toolbar-btn" onclick="doFindPrev()" title="Find Previous">▲</span>
+  <span class="toolbar-btn" onclick="doReplace()" title="Replace">↻</span>
+  <span class="toolbar-btn" onclick="doReplaceAll()" title="Replace All">↻All</span>
+  <span id="find-count" style="font-size:11px;color:var(--fg-dim);min-width:40px"></span>
+  <span class="toolbar-btn" onclick="closeFindBar()" title="Close (Esc)">✕</span>
+</div>
+
+<!-- Language picker modal -->
+<div id="lang-picker" class="modal-bg">
+  <div class="modal" style="width:400px;max-height:500px">
+    <input id="lang-search" placeholder="Select Language Mode" style="width:100%;background:var(--bg-input);
+      color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font:13px var(--sans);
+      outline:none;margin-bottom:8px" oninput="filterLanguages()">
+    <div id="lang-list" style="max-height:380px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- Editor context menu -->
+<div id="ctx-menu" style="display:none;position:fixed;background:var(--bg2);border:1px solid var(--border);
+  border-radius:4px;padding:4px 0;z-index:200;box-shadow:0 4px 16px #00000060;min-width:180px">
 </div>
 
 <!-- Settings modal -->
@@ -610,20 +659,219 @@ function openInEditor(code,lang){
   $('editor-welcome').style.display='none';
   $('editor-container').style.display='flex';
   $('editor-text').value=code;
-  updateLineNums();
+  updateLineNums();updateCursorPos();
+  if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
+  else detectLanguage(code,'');
+  editorDirty=false;
 }
+
+// ── Editor state ──
+let editorLang='plaintext', editorDirty=false, editorFileName='untitled';
+const LANGUAGES=['plaintext','python','javascript','typescript','json','html','css','markdown',
+  'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
 
 function updateLineNums(){
   const lines=$('editor-text').value.split('\n').length;
   $('line-nums').textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
 }
-$('editor-text').addEventListener('input',updateLineNums);
-$('editor-text').addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop});
-$('editor-text').addEventListener('keydown',function(e){
-  if(e.key==='Tab'){e.preventDefault();const s=this.selectionStart,end=this.selectionEnd;
+function updateCursorPos(){
+  const ta=$('editor-text'),val=ta.value,pos=ta.selectionStart;
+  const before=val.substring(0,pos),lines=before.split('\n');
+  const ln=lines.length,col=lines[lines.length-1].length+1;
+  $('status-cursor').textContent='Ln '+ln+', Col '+col;
+}
+function detectLanguage(code,name){
+  if(name){
+    const ext=name.split('.').pop().toLowerCase();
+    const map={py:'python',js:'javascript',ts:'typescript',json:'json',html:'html',css:'css',
+      md:'markdown',yml:'yaml',yaml:'yaml',xml:'xml',sql:'sql',sh:'shell',bash:'shell',
+      lua:'lua',c:'c',cpp:'cpp',cs:'csharp',java:'java',go:'go',rs:'rust',toml:'toml'};
+    if(map[ext]){setEditorLanguage(map[ext]);return}
+  }
+  if(code.startsWith('#!/usr/bin/env python')||code.includes('def ')||code.includes('import '))setEditorLanguage('python');
+  else if(code.includes('function ')||code.includes('const ')||code.includes('=>'))setEditorLanguage('javascript');
+  else if(code.startsWith('{')&&code.endsWith('}'))setEditorLanguage('json');
+  else setEditorLanguage('plaintext');
+}
+function setEditorLanguage(lang){
+  editorLang=lang;
+  const icons={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
+    markdown:'M↓',yaml:'📄',shell:'$_',lua:'🌙',sql:'🗃',plaintext:'{}'};
+  $('status-language').textContent=(icons[lang]||'{}')+' '+lang.charAt(0).toUpperCase()+lang.slice(1);
+}
+
+const ed=$('editor-text');
+ed.addEventListener('input',function(){updateLineNums();updateCursorPos();editorDirty=true});
+ed.addEventListener('click',updateCursorPos);
+ed.addEventListener('keyup',updateCursorPos);
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop});
+ed.addEventListener('keydown',function(e){
+  // Tab → indent
+  if(e.key==='Tab'&&!e.ctrlKey){e.preventDefault();const s=this.selectionStart,end=this.selectionEnd;
     this.value=this.value.substring(0,s)+'    '+this.value.substring(end);
-    this.selectionStart=this.selectionEnd=s+4;updateLineNums()}
+    this.selectionStart=this.selectionEnd=s+4;updateLineNums();return}
+  // Ctrl+F → Find
+  if(e.key==='f'&&e.ctrlKey){e.preventDefault();openFindBar();return}
+  // Ctrl+H → Replace
+  if(e.key==='h'&&e.ctrlKey){e.preventDefault();openFindBar(true);return}
+  // Ctrl+G → Go to line
+  if(e.key==='g'&&e.ctrlKey){e.preventDefault();goToLinePrompt();return}
+  // Ctrl+/ → Toggle comment
+  if(e.key==='/'&&e.ctrlKey){e.preventDefault();toggleComment();return}
+  // Ctrl+D → Duplicate line
+  if(e.key==='d'&&e.ctrlKey){e.preventDefault();duplicateLine();return}
+  // Ctrl+Shift+K → Delete line
+  if(e.key==='K'&&e.ctrlKey&&e.shiftKey){e.preventDefault();deleteLine();return}
+  // Enter → Auto-indent
+  if(e.key==='Enter'&&!e.ctrlKey){
+    const pos=this.selectionStart,before=this.value.substring(0,pos);
+    const line=before.split('\n').pop();
+    const indent=line.match(/^(\s*)/)[1];
+    const extra=(line.trimEnd().endsWith(':')||line.trimEnd().endsWith('{'))?'    ':'';
+    e.preventDefault();
+    const ins='\n'+indent+extra;
+    this.value=this.value.substring(0,pos)+ins+this.value.substring(this.selectionEnd);
+    this.selectionStart=this.selectionEnd=pos+ins.length;
+    updateLineNums();updateCursorPos()}
 });
+
+// ── Context menu ──
+ed.addEventListener('contextmenu',function(e){
+  e.preventDefault();
+  const menu=$('ctx-menu');
+  menu.innerHTML='';
+  const items=[
+    {label:'Cut',shortcut:'Ctrl+X',action:()=>{document.execCommand('cut')}},
+    {label:'Copy',shortcut:'Ctrl+C',action:()=>{document.execCommand('copy')}},
+    {label:'Paste',shortcut:'Ctrl+V',action:()=>{document.execCommand('paste')}},
+    {sep:true},
+    {label:'Select All',shortcut:'Ctrl+A',action:()=>{ed.select()}},
+    {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
+    {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
+    {sep:true},
+    {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+    {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
+    {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+    {sep:true},
+    {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
+  ];
+  items.forEach(it=>{
+    if(it.sep){const s=document.createElement('div');s.className='ctx-sep';menu.appendChild(s);return}
+    const d=document.createElement('div');d.className='ctx-item';
+    d.innerHTML=esc(it.label)+(it.shortcut?'<span class="shortcut">'+it.shortcut+'</span>':'');
+    d.onclick=()=>{menu.style.display='none';it.action()};
+    menu.appendChild(d);
+  });
+  menu.style.display='block';menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
+});
+document.addEventListener('click',()=>{$('ctx-menu').style.display='none'});
+
+// ── Find/Replace ──
+function openFindBar(showReplace){
+  const bar=$('find-bar');bar.style.display='flex';
+  $('replace-input').style.display=showReplace?'':'none';
+  const sel=ed.value.substring(ed.selectionStart,ed.selectionEnd);
+  if(sel)$('find-input').value=sel;
+  $('find-input').focus();$('find-input').select();
+}
+function closeFindBar(){$('find-bar').style.display='none';ed.focus()}
+function doFind(){
+  const q=$('find-input').value;if(!q)return;
+  const val=ed.value,start=ed.selectionEnd;
+  let idx=val.indexOf(q,start);if(idx===-1)idx=val.indexOf(q);
+  if(idx>=0){ed.selectionStart=idx;ed.selectionEnd=idx+q.length;ed.focus();
+    const count=(val.match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'))||[]).length;
+    $('find-count').textContent=count+' results'}
+  else{$('find-count').textContent='No results'}
+}
+function doFindPrev(){
+  const q=$('find-input').value;if(!q)return;
+  const val=ed.value,end=ed.selectionStart;
+  let idx=val.lastIndexOf(q,end-1);if(idx===-1)idx=val.lastIndexOf(q);
+  if(idx>=0){ed.selectionStart=idx;ed.selectionEnd=idx+q.length;ed.focus()}
+}
+function doReplace(){
+  const q=$('find-input').value,r=$('replace-input').value;
+  if(!q||ed.selectionStart===ed.selectionEnd)return;
+  const s=ed.selectionStart;
+  ed.value=ed.value.substring(0,s)+r+ed.value.substring(ed.selectionEnd);
+  ed.selectionStart=s;ed.selectionEnd=s+r.length;updateLineNums();doFind();
+}
+function doReplaceAll(){
+  const q=$('find-input').value,r=$('replace-input').value;if(!q)return;
+  ed.value=ed.value.split(q).join(r);updateLineNums();
+  $('find-count').textContent='All replaced';
+}
+$('find-input').addEventListener('keydown',e=>{if(e.key==='Enter')doFind();if(e.key==='Escape')closeFindBar()});
+
+// ── Go to line ──
+function goToLinePrompt(){
+  const ln=prompt('Go to Line:');if(!ln)return;
+  const n=parseInt(ln);if(isNaN(n)||n<1)return;
+  const lines=ed.value.split('\n');
+  let pos=0;for(let i=0;i<Math.min(n-1,lines.length-1);i++)pos+=lines[i].length+1;
+  ed.selectionStart=ed.selectionEnd=pos;ed.focus();updateCursorPos();
+  ed.scrollTop=Math.max(0,(n-10)*18);
+}
+
+// ── Toggle comment ──
+function toggleComment(){
+  const cmt=editorLang==='python'?'# ':editorLang==='html'?'<!-- ':editorLang==='css'?'/* ':'// ';
+  const val=ed.value,start=ed.selectionStart,end=ed.selectionEnd;
+  const before=val.substring(0,start),lineStart=before.lastIndexOf('\n')+1;
+  const line=val.substring(lineStart,val.indexOf('\n',start)===-1?val.length:val.indexOf('\n',start));
+  if(line.trimStart().startsWith(cmt.trim())){
+    const idx=line.indexOf(cmt.trim());
+    ed.value=val.substring(0,lineStart+idx)+val.substring(lineStart+idx+cmt.length);
+  } else {
+    ed.value=val.substring(0,lineStart)+cmt+val.substring(lineStart);
+  }
+  updateLineNums();
+}
+
+// ── Duplicate line ──
+function duplicateLine(){
+  const val=ed.value,pos=ed.selectionStart;
+  const before=val.substring(0,pos),lineStart=before.lastIndexOf('\n')+1;
+  let lineEnd=val.indexOf('\n',pos);if(lineEnd===-1)lineEnd=val.length;
+  const line=val.substring(lineStart,lineEnd);
+  ed.value=val.substring(0,lineEnd)+'\n'+line+val.substring(lineEnd);
+  ed.selectionStart=ed.selectionEnd=pos+line.length+1;updateLineNums();
+}
+
+// ── Delete line ──
+function deleteLine(){
+  const val=ed.value,pos=ed.selectionStart;
+  const before=val.substring(0,pos),lineStart=before.lastIndexOf('\n')+1;
+  let lineEnd=val.indexOf('\n',pos);if(lineEnd===-1)lineEnd=val.length;else lineEnd++;
+  ed.value=val.substring(0,lineStart)+val.substring(lineEnd);
+  ed.selectionStart=ed.selectionEnd=lineStart;updateLineNums();updateCursorPos();
+}
+
+// ── Format document ──
+function formatDocument(){
+  if(editorLang==='json'){
+    try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);updateLineNums();setStatus('Formatted JSON')}
+    catch{setStatus('Invalid JSON')}
+  } else setStatus('Format not available for '+editorLang);
+}
+
+// ── Language picker ──
+function showLanguagePicker(){
+  $('lang-picker').classList.add('open');$('lang-search').value='';$('lang-search').focus();
+  filterLanguages();
+}
+function filterLanguages(){
+  const q=$('lang-search').value.toLowerCase(),list=$('lang-list');list.innerHTML='';
+  LANGUAGES.filter(l=>l.includes(q)).forEach(l=>{
+    const d=document.createElement('div');d.className='sb-item';d.style.padding='6px 16px';
+    d.textContent=l.charAt(0).toUpperCase()+l.slice(1);
+    d.onclick=()=>{setEditorLanguage(l);$('lang-picker').classList.remove('open')};
+    list.appendChild(d);
+  });
+}
+$('lang-picker').onclick=e=>{if(e.target.id==='lang-picker')e.target.classList.remove('open')};
+window.showLanguagePicker=showLanguagePicker;window.filterLanguages=filterLanguages;
 
 // ── Syntax highlighting ──
 const KW_PY=new Set('def class import from return if elif else for while try except finally with as yield async await lambda pass break continue raise True False None and or not in is'.split(' '));
