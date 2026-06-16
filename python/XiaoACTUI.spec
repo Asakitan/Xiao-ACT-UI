@@ -39,6 +39,7 @@ REORG_PKG_HIDDENIMPORTS = (
     + collect_submodules('act_platform')
     + collect_submodules('act_replay')
     + collect_submodules('ui_gpu')
+    + collect_submodules('ai_editor')
 )
 MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe',
