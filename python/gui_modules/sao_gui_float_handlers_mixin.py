@@ -34,8 +34,7 @@ Required SAOPlayerGUI methods (via MRO):
   * _toggle_sao_menu (Menu mixin)
   * _toggle_recognition_menu, _toggle_topmost,
     _toggle_hide_all_panels (Panels mixin)
-  * _toggle_auto_script, _toggle_boss_raid,
-    _boss_raid_next_phase (Actions mixin)
+  * Game-specific toggles provided by plugin
   * _show_plugin_popup_menu (Panels mixin)
 """
 
@@ -198,68 +197,13 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._hotkey_mgr = SAOHotkeyManager(self.settings, {
             'toggle_recognition': lambda: self.root.after(0, self._toggle_recognition_menu),
             'toggle_topmost': lambda: self.root.after(0, self._toggle_topmost),
-            'toggle_auto_script': lambda: self.root.after(0, self._toggle_auto_script),
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
-            'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
-            'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
-            'toggle_auto_dodge': lambda: self.root.after(0, self._toggle_auto_dodge),
         }, hotkey_provider=self._plugin_hotkey_map)
 
     def _toggle_auto_dodge(self):
-        """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
-        try:
-            linkage = getattr(self, '_boss_autokey_linkage', None)
-            if linkage is None:
-                return
-            _lc = getattr(linkage, 'load_config', None)
-            _se = getattr(linkage, 'set_dodge_enabled', None)
-            if not (callable(_lc) and callable(_se)):
-                return
-            cfg = _lc(self._cfg_settings_ref)
-            new_state = not bool(cfg.get('dodge_enabled', True))
-            _se(self._cfg_settings_ref, new_state)
-            # 急停: 立刻松开定向躲避按住的所有 WASD 键, 杀掉在途位移
-            director = getattr(self, '_auto_dodge_director', None)
-            if director is not None:
-                try:
-                    director.release_all()
-                except Exception:
-                    pass
-            # 同步作废 linkage 在飞的发键线程, 否则 hold 连招无视 F12 继续发
-            linkage = getattr(self, '_boss_autokey_linkage', None)
-            if linkage is not None:
-                try:
-                    linkage.panic_stop()
-                except Exception:
-                    pass
-            key = 'F12'
-            try:
-                v = (self.settings.get('hotkeys', {}) or {}).get('toggle_auto_dodge')
-                if isinstance(v, dict):
-                    v = v.get('key') or v.get('name')
-                if v:
-                    key = str(v).upper()
-            except Exception:
-                pass
-            msg = (f'已启用 ({key} 紧急停用)' if new_state
-                   else f'已禁用 ({key} 重新启用)')
-            if getattr(self, '_alert_overlay', None):
-                self._alert_overlay.show_alert('自动躲避', msg)
-            # 同步刷新已打开的机制面板 — 否则总开关显示与引擎实际状态脱节
-            for attr in ('_bossraid_panel', '_bossraid_detail_panel'):
-                p = getattr(self, attr, None)
-                if p is None:
-                    continue
-                try:
-                    p._mech_bump()
-                    if hasattr(p, '_mx_rerender'):
-                        p._mx_rerender()
-                except Exception:
-                    pass
-            print(f'[SAO Entity] auto-dodge {"on" if new_state else "off"}')
-        except Exception as e:
-            print(f'[SAO Entity] toggle_auto_dodge failed: {e}')
+        """自动躲避切换 — 游戏插件覆盖。"""
+        pass
 
     def _plugin_hotkey_map(self):
         """Resolve plugin-registered hotkeys for the hotkey listener.

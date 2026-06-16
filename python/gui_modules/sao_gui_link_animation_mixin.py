@@ -1014,15 +1014,10 @@ void main() {
                         })
             except Exception:
                 pass
-        for idx, panel in enumerate([
-            self._status_panel,
-            getattr(self._autokey_panel, '_win', None),
-            getattr(self._bossraid_panel, '_win', None),
-            getattr(self._autokey_detail_panel, '_win', None),
-            getattr(self._bossraid_detail_panel, '_win', None),
-        ]):
-            _add(panel, 'panel', order=idx)
-        _add_panel_owner(self._commander_panel, order=5)
+        for idx, attr in enumerate(sorted(k for k in vars(self) if k.endswith('_panel') and k.startswith('_'))):
+            obj = getattr(self, attr, None)
+            win = getattr(obj, '_win', obj)
+            _add(win, 'panel', order=idx)
         _add(getattr(getattr(self, '_sao_menu', None), '_overlay', None), 'menu')
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
         # _hp_alpha_windows 已废弃 (ULW 内部渲染)
