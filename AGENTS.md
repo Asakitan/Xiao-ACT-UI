@@ -43,7 +43,28 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 - Current branch: `5.0.0`.
 - Do not run `build_release.bat`, PyInstaller, Cython, `dev_publish`, or package publishing unless explicitly requested.
 - Stage only intended files; this repo often has unrelated local edits from concurrent sessions.
-- Keep PyInstaller specs aligned with module layout (`hiddenimports`, `collect_submodules`).
+
+### Packaging maintenance (XiaoACTUI.spec + dev_publish.py)
+
+**When adding a new package (directory with `__init__.py`):**
+1. Add `collect_submodules('package_name')` to `REORG_PKG_HIDDENIMPORTS` in `XiaoACTUI.spec`.
+2. Decide delta vs rebuild: if the package contains sensitive/binary code (like `mem_probe/`, `license/`), add it to `IGNORE_PREFIXES` in `dev_publish.py` so changes only go via full runtime-rebuild, not delta.
+
+**Current package routing:**
+
+| Package | spec | dev_publish | Route |
+|---------|------|-------------|-------|
+| `act_platform/` `act_replay/` `engines/` `gui_modules/` `render/` `sao_theme/` `ui_gpu/` `updater/` `utils/` `ai_editor/` | collect_submodules | delta | Normal: delta .pyc |
+| `mem_probe/` | curated 9-module list | IGNORE | Sensitive: full rebuild only |
+| `license/` | collect_submodules | IGNORE | Sensitive: full rebuild only |
+| `license_server/` | ❌ not in spec | IGNORE | Dev-only: never published |
+
+**When modifying files in an IGNORE-routed package** (`mem_probe/`, `license/`): changes will NOT appear in delta updates. Must do a full runtime-rebuild (`build_release.bat`).
+
+**Plugin tree filtering** (dev_publish.py, line 493+): Files under `plugins/` go as `CAT_DATA` except:
+- `il2cpp/out/` and `il2cpp/bin/` (dumper output, 1.8GB+)
+- `.dll`, `.exe`, `.pdb` files
+- Dev scripts: `diag_dump`, `dump_tool`, `setup_dumper`, `mem_dump_metadata`
 
 ## Validation
 
