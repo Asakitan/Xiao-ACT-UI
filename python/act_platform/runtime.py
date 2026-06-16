@@ -9,14 +9,15 @@ import json
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
-from engines.act_aggregate import (
-    aggregate_by_actor,
-    aggregate_by_field,
-    aggregate_by_topic,
-    aggregate_damage_by_monster,
-    aggregate_damage_by_skill,
-    build_act_aggregate_summary,
-)
+def _noop_agg(*a, **kw):
+    return {}
+
+aggregate_by_actor = _noop_agg
+aggregate_by_field = _noop_agg
+aggregate_by_topic = _noop_agg
+aggregate_damage_by_monster = _noop_agg
+aggregate_damage_by_skill = _noop_agg
+build_act_aggregate_summary = _noop_agg
 
 
 # 聚合工作台维度：插件开发者可在界面上切换"按什么聚合"（改聚合规则）。

@@ -128,7 +128,7 @@ public class ApplyEngineTests : IDisposable
     [Fact]
     public void PendingApplyMeta_RoundTripsJson()
     {
-        var meta = new PendingApplyMeta("p.zip", "C:/install", 1234, "C:/install/run.exe", "stable", "2.4.1");
+        var meta = new PendingApplyMeta("p.zip", "C:/install", 1234, "C:/install/run.exe", "stable", "5.0.0");
         var json = meta.ToJson();
         var back = PendingApplyMeta.FromJson(json);
         Assert.Equal(meta, back);

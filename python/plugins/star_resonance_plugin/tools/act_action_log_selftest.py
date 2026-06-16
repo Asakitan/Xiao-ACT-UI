@@ -16,7 +16,7 @@ if ROOT not in sys.path:
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
-from engines.dps_history import DpsHistoryStore
+from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore
 from gui_modules.sao_gui_action_log import ActionLogPanel, _finite_float, _finite_int
 
 

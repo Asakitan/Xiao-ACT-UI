@@ -29,7 +29,6 @@ import threading
 import time
 from typing import Any, Dict, List
 
-from engines.combat_analytics import mem_boss_break_override
 
 
 def _finite_float(

@@ -2,29 +2,33 @@
 
 Parallel C# implementation of the Python/Cython `sao_auto` runtime.
 Python remains canonical; the C# tree is built session-by-session and
-reaches feature parity over the course of fourteen named sessions
-(`docs/session-handoffs/session-NN.md`).
+tracks the current Python product version (`5.0.0`) while feature
+parity continues session-by-session (`docs/session-handoffs/session-NN.md`).
 
 ## Status
 
-As of Session 14 — **256 unit tests passing, 0 failing**, all
-foundational layers landed: configuration, state, CLI, packet protocol
-+ TCP reassembler + parser envelope, vision contracts, overlay
-scheduler / lanes / premultiply, menu state machine, WebView2 bridge
-contract, panel snapshots + geometry + format, automation engines,
-updater state machine + manifest, parity harness.
+As of the 5.0.0 metadata-alignment pass, `dotnet test SaoAuto.sln`
+passes **1992 tests**. The C# port now shares the Python `5.0.0`
+product version and has landed the foundational layers plus substantial
+runtime wiring: configuration, state, CLI, packet protocol + TCP
+reassembler + parser envelope, vision contracts, overlay scheduler /
+lanes / premultiply, menu state machine, WebView2 bridge + legacy shim,
+transparent HUD host geometry, panel snapshots + geometry + format,
+automation engines, updater state machine + manifest, parity harness.
 
-What still needs follow-up sessions (`*b` suffix):
-- Live SharpPcap capture + per-method packet decode (5d).
-- Live frame capture + recognition (6b).
-- ULW window presenter + click-through (7b).
-- Live entity menu rendering + hotkeys (8b).
-- Live WebView2 host + HTML asset load (9b).
-- Live overlay panel rendering (10b).
-- Live SendInput / sound playback / Commander / HideSeek (11b).
-- Live HTTP fetch + apply helper + onedir packaging (12b).
-- Cross-runtime fixture generators (13b).
-- Root `SAO-UI.sln` integration (14b).
+What still needs follow-up before a real cutover:
+- Real-game packet / recognition parity and one full combat replay.
+- Multi-monitor HUD tracking, fullscreen HUD flag parity, and the
+  remaining HUD subscriber events.
+- Native/entity menu rendering beyond the placeholder shell.
+- Full ACT panel / plugin contract parity against the Python 5.0.0
+  `act_platform` and `star_resonance_plugin` contracts.
+- UpdateHost / DevPublish full-package, minimum-version, and disposable
+  apply/rollback validation.
+- Driver / MemProbe kernel-backend live validation if C# is expected to
+  replace the Python runtime in gameplay.
+- Root `SAO-UI.sln` integration if the C# port should build from the
+  workspace root.
 
 See [docs/cutover-checklist.md](docs/cutover-checklist.md) for the full
 gate list before the C# port can replace the Python runtime.

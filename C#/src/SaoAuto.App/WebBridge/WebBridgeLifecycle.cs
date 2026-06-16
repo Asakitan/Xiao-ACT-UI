@@ -42,6 +42,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private SoundBridge? _soundBridge;
     private LegacyUiBridge? _legacyUiBridge;
     private FilePickerBridge? _filePickerBridge;
+    private ActRuntime? _actRuntime;
     private ActBridge? _actBridge;
     private bool _disposed;
 
@@ -297,8 +298,20 @@ public sealed class WebBridgeLifecycle : IDisposable
     public void AttachAct(ActBridge.ActCommandHandler? handler = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        if (handler is null) _actRuntime = null;
         _actBridge?.Dispose();
         _actBridge = new ActBridge(Router, handler);
+    }
+
+    /// <summary>S203 — attach the native C# ACT runtime so shared ACT HTML
+    /// pages get Python-compatible empty states instead of unavailable or
+    /// unknown-command replies while deeper ACT parity is ported.</summary>
+    public void AttachActRuntime(SettingsManager settings, GameStateManager? states = null)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _actRuntime = new ActRuntime(settings, states);
+        AttachAct(_actRuntime.Handle);
     }
 
     public void Dispose()
@@ -306,6 +319,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         if (_disposed) return;
         _disposed = true;
         _actBridge?.Dispose();
+        _actRuntime = null;
         _filePickerBridge?.Dispose();
         _legacyUiBridge?.Dispose();
         _soundBridge?.Dispose();

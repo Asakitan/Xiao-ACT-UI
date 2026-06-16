@@ -18,35 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
-from engines.auto_key_engine import (
-    AutoKeyCloudClient,
-    AutoKeyEngine,
-    DEFAULT_AUTO_KEY_SERVER_URL,
-    build_auto_key_state,
-    build_identity_state,
-    clone_profile,
-    default_upload_auth_state,
-    delete_profile as delete_auto_key_profile,
-    export_profile_to_default_path,
-    find_profile as find_auto_key_profile,
-    import_profile_from_path,
-    load_auto_key_config,
-    make_default_profile,
-    normalize_profile,
-    save_auto_key_config,
-    snapshot_author_from_state,
-    upsert_profile,
-)
-# Game engine imports removed in 5.0.0 — plugin creates these.
-# boss_raid_engine, boss_autokey_linkage, mechanic_alert_controller
-# functions are accessed via getattr on the installed engine instances.
 from utils import sao_tts
-from engines.dps_tracker import DpsTracker
-from engines.dps_history import DpsHistoryStore
-from engines.encounter_manager import EncounterManager
-from engines.act_trigger_engine import ActTriggerEngine
-from engines.combat_analytics import (
-    boss_state_from_monster_update, build_act_snapshot, mem_boss_break_override)
 from act_platform.runtime import (
     act_action_log_copy,
     act_action_log_filter,

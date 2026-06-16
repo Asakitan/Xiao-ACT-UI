@@ -111,6 +111,34 @@ def _init_game_engines(ctx):
     except Exception:
         pass
 
+    # ── DPS / Encounter / History / Trigger 引擎 ──
+    try:
+        from plugins.star_resonance_plugin.engines.dps_tracker import DpsTracker
+        from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore
+        from plugins.star_resonance_plugin.engines.encounter_manager import EncounterManager
+        from plugins.star_resonance_plugin.engines.act_trigger_engine import ActTriggerEngine
+        dps_history = DpsHistoryStore()
+        dps_tracker = DpsTracker()
+        encounter_mgr = EncounterManager()
+        try:
+            _rules = cfg.get('act_trigger_rules', []) or []
+        except Exception:
+            _rules = []
+        trigger_engine = ActTriggerEngine(_rules)
+        _finalize_hook = getattr(owner, '_on_dps_report_finalized', None)
+        if callable(_finalize_hook):
+            dps_tracker.register_finalized_hook(_finalize_hook)
+        ctx.engine.set_owner_attr('_dps_history_store', dps_history)
+        ctx.engine.set_owner_attr('_dps_tracker', dps_tracker)
+        ctx.engine.set_owner_attr('_encounter_mgr', encounter_mgr)
+        ctx.engine.set_owner_attr('_act_trigger_engine', trigger_engine)
+        ctx.engine.register('dps_tracker', dps_tracker)
+        ctx.engine.register('encounter_manager', encounter_mgr)
+        ctx.engine.register('trigger_engine', trigger_engine)
+        ctx.log('[SR] DPS/Encounter/Trigger engines initialized')
+    except Exception as e:
+        ctx.log(f'[SR] DPS engines FAILED: {e}')
+
     # ── PacketBridge (data source) ──
     packet_engine = None
     try:
@@ -160,7 +188,7 @@ def _init_game_engines(ctx):
 
     # ── AutoKeyEngine ──
     try:
-        from engines.auto_key_engine import AutoKeyEngine
+        from plugins.star_resonance_plugin.engines.auto_key_engine import AutoKeyEngine
         ak = AutoKeyEngine(
             state_mgr, cfg,
             extra_gate=lambda: bool(getattr(owner, '_recognition_active', False)),

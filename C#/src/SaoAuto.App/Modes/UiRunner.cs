@@ -148,6 +148,7 @@ public sealed class UiRunner
                 catch { /* swallow */ }
             });
         webBridge.AttachFilePicker(settings: _settings, states: _states);
+        webBridge.AttachActRuntime(_settings, _states);
 
         var application = (System.Windows.Application.Current as App) ?? new App();
         application.DispatcherUnhandledException += (_, e) =>
@@ -371,8 +372,13 @@ public sealed class UiRunner
     /// The hard log line at the end is the source-of-truth signal in
     /// %LOCALAPPDATA%/SaoAuto/logs/saoauto-*.log.</summary>
     public static string? ResolveHudIndexUrl(ILogger log)
+        => ResolveHudIndexUrl(log, AppContext.BaseDirectory);
+
+    public static string? ResolveHudIndexUrl(ILogger log, string baseDirectory)
     {
-        var binDir = AppContext.BaseDirectory;
+        var binDir = string.IsNullOrWhiteSpace(baseDirectory)
+            ? AppContext.BaseDirectory
+            : baseDirectory;
         string[] names = { "hp.html", "panel.html" };
         var roots = new List<string>
         {
@@ -384,19 +390,26 @@ public sealed class UiRunner
             System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "..", "web"),
         };
 
-        // Project-anchored upward walk: look for a dir named "sao_auto"
-        // that contains web/panel.html. Walks at most 12 levels up to
-        // guard against pathological mount points.
+        // C#-anchored upward walk: look for local web folders in the C# tree
+        // only. Do not fall back to legacy Python-source layouts; the C# client
+        // must be able to launch without the Python source tree.
         try
         {
             var probe = new System.IO.DirectoryInfo(binDir);
             for (int i = 0; probe is not null && i < 12; i++, probe = probe.Parent)
             {
-                var saoAuto = System.IO.Path.Combine(probe.FullName, "sao_auto");
-                var probePanel = System.IO.Path.Combine(saoAuto, "web", "panel.html");
-                if (System.IO.File.Exists(probePanel))
+                var localWeb = System.IO.Path.Combine(probe.FullName, "web");
+                var localPanel = System.IO.Path.Combine(localWeb, "panel.html");
+                if (System.IO.File.Exists(localPanel))
                 {
-                    roots.Add(System.IO.Path.Combine(saoAuto, "web"));
+                    roots.Add(localWeb);
+                }
+
+                var sourceWeb = System.IO.Path.Combine(probe.FullName, "src", "SaoAuto.App", "web");
+                var sourcePanel = System.IO.Path.Combine(sourceWeb, "panel.html");
+                if (System.IO.File.Exists(sourcePanel))
+                {
+                    roots.Add(sourceWeb);
                     break;
                 }
             }
@@ -421,7 +434,7 @@ public sealed class UiRunner
             }
             catch { /* ignore malformed candidates */ }
         }
-        log.LogWarning("HUD index not found; starting on about:blank — buttons WILL appear dead until web/panel.html is reachable");
+        log.LogWarning("HUD index not found; starting on about:blank — buttons WILL appear dead until C# web/panel.html is reachable");
         return null;
     }
 

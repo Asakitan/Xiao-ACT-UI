@@ -22,7 +22,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.buff_marker_fill import BOSS_BUFF_SEGMENTS               # noqa: E402
+from plugins.star_resonance_plugin.engines.buff_marker_fill import BOSS_BUFF_SEGMENTS               # noqa: E402
 
 _DIR = os.path.join(_ROOT, "assets", "boss_raids")
 _CACHE = os.path.join(_ROOT, "assets", "name_tables", "static_id_name_cache.json")

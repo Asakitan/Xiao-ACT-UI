@@ -20,7 +20,7 @@ from act_platform.plugins import PluginManager
 from act_replay.events import damage_event, dungeon_event
 from act_replay.harness import ActReplayHarness
 from act_replay.importer import import_normalized_file, load_normalized_import
-from engines.dps_history import DpsHistoryStore, load_exported_report_file
+from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore, load_exported_report_file
 
 
 SELF_UID = 36668136

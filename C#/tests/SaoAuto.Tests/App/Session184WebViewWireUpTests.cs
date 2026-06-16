@@ -33,21 +33,41 @@ public class Session184WebViewWireUpTests : IDisposable
     [Fact]
     public void ResolveHudIndexUrl_NoFile_ReturnsNull()
     {
-        // AppContext.BaseDirectory is the test runner's bin; web/panel.html
-        // does not ship from the test project, so resolve must return null.
-        var url = UiRunner.ResolveHudIndexUrl(NullLogger.Instance);
-        // Either null (no panel.html) or a file:// URL to a real panel.html
-        // (when test is run from a workspace that has one). Both are
-        // valid outcomes; verify the contract.
-        if (url is not null)
-        {
-            Assert.StartsWith("file:///", url);
-            // S192 — hp.html is now the priority target, panel.html is a fallback.
-            Assert.True(
-                url.EndsWith("hp.html", StringComparison.OrdinalIgnoreCase)
-                    || url.EndsWith("panel.html", StringComparison.OrdinalIgnoreCase),
-                $"unexpected url={url}");
-        }
+        var isolated = Path.Combine(_workDir, "isolated", "bin");
+        Directory.CreateDirectory(isolated);
+
+        var url = UiRunner.ResolveHudIndexUrl(NullLogger.Instance, isolated);
+
+        Assert.Null(url);
+    }
+
+    [Fact]
+    public void ResolveHudIndexUrl_UsesCSharpLocalWebOnly()
+    {
+        var bin = Path.Combine(_workDir, "standalone", "bin");
+        var web = Path.Combine(bin, "web");
+        Directory.CreateDirectory(web);
+        File.WriteAllText(Path.Combine(web, "panel.html"), "<html></html>");
+
+        var pythonWeb = Path.Combine(_workDir, "sao_auto", "web");
+        Directory.CreateDirectory(pythonWeb);
+        File.WriteAllText(Path.Combine(pythonWeb, "hp.html"), "<html>python</html>");
+
+        var url = UiRunner.ResolveHudIndexUrl(NullLogger.Instance, bin);
+
+        Assert.NotNull(url);
+        Assert.EndsWith("panel.html", url, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sao_auto", url!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AppProjectDoesNotReferencePythonRuntimeResources()
+    {
+        var project = LocateAppProjectFile();
+        var text = File.ReadAllText(project);
+
+        Assert.DoesNotContain("Include=\"..\\..\\..\\python", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Include=\"../../../python", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -60,5 +80,17 @@ public class Session184WebViewWireUpTests : IDisposable
         Assert.False(string.IsNullOrEmpty(status));
         // `available` reflects this machine's installed runtime; not asserted.
         _ = available;
+    }
+
+    private static string LocateAppProjectFile()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 12 && dir is not null; i++, dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "src", "SaoAuto.App", "SaoAuto.App.csproj");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        throw new FileNotFoundException("Could not locate SaoAuto.App.csproj from test output directory.");
     }
 }

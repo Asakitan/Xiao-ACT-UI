@@ -35,7 +35,7 @@ from sao_web_panel_common import (
 )
 from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
 
-from engines.auto_key_engine import (
+from plugins.star_resonance_plugin.engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
     delete_profile as delete_auto_key_profile,
     export_profile_to_default_path as export_auto_key_profile,

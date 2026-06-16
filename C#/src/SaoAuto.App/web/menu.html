@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SAO Auto C# Menu</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: radial-gradient(circle at top, rgba(21, 93, 142, .62), rgba(2, 7, 19, .94)); color: #bdfcff; font-family: "Segoe UI", sans-serif; }
+    main { margin: 24px; padding: 18px; border: 1px solid rgba(81, 220, 255, .7); border-radius: 18px; background: rgba(3, 12, 26, .76); box-shadow: 0 0 30px rgba(28, 192, 255, .25); }
+    h1 { margin: 0 0 8px; color: #f9d86a; font-size: 18px; letter-spacing: .12em; text-transform: uppercase; }
+    p { margin: 0 0 14px; color: rgba(189, 252, 255, .78); }
+    button { border: 1px solid rgba(81, 220, 255, .75); border-radius: 999px; padding: 8px 14px; color: #bdfcff; background: rgba(12, 50, 76, .74); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SAO Auto C# Menu</h1>
+    <p>Standalone fallback menu loaded from the C# project web folder.</p>
+    <button id="closeBtn" type="button">Close</button>
+  </main>
+  <script src="bridge.js"></script>
+  <script src="pywebview-shim.js"></script>
+  <script>
+    document.getElementById('closeBtn').addEventListener('click', function () {
+      if (window.bridge && window.bridge.call) window.bridge.call('menu.close', {});
+    });
+  </script>
+</body>
+</html>

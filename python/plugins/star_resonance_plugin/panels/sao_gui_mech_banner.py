@@ -90,7 +90,7 @@ class MechBannerOverlay:
         try:
             hwnd = 0
             try:
-                from engines.auto_key_engine import GAME_PROCESS_NAMES  # noqa: F401
+                from plugins.star_resonance_plugin.engines.auto_key_engine import GAME_PROCESS_NAMES  # noqa: F401
                 found = _user32.GetForegroundWindow()
                 if found:
                     hwnd = found

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from act_platform import runtime
-from engines.dps_history import (
+from plugins.star_resonance_plugin.engines.dps_history import (
     DpsHistoryStore,
     DPS_HISTORY_JSONL_SCHEMA_VERSION,
     DPS_HISTORY_SQLITE_SCHEMA_VERSION,

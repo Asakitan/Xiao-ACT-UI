@@ -15,9 +15,9 @@ public class UpdaterStateMachineTests
     public void CheckCompletedWithNewerVersionMarksAvailable()
     {
         var sm = new UpdaterStateMachine();
-        var manifest = MakeManifest("3.0.2");
+        var manifest = MakeManifest("5.0.1");
         sm.BeginCheck();
-        sm.CheckCompleted(manifest, currentVersion: "3.0.1");
+        sm.CheckCompleted(manifest, currentVersion: "5.0.0");
         Assert.Equal(UpdaterStatus.UpdateAvailable, sm.Snapshot.Status);
         Assert.Equal(manifest, sm.Snapshot.Latest);
     }
@@ -27,7 +27,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.0"), currentVersion: "3.0.1");
+        sm.CheckCompleted(MakeManifest("4.9.9"), currentVersion: "5.0.0");
         Assert.Equal(UpdaterStatus.NoUpdate, sm.Snapshot.Status);
     }
 
@@ -36,7 +36,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.1-a"), currentVersion: "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.0-a"), currentVersion: "5.0.0");
         Assert.Equal(UpdaterStatus.UpdateAvailable, sm.Snapshot.Status);
     }
 
@@ -45,7 +45,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.2"), "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.1"), "5.0.0");
         sm.BeginDownload();
         sm.ReportProgress(0.5);
         Assert.Equal(0.5, sm.Snapshot.DownloadProgress, 4);
@@ -60,7 +60,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.2"), "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.1"), "5.0.0");
         sm.BeginDownload();
         sm.DownloadCompleted();
         Assert.Equal(UpdaterStatus.StagedReady, sm.Snapshot.Status);
@@ -71,7 +71,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.2"), "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.1"), "5.0.0");
         sm.BeginDownload();
         sm.DownloadCompleted();
         sm.BeginApply();
@@ -85,7 +85,7 @@ public class UpdaterStateMachineTests
     {
         var sm = new UpdaterStateMachine();
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.2"), "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.1"), "5.0.0");
         sm.BeginDownload();
         sm.DownloadFailed("network");
         Assert.Equal(UpdaterStatus.UpdateAvailable, sm.Snapshot.Status);
@@ -99,7 +99,7 @@ public class UpdaterStateMachineTests
         var states = new List<UpdaterState>();
         sm.StateChanged += states.Add;
         sm.BeginCheck();
-        sm.CheckCompleted(MakeManifest("3.0.2"), "3.0.1");
+        sm.CheckCompleted(MakeManifest("5.0.1"), "5.0.0");
         Assert.Equal(2, states.Count);
         Assert.Equal(UpdaterStatus.Checking, states[0].Status);
         Assert.Equal(UpdaterStatus.UpdateAvailable, states[1].Status);

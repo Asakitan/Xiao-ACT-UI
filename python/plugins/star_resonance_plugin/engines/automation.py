@@ -3,7 +3,7 @@
 
 import threading
 
-from engines.auto_key_engine import AutoKeyEngine
+from plugins.star_resonance_plugin.engines.auto_key_engine import AutoKeyEngine
 from config import (
     DEFAULT_HOTKEYS,
     HOTKEY_FKEY_VK,

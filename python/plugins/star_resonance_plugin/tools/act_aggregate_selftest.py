@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 import unittest
 from unittest import mock
 
-from engines.act_aggregate import (
+from plugins.star_resonance_plugin.engines.act_aggregate import (
     aggregate_damage_by_dungeon,
     aggregate_damage_by_monster,
     aggregate_damage_by_skill,

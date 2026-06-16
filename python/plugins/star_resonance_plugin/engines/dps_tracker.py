@@ -15,7 +15,7 @@ from utils.perf_probe import probe as _probe
 
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
-from engines.buff_uptime import BuffUptimeTracker
+from plugins.star_resonance_plugin.engines.buff_uptime import BuffUptimeTracker
 
 
 # ═══════════════════════════════════════════════

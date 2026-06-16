@@ -2,7 +2,7 @@ namespace SaoAuto.Core.Configuration;
 
 public static class AppVersion
 {
-    public const string Version = "3.1.1";
+    public const string Version = "5.0.0";
     public const string Label = "v" + Version;
 
     public const string DefaultUpdateHost = "http://doi.sakisense.top:15018";

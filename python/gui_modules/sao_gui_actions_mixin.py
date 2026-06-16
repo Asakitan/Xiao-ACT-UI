@@ -43,13 +43,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from engines.auto_key_engine import (
-    load_auto_key_config,
-    save_auto_key_config,
-    snapshot_author_from_state,
-)
-# Game panel classes + boss_raid config helpers: loaded lazily inside
-# toggle methods. Returns gracefully if game plugin is absent.
 
 
 class SAOPlayerGUIActionsMixin:

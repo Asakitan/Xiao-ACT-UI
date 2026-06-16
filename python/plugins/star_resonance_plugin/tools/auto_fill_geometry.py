@@ -17,7 +17,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from engines.geometry_auto_fill import auto_fill_from_fields        # noqa: E402
+from plugins.star_resonance_plugin.engines.geometry_auto_fill import auto_fill_from_fields        # noqa: E402
 
 _DIR = os.path.join(_ROOT, "assets", "boss_raids")
 

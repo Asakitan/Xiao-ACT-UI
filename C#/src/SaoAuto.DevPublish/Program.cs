@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using SaoAuto.Core.Configuration;
 using SaoAuto.Core.Updater;
 
 // SaoAuto.DevPublish — packages an install directory into a zip and POSTs
@@ -11,9 +12,9 @@ using SaoAuto.Core.Updater;
 //
 // Usage:
 //   SaoAuto.DevPublish pack <source-dir> <out.zip>
-//   SaoAuto.DevPublish publish <out.zip> --version 2.4.1 --channel stable \
+//   SaoAuto.DevPublish publish <out.zip> [--version 5.0.0] --channel stable \
 //        --target windows-x64 --url http://localhost:5000/publish \
-//        --package-url https://example.com/sao-2.4.1.zip [--notes "..."] [--kind full|delta|runtime-delta]
+//        --package-url https://example.com/sao-5.0.0.zip [--notes "..."] [--kind full|delta|runtime-delta]
 
 if (args.Length == 0) { PrintHelp(); return 0; }
 try
@@ -40,8 +41,9 @@ static int PrintHelp()
     Console.WriteLine();
     Console.WriteLine("  pack    <source-dir> <out.zip>            zip up an install directory");
     Console.WriteLine("  hash    <file>                             print SHA-256 of a file");
-    Console.WriteLine("  publish <zip> --version <v> [--channel stable] [--target windows-x64]");
+    Console.WriteLine($"  publish <zip> [--version <v>] [--channel stable] [--target windows-x64]");
     Console.WriteLine("                --url <host>/publish --package-url <url> [--notes \"...\"] [--kind full]");
+    Console.WriteLine($"                defaults --version to {AppVersion.Version}");
     return 0;
 }
 
@@ -72,7 +74,7 @@ static int RunHash(string[] a)
 
 static async Task<int> RunPublishAsync(string[] a)
 {
-    if (a.Length < 1) return Fail("publish <zip> --version <v> --url <host>/publish --package-url <url>");
+    if (a.Length < 1) return Fail("publish <zip> [--version <v>] --url <host>/publish --package-url <url>");
     var zip = a[0];
     if (!File.Exists(zip)) return Fail($"zip not found: {zip}");
 
@@ -92,8 +94,9 @@ static async Task<int> RunPublishAsync(string[] a)
             default: return Fail($"unknown flag: {a[i]}");
         }
     }
-    if (version is null || host is null || packageUrl is null)
-        return Fail("--version / --url / --package-url required");
+    version ??= AppVersion.Version;
+    if (host is null || packageUrl is null)
+        return Fail("--url / --package-url required");
 
     var manifest = new UpdateManifest(
         Version: version,

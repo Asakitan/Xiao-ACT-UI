@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SAO Auto C# HUD</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: transparent; color: #bdfcff; font-family: "Segoe UI", sans-serif; overflow: hidden; }
+    .hud { position: fixed; left: 18px; top: 18px; min-width: 300px; padding: 14px 18px; border: 1px solid rgba(81, 220, 255, .75); border-radius: 16px; background: linear-gradient(135deg, rgba(3, 12, 26, .78), rgba(4, 36, 58, .62)); box-shadow: 0 0 24px rgba(28, 192, 255, .32), inset 0 0 20px rgba(52, 211, 255, .12); }
+    .title { letter-spacing: .18em; font-size: 13px; color: #f9d86a; text-transform: uppercase; }
+    .status { margin-top: 8px; font-size: 18px; }
+    .sub { margin-top: 6px; font-size: 12px; color: rgba(189, 252, 255, .72); }
+  </style>
+</head>
+<body>
+  <section class="hud">
+    <div class="title">C# Standalone HUD</div>
+    <div class="status" id="status">SAO Auto is running without Python runtime assets.</div>
+    <div class="sub">Full game panels can be migrated into this C# web folder in later parity slices.</div>
+  </section>
+  <script src="bridge.js"></script>
+  <script src="pywebview-shim.js"></script>
+  <script src="hud-bootstrap.js"></script>
+  <script>
+    window.addEventListener('sao:hud:hp', function (event) {
+      var payload = event.detail || {};
+      var text = payload.hp_current != null && payload.hp_max != null
+        ? 'HP ' + payload.hp_current + ' / ' + payload.hp_max
+        : 'SAO Auto is running without Python runtime assets.';
+      document.getElementById('status').textContent = text;
+    });
+  </script>
+</body>
+</html>

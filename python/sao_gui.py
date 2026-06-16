@@ -45,16 +45,6 @@ from sao_theme import (
     _close_alert as _sao_close_dialog,
 )
 from utils.sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
-from engines.auto_key_engine import (
-    AutoKeyEngine,
-    build_auto_key_state,
-    build_identity_state,
-    default_upload_auth_state,
-    load_auto_key_config,
-    save_auto_key_config,
-    snapshot_author_from_state,
-)
-from engines.dps_tracker import DpsTracker
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 # Panel UI helpers (constants + builders) extracted in round 49 of the
 # sao_gui split refactor. Re-import the names that the rest of sao_gui.py

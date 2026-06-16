@@ -150,16 +150,19 @@ public partial class SaoSplashWindow : Window
             }
             catch { /* try next */ }
         }
-        // Project-anchored upward walk: find any ancestor sao_auto/web/linkstart.html.
+        // C#-anchored upward walk: find local C# web/linkstart.html only.
+        // Do not probe legacy Python-source layouts; the C# client must run
+        // without the Python source tree.
         try
         {
             var dir = new DirectoryInfo(binDir);
             for (int i = 0; i < 12 && dir is not null; i++, dir = dir.Parent)
             {
-                var probe = Path.Combine(dir.FullName, "sao_auto", "web", "linkstart.html");
-                if (File.Exists(probe)) return new Uri(Path.GetFullPath(probe)).AbsoluteUri;
-                var probe2 = Path.Combine(dir.FullName, "web", "linkstart.html");
-                if (File.Exists(probe2)) return new Uri(Path.GetFullPath(probe2)).AbsoluteUri;
+                var local = Path.Combine(dir.FullName, "web", "linkstart.html");
+                if (File.Exists(local)) return new Uri(Path.GetFullPath(local)).AbsoluteUri;
+
+                var source = Path.Combine(dir.FullName, "src", "SaoAuto.App", "web", "linkstart.html");
+                if (File.Exists(source)) return new Uri(Path.GetFullPath(source)).AbsoluteUri;
             }
         }
         catch { /* ignore */ }

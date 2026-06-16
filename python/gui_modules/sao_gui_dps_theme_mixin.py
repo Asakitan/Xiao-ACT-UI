@@ -55,7 +55,6 @@ import threading
 import time
 from typing import Any, Optional
 
-from engines.combat_analytics import build_act_snapshot
 from act_platform.runtime import act_render_apply_hooks, publish_owner_event
 
 # Minimum interval between *per-combat-event* ACT snapshot pushes (the storm

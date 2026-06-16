@@ -67,10 +67,6 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from engines.act_trigger_engine import ActTriggerEngine
-from engines.dps_history import DpsHistoryStore
-from engines.dps_tracker import DpsTracker
-from engines.encounter_manager import EncounterManager
 from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager, shutdown_act_plugin_manager
 
 
@@ -108,33 +104,10 @@ class SAOPlayerGUIEngineLifecycleMixin:
         self._reset_sta_offline_state()
 
     def _reconfigure_data_engines(self):
-        """重启数据引擎。平台创建 DPS/ACT 引擎，游戏插件创建数据源+overlay。"""
+        """重启引擎。所有引擎/数据源/overlay 由插件 on_load 创建。"""
         self._stop_recognition_engines()
-
-        # ── 平台引擎 ──
-        try:
-            self._dps_history_store = DpsHistoryStore()
-            self._dps_tracker = DpsTracker()
-            self._encounter_mgr = EncounterManager()
-            try:
-                cfg = getattr(self, '_cfg_settings_ref', None) or self.settings
-                _act_rules = cfg.get('act_trigger_rules', []) or []
-            except Exception:
-                _act_rules = []
-            self._act_trigger_engine = ActTriggerEngine(_act_rules)
-            self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
-            ensure_act_event_bus(self)
-            print('[SAO Entity] Platform engines initialized (DPS/Encounter/Trigger)')
-        except Exception as e:
-            print(f'[SAO Entity] Platform engine init failed: {e}')
-            self._dps_history_store = None
-            self._dps_tracker = None
-            self._encounter_mgr = None
-            self._act_trigger_engine = None
-
-        # ── 加载插件（游戏插件的 on_load 创建数据源 + overlay） ──
+        ensure_act_event_bus(self)
         ensure_act_plugin_manager(self, load=True)
-
         self._recognition_engines = []
         self._recognition_engine = None
         self._recognition_active = bool(

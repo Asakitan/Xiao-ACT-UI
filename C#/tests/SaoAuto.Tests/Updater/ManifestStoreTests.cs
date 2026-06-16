@@ -25,14 +25,14 @@ public class ManifestStoreTests : IDisposable
     public void Publish_RoundTripsToDisk()
     {
         var s1 = new ManifestStore(_path);
-        s1.Publish(Make("2.4.1"));
-        s1.Publish(Make("3.0.0", ch: "beta"));
+        s1.Publish(Make("5.0.0"));
+        s1.Publish(Make("5.0.1", ch: "beta"));
 
         Assert.True(File.Exists(_path));
 
         var s2 = new ManifestStore(_path);
-        Assert.Equal("2.4.1", s2.Latest("stable", "windows-x64")!.Version);
-        Assert.Equal("3.0.0", s2.Latest("beta", "windows-x64")!.Version);
+        Assert.Equal("5.0.0", s2.Latest("stable", "windows-x64")!.Version);
+        Assert.Equal("5.0.1", s2.Latest("beta", "windows-x64")!.Version);
         Assert.Null(s2.Latest("nope", "windows-x64"));
         Assert.Equal(2, s2.Summary().Count);
     }
@@ -41,9 +41,9 @@ public class ManifestStoreTests : IDisposable
     public void Publish_OverwritesExistingChannelTarget()
     {
         var s = new ManifestStore(_path);
-        s.Publish(Make("2.4.1"));
-        s.Publish(Make("2.4.2"));
-        Assert.Equal("2.4.2", s.Latest("stable", "windows-x64")!.Version);
+        s.Publish(Make("5.0.0"));
+        s.Publish(Make("5.0.1"));
+        Assert.Equal("5.0.1", s.Latest("stable", "windows-x64")!.Version);
         Assert.Single(s.Summary());
     }
 
