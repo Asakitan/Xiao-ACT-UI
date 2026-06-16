@@ -510,6 +510,33 @@ def _apply_zip_package(
                 base,
             )
 
+        if package_type == "full-package":
+            runtime_dir = os.path.join(base, "runtime")
+            if os.path.isdir(runtime_dir):
+                _emit(
+                    progress_cb,
+                    phase="cleanup",
+                    step=1,
+                    headline="Full-package: 清理旧 runtime 目录",
+                    detail="删除 runtime/ 以确保干净安装…",
+                    progress=0.0,
+                    indeterminate=True,
+                )
+                _log("full-package: removing entire runtime/ before apply", base)
+                if _safe_remove_tree(runtime_dir, base):
+                    _log("full-package: runtime/ removed successfully", base)
+                else:
+                    _log("full-package: runtime/ removal failed (partial)", base)
+                _emit(
+                    progress_cb,
+                    phase="cleanup",
+                    step=1,
+                    headline="Full-package: runtime 目录已清理",
+                    detail="准备写入新版本…",
+                    progress=1.0,
+                    indeterminate=False,
+                )
+
         total_files = len(entries)
         if total_files:
             _emit(
