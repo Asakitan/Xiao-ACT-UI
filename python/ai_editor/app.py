@@ -67,8 +67,12 @@ class AIEditorAPI:
         self._controller.on_stream_end = self._on_stream_end
         self._controller.on_tool_start = self._on_tool_start
         self._controller.on_tool_end = self._on_tool_end
+        self._controller.on_tool_confirm = self._on_tool_confirm
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
+
+        self._pending_confirm: Dict[str, threading.Event] = {}
+        self._confirm_results: Dict[str, bool] = {}
 
     def _default_system_prompt(self) -> str:
         cats = ""
@@ -198,6 +202,67 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def count_tokens(self, text: str = "") -> Dict:
+        self._ensure_engine()
+        count = self._engine.estimate_tokens(text)
+        return {"tokens": count, "model": self._engine.config.effective_model}
+
+    def count_conversation_tokens(self) -> Dict:
+        self._ensure_engine()
+        if not self._controller or not self._controller.conversation:
+            return {"tokens": 0}
+        msgs = self._controller.conversation.to_api_messages()
+        count = self._engine.count_message_tokens(msgs)
+        return {"tokens": count, "messages": len(msgs)}
+
+    def send_image_message(self, text: str, image_base64: str, mime: str = "image/png") -> Dict:
+        """Send a message with an attached image (vision)."""
+        if not image_base64:
+            return {"error": "No image data"}
+        self._ensure_engine()
+        if self._is_anthropic():
+            content = self._engine.make_image_content_anthropic(text or "What is this image?", image_base64, mime)
+        else:
+            content = self._engine.make_image_content(text or "What is this image?", image_base64, mime)
+        from ai_editor.chat_state import ChatMessage
+        user_msg = ChatMessage(role="user", content=text or "(image)")
+        self._controller.conversation.add_message(user_msg)
+        # Directly call with multimodal content
+        msgs = self._controller.conversation.to_api_messages()
+        msgs[-1]["content"] = content
+        self._controller._running = True
+        import threading as _th
+        def _run():
+            try:
+                tools = self._controller.registry.to_openai_tools() or None
+                self._controller.engine.reset_cancel()
+                resp = self._controller.engine.chat_completion_stream(
+                    messages=msgs, tools=tools,
+                    on_delta=lambda d: (d.content and self._emit("stream_delta", {"content": d.content})),
+                )
+                self._emit("stream_end", {
+                    "content": resp.content, "model": resp.model,
+                    "thinking": resp.thinking,
+                    "usage": resp.usage,
+                    **({"error": resp.error} if resp.error else {}),
+                })
+            finally:
+                self._controller._running = False
+                self._emit("idle", {})
+        _th.Thread(target=_run, daemon=True).start()
+        return {"ok": True}
+
+    def _is_anthropic(self) -> bool:
+        return self._engine and self._engine._is_anthropic_native(self._engine.config)
+
+    def confirm_tool(self, call_id: str, allowed: bool) -> Dict:
+        """UI calls this to allow/deny a pending tool confirmation."""
+        evt = self._pending_confirm.pop(call_id, None)
+        self._confirm_results[call_id] = allowed
+        if evt:
+            evt.set()
+        return {"ok": True}
+
     # ── Events pushed to JS ──
 
     def _eval_js(self, js: str) -> None:
@@ -234,6 +299,15 @@ class AIEditorAPI:
 
     def _on_tool_start(self, call_id: str, name: str, args: str) -> None:
         self._emit("tool_start", {"id": call_id, "name": name, "arguments": args})
+
+    def _on_tool_confirm(self, call_id: str, name: str, args: str) -> bool:
+        """Called from background thread. Pushes confirm request to JS, blocks until response."""
+        evt = threading.Event()
+        self._pending_confirm[call_id] = evt
+        self._confirm_results[call_id] = True
+        self._emit("tool_confirm", {"id": call_id, "name": name, "arguments": args})
+        evt.wait(timeout=60.0)
+        return self._confirm_results.pop(call_id, True)
 
     def _on_tool_end(self, call_id: str, result: str) -> None:
         self._emit("tool_end", {"id": call_id, "result": result})

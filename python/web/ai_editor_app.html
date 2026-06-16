@@ -403,6 +403,7 @@ pre.code-block code .type { color:var(--fg-type); }
             <span class="hint">Enter 发送 · Shift+Enter 换行 · / 命令</span>
             <span class="spacer"></span>
             <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■ Stop</span>
+            <span class="toolbar-btn" onclick="uploadImage()" title="Attach image (vision)">📷</span>
             <span class="token-count" id="token-count">0 tokens</span>
           </div>
         </div>
@@ -470,6 +471,7 @@ window._onEditorEvent=function(event,data){
   else if(event==='stream_end') onStreamEnd(data);
   else if(event==='tool_start') onToolStart(data);
   else if(event==='tool_end') onToolEnd(data);
+  else if(event==='tool_confirm') onToolConfirm(data);
   else if(event==='error') onError(data);
   else if(event==='idle') onIdle();
 };
@@ -644,11 +646,31 @@ function markToolComplete(callId,success){
   if(state) state.innerHTML=success?'<span class="checkmark">✓</span>':'<span class="error-mark">✗</span>';
 }
 
-// ── Streaming ──
+// ── Streaming (word-by-word progressive rendering) ──
+let streamWordQueue='', streamFlushTimer=null;
+
 function onStreamDelta(d){
   if(!currentMsgBody)return;
-  streamBuf+=(d.content||'');
-  currentMsgBody.textContent=streamBuf;
+  const text=d.content||'';
+  streamBuf+=text;
+  streamWordQueue+=text;
+  if(!streamFlushTimer){
+    streamFlushTimer=requestAnimationFrame(flushStreamWords);
+  }
+}
+
+function flushStreamWords(){
+  streamFlushTimer=null;
+  if(!currentMsgBody||!streamWordQueue)return;
+  const words=streamWordQueue.split(/(\s+)/);
+  streamWordQueue='';
+  words.forEach(w=>{
+    if(!w)return;
+    const span=document.createElement('span');
+    span.className='stream-word';
+    span.textContent=w;
+    currentMsgBody.appendChild(span);
+  });
   currentMsgBody.classList.add('stream-cursor');
   $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
 }
@@ -691,6 +713,60 @@ function onIdle(){
   setStatus('Ready');streaming=false;
   $('send-btn').disabled=false;$('send-btn').textContent='Send';
   $('stop-btn').style.display='none';
+  updateTokenCount();
+}
+
+// ── Tool confirmation ──
+function onToolConfirm(d){
+  const msgs=$('chat-messages');const last=msgs.lastElementChild;
+  if(!last)return;
+  const body=last.querySelector('.msg-body');if(!body)return;
+  const bar=document.createElement('div');bar.className='confirm-bar';
+  bar.innerHTML='<span class="msg">⚠ <b>'+esc(d.name)+'</b> requires confirmation</span>'+
+    '<span class="confirm-btn confirm-allow" onclick="confirmTool(\''+d.id+'\',true,this)">✓ Allow</span>'+
+    '<span class="confirm-btn confirm-deny" onclick="confirmTool(\''+d.id+'\',false,this)">✗ Deny</span>';
+  body.appendChild(bar);
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+  setStatus('Waiting for confirmation: '+d.name);
+}
+window.confirmTool=async function(callId,allowed,btn){
+  const bar=btn.closest('.confirm-bar');
+  if(bar){bar.innerHTML='<span class="msg">'+(allowed?'✓ Allowed':'✗ Denied')+'</span>';
+    bar.style.opacity='0.5'}
+  await call('confirm_tool',callId,allowed);
+};
+
+// ── Image upload ──
+async function uploadImage(){
+  const input=document.createElement('input');
+  input.type='file';input.accept='image/*';
+  input.onchange=async()=>{
+    const file=input.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=async()=>{
+      const base64=reader.result.split(',')[1];
+      const mime=file.type||'image/png';
+      const text=prompt('Describe what to ask about this image:','What is in this image?');
+      if(text===null)return;
+      createMsg('user').innerHTML=esc(text)+'<br><img src="'+reader.result+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
+      streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';
+      setStatus('Analyzing image...');
+      currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
+      await call('send_image_message',text,base64,mime);
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+
+// ── Token counting ──
+async function updateTokenCount(){
+  const r=await call('count_conversation_tokens');
+  if(r&&r.tokens!==undefined){
+    totalTokens=r.tokens;
+    $('token-count').textContent=totalTokens+' tokens';
+    $('status-tokens').textContent=totalTokens+' tokens';
+  }
 }
 
 // ── Actions ──

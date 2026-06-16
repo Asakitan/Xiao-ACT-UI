@@ -130,8 +130,13 @@ class ChatController:
         self.on_stream_end: Optional[Callable[[ChatMessage], None]] = None
         self.on_tool_start: Optional[Callable[[str, str, str], None]] = None  # call_id, name, args
         self.on_tool_end: Optional[Callable[[str, str], None]] = None  # call_id, result
+        self.on_tool_confirm: Optional[Callable[[str, str, str], bool]] = None  # call_id, name, args → allow?
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_idle: Optional[Callable[[], None]] = None
+
+        # Confirmation state
+        self._confirm_event: Optional[threading.Event] = None
+        self._confirm_result: bool = True
 
     @property
     def is_running(self) -> bool:
@@ -208,6 +213,23 @@ class ChatController:
                         break
                     if self.on_tool_start:
                         self.on_tool_start(tc.id, tc.name, tc.arguments)
+
+                    # Confirmation gate for dangerous tools
+                    desc = self.registry.get(tc.name)
+                    if desc and desc.requires_confirm and self.on_tool_confirm:
+                        self._confirm_event = threading.Event()
+                        self._confirm_result = True
+                        allowed = self.on_tool_confirm(tc.id, tc.name, tc.arguments)
+                        if isinstance(allowed, bool):
+                            if not allowed:
+                                result = json.dumps({"error": "User denied tool execution"})
+                                tc.result = result
+                                tool_msg = ChatMessage(role="tool", content=result,
+                                                       tool_call_id=tc.id, tool_name=tc.name)
+                                self.conversation.add_message(tool_msg)
+                                if self.on_tool_end:
+                                    self.on_tool_end(tc.id, result)
+                                continue
 
                     result = self.registry.execute(tc.name, tc.arguments)
                     tc.result = result

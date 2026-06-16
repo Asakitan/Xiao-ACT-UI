@@ -561,3 +561,57 @@ class LLMEngine:
             return True, f"Connected: {cfg.effective_model} — {resp.content[:60]}"
         except Exception as exc:
             return False, str(exc)
+
+    # -- Token counting (estimation) --
+
+    @staticmethod
+    def estimate_tokens(text: str, model: str = "") -> int:
+        """Rough token estimate. ~4 chars per token for English, ~2 for CJK."""
+        if not text:
+            return 0
+        cjk = sum(1 for c in text if '一' <= c <= '鿿' or '　' <= c <= '〿')
+        ascii_chars = len(text) - cjk
+        return int(ascii_chars / 4 + cjk / 1.5)
+
+    def count_message_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate total tokens for a message array."""
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += self.estimate_tokens(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            total += self.estimate_tokens(part.get("text", ""))
+                        elif part.get("type") == "image_url":
+                            total += 85  # base image token cost
+            total += 4  # per-message overhead
+        return total
+
+    # -- Image/vision message helpers --
+
+    @staticmethod
+    def make_image_content(text: str, image_base64: str, mime: str = "image/png") -> List[Dict[str, Any]]:
+        """Build a multimodal content array with text + image."""
+        parts: List[Dict[str, Any]] = []
+        if text:
+            parts.append({"type": "text", "text": text})
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{image_base64}"},
+        })
+        return parts
+
+    @staticmethod
+    def make_image_content_anthropic(text: str, image_base64: str, mime: str = "image/png") -> List[Dict[str, Any]]:
+        """Build Anthropic-native multimodal content."""
+        parts: List[Dict[str, Any]] = []
+        if text:
+            parts.append({"type": "text", "text": text})
+        parts.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": mime, "data": image_base64},
+        })
+        return parts
