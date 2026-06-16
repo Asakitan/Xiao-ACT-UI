@@ -10,16 +10,16 @@ SAO ACT UI 内置的 AI 编辑器是一个**独立 pywebview 窗口**，提供�
 
 | 文件 | 职责 |
 |------|------|
-| `prompts.py` | System prompt — 项目简介、工具表、IDE 使用指南、Agent Mode 指令 |
-| `llm_engine.py` | 多 Provider LLM 引擎（OpenAI / Anthropic 原生 / DeepSeek / Ollama / 自定义兼容端点） |
-| `tool_registry.py` | 工具注册中心、OpenAI function-calling schema 生成、参数自动推断、decorator API |
-| `engine_tools.py` | VSCode 对齐工具集 + `engine` 聚合入口 |
-| `chat_state.py` | 对话管理、send → stream → tool-call → resume 循环、@-mention 解析、Agent Mode |
-| `app.py` | pywebview 启动器 + `AIEditorAPI` JS bridge（30+ 方法） |
-| `mcp_client.py` | MCP (Model Context Protocol) 客户端：stdio + HTTP/SSE 双传输 |
-| `extensions.py` | VSCode Marketplace API 客户端 + 扩展 tool 加载 |
-| `history.py` | 对话历史持久化（JSON 文件、原子写入） |
-| `selftest.py` | 自测套件 |
+| `prompts.py` | VSCode Copilot 风格 system prompt（模块化拼接: _IDENTITY + _TOOL_RULES + _MEM_PROBE_GUIDE + _SAFETY + _PROJECT_STRUCTURE）|
+| `llm_engine.py` | 多 Provider LLM 引擎（OpenAI / Anthropic 原生 SSE / 兼容端点），持久 httpx 连接池 |
+| `tool_registry.py` | 工具注册中心、OpenAI function-calling schema 生成、参数自动推断 |
+| `engine_tools.py` | 12 个 VSCode 对齐工具 + `engine` 聚合入口（15 个 sub-action） |
+| `chat_state.py` | 对话管理、tool 循环、@-mention（预编译正则）、Agent Mode、to_api_messages 缓存 |
+| `app.py` | pywebview 启动器 + `AIEditorAPI` JS bridge（30+ 方法），stream delta 批量合并 |
+| `mcp_client.py` | MCP 客户端：stdio + HTTP/SSE + **内部 Python 注册**（InternalMcpProvider） |
+| `extensions.py` | VSCode Marketplace API 客户端 + VSIX tool 加载，共享 httpx 连接池 |
+| `history.py` | 对话历史持久化（JSON 文件、原子写入、版本号跳过无变更保存） |
+| `selftest.py` | 59 项自测套件 |
 
 ## LLM 通讯协议
 
@@ -130,14 +130,22 @@ Anthropic 原生模式下，`llm_engine.py` 自动处理：
 
 ## MCP 集成
 
-`mcp_client.py` 实现 JSON-RPC 2.0 over stdin/stdout 和 HTTP/SSE 两种传输。
+`mcp_client.py` 支持三种传输模式：
 
-### 配置来源
+| 模式 | 场景 | 示例 |
+|------|------|------|
+| **stdio** | 外部进程, JSON-RPC over stdin/stdout | `npx @modelcontextprotocol/server-filesystem` |
+| **sse** | 远程 HTTP+SSE 端点 | `https://mcp.example.com/sse` |
+| **internal** | Python 插件直接注册, 无子进程 | 插件 `on_load` 时调用 |
+
+### 配置来源 (优先级)
 
 1. `settings.ai_editor_mcp_servers` 列表
 2. 工作区 `mcp.json` / `.vscode/mcp.json` / `.mcp/mcp.json`
+3. 用户主目录 `~/.sao/mcp.json`
+4. 插件 manifest `plugins/*/plugin.json` → `mcpServers`
 
-### 协议
+### 协议 (stdio/sse)
 
 ```
 → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
@@ -146,6 +154,31 @@ Anthropic 原生模式下，`llm_engine.py` 自动处理：
 ← {"jsonrpc":"2.0","id":2,"result":{"tools":[...]}}
 → {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"...","arguments":{...}}}
 ← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"..."}]}}
+```
+
+### 内部 MCP (插件注册)
+
+```python
+# 在 plugin.py on_load(ctx) 中:
+from ai_editor.mcp_client import InternalMcpProvider
+
+provider = InternalMcpProvider("my_plugin")
+provider.add_tool(
+    "get_hp", "Read player HP",
+    {"type": "object", "properties": {}},
+    handler=lambda: {"hp": 50000},
+)
+# 注册到 MCP manager
+mcp_manager.register_provider(provider)
+```
+
+或通过 app API 批量注册:
+
+```python
+mcp_manager.register_internal("my_game", [
+    {"name": "scan_memory", "description": "Scan for value",
+     "inputSchema": {"type":"object","properties":{"value":{"type":"integer"}}}},
+], handlers={"scan_memory": lambda value=0: {"found": 3}})
 ```
 
 MCP 工具自动注册为 `mcp_{server}_{tool}` 出现在 LLM 工具列表中。
@@ -207,6 +240,47 @@ Dark 和 Light 各定义完整的 CSS 变量集。accent 颜色与 ACT 平台对
 - System prompt 追加 plan→execute→verify→report 指令
 - `MAX_TOOL_ROUNDS` 从 10 提高到 25
 - 响应以 `...` 或 `[continue]` 结尾时自动注入 "Continue with the next step"
+
+## mem_probe 集成
+
+mem_probe 是通用内存扫描基础设施（游戏无关）。system prompt 教 LLM 如何使用：
+
+- `mem_probe.process.GameProcess` — 附加目标进程（进程名从 config，不硬编码）
+- `mem_probe.scanner` — 多帧值搜索 scan→narrow
+- `mem_probe.cy_memscan` — AVX2 加速（Cython，有纯 Python fallback）
+- `mem_probe.unified_source` — TCP/内存混合数据源，插件通过 `set_bridge_classes()` 注入桥接
+
+LLM 通过 `engine(action="eval/exec")` 直接操作内存：
+
+```
+engine(action="exec", code="from mem_probe.process import GameProcess; ...")
+```
+
+## Chat 交互功能
+
+对齐 VSCode Copilot 的用户交互：
+
+- **代码块 toolbar** — Copy📋 / Insert📥 / Run▶ / New Tab📄（hover 显示）
+- **消息 footer** — 👍/👎 评分 + 📋复制 + 🔄重试
+- **Follow-up 建议** — 响应后自动生成上下文相关建议
+- **文件拖拽附件** — 拖入文件 → pill 显示 → 发送时 prepend
+- **消息右键菜单** — Copy / Insert to Editor / Run in Terminal / Delete
+- **命令面板** — Ctrl+Shift+P，19 个命令
+- **Toast 通知** — info/success/error/warning
+
+## 性能优化
+
+已修复的关键瓶颈：
+
+| 优化 | 模块 | 效果 |
+|------|------|------|
+| httpx 持久连接池 | llm_engine, extensions, mcp_client | -400ms/请求 |
+| stream delta 批量合并 | app.py | -93% JS eval 调用 |
+| to_api_messages 版本缓存 | chat_state | -90% 消息拷贝 |
+| @-mention 正则预编译 | chat_state | 消除重复编译 |
+| auto-save 版本号跳过 | chat_state | -50% 磁盘写 |
+| editor_get_content 单次 JS eval | app.py | -50% 延迟 |
+| MCP stdio bufsize 8192 | mcp_client | -90% 系统调用 |
 
 ## 验证
 
