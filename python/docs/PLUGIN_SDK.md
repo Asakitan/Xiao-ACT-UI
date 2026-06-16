@@ -1,6 +1,6 @@
 # ACT Python 插件 SDK
 
-> 当前版本：`4.6.74`（review-chain Batch 202）。本文与 `docs/ACT_PLATFORM.md`、`docs/ACT_UI_PARITY_SDK.md` 配套阅读。
+> 当前版本：`5.0.0`。本文与 `docs/ACT_PLATFORM.md`、`docs/ACT_UI_PARITY_SDK.md` 配套阅读。
 
 SAO Auto 提供一个进程内的 Python 插件层，用于 ACT 风格扩展。插件从 `plugins/<plugin_id>/` 与 `user_plugins/<plugin_id>/` 加载。
 
@@ -416,9 +416,70 @@ WebView：`SAO Menu > ACT 插件管理 Plugin Manager`。
 
 Entity：`SAO 菜单 > 面板 > ACT插件管理面板`。
 
+## 依赖管理 (v5.0.0)
+
+插件可自带第三方依赖，不需要改平台 spec。在插件目录下放 `requirements.txt`，然后在 `on_load` 里调：
+
+```python
+def on_load(ctx):
+    ctx.ensure_requirements(install=True)
+    # ... 其余初始化
+```
+
+bootstrap 流程：
+1. 读取 `plugins/<plugin_id>/requirements.txt`
+2. 缺失的包 `pip install --target` 到 `plugins/<plugin_id>/libs/`
+3. 把 `libs/` 和 `vendor/` prepend 到 `sys.path`
+4. 卸载时恢复 `sys.path`
+
+`vendor/` 用于手动放置的纯 Python 包；`libs/` 是 pip 自动安装目标。
+
+## mem_probe 桥接注入 (v5.0.0)
+
+`mem_probe/` 是通用内存扫描基础设施。游戏特化的内存桥接由插件注入：
+
+```python
+from mem_probe.unified_source import set_bridge_classes
+
+def on_load(ctx):
+    from .mem.il2cpp.mem_state_bridge import MemStateBridge
+    from .mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+    set_bridge_classes(MemStateBridge, MemSelfStateProvider)
+```
+
+`mem_probe.process.GameProcess` 的进程名由 `config.GAME_PROCESS_NAMES` 配置，不硬编码。
+
+## MCP 工具注册 (v5.0.0)
+
+插件可通过 MCP 协议向 AI Editor 暴露工具：
+
+方式一：在 `plugin.json` 中声明：
+```json
+{
+  "mcpServers": {
+    "my_tools": {
+      "transport": "internal",
+      "name": "My Game Tools"
+    }
+  }
+}
+```
+
+方式二：代码注册：
+```python
+from ai_editor.mcp_client import InternalMcpProvider
+
+def on_load(ctx):
+    provider = InternalMcpProvider("my_plugin")
+    provider.add_tool("get_hp", "Read HP", {...}, handler=my_handler)
+    # 注册到 AI Editor 的 MCP 管理器
+```
+
 ## 打包提示
 
-插件零件（如独立 MIDI 插件、独立 Hide & Seek 插件等）已并入正式打包流程。如果插件需要进入 onedir 发行，请同步 `XiaoACTUI.spec` 的 hidden imports 与资源声明，避免运行时找不到入口或资源。
+v5.0.0 起，插件通过 `requirements.txt` + `ctx.ensure_requirements()` 管理自己的第三方依赖。
+不需要修改 `XiaoACTUI.spec` 的 hiddenimports。PyInstaller 打包时，spec 的
+`collect_plugins()` 会收集插件目录下的所有运行时文件（排除 il2cpp/out、il2cpp/bin 等开发产物）。
 
 ## 安全注意
 

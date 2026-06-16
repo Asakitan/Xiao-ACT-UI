@@ -59,6 +59,12 @@ for %%D in (web plugins drivers) do (
         move /y "%CLIENT_DIR%\runtime\%%D" "%CLIENT_DIR%\%%D" >nul
     )
 )
+rem Copy docs to top level (not in runtime/)
+if exist "%ROOT%docs" (
+    echo   copying docs\ -^> docs\
+    xcopy /e /i /y "%ROOT%docs" "%CLIENT_DIR%\docs" >nul
+)
+
 rem User drop-in plugins live here and survive updates (never shipped/overwritten).
 if not exist "%CLIENT_DIR%\user_plugins" mkdir "%CLIENT_DIR%\user_plugins"
 if exist "%CLIENT_DIR%\runtime\icon.ico" (

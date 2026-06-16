@@ -1,6 +1,6 @@
 # ACT UI 对等 SDK
 
-> 当前版本：`4.6.74`（review-chain Batch 202）。本文档配合 `docs/ACT_PLATFORM.md` 与 `docs/PLUGIN_SDK.md` 阅读。
+> 当前版本：`5.0.0`。本文档配合 `docs/ACT_PLATFORM.md` 与 `docs/PLUGIN_SDK.md` 阅读。
 
 SAO Auto 提供一个小型 Python SDK，用于让 ACT 的 WebView 与 Entity UI 表面保持 1:1 对等。每当 ACT 功能新增或修改路由、动作、payload 字段或渲染行为时都应使用这套契约。
 

@@ -1,6 +1,6 @@
 # 混合 TCP + 内存数据源
 
-> 当前版本：`4.6.74`（review-chain Batch 202）。本文与 `docs/ACT_PLATFORM.md` 中的"解析器适配器"与"数据源健康"小节配套阅读。
+> 当前版本：`5.0.0`。本文与 `docs/ACT_PLATFORM.md` 中的"解析器适配器"与"数据源健康"小节配套阅读。
 
 本文描述 SAO Auto ACT 平台保守的数据源策略。
 
@@ -175,4 +175,4 @@ git diff --check
 
 ## 升级建议
 
-升级到 `4.6.74` 后，建议在切换运行模式前查看健康字段中的 `policy.region_scan_capped`、`policy.static_fallback_mode` 与 `requested_mode/mode` 差异，确认运行时门已生效。当 Cython memscan 不可用、私有区域不可读或锚点弱时，`UnifiedDataSource` 会显式 fail-closed，并经 `policy` 与 `error_msg` 暴露原因；`PacketBridge` 仍可以独立保持 TCP 战斗源运行。
+升级到 `5.0.0` 后，建议在切换运行模式前查看健康字段中的 `policy.region_scan_capped`、`policy.static_fallback_mode` 与 `requested_mode/mode` 差异，确认运行时门已生效。当 Cython memscan 不可用、私有区域不可读或锚点弱时，`UnifiedDataSource` 会显式 fail-closed，并经 `policy` 与 `error_msg` 暴露原因；`PacketBridge` 仍可以独立保持 TCP 战斗源运行。
