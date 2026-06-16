@@ -581,6 +581,18 @@ class GameProcess:
         except Exception:
             return None
 
+    # ───── 写入 (仅驱动后端, Tier B+ 时可用) ─────
+    def write_bytes(self, addr: int, data: bytes) -> bool:
+        if not data or _drv is None or not _DRIVER_OK:
+            return False
+        return _drv.write(int(addr), data)
+
+    def can_write(self) -> bool:
+        if _drv is None or not _DRIVER_OK:
+            return False
+        caps = _drv.ENGINE_CAPS.get(_drv._engine, 0)
+        return bool(caps & _drv.CAP_WRITE)
+
     # ───── 区域缓存 / 预取 / 批量 slab ─────
     def cached_regions(
         self, *, ttl: float = 5.0, only_readable: bool = True, only_private: bool = True,

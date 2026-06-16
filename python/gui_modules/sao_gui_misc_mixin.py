@@ -48,7 +48,7 @@ from typing import Any, Dict, List, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-from config import get_skill_slot_rects
+get_skill_slot_rects = None  # moved to plugin sr_config; set by plugin on_load
 from utils.sao_sound import play_sound
 from gui_modules.sao_panel_ui import _apply_window_icon, _set_process_app_id
 
