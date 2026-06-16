@@ -206,23 +206,26 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
     registry.register(
         name="engine",
         description=(
-            "Query the SAO ACT game engine. Accepts an 'action' parameter to select what to query.\n"
-            "Available actions:\n"
+            "Query the SAO ACT engine. Accepts an 'action' parameter.\n"
+            "\n"
+            "Platform actions (always available):\n"
+            "  system_info — ACT version, uptime, data source\n"
+            "  plugins — installed plugin list\n"
+            "  settings_get — read a setting (pass 'key')\n"
+            "  settings_set — write a setting (pass 'key' and 'value')\n"
+            "  memory_status — memory data source health\n"
+            "  eval — evaluate a Python expression (pass 'expression')\n"
+            "  exec — execute Python code block (pass 'code')\n"
+            "\n"
+            "Plugin-provided actions (available when a game plugin is loaded):\n"
             "  game_state — player name, level, HP, scene\n"
-            "  entity_list — all visible entities (players/monsters/NPCs)\n"
+            "  entity_list — all visible entities\n"
             "  dps_summary — current combat DPS table\n"
             "  dps_report — last encounter full report\n"
             "  boss_status — boss HP, break, shield\n"
             "  combat_status — in_combat, duration\n"
             "  buff_list — buffs on self or boss\n"
             "  auto_key_status — auto-key engine state\n"
-            "  memory_status — memory data source health\n"
-            "  system_info — ACT version, uptime, data source\n"
-            "  plugins — installed plugin list\n"
-            "  settings_get — read a setting (pass 'key')\n"
-            "  settings_set — write a setting (pass 'key' and 'value')\n"
-            "  eval — evaluate a Python expression (pass 'expression')\n"
-            "  exec — execute Python code block (pass 'code')\n"
         ),
         parameters={
             "type": "object",

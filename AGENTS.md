@@ -64,3 +64,38 @@
 - Keep `AGENTS.md` focused on durable instructions.
 - Put design notes in docs, task handoffs in rollout/handoff files, and historical findings in `/memories/repo/`.
 - If a new lesson is broadly reusable, add a short repo memory note instead of appending a long narrative here.
+
+## AI Editor (python/ai_editor/)
+
+The AI Editor is a standalone pywebview-based IDE window with multi-provider LLM chat, tool calling, and a VSCode Marketplace extension browser. When modifying it:
+
+### Architecture boundaries
+- The AI Editor is **platform code**, not plugin code. It must not reference any specific game plugin.
+- Game-specific features (DPS, Boss, Buff, Auto-key) are provided by plugins at runtime. The `engine()` tool dispatches to whatever plugin is loaded.
+- The tools follow the VSCode Copilot pattern: `readFile`, `editFile`, `listFiles`, `searchFiles`, `runTerminal`, `askQuestion`, `taskComplete`, `getConfirmation`, plus editor tools and the `engine` aggregate.
+
+### System prompt maintenance (python/ai_editor/prompts.py)
+- `SYSTEM_PROMPT` introduces the platform (game-agnostic), lists tools, and explains IDE usage.
+- Game-specific content belongs in plugin descriptions, not in the system prompt.
+- When adding or removing tools, update the tool table in `SYSTEM_PROMPT` and the engine action list.
+- `AGENT_MODE_ADDITION` is appended when Agent Mode checkbox is checked.
+- Both `app.py` (pywebview) and `sao_gui_ai_editor.py` (Tk fallback) call `get_system_prompt()`.
+
+### IDE requirements
+- Tools must align with VSCode Copilot's design. Keep them generic (file/terminal/editor/interaction), not engine-specific.
+- All engine queries go through the single `engine(action=...)` aggregate tool.
+- The HTML UI (`web/ai_editor_app.html`) supports dark/light theme via `[data-theme]` CSS variable sets. Theme syncs with ACT's `panel_themes.act` setting.
+- Extension tools are loaded from installed VSIX `package.json` `contributes` (languageModelTools, chatParticipants, commands).
+- MCP servers are loaded from `mcp.json` / settings. MCP tools appear as `mcp_<server>_<tool>` in the tool list.
+
+### File inventory
+- `prompts.py` — System prompts (update when tools or project scope changes)
+- `llm_engine.py` — Multi-provider LLM (OpenAI, Anthropic native, compatible)
+- `tool_registry.py` — Tool registration and dispatch
+- `engine_tools.py` — VSCode-aligned tools + engine aggregate
+- `chat_state.py` — Conversation management, tool loop, agent mode
+- `app.py` — pywebview launcher + JS API bridge
+- `mcp_client.py` — MCP server connections (stdio + SSE)
+- `extensions.py` — VSCode Marketplace API client
+- `history.py` — Conversation persistence
+- `selftest.py` — 59-item self-test suite
