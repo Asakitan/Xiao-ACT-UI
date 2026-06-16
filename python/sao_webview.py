@@ -4370,26 +4370,9 @@ class SAOWebViewGUI:
         elif self._packet_engine not in engines:
             engines.insert(0, self._packet_engine)
 
-        # DPS Tracker
-        try:
-            self._dps_history_store = DpsHistoryStore()
-            self._dps_tracker = DpsTracker()
-            self._encounter_mgr = EncounterManager()
-            try:
-                _act_rules = self._cfg_settings_ref.get('act_trigger_rules', []) or []
-            except Exception:
-                _act_rules = []
-            self._act_trigger_engine = ActTriggerEngine(_act_rules)
-            self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
-            ensure_act_event_bus(self)
-            ensure_act_plugin_manager(self, load=True)
-            print('[SAO] DPS tracker initialized')
-        except Exception as e:
-            print(f'[SAO] DPS tracker init failed: {e}')
-            self._dps_tracker = None
-            self._dps_history_store = None
-            self._encounter_mgr = None
-            self._act_trigger_engine = None
+        # 5.0.0: 所有引擎由插件 on_load 创建 (DPS/Encounter/AutoKey/BossRaid...)
+        ensure_act_event_bus(self)
+        ensure_act_plugin_manager(self, load=True)
 
         try:
             from vision.recognition import RecognitionEngine
@@ -6522,68 +6505,18 @@ class SAOWebViewGUI:
                 self._eval_hp(f'setPlayerInfo({_j.dumps(info, ensure_ascii=False)})')
                 print(f'[SAO] 从缓存加载: 职业={cached_prof}, UID={cached_uid}')
 
+            # 5.0.0: 引擎由插件 on_load 创建 (DPS/AutoKey/BossRaid/MemBridge...)
             self._reconfigure_data_engines(restart_packet=not bool(getattr(self, '_packet_engine', None)))
-            self._auto_key_engine = AutoKeyEngine(
-                self._state_mgr,
-                self._cfg_settings_ref,
-                extra_gate=lambda: bool(getattr(self, '_recognition_active', False)),
-            )
-            self._auto_key_engine.start()
-            self._sync_auto_key_menu()
 
-            # Boss Raid Engine + Autokey Linkage
-            self._boss_autokey_linkage = BossAutoKeyLinkage(
-                self._cfg_settings_ref,
-                send_key=self._send_linked_key,
-                on_log=lambda msg: print(msg),
-                foreground_gate=self._auto_key_engine.is_game_foreground,
-                # 定向躲避按住 WASD 时连招跳过移动键 (无 director 则恒 False, 无副作用)
-                dodge_active_gate=lambda: bool(getattr(self, '_auto_dodge_director', None))
-                and self._auto_dodge_director.is_active(),
-            )
+            # 同步菜单状态
             try:
-                self._mech_alert_controller = MechanicAlertController(
-                    on_banner=self._push_mech_banner,
-                    banner_enabled_fn=lambda: bool(
-                        self._get_setting('mech_banner_enabled', True)),
-                )
-                sao_tts.set_tts_enabled(bool(self._get_setting('tts_enabled', True)))
-                sao_tts.set_tts_volume(int(self._get_setting('tts_volume', 80) or 80))
-            except Exception as _mac_exc:
-                print(f'[SAO] mech alert controller init failed: {_mac_exc}')
-                self._mech_alert_controller = None
-
-            def _on_boss_alert_with_linkage(title, message):
-                # v2.1.17: BossRaidEngine separately calls on_sound("boss_alert")
-                # which maps to the same Popup.SAO.Alert.mp3 file as 'alert'.
-                # Suppress the alert window's built-in sound to avoid playing
-                # the same clip twice.
-                self._show_identity_alert_window(
-                    title, message, play_sound=False, alert_kind='boss_raid')
-                if self._boss_autokey_linkage:
-                    try:
-                        self._boss_autokey_linkage.on_boss_raid_alert(title, message)
-                    except Exception:
-                        pass
-
-            self._boss_raid_engine = BossRaidEngine(
-                self._state_mgr,
-                self._cfg_settings_ref,
-                on_alert=_on_boss_alert_with_linkage,
-                on_sound=self._play_sound,
-                on_entity_update=self._on_raid_entity_update,
-                on_boss_action=self._on_boss_action_with_gate,
-                on_mechanic=self._on_mechanic_event,
-            )
-            # hybrid: forward the boss raid engine into the (deferred) mem source so
-            # the boss-action feed reaches on_mem_boss_action.
-            try:
-                pe = getattr(self, '_packet_engine', None)
-                if pe is not None and hasattr(pe, 'set_boss_raid_engine'):
-                    pe.set_boss_raid_engine(self._boss_raid_engine)
+                self._sync_auto_key_menu()
             except Exception:
                 pass
-            self._sync_boss_raid_menu()
+            try:
+                self._sync_boss_raid_menu()
+            except Exception:
+                pass
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
