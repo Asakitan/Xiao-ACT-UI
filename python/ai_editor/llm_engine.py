@@ -69,6 +69,7 @@ class ToolCall:
 class StreamDelta:
     """A single incremental chunk from the LLM stream."""
     content: str = ""
+    thinking: str = ""
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     finish_reason: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
@@ -77,6 +78,7 @@ class StreamDelta:
 @dataclass
 class LLMResponse:
     content: str = ""
+    thinking: str = ""
     tool_calls: List[ToolCall] = field(default_factory=list)
     finish_reason: str = ""
     usage: Dict[str, int] = field(default_factory=dict)
@@ -213,6 +215,8 @@ class LLMEngine:
                         delta = self._parse_stream_chunk(chunk)
                         if delta.content:
                             accumulated.content += delta.content
+                        if delta.thinking:
+                            accumulated.thinking += delta.thinking
                         if delta.finish_reason:
                             accumulated.finish_reason = delta.finish_reason
                         if delta.usage:
@@ -301,25 +305,35 @@ class LLMEngine:
                         elif dtype == "content_block_start":
                             idx = data.get("index", 0)
                             block = data.get("content_block", {})
-                            if block.get("type") == "tool_use":
+                            btype = block.get("type", "")
+                            if btype == "tool_use":
                                 tool_blocks[idx] = {
                                     "id": block.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
                                     "name": block.get("name", ""),
                                     "input_json": "",
                                 }
+                            elif btype == "thinking":
+                                tool_blocks[idx] = {"_thinking": True}
 
                         elif dtype == "content_block_delta":
                             idx = data.get("index", 0)
                             d = data.get("delta", {})
-                            if d.get("type") == "text_delta":
+                            delta_type = d.get("type", "")
+                            if delta_type == "text_delta":
                                 text = d.get("text", "")
                                 if text:
                                     accumulated.content += text
                                     if on_delta:
                                         on_delta(StreamDelta(content=text))
-                            elif d.get("type") == "input_json_delta":
+                            elif delta_type == "thinking_delta":
+                                text = d.get("thinking", "")
+                                if text:
+                                    accumulated.thinking += text
+                                    if on_delta:
+                                        on_delta(StreamDelta(thinking=text))
+                            elif delta_type == "input_json_delta":
                                 partial = d.get("partial_json", "")
-                                if idx in tool_blocks:
+                                if idx in tool_blocks and not tool_blocks[idx].get("_thinking"):
                                     tool_blocks[idx]["input_json"] += partial
 
                         elif dtype == "message_delta":
@@ -482,6 +496,8 @@ class LLMEngine:
                 btype = block.get("type", "")
                 if btype == "text":
                     resp.content += block.get("text", "")
+                elif btype == "thinking":
+                    resp.thinking += block.get("thinking", "")
                 elif btype == "tool_use":
                     inp = block.get("input", {})
                     resp.tool_calls.append(ToolCall(
@@ -500,6 +516,7 @@ class LLMEngine:
             choice = data["choices"][0]
             msg = choice.get("message", {})
             resp.content = msg.get("content", "") or ""
+            resp.thinking = msg.get("reasoning_content", "") or ""
             resp.finish_reason = choice.get("finish_reason", "")
             for tc in msg.get("tool_calls", []):
                 fn = tc.get("function", {})
@@ -521,6 +538,7 @@ class LLMEngine:
             choice = chunk.get("choices", [{}])[0]
             d = choice.get("delta", {})
             delta.content = d.get("content", "") or ""
+            delta.thinking = d.get("reasoning_content", "") or ""
             delta.tool_calls = d.get("tool_calls", [])
             delta.finish_reason = choice.get("finish_reason")
         except (IndexError, TypeError):

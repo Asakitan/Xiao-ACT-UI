@@ -26,6 +26,7 @@ class ChatMessage:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     role: str = "user"  # user | assistant | system | tool
     content: str = ""
+    thinking: str = ""
     tool_calls: List[ToolCall] = field(default_factory=list)
     tool_call_id: Optional[str] = None
     tool_name: Optional[str] = None
@@ -125,6 +126,7 @@ class ChatController:
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
         self.on_stream_delta: Optional[Callable[[ChatMessage, str], None]] = None
+        self.on_thinking_delta: Optional[Callable[[ChatMessage, str], None]] = None
         self.on_stream_end: Optional[Callable[[ChatMessage], None]] = None
         self.on_tool_start: Optional[Callable[[str, str, str], None]] = None  # call_id, name, args
         self.on_tool_end: Optional[Callable[[str, str], None]] = None  # call_id, result
@@ -171,6 +173,8 @@ class ChatController:
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
                     if delta.content and self.on_stream_delta:
                         self.on_stream_delta(_msg, delta.content)
+                    if delta.thinking and self.on_thinking_delta:
+                        self.on_thinking_delta(_msg, delta.thinking)
 
                 self.engine.reset_cancel()
                 resp = self.engine.chat_completion_stream(
@@ -180,6 +184,7 @@ class ChatController:
                 )
 
                 assistant_msg.content = resp.content
+                assistant_msg.thinking = resp.thinking
                 assistant_msg.tool_calls = resp.tool_calls
                 assistant_msg.usage = resp.usage
                 assistant_msg.model = resp.model

@@ -181,6 +181,53 @@ code.inline { background:#1a1a2e; padding:1px 5px; border-radius:3px;
 .stream-cursor::after { content:'▊'; color:var(--fg-accent); animation:blink .8s infinite; }
 @keyframes blink { 50%{opacity:0} }
 
+/* Thinking block (VSCode-style collapsible + shimmer) */
+.thinking-block { border-radius:var(--radius); margin:6px 0; overflow:hidden;
+  border:1px solid #333; background:#1a1a2e; }
+.thinking-header { padding:6px 12px; font-size:11px; color:var(--fg-dim); cursor:pointer;
+  display:flex; align-items:center; gap:6px; user-select:none; }
+.thinking-header:hover { background:#222238; }
+.thinking-header .arrow { font-size:10px; transition:transform .15s; display:inline-block; }
+.thinking-header.open .arrow { transform:rotate(90deg); }
+.thinking-shimmer { background:linear-gradient(90deg,var(--fg-dim) 0%,var(--fg-accent) 50%,var(--fg-dim) 100%);
+  background-size:200%; -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  animation:shimmer 2s linear infinite; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.thinking-body { padding:0 12px 8px; font:11px/1.5 var(--mono); color:var(--fg-dim);
+  white-space:pre-wrap; display:none; max-height:300px; overflow-y:auto; }
+.thinking-body.open { display:block; }
+
+/* Tool state indicators */
+.tool-state { display:inline-flex; align-items:center; gap:4px; font-size:11px; margin-left:auto; }
+.tool-state .spinner { display:inline-block; width:12px; height:12px; border:2px solid var(--fg-dim);
+  border-top-color:var(--fg-accent); border-radius:50%; animation:spin .8s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.tool-state .checkmark { color:var(--fg-success); font-size:13px; }
+.tool-state .error-mark { color:var(--fg-error); font-size:13px; }
+
+/* Confirmation dialog */
+.confirm-bar { display:flex; align-items:center; gap:8px; padding:8px 12px;
+  background:#1e2a1e; border-top:1px solid #333; }
+.confirm-bar .msg { flex:1; font-size:12px; color:var(--fg-warning); }
+.confirm-btn { padding:3px 12px; border-radius:3px; cursor:pointer; font-size:11px; font-weight:600; }
+.confirm-allow { background:#2ea04333; color:var(--fg-success); border:1px solid #2ea04366; }
+.confirm-allow:hover { background:#2ea04366; }
+.confirm-deny { background:#f1444433; color:var(--fg-error); border:1px solid #f1444466; }
+.confirm-deny:hover { background:#f1444466; }
+.confirm-skip { background:transparent; color:var(--fg-dim); border:1px solid var(--border); }
+
+/* Streaming word fade-in */
+.stream-word { animation:wordFade .3s ease-out; display:inline; }
+@keyframes wordFade { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:translateY(0)} }
+
+/* Syntax highlighting in code blocks */
+pre.code-block code .kw { color:var(--fg-kw); }
+pre.code-block code .str { color:var(--fg-str); }
+pre.code-block code .num { color:var(--fg-num); }
+pre.code-block code .cmt { color:var(--fg-cmt); }
+pre.code-block code .fn { color:var(--fg-fn); }
+pre.code-block code .type { color:var(--fg-type); }
+
 /* Chat input */
 .chat-input-area { flex-shrink:0; background:var(--bg3); border-top:1px solid var(--border); padding:8px 12px; }
 .chat-input-row { display:flex; gap:8px; align-items:flex-end; }
@@ -419,6 +466,7 @@ async function call(method,...args){
 // ── Event handler (called from Python) ──
 window._onEditorEvent=function(event,data){
   if(event==='stream_delta') onStreamDelta(data);
+  else if(event==='thinking_delta') onThinkingDelta(data);
   else if(event==='stream_end') onStreamEnd(data);
   else if(event==='tool_start') onToolStart(data);
   else if(event==='tool_end') onToolEnd(data);
@@ -465,7 +513,7 @@ function renderMd(container,text){
       if(nl>0){const fl=inner.slice(0,nl).trim();if(/^\w+$/.test(fl)){lang=fl;inner=inner.slice(nl+1)}}
       const pre=document.createElement('pre');pre.className='code-block';
       if(lang){const l=document.createElement('span');l.className='lang';l.textContent=lang;pre.appendChild(l)}
-      const code=document.createElement('code');code.textContent=inner;pre.appendChild(code);
+      const code=document.createElement('code');code.innerHTML=highlightCode(inner,lang);pre.appendChild(code);
       const cp=document.createElement('span');cp.className='copy-btn';cp.textContent='Copy';
       cp.onclick=()=>{navigator.clipboard.writeText(inner);cp.textContent='✓';setTimeout(()=>cp.textContent='Copy',1500)};
       pre.appendChild(cp);
@@ -532,6 +580,70 @@ $('editor-text').addEventListener('keydown',function(e){
     this.selectionStart=this.selectionEnd=s+4;updateLineNums()}
 });
 
+// ── Syntax highlighting ──
+const KW_PY=new Set('def class import from return if elif else for while try except finally with as yield async await lambda pass break continue raise True False None and or not in is'.split(' '));
+const KW_JS=new Set('function const let var return if else for while try catch finally async await class import export from new this true false null undefined typeof instanceof switch case break default throw yield of in'.split(' '));
+
+function highlightCode(code,lang){
+  const kws=(lang==='python'||lang==='py')?KW_PY:KW_JS;
+  return code.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d[\d.xXa-fA-F_]*\b)|(#[^\n]*|\/\/[^\n]*)|(\b\w+\b)/g,
+    (m,str,num,cmt,word)=>{
+      if(str) return '<span class="str">'+esc(str)+'</span>';
+      if(num) return '<span class="num">'+esc(num)+'</span>';
+      if(cmt) return '<span class="cmt">'+esc(cmt)+'</span>';
+      if(word&&kws.has(word)) return '<span class="kw">'+esc(word)+'</span>';
+      return esc(m);
+    });
+}
+
+// ── Thinking block ──
+let thinkingBuf='', thinkingEl=null;
+
+function onThinkingDelta(d){
+  thinkingBuf+=(d.content||'');
+  if(!thinkingEl&&currentMsgBody){
+    thinkingEl=document.createElement('div');thinkingEl.className='thinking-block';
+    const hdr=document.createElement('div');hdr.className='thinking-header open';
+    hdr.innerHTML='<span class="arrow">▸</span> <span class="thinking-shimmer">Thinking...</span>';
+    const body=document.createElement('div');body.className='thinking-body open';
+    hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+    thinkingEl.appendChild(hdr);thinkingEl.appendChild(body);
+    currentMsgBody.appendChild(thinkingEl);
+    thinkingEl._body=body;thinkingEl._hdr=hdr;
+  }
+  if(thinkingEl&&thinkingEl._body){thinkingEl._body.textContent=thinkingBuf}
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+}
+
+function finalizeThinking(){
+  if(thinkingEl&&thinkingEl._hdr){
+    thinkingEl._hdr.innerHTML='<span class="arrow">▸</span> Thinking ('+thinkingBuf.split(/\s+/).length+' words)';
+    thinkingEl._hdr.classList.remove('open');
+    if(thinkingEl._body)thinkingEl._body.classList.remove('open');
+  }
+  thinkingBuf='';thinkingEl=null;
+}
+
+// ── Tool state rendering ──
+function renderToolCallWithState(container,name,args,callId){
+  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+callId;
+  const hdr=document.createElement('div');hdr.className='tool-header';
+  hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name)+
+    '<span class="tool-state"><span class="spinner"></span></span>';
+  const body=document.createElement('div');body.className='tool-body';
+  try{body.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{body.textContent=args}
+  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+  return el;
+}
+
+function markToolComplete(callId,success){
+  const el=document.getElementById('tc-'+callId);
+  if(!el)return;
+  const state=el.querySelector('.tool-state');
+  if(state) state.innerHTML=success?'<span class="checkmark">✓</span>':'<span class="error-mark">✗</span>';
+}
+
 // ── Streaming ──
 function onStreamDelta(d){
   if(!currentMsgBody)return;
@@ -542,11 +654,22 @@ function onStreamDelta(d){
 }
 
 function onStreamEnd(d){
+  finalizeThinking();
   if(currentMsgBody){
     currentMsgBody.classList.remove('stream-cursor');
     currentMsgBody.textContent='';
+    // Render thinking block if present
+    if(d.thinking){
+      const tb=document.createElement('div');tb.className='thinking-block';
+      const hdr=document.createElement('div');hdr.className='thinking-header';
+      hdr.innerHTML='<span class="arrow">▸</span> Thinking ('+d.thinking.split(/\s+/).length+' words)';
+      const body=document.createElement('div');body.className='thinking-body';
+      body.textContent=d.thinking;
+      hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+      tb.appendChild(hdr);tb.appendChild(body);currentMsgBody.appendChild(tb);
+    }
     renderMd(currentMsgBody,streamBuf);
-    if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCall(currentMsgBody,tc.name,tc.arguments));
+    if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id));
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
   }
   if(d.usage){totalTokens+=(d.usage.total_tokens||0);$('token-count').textContent=totalTokens+' tokens';$('status-tokens').textContent=totalTokens+' tokens'}
@@ -555,8 +678,11 @@ function onStreamEnd(d){
   setStatus(d.tool_calls?'Executing tools...':'Ready');
 }
 
-function onToolStart(d){setStatus('Tool: '+d.name+'...')}
+function onToolStart(d){
+  setStatus('Tool: '+d.name+'...');
+}
 function onToolEnd(d){
+  markToolComplete(d.id,!d.error);
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
   if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,d.name||'?',d.result||'')}
 }

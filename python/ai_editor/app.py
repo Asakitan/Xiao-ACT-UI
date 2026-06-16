@@ -63,6 +63,7 @@ class AIEditorAPI:
         self._controller = ChatController(self._engine, self._registry, conv)
 
         self._controller.on_stream_delta = self._on_stream_delta
+        self._controller.on_thinking_delta = self._on_thinking_delta
         self._controller.on_stream_end = self._on_stream_end
         self._controller.on_tool_start = self._on_tool_start
         self._controller.on_tool_end = self._on_tool_end
@@ -213,8 +214,13 @@ class AIEditorAPI:
     def _on_stream_delta(self, msg: ChatMessage, text: str) -> None:
         self._emit("stream_delta", {"content": text})
 
+    def _on_thinking_delta(self, msg: ChatMessage, text: str) -> None:
+        self._emit("thinking_delta", {"content": text})
+
     def _on_stream_end(self, msg: ChatMessage) -> None:
         payload: Dict[str, Any] = {"content": msg.content, "model": msg.model}
+        if msg.thinking:
+            payload["thinking"] = msg.thinking
         if msg.tool_calls:
             payload["tool_calls"] = [
                 {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
