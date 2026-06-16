@@ -1,8 +1,11 @@
-"""Star.exe 进程附加与基础读取封装.
+"""通用进程附加与基础读取封装.
 
-只暴露 ``StarProcess`` 一个类, 内部用 pymem 完成 OpenProcess + ReadProcessMemory.
-所有读操作均包裹 try/except, 失败返回 None 而不是抛, 因为内存扫描场景下
-触碰未映射页是常态。
+只暴露 ``GameProcess`` (别名 ``StarProcess``) 一个类, 内部用 pymem
+完成 OpenProcess + ReadProcessMemory. 所有读操作均包裹 try/except,
+失败返回 None 而不是抛, 因为内存扫描场景下触碰未映射页是常态。
+
+进程名通过 ``config.GAME_PROCESS_NAMES`` 或构造函数 ``process_name``
+参数指定, 平台本身不硬编码任何游戏进程名。
 
 依赖: pymem>=1.13 (PoC 可选依赖, 未在打包 spec 中)
 """
@@ -253,8 +256,8 @@ class StarProcessError(RuntimeError):
     pass
 
 
-class StarProcess:
-    """对 Star.exe 的只读包装."""
+class GameProcess:
+    """对目标游戏进程的只读包装 (进程名由 config 或参数指定)."""
 
     def __init__(self, process_name: Optional[str] = None) -> None:
         try:
@@ -342,6 +345,18 @@ class StarProcess:
     @property
     def name(self) -> str:
         return self._attached_name or ""
+
+    @property
+    def memory_tier(self) -> str:
+        if _drv is not None and _DRIVER_OK:
+            return _drv.memory_tier()
+        return "S"
+
+    @property
+    def memory_tier_desc(self) -> str:
+        if _drv is not None and _DRIVER_OK:
+            return _drv.TIER_DESC.get(_drv.memory_tier(), "")
+        return "系统 API (NtRVM/RPM, 无驱动)"
 
     # ───── 模块 ─────
     def list_modules(self) -> List[ModuleInfo]:
@@ -646,15 +661,18 @@ def find_pid_by_name(process_name: str) -> Optional[int]:
     """轻量探测: 不开进程, 仅枚举 PID; 用于 attach 前预检.
 
     Uses the Unicode Win32 process enumeration path so a non-UTF-8 executable
-    name from any unrelated process cannot abort Star.exe discovery.
+    name from any unrelated process cannot abort game process discovery.
     """
     return _find_pid_by_name_wide(process_name)
+
+
+StarProcess = GameProcess
 
 
 if __name__ == "__main__":  # 简易自测
     print(f"is_admin={is_admin()} python={sys.executable}")
     try:
-        with StarProcess() as sp:
+        with GameProcess() as sp:
             print(f"attached: pid={sp.pid} name={sp.name}")
             print(sp.main_module())
             n = 0

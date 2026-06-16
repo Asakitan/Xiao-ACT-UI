@@ -1,13 +1,18 @@
-"""Top-level mem_probe package.
+"""Top-level mem_probe package — generic memory scanning infrastructure.
 
 Exposes the read-only memory probe stack used by the SAO ACT runtime:
 
-  - :mod:`mem_probe.process` — minimal Star.exe process handle (admin required)
+  - :mod:`mem_probe.process` — game process handle (name from config, admin required)
   - :mod:`mem_probe.cy_memscan` — Python facade over ``_sao_cy_memscan`` (AVX2)
-  - :mod:`mem_probe.il2cpp` — script.json / dump.cs / static resolvers
+  - :mod:`mem_probe.scanner` — multi-frame memory value search
+  - :mod:`mem_probe.unified_source` — TCP/memory hybrid data source
 
-All readers rely on ``PROCESS_VM_READ``; running them from an admin shell is
-mandatory.  Nothing in this package mutates the target process.
+Game-specific bridges (e.g. IL2CPP field resolvers) are injected by plugins
+at runtime via ``unified_source.set_bridge_classes()``.  The package itself
+has no game-specific imports.
+
+All readers rely on ``PROCESS_VM_READ``; admin shell is mandatory.
+Nothing in this package mutates the target process.
 """
 from __future__ import annotations
 

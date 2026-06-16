@@ -788,7 +788,7 @@ class MemAccess:
             if pm is None:
                 return _err("not_armed", "属性读取器尚未挂载")
             try:
-                from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader
+                from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader  # plugin-provided via il2cpp namespace
                 ecr = EntityCombatReader(pm)
             except Exception as exc:
                 return _err("process_gone", f"无法创建属性读取器: {exc}")

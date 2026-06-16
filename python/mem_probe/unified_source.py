@@ -21,9 +21,31 @@ import time
 import threading
 from typing import Any, Callable, Optional
 
-from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
-from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
 from mem_probe import cy_memscan as _cy_memscan
+
+# Game-specific bridges are injected by plugins at runtime via
+# set_bridge_factory(). Default: try il2cpp (Star Resonance plugin
+# registers this path); graceful fallback if unavailable.
+_MemStateBridge = None
+_MemSelfStateProvider = None
+
+def _ensure_bridges():
+    global _MemStateBridge, _MemSelfStateProvider
+    if _MemStateBridge is not None:
+        return
+    try:
+        from mem_probe.il2cpp.mem_state_bridge import MemStateBridge as _MSB
+        from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider as _MSSP
+        _MemStateBridge = _MSB
+        _MemSelfStateProvider = _MSSP
+    except ImportError:
+        pass
+
+def set_bridge_classes(state_bridge_cls, self_state_provider_cls):
+    """Plugin injection point: register game-specific bridge classes."""
+    global _MemStateBridge, _MemSelfStateProvider
+    _MemStateBridge = state_bridge_cls
+    _MemSelfStateProvider = self_state_provider_cls
 
 StatusCallback = Callable[[str, str], None]
 SelfCallback = Callable[[dict], None]
@@ -80,7 +102,10 @@ class UnifiedDataSource:
         self._start_lock = threading.RLock()
         self._policy = self._build_policy()
 
-        self._bridge = MemStateBridge(
+        _ensure_bridges()
+        if _MemStateBridge is None:
+            raise RuntimeError("No memory state bridge available — game plugin not loaded")
+        self._bridge = _MemStateBridge(
             state_mgr=state_mgr,
             dps_tracker=dps_tracker,
             dps_overlay=dps_overlay,
@@ -336,10 +361,10 @@ class UnifiedDataSource:
     def _build_policy(self) -> dict:
         interval = self._float_setting(
             "mem_auto_scan_interval_s",
-            getattr(MemSelfStateProvider, "POLL_INTERVAL", 0.5),
+            getattr(_MemSelfStateProvider, "POLL_INTERVAL", 0.5) if _MemSelfStateProvider else 0.5,
         )
         if interval <= 0:
-            interval = getattr(MemSelfStateProvider, "POLL_INTERVAL", 0.5)
+            interval = getattr(_MemSelfStateProvider, "POLL_INTERVAL", 0.5) if _MemSelfStateProvider else 0.5
         interval = max(0.1, min(float(interval), 30.0))
         require_admin = self._bool_setting("mem_require_admin", False)
         admin_ok = (not require_admin) or self._is_windows_admin()
