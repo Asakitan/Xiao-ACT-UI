@@ -204,21 +204,8 @@ class AIEditorPanel:
         self._controller.on_idle = self._on_idle
 
     def _default_system_prompt(self) -> str:
-        tools_desc = ""
-        if self._registry:
-            for cat in self._registry.categories():
-                names = [t.name for t in self._registry.list_tools(cat)]
-                tools_desc += f"\n- {cat}: {', '.join(names)}"
-        return (
-            "你是 SAO ACT (星痕共鸣战斗分析工具) 的AI助手。\n"
-            "你可以通过 tool call 访问游戏引擎的底层接口，包括内存读取、实体查询、"
-            "DPS数据、Boss状态、触发器、设置等。\n"
-            "用户可能用中文或英文提问。回答时优先使用用户的语言。\n"
-            "代码输出用 markdown 代码块包裹。\n"
-            f"\n可用工具分类:{tools_desc}\n"
-            "\n重要: 对于 requires_confirm 的工具(内存写入、设置修改等)，"
-            "先解释操作再执行。"
-        )
+        from ai_editor.prompts import get_system_prompt
+        return get_system_prompt()
 
     # -- Config persistence --
 

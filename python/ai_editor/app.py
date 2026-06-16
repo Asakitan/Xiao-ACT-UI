@@ -101,16 +101,8 @@ class AIEditorAPI:
         self._confirm_results: Dict[str, bool] = {}
 
     def _default_system_prompt(self) -> str:
-        cats = ""
-        if self._registry:
-            for cat in self._registry.categories():
-                names = [t.name for t in self._registry.list_tools(cat)]
-                cats += f"\n- {cat}: {', '.join(names)}"
-        return (
-            "你是 SAO ACT 的AI助手。你可以通过 tool call 访问游戏引擎底层接口。\n"
-            f"可用工具:{cats}\n"
-            "代码输出用 markdown 代码块。优先使用用户的语言回答。"
-        )
+        from ai_editor.prompts import get_system_prompt
+        return get_system_prompt()
 
     # ── Config ──
 
@@ -173,6 +165,10 @@ class AIEditorAPI:
                 self._engine.config.provider = config["provider"]
             if config.get("model"):
                 self._engine.config.model = config["model"]
+        # Update system prompt for agent mode
+        if agent_mode and self._controller.conversation:
+            from ai_editor.prompts import get_system_prompt
+            self._controller.conversation.system_prompt = get_system_prompt(agent_mode=True)
         self._controller.send(text.strip(), agent_mode=agent_mode)
         return {"ok": True}
 
