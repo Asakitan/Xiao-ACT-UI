@@ -11,6 +11,62 @@ from __future__ import annotations
 _ctx = None
 _engines_started = False
 
+_GAME_SETTING_KEYS = (
+    'mem_data_source', 'dps_enabled', 'burst_enabled', 'buffmon_enabled',
+    'boss_bar_mode', 'sound_enabled', 'sound_volume', 'hp_ov_enabled',
+    'watched_skill_slots', 'mech_banner_enabled', 'tts_enabled', 'tts_volume',
+    'directional_dodge_enabled',
+)
+
+_GAME_SETTING_DEFAULTS = {
+    'mem_data_source': 'tcp',
+    'dps_enabled': True,
+    'burst_enabled': True,
+    'buffmon_enabled': True,
+    'boss_bar_mode': 'boss_raid',
+    'sound_enabled': True,
+    'sound_volume': 70,
+    'hp_ov_enabled': True,
+    'tts_enabled': True,
+    'tts_volume': 80,
+}
+
+
+def _owner_get(key, default=None):
+    """Read a game setting from the owner's top-level settings (backward compat)."""
+    if _ctx is None:
+        return default
+    owner = _ctx.engine.owner
+    fn = getattr(owner, '_get_setting', None)
+    if callable(fn):
+        return fn(key, default)
+    return default
+
+
+def _ensure_toplevel_defaults(ctx):
+    """Ensure game settings exist at the top level of settings.json.
+
+    Old installs already have these keys at the top level — this just fills in
+    any missing ones for fresh installs. The plugin reads/writes these through
+    the owner's _get_setting/_set_setting so the platform and plugin always
+    see the same values.
+    """
+    owner = ctx.engine.owner
+    cfg = getattr(owner, '_cfg_settings_ref', None)
+    if cfg is None:
+        return
+    changed = False
+    for key, default in _GAME_SETTING_DEFAULTS.items():
+        sentinel = object()
+        if cfg.get(key, sentinel) is sentinel:
+            cfg.set(key, default)
+            changed = True
+    if changed:
+        try:
+            cfg.save()
+        except Exception:
+            pass
+
 
 def _init_game_engines(ctx):
     """Create GameState + PacketBridge + AutoKey + BossRaid + all overlays."""
@@ -307,7 +363,7 @@ def _build_burst_items():
     owner = _ctx.engine.owner if _ctx else None
     if owner is None:
         return []
-    burst_on = bool(_ctx.setting('burst_enabled') if _ctx else True)
+    burst_on = bool(_owner_get('burst_enabled', True))
     return [
         {'icon': '◆', 'label': f'爆发提示: {"ON" if burst_on else "OFF"}',
          'command': getattr(owner, '_toggle_burst_enabled', lambda: None)},
@@ -318,7 +374,7 @@ def _build_panel_items():
     owner = _ctx.engine.owner if _ctx else None
     if owner is None:
         return []
-    dps_on = bool(_ctx.setting('dps_enabled') if _ctx else True)
+    dps_on = bool(_owner_get('dps_enabled', True))
     return [
         {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}',
          'command': getattr(owner, '_toggle_dps_enabled', lambda: None)},
@@ -332,14 +388,7 @@ def on_load(ctx):
     global _ctx
     _ctx = ctx
 
-    ctx.set_defaults({
-        'mem_data_source': 'tcp',
-        'dps_enabled': True,
-        'burst_enabled': True,
-        'buffmon_enabled': True,
-        'boss_bar_mode': 'boss_raid',
-        'sound_enabled': True,
-    })
+    _ensure_toplevel_defaults(ctx)
 
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
     ctx.register_menu_category('Boss', '⚔', _build_boss_items, priority=20)
