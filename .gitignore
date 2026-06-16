@@ -76,6 +76,17 @@ driver_*.py
 _encrypt_drivers.py
 _build_driver.py
 
+# —— License system (local only, never commit) ────────────────────────
+python/license/
+python/license_server/
+license_tool.py
+.sao_license.dat
+*.license
+license.db
+
+# ── AI Editor (user conversation history, local only) ──
+python/ai_editor_history/
+
 # ── Misc ───────────────────────────────────────────
 .github/
 out/

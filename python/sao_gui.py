@@ -439,6 +439,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._act_combatant_drilldown_panel = None  # CombatantDrilldownPanel
         self._act_skill_drilldown_panel = None  # SkillDrilldownPanel
         self._mem_scope_panel = None  # MemScopePanel
+        self._ai_editor_panel = None  # AIEditorPanel
         self._commander_last_push = 0.0
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()

@@ -104,6 +104,27 @@ class SAOPlayerGUIPanelsMixin:
             self._push_commander_data()
             self.root.after(120, lambda: self._raise_panel_window(self._commander_panel))
 
+    def _toggle_ai_editor_panel(self):
+        """启动独立 AI Editor GUI 窗口 (pywebview)."""
+        self._dismiss_sao_menu_for_panel()
+        try:
+            from ai_editor.app import launch
+            launch(gui_ref=self)
+        except Exception as exc:
+            print(f"[AIEditor] launch failed: {exc}")
+            # Fallback to Tk panel
+            try:
+                if not self._ai_editor_panel:
+                    from gui_modules.sao_gui_ai_editor import AIEditorPanel
+                    self._ai_editor_panel = AIEditorPanel(self.root, self)
+                if self._ai_editor_panel.is_visible():
+                    self._ai_editor_panel.hide()
+                else:
+                    self._ai_editor_panel.show()
+                    self.root.after(120, lambda: self._raise_panel_window(self._ai_editor_panel))
+            except Exception:
+                pass
+
     def _toggle_act_plugin_manager_panel(self):
         """打开/关闭 ACT 插件管理面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()
@@ -457,6 +478,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_combatant_drilldown', getattr(self._act_combatant_drilldown_panel, '_win', None)),
             ('act_skill_drilldown', getattr(self._act_skill_drilldown_panel, '_win', None)),
             ('mem_scope', getattr(self._mem_scope_panel, '_win', None)),
+            ('ai_editor', getattr(self._ai_editor_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:

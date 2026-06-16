@@ -314,6 +314,12 @@ class SAOPlayerGUILifecycleMixin:
         self._act_combatant_drilldown_panel = None
         self._act_skill_drilldown_panel = None
         self._mem_scope_panel = None
+        if getattr(self, '_ai_editor_panel', None):
+            try:
+                self._ai_editor_panel.destroy()
+            except Exception:
+                pass
+        self._ai_editor_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:
             if self._float and self._float.winfo_exists():

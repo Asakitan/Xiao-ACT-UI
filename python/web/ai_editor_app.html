@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAO AI Editor</title>
+<style>
+:root {
+  --bg: #1e1e1e; --bg2: #252526; --bg3: #2d2d2d; --bg-sidebar: #181818;
+  --bg-input: #1e1e1e; --bg-editor: #1e1e1e; --bg-panel: #1e1e1e;
+  --bg-code: #0d1117; --bg-tool: #1a2a1a; --bg-tool-result: #0d1a0d;
+  --bg-hover: #2a2d2e; --bg-active: #37373d; --bg-tab-active: #1e1e1e;
+  --bg-tab: #2d2d2d; --bg-badge: #007acc;
+  --fg: #cccccc; --fg-dim: #808080; --fg-bright: #e0e0e0;
+  --fg-accent: #4fc1ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
+  --fg-warning: #cca700; --fg-tool: #dcdcaa; --fg-code: #d4d4d4;
+  --fg-kw: #569cd6; --fg-str: #ce9178; --fg-num: #b5cea8; --fg-cmt: #6a9955;
+  --fg-fn: #dcdcaa; --fg-type: #4ec9b0;
+  --border: #3c3c3c; --border-focus: #007acc;
+  --btn: #0e639c; --btn-hover: #1177bb;
+  --scrollbar: #424242; --scrollbar-hover: #4f4f4f;
+  --selection: #264f78; --line-highlight: #ffffff08;
+  --radius: 4px;
+  --mono: 'Cascadia Code','Fira Code','Consolas','Courier New',monospace;
+  --sans: 'Segoe UI',system-ui,-apple-system,sans-serif;
+  --activity-w: 48px; --sidebar-w: 260px; --panel-h: 45%;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
+  display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--scrollbar); border-radius:4px; }
+::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-hover); }
+::selection { background:var(--selection); }
+
+/* ── Title bar ── */
+.titlebar { display:flex; align-items:center; height:30px; background:var(--bg2);
+  padding:0 8px; -webkit-app-region:drag; user-select:none; font-size:12px; }
+.titlebar .title { color:var(--fg-dim); flex:1; text-align:center; }
+.titlebar .title b { color:var(--fg-accent); }
+.tb-btn { -webkit-app-region:no-drag; width:46px; height:30px; display:flex;
+  align-items:center; justify-content:center; color:var(--fg-dim); cursor:pointer; }
+.tb-btn:hover { background:var(--bg-hover); color:var(--fg); }
+.tb-btn.close:hover { background:#c42b1c; color:#fff; }
+
+/* ── Main layout ── */
+.main { display:flex; flex:1; overflow:hidden; }
+
+/* ── Activity bar ── */
+.activity-bar { width:var(--activity-w); background:var(--bg2); display:flex;
+  flex-direction:column; align-items:center; padding:4px 0; flex-shrink:0; }
+.ab-icon { width:48px; height:48px; display:flex; align-items:center; justify-content:center;
+  color:var(--fg-dim); cursor:pointer; font-size:20px; position:relative; border-left:2px solid transparent; }
+.ab-icon:hover { color:var(--fg); }
+.ab-icon.active { color:var(--fg); border-left-color:var(--fg); }
+.ab-icon .badge { position:absolute; top:6px; right:6px; background:var(--bg-badge);
+  color:#fff; font-size:9px; min-width:16px; height:16px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center; }
+.ab-spacer { flex:1; }
+
+/* ── Sidebar ── */
+.sidebar { width:var(--sidebar-w); background:var(--bg-sidebar); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
+.sidebar.hidden { display:none; }
+.sb-header { padding:10px 16px 8px; font-size:11px; font-weight:600; text-transform:uppercase;
+  letter-spacing:1px; color:var(--fg-dim); display:flex; align-items:center; }
+.sb-header .spacer { flex:1; }
+.sb-header .sb-action { cursor:pointer; font-size:14px; padding:2px 4px; }
+.sb-header .sb-action:hover { color:var(--fg); }
+.sb-section { flex:1; overflow-y:auto; padding:0 0 8px; }
+.sb-item { padding:4px 16px; cursor:pointer; display:flex; align-items:center; gap:6px;
+  font-size:12px; color:var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sb-item:hover { background:var(--bg-hover); color:var(--fg); }
+.sb-item.active { background:var(--bg-active); color:var(--fg-accent); }
+.sb-item .meta { font-size:10px; color:var(--fg-dim); margin-left:auto; }
+.sb-group { padding:6px 16px 3px; font-size:11px; font-weight:600; color:var(--fg-dim); }
+
+/* ── Content area ── */
+.content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+
+/* ── Tab bar ── */
+.tab-bar { display:flex; align-items:center; height:35px; background:var(--bg-tab);
+  border-bottom:1px solid var(--border); overflow-x:auto; flex-shrink:0; }
+.tab { padding:0 12px; height:35px; display:flex; align-items:center; gap:6px;
+  font-size:12px; color:var(--fg-dim); cursor:pointer; border-right:1px solid var(--border);
+  white-space:nowrap; min-width:80px; position:relative; background:var(--bg-tab); }
+.tab:hover { color:var(--fg); }
+.tab.active { color:var(--fg); background:var(--bg-tab-active);
+  border-bottom:1px solid var(--bg-tab-active); margin-bottom:-1px; }
+.tab .close { opacity:0; font-size:14px; margin-left:4px; padding:2px; border-radius:3px; }
+.tab:hover .close { opacity:0.6; }
+.tab .close:hover { opacity:1; background:var(--bg-hover); }
+.tab-add { padding:0 10px; height:35px; display:flex; align-items:center;
+  color:var(--fg-dim); cursor:pointer; font-size:16px; }
+.tab-add:hover { color:var(--fg); }
+
+/* ── Editor ── */
+.editor-area { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+.editor-container { flex:1; display:flex; overflow:hidden; }
+.line-numbers { width:50px; background:var(--bg-editor); color:var(--fg-dim); font:12px/1.5 var(--mono);
+  padding:8px 8px 8px 0; text-align:right; overflow:hidden; user-select:none; flex-shrink:0; }
+.editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
+  padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
+  overflow:auto; caret-color:var(--fg-accent); }
+.editor-textarea::selection { background:var(--selection); }
+.editor-welcome { display:flex; align-items:center; justify-content:center; flex:1;
+  color:var(--fg-dim); font-size:14px; flex-direction:column; gap:12px; }
+.editor-welcome kbd { background:var(--bg3); padding:2px 6px; border-radius:3px;
+  border:1px solid var(--border); font-family:var(--mono); font-size:12px; }
+
+/* ── Splitter ── */
+.splitter { height:4px; background:transparent; cursor:ns-resize; flex-shrink:0;
+  position:relative; }
+.splitter::after { content:''; position:absolute; left:0; right:0; top:1px; height:2px;
+  background:var(--border); }
+.splitter:hover::after, .splitter.dragging::after { background:var(--border-focus); }
+
+/* ── Panel (Chat/Terminal) ── */
+.panel-area { height:var(--panel-h); display:flex; flex-direction:column; border-top:1px solid var(--border); }
+.panel-tabs { display:flex; height:28px; background:var(--bg2); border-bottom:1px solid var(--border);
+  padding:0 8px; align-items:center; flex-shrink:0; }
+.ptab { padding:0 10px; height:28px; display:flex; align-items:center; font-size:11px;
+  color:var(--fg-dim); cursor:pointer; text-transform:uppercase; letter-spacing:0.5px;
+  border-bottom:1px solid transparent; }
+.ptab:hover { color:var(--fg); }
+.ptab.active { color:var(--fg); border-bottom-color:var(--fg-accent); }
+.ptab .count { background:var(--bg-badge); color:#fff; font-size:9px; min-width:14px;
+  height:14px; border-radius:7px; display:inline-flex; align-items:center;
+  justify-content:center; margin-left:4px; }
+.panel-tabs .spacer { flex:1; }
+.panel-btn { color:var(--fg-dim); cursor:pointer; padding:2px 6px; font-size:13px; }
+.panel-btn:hover { color:var(--fg); }
+
+/* ── Chat panel ── */
+.chat-panel { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.chat-messages { flex:1; overflow-y:auto; padding:12px 16px; }
+.msg { margin-bottom:14px; animation:fadeIn .2s; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1} }
+.msg-header { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
+.msg-role { font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+.msg-role.user { color:var(--fg-accent); }
+.msg-role.assistant { color:var(--fg-success); }
+.msg-role.system { color:var(--fg-warning); }
+.msg-model { color:var(--fg-dim); font-size:10px; }
+.msg-body { line-height:1.6; }
+.msg-body p { margin-bottom:4px; }
+
+/* Code blocks */
+pre.code-block { position:relative; background:var(--bg-code); border-radius:var(--radius);
+  margin:8px 0; overflow:hidden; border:1px solid #30363d; }
+pre.code-block .lang { display:block; padding:4px 12px; font-size:10px; color:var(--fg-dim);
+  background:#161b22; font-family:var(--mono); border-bottom:1px solid #21262d; }
+pre.code-block code { display:block; padding:10px 14px; font:12px/1.6 var(--mono);
+  color:var(--fg-code); overflow-x:auto; white-space:pre; }
+pre.code-block .copy-btn { position:absolute; top:4px; right:8px; cursor:pointer;
+  color:var(--fg-dim); font-size:11px; padding:2px 8px; border-radius:3px;
+  background:#21262d; border:1px solid #30363d; }
+pre.code-block .copy-btn:hover { background:#30363d; color:var(--fg); }
+code.inline { background:#1a1a2e; padding:1px 5px; border-radius:3px;
+  font:12px var(--mono); color:var(--fg-code); }
+
+/* Tool calls */
+.tool-call { background:var(--bg-tool); border-radius:var(--radius); margin:6px 0;
+  border-left:3px solid var(--fg-tool); overflow:hidden; }
+.tool-header { padding:6px 12px; font:12px var(--mono); color:var(--fg-tool);
+  cursor:pointer; display:flex; align-items:center; gap:6px; user-select:none; }
+.tool-header:hover { background:#223322; }
+.tool-header .arrow { font-size:10px; transition:transform .15s; display:inline-block; }
+.tool-header.open .arrow { transform:rotate(90deg); }
+.tool-body { padding:0 12px 8px; font:11px/1.5 var(--mono); color:var(--fg-dim);
+  white-space:pre-wrap; display:none; max-height:300px; overflow-y:auto; }
+.tool-body.open { display:block; }
+
+.tool-result { background:var(--bg-tool-result); border-radius:var(--radius); margin:6px 0;
+  border-left:3px solid var(--fg-success); }
+.tool-result .tool-header { color:var(--fg-success); }
+.tool-result .tool-header:hover { background:#0d220d; }
+
+.error-text { color:var(--fg-error); }
+.stream-cursor::after { content:'▊'; color:var(--fg-accent); animation:blink .8s infinite; }
+@keyframes blink { 50%{opacity:0} }
+
+/* Chat input */
+.chat-input-area { flex-shrink:0; background:var(--bg3); border-top:1px solid var(--border); padding:8px 12px; }
+.chat-input-row { display:flex; gap:8px; align-items:flex-end; }
+.chat-input { flex:1; background:var(--bg-input); color:var(--fg); border:1px solid var(--border);
+  border-radius:var(--radius); padding:8px 12px; font:13px var(--mono); resize:none;
+  outline:none; min-height:40px; max-height:180px; line-height:1.5; }
+.chat-input:focus { border-color:var(--border-focus); }
+.chat-input::placeholder { color:var(--fg-dim); }
+.send-btn { background:var(--btn); color:#fff; border:none; border-radius:var(--radius);
+  padding:8px 16px; font:12px/1 var(--sans); font-weight:600; cursor:pointer; white-space:nowrap; }
+.send-btn:hover { background:var(--btn-hover); }
+.send-btn:disabled { opacity:0.5; cursor:default; }
+.chat-toolbar { display:flex; align-items:center; gap:8px; padding-top:6px; font-size:11px; }
+.chat-toolbar .hint { color:var(--fg-dim); }
+.chat-toolbar .spacer { flex:1; }
+.chat-toolbar .token-count { color:var(--fg-dim); }
+.toolbar-btn { color:var(--fg-dim); cursor:pointer; padding:2px 8px; border-radius:3px; }
+.toolbar-btn:hover { background:var(--bg-hover); color:var(--fg); }
+
+/* ── Terminal panel ── */
+.terminal-panel { flex:1; display:none; flex-direction:column; }
+.terminal-panel.active { display:flex; }
+.terminal-output { flex:1; overflow-y:auto; padding:8px 12px; font:12px/1.5 var(--mono);
+  color:var(--fg-success); white-space:pre-wrap; }
+
+/* ── Status bar ── */
+.statusbar { display:flex; align-items:center; height:22px; background:#007acc;
+  padding:0 12px; font-size:11px; color:#fff; flex-shrink:0; }
+.statusbar .spacer { flex:1; }
+.sb-item { padding:0 8px; cursor:default; }
+.sb-item:hover { background:#ffffff20; }
+
+/* ── Settings modal ── */
+.modal-bg { position:fixed; inset:0; background:#00000060; display:none;
+  align-items:center; justify-content:center; z-index:200; }
+.modal-bg.open { display:flex; }
+.modal { background:var(--bg); border:1px solid var(--border); border-radius:8px;
+  width:560px; max-height:85vh; overflow-y:auto; padding:24px; box-shadow:0 8px 32px #00000080; }
+.modal h2 { color:var(--fg); font-size:16px; margin-bottom:16px; font-weight:500; }
+.modal label { display:block; color:var(--fg-dim); font-size:12px; margin-top:12px; margin-bottom:4px; }
+.modal input,.modal select,.modal textarea { width:100%; background:var(--bg-input);
+  color:var(--fg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:7px 10px; font:13px var(--mono); outline:none; }
+.modal input:focus,.modal select:focus,.modal textarea:focus { border-color:var(--border-focus); }
+.modal textarea { min-height:80px; resize:vertical; }
+.modal-btns { display:flex; gap:8px; margin-top:20px; justify-content:flex-end; }
+.modal-status { margin-top:8px; font-size:12px; min-height:18px; }
+
+/* ── Slash command popup ── */
+.slash-popup { position:absolute; bottom:100%; left:0; right:0; background:var(--bg2);
+  border:1px solid var(--border); border-radius:var(--radius); max-height:240px;
+  overflow-y:auto; display:none; z-index:100; box-shadow:0 -4px 16px #00000040; }
+.slash-popup.open { display:block; }
+.slash-item { padding:6px 14px; cursor:pointer; display:flex; align-items:center; gap:10px; }
+.slash-item:hover,.slash-item.selected { background:var(--bg-hover); }
+.slash-item .cmd { color:var(--fg-accent); font:12px var(--mono); min-width:80px; }
+.slash-item .desc { color:var(--fg-dim); font-size:12px; }
+
+/* ── Responsive ── */
+@media(max-width:900px) { .sidebar { display:none !important; } }
+</style>
+</head>
+<body>
+
+<!-- Title bar -->
+<div class="titlebar">
+  <div class="title"><b>✦</b> SAO AI Editor</div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Activity bar -->
+  <div class="activity-bar">
+    <div class="ab-icon active" data-panel="chat" title="Chat">💬</div>
+    <div class="ab-icon" data-panel="tools" title="Tools">🔧</div>
+    <div class="ab-icon" data-panel="history" title="History">📋</div>
+    <div class="ab-spacer"></div>
+    <div class="ab-icon" data-panel="settings" title="Settings">⚙</div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <!-- Chat sidebar (default) -->
+    <div class="sb-view" id="sb-chat">
+      <div class="sb-header">Chat <span class="spacer"></span>
+        <span class="sb-action" onclick="newChat()" title="New Chat">✚</span>
+      </div>
+      <div class="sb-section">
+        <div class="sb-group">Model</div>
+        <div style="padding:4px 16px">
+          <select id="provider-sel" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:12px">
+            <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+            <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input id="model-inp" placeholder="Model name" style="width:100%;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
+        </div>
+        <div class="sb-group" style="margin-top:8px">Quick Actions</div>
+        <div class="sb-item" onclick="execSlash('/state')">📊 Game State</div>
+        <div class="sb-item" onclick="execSlash('/dps')">⚔ DPS Summary</div>
+        <div class="sb-item" onclick="execSlash('/boss')">👹 Boss Status</div>
+        <div class="sb-item" onclick="execSlash('/entities')">👥 Entity List</div>
+        <div class="sb-item" onclick="execSlash('/system')">ℹ System Info</div>
+      </div>
+    </div>
+    <!-- Tools sidebar -->
+    <div class="sb-view" id="sb-tools" style="display:none">
+      <div class="sb-header">Engine Tools</div>
+      <div class="sb-section" id="tools-list"></div>
+    </div>
+    <!-- History sidebar -->
+    <div class="sb-view" id="sb-history" style="display:none">
+      <div class="sb-header">History <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshHistory()">↻</span>
+      </div>
+      <div class="sb-section" id="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <div class="tab active" data-tab="editor">📝 Editor</div>
+      <div class="tab-add" title="New tab">+</div>
+    </div>
+
+    <!-- Editor area -->
+    <div class="editor-area" id="editor-area">
+      <div class="editor-welcome" id="editor-welcome">
+        <div style="font-size:28px;color:var(--fg-accent)">✦</div>
+        <div style="font-size:16px;color:var(--fg)">SAO AI Editor</div>
+        <div style="color:var(--fg-dim);text-align:center;max-width:400px">
+          多模型 LLM 编辑器<br>
+          OpenAI · Claude · DeepSeek · Ollama<br>
+          22 个引擎底层工具 · Tool Calling · 流式输出
+        </div>
+        <div style="margin-top:12px;color:var(--fg-dim);font-size:12px">
+          <kbd>⚙ Settings</kbd> 配置 API Key &nbsp;→&nbsp; 在下方 Chat 面板开始对话
+        </div>
+      </div>
+      <div class="editor-container" id="editor-container" style="display:none">
+        <div class="line-numbers" id="line-nums">1</div>
+        <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
+      </div>
+    </div>
+
+    <!-- Splitter -->
+    <div class="splitter" id="splitter"></div>
+
+    <!-- Panel area -->
+    <div class="panel-area" id="panel-area">
+      <div class="panel-tabs">
+        <div class="ptab active" data-ptab="chat">Chat</div>
+        <div class="ptab" data-ptab="terminal">Terminal</div>
+        <span class="spacer"></span>
+        <span class="panel-btn" onclick="clearChat()" title="Clear">🗑</span>
+        <span class="panel-btn" onclick="exportChat()" title="Export">📋</span>
+      </div>
+
+      <!-- Chat panel -->
+      <div class="chat-panel" id="chat-panel">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-area">
+          <div style="position:relative">
+            <div class="slash-popup" id="slash-popup"></div>
+            <div class="chat-input-row">
+              <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ for commands)"></textarea>
+              <button class="send-btn" id="send-btn" onclick="doSend()">Send</button>
+            </div>
+          </div>
+          <div class="chat-toolbar">
+            <span class="hint">Enter 发送 · Shift+Enter 换行 · / 命令</span>
+            <span class="spacer"></span>
+            <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■ Stop</span>
+            <span class="token-count" id="token-count">0 tokens</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Terminal panel -->
+      <div class="terminal-panel" id="terminal-panel">
+        <div class="terminal-output" id="terminal-output"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="statusbar">
+  <span class="sb-item" id="status-text">Ready</span>
+  <span class="spacer"></span>
+  <span class="sb-item" id="status-model">-</span>
+  <span class="sb-item" id="status-tokens">0 tokens</span>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-bg" id="settings-modal">
+  <div class="modal">
+    <h2>Settings</h2>
+    <label>Provider</label>
+    <select id="s-provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+    <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
+    <label>API Key</label>
+    <div style="display:flex;gap:6px"><input id="s-apikey" type="password" style="flex:1">
+    <span class="toolbar-btn" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</span></div>
+    <label>Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
+    <label>Model</label><input id="s-model">
+    <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
+    <label>Max Tokens</label><input id="s-maxtok" type="number" value="4096">
+    <label>System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
+    <div class="modal-status" id="s-status"></div>
+    <div class="modal-btns">
+      <span class="toolbar-btn" onclick="testConn()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Test</span>
+      <span class="toolbar-btn" onclick="closeSettings()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Cancel</span>
+      <button class="send-btn" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+// ── State ──
+let config={provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:''};
+let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
+
+// ── API ──
+const api=()=>window.pywebview&&window.pywebview.api;
+async function call(method,...args){
+  const a=api(); if(!a||!a[method])return null;
+  try{return await a[method](...args)}catch(e){console.error(method,e);return null}
+}
+
+// ── Event handler (called from Python) ──
+window._onEditorEvent=function(event,data){
+  if(event==='stream_delta') onStreamDelta(data);
+  else if(event==='stream_end') onStreamEnd(data);
+  else if(event==='tool_start') onToolStart(data);
+  else if(event==='tool_end') onToolEnd(data);
+  else if(event==='error') onError(data);
+  else if(event==='idle') onIdle();
+};
+
+// ── Init ──
+async function init(){
+  const c=await call('load_config'); if(c)Object.assign(config,c);
+  syncUI();
+  const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
+  refreshHistory();
+  appendSystem('✦ SAO AI Editor 就绪\n22 个引擎工具 · 多模型支持 · Tool Calling\n\n在左侧 ⚙ 中配置 API Key，然后开始对话。');
+}
+
+// ── Render ──
+const $=id=>document.getElementById(id);
+const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+
+function createMsg(role,model){
+  const el=document.createElement('div');el.className='msg';
+  const hdr=document.createElement('div');hdr.className='msg-header';
+  const r=document.createElement('span');r.className='msg-role '+role;
+  r.textContent={user:'You',assistant:'Assistant',system:'System',tool:'Tool'}[role]||role;
+  hdr.appendChild(r);
+  if(model){const m=document.createElement('span');m.className='msg-model';m.textContent=model;hdr.appendChild(m)}
+  el.appendChild(hdr);
+  const body=document.createElement('div');body.className='msg-body';
+  el.appendChild(body);
+  $('chat-messages').appendChild(el);
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+  return body;
+}
+
+function appendSystem(text){const b=createMsg('system');b.style.color='var(--fg-dim)';b.textContent=text}
+
+function renderMd(container,text){
+  const parts=text.split(/(```[\s\S]*?```)/g);
+  parts.forEach(p=>{
+    if(p.startsWith('```')&&p.endsWith('```')){
+      let inner=p.slice(3,-3),lang='';
+      const nl=inner.indexOf('\n');
+      if(nl>0){const fl=inner.slice(0,nl).trim();if(/^\w+$/.test(fl)){lang=fl;inner=inner.slice(nl+1)}}
+      const pre=document.createElement('pre');pre.className='code-block';
+      if(lang){const l=document.createElement('span');l.className='lang';l.textContent=lang;pre.appendChild(l)}
+      const code=document.createElement('code');code.textContent=inner;pre.appendChild(code);
+      const cp=document.createElement('span');cp.className='copy-btn';cp.textContent='Copy';
+      cp.onclick=()=>{navigator.clipboard.writeText(inner);cp.textContent='✓';setTimeout(()=>cp.textContent='Copy',1500)};
+      pre.appendChild(cp);
+      container.appendChild(pre);
+      // Also open in editor
+      openInEditor(inner,lang);
+    } else renderInline(container,p);
+  });
+}
+
+function renderInline(c,text){
+  const parts=text.split(/(`[^`]+`)/g);
+  parts.forEach(p=>{
+    if(p.startsWith('`')&&p.endsWith('`')){const el=document.createElement('code');el.className='inline';el.textContent=p.slice(1,-1);c.appendChild(el)}
+    else{
+      const bolds=p.split(/(\*\*[^*]+\*\*)/g);
+      bolds.forEach(b=>{
+        if(b.startsWith('**')&&b.endsWith('**')){const s=document.createElement('strong');s.textContent=b.slice(2,-2);c.appendChild(s)}
+        else c.appendChild(document.createTextNode(b));
+      });
+    }
+  });
+}
+
+function renderToolCall(container,name,args){
+  const el=document.createElement('div');el.className='tool-call';
+  const hdr=document.createElement('div');hdr.className='tool-header';
+  hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name);
+  const body=document.createElement('div');body.className='tool-body';
+  try{body.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{body.textContent=args}
+  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+}
+
+function renderToolResult(container,name,result){
+  const el=document.createElement('div');el.className='tool-result';
+  const hdr=document.createElement('div');hdr.className='tool-header';
+  hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
+  const body=document.createElement('div');body.className='tool-body';
+  try{body.textContent=JSON.stringify(JSON.parse(result),null,2)}catch{body.textContent=result}
+  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+  el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
+  // Auto-open if small
+  if(result.length<500){hdr.classList.add('open');body.classList.add('open')}
+}
+
+// ── Editor ──
+function openInEditor(code,lang){
+  $('editor-welcome').style.display='none';
+  $('editor-container').style.display='flex';
+  $('editor-text').value=code;
+  updateLineNums();
+}
+
+function updateLineNums(){
+  const lines=$('editor-text').value.split('\n').length;
+  $('line-nums').textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
+}
+$('editor-text').addEventListener('input',updateLineNums);
+$('editor-text').addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop});
+$('editor-text').addEventListener('keydown',function(e){
+  if(e.key==='Tab'){e.preventDefault();const s=this.selectionStart,end=this.selectionEnd;
+    this.value=this.value.substring(0,s)+'    '+this.value.substring(end);
+    this.selectionStart=this.selectionEnd=s+4;updateLineNums()}
+});
+
+// ── Streaming ──
+function onStreamDelta(d){
+  if(!currentMsgBody)return;
+  streamBuf+=(d.content||'');
+  currentMsgBody.textContent=streamBuf;
+  currentMsgBody.classList.add('stream-cursor');
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+}
+
+function onStreamEnd(d){
+  if(currentMsgBody){
+    currentMsgBody.classList.remove('stream-cursor');
+    currentMsgBody.textContent='';
+    renderMd(currentMsgBody,streamBuf);
+    if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCall(currentMsgBody,tc.name,tc.arguments));
+    if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
+  }
+  if(d.usage){totalTokens+=(d.usage.total_tokens||0);$('token-count').textContent=totalTokens+' tokens';$('status-tokens').textContent=totalTokens+' tokens'}
+  if(d.model)$('status-model').textContent=d.model;
+  currentMsgBody=null;streamBuf='';
+  setStatus(d.tool_calls?'Executing tools...':'Ready');
+}
+
+function onToolStart(d){setStatus('Tool: '+d.name+'...')}
+function onToolEnd(d){
+  const msgs=$('chat-messages');const last=msgs.lastElementChild;
+  if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,d.name||'?',d.result||'')}
+}
+function onError(d){appendSystem('⚠ Error: '+(d.error||d));setStatus('Error')}
+function onIdle(){
+  setStatus('Ready');streaming=false;
+  $('send-btn').disabled=false;$('send-btn').textContent='Send';
+  $('stop-btn').style.display='none';
+}
+
+// ── Actions ──
+async function doSend(){
+  const inp=$('chat-input'),text=inp.value.trim();
+  if(!text||streaming)return;
+  inp.value='';inp.style.height='auto';
+
+  // Slash command?
+  if(text.startsWith('/')){execSlash(text);return}
+
+  if(!config.api_key&&config.provider!=='ollama'){appendSystem('⚠ 请先在 ⚙ Settings 中配置 API Key');return}
+
+  createMsg('user').textContent=text;
+  streaming=true;$('send-btn').disabled=true;$('send-btn').textContent='...';$('stop-btn').style.display='';
+  setStatus('Thinking...');
+  currentMsgBody=createMsg('assistant',config.model||config.provider);
+  streamBuf='';
+  await call('send_message',text,{provider:config.provider,model:config.model});
+}
+
+async function doStop(){await call('cancel');onIdle()}
+async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
+  $('token-count').textContent='0 tokens';$('status-tokens').textContent='0 tokens';
+  appendSystem('New conversation started.')}
+async function clearChat(){newChat()}
+async function exportChat(){const d=await call('export_chat');if(d){navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus('Exported to clipboard')}}
+window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearChat=clearChat;window.exportChat=exportChat;
+
+// ── Slash commands ──
+const SLASH_CMDS=[
+  ['/clear','Clear chat'],['/new','New conversation'],['/export','Export to clipboard'],
+  ['/settings','Open settings'],['/tools','Show tools sidebar'],['/history','Show history'],
+  ['/state','Game state'],['/dps','DPS summary'],['/boss','Boss status'],
+  ['/entities','Entity list'],['/system','System info'],['/eval','Eval Python (usage: /eval expr)'],
+];
+
+async function execSlash(raw){
+  const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),arg=parts.slice(1).join(' ');
+  const toolMap={'/state':'get_game_state','/dps':'get_dps_summary','/boss':'get_boss_status','/entities':'get_entity_list','/system':'get_system_info'};
+  if(cmd==='/clear')clearChat();
+  else if(cmd==='/new')newChat();
+  else if(cmd==='/export')exportChat();
+  else if(cmd==='/settings')openSettings();
+  else if(cmd==='/tools')switchSidebar('tools');
+  else if(cmd==='/history'){switchSidebar('history');refreshHistory()}
+  else if(toolMap[cmd]){
+    const r=await call('execute_tool',toolMap[cmd],'{}');
+    const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';b.style.color='var(--fg-dim)';
+    try{b.textContent=JSON.stringify(JSON.parse(r),null,2)}catch{b.textContent=r}
+    logTerminal(cmd+': '+r);
+  } else if(cmd==='/eval'&&arg){
+    const r=await call('execute_tool','eval_python',JSON.stringify({expression:arg}));
+    const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';
+    try{b.textContent=JSON.stringify(JSON.parse(r),null,2)}catch{b.textContent=r}
+    logTerminal('/eval '+arg+': '+r);
+  } else appendSystem('Unknown command: '+cmd);
+}
+window.execSlash=execSlash;
+
+// Slash popup
+const chatInp=$('chat-input'),slashPopup=$('slash-popup');
+chatInp.addEventListener('input',function(){
+  const v=this.value;
+  if(v.startsWith('/')&&!v.includes('\n')){
+    const prefix=v.split(/\s/)[0].toLowerCase();
+    const matches=SLASH_CMDS.filter(c=>c[0].startsWith(prefix));
+    if(matches.length){
+      slashPopup.innerHTML=matches.map(c=>'<div class="slash-item" onclick="pickSlash(\''+c[0]+'\')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span></div>').join('');
+      slashPopup.classList.add('open');
+    } else slashPopup.classList.remove('open');
+  } else slashPopup.classList.remove('open');
+  this.style.height='auto';this.style.height=Math.min(this.scrollHeight,180)+'px';
+});
+chatInp.addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');doSend()}
+});
+window.pickSlash=function(cmd){slashPopup.classList.remove('open');chatInp.value='';execSlash(cmd)};
+
+// ── Terminal ──
+function logTerminal(text){$('terminal-output').textContent+='> '+text+'\n';$('terminal-output').scrollTop=$('terminal-output').scrollHeight}
+
+// ── Sidebar ──
+function switchSidebar(panel){
+  document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
+  document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
+  const view=$('sb-'+panel);if(view)view.style.display='';
+  if(panel==='settings'){openSettings();return}
+  const sb=$('sidebar');sb.classList.remove('hidden');
+}
+document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener('click',()=>switchSidebar(i.dataset.panel)));
+
+function renderToolsSidebar(tools){
+  const list=$('tools-list');list.innerHTML='';let lastCat='';
+  tools.forEach(t=>{
+    if(t.category!==lastCat){lastCat=t.category;const g=document.createElement('div');g.className='sb-group';g.textContent='▸ '+lastCat;list.appendChild(g)}
+    const item=document.createElement('div');item.className='sb-item';
+    item.innerHTML='<span style="color:var(--fg-tool);font-family:var(--mono);font-size:11px">'+esc(t.name)+'</span>'+(t.requires_confirm?' ⚠':'');
+    item.title=t.description;
+    item.onclick=()=>{chatInp.value='Tell me about the '+t.name+' tool and show me an example';chatInp.focus()};
+    list.appendChild(item);
+  });
+}
+
+async function refreshHistory(){
+  const r=await call('list_history');const list=$('history-list');list.innerHTML='';
+  if(!r||!r.entries||!r.entries.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)">No history</div>';return}
+  r.entries.forEach(e=>{
+    const item=document.createElement('div');item.className='sb-item';
+    item.innerHTML=esc((e.title||'Untitled').slice(0,28))+'<span class="meta">'+e.message_count+'msg</span>';
+    item.onclick=()=>loadHistoryConv(e.id);
+    list.appendChild(item);
+  });
+}
+window.refreshHistory=refreshHistory;
+
+async function loadHistoryConv(id){
+  const data=await call('load_history',id);if(!data||data.error){appendSystem('Failed to load');return}
+  $('chat-messages').innerHTML='';totalTokens=0;
+  (data.messages||[]).forEach(m=>{
+    if(m.role==='user')createMsg('user').textContent=m.content;
+    else if(m.role==='assistant'){const b=createMsg('assistant',data.model);renderMd(b,m.content||'');
+      if(m.tool_calls)m.tool_calls.forEach(tc=>renderToolCall(b,tc.name,tc.arguments))}
+    else if(m.role==='tool'){}// tool results shown inline with assistant
+  });
+  setStatus('Loaded: '+(data.title||''));
+}
+
+// ── Panel tabs ──
+document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',function(){
+  document.querySelectorAll('.ptab').forEach(p=>p.classList.remove('active'));this.classList.add('active');
+  const panel=this.dataset.ptab;
+  $('chat-panel').style.display=panel==='chat'?'flex':'none';
+  $('terminal-panel').className='terminal-panel'+(panel==='terminal'?' active':'');
+}));
+
+// ── Splitter ──
+const splitter=$('splitter'),panelArea=$('panel-area'),editorArea=$('editor-area');
+let splitterDragging=false,splitterStartY=0,splitterStartH=0;
+splitter.addEventListener('mousedown',e=>{splitterDragging=true;splitterStartY=e.clientY;
+  splitterStartH=panelArea.offsetHeight;splitter.classList.add('dragging');e.preventDefault()});
+document.addEventListener('mousemove',e=>{if(!splitterDragging)return;
+  const dy=splitterStartY-e.clientY;panelArea.style.height=Math.max(120,Math.min(window.innerHeight-200,splitterStartH+dy))+'px'});
+document.addEventListener('mouseup',()=>{splitterDragging=false;splitter.classList.remove('dragging')});
+
+// ── Settings ──
+function openSettings(){
+  $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
+  $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
+  $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
+  $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
+  $('settings-modal').classList.add('open');
+}
+function closeSettings(){$('settings-modal').classList.remove('open')}
+window.openSettings=openSettings;window.closeSettings=closeSettings;
+
+async function testConn(){
+  const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
+  const r=await call('test_connection',{provider:$('s-provider').value,api_key:$('s-apikey').value,base_url:$('s-baseurl').value,model:$('s-model').value});
+  if(r&&r.ok){s.textContent=r.message;s.style.color='var(--fg-success)'}else{s.textContent=(r&&r.message)||'Failed';s.style.color='var(--fg-error)'}
+}
+window.testConn=testConn;
+
+async function saveSettings(){
+  config.provider=$('s-provider').value;config.api_key=$('s-apikey').value;
+  config.base_url=$('s-baseurl').value;config.model=$('s-model').value;
+  config.temperature=parseFloat($('s-temp').value)||0.7;config.max_tokens=parseInt($('s-maxtok').value)||4096;
+  config.system_prompt=$('s-sysprompt').value;
+  syncUI();await call('save_config',config);closeSettings();
+}
+window.saveSettings=saveSettings;
+
+function syncUI(){
+  $('provider-sel').value=config.provider;$('model-inp').value=config.model;
+  $('status-model').textContent=config.model||config.provider;
+}
+$('provider-sel').onchange=e=>{config.provider=e.target.value;
+  const defs={openai:'gpt-4o',anthropic:'claude-sonnet-4-20250514',deepseek:'deepseek-chat',ollama:'llama3.1',custom:''};
+  if(!config.model)$('model-inp').value=defs[config.provider]||'';
+  $('status-model').textContent=$('model-inp').value||config.provider};
+$('model-inp').onchange=e=>{config.model=e.target.value;$('status-model').textContent=e.target.value||config.provider};
+
+function setStatus(t){$('status-text').textContent=t}
+$('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings()};
+
+// ── Ready ──
+if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
+})();
+</script>
+</body>
+</html>
