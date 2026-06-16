@@ -202,6 +202,56 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    # ── Extension marketplace API ──
+
+    def search_extensions(self, query: str = "ai chat model", page: int = 1) -> Dict:
+        """Search VSCode Marketplace. Returns list of extensions."""
+        try:
+            from ai_editor.extensions import search_extensions, is_installed
+            results = search_extensions(query, page=page)
+            for r in results:
+                if isinstance(r, dict) and "id" in r:
+                    r["installed"] = is_installed(r["id"])
+            return {"extensions": results}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def install_extension(self, ext_id: str, vsix_url: str = "") -> Dict:
+        """Install an extension from the marketplace."""
+        try:
+            from ai_editor.extensions import install_extension
+            return install_extension(ext_id, vsix_url)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def uninstall_extension(self, ext_id: str) -> Dict:
+        """Uninstall an extension."""
+        try:
+            from ai_editor.extensions import uninstall_extension
+            return uninstall_extension(ext_id)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def list_installed_extensions(self) -> Dict:
+        """List locally installed extensions."""
+        try:
+            from ai_editor.extensions import list_installed
+            return {"extensions": list_installed()}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_extension_detail(self, publisher: str, name: str) -> Dict:
+        """Fetch a single extension detail from marketplace."""
+        try:
+            from ai_editor.extensions import get_extension_detail, is_installed
+            result = get_extension_detail(publisher, name)
+            if result:
+                result["installed"] = is_installed(result["id"])
+                return result
+            return {"error": "Not found"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def count_tokens(self, text: str = "") -> Dict:
         self._ensure_engine()
         count = self._engine.estimate_tokens(text)
