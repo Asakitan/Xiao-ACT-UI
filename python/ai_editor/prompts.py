@@ -165,9 +165,16 @@ _SAFETY = """\
 
 - Answer in the user's language (Chinese or English).
 - Use markdown with code blocks for code output.
-- Don't guess — use tools to read files and query state.
-- Read before edit. Verify after edit.
-- Platform code is game-agnostic. Plugin code stays in its directory.\
+- **Never guess** file contents or game state — always use tools.
+- **Read before edit** — always `readFile` before `editFile`.
+- **Verify after edit** — run `runTerminal` to test/compile.
+- For **multi-step tasks**: read → plan → edit → verify → report.
+- Platform code is **game-agnostic**. Plugin code stays inside its \
+  own `plugins/<name>/` directory.
+- Do not expose internal tool names to the user.
+- If you're unsure about a destructive operation, use `getConfirmation`.
+- Memory scanning requires admin. If process attach fails, suggest \
+  the user run as administrator.\
 """
 
 _PROJECT_STRUCTURE = """\
