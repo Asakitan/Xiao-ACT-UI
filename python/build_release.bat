@@ -60,9 +60,9 @@ for %%D in (web plugins drivers) do (
     )
 )
 rem Copy docs to top level (not in runtime/)
-if exist "%ROOT%docs" (
+if exist "%ROOT%docs\" (
     echo   copying docs\ -^> docs\
-    xcopy /e /i /y "%ROOT%docs" "%CLIENT_DIR%\docs" >nul
+    xcopy /e /i /y "%ROOT%docs\*" "%CLIENT_DIR%\docs\" >nul
 )
 
 rem User drop-in plugins live here and survive updates (never shipped/overwritten).
