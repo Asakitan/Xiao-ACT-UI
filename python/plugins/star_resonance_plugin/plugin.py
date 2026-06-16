@@ -412,27 +412,55 @@ def _build_panel_items():
 
 
 def _inject_game_constants():
-    """Inject game-specific constants into platform modules at load time."""
+    """Inject game-specific modules and constants into platform at load time.
+
+    Registers plugin-owned mem_access / unified_source into sys.modules under
+    the ``mem_probe.*`` namespace so platform code that does
+    ``from mem_probe.mem_access import MemAccess`` still works after the files
+    moved from platform to plugin.
+    """
+    import sys
     from plugins.star_resonance_plugin.sr_config import (
         GAME_PROCESS_NAMES, GAME_WINDOW_KEYWORDS, GAME_MAIN_MODULE,
     )
     import config
     config.GAME_PROCESS_NAMES = GAME_PROCESS_NAMES
     config.GAME_WINDOW_KEYWORDS = GAME_WINDOW_KEYWORDS
+
+    # ── Register game modules into mem_probe namespace ──
+    try:
+        import mem_probe
+        from plugins.star_resonance_plugin.mem import mem_access as _ma
+        from plugins.star_resonance_plugin.mem import unified_source as _us
+        sys.modules['mem_probe.mem_access'] = _ma
+        sys.modules['mem_probe.unified_source'] = _us
+        mem_probe.mem_access = _ma
+        mem_probe.unified_source = _us
+    except Exception:
+        pass
+
     try:
         from mem_probe.process import set_game_process_names
         set_game_process_names(GAME_PROCESS_NAMES)
     except Exception:
         pass
+
+    # ── Inject game-specific factories into the now-registered mem_access ──
     try:
-        from mem_probe.mem_access import set_game_main_module, set_ecr_factory
+        from plugins.star_resonance_plugin.mem.mem_access import (
+            set_game_main_module, set_ecr_factory,
+        )
         set_game_main_module(GAME_MAIN_MODULE)
         from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import EntityCombatReader
         set_ecr_factory(EntityCombatReader)
     except Exception:
         pass
+
+    # ── Inject bridge classes into unified_source ──
     try:
-        from mem_probe.unified_source import set_bridge_classes, set_root_pointer_cache_fn
+        from plugins.star_resonance_plugin.mem.unified_source import (
+            set_bridge_classes, set_root_pointer_cache_fn,
+        )
         from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
         from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
         set_bridge_classes(MemStateBridge, MemSelfStateProvider)
@@ -469,6 +497,9 @@ def on_load(ctx):
     ctx.ensure_requirements(install=True)
 
     _ensure_toplevel_defaults(ctx)
+
+    from plugins.star_resonance_plugin.webview_bridge import install_webview_bridge
+    install_webview_bridge(ctx)
 
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
     ctx.register_menu_category('Boss', '⚔', _build_boss_items, priority=20)

@@ -23,11 +23,13 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from mem_probe import cy_memscan as _cymem
+    from plugins.star_resonance_plugin.mem import cy_combat as _cyc
     _HAS_BATCH = bool(_cymem.has_batch_read())
-    _HAS_FULLDECODE = bool(_cymem.has_full_combat_decode())
-    _HAS_BOSS_CACHED = bool(_cymem.has_boss_combat_cached())
+    _HAS_FULLDECODE = bool(_cyc.has_full_combat_decode())
+    _HAS_BOSS_CACHED = bool(_cyc.has_boss_combat_cached())
 except Exception:
     _cymem = None
+    _cyc = None
     _HAS_BATCH = False
     _HAS_FULLDECODE = False
     _HAS_BOSS_CACHED = False
@@ -448,7 +450,7 @@ class EntityCombatReader:
             return {}
         if _HAS_FULLDECODE and _cymem is not None:
             try:
-                flat = _cymem.read_entity_combat_many(
+                flat = _cyc.read_entity_combat_many(
                     self.pm._handle, ent_addrs,
                     self.off_ent_attrs, self.off_coll_indexpart, self.off_coll_values)
             except Exception:
@@ -495,7 +497,7 @@ class EntityCombatReader:
         """
         if _HAS_BOSS_CACHED and _cymem is not None:
             try:
-                flat = _cymem.read_boss_combat_cached(
+                flat = _cyc.read_boss_combat_cached(
                     self.pm._handle, int(ent_addr),
                     self.off_ent_attrs, self.off_coll_indexpart, self.off_coll_values)
             except Exception:
@@ -524,7 +526,7 @@ class EntityCombatReader:
     def boss_cache_invalidate() -> None:
         if _cymem is not None:
             try:
-                _cymem.boss_cache_invalidate()
+                _cyc.boss_cache_invalidate()
             except Exception:
                 pass
 

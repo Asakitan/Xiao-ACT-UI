@@ -506,8 +506,11 @@ class PluginContext:
         """
         facade = self._mem_access
         if facade is None:
-            from mem_probe.mem_access import MemAccess
-            facade = MemAccess(self.owner)
+            try:
+                from mem_probe.mem_access import MemAccess
+                facade = MemAccess(self.owner)
+            except ImportError:
+                return None
             self._mem_access = facade
         return facade
 

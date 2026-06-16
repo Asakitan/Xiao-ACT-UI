@@ -4194,9 +4194,20 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 
 # ── Memory-scan access (read-only facade for plugins + the Mem Scope panel) ────
 
+class _NullMemAccess:
+    """Fallback when game plugin hasn't registered mem_access."""
+    def __getattr__(self, name):
+        def _noop(**kw):
+            return {"ok": False, "reason": "no_plugin", "hint": "游戏插件未加载"}
+        return _noop
+
+
 def _mem_access(owner: Any):
-    from mem_probe.mem_access import MemAccess
-    return MemAccess(owner)
+    try:
+        from mem_probe.mem_access import MemAccess
+        return MemAccess(owner)
+    except ImportError:
+        return _NullMemAccess()
 
 
 def act_mem_status(owner: Any, **_: Any) -> dict[str, Any]:
