@@ -271,67 +271,74 @@ class GameProcess:
         from pymem import Pymem
         from pymem.exception import CouldNotOpenProcess
 
+        # ── Step 1: 只找 PID (CreateToolhelp32Snapshot, 无句柄, 不触发 ObRegisterCallbacks) ──
         candidates = [process_name] if process_name else list(GAME_PROCESS_NAMES)
+        found_pid: Optional[int] = None
+        attached_name: Optional[str] = None
         last_err: Optional[Exception] = None
-        self._pm = None
-        attached_name = None
         for name in candidates:
             if not name:
                 continue
-            try:
-                pid = find_pid_by_name(name)
-                if pid is None:
-                    last_err = StarProcessError(f"process not found: {name}")
-                    continue
-                handle = pymem.process.open(
-                    pid,
-                    debug=False,
-                    process_access=(
-                        PROCESS_QUERY_INFORMATION
-                        | PROCESS_QUERY_LIMITED_INFORMATION
-                        | PROCESS_VM_READ
-                    ),
-                )
-                if not handle:
-                    raise CouldNotOpenProcess(pid)
-                self._pm = Pymem()
-                self._pm.process_id = pid
-                self._pm.process_handle = handle
+            pid = find_pid_by_name(name)
+            if pid is not None:
+                found_pid = pid
                 attached_name = name
                 break
-            except CouldNotOpenProcess as e:
-                # 找到了但打不开 — 通常是反作弊或权限不足, 直接抛, 不再尝试其它候选
-                raise StarProcessError(
-                    f"找到进程 {name} 但无法 OpenProcess(PROCESS_QUERY|VM_READ); "
-                    f"可能被反作弊保护或需要管理员权限。原始错误: {e}"
-                ) from e
-        if self._pm is None:
+            last_err = StarProcessError(f"process not found: {name}")
+        if found_pid is None:
             raise StarProcessError(
                 f"未找到游戏进程 (尝试候选: {candidates})。请确认 Star.exe 正在运行。"
                 + (f" 最后错误: {last_err}" if last_err else "")
             )
-        self._attached_name = attached_name
-        self._pid = int(self._pm.process_id)
-        self._handle = int(self._pm.process_handle)
-        self._region_cache: Optional[List[MemoryRegion]] = None
-        self._region_cache_time: float = 0.0
+
+        # ── Step 2: 驱动优先 (在 OpenProcess 之前, 不产生游戏进程句柄) ──
         global _DRIVER_OK, _DRIVER_TRIED
+        drv_attached = False
         if _drv is not None:
-            if not _DRIVER_OK:
+            if not _DRIVER_TRIED:
                 try:
                     _DRIVER_OK = _drv.ensure_loaded()
                 except Exception:
                     _DRIVER_OK = False
                 _DRIVER_TRIED = True
             if _DRIVER_OK:
-                if _drv.attach(self._pid):
-                    print(f"[StarProcess] driver backend attached (pid={self._pid})")
+                if _drv.attach(found_pid):
+                    drv_attached = True
+                    print(f"[StarProcess] driver backend attached (pid={found_pid})")
                     try:
                         from mem_probe import cy_memscan as _cy
-                        if _cy.driver_attach(self._pid):
+                        if _cy.driver_attach(found_pid):
                             print(f"[StarProcess] cython driver fast-path activated")
                     except Exception:
                         pass
+
+        # ── Step 3: OpenProcess — 驱动在线时只要 QUERY (不含 VM_READ, 不触发降权) ──
+        access = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
+        if not drv_attached:
+            access |= PROCESS_VM_READ
+        try:
+            handle = pymem.process.open(
+                found_pid, debug=False, process_access=access)
+            if not handle:
+                raise CouldNotOpenProcess(found_pid)
+            self._pm = Pymem()
+            self._pm.process_id = found_pid
+            self._pm.process_handle = handle
+        except CouldNotOpenProcess as e:
+            if drv_attached:
+                self._pm = Pymem()
+                self._pm.process_id = found_pid
+                self._pm.process_handle = 0
+            else:
+                raise StarProcessError(
+                    f"找到进程 {attached_name} 但无法 OpenProcess; "
+                    f"可能被反作弊保护或需要管理员权限。原始错误: {e}"
+                ) from e
+        self._attached_name = attached_name
+        self._pid = int(found_pid)
+        self._handle = int(self._pm.process_handle)
+        self._region_cache: Optional[List[MemoryRegion]] = None
+        self._region_cache_time: float = 0.0
 
     # ───── 基本属性 ─────
     @property
