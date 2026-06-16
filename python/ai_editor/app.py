@@ -43,6 +43,9 @@ class AIEditorAPI:
         self._controller: Optional[ChatController] = None
         self._window = None  # set after window creation
         self._ready = threading.Event()
+        self._delta_buf: List[str] = []
+        self._thinking_buf: List[str] = []
+        self._delta_last_flush: float = 0.0
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -427,13 +430,15 @@ class AIEditorAPI:
     # ── Editor state API (called by JS, also used by editor tools) ──
 
     def editor_get_content(self) -> Dict:
-        """Get editor content via JS eval."""
+        """Get editor content + language in a single JS eval."""
         if not self._window:
             return {"content": "", "language": "plaintext"}
         try:
-            content = self._window.evaluate_js("document.getElementById('editor-text').value")
-            lang = self._window.evaluate_js("editorLang")
-            return {"content": content or "", "language": lang or "plaintext"}
+            raw = self._window.evaluate_js(
+                "JSON.stringify({c:document.getElementById('editor-text').value,l:editorLang})"
+            )
+            d = json.loads(raw) if raw else {}
+            return {"content": d.get("c", ""), "language": d.get("l", "plaintext")}
         except Exception:
             return {"content": "", "language": "plaintext"}
 
@@ -532,12 +537,34 @@ class AIEditorAPI:
         self._eval_js(f"window._onEditorEvent&&window._onEditorEvent({json.dumps(event)},{payload})")
 
     def _on_stream_delta(self, msg: ChatMessage, text: str) -> None:
-        self._emit("stream_delta", {"content": text})
+        self._delta_buf.append(text)
+        now = time.monotonic()
+        if len(self._delta_buf) >= 15 or (now - self._delta_last_flush) > 0.05:
+            self._flush_deltas()
 
     def _on_thinking_delta(self, msg: ChatMessage, text: str) -> None:
-        self._emit("thinking_delta", {"content": text})
+        self._thinking_buf.append(text)
+        if len(self._thinking_buf) >= 10:
+            self._flush_thinking()
+
+    def _flush_deltas(self) -> None:
+        if not self._delta_buf:
+            return
+        combined = "".join(self._delta_buf)
+        self._delta_buf.clear()
+        self._delta_last_flush = time.monotonic()
+        self._emit("stream_delta", {"content": combined})
+
+    def _flush_thinking(self) -> None:
+        if not self._thinking_buf:
+            return
+        combined = "".join(self._thinking_buf)
+        self._thinking_buf.clear()
+        self._emit("thinking_delta", {"content": combined})
 
     def _on_stream_end(self, msg: ChatMessage) -> None:
+        self._flush_deltas()
+        self._flush_thinking()
         payload: Dict[str, Any] = {"content": msg.content, "model": msg.model}
         if msg.thinking:
             payload["thinking"] = msg.thinking

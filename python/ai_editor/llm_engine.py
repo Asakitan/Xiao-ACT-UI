@@ -122,6 +122,22 @@ class LLMEngine:
     def __init__(self, config: Optional[ProviderConfig] = None):
         self.config = config or ProviderConfig()
         self._cancel = threading.Event()
+        self._http: Any = None
+
+    @property
+    def _client(self):
+        if self._http is None:
+            import httpx
+            self._http = httpx.Client(timeout=180.0, http2=False, follow_redirects=True)
+        return self._http
+
+    def close(self) -> None:
+        if self._http is not None:
+            try:
+                self._http.close()
+            except Exception:
+                pass
+            self._http = None
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -140,19 +156,17 @@ class LLMEngine:
         cfg = config_override or self.config
         body = self._build_body(cfg, messages, tools, stream=False)
         try:
-            import httpx
             headers = self._build_headers(cfg)
             if self._is_anthropic_native(cfg):
                 url = f"{cfg.effective_base_url}/messages"
             else:
                 url = f"{cfg.effective_base_url}/chat/completions"
-            with httpx.Client(timeout=120.0) as client:
-                resp = client.post(url, json=body, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                if self._is_anthropic_native(cfg):
-                    return self._parse_anthropic_response(data, cfg)
-                return self._parse_response(data, cfg)
+            resp = self._client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            if self._is_anthropic_native(cfg):
+                return self._parse_anthropic_response(data, cfg)
+            return self._parse_response(data, cfg)
         except Exception as exc:
             return LLMResponse(error=str(exc))
 
@@ -191,12 +205,10 @@ class LLMEngine:
         tool_call_buffers: Dict[int, Dict[str, Any]] = {}
 
         try:
-            import httpx
             headers = self._build_headers(cfg)
             url = f"{cfg.effective_base_url}/chat/completions"
 
-            with httpx.Client(timeout=180.0) as client:
-                with client.stream("POST", url, json=body, headers=headers) as resp:
+            with self._client.stream("POST", url, json=body, headers=headers) as resp:
                     resp.raise_for_status()
                     for line in resp.iter_lines():
                         if self._cancel.is_set():
@@ -267,12 +279,10 @@ class LLMEngine:
         tool_blocks: Dict[int, Dict[str, Any]] = {}  # index → {id, name, input_json}
 
         try:
-            import httpx
             headers = self._build_headers(cfg)
             url = f"{cfg.effective_base_url}/messages"
 
-            with httpx.Client(timeout=180.0) as client:
-                with client.stream("POST", url, json=body, headers=headers) as resp:
+            with self._client.stream("POST", url, json=body, headers=headers) as resp:
                     resp.raise_for_status()
                     event_type = ""
                     for line in resp.iter_lines():

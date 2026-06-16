@@ -67,7 +67,7 @@ class McpStdioClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
-                bufsize=0,
+                bufsize=8192,
             )
             self._alive = True
             self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
@@ -185,19 +185,24 @@ class McpSseClient:
         self.config = config
         self.tools: List[McpToolDef] = []
         self._session_url: str = ""
+        self._http: Any = None
+
+    def _client(self):
+        if self._http is None:
+            import httpx
+            self._http = httpx.Client(timeout=30.0)
+        return self._http
 
     def start(self) -> bool:
         try:
-            import httpx
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.get(self.config.url, headers=self.config.headers)
-                resp.raise_for_status()
-                for line in resp.text.split("\n"):
-                    if line.startswith("data:"):
-                        data = json.loads(line[5:].strip())
-                        if "sessionUrl" in data:
-                            self._session_url = data["sessionUrl"]
-                            break
+            resp = self._client().get(self.config.url, headers=self.config.headers)
+            resp.raise_for_status()
+            for line in resp.text.split("\n"):
+                if line.startswith("data:"):
+                    data = json.loads(line[5:].strip())
+                    if "sessionUrl" in data:
+                        self._session_url = data["sessionUrl"]
+                        break
             if not self._session_url:
                 self._session_url = self.config.url
             self._discover_tools()
@@ -207,19 +212,22 @@ class McpSseClient:
             return False
 
     def stop(self) -> None:
-        pass
+        if self._http:
+            try:
+                self._http.close()
+            except Exception:
+                pass
+            self._http = None
 
     def _rpc(self, method: str, params: Any = None) -> Any:
-        import httpx
         body = {"jsonrpc": "2.0", "id": 1, "method": method}
         if params:
             body["params"] = params
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(self._session_url or self.config.url,
-                               json=body, headers=self.config.headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("result")
+        resp = self._client().post(self._session_url or self.config.url,
+                                   json=body, headers=self.config.headers)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("result")
 
     def _discover_tools(self) -> None:
         result = self._rpc("tools/list", {})

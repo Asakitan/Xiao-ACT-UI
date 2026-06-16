@@ -7,6 +7,7 @@ conversations with streaming.  Thread-safe for the Tk after-based UI loop.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
@@ -69,10 +70,14 @@ class Conversation:
         self.system_prompt: str = system_prompt
         self.created_at: float = time.time()
         self._lock = threading.Lock()
+        self._msg_version = 0
+        self._api_cache: Optional[List[Dict[str, Any]]] = None
+        self._api_cache_ver = -1
 
     def add_message(self, msg: ChatMessage) -> None:
         with self._lock:
             self.messages.append(msg)
+            self._msg_version += 1
             if len(self.messages) == 1 and msg.role == "user" and not self.title_set:
                 self.title = msg.content[:40].replace("\n", " ")
 
@@ -81,18 +86,24 @@ class Conversation:
         return self.title != "New Chat"
 
     def to_api_messages(self) -> List[Dict[str, Any]]:
-        msgs: List[Dict[str, Any]] = []
-        if self.system_prompt:
-            msgs.append({"role": "system", "content": self.system_prompt})
         with self._lock:
+            if self._api_cache is not None and self._api_cache_ver == self._msg_version:
+                return self._api_cache
+            msgs: List[Dict[str, Any]] = []
+            if self.system_prompt:
+                msgs.append({"role": "system", "content": self.system_prompt})
             for m in self.messages:
                 msgs.append(m.to_api_dict())
-        return msgs
+            self._api_cache = msgs
+            self._api_cache_ver = self._msg_version
+            return msgs
 
     def clear(self) -> None:
         with self._lock:
             self.messages.clear()
             self.title = "New Chat"
+            self._msg_version += 1
+            self._api_cache = None
 
     @property
     def total_tokens(self) -> int:
@@ -160,9 +171,10 @@ class ChatController:
         self._thread.start()
 
     # @-mention variable resolution
+    _AT_RE = re.compile(r'@(\w+)')
+
     def _resolve_at_mentions(self, text: str) -> str:
         """Replace @file, @selection, @editor, @state etc with real content."""
-        import re
         def _replace(m):
             var = m.group(1).lower()
             if var == "selection" and self.resolve_variable:
@@ -181,7 +193,7 @@ class ChatController:
                 r = self.resolve_variable("language")
                 return f"[Language: {r}]" if r else "@language"
             return m.group(0)
-        return re.sub(r'@(\w+)', _replace, text)
+        return self._AT_RE.sub(_replace, text)
 
     def cancel(self) -> None:
         self.engine.cancel()
@@ -305,10 +317,15 @@ class ChatController:
             if self.on_idle:
                 self.on_idle()
 
+    _last_save_ver: int = -1
+
     def _auto_save(self) -> None:
-        """Persist current conversation to disk after each turn."""
+        """Persist conversation — skip if nothing changed since last save."""
         try:
             if not self.conversation.messages:
+                return
+            ver = self.conversation._msg_version
+            if ver == self._last_save_ver:
                 return
             from ai_editor.history import save_conversation
             msgs = json.loads(self.export_messages())
@@ -319,6 +336,7 @@ class ChatController:
                 system_prompt=self.conversation.system_prompt,
                 model=self.engine.config.effective_model,
             )
+            self._last_save_ver = ver
         except Exception:
             pass
 

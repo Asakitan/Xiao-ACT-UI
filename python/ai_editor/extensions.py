@@ -23,6 +23,14 @@ _API_VERSION = "6.1-preview.1"
 # Flags: IncludeVersions | IncludeFiles | IncludeCategoryAndTags |
 #        IncludeStatistics | IncludeLatestVersionOnly | ExcludeNonValidated
 _QUERY_FLAGS = 0x200 | 0x2 | 0x20 | 0x80 | 0x100 | 0x10  # 914
+_http_client = None
+
+def _get_http_client():
+    global _http_client
+    if _http_client is None:
+        import httpx
+        _http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+    return _http_client
 
 
 # ---------------------------------------------------------------------------
@@ -60,15 +68,13 @@ def _marketplace_query(
         "flags": _QUERY_FLAGS,
     }
 
-    import httpx
     headers = {
         "Content-Type": "application/json",
         "Accept": f"application/json;api-version={_API_VERSION}",
     }
-    with httpx.Client(timeout=15.0) as client:
-        resp = client.post(_MARKETPLACE_URL, json=body, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+    resp = _get_http_client().post(_MARKETPLACE_URL, json=body, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def search_extensions(query: str = "ai chat model", page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
@@ -177,13 +183,11 @@ def download_vsix(vsix_url: str, ext_id: str) -> str:
     """Download a VSIX file. Returns local path."""
     if not vsix_url:
         raise ValueError("No VSIX URL")
-    import httpx
     dest = os.path.join(_extensions_dir(), f"{ext_id}.vsix")
-    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-        resp = client.get(vsix_url)
-        resp.raise_for_status()
-        with open(dest, "wb") as f:
-            f.write(resp.content)
+    resp = _get_http_client().get(vsix_url)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        f.write(resp.content)
     return dest
 
 
