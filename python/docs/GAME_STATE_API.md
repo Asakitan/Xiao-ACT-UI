@@ -1,477 +1,147 @@
-# GAME_STATE_API
+# 游戏状态 API
 
-面向 ACT 插件作者的游戏状态与内存扫描接口说明。
+> 版本 `5.0.0`。面向插件作者的游戏状态与内存扫描接口。
 
-这不是游戏官方 API，而是 SAO Auto 通过 TCP 抓包、ACT 状态聚合和只读内存扫描整理出的稳定调用层。插件优先使用 `ctx.get_snapshot()`、`ctx.mem` 和 `ctx.call_runtime("act_mem_...")`；不要直接依赖底层堆地址、偏移或 reader 私有字段。
+这不是游戏官方 API。这是 SAO ACT 通过 TCP 抓包和只读内存扫描整理出的调用层。
 
-## 设计边界
+## 获取游戏状态
 
-- **只读**：内存路径只使用读进程内存，不提供写入、注入、Hook、Detour 或修改游戏状态能力。
-- **TCP 仍是战斗事实源**：伤害事件、战斗流程、场景/副本语义仍以 TCP/ACT 事件为准；内存用于补齐自身状态、实体 HP、Boss 动作、名字和游戏内聚合表。
-- **Hybrid-gated**：`ctx.mem` 在 `tcp` 模式下会返回 `{"ok": false, "reason": "mode_tcp", ...}`。需要 `hybrid`、`auto` 或 `memory` 模式才会启用内存 facade。
-- **地址不稳定**：所有 `obj`、`ent_addr`、扫描命中地址都只对当前游戏进程/当前会话有效。插件不要持久化这些地址。
-- **JSON-safe**：大整数/UUID 会转成字符串，地址会转成十六进制字符串，避免 JS Number 精度损坏。
-- **失败闭合**：公开接口应返回 JSON 字典并尽量不抛异常；调用方必须检查 `ok`、`reason`、`hint`。
-
-## 插件侧首选入口
-
-### ACT 聚合快照
-
-`ctx.get_snapshot()` 返回当前 ACT 聚合快照，适合 UI、报表、触发器、普通插件逻辑。
-
-常用路径：
-
-| 路径 | 内容 |
-| --- | --- |
-| `snapshot["context"]` | `dungeon_id`、`dungeon_scene_id`、`dungeon_name`、Boss HP/盾/破防状态、最近技能/Boss 事件。同时含 `last_skill_event`、`last_skill_kind`、`last_dungeon_event`、`last_boss_event`、`last_boss_event_type` 等语义快照，触发器/AutoKey 直接对这些字段做匹配。 |
-| `snapshot["render_spec"]` | WebView/Entity 共用渲染契约；含 `context`、`boss`、`totals`、`rows`、`sources`。`render_spec.context.last_*` 是经过 `combat_fact` 规范化后的稳定语义层（见下文）。 |
-| `snapshot["sources"]` | TCP/Memory 数据源健康摘要；含 `packet.parser_adapter_selection`、`memory.policy`、UnifiedDataSource 健康项。 |
-| `snapshot["live"]` | 当前 encounter 的 DPS/HPS/行数据。 |
-| `snapshot["triggers"]` | ACT 触发/计时器状态。 |
+### 通过插件 SDK
 
 ```python
 def on_load(ctx):
+    # 方式一：订阅快照
+    ctx.on_snapshot(lambda snap: print(snap))
+
+    # 方式二：主动获取
     snap = ctx.get_snapshot()
-    render = snap.get("render_spec") or {}
-    ctx.log((render.get("context") or {}).get("dungeon_name", ""))
+
+    # 方式三：通过引擎句柄
+    gsm = ctx.engine.get('game_state')
+    state = gsm.snapshot()
 ```
 
-### 内存扫描 facade
+### 通过 AI Editor
 
-`ctx.mem` 是插件作者使用内存能力的主入口。它会复用运行时已经打开的 `MemStateBridge` / `UnifiedDataSource`，不会为插件额外打开第二个游戏进程句柄。
+```
+engine(action="game_state")
+engine(action="entity_list")
+engine(action="dps_summary")
+```
+
+## GameStateManager
+
+由星痕共鸣插件提供（`plugins/star_resonance_plugin/engines/game_state.py`）。
+
+### 主要方法
+
+| 方法 | 说明 |
+|------|------|
+| `.snapshot()` | 返回当前状态的浅拷贝 |
+| `.update(**kwargs)` | 部分更新 + 通知订阅者 |
+| `.subscribe(callback)` | 注册状态变化监听 |
+| `.load_cache(settings)` | 从设置恢复缓存身份 |
+
+### 状态字段
+
+**身份：**
+`player_name`、`level_base`、`level_extra`、`player_id`、`profession_id`、`profession_name`、`fight_point`
+
+**生命：**
+`hp_current`、`hp_max`、`hp_pct`、`stamina_current`、`stamina_max`、`stamina_pct`
+
+**技能：**
+`skill_slots`（列表）、`custom_skill_slots`（列表）、`burst_ready`
+
+**Buff：**
+`self_buffs`（列表）、`server_time_offset_ms`
+
+**战斗：**
+`in_combat`（AttrCombatState 104）
+
+**Boss：**
+`boss_current_hp`、`boss_total_hp`、`boss_hp_source`、`boss_shield_active`、`boss_shield_pct`、`boss_breaking_stage`、`boss_extinction_pct`、`boss_cast_skill_id`、`boss_cast_skill_name`、`boss_cast_active`、`boss_cast_duration_ms`、`boss_stun`、`boss_invincible`、`boss_in_overdrive`
+
+**副本：**
+`dungeon_id`、`dungeon_scene_id`、`dungeon_difficulty`、`dungeon_name`
+
+**元数据：**
+`capture_timestamp`、`recognition_ok`、`packet_active`、`error_msg`
+
+## 内存扫描接口
+
+### MemAccess (ctx.mem)
 
 ```python
-def on_load(ctx):
-    ctx.log(ctx.mem.status())
+mem = ctx.mem  # MemAccess 实例（hybrid 模式下可用）
 
-    def poll_mem():
-        status = ctx.mem.status()
-        if not status.get("active"):
-            return
-        self_state = ctx.mem.self_state()
-        boss = ctx.mem.boss()
-        ctx.log({"self": self_state, "boss": boss})
+# 自身状态
+self_state = mem.self_state()  # {"hp": 50000, "max_hp": 100000, ...}
 
-    ctx.set_interval(poll_mem, 1.0)
+# 实体列表
+entities = mem.entities(include_monsters=True)
+
+# Boss 状态
+boss = mem.boss()
+
+# 属性读取
+attrs = mem.attr_map(entity_addr, [1, 100, 10000])
+
+# 状态
+status = mem.status()  # 连接/缓存/健康信息
 ```
 
-### Runtime action 形式
+所有方法在 TCP-only 模式下返回 `{"ok": False, "reason": "...", "hint": "..."}`。
 
-同一套能力也暴露在 `act_platform.runtime`，插件可通过 `ctx.call_runtime()` 调用。推荐写全名：
+所有返回值是 JSON-safe dict（地址为 hex 字符串，大整数为字符串）。
+
+### 直接内存操作
+
+通过 AI Editor 的 `engine(action="eval/exec")`：
+
+```
+engine(action="exec", code="""
+from mem_probe.process import GameProcess
+with GameProcess() as proc:
+    base = proc.main_module().base
+    data = proc.read_bytes(base, 16)
+    _output.append(f'Base: 0x{base:X}, Header: {data.hex()}')
+""")
+```
+
+### mem_probe.scanner
+
+多帧值搜索：
 
 ```python
-ctx.call_runtime("act_mem_status")
-ctx.call_runtime("act_mem_self")
-ctx.call_runtime("act_mem_entities", include_monsters=True, max_per_dict=128)
+from mem_probe.scanner import scan, narrow
+
+candidates = scan(process, target_value=50000, dtype='i32')
+# 改变游戏内数值后...
+refined = narrow(process, candidates, new_value=49500, dtype='i32')
 ```
 
-需要直接访问引擎时，使用可信 in-process 插件句柄：
+### mem_probe.cy_memscan
+
+AVX2 加速的内存扫描。Cython 编译的 `.pyd`，有纯 Python fallback：
 
 ```python
-bridge = ctx.get_engine("memory_bridge")
-packet = ctx.get_engine("packet_bridge")
-game_state = ctx.get_engine("game_state")
-state_mgr = ctx.get_engine("state_manager")
+from mem_probe import cy_memscan
+result = cy_memscan.find_aligned_u64_in_range(buffer, target, offset, size)
 ```
 
-普通插件优先使用 `ctx.mem` 和 `ctx.get_snapshot()`；只有诊断/高级插件才应读取 `memory_bridge` 等底层句柄。
+## 进程附加
 
-## `ctx.mem` API 总览
-
-先调用 `ctx.mem.catalog()` 可以动态查看当前可用能力、UI action 名称和示例参数。
-
-| 方法 | 用途 | 主要返回 |
-| --- | --- | --- |
-| `status()` | 查询内存 facade 状态。未启用内存时也可调用。 | `mode`、`active`、`bridge`、`armed`、`provider_mode`、`last_error`、`process_attached`、`module_base`。 |
-| `catalog()` | 返回当前可用内存能力清单。 | `categories[]`: `id`、`name`、`action`、`hint`、`available`、`example`。 |
-| `self_state()` | 读取自身状态缓存和最近 self snapshot。 | UID、HP、职业、名字、技能 CD 数、资源、死亡状态、等级、战力、场景、体力等。 |
-| `entities(include_monsters=True, include_npcs=False, max_per_dict=128)` | 当前可见实体 HP/战斗态。 | `entities[]`: uuid/base_id/kind/HP/破防/过载/眩晕/施法技能/对象地址。 |
-| `boss()` | 当前 Boss 候选。 | `boss`: bossDict 优先，否则最高 MaxHP 实体。 |
-| `boss_actions()` | Boss/怪施法和战斗状态流。 | `actions[]`: cast edge、skill、actor state、破防/过载/眩晕、HP。 |
-| `boss_action(uuid)` | 查询单个 Boss/怪最近动作。 | `action` 或 `None`。 |
-| `damage_totals(total_type=1)` | 读取游戏自己的 `DamageDataMgr` 总表。 | `totals`: uuid -> total；`source`: `live`/`cache`。 |
-| `skill_damage(uuid)` | 读取某玩家逐技能伤害。 | `skills`: skill_id -> value。 |
-| `attr_map(ent_addr)` | 解码某个实体的完整属性表。 | `attrs`: attr_id -> value。 |
-| `resolve_name(kind, id)` | 用离线/运行时名字表解析 ID。 | `name`。 |
-| `read_at(addr, dtype="u64")` | 对一个地址做多路解码。 | `hint`: u32/i32/u64/i64/f32/utf16/cstr/ptr/module/class hint。 |
-| `read_many(addrs, dtype="u64")` | 批量地址多路解码，最多 256 个。 | `hints[]`。 |
-| `search(value, dtype, align=0)` | 异步全堆值搜索。 | `job_id`。 |
-| `search_status(job_id)` | 查询搜索任务。 | `state`、`progress`、`count`、`results[]`。 |
-| `narrow(job_id, value)` | 用新值在上次命中里收敛。 | `job_id` / `state`。 |
-| `search_cancel(job_id)` | 取消搜索。 | `state`。 |
-| `search_list()` | 列出搜索任务。 | `jobs[]`。 |
-
-## Runtime action 对照表
-
-这些函数都在 `act_platform.runtime` 中，插件可用 `ctx.call_runtime("函数名", **kwargs)` 调用。
-
-| Runtime action | 等价 `ctx.mem` 调用 |
-| --- | --- |
-| `act_mem_status` | `ctx.mem.status()` |
-| `act_mem_catalog` | `ctx.mem.catalog()` |
-| `act_mem_self` | `ctx.mem.self_state()` |
-| `act_mem_entities` | `ctx.mem.entities(...)` |
-| `act_mem_boss` | `ctx.mem.boss()` |
-| `act_mem_boss_actions` | `ctx.mem.boss_actions()` |
-| `act_mem_boss_action` | `ctx.mem.boss_action(uuid)` |
-| `act_mem_damage` | `ctx.mem.damage_totals(total_type=...)` |
-| `act_mem_skill_damage` | `ctx.mem.skill_damage(uuid)` |
-| `act_mem_attr_map` | `ctx.mem.attr_map(ent_addr)` |
-| `act_mem_resolve_name` | `ctx.mem.resolve_name(kind, id)` |
-| `act_mem_read` | `ctx.mem.read_at(addr, dtype)` |
-| `act_mem_read_many` | `ctx.mem.read_many(addrs, dtype)` |
-| `act_mem_search` | `ctx.mem.search(value, dtype, align=...)` |
-| `act_mem_search_status` | `ctx.mem.search_status(job_id)` |
-| `act_mem_narrow` | `ctx.mem.narrow(job_id, value)` |
-| `act_mem_search_cancel` | `ctx.mem.search_cancel(job_id)` |
-| `act_mem_search_list` | `ctx.mem.search_list()` |
-| `act_mem_scope_status` | 一次返回 `status` + `catalog` + `self` + `entities` + `damage` + 可选 search 状态。 |
-
-## 返回结构细节
-
-### `status()`
-
-示例字段：
-
-```json
-{
-  "ok": true,
-  "mode": "hybrid",
-  "active": true,
-  "bridge": "hybrid",
-  "armed": true,
-  "provider_mode": "memory",
-  "last_error": "",
-  "process": "Star.exe#12345",
-  "process_attached": true,
-  "module_base": "0x7ff6..."
-}
-```
-
-`active=true` 表示当前模式允许内存访问且 bridge 已挂载；`armed=true` 表示已经复用到可读进程句柄。
-
-### `self_state()`
-
-核心字段：
-
-| 字段 | 来源/含义 |
-| --- | --- |
-| `uid` | 自身 CharId，字符串。 |
-| `hp` / `max_hp` / `hp_pct` | 自身血量。 |
-| `profession_id` / `char_name` | 职业与名字。 |
-| `skill_cd_count` | 最近内存技能 CD 条目数量。 |
-| `is_dead` | 自身死亡状态。 |
-| `resources` | 资源计数，结构随游戏字段而变。 |
-| `level_base` / `season_exp` / `fight_point` | 角色等级/经验/战力，能读到时返回。 |
-| `stamina` / `stamina_max` / `origin_energy` | 体力/能量字段，能读到时返回。 |
-| `scene_map_id` | 内存读到的当前场景 map id，能读到时返回。 |
-
-### `entities()` / `boss()`
-
-实体行字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| `uuid` | `ZEntity.Uuid`，字符串。 |
-| `config_uuid` | 运行时配置 uuid，字符串。 |
-| `base_id` | 模板/名字表 ID。 |
-| `kind` | `entity` / `boss` / `monster` / `npc`。 |
-| `name` | 已解析名字；可能为空。 |
-| `cur_hp` / `max_hp` / `hp_pct` | 实体实时 HP。 |
-| `obj` | 当前会话实体对象地址，十六进制字符串；可作为 `attr_map()` 输入，但不要持久化。 |
-| `breaking_stage` | 破防阶段 attr。 |
-| `overdrive` | 过载/狂暴 attr。 |
-| `stun` | 眩晕 attr。 |
-| `cast_skill_id` | 当前施法技能 attr，可能为 `None`。 |
-
-### `boss_actions()`
-
-每条 action 代表 Boss/怪的最新施法/状态记录：
-
-- `boss_uuid`、`boss_base_id`、`boss_name`
-- `skill_id`、`skill_name`
-- `cast_edge`: `start` / `end` / `none`
-- `cast_active`
-- `actor_state`
-- `cast_elapsed_ms`
-- `cast_duration_ms`
-- `cast_duration_src`: `learned` / `buff` / `none`
-- `breaking_stage`、`overdrive`、`stun`、`extinction`
-- `hp`、`max_hp`、`hp_pct`
-
-### `damage_totals()` / `skill_damage()`
-
-`total_type` 对应游戏 `DamageShowTotalType`：
-
-| 值 | 含义 |
-| --- | --- |
-| `1` | 总伤害 Damage |
-| `2` | 总治疗 Cure |
-| `3` | 总承伤 TakeDamage |
-
-`damage_totals()` 读取 `DamageDataMgr.totalPlayerValue_`；`skill_damage(uuid)` 读取 `DamageDataMgr.damageValue_[uuid]` 的逐技能 `actualValue`。
-
-### `attr_map(ent_addr)` 常用 attr id
-
-这些 ID 来自当前 reader/packet enum 使用的字段，适合诊断或插件高级逻辑：
-
-| Attr ID | 含义 |
-| --- | --- |
-| `1` | 实体显示名 NAME（字符串 attr，部分实体才有）。 |
-| `100` | 当前/触发技能 ID。 |
-| `440` | `max_extinction`。 |
-| `441` | `extinction`。 |
-| `442` | `max_stun`。 |
-| `443` | `stun`。 |
-| `444` | `overdrive`。 |
-| `455` | `breaking_stage`。 |
-| `471` | `hated_char_id`。 |
-| `11310` | 当前 HP。 |
-| `11320` | 最大 HP。 |
-
-`attr_map()` 的输出是诊断/高级能力，不是稳定业务 schema。普通插件优先使用 `entities()`、`boss()`、`boss_actions()` 已归一化字段。
-
-### `read_at()` / `read_many()`
-
-`dtype` 参数保留给 UI/API 一致性；当前实现会对地址做多路解码并返回 `hint`，而不是只返回某一种类型。
-
-支持的扫描/解码类型包括：`i32`、`u32`、`i64`、`u64`、`f32`、`f64`、`utf16`。
-
-### `search()` / `narrow()`
-
-手动值搜索是异步 job：
+`mem_probe.process.GameProcess`（别名 `StarProcess`）：
 
 ```python
-job = ctx.mem.search(12345, "u32")
-job_id = job.get("job_id")
+from mem_probe.process import GameProcess
 
-# 后续轮询
-status = ctx.mem.search_status(job_id)
-
-# 数值变化后收敛
-ctx.mem.narrow(job_id, 12000)
+with GameProcess() as proc:
+    print(f"PID: {proc.pid}, Name: {proc.name}")
+    print(proc.main_module())  # ModuleInfo(name, base, size)
+    for region in proc.memory_regions():
+        print(f"0x{region.base:X} size={region.size}")
 ```
 
-当前限制：
-
-- 最大并发搜索：2。
-- 单 job TTL：约 300 秒。
-- 返回结果默认截断到 200 条，内部最多保留约 200,000 命中。
-- 单 region 扫描上限为 256 MB；超大扫描不要放在 UI 高频路径。
-
-## 底层读者与游戏对象映射
-
-插件通常不需要直接 import 下列模块，但理解它们有助于判断数据可信度。
-
-| 能力 | 模块 | 游戏对象/链路 | 公开层 |
-| --- | --- | --- | --- |
-| 统一数据源 | `mem_probe.unified_source.UnifiedDataSource` | `PacketBridge` 的 `memory` / `hybrid` / `auto` 适配器。 | `PacketBridge.health()`、`ctx.get_snapshot()["sources"]`。 |
-| 自身状态桥 | `mem_probe.il2cpp.mem_state_bridge.MemStateBridge` | 把内存 self/entity/boss/damage 读数推到 `GameStateManager`、`DpsTracker`、BossRaid/AutoKey。 | `ctx.mem`、`ctx.get_engine("memory_bridge")`。 |
-| 自身后台 provider | `mem_probe.il2cpp.mem_self_state_provider.MemSelfStateProvider` | 轮询 `StaticDpsSource` / `AnchorMemoryReader`，失败后回退 TCP。 | `ctx.mem.self_state()`、data-source health policy。 |
-| TCP 锚点定位 | `mem_probe.il2cpp.mem_state_anchor.AnchorMemoryReader` | `Zproto.CharSerialize` -> `Zproto.UserFightAttr` / `CharBase` / `RoleLevel` / `EnergyItem` / `SceneData`。 | `self_state()`。 |
-| 静态 self 快照 | `mem_probe.il2cpp.static_dps_source.StaticDpsSource` | bundle/script layout + instance cache，读取 `SelfSnapshot`。 | `MemSelfStateProvider` 内部使用。 |
-| 实体管理器 | `mem_probe.il2cpp.mem_entity_mgr.EntityMgrReader` | `Panda.ZGame.ZEntityMgr` 的 `entityDict_`、`bossDict_`、`monsterDict_`、`npcDict_`。 | `entities()`、`boss()`。 |
-| 实体战斗属性 | `mem_probe.il2cpp.mem_entity_combat.EntityCombatReader` | `ZEntity.attrs_` -> `ZAttrCollection.cacheSlim_` -> attr id/value。 | `entities()`、`attr_map()`。 |
-| 游戏伤害表 | `mem_probe.il2cpp.mem_damage_reader.MemDamageReader` | `Panda.ZGame.DamageDataMgr` 的总伤/治疗/承伤/逐技能字典。 | `damage_totals()`、`skill_damage()`。 |
-| Boss 动作 | `mem_probe.il2cpp.mem_boss_action_reader.BossActionTracker` | `ZEntity` actor state、`BuffComp`、`cast_skill_id`，边沿检测施法。 | `boss_actions()`、BossRaid/AutoKey。 |
-| 场景名 | `mem_probe.il2cpp.mem_map_name_reader.MapNameReader` | `SceneConfigMgr` / `Bokura.SceneTableBase` / `StringPoolRuntimeImpl`。 | `GameState.dungeon_name`、ACT context。 |
-| 名牌名字 | `mem_probe.il2cpp.mem_nameplate_reader.NameplateReader` | 世界名牌 UI widget：uuid + text。 | 实体名字修正、TCP name cache。 |
-| 坐标/躲避上下文 | `mem_probe.il2cpp.mem_dodge_context.DodgeContext` | Camera、玩家/实体坐标、ZoneEnt 成员列表。 | AutoDodge 内部；尚未作为通用插件 API 承诺。 |
-| Cython 扫描内核 | `mem_probe.cy_memscan` / `_sao_cy_memscan` | aligned u32/u64 搜索、批量读、实体战斗批量解码。 | 所有高频 reader 的性能后端。 |
-
-## 数据源策略与配置
-
-`PacketBridge` 支持 `mem_data_source`：
-
-| 模式 | 含义 |
-| --- | --- |
-| `tcp` | 只启 TCP 抓包；`ctx.mem` 只返回状态和 gate 错误。 |
-| `memory` | 尝试只启内存源；当前不承诺 memory-only 产生完整战斗事件流。 |
-| `hybrid` | TCP 负责战斗事实，内存补充 self/entity/boss/action/damage 聚合。推荐插件调试模式。 |
-| `auto` | 尝试内存/hybrid，失败时保留 TCP fallback。 |
-
-常见 gate：
-
-| 设置 | 作用 |
-| --- | --- |
-| `mem_auto_scan_enabled` | false 时内存扫描拒绝启动。 |
-| `mem_auto_scan_interval_s` | self provider 轮询间隔，内部夹在 `0.1..30.0` 秒。 |
-| `mem_require_admin` | true 时要求当前进程管理员权限。 |
-| `mem_max_scan_regions_mb` | 限制锚点扫描的 readable private region 总量；`0` 表示不限制。 |
-| `mem_allow_full_heap_scan` | hybrid/auto 默认更保守，避免无界全堆扫描。 |
-| `mem_allow_static_fallback` | 允许锚点失败后走静态 bundle/cache fallback；`memory` 模式默认更宽松。 |
-| `mem_defer_until_tcp_scene` | hybrid/auto 默认延迟重扫描，等 TCP 场景/全量同步等强锚触发。 |
-| `mem_start_on_scene` / `mem_start_on_full_sync` | 控制哪些 TCP 事件可以触发 deferred memory 启动。 |
-| `mem_show_risk_warning` | 供 UI/health 展示风险提示。 |
-
-这些值会出现在 `UnifiedDataSource.health()["policy"]` 或 `ctx.mem.status()` / data-source health 中。
-
-## `combat_fact` 语义事实层
-
-为了让插件、触发器和 AutoKey 不再硬编码包字段、技能 ID 或地牢编号，所有进入 ACT 流水线的技能/地牢/Boss/怪物事件都会被 `tools/tablekit/combat_preparse.py` 注入一个稳定的 `combat_fact`：
-
-| 来源事件 | 注入函数 | 落点 |
-| --- | --- | --- |
-| 技能（`server_end` / `start_cast` / 普攻 …） | `enrich_skill_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_skill_event`。 |
-| 地牢/场景流转（`sync_dungeon_data` / `sync_dungeon_dirty_data`） | `enrich_dungeon_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_dungeon_event`。 |
-| Boss 机制 buff（`buff_event_*`） | `enrich_boss_event` | `event["combat_fact"]`；同步进入 `render_spec.context.last_boss_event` 与 `last_boss_event_type`。 |
-| 怪物聚合（render rows / Entity 面板） | `enrich_monster_event` | 写到 monster 行的 `combat_fact`，并合并 `mechanics`/`shield`/`breaking_stage` 等字段。 |
-
-技能 fact 关键字段（节选）：
-
-| 字段 | 含义 |
-| --- | --- |
-| `skill_id`、`skill_level_id`、`skill_name`、`display_name` | 规范化后的稳定标识与显示名；`display_name` 失败时回退 `技能#<id>`。 |
-| `skill_role` | `player`/`monster`/`boss`/`environment`/`ultimate` 等粗分类。 |
-| `skill_category` / `skill_kind` | 通过 `_classified_kind` 决定的精细分类（与 `skill_role` 在 `category_roles` 内保持一致）。 |
-| `is_ultimate`、`is_player_skill`、`is_monster_skill`、`is_boss_skill`、`is_boss_mechanic_skill`、`is_environment_skill`、`is_scripted_skill`、`is_virtual_skill`、`is_roguelike_affix`、`is_client_effect_skill`、`is_interaction_skill`、`is_companion_skill`、`is_projectile_skill`、`is_passive_skill`、`is_test_skill`、`is_system_skill` | 布尔分类位，AutoKey/触发器直接读取。 |
-| `profession_id`、`sub_profession` | 通过 `_SKILL_TO_PROFESSION` 反查得到的施法职业；命中表时填副职业名。 |
-| `target_uuid`、`caster_uid`、`caster_uuid` | 规范化的对象引用，整数表达。 |
-| `source` | `tcp` / `memory` / `replay`，标记事实来源。 |
-| `stage_id` / `new_stage_id` / `condition_id` | 出现在 stage 推进事件时附带。 |
-
-地牢 fact 关键字段：`dungeon_id`、`scene_id`、`scene_uuid`、`dungeon_difficulty`、`dungeon_name`、`display_name`、`flow_state`、`target_count`、`scene_guid`、`connect_guid`、`source`。
-
-Boss 机制 fact 关键字段：`event_type`、`boss_mechanic_key`（如 `buff_event_<n>`）、`boss_mechanic_label`、`trigger_family`（如 `buff_event` / `phase_change` / `mechanic_call`）、`severity`、`host_uuid`、`buff_uuid`、`buff_id`、`buff_category`、`buff_name`、`source`。`event_type` 与 `tools/tablekit/combat_preparse.py:BOSS_MECHANIC_EVENTS` 对齐。
-
-怪物 fact 关键字段：`uuid`、`uid`、`monster_id`、`monster_name`、`boss_name`、`display_name`、`hp`、`max_hp`、`hp_pct`、`shield_active`、`shield_pct`、`breaking_stage`、`extinction_pct`、`in_overdrive`、`mechanics[]`（`shield` / `breaking` / `overdrive` / `break_tick_stopped` / `dead`）、`buff_count`。
-
-> 插件应只读取 `event["combat_fact"]` 字段，不要再去解析 `skill_id` 数值、生硬比较包字段或自行做职业映射。事实层会随版本扩展但保持向后兼容。
-
-## AutoKey 语义条件
-
-AutoKey 引擎（`engines/auto_key_engine.py`）已迁移到上面的 `combat_fact` 层，下列条件可在 `auto_key_rules.json` 等规则里直接使用：
-
-| 条件类型 | 含义 | 数据来源 |
-| --- | --- | --- |
-| `last_skill_is` | 最近一次技能事件的 `skill_id` 命中给定列表。 | `render_spec.context.last_skill_event.combat_fact.skill_id`。 |
-| `last_skill_category_is` / `last_skill_kind_is` | 最近技能 `skill_category` / `skill_kind` 命中。 | `combat_fact.skill_category`。 |
-| `last_skill_is_ultimate` / `last_skill_is_boss_mechanic` | 布尔判断最近技能是否为终结技/Boss 机制技。 | `combat_fact.is_ultimate` / `combat_fact.is_boss_mechanic_skill`。 |
-| `last_buff_category_is` | 最近 Boss 机制事件的 `buff_category` 命中。 | `last_boss_event.combat_fact.buff_category`。 |
-| `boss_mechanic_is` | 最近 Boss 机制 `event_type` 在列表内。 | `last_boss_event.combat_fact.event_type` / `boss_mechanic_key`。 |
-| `boss_mechanic_family_is` | 最近 Boss 机制 `trigger_family` 命中。 | `last_boss_event.combat_fact.trigger_family`。 |
-| `boss_casting_skill_is` | 当前 Boss 正在施法且 `cast_skill_id` 命中。 | 内存 `boss_actions()` + render 上下文。 |
-| `dungeon_is` | 当前所在副本/场景的 `dungeon_id` 或 `scene_id` 命中。 | `last_dungeon_event.combat_fact.dungeon_id` / `scene_id`。 |
-| `profession_is` / `player_name_is` | 自身职业/角色名匹配。 | ACT 自身状态 + `MemSelfStateProvider`。 |
-
-这些条件在内部会自动 `event.get("combat_fact") or enrich_*_event(event)`，保证即使事件来自历史记录或回放，也能拿到一致的语义层。
-
-## 数据源健康面板
-
-`ctx.get_snapshot()["sources"]` 与 `PacketBridge.health()` 是插件诊断数据源的统一入口：
-
-```jsonc
-{
-  "packet": {
-    "mode": "hybrid",
-    "tcp_active": true,
-    "parser_adapter_selection": {
-      "requested_id": "star_resonance_tcp",
-      "selected_id": "star_resonance_tcp",
-      "mode": "builtin",
-      "fallback_reason": ""
-    }
-  },
-  "memory": {
-    "active": true,
-    "armed": true,
-    "policy": {
-      "mem_auto_scan_enabled": true,
-      "mem_data_source": "hybrid",
-      "mem_max_scan_regions_mb": 256,
-      "mem_allow_full_heap_scan": false,
-      "mem_allow_static_fallback": true,
-      "mem_defer_until_tcp_scene": true,
-      "region_scan_capped": false,
-      "static_fallback_mode": "off",
-      "requested_mode": "hybrid",
-      "mode": "hybrid"
-    }
-  }
-}
-```
-
-| 字段 | 含义 |
-| --- | --- |
-| `packet.parser_adapter_selection.requested_id` | UI/配置请求使用的 parser adapter id。 |
-| `packet.parser_adapter_selection.selected_id` | 当前实际选中的 adapter（可能因兼容降级到内置）。 |
-| `packet.parser_adapter_selection.mode` | `builtin` / `plugin` / `external`，反映加载源。 |
-| `packet.parser_adapter_selection.fallback_reason` | 非空时表示曾发生 fallback，并给出原因（例如插件不支持 packet 抓取）。 |
-| `memory.policy.requested_mode` / `memory.policy.mode` | 请求的与实际生效的内存模式（`tcp`/`memory`/`hybrid`/`auto`）。 |
-| `memory.policy.region_scan_capped` | 真表示扫描已被 `mem_max_scan_regions_mb` 截断。 |
-| `memory.policy.static_fallback_mode` | `off` / `bundle` / `cache`，反映静态 fallback 是否被启用。 |
-| `memory.policy.mem_defer_until_tcp_scene` | 是否在等待 TCP 场景/全量同步之前延迟内存重扫描。 |
-
-插件应优先消费 `policy.*` 与 `parser_adapter_selection` 而不是直接探测进程或读注册表，以便和 ACT 数据源面板、Mem Scope 面板保持一致。
-
-## 调用建议
-
-- 普通 UI/报表插件：先用 `ctx.get_snapshot()`，只有确实需要实时实体 HP、Boss 动作或游戏内聚合表时再用 `ctx.mem`。
-- 高频轮询：`self_state()`、默认 `entities()` 会尽量用 bridge 缓存；仍建议 `0.5s` 到 `1s` 以上间隔。
-- 手动搜索：只用于诊断或开发工具；不要在战斗热路径里自动发起全堆搜索。
-- 地址读取：只读 `entities()[i]["obj"]` 这类当前快照给出的地址；不要读取用户输入的任意地址作为普通插件功能。
-- `attr_map()`：适合高级插件/诊断，不适合作为公共业务 schema。能用 `boss_actions()` / `entities()` 就不要自己解析 attr。
-- 插件事件回调应快速返回；需要持续轮询时用 `ctx.set_interval()` 或插件自己的后台线程。
-
-## 不应承诺的能力
-
-- 不承诺写内存、调用游戏函数、Hook 游戏函数、模拟内部 RPC。
-- 不承诺跨版本固定地址或固定对象布局；布局通过名字/活对象解析和 fallback 自愈，但仍可能随更新失效。
-- 不承诺 weak anchor（只有 uid）的扫描一定可信；强锚至少需要 uid + level/profession 或足够技能 ID。
-- 不承诺所有实体都有名字、HP、Boss 技能时长或 Buff 源；字段缺失时应显示为空/unknown。
-- 不承诺 `memory` 模式下能完整替代 TCP 战斗事件流；ACT 战斗记录仍以 TCP/replay 合同为准。
-- Shield 仍是 TCP-only；内存 boss break 只覆盖破防阶段和灭却/韧性类读数。
-
-## 最小插件示例
-
-```python
-_timer = ""
-
-
-def on_load(ctx):
-    ctx.log("GAME_STATE_API demo loaded")
-
-    @ctx.on("act_snapshot")
-    def on_act_snapshot(event):
-        snap = event.get("payload") or {}
-        render = snap.get("render_spec") or {}
-        boss = render.get("boss") or {}
-        if boss.get("hp_pct") is not None:
-            ctx.log(f"ACT boss hp: {boss.get('hp_pct')}")
-
-    def poll_mem():
-        status = ctx.mem.status()
-        if not status.get("active"):
-            return
-        self_state = ctx.mem.self_state()
-        boss = ctx.mem.boss()
-        actions = ctx.mem.boss_actions()
-        ctx.log({
-            "self_hp": (self_state.get("hp"), self_state.get("max_hp")),
-            "boss": boss.get("boss"),
-            "actions_n": actions.get("count", 0),
-        })
-
-    global _timer
-    _timer = ctx.set_interval(poll_mem, 1.0)
-
-
-def on_unload():
-    # ctx.clear_timer(_timer) 可在保存 ctx 时调用；省略时 manager unload 也会清理插件 timer。
-    pass
-```
-
-## 验证命令
-
-从 `sao_auto` 目录运行：
-
-```powershell
-e:\Py\python.exe -m unittest tools.mem_access_selftest tools.unified_source_selftest tools.act_data_source_health_selftest
-e:\Py\python.exe -m unittest tools.mem_scope_panel_selftest tools.mem_scope_ui_selftest
-e:\Py\python.exe -m unittest tools.mem_entity_combat_selftest
-e:\Py\python.exe -m act_platform.selftest
-e:\Py\python.exe -m act_replay.selftest
-git diff --check -- docs/GAME_STATE_API.md
-```
-
-Live 验证需要游戏进程和当前数据源模式支持，不应作为 CI 阻塞项。
+进程名从 `config.GAME_PROCESS_NAMES` 配置。需要管理员权限。
