@@ -93,7 +93,7 @@ class EntityCombatReader:
         # struct's inline fields (inner deltas 0x0/0x8), kept structural. The cython
         # fast path (read_entity_combat_many) carries its own offsets; these drive the
         # Python paths (read_attr_map / read_name_attr / read_combat -> boss-cast loop).
-        from mem_probe.il2cpp import auto_offsets as _ao
+        from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
         ent = _ao.resolve(resolver, "Panda.ZGame.ZEntity", {
             "off_ent_attrs": ("attrs_", ENT_ATTRS_OFF),
         })

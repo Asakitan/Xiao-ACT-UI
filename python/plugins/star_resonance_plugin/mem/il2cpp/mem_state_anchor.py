@@ -232,7 +232,7 @@ class AnchorMemoryReader:
 
     def _init_layout(self, resolver) -> None:
         """Resolve the proto field layouts by name (live memory -> dump -> literal)."""
-        from mem_probe.il2cpp import auto_offsets as _ao
+        from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
 
         def _R(literal_map, class_name):
             out = {}

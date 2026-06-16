@@ -14,8 +14,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from mem_probe import unified_source
-from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
-from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
 from mem_probe.process import MemoryRegion
 
 

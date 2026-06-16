@@ -6,7 +6,7 @@ Builds a fake ZEntity -> ZAttrCollection -> Burst index -> _values -> ZAttr<stri
 (id=1) decodes to the expected CN string. Verifies the index walk + UTF-16 string decode
 without the game running.  Run: python -m mem_probe.il2cpp.test_name_attr_decode
 """
-from mem_probe.il2cpp.mem_entity_combat import (
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import (
     EntityCombatReader, ENT_ATTRS_OFF, COLL_INDEXPART_OFF, COLL_VALUES_OFF,
     INDEX_KEYSEG_OFF, INDEX_VALIDX_OFF, KEYSEG_COUNT_OFF, ARRAY_ELEMS_OFF,
     VALUES_TUPLE_STRIDE, VALUES_TUPLE_ARR_OFF, ATTR_VAL8_OFF, STR_LEN_OFF, STR_CHARS_OFF,

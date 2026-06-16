@@ -39,8 +39,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.script_parser import ScriptIndex
-from mem_probe.il2cpp.dump_cs_parser import DumpCsIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.dump_cs_parser import DumpCsIndex
 
 
 # 默认需要的类: 玩家自身 + 战斗属性容器. 后续按需扩.

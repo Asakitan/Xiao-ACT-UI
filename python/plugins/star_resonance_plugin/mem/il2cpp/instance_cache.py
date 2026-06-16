@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional
 
-from mem_probe.il2cpp.static_resolver import StaticResolver
+from plugins.star_resonance_plugin.mem.il2cpp.static_resolver import StaticResolver
 
 
 _DEFAULT_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)),

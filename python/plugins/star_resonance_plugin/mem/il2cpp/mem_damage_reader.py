@@ -91,7 +91,7 @@ class MemDamageReader:
         # literal fallback (the curated bundle may omit DamageDataMgr -> falls back;
         # add it to the bundle class list to activate self-heal). The ZDictionary
         # entry offsets stay literal — it's an open generic (no fields in the dump).
-        from mem_probe.il2cpp import auto_offsets as _ao
+        from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
         ddm = _ao.resolve(self._src, DDM_CLASS, {
             "off_isactive": ("IsActive", DDM_ISACTIVE_OFF),
             "off_damagevalue": ("damageValue_", DDM_DAMAGEVALUE_OFF),
@@ -115,7 +115,7 @@ class MemDamageReader:
     def _resolve_klass(self) -> int:
         if self._klass and self._kname(self._klass) == "DamageDataMgr":
             return self._klass
-        from mem_probe.il2cpp.klass_index import resolve_klasses
+        from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
         idx = resolve_klasses(self.pm, {DDM_CLASS}, time_budget_s=30)
         self._klass = int(idx.get(DDM_CLASS, 0) or 0)
         return self._klass

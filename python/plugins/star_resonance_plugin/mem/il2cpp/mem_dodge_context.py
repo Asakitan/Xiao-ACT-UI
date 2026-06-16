@@ -32,19 +32,19 @@ class DodgeContext:
     # ---- lazy readers ----
     def _camera(self):
         if self._cam is None:
-            from mem_probe.il2cpp.mem_camera_reader import CameraReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_camera_reader import CameraReader
             self._cam = CameraReader(self._src)
         return self._cam
 
     def _position(self):
         if self._pos is None:
-            from mem_probe.il2cpp.mem_player_position_reader import PlayerPositionReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_player_position_reader import PlayerPositionReader
             self._pos = PlayerPositionReader(self._src)
         return self._pos
 
     def _entity_mgr(self):
         if self._emr is None:
-            from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
             self._emr = EntityMgrReader(self._src)
         return self._emr
 
@@ -116,7 +116,7 @@ class DodgeContext:
 
     def _zone(self):
         if getattr(self, "_zone_reader", None) is None:
-            from mem_probe.il2cpp.mem_zone_reader import ZoneReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_zone_reader import ZoneReader
             self._zone_reader = ZoneReader(self._src)
         return self._zone_reader
 
@@ -130,7 +130,7 @@ class DodgeContext:
 
     def _skill_state(self):
         if getattr(self, "_skill_reader", None) is None:
-            from mem_probe.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
             self._skill_reader = BossSkillStateReader(self._src)
         return self._skill_reader
 
@@ -266,7 +266,7 @@ class DodgeContext:
             cl = pm.read_u64(zone_obj + 0x60) or 0
             if not cl:
                 return None
-            from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+            from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
 
             def _kn(o):
                 kp = pm.read_u64(o); np = pm.read_u64(kp + 0x10)

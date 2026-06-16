@@ -9,7 +9,7 @@ Run: python -m mem_probe.il2cpp.test_table_columns
 """
 import os
 
-from mem_probe.il2cpp.table_columns import (
+from plugins.star_resonance_plugin.mem.il2cpp.table_columns import (
     parse_classes_getters, extract_columns, READPROXY_CLS, FALLBACK,
 )
 

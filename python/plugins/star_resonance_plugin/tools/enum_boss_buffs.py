@@ -43,9 +43,9 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp import table_columns
-from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader, TABLE_CLASS
-from mem_probe.il2cpp.mem_string_pool import StringPoolBridge
+from plugins.star_resonance_plugin.mem.il2cpp import table_columns
+from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader, TABLE_CLASS
+from plugins.star_resonance_plugin.mem.il2cpp.mem_string_pool import StringPoolBridge
 
 BUFF_CLS = TABLE_CLASS["buff"]
 MONSTER_CLS = TABLE_CLASS["monster"]
@@ -368,7 +368,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--out", default=None, help="exports JSON path")
     args = p.parse_args(argv)
 
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
     src = StaticDpsSource()
     _ = src.sr   # lazy open: bundle + process handle
     en = BossBuffEnumerator(src)

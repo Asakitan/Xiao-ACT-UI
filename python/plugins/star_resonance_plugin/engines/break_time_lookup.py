@@ -105,7 +105,7 @@ def _resolve_col_offset() -> Optional[int]:
     if _COL_BREAKING_CONTINUE_TIME is not None:
         return _COL_BREAKING_CONTINUE_TIME
     try:
-        from mem_probe.il2cpp import table_columns
+        from plugins.star_resonance_plugin.mem.il2cpp import table_columns
         cols = table_columns.load_columns([_MONSTER_CLS])
         ent = cols.get(_MONSTER_CLS, {}).get("BreakingContinueTime")
         if ent:
@@ -121,8 +121,8 @@ def _read_live(template_id: int) -> float:
     """Try to read BreakingContinueTime from live memory for one monster."""
     global _dirty
     try:
-        from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader, TABLE_CLASS
-        from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader, TABLE_CLASS
+        from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
         src = StaticDpsSource()
         _ = src.sr
         rd = MemConfigTableReader(src)
@@ -165,8 +165,8 @@ def build_full_cache() -> int:
     global _dirty
     _load()
     try:
-        from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader
-        from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader
+        from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
         src = StaticDpsSource()
         _ = src.sr
         rd = MemConfigTableReader(src)

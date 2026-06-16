@@ -15,9 +15,9 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe.process import StarProcess
-from mem_probe.il2cpp.script_parser import ScriptIndex
-from mem_probe.il2cpp.dump_cs_parser import DumpCsIndex
-from mem_probe.il2cpp.static_resolver import StaticResolver
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.dump_cs_parser import DumpCsIndex
+from plugins.star_resonance_plugin.mem.il2cpp.static_resolver import StaticResolver
 
 
 def _bundle_to_script_index(bundle: dict) -> ScriptIndex:

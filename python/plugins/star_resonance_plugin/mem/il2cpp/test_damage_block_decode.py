@@ -16,7 +16,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp import mem_damage_reader as mdr
+from plugins.star_resonance_plugin.mem.il2cpp import mem_damage_reader as mdr
 
 # ZDictionary offsets (mirror the module constants)
 ZDICT_COUNT_OFF = mdr.ZDICT_COUNT_OFF

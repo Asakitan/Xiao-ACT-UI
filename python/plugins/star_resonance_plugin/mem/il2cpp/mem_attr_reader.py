@@ -73,7 +73,7 @@ class ZAttrReader:
         self._calibrated_ga: int = 0
         self._req_ga: int = int(ga_base or 0)
         # auto-offset: ZAttrCollection.mixItemDict_ by name (dump), literal fallback.
-        from mem_probe.il2cpp import auto_offsets as _ao
+        from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
         self.off_mixdict = _ao.resolve(resolver, "Panda.ZGame.ZAttrCollection", {
             "mixdict": ("mixItemDict_", MIXDICT_OFF)})["mixdict"]
 

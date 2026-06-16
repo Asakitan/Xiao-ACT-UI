@@ -2,7 +2,7 @@
 
 主程序集成 (在 sao_gui 初始化 packet_engine + dps_tracker 之后):
 
-    from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
     self._mem_bridge = MemStateBridge(
         state_mgr=self._state_mgr,        # game_state.GameStateManager
         dps_tracker=self._dps_tracker,    # 可 None
@@ -29,9 +29,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
-from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
-from mem_probe.il2cpp.field_authority import FieldAuthority, ProbeReason, Source
+from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from plugins.star_resonance_plugin.mem.il2cpp.field_authority import FieldAuthority, ProbeReason, Source
 
 
 class MemStateBridge:
@@ -311,11 +311,11 @@ class MemStateBridge:
                     # but ZEntityMgr / DamageDataMgr locate independently (best-by-count +
                     # klass sentinel). Start as soon as the StaticDpsSource is available.
                     if src is not None:
-                        from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
+                        from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_provider import MemEntityProvider
                         prov = MemEntityProvider(src, self_uid=int(self.last_uid or 0))
                         self._entity_provider = prov
                         try:
-                            from mem_probe.il2cpp.mem_damage_reader import MemDamageReader
+                            from plugins.star_resonance_plugin.mem.il2cpp.mem_damage_reader import MemDamageReader
                             self._damage_reader = MemDamageReader(src)
                         except Exception as _dr_exc:
                             self._damage_reader = None
@@ -323,7 +323,7 @@ class MemStateBridge:
                         # boss-action tracker: edge-detect cast_skill_id on the live
                         # entity snapshot (reuses prov._ecr / prov._pm; never blocks).
                         try:
-                            from mem_probe.il2cpp.mem_boss_action_reader import (
+                            from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_action_reader import (
                                 BossActionTracker, BossDurationProbe)
                             # on_event left unset: the bridge forwards explicitly from
                             # both loops (fast = low-latency cast edges; 1Hz = offensive
@@ -724,7 +724,7 @@ class MemStateBridge:
                 or getattr(self._provider, "_src", None)
             if src is None or getattr(src, "sr", None) is None:
                 return None
-            from mem_probe.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_skill_state_reader import BossSkillStateReader
             self._boss_skill_reader = BossSkillStateReader(src)
             return self._boss_skill_reader
         except Exception:
@@ -736,7 +736,7 @@ class MemStateBridge:
                 or getattr(self._provider, "_src", None)
             if src is None or getattr(src, "sr", None) is None:
                 return
-            from mem_probe.il2cpp.mem_map_name_reader import MapNameReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_map_name_reader import MapNameReader
             r = MapNameReader(src)
             if r.build():
                 self._map_reader = r
@@ -822,7 +822,7 @@ class MemStateBridge:
                 base_kind[b] = str(e.get("kind") or "monster")
                 base_to_uuids.setdefault(b, []).append(u)
             if self._np_reader is None:
-                from mem_probe.il2cpp.mem_nameplate_reader import NameplateReader
+                from plugins.star_resonance_plugin.mem.il2cpp.mem_nameplate_reader import NameplateReader
                 self._np_reader = NameplateReader(pm)
             res = self._np_reader.harvest(uuid_to_base)
             names = res.get("names") or {}
@@ -998,7 +998,7 @@ class MemStateBridge:
         # 把 SkillCD list 转成 GameState.skill_slots 格式 (HUD/SkillFX/AutoKey 都用这个)
         if self.state_mgr is not None:
             try:
-                from mem_probe.il2cpp.mem_skill_slots import convert as _conv
+                from plugins.star_resonance_plugin.mem.il2cpp.mem_skill_slots import convert as _conv
                 slots = _conv(cds, self.last_profession_id, server_time_offset_ms=None)
                 if slots:
                     self.state_mgr.update(skill_slots=slots)

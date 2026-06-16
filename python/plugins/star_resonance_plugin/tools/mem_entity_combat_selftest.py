@@ -29,7 +29,7 @@ from __future__ import annotations
 import os, struct, sys
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)
 if _ROOT not in sys.path: sys.path.insert(0,_ROOT)
-from mem_probe.il2cpp.mem_entity_combat import (
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import (
     EntityCombatReader, A_HP, A_MAX_HP, A_BREAK_STAGE, A_OVERDRIVE, A_STUN,
     A_EXT, A_MAX_EXT, A_SKILL_ID,
 )

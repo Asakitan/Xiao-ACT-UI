@@ -6,7 +6,7 @@
   - 高层数据 API: get_self_snapshot() -> SelfSnapshot
 
 主程序集成示例:
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
     src = StaticDpsSource()             # 自动选 bundle / 完整 dump
     snap = src.get_self_snapshot()      # 第一次 ~200s, 之后 <1ms
     print(snap.uid, snap.cur_hp, snap.max_hp)
@@ -24,10 +24,10 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_resolver import StaticResolver, open_resolver
-from mem_probe.il2cpp.bundle_loader import open_resolver_from_bundle
-from mem_probe.il2cpp.instance_cache import get_or_find_self
-from mem_probe.il2cpp.bundle_store import find_bundle_for_running_game
+from plugins.star_resonance_plugin.mem.il2cpp.static_resolver import StaticResolver, open_resolver
+from plugins.star_resonance_plugin.mem.il2cpp.bundle_loader import open_resolver_from_bundle
+from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import get_or_find_self
+from plugins.star_resonance_plugin.mem.il2cpp.bundle_store import find_bundle_for_running_game
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -157,7 +157,7 @@ class StaticDpsSource:
         with self._sr_lock:
             try:
                 # 复用 get_or_find_self 的校验逻辑: 强制不扫,直接读 cache
-                from mem_probe.il2cpp.instance_cache import _load, _key, _DEFAULT_CACHE
+                from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import _load, _key, _DEFAULT_CACHE
                 cache = _load(_DEFAULT_CACHE)
                 e = cache.get(_key(self.SELF_CLASS, self.SELF_SENTINEL_FIELD))
                 kp = sr.resolve_klass(self.SELF_CLASS)

@@ -16,7 +16,7 @@ from plugins.star_resonance_plugin.engines.mechanic_intelligence import (       
     MechanicClassifier, build_mechanic_shell, fill_geometry)
 from plugins.star_resonance_plugin.engines.boss_raid_engine import normalize_mechanic             # noqa: E402
 from plugins.star_resonance_plugin.engines.auto_dodge_director import AutoDodgeDirector           # noqa: E402
-from mem_probe.il2cpp.mem_dodge_context import DodgeContext         # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_dodge_context import DodgeContext         # noqa: E402
 
 
 class ClassifyTest(unittest.TestCase):

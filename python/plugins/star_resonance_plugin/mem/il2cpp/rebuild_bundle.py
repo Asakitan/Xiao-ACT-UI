@@ -22,15 +22,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(ROOT))
 
-from mem_probe.il2cpp.bundle_store import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.bundle_store import (  # noqa: E402
     compute_running_game_key, register_bundle,
 )
-from mem_probe.il2cpp.bundle_build import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.bundle_build import (  # noqa: E402
     DEFAULT_CLASSES, build_bundle, expand_referenced_classes,
 )
-from mem_probe.il2cpp.dump_cs_parser import DumpCsIndex  # noqa: E402
-from mem_probe.il2cpp.script_parser import ScriptIndex  # noqa: E402
-from mem_probe.il2cpp.mem_dump_metadata import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.dump_cs_parser import DumpCsIndex  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_dump_metadata import (  # noqa: E402
     find_metadata_in_process, dump_metadata,
 )
 from mem_probe.process import StarProcess  # noqa: E402

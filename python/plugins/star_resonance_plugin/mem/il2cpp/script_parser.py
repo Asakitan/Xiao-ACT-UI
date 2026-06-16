@@ -1,7 +1,7 @@
 """script_parser — 解析 Il2CppDumper 生成的 script.json.
 
 用法:
-    from mem_probe.il2cpp.script_parser import ScriptIndex
+    from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
     si = ScriptIndex.load("...path/script.json")
     si.find_klass("Zproto.UserFightAttr")  # -> RVA of *_TypeInfo
     si.find_var("Zproto.UserFightAttr")    # -> RVA of *_var (Il2CppType*)

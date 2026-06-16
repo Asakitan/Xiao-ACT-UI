@@ -27,9 +27,9 @@ ST = {0: "Idle", 1: "Singing(读条)", 2: "Skill(瞬发)", 8: "Action", 23: "Bre
 
 
 def main():
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-    from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
-    from mem_probe.il2cpp.mem_boss_action_reader import BossDurationProbe
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_provider import MemEntityProvider
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_action_reader import BossDurationProbe
     try:
         from tools.tablekit.name_tables import names as NR
     except Exception:

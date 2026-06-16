@@ -10,7 +10,7 @@ TCP 回退策略:
   - 默认模式: "memory" (启动时尝试内存, 失败提示用户).
 
 主程序集成:
-    from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
     provider = MemSelfStateProvider(
         on_uid_change=lambda uid: dps_tracker.set_self_uid(uid),
         on_hp_change=lambda cur,mx: hp_overlay.update(cur,mx),
@@ -34,8 +34,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource, SelfSnapshot
-from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource, SelfSnapshot
+from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
 from mem_probe import cy_memscan as _cy_memscan
 
 

@@ -24,9 +24,9 @@ HZ = 30.0
 
 
 def main():
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-    from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
-    from mem_probe.il2cpp.mem_boss_action_reader import BossDurationProbe
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_provider import MemEntityProvider
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_action_reader import BossDurationProbe
 
     src = StaticDpsSource(dump_id="fdc7111b")
     prov = MemEntityProvider(src)

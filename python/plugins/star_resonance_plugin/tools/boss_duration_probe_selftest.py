@@ -17,7 +17,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_boss_action_reader import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_action_reader import (  # noqa: E402
     BossDurationProbe,
     ENT_BUFFCOMP_OFF, ENT_STATEMACHINE_OFF, SM_CURSTATE_OFF, ACTOR_STATE_SINGING,
     BUFFCOMP_LIST_OFF, ZLIST_ITEMS_OFF, ZLIST_SIZE_OFF, ARR_LEN_OFF, ARR_ELEMS_OFF,

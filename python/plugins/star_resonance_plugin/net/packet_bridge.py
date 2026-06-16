@@ -522,7 +522,7 @@ class PacketBridge:
         except Exception:
             pass
         if fa is not None:
-            from mem_probe.il2cpp.field_authority import Source
+            from plugins.star_resonance_plugin.mem.il2cpp.field_authority import Source
             src = fa.source(component)
             if src == Source.MEMORY:
                 return 'memory'

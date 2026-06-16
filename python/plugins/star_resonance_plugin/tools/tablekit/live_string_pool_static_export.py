@@ -25,7 +25,7 @@ _SAO = os.path.dirname(os.path.dirname(_HERE))
 if _SAO not in sys.path:
     sys.path.insert(0, _SAO)
 
-from mem_probe.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 from mem_probe.process import StarProcess
 
 

@@ -25,8 +25,8 @@ _DIR = os.path.join(_ROOT, "assets", "boss_raids")
 def main():
     log = lambda m: print(m, flush=True)
     try:
-        from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-        from mem_probe.il2cpp.mem_field_geometry_reader import FieldGeometryReader
+        from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_field_geometry_reader import FieldGeometryReader
         src = StaticDpsSource()
     except Exception as e:
         log("游戏未开/连不上: %s" % str(e)[:80])

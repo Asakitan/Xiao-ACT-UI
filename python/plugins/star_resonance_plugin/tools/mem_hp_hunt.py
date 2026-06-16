@@ -13,9 +13,9 @@ from __future__ import annotations
 import argparse, struct, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)
 if _ROOT not in sys.path: sys.path.insert(0,_ROOT)
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.script_parser import ScriptIndex
-from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
 
 PLAUS = lambda p: bool(p and 0x10000 <= p <= 0x7FFFFFFFFFFF)
 

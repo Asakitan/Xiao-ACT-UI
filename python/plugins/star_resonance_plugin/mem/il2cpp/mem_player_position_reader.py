@@ -20,7 +20,7 @@ import math
 import struct
 from typing import Dict, Optional, Tuple
 
-from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
 
 ENTITY_CLASS = "Panda.ZGame.ZEntity"
 MOVEMOD_CLASS = "MoveModuleComp"

@@ -11,8 +11,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.instance_cache import (
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import (
     _DEFAULT_CACHE, _key, _load, _save, validate_cache_entry,
 )
 from mem_probe.process import StarProcessError

@@ -21,7 +21,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_attr_reader import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_attr_reader import (  # noqa: E402
     ZAttrReader, ENTRY_SIZE, ARRAY_ELEMS_OFF,
 )
 
@@ -139,7 +139,7 @@ def test_entity_integration():
     """F-C: synth ZEntity -> attrs_ -> calibrated ZAttrReader -> numeric fields."""
     print("test_entity_integration (F-C)")
     try:
-        from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader, EntitySnap
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader, EntitySnap
     except Exception as exc:  # heavy import chain (StaticDpsSource); skip if unavailable
         print(f"  [SKIP] mem_entity_mgr import failed: {exc}")
         return

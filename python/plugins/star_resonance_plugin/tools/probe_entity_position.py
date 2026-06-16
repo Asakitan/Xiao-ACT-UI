@@ -22,9 +22,9 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader, ENTITY_CLASS
-from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader, ENTITY_CLASS
+from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
 
 _MIN_PTR = 0x10000
 _MAX_PTR = 0x7FFF_FFFF_FFFF
@@ -112,7 +112,7 @@ def main(argv=None) -> int:
     print(f"[probe] attached, ga=0x{int(sr.ga):X}")
 
     if args.find_class:
-        from mem_probe.il2cpp.auto_registration_locator import (
+        from plugins.star_resonance_plugin.mem.il2cpp.auto_registration_locator import (
             find_ga_module, klass_fullname, KLASS_LO, KLASS_HI)
         try:
             import numpy as _np
@@ -155,7 +155,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.find_instance:
-        from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
+        from plugins.star_resonance_plugin.mem.il2cpp.auto_registration_locator import build_live_class_index
         idx = build_live_class_index(pm, {args.find_instance}, time_budget_s=60)
         kp = int(idx.get(args.find_instance, 0) or 0)
         if not kp:

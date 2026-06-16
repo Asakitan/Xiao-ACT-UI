@@ -25,7 +25,7 @@ if _SAO_AUTO_ROOT not in sys.path:
     sys.path.insert(0, _SAO_AUTO_ROOT)
 
 from mem_probe.process import StarProcess
-from mem_probe.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 
 
 _DEFAULT_DUMP_ID = "ef9ef95a"

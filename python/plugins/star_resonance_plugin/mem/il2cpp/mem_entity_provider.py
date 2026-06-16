@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
-from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import EntityCombatReader
 
 
 class MemEntityProvider:

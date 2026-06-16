@@ -24,13 +24,13 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader
-from mem_probe.il2cpp.mem_string_pool import (
+from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader
+from plugins.star_resonance_plugin.mem.il2cpp.mem_string_pool import (
     StringPoolBridge, POOL_CLS, _FALLBACK, _plaus, _is_cjk,
     CLASS_FIELDS_OFF, FI_NAME_OFF, FI_PARENT_OFF, FI_OFF_OFF, FI_STRIDE,
     STR_LEN_OFF, STR_CHARS_OFF, ARR_LEN_OFF, ARR_ELEMS_OFF, NATIVEARRAY_LEN_OFF,
 )
-from mem_probe.il2cpp import root_pointer_cache as _rpc
+from plugins.star_resonance_plugin.mem.il2cpp import root_pointer_cache as _rpc
 
 try:
     from mem_probe import cy_memscan as _cy
@@ -299,7 +299,7 @@ class MapNameReader:
             # launches hit the persisted per-version RVAs. The individual
             # resolve_klass calls below then just read the cache.
             try:
-                from mem_probe.il2cpp.klass_index import resolve_klasses
+                from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
                 resolve_klasses(self.pm, {POOL_CLS, SCENE_CLS, PROXY_CLS}, time_budget_s=90)
             except Exception:
                 pass
@@ -325,7 +325,7 @@ class MapNameReader:
 
 
 def _selftest():
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
     import time
     src = StaticDpsSource()
     _ = src.sr

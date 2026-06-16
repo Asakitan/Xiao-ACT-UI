@@ -22,7 +22,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe.process import StarProcess
-from mem_probe.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 from mem_probe import cy_memscan as _cy
 
 

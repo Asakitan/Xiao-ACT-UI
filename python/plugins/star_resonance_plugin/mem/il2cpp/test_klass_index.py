@@ -15,7 +15,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp import klass_index as ki
+from plugins.star_resonance_plugin.mem.il2cpp import klass_index as ki
 
 GA_BASE = 0x140000000
 GA_SIZE = 0x01000000

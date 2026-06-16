@@ -8,7 +8,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
 
 
 class FakeAnchorReader(AnchorMemoryReader):

@@ -25,13 +25,13 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.mem_entity_mgr import (
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import (
     EntityMgrReader, ENT_ATTRS_OFF, ENT_UUID_OFF, ENT_CONFIG_OFF,
     BOSS_DICT_OFF, MONSTER_DICT_OFF,
 )
-from mem_probe.il2cpp.mem_attr_reader import ZAttrReader, MIXDICT_OFF
-from mem_probe.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.mem_attr_reader import ZAttrReader, MIXDICT_OFF
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 
 ENTITY_MGR_CLASS = "Panda.ZGame.ZEntityMgr"
 A_HP, A_MAX_HP, A_BREAKING_STAGE = 11310, 11320, 455

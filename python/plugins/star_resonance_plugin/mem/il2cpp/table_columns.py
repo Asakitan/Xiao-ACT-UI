@@ -146,7 +146,7 @@ def select_dump_dir(out_root: str = _OUT_ROOT) -> Optional[Tuple[str, str]]:
     its out/<dump_id>/ dir holds both dump.cs and GameAssembly.dll; otherwise
     the newest out/ dir that has both artifacts."""
     try:
-        from mem_probe.il2cpp.bundle_store import find_bundle_for_running_game
+        from plugins.star_resonance_plugin.mem.il2cpp.bundle_store import find_bundle_for_running_game
         hit = find_bundle_for_running_game()
         if hit:
             with open(hit[0], "r", encoding="utf-8") as f:

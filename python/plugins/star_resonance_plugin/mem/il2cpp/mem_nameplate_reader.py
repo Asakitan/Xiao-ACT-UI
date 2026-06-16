@@ -222,8 +222,8 @@ class NameplateReader:
 
 def _selftest():
     import sys
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-    from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
 
     src = StaticDpsSource()
     snap = src.get_self_snapshot(force_rescan=False)

@@ -32,7 +32,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe.process import StarProcess, StarProcessError
-from mem_probe.il2cpp.mem_dump_metadata import (
+from plugins.star_resonance_plugin.mem.il2cpp.mem_dump_metadata import (
     find_metadata_in_process, MAGIC, _default_out_dir
 )
 

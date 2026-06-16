@@ -17,8 +17,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.dump_cs_parser import DumpCsIndex
-from mem_probe.il2cpp import auto_offsets as _ao
+from plugins.star_resonance_plugin.mem.il2cpp.dump_cs_parser import DumpCsIndex
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
 
 _BUNDLE = os.path.join(_HERE, "_cache", "bundle.json")
 

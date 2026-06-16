@@ -18,7 +18,7 @@ from __future__ import annotations
 import struct
 from typing import Dict, Optional
 
-from mem_probe.il2cpp.klass_index import resolve_klasses
+from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
 
 try:
     from mem_probe import cy_memscan as _cy

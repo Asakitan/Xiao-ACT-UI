@@ -20,7 +20,7 @@ import struct
 import time
 from typing import Optional, Tuple
 
-from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
 
 CAMMGR_CLASS = "Panda.ZGame.CameraManager"
 BRAIN_CLASS = "CinemachineBrain"
@@ -162,7 +162,7 @@ class CameraReader:
         self._resolve_offsets()
         pm = self._pm
         # 进程级共享类索引: 一遍 GA 扫服务所有 reader + 按版本持久化 RVA 暖启动
-        from mem_probe.il2cpp.klass_index import resolve_klasses
+        from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
         kp = int(resolve_klasses(pm, {CAMMGR_CLASS}, time_budget_s=40).get(CAMMGR_CLASS, 0) or 0)
         if not kp:
             return False

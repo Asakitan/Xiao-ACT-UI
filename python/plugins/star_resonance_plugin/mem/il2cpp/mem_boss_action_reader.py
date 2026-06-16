@@ -70,7 +70,7 @@ class BossDurationProbe:
         # auto-offset: ZEntity.stateMachine_/buffComp_, ZStateMachine.currentState_,
         # BuffComp.buffList_ by name from the dump (literal fallback). BuffItem/ZList
         # stay literal (BuffItem not in the curated bundle; ZList is an open generic).
-        from mem_probe.il2cpp import auto_offsets as _ao
+        from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
         ent = _ao.resolve(resolver, "Panda.ZGame.ZEntity", {
             "off_statemachine": ("stateMachine_", ENT_STATEMACHINE_OFF),
             "off_buffcomp": ("buffComp_", ENT_BUFFCOMP_OFF),

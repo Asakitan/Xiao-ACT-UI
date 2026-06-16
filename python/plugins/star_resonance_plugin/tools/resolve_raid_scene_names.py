@@ -31,8 +31,8 @@ def main():
     log = lambda m: print(m, flush=True)
     apply_ = "--apply" in sys.argv
     try:
-        from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-        from mem_probe.il2cpp.mem_string_pool import StringPoolBridge
+        from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_string_pool import StringPoolBridge
         src = StaticDpsSource()
     except Exception as e:
         log("游戏未开/连不上: %s" % str(e)[:100])

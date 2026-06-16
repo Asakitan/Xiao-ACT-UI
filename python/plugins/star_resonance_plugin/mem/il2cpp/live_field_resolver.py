@@ -63,7 +63,7 @@ class LiveFieldResolver:
             try:
                 # Process-wide shared index: one GA scan serves every reader and
                 # warm starts from the persisted per-version RVA cache.
-                from mem_probe.il2cpp.klass_index import resolve_klasses
+                from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
                 kp = int(resolve_klasses(self.pm, {class_name},
                                          time_budget_s=self._budget).get(class_name, 0) or 0)
             except Exception:

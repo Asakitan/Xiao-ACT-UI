@@ -24,7 +24,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp import mem_dump_metadata as mdm
+from plugins.star_resonance_plugin.mem.il2cpp import mem_dump_metadata as mdm
 
 DUMPER_EXE = os.path.join(_HERE, "bin", "Il2CppDumper.exe")
 EXPECTED_OUTPUTS = ("dump.cs", "script.json", "il2cpp.h")

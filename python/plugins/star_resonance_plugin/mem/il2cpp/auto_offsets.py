@@ -82,7 +82,7 @@ def live_resolver_of(resolver):
         cached = getattr(sr, "_live_field_resolver", None)
         if cached is not None:
             return cached or None                # False -> known-unavailable
-        from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+        from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
         lfr = LiveFieldResolver(pm, klass_resolver=getattr(sr, "resolve_klass", None))
         try:
             setattr(sr, "_live_field_resolver", lfr)

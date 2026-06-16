@@ -111,7 +111,7 @@ def convert(skill_cds, profession_id: int = 0,
 
 
 def _selftest():
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
     src = StaticDpsSource()
     snap = src.get_extended_snapshot()
     if not snap:

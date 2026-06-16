@@ -18,7 +18,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_boss_action_reader import BossActionTracker, BossDurationProbe  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_boss_action_reader import BossActionTracker, BossDurationProbe  # noqa: E402
 
 _passed = 0
 _failed = 0

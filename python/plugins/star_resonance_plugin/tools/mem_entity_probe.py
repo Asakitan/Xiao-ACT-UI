@@ -28,12 +28,12 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.mem_entity_mgr import (
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import (
     EntityMgrReader, A_HP, A_MAX_HP, A_BREAKING_STAGE, A_IN_OVERDRIVE,
     A_EXTINCTION, A_MAX_EXTINCTION, A_STUNNED, A_HATED_CHAR_ID, A_SKILL_ID,
 )
-from mem_probe.il2cpp.mem_attr_reader import ZAttrReader
+from plugins.star_resonance_plugin.mem.il2cpp.mem_attr_reader import ZAttrReader
 
 
 def _ga_base(src) -> int:

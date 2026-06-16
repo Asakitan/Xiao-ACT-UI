@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from mem_probe.il2cpp import auto_offsets as _ao
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
 
 _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
 ARRAY_ELEMS_OFF = 0x20               # Il2Cpp STRUCTURAL: array element ptrs start

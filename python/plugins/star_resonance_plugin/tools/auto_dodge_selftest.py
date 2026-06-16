@@ -17,7 +17,7 @@ if _ROOT not in sys.path:
 from plugins.star_resonance_plugin.engines.auto_dodge_director import (                       # noqa: E402
     AutoDodgeDirector, resolve_dodge_keys, world_vec_to_keys, direction_label,
 )
-from mem_probe.il2cpp.mem_camera_reader import (                # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_camera_reader import (                # noqa: E402
     _quat_forward_xz, _quat_right_xz, _quat_pitch_deg,
 )
 

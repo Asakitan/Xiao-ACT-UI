@@ -22,11 +22,11 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource        # noqa: E402
-from mem_probe.il2cpp import table_columns                           # noqa: E402
-from mem_probe.il2cpp.mem_config_table_reader import (               # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource        # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp import table_columns                           # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import (               # noqa: E402
     MemConfigTableReader, TABLE_CLASS)
-from mem_probe.il2cpp.mem_string_pool import StringPoolBridge        # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_string_pool import StringPoolBridge        # noqa: E402
 
 _CACHE = os.path.join(_ROOT, "assets", "name_tables", "static_id_name_cache.json")
 # 每表用哪些列做名字 (有就按序取第一个非空)

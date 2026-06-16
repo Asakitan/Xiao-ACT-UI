@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
 
-from mem_probe.il2cpp import auto_offsets as _ao
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
 
 _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
 
@@ -71,7 +71,7 @@ class ZoneReader:
         if getattr(self, "_zc_fields", None) is None:
             self._zc_fields = {}
             try:
-                from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+                from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
                 kp = self._pm.read_u64(zonecomp)
                 self._zc_fields = LiveFieldResolver(self._pm)._field_map(kp) or {}
             except Exception:
@@ -126,7 +126,7 @@ class ZoneReader:
         zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:
-            from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
             emr = EntityMgrReader(self._src)
             d = self._pm.read_u64(mgr_addr + zoff) or 0
             for key, zone in emr._read_dict_entries(d, max_entries=64):
@@ -148,7 +148,7 @@ class ZoneReader:
         zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:
-            from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
             emr = EntityMgrReader(self._src)
             emr.locate(0)        # 触发 off_ent_baseid 等 auto-offset 解析
             baseid_off = int(getattr(emr, "off_ent_baseid", ENT_BASEID_OFF) or ENT_BASEID_OFF)

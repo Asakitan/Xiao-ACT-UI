@@ -11,7 +11,7 @@ blobs in a flat dict-backed 'process memory', then asserts:
 
 No game required.  Run: python -m mem_probe.il2cpp.test_table_array_decode
 """
-from mem_probe.il2cpp.mem_config_table_reader import (
+from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import (
     MemConfigTableReader,
     ZLOADER_INTARRAYPOOL_OFF, ZLOADER_MEM_OBJ_OFF, ZLOADER_OFFSETS_OFF,
     ZLOADER_DATASIZE_OFF, ZLOADER_BUFRANGE_OFF,

@@ -19,7 +19,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.mem_state_anchor import (  # noqa: E402
+from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import (  # noqa: E402
     AnchorMemoryReader, AnchorPack, ResolvedSelf,
 )
 

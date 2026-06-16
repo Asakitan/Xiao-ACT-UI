@@ -20,7 +20,7 @@ from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from mem_probe import cy_memscan as _cy
-from mem_probe.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 from mem_probe.process import StarProcess
 
 

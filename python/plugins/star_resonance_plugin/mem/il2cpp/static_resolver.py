@@ -29,8 +29,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe.process import StarProcess
-from mem_probe.il2cpp.script_parser import ScriptIndex
-from mem_probe.il2cpp.dump_cs_parser import DumpCsIndex
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp.dump_cs_parser import DumpCsIndex
 from mem_probe import cy_memscan as _cy
 
 
@@ -96,7 +96,7 @@ class StaticResolver:
             try:
                 # Shared process index: one GA scan for the union of critical
                 # classes, warm-started from the persisted per-version RVAs.
-                from mem_probe.il2cpp.klass_index import resolve_klasses
+                from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
                 want = set(self._LIVE_CLASSES) | {class_name}
                 self._live_index = resolve_klasses(self.pm, want, time_budget_s=40)
             except Exception:

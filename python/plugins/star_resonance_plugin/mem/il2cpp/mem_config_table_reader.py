@@ -50,8 +50,8 @@ import struct
 import time
 from typing import Dict, Iterator, List, Optional, Tuple
 
-from mem_probe.il2cpp import auto_offsets
-from mem_probe.il2cpp.klass_index import resolve_klasses
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets
+from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
 
 try:
     from mem_probe import cy_memscan as _cy
@@ -570,7 +570,7 @@ class MemConfigTableReader:
 
 
 def _selftest():
-    from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
     src = StaticDpsSource()
     _ = src.sr  # trigger lazy open
     rd = MemConfigTableReader(src)

@@ -22,8 +22,8 @@ class FieldGeometryReader:
         """返回 [{name, shape, radius, inner}] —— FieldTable 全部带 Size 的领域几何。"""
         out = []
         try:
-            from mem_probe.il2cpp import table_columns
-            from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader
+            from plugins.star_resonance_plugin.mem.il2cpp import table_columns
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader
             rd = MemConfigTableReader(self._src)
             cls = "Bokura.FieldTableBase"
             C = {k: v[0] for k, v in

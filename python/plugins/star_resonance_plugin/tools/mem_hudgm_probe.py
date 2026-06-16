@@ -66,7 +66,7 @@ def main():
     hgr=ks.get("HudGmRender"); hgk=ks.get("HudGm")
     hudgms=[]
     if hgr:
-        from mem_probe.il2cpp.resolver import Il2CppResolver
+        from plugins.star_resonance_plugin.mem.il2cpp.resolver import Il2CppResolver
         insts=Il2CppResolver(pm).locate_instances(hgr, max_hits=16)
         print(f"HudGmRender instances: {len(insts)}")
         for inst in insts:
@@ -74,7 +74,7 @@ def main():
             if P(dct): hudgms+=walk_dict(pm,dct)
     if not hudgms and hgk:
         print("falling back to HudGm instance scan")
-        from mem_probe.il2cpp.resolver import Il2CppResolver
+        from plugins.star_resonance_plugin.mem.il2cpp.resolver import Il2CppResolver
         hudgms=Il2CppResolver(pm).locate_instances(hgk, max_hits=256)
     print(f"HudGm objects: {len(hudgms)}")
     for hg in hudgms[:50]:

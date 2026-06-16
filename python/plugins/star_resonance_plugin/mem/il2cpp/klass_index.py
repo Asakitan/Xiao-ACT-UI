@@ -36,7 +36,7 @@ import os
 import threading
 from typing import Dict, Iterable, Optional, Set
 
-from mem_probe.il2cpp.auto_registration_locator import (
+from plugins.star_resonance_plugin.mem.il2cpp.auto_registration_locator import (
     build_live_class_index, find_ga_module, klass_fullname,
 )
 

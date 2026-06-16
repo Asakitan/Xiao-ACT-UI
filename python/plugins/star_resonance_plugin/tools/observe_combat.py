@@ -23,9 +23,9 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
-from mem_probe.il2cpp.mem_player_position_reader import PlayerPositionReader
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
+from plugins.star_resonance_plugin.mem.il2cpp.mem_player_position_reader import PlayerPositionReader
 
 _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
 # ZEntityMgr dict 偏移 (实测): 见 zoneDict_=0x90 levelEntityDict_=0x98
@@ -81,7 +81,7 @@ def main(argv=None):
     pm = src.sr.pm
     emr = EntityMgrReader(src)
     rd = PlayerPositionReader(src)
-    from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
+    from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
     lfr = LiveFieldResolver(pm, klass_resolver=getattr(src.sr, "resolve_klass", None))
 
     mgr = emr.locate(0)

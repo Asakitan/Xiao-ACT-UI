@@ -26,7 +26,7 @@ _SAO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if _SAO not in sys.path:
     sys.path.insert(0, _SAO)
 
-from mem_probe.il2cpp import root_pointer_cache as _rpc
+from plugins.star_resonance_plugin.mem.il2cpp import root_pointer_cache as _rpc
 
 
 GAME_KEY = "deadbeef" * 8

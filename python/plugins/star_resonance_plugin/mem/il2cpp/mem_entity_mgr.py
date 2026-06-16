@@ -36,10 +36,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Tuple
 
-from mem_probe.il2cpp.static_dps_source import StaticDpsSource
-from mem_probe.il2cpp.script_parser import ScriptIndex
-from mem_probe.il2cpp import auto_offsets as _ao
-from mem_probe.il2cpp import root_pointer_cache as _rpc
+from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
+from plugins.star_resonance_plugin.mem.il2cpp import root_pointer_cache as _rpc
 
 try:
     from mem_probe import cy_memscan as _cy
@@ -250,7 +250,7 @@ class EntityMgrReader:
         #    memory (no dump, no script.json, version-robust, onedir-safe). This is
         #    the production path for frozen clients and for new game versions.
         try:
-            from mem_probe.il2cpp.klass_index import resolve_klasses
+            from plugins.star_resonance_plugin.mem.il2cpp.klass_index import resolve_klasses
             idx = resolve_klasses(sr.pm, {ENTITY_MGR_CLASS}, time_budget_s=30)
             kp = int(idx.get(ENTITY_MGR_CLASS, 0) or 0)
             if kp and self._klass_name(kp) == "ZEntityMgr":

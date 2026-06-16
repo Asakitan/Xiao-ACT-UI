@@ -25,9 +25,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.il2cpp import dump_tool, dump_cs_parser, bundle_build, bundle_store
-from mem_probe.il2cpp import mem_dump_metadata as mdm
-from mem_probe.il2cpp.instance_cache import clear_cache
+from plugins.star_resonance_plugin.mem.il2cpp import dump_tool, dump_cs_parser, bundle_build, bundle_store
+from plugins.star_resonance_plugin.mem.il2cpp import mem_dump_metadata as mdm
+from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import clear_cache
 
 
 # Single source of truth for the curated class set lives in bundle_build; the
@@ -59,7 +59,7 @@ def ensure_current(*, auto_dump: bool = False, background: bool = True,
     key = info[0]
     if bundle_store.find_bundle_for_key(key):
         return "current"
-    from mem_probe.il2cpp.dump_tool import DUMPER_EXE
+    from plugins.star_resonance_plugin.mem.il2cpp.dump_tool import DUMPER_EXE
     if not (auto_dump and os.path.isfile(DUMPER_EXE)):
         return "healed-live"   # live field resolver self-heals; bundle is optional
     if background:
