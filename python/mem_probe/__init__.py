@@ -12,7 +12,7 @@ at runtime via ``unified_source.set_bridge_classes()``.  The package itself
 has no game-specific imports.
 
 All readers rely on ``PROCESS_VM_READ``; admin shell is mandatory.
-Nothing in this package mutates the target process.
+Write path requires driver backend (Tier B+); see ``StarProcess.write_bytes``.
 """
 from __future__ import annotations
 

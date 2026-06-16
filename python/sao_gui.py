@@ -217,17 +217,17 @@ from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin  # noqa: E4
 from gui_modules.sao_gui_status_updater_mixin import SAOPlayerGUIStatusUpdaterMixin  # noqa: E402
 from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin  # noqa: E402
 from gui_modules.sao_gui_engine_lifecycle_mixin import SAOPlayerGUIEngineLifecycleMixin  # noqa: E402
-from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin  # noqa: E402
+# Game mixins (PacketCallbacksMixin/DamageEventsMixin) moved to plugin in 5.0.0
 from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin  # noqa: E402
 from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin  # noqa: E402
 from gui_modules.sao_gui_lifecycle_mixin import SAOPlayerGUILifecycleMixin  # noqa: E402
 from gui_modules.sao_gui_panel_fx_mixin import SAOPlayerGUIPanelFxMixin  # noqa: E402
 from gui_modules.sao_gui_link_animation_mixin import SAOPlayerGUILinkAnimationMixin  # noqa: E402
-from gui_modules.sao_gui_damage_events_mixin import SAOPlayerGUIDamageEventsMixin  # noqa: E402
+# SAOPlayerGUIDamageEventsMixin → moved to plugin
 from gui_modules.sao_gui_misc_mixin import SAOPlayerGUIMiscMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIActionsMixin, SAOPlayerGUIEngineTogglesMixin, SAOPlayerGUIDpsThemeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIEngineLifecycleMixin, SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIDamageEventsMixin, SAOPlayerGUIMiscMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIActionsMixin, SAOPlayerGUIEngineTogglesMixin, SAOPlayerGUIDpsThemeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIEngineLifecycleMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
