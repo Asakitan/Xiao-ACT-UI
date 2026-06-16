@@ -217,7 +217,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
             "  eval — evaluate a Python expression (pass 'expression')\n"
             "  exec — execute Python code block (pass 'code')\n"
             "\n"
-            "Plugin-provided actions (available when a game plugin is loaded):\n"
+            "Star Resonance plugin actions (available when the SR plugin is loaded):\n"
             "  game_state — player name, level, HP, scene\n"
             "  entity_list — all visible entities\n"
             "  dps_summary — current combat DPS table\n"
