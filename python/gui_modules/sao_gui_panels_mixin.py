@@ -93,16 +93,8 @@ class SAOPlayerGUIPanelsMixin:
     """Mixin bundling commander + panel-visibility + settings toggles."""
 
     def _toggle_commander_panel(self):
-        """打开/关闭 Commander 面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._commander_panel:
-            self._commander_panel = CommanderPanel(self.root)
-        if self._commander_panel.is_visible():
-            self._commander_panel.hide()
-        else:
-            self._commander_panel.show()
-            self._push_commander_data()
-            self.root.after(120, lambda: self._raise_panel_window(self._commander_panel))
+        """Commander 面板 — 游戏插件覆盖。"""
+        pass
 
     def _toggle_ai_editor_panel(self):
         """启动独立 AI Editor GUI 窗口 (pywebview)."""
@@ -430,56 +422,19 @@ class SAOPlayerGUIPanelsMixin:
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_skill_drilldown_panel))
 
-    @_probe.decorate('ui.commander_push')
     def _push_commander_data(self):
-        """Build + push a snapshot to the Commander panel."""
-        if not self._commander_panel or not self._commander_panel.is_visible():
-            return
-        try:
-            bridge = getattr(self, '_packet_engine', None)
-            if bridge and hasattr(bridge, 'get_commander_data'):
-                data = bridge.get_commander_data()
-            else:
-                # status 让面板能区分「没队伍」和「数据源还没起来」
-                data = {'members': [], 'team_id': 0,
-                        'leader_uid': 0, 'dungeon_id': 0,
-                        'status': 'backend_not_ready'}
-            _sig = commander_data_signature(data)
-            if _sig != self._last_commander_push_sig:
-                self._last_commander_push_sig = _sig
-                self._commander_panel.update(data)
-        except Exception as exc:
-            # 推送循环里持续失败 60s 只记一次, 面板空白时控制台能看到根因。
-            now = time.monotonic()
-            if now - getattr(self, '_commander_push_fail_at', 0.0) >= 60.0:
-                self._commander_push_fail_at = now
-                print(f'[Commander] data push failed: {exc}')
+        """Commander data push — 游戏插件覆盖。"""
+        pass
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
-        panels = [
-            ('status',  self._status_panel),
-            ('updater', self._update_panel),
-            ('autokey_quick', getattr(self._autokey_panel, '_win', None)),
-            ('bossraid_quick', getattr(self._bossraid_panel, '_win', None)),
-            ('autokey_detail', getattr(self._autokey_detail_panel, '_win', None)),
-            ('bossraid_detail', getattr(self._bossraid_detail_panel, '_win', None)),
-            ('commander', getattr(self._commander_panel, '_win', None)),
-            ('act_plugin_manager', getattr(self._act_plugin_manager_panel, '_win', None)),
-            ('act_trigger_timer', getattr(self._act_trigger_timer_panel, '_win', None)),
-            ('act_data_source_health', getattr(self._act_data_source_health_panel, '_win', None)),
-            ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
-            ('act_offline_import', getattr(self._act_offline_import_panel, '_win', None)),
-            ('act_timeline_vcr', getattr(self._act_timeline_vcr_panel, '_win', None)),
-            ('act_aggregate', getattr(self._act_aggregate_panel, '_win', None)),
-            ('act_action_log', getattr(self._act_action_log_panel, '_win', None)),
-            ('act_death_recap', getattr(self._act_death_recap_panel, '_win', None)),
-            ('act_graph_timeseries', getattr(self._act_graph_timeseries_panel, '_win', None)),
-            ('act_combatant_drilldown', getattr(self._act_combatant_drilldown_panel, '_win', None)),
-            ('act_skill_drilldown', getattr(self._act_skill_drilldown_panel, '_win', None)),
-            ('mem_scope', getattr(self._mem_scope_panel, '_win', None)),
-            ('ai_editor', getattr(self._ai_editor_panel, '_win', None)),
-        ]
+        panels = []
+        for attr in vars(self):
+            if attr.endswith('_panel') and attr.startswith('_'):
+                obj = getattr(self, attr, None)
+                if obj is not None:
+                    win = getattr(obj, '_win', obj)
+                    panels.append((attr.strip('_'), win))
 
         if not self._panels_hidden:
             # ── 隐藏 ──
@@ -590,45 +545,19 @@ class SAOPlayerGUIPanelsMixin:
         self._set_setting('sound_volume', nv)
 
     def _toggle_buffmon_enabled(self):
-        cur = bool(self._get_setting('buffmon_enabled', True))
-        new = not cur
-        self._set_setting('buffmon_enabled', new)
-        for ov in (self._self_buff_overlay, self._boss_buff_overlay):
-            try:
-                if ov is not None:
-                    ov.set_enabled(new)
-            except Exception:
-                pass
-        self._refresh_menu_if_open()
+        """Buff 监视器切换 — 游戏插件覆盖。"""
+        pass
 
     def _cycle_boss_bar_mode(self):
-        modes = ['boss_raid', 'always', 'off']
-        cur = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-        idx = modes.index(cur) if cur in modes else 0
-        nxt = modes[(idx + 1) % len(modes)]
-        self._set_setting('boss_bar_mode', nxt)
-        self._refresh_menu_if_open()
+        """Boss 血条模式切换 — 游戏插件覆盖。"""
+        pass
 
     def _get_mem_data_source(self) -> str:
-        mode = str(self._get_setting('mem_data_source', 'tcp') or 'tcp').strip().lower()
-        return mode if mode in ('tcp', 'memory', 'hybrid', 'auto') else 'tcp'
+        return str(self._get_setting('mem_data_source', 'tcp') or 'tcp').strip().lower()
 
     def _cycle_mem_data_source(self):
-        modes = ['tcp', 'hybrid', 'auto', 'memory']
-        cur = self._get_mem_data_source()
-        nxt = modes[(modes.index(cur) + 1) % len(modes)]
-        self._set_setting('mem_data_source', nxt)
-        labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
-        try:
-            self._reconfigure_data_engines()
-        except Exception as exc:
-            self._update_status_panel()
-            self._refresh_menu_if_open()
-            self._show_entity_alert('DATA SOURCE', f'切到 {labels.get(nxt, nxt.upper())} 后引擎重启失败: {exc}', display_time=4.0)
-            return
-        self._update_status_panel()
-        self._refresh_menu_if_open()
-        self._show_entity_alert('DATA SOURCE', f'已切换到 {labels.get(nxt, nxt.upper())}', display_time=2.4)
+        """数据源切换 — 游戏插件覆盖。"""
+        pass
 
     # ══════════════════════════════════════════════
     #  其他功能
