@@ -1,0 +1,1241 @@
+/* Star Resonance plugin — game-specific menu CSS */
+/* Extracted from menu.html during 5.0.0 restructure */
+
+/* === Burst Slot Grid === */
+/* Slot checkbox grid */
+.slot-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+}
+.slot-chk {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px; height: 32px;
+    border: 1px solid rgba(244, 244, 244, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(238,239,233,0.84), rgba(214,216,205,0.55));
+    font-family: var(--font-sao);
+    font-size: 11px;
+    color: rgba(97, 98, 86, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.slot-chk.active {
+    background: linear-gradient(180deg, rgba(162,241,255,0.38), rgba(104,228,255,0.18));
+    border-color: rgba(104, 228, 255, 0.6);
+    color: rgba(100, 99, 100, 0.95);
+    box-shadow: 0 0 12px rgba(104, 228, 255, 0.2), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.slot-chk:hover {
+    border-color: rgba(243, 175, 18, 0.6);
+    transform: translateY(-1px);
+}
+/* Mode selector buttons */
+.mode-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+.mode-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid rgba(244, 244, 244, 0.4);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(223,225,217,0.52));
+    font-family: var(--font-sao);
+
+/* === Auto-Key UI === */
+.child-menu.auto-key-menu li {
+    width: 860px;
+}
+.auto-key-shell-row {
+    align-items: flex-start;
+}
+.auto-key-shell {
+    width: 100%;
+    min-height: 560px;
+}
+.auto-key-runtime {
+    width: 100%;
+    margin-top: 10px;
+    padding: 11px 14px;
+    border: 1px solid rgba(244, 244, 244, 0.38);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(226,228,220,0.46));
+    color: rgba(100, 99, 100, 0.82);
+    font-size: 10px;
+    letter-spacing: 0.6px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+}
+.auto-key-tabs {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 1px solid rgba(244, 244, 244, 0.42);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(224,226,218,0.56));
+    color: rgba(100, 99, 100, 0.78);
+    font-family: var(--font-sao);
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.auto-key-tab:hover {
+    border-color: rgba(243, 175, 18, 0.5);
+    transform: translateY(-1px);
+}
+.auto-key-tab.active {
+    background: linear-gradient(180deg, rgba(175,247,255,0.38), rgba(104,228,255,0.18));
+    border-color: rgba(104, 228, 255, 0.6);
+    color: rgba(100, 99, 100, 0.95);
+    box-shadow: 0 0 14px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.auto-key-panel {
+    display: none;
+    width: 100%;
+}
+.auto-key-panel.show {
+    display: block;
+}
+.auto-key-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-btn {
+    border: 1px solid rgba(244, 244, 244, 0.42);
+    border-radius: 9px;
+    padding: 8px 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(224,226,218,0.56));
+    color: rgba(100, 99, 100, 0.85);
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 0.9px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.auto-key-btn:hover {
+    border-color: rgba(243, 175, 18, 0.5);
+    transform: translateY(-1px);
+}
+.auto-key-btn:disabled {
+    opacity: 0.46;
+    cursor: not-allowed;
+    transform: none;
+    border-color: rgba(244, 244, 244, 0.32);
+    box-shadow: none;
+}
+.auto-key-btn.primary {
+    background: linear-gradient(180deg, rgba(175,247,255,0.42), rgba(104,228,255,0.20));
+    border-color: rgba(104, 228, 255, 0.58);
+}
+.auto-key-btn.warn {
+    background: linear-gradient(180deg, rgba(255,244,232,0.90), rgba(248,214,168,0.56));
+    border-color: rgba(243, 175, 18, 0.45);
+}
+.auto-key-btn.card-more {
+    padding-top: 7px;
+    padding-bottom: 7px;
+}
+.auto-key-list,
+.auto-key-cloud-results,
+.auto-key-action-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    max-height: 430px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.auto-key-list::-webkit-scrollbar,
+.auto-key-cloud-results::-webkit-scrollbar,
+.auto-key-action-list::-webkit-scrollbar {
+    width: 5px;
+}
+.auto-key-list::-webkit-scrollbar-thumb,
+.auto-key-cloud-results::-webkit-scrollbar-thumb,
+.auto-key-action-list::-webkit-scrollbar-thumb {
+    background: var(--cyan);
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.auto-key-list::-webkit-scrollbar-thumb:hover,
+.auto-key-cloud-results::-webkit-scrollbar-thumb:hover,
+.auto-key-action-list::-webkit-scrollbar-thumb:hover {
+    background: var(--cyan-strong);
+    opacity: 0.9;
+}
+.auto-key-profile,
+.auto-key-cloud-card,
+.auto-key-action-card {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid rgba(244, 244, 244, 0.38);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(237,239,232,0.74));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.auto-key-profile.active {
+    border-color: rgba(104, 228, 255, 0.62);
+    box-shadow: 0 0 18px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.auto-key-profile.selected {
+    border-color: rgba(243, 175, 18, 0.48);
+}
+.auto-key-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.auto-key-card-title {
+    min-width: 0;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    color: rgba(44, 52, 59, 0.96);
+    letter-spacing: 0.6px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+}
+.auto-key-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-bottom: 10px;
+    color: rgba(78, 87, 93, 0.84);
+    font-size: 11px;
+    line-height: 1.45;
+}
+.auto-key-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(244, 244, 244, 0.38);
+    background: rgba(255,255,255,0.72);
+    font-size: 10px;
+    letter-spacing: 0.7px;
+}
+.auto-key-pill.active {
+    border-color: rgba(104, 228, 255, 0.56);
+    color: rgba(48, 86, 92, 0.92);
+}
+.auto-key-pill.warn {
+    border-color: rgba(243, 175, 18, 0.45);
+    color: rgba(126, 84, 14, 0.92);
+}
+.auto-key-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.auto-key-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 14px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-grid.compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.auto-key-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.auto-key-field.span-2 {
+    grid-column: span 2;
+}
+.auto-key-field.span-3 {
+    grid-column: span 3;
+}
+.auto-key-field label {
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    color: rgba(74, 92, 104, 0.88);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+}
+.auto-key-field input,
+.auto-key-field select,
+.auto-key-field textarea {
+    width: 100%;
+    border: 1px solid rgba(244, 244, 244, 0.38);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(231,233,226,0.58));
+    color: rgba(49, 55, 60, 0.92);
+    padding: 10px 12px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    outline: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+}
+.auto-key-field textarea {
+    min-height: 108px;
+    resize: vertical;
+    line-height: 1.5;
+}
+.auto-key-field input:focus,
+.auto-key-field select:focus,
+.auto-key-field textarea:focus {
+    border-color: rgba(104, 228, 255, 0.58);
+    box-shadow: 0 0 0 3px rgba(104, 228, 255, 0.10);
+}
+.auto-key-empty {
+    width: 100%;
+    padding: 20px 12px;
+    text-align: center;
+    color: rgba(95, 101, 108, 0.78);
+    font-size: 12px;
+    line-height: 1.6;
+}
+.auto-key-condition-note {
+    margin-top: 8px;
+    color: rgba(91, 96, 103, 0.82);
+    font-size: 11px;
+    line-height: 1.5;
+}
+.auto-key-mono {
+    font-family: Consolas, 'Courier New', monospace;
+    letter-spacing: 0;
+}
+.item_box,
+.cb_position,
+.leftInfo {
+    transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+}
+.position.auto-key-layout .item_box {
+    transform: translateX(-156px);
+}
+.position.auto-key-layout .cb_position {
+    transform: translateX(-128px);
+}
+.position.auto-key-layout .leftInfo {
+    transform: translateX(-108px);
+}
+.child-menu.auto-key-menu {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
+}
+.child-menu.auto-key-menu li {
+    width: 100%;
+}
+.child-menu.auto-key-menu .widget-row {
+    width: 100%;
+}
+.auto-key-shell {
+    min-height: min(calc(100vh - 96px), 820px);
+    display: flex;
+    flex-direction: column;
+}
+.auto-key-panel.show {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-list,
+.auto-key-cloud-results,
+.auto-key-action-list {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-editor-layout,
+.auto-key-cloud-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-actions-section,
+.auto-key-cloud-results-section {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+.auto-key-section {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid rgba(244, 244, 244, 0.38);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(235,237,231,0.76));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.44);
+}
+.auto-key-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.auto-key-section-title {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    color: rgba(44, 52, 59, 0.96);
+    letter-spacing: 0.6px;
+}
+.auto-key-section-note {
+    max-width: 520px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(86, 92, 98, 0.78);
+    text-align: right;
+}
+.auto-key-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+}
+.auto-key-summary-item {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(244, 244, 244, 0.34);
+    border-radius: 11px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(229,231,224,0.54));
+}
+.auto-key-summary-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    color: rgba(97, 98, 86, 0.72);
+}
+.auto-key-summary-value {
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(44, 52, 59, 0.94);
+    word-break: break-word;
+}
+.auto-key-summary-value.muted {
+    color: rgba(95, 101, 108, 0.72);
+}
+.auto-key-details {
+    width: 100%;
+    margin-top: 12px;
+    border: 1px solid rgba(244, 244, 244, 0.34);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.52);
+    overflow: hidden;
+}
+.auto-key-details summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 11px 14px;
+    font-size: 12px;
+    color: rgba(74, 92, 104, 0.88);
+    user-select: none;
+}
+.auto-key-details summary::-webkit-details-marker {
+    display: none;
+}
+.auto-key-details[open] summary {
+    border-bottom: 1px solid rgba(244, 244, 244, 0.26);
+}
+.auto-key-details-body {
+    padding: 12px 14px 14px;
+}
+.auto-key-cloud-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.auto-key-cloud-meta .auto-key-pill {
+    min-height: 24px;
+}
+.auto-key-status-good {
+    border-color: rgba(104, 228, 255, 0.58);
+    color: rgba(48, 86, 92, 0.96);
+}
+.auto-key-status-warn {
+    border-color: rgba(243, 175, 18, 0.5);
+    color: rgba(126, 84, 14, 0.96);
+}
+.auto-key-status-error {
+    border-color: rgba(210, 88, 88, 0.45);
+    color: rgba(147, 45, 45, 0.92);
+}
+.auto-key-condition-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+}
+.auto-key-condition-card {
+    padding: 12px;
+    border: 1px solid rgba(244, 244, 244, 0.34);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(231,233,226,0.58));
+}
+.auto-key-condition-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.auto-key-condition-title {
+    font-size: 12px;
+    color: rgba(100, 99, 100, 0.84);
+    letter-spacing: 0.5px;
+}
+.auto-key-condition-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+}
+.auto-key-json-status {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: rgba(91, 96, 103, 0.82);
+}
+.auto-key-empty.compact {
+    padding: 14px 12px;
+    border: 1px dashed rgba(244, 244, 244, 0.45);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.52);
+}
+@media (max-width: 1200px) {
+    .child-menu.auto-key-menu {
+        width: min(88vw, 940px);
+        min-width: min(88vw, 940px);
+        max-width: calc(100vw - 120px);
+        top: -18px;
+    }
+    .child-menu.boss-raid-menu {
+        width: min(88vw, 1040px);
+        min-width: min(88vw, 1040px);
+        max-width: calc(100vw - 120px);
+        top: -18px;
+    }
+    .child-menu.auto-key-menu li {
+        width: 100%;
+    }
+    .child-menu.boss-raid-menu li {
+        width: 100%;
+    }
+    .position.auto-key-layout .item_box,
+    .position.auto-key-layout .cb_position,
+    .position.auto-key-layout .leftInfo {
+        transform: translateX(-72px);
+    }
+    .boss-raid-summary-grid,
+    .auto-key-summary-grid,
+    .auto-key-condition-grid,
+    .boss-raid-grid.compact,
+    .auto-key-grid.compact {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (max-width: 920px) {
+    .child-menu.auto-key-menu {
+        width: min(92vw, 760px);
+        min-width: min(92vw, 760px);
+        max-width: calc(100vw - 48px);
+    }
+    .child-menu.boss-raid-menu {
+        width: min(92vw, 760px);
+        min-width: min(92vw, 760px);
+        max-width: calc(100vw - 48px);
+    }
+    .position.auto-key-layout .item_box,
+    .position.auto-key-layout .cb_position,
+    .position.auto-key-layout .leftInfo {
+        transform: none;
+    }
+    .boss-raid-summary-grid,
+    .auto-key-summary-grid,
+    .boss-raid-grid,
+    .auto-key-grid.compact {
+        grid-template-columns: 1fr;
+    }
+    .boss-raid-field.span-2 {
+        grid-column: span 1;
+    }
+    .auto-key-field.span-3 {
+        grid-column: span 1;
+    }
+    .auto-key-field.span-2 {
+        grid-column: span 1;
+    }
+    .boss-raid-section-head,
+    .auto-key-section-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .boss-raid-section-note,
+    .auto-key-section-note {
+        max-width: none;
+        text-align: left;
+    }
+}
+.source-name {
+    width: 86px;
+    flex: 0 0 86px;
+    color: rgba(80, 82, 70, 0.84);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    letter-spacing: 0.9px;
+}
+.source-row .mode-group {
+    flex-direction: row;
+    gap: 8px;
+}
+.source-row .mode-btn {
+    text-align: center;
+}
+.source-note {
+    padding: 10px 0 4px;
+    color: rgba(84, 86, 74, 0.64);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    letter-spacing: 0.35px;
+    line-height: 1.6;
+}
+
+/* Active circle */
+.item.active {
+    border: 2px solid var(--circle-active-border) !important;
+    box-shadow: none;
+}
+.item.active .in-circle {
+    background: var(--circle-active-bg) !important;
+    box-shadow: none;
+}
+.item.active .in-circle i,
+.item.active .in-circle .sao-icon {
+    color: var(--circle-active-icon) !important;
+}
+
+/* Hover */
+.item:hover .in-circle {
+    background: var(--circle-hover-bg);
+    transform: scale(1.02);
+}
+.item:hover .in-circle i,
+.item:hover .in-circle .sao-icon {
+    color: var(--circle-hover-icon);
+}
+.item:hover {
+    border: 2px solid var(--sao-cyan);
+    transform: translateX(-2px);
+}
+
+/* === Boss-Raid UI === */
+/* ═══════════════════════════════════════
+   Boss Raid Panel — mirrors Auto-Key styles
+   ═══════════════════════════════════════ */
+.child-menu.boss-raid-menu {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
+}
+.child-menu.boss-raid-menu li { width: 100%; }
+.child-menu.boss-raid-menu .widget-row { width: 100%; }
+.boss-raid-runtime {
+    font-size: 12px;
+    font-family: var(--font-sao);
+    color: rgba(88, 152, 190, 0.90);
+    margin: 4px 0 2px;
+    letter-spacing: 1px;
+}
+.boss-raid-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+    margin: 8px 0 0;
+}
+.boss-raid-shell-row {
+    align-items: flex-start;
+}
+.boss-raid-shell {
+    width: 100%;
+    min-height: min(calc(100vh - 96px), 820px);
+    display: flex; flex-direction: column;
+}
+.boss-raid-panel { display: none; }
+.boss-raid-panel.show {
+    display: flex; flex-direction: column; gap: 12px;
+    min-height: 0; flex: 1 1 auto; width: 100%;
+}
+.boss-raid-editor-layout,
+.boss-raid-cloud-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+    width: 100%;
+}
+.boss-raid-cloud-results-section {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+.boss-raid-tabs {
+    display: flex; gap: 6px; margin-bottom: 10px;
+}
+.boss-raid-tab {
+    flex: 0 0 auto;
+    padding: 4px 14px;
+    border: 1px solid rgba(244, 244, 244, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.8px;
+    color: rgba(54, 60, 66, 0.88); cursor: pointer; transition: 0.15s;
+}
+.boss-raid-tab.active, .boss-raid-tab:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24, 54, 76, 0.95);
+}
+/* Boss bar mode selector */
+.boss-bar-mode-group {
+    display: flex; gap: 4px; margin: 4px 0; flex-wrap: wrap;
+}
+.boss-bar-mode-btn {
+    flex: 1 1 0; min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid rgba(244, 244, 244, 0.45);
+    border-radius: 6px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 10px; letter-spacing: 0.4px;
+    color: rgba(54, 60, 66, 0.88); cursor: pointer; transition: 0.15s;
+    text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.boss-bar-mode-btn.active, .boss-bar-mode-btn:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24, 54, 76, 0.95);
+}
+.boss-raid-toolbar {
+    display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0;
+}
+.boss-raid-btn {
+    padding: 5px 14px;
+    border: 1px solid rgba(244, 244, 244, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.6px;
+    cursor: pointer; color: rgba(54,60,66,0.88); transition: 0.15s;
+}
+.boss-raid-btn:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+}
+.boss-raid-btn.primary {
+    background: linear-gradient(180deg, rgba(104,186,220,0.38), rgba(80,164,200,0.32));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24,54,76,0.95);
+}
+.boss-raid-btn.danger {
+    color: rgba(180,40,40,0.88);
+    border-color: rgba(180,40,40,0.32);
+}
+.boss-raid-section {
+    width: 100%; padding: 14px 16px;
+    border: 1px solid rgba(244, 244, 244,0.38); border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(235,237,231,0.76));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.44);
+}
+.boss-raid-section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;
+}
+.boss-raid-section-title {
+    font-family: var(--font-ui); font-size: 14px;
+    color: rgba(44,52,59,0.96); letter-spacing: 0.6px;
+}
+.boss-raid-section-note {
+    max-width: 520px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(86, 92, 98, 0.78);
+    text-align: right;
+}
+.boss-raid-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+}
+.boss-raid-grid.compact { gap: 6px 10px; }
+.boss-raid-field { display: flex; flex-direction: column; gap: 2px; }
+.boss-raid-field.span-2 { grid-column: span 2; }
+.boss-raid-field label {
+    font-size: 11px; color: rgba(86,92,98,0.78); letter-spacing: 0.4px;
+}
+.boss-raid-field input,
+.boss-raid-field textarea,
+.boss-raid-field select {
+    width: 100%;
+    padding: 5px 10px;
+    border: 1px solid rgba(244, 244, 244,0.45); border-radius: 8px;
+    font-family: var(--font-ui); font-size: 12px;
+    background: rgba(255,255,255,0.7);
+}
+.boss-raid-field textarea { min-height: 44px; resize: vertical; }
+.boss-raid-list, .boss-raid-cloud-results {
+    max-height: none; min-height: 0; flex: 1 1 auto; overflow: auto;
+}
+.boss-raid-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+    margin-top: 12px;
+}
+.boss-raid-summary-item {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(244, 244, 244, 0.34);
+    border-radius: 11px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(229,231,224,0.54));
+}
+.boss-raid-summary-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    color: rgba(97, 98, 86, 0.72);
+}
+.boss-raid-summary-value {
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(44, 52, 59, 0.94);
+    word-break: break-word;
+}
+.boss-raid-summary-value.muted {
+    color: rgba(95, 101, 108, 0.72);
+}
+.boss-raid-cloud-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.boss-raid-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(243,175,18,0.08);
+    border: 1px solid rgba(201,198,198,0.45);
+    color: rgb(100,99,100);
+    font-size: 11px;
+    line-height: 1.3;
+}
+.boss-raid-empty {
+    padding: 14px 12px;
+    border: 1px dashed rgba(244, 244, 244, 0.45);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.52);
+    color: rgba(91, 96, 103, 0.82);
+    font-size: 11px;
+    line-height: 1.6;
+}
+.boss-raid-empty.compact {
+    padding: 10px 12px;
+}
+/* Profile card in local list */
+.boss-raid-card {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 10px; margin-bottom: 6px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.94), rgba(240,242,236,0.88));
+    border: 1px solid rgba(244, 244, 244,0.35); cursor: pointer;
+    transition: 0.15s;
+}
+.boss-raid-card:hover, .boss-raid-card.selected {
+    border-color: rgba(104,186,220,0.5);
+    background: linear-gradient(135deg, rgba(220,240,255,0.7), rgba(200,228,244,0.5));
+}
+.boss-raid-card.active-profile {
+    border-left: 3px solid rgba(104,228,255,0.85);
+}
+.boss-raid-card-info { flex: 1; min-width: 0; }
+.boss-raid-card-name {
+    font-size: 13px; font-weight: 600; color: rgba(44,52,59,0.96);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.boss-raid-card-meta {
+    font-size: 10px; color: rgba(86,92,98,0.68); margin-top: 2px;
+}
+.boss-raid-card-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+/* Phase card in editor */
+.br-phase-card {
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 8px;
+    background: rgba(255,255,255,0.7);
+    border: 1px solid rgba(244, 244, 244,0.30);
+    width: 100%;
+}
+.br-phase-head {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+}
+.br-phase-name { font-size: 13px; font-weight: 600; color: rgba(44,52,59,0.9); }
+.br-phase-tl-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; width: 100%; }
+.br-tl-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px; border-radius: 6px;
+    background: rgba(245,247,243,0.7);
+    flex-wrap: wrap;
+}
+.br-tl-row input, .br-tl-row select {
+    padding: 3px 6px; border: 1px solid rgba(244, 244, 244,0.4); border-radius: 6px;
+    font-size: 11px; font-family: var(--font-ui);
+    background: rgba(255,255,255,0.7);
+}
+.br-tl-row input[type="number"] { width: 60px; }
+.br-tl-row input[type="text"] { flex: 1; min-width: 80px; }
+#br-phases-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-height: 380px;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+#br-phases-container::-webkit-scrollbar-thumb:hover {
+    background: var(--cyan-strong);
+}
+.boss-raid-btn:disabled {
+    opacity: 0.38;
+    color: rgb(185,183,183);
+    cursor: not-allowed;
+}
+
+
+/* === Theme Overrides (Game Panels) === */
+/* ═══════════════════════════════════════
+   SAO Light Theme — Boss Raid & Auto Key & Panels
+   ═══════════════════════════════════════ */
+.boss-raid-runtime,
+.auto-key-runtime {
+    background: rgba(229,227,227,0.80);
+    border: 1px solid rgba(201,198,198,0.60);
+    color: rgb(100,99,100);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 11px;
+}
+.boss-raid-tab, .auto-key-tab {
+    background: rgba(255,255,255,0.60);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-raid-tab.active, .boss-raid-tab:hover,
+.auto-key-tab.active, .auto-key-tab:hover {
+    background: rgba(243,175,18,0.18);
+    border-color: rgba(243,175,18,0.55);
+    color: rgb(80,78,80);
+    box-shadow: 0 1px 4px rgba(50,50,0,0.10);
+}
+.boss-raid-btn, .auto-key-btn {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-raid-btn:hover, .auto-key-btn:hover {
+    background: rgba(243,175,18,0.16);
+    border-color: rgba(222,166,32,0.50);
+    color: rgb(80,78,80);
+}
+.boss-raid-btn.primary, .auto-key-btn.primary {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.boss-raid-btn.danger {
+    color: rgba(210,60,60,0.90);
+    border-color: rgba(210,60,60,0.35);
+}
+.auto-key-btn.warn {
+    background: rgba(243,175,18,0.12);
+    border-color: rgba(222,166,32,0.40);
+    color: rgb(180,130,20);
+}
+.boss-raid-section,
+.auto-key-profile, .auto-key-cloud-card, .auto-key-action-card {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(201,198,198,0.50);
+    box-shadow: 0 1px 3px rgba(50,50,0,0.06);
+}
+.auto-key-profile.active, .boss-raid-card.active-profile {
+    border-color: rgba(222,166,32,0.60);
+    box-shadow: 0 0 10px rgba(243,175,18,0.12), 0 1px 3px rgba(50,50,0,0.06);
+}
+.boss-raid-card {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.45);
+}
+.boss-raid-card:hover, .boss-raid-card.selected,
+.auto-key-profile.selected {
+    border-color: rgba(222,166,32,0.55);
+    background: rgba(243,175,18,0.08);
+}
+.boss-raid-section-title,
+.auto-key-card-title {
+    color: rgb(80,78,80);
+}
+.boss-raid-card-name {
+    color: rgb(80,78,80);
+}
+.boss-raid-field label,
+.auto-key-card-meta,
+.auto-key-field label {
+    color: rgb(140,138,140);
+}
+.boss-raid-card-meta {
+    color: rgb(140,138,140);
+}
+.boss-raid-field input, .boss-raid-field textarea, .boss-raid-field select,
+.auto-key-field input, .auto-key-field textarea, .auto-key-field select {
+    background: rgba(255,255,255,0.90);
+    border: 1px solid rgba(201,198,198,0.55);
+    color: rgb(80,78,80);
+}
+.auto-key-pill {
+    background: rgba(243,175,18,0.08);
+    border: 1px solid rgba(201,198,198,0.45);
+    color: rgb(100,99,100);
+}
+.auto-key-pill.active {
+    border-color: rgba(222,166,32,0.60);
+    color: rgb(180,130,20);
+    background: rgba(243,175,18,0.15);
+}
+.auto-key-pill.warn {
+    border-color: rgba(210,60,60,0.35);
+    color: rgba(210,60,60,0.88);
+}
+.boss-bar-mode-btn {
+    background: rgba(255,255,255,0.65);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-bar-mode-btn.active, .boss-bar-mode-btn:hover {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.boss-raid-section-note,
+.auto-key-section-note {
+    color: rgb(160,158,160);
+}
+.boss-raid-section-head,
+.auto-key-section-head {
+    border-bottom-color: rgba(201,198,198,0.40);
+}
+.br-phase-name {
+    color: rgb(80,78,80);
+}
+.br-tl-row {
+    background: rgba(245,243,240,0.80);
+}
+.br-tl-row input, .br-tl-row select {
+    background: rgba(255,255,255,0.90);
+    border: 1px solid rgba(201,198,198,0.55);
+    color: rgb(80,78,80);
+}
+/* Widget notes inside boss-raid / auto-key */
+.child-menu.boss-raid-menu .widget-note,
+.child-menu.auto-key-menu .widget-note {
+    color: rgb(160,158,160);
+}
+.child-menu.boss-raid-menu .widget-label,
+.child-menu.auto-key-menu .widget-label {
+    color: rgb(80,78,80);
+}
+/* Summary grids (identity / upload auth) */
+.auto-key-summary-item,
+.boss-raid-summary-item {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.45);
+}
+.auto-key-summary-label,
+.boss-raid-summary-label {
+    color: rgb(140,138,140);
+}
+.auto-key-summary-value,
+.boss-raid-summary-value {
+    color: rgb(80,78,80);
+}
+.auto-key-summary-value.muted {
+    color: rgb(185,183,183);
+}
+.auto-key-details {
+    border: 1px solid rgba(201,198,198,0.45);
+    background: rgba(255,255,255,0.70);
+    color: rgb(100,99,100);
+}
+/* Phase cards & misc light overrides */
+.br-phase-card {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(201,198,198,0.50);
+}
+.br-phase-head .boss-raid-btn {
+    background: rgba(255,255,255,0.60);
+}
+.auto-key-empty,
+.auto-key-condition-note {
+    color: rgb(160,158,160);
+}
+.auto-key-btn.primary {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.auto-key-btn:disabled {
+    opacity: 0.38;
+    color: rgb(185,183,183);
+}
+.auto-key-field label {
+    color: rgb(140,138,140);
+}
+.auto-key-card-meta {
+    color: rgb(140,138,140);
+}
+.boss-raid-section-note,
+.auto-key-section-note {
+    color: rgb(160,158,160);
+}
+/* ─── Motion blur fix + dropdown stacking: skip blur/transform on large panels ─── */
+.child-menu.boss-raid-menu,
+.child-menu.auto-key-menu,
+.child-menu#sub-act {
+    filter: none;
+    transform: none;
+    transition: opacity 0.22s ease;
+}
+.child-menu.boss-raid-menu.show,
+.child-menu.auto-key-menu.show,
+.child-menu#sub-act.show {
+    filter: none;
+    transform: none;
+}
+
+/* Panels / ACT sub-menus — enable scrolling like the other complex menus */
+.child-menu#sub-panels,
+.child-menu#sub-act {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
+}
+.child-menu#sub-panels li,
+.child-menu#sub-act li {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+.child-menu#sub-panels .widget-row,
+.child-menu#sub-act .widget-row {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* ACT/menu text overflow guard: compact commands ellipsize, explanatory widgets wrap. */
+.child-menu#sub-panels li > span,
+.child-menu#sub-act li > span {
+    min-width: 0;
+}
+#sub-panels .widget-label,
+#sub-act .widget-label,
+#sub-panels .widget-note,
+#sub-act .widget-note,
+#sub-panels .source-summary,
+#sub-act .source-summary {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+#sub-panels .widget-label,
+#sub-act .widget-label {
+    line-height: 1.35;
+}
+#sub-panels .widget-note,
+#sub-act .widget-note,
+#sub-panels .source-summary,
+#sub-act .source-summary {
+    line-height: 1.55;
+}
+#sub-panels .sao-toggle,
+#sub-act .sao-toggle,
+#sub-panels .mode-group,
+#sub-act .mode-group,
+#sub-panels .boss-bar-mode-group,
+#sub-act .boss-bar-mode-group,
+#sub-panels .mem-source-group,
+#sub-act .mem-source-group {
+    max-width: 100%;
+    min-width: 0;
+}
+#sub-panels .sao-toggle > span,
+#sub-act .sao-toggle > span {
+    flex: 1 1 auto;
+    min-width: 0;
