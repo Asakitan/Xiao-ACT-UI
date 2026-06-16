@@ -1,0 +1,2242 @@
+/* Star Resonance plugin — game-specific menu JS */
+/* Extracted from menu.html during 5.0.0 restructure */
+
+/* === Burst Slot Handlers === */
+var _watchedSlotsRequestSeq = 0;
+function _watchedSlotsList() {
+    var slots = [];
+    document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
+        var slot = _slotId(el.getAttribute('data-slot'));
+        if (slot != null && slots.indexOf(slot) < 0) slots.push(slot);
+    });
+    return slots;
+}
+function _syncWatchedSlots(slots, commit) {
+    var restoredSlots = {};
+    var normalized = [];
+    if (Array.isArray(slots)) {
+        slots.forEach(function(slotValue) {
+            var slot = _slotId(slotValue);
+            if (slot != null && !restoredSlots[slot]) {
+                restoredSlots[slot] = true;
+                normalized.push(slot);
+            }
+        });
+    }
+    document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
+        var slot = _slotId(el.getAttribute('data-slot'));
+        if (slot != null && restoredSlots[slot]) {
+            el.classList.add('active');
+        } else {
+            el.classList.remove('active');
+        }
+    });
+    if (commit !== false) _watchedSlotsConfirmed = normalized.slice();
+    return normalized;
+}
+function _brNumText(value, fallback, hi) {
+    var fallbackText = String(fallback == null ? 0 : fallback);
+    var n = _clampNum(value, null, 0, hi == null ? null : hi);
+    return n == null ? fallbackText : String(n);
+}
+function _brNumAttr(value, fallback, hi) {
+    return _escAttr(_brNumText(value, fallback, hi));
+}
+function _fmtSize(bytes) {
+    if (bytes < 1024) return bytes + 'B';
+    if (bytes < 1048576) return Math.round(bytes/1024) + 'K';
+    return (bytes/1048576).toFixed(1) + 'M';
+}
+
+document.getElementById('picker-close').addEventListener('click', closeFilePicker);
+document.getElementById('picker-use-folder').addEventListener('click', function() {
+    var folderPath = _pickerCurrentDir;
+    closeFilePicker();
+    _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
+});
+
+/* ═══ Circle click handlers ═══ */
+menuBar.querySelectorAll('.item').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var name = this.getAttribute('data-name');
+        activateCircle(name);
+    });
+});
+
+/* ═══ Child menu item clicks ═══ */
+document.querySelectorAll('.child-menu li').forEach(function(li) {
+    li.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var action = this.getAttribute('data-action');
+        if (!action) return;
+        playSound('snd-click');
+        if (action === 'exit') {
+            exitApplication();
+            return;
+        }
+        if (action === 'show_plugins') {
+            showPluginPopup();
+            return;
+        }
+        if (action === 'reload_plugins_all') {
+            _callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {
+                if (window.renderPluginsCategory) window.renderPluginsCategory();
+                showToast('PLUGINS RELOADED');
+            });
+            return;
+        }
+        if (action) {
+            _callMenuSettingApi('menu_action', [action], 'MENU');
+        }
+    });
+});
+
+/* ═══ Skill Effects — Slot checkboxes ═══ */
+document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var previousSlots = _watchedSlotsConfirmed.slice();
+        this.classList.toggle('active');
+        playSound('snd-click');
+        _saveWatchedSlots(previousSlots);
+    });
+});
+function _saveWatchedSlots(previousSlots) {
+    var slots = _watchedSlotsList();
+    var requestSeq = ++_watchedSlotsRequestSeq;
+    _callMenuSettingApi('set_watched_slots', [slots], 'BURST SLOTS', function(data) {
+        if (requestSeq !== _watchedSlotsRequestSeq) return;
+        _syncWatchedSlots(data && Array.isArray(data.slots) ? data.slots : slots);
+    }, function() {
+        if (requestSeq !== _watchedSlotsRequestSeq) return false;
+        _watchedSlotsRequestSeq += 1;
+        _syncWatchedSlots(Array.isArray(previousSlots) ? previousSlots : _watchedSlotsConfirmed);
+    });
+}
+_syncWatchedSlots(_watchedSlotsList());
+/* Burst enabled toggle */
+document.getElementById('burst-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    playSound('snd-click');
+    var on = !!this.checked;
+    _setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
+});
+
+/* ═══ Sound controls ═══ */
+document.getElementById('sound-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    playSound('snd-click');
+    var on = !!this.checked;
+    _setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');
+});
+document.getElementById('sound-volume').addEventListener('input', function(e) {
+    e.stopPropagation();
+    var previousVolume = _soundVolumeValue;
+    var volume = _setSoundVolumeUI(this.value, false);
+    var requestSeq = ++_soundVolumeRequestSeq;
+    _callMenuSettingApi('set_sound_volume', [volume], 'SOUND', function(data) {
+        if (requestSeq !== _soundVolumeRequestSeq) return;
+        _setSoundVolumeUI(data && data.volume !== undefined ? data.volume : volume);
+    }, function() {
+        if (requestSeq !== _soundVolumeRequestSeq) return false;
+        _setSoundVolumeUI(previousVolume);
+    });
+});
+
+/* ═══ Data source panel ═══ */
+document.getElementById('open-data-source-panel').addEventListener('click', function(e) {
+    e.stopPropagation();
+    openSourceDialog();
+});
+document.getElementById('source-close').addEventListener('click', function(e) {
+
+/* === Auto-Key API & State === */
+    });
+}
+
+function _akParseApiResult(result) {
+    if (!result) return {};
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return { ok: false, message: result }; }
+    }
+    return result;
+}
+
+function _akClone(value) {
+    return value ? JSON.parse(JSON.stringify(value)) : null;
+}
+
+function _menuTabName(value) {
+    var key = String(value == null ? '' : value);
+    var allowed = { local: true, editor: true, cloud: true };
+    return allowed[key] ? key : 'local';
+}
+
+function _profileEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+
+function _profileEntries(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function _profileText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
+function _akNewClientId(prefix) {
+    return (prefix || 'ak') + '_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1000000).toString(36);
+}
+
+function _akProfilesFull() {
+    return _profileEntries(_autoKeyState && _autoKeyState.profiles_full).map(_profileEntry);
+}
+
+function _akFindProfile(profileId) {
+    var id = _profileText(profileId, '');
+    if (!id) return null;
+    var profiles = _akProfilesFull();
+    for (var i = 0; i < profiles.length; i++) {
+        if (_profileText(profiles[i].id, '') === id) return profiles[i];
+    }
+    return null;
+}
+
+function _akEnsureSelectedProfile() {
+    var profiles = _akProfilesFull();
+    if (!profiles.length) {
+        _autoKeySelectedProfileId = '';
+        return;
+    }
+    if (_akFindProfile(_autoKeySelectedProfileId)) return;
+    _autoKeySelectedProfileId = _profileText((_autoKeyState && _autoKeyState.active_profile_id), _profileText(profiles[0].id, ''));
+}
+
+function _akPrepareDraft(profile) {
+    var draft = _akClone(profile);
+    if (!draft) return null;
+    if (!draft.engine) {
+        draft.engine = { tick_ms: 50, require_foreground: true, pause_on_death: true };
+    }
+    draft.actions = _profileEntries(draft.actions).map(_profileEntry);
+    draft.actions.forEach(function(action, index) {
+        action.id = _profileText(action.id, _akNewClientId('action'));
+        action.label = _profileText(action.label, 'Action ' + (index + 1));
+        if (typeof action.enabled !== 'boolean') action.enabled = true;
+        action.conditions = _profileEntries(action.conditions).map(_profileEntry);
+        action._conditions_text = JSON.stringify(action.conditions, null, 2);
+        action._conditions_error = '';
+    });
+    return draft;
+}
+
+function _akLoadDraftFromState(profileId, force) {
+    _akEnsureSelectedProfile();
+    var chosenId = _profileText(profileId, _autoKeySelectedProfileId);
+    var profile = _akFindProfile(chosenId);
+    if (!profile) {
+        _autoKeyDraftProfile = null;
+        return;
+    }
+    _autoKeySelectedProfileId = _profileText(profile.id, '');
+    if (!force && _autoKeyDraftDirty && _autoKeyDraftProfile && _profileText(_autoKeyDraftProfile.id, '') === _autoKeySelectedProfileId) {
+        return;
+    }
+    _autoKeyDraftProfile = _akPrepareDraft(profile);
+    _autoKeyDraftDirty = false;
+}
+
+function _akCallApi(methodName, args, onOk) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api[methodName]) {
+        showAlert('AUTO KEYS', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    var fn = window.pywebview.api[methodName];
+    var request;
+    try {
+        request = Promise.resolve(fn.apply(window.pywebview.api, args || []));
+    } catch (err) {
+        showAlert('AUTO KEYS', String(err || '未知错误 / Unknown error'), true);
+        return;
+    }
+    request.then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.state) {
+            _syncAutoKeyState(data.state);
+        }
+        if (data && data.ok) {
+            if (onOk) onOk(data);
+            return;
+        }
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : ('请求失败 / Request failed: ' + methodName), true);
+    }).catch(function(err) {
+        showAlert('AUTO KEYS', String(err || '未知错误 / Unknown error'), true);
+    });
+}
+
+function _akRefreshUploadAuth(force, onOk) {
+    _akCallApi('refresh_auto_key_upload_auth', [!!force], function(data) {
+        if (onOk) onOk(data);
+        else showToast((data && data.ok) ? 'UPLOAD AUTH READY' : 'UPLOAD AUTH UPDATED');
+    });
+}
+
+function _akRenderRuntime() {
+    var runtimeEl = document.getElementById('auto-key-runtime');
+    var enabledEl = document.getElementById('auto-key-enabled');
+    if (!runtimeEl || !enabledEl) return;
+    var state = _autoKeyState || {};
+    var runtime = state.runtime || {};
+    enabledEl.checked = !!state.enabled;
+    var activeProfileName = _profileText(state.active_profile_name, '无 None');
+    var runtimeReason = _profileText(runtime.last_reason, runtime.active ? 'RUNNING' : 'IDLE');
+    var lastActionLabel = _profileText(runtime.last_action_label, '');
+    var bits = [];
+    bits.push('引擎 Engine ' + (state.enabled ? '开启 ON' : '关闭 OFF'));
+    bits.push('配置 Profile ' + activeProfileName);
+    bits.push('状态 Status ' + runtimeReason);
+    if (lastActionLabel) {
+        bits.push('上次 Last ' + lastActionLabel);
+    }
+    runtimeEl.innerHTML = bits.map(function(item) {
+        return '<span class="auto-key-pill ' + (state.enabled ? 'active' : '') + '">' + _escHtml(item) + '</span>';
+    }).join(' ');
+}
+
+function _akRenderLocal() {
+    var listEl = document.getElementById('auto-key-profile-list');
+    if (!listEl) return;
+    var profiles = _akProfilesFull();
+    var state = _autoKeyState || {};
+    if (!profiles.length) {
+        listEl.innerHTML = '<div class="auto-key-empty">还没有本地配置。<br>No local profiles yet. Create one here or import a JSON file.</div>';
+        return;
+    }
+    var summaries = {};
+    _profileEntries(state.profiles).forEach(function(rawItem) {
+        var item = _profileEntry(rawItem);
+        summaries[_profileText(item.id, '')] = item;
+    });
+    listEl.innerHTML = profiles.map(function(rawProfile) {
+        var profile = _profileEntry(rawProfile);
+        var id = _profileText(profile.id, '');
+        var summary = summaries[id] || {};
+        var actionCount = _clampInt(summary.action_count, _profileEntries(profile.actions).length, 0, 999999);
+        var enabledCount = _clampInt(summary.enabled_action_count, 0, 0, actionCount);
+        var classes = ['auto-key-profile'];
+        if (_profileText(state.active_profile_id, '') === id) classes.push('active');
+        if (_profileText(_autoKeySelectedProfileId, '') === id) classes.push('selected');
+        return '' +
+            '<div class="' + classes.join(' ') + '">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">' + _escHtml(_profileText(profile.profile_name, '配置 Profile')) + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + _jsAttrArg(id) + ', \'editor\'); return false;">编辑 Edit</button>' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + _jsAttrArg(id) + '); return false;">启用 Activate</button>' +
+                        // 复制/导出/删除(同类档案管理动作)聚合进「更多 ▾」, 与 Tk _make_profile_more_button 1:1
+                        '<select class="auto-key-btn card-more" onchange="_akCardAction(' + _jsAttrArg(id) + ', this.value); this.selectedIndex=0; return false;">' +
+                            '<option value="">更多 ▾</option>' +
+                            '<option value="copy">复制 Copy</option>' +
+                            '<option value="export">导出 Export</option>' +
+                            '<option value="delete">删除 Delete</option>' +
+                        '</select>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span class="auto-key-pill ' + (_profileText(state.active_profile_id, '') === id ? 'active' : '') + '">' + _escHtml(_profileText(profile.profession_name, '任意 Any').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_profileText(profile.source, 'local').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(actionCount + ' 动作 Actions / ' + enabledCount + ' 已启用 On') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_profileText(profile.updated_at, '')) + '</span>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span>' + _escHtml(_profileText(profile.description, '暂无说明 / No description')) + '</span>' +
+                '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akSummaryItem(label, value, muted) {
+    return '' +
+        '<div class="auto-key-summary-item">' +
+            '<span class="auto-key-summary-label">' + _escHtml(label || '') + '</span>' +
+            '<span class="auto-key-summary-value' + (muted ? ' muted' : '') + '">' + _escHtml(_akDisplayValue(value, '--')) + '</span>' +
+        '</div>';
+}
+
+function _akRenderEditorIdentitySummary(draft) {
+    var summaryEl = document.getElementById('ak-editor-identity-summary');
+    if (!summaryEl) return;
+    var state = _autoKeyState || {};
+    var identity = state.identity || {};
+    var profileProfession = (draft && draft.profession_name) ? draft.profession_name : '任意 Any';
+    var profileProfessionIdValue = draft ? _clampInt(draft.profession_id, 0, 0, 999999999) : 0;
+    var identityProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+    var profileProfessionId = profileProfessionIdValue > 0 ? String(profileProfessionIdValue) : '不限制 Any';
+    var identityUid = _cloudText(identity.player_uid, '--');
+    var identityName = _cloudText(identity.player_name, '--');
+    summaryEl.innerHTML = [
+        _akSummaryItem('当前 UID Current UID', identityUid, identityUid === '--'),
+        _akSummaryItem('当前玩家 Current Player', identityName, identityName === '--'),
+        _akSummaryItem('当前职业 ID Current Profession ID', identityProfessionId > 0 ? String(identityProfessionId) : '--', !(identityProfessionId > 0)),
+        _akSummaryItem('脚本职业限制 Profile Filter', profileProfession + ' / ' + profileProfessionId, false)
+    ].join('');
+}
+
+function _akConditionType(value) {
+    var key = _profileText(value, 'hp_pct_gte');
+    var allowed = { hp_pct_gte: true, hp_pct_lte: true, sta_pct_gte: true, burst_ready_is: true, slot_state_is: true, profession_is: true, player_name_is: true, dungeon_is: true, last_skill_is: true, boss_mechanic_is: true, boss_mechanic_family_is: true };
+    return allowed[key] ? key : 'hp_pct_gte';
+}
+
+function _akSlotState(value) {
+    var key = _profileText(value, 'ready');
+    var allowed = { ready: true, cooldown: true, active: true, insufficient_energy: true, unknown: true };
+    return allowed[key] ? key : 'ready';
+}
+
+function _akPressMode(value) {
+    var key = _profileText(value, 'tap');
+    return key === 'hold' ? 'hold' : 'tap';
+}
+
+function _akBoolValue(value, fallback) {
+    if (typeof value === 'boolean') return value;
+    if (value == null || value === '') return !!fallback;
+    var text = String(value).trim().toLowerCase();
+    if (text === 'false' || text === '0' || text === 'no' || text === 'off') return false;
+    if (text === 'true' || text === '1' || text === 'yes' || text === 'on') return true;
+    return !!fallback;
+}
+
+function _akDefaultCondition(conditionType) {
+    var type = _akConditionType(conditionType);
+    if (type === 'burst_ready_is') return { type: type, value: true };
+    if (type === 'slot_state_is') return { type: type, slot_index: 1, state: 'ready' };
+    if (type === 'profession_is' || type === 'player_name_is' || type === 'dungeon_is' || type === 'last_skill_is' || type === 'boss_mechanic_is' || type === 'boss_mechanic_family_is') return { type: type, value: '' };
+    return { type: type, value: 0.5 };
+}
+
+function _akNormalizeCondition(condition) {
+    var raw = _profileEntry(condition);
+    var merged = _akDefaultCondition(raw.type);
+    Object.keys(raw).forEach(function(key) { merged[key] = raw[key]; });
+    merged.type = _akConditionType(merged.type);
+    if (merged.type === 'burst_ready_is') {
+        merged.value = _akBoolValue(merged.value, true);
+    } else if (merged.type === 'slot_state_is') {
+        merged.slot_index = _akIntValue('slot_index', merged.slot_index);
+        merged.state = _akSlotState(merged.state);
+    } else if (merged.type === 'profession_is' || merged.type === 'player_name_is' || merged.type === 'dungeon_is' || merged.type === 'last_skill_is' || merged.type === 'boss_mechanic_is' || merged.type === 'boss_mechanic_family_is') {
+        merged.value = _akTextValue(merged.value);
+    } else {
+        merged.value = _clampNum(merged.value, 0.5, 0, 1);
+    }
+    return merged;
+}
+
+function _akGetDraftAction(index) {
+    if (!_autoKeyDraftProfile || !Array.isArray(_autoKeyDraftProfile.actions)) return null;
+    return _autoKeyDraftProfile.actions[index] || null;
+}
+
+function _akGetActionConditions(index) {
+    var action = _akGetDraftAction(index);
+    if (!action) return [];
+    var items = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];
+    return items.map(_akNormalizeCondition);
+}
+
+function _akSetActionConditions(index, conditions, rerender) {
+    var action = _akGetDraftAction(index);
+    if (!action) return;
+    action.conditions = _akClone(Array.isArray(conditions) ? conditions : []);
+    action._conditions_text = JSON.stringify(action.conditions, null, 2);
+    action._conditions_error = '';
+    _autoKeyDraftDirty = true;
+    if (rerender !== false) _akRenderActionList();
+}
+
+function _akConditionTypeOptions(selected) {
+    selected = _akConditionType(selected);
+    return [
+        ['hp_pct_gte', 'HP 至少 >='],
+        ['hp_pct_lte', 'HP 不高于 <='],
+        ['sta_pct_gte', 'STA 至少 >='],
+        ['burst_ready_is', 'Burst 状态'],
+        ['slot_state_is', '槽位状态'],
+        ['profession_is', '职业名称匹配'],
+        ['player_name_is', '玩家名称匹配'],
+        ['dungeon_is', '副本匹配 Dungeon'],
+        ['last_skill_is', '上个技能匹配 Last Skill'],
+        ['boss_mechanic_is', 'Boss机制匹配 Mechanic'],
+        ['boss_mechanic_family_is', 'Boss机制族匹配 Family']
+    ].map(function(item) {
+        return '<option value="' + _escHtml(item[0]) + '"' + (selected === item[0] ? ' selected' : '') + '>' + _escHtml(item[1]) + '</option>';
+    }).join('');
+}
+
+function _akSlotStateOptions(selected) {
+    selected = _akSlotState(selected);
+    return [
+        ['ready', '就绪 Ready'],
+        ['cooldown', '冷却中 Cooldown'],
+        ['active', '施放中 Active'],
+        ['insufficient_energy', '能量不足 No Energy'],
+        ['unknown', '未知 Unknown']
+    ].map(function(item) {
+        return '<option value="' + _escHtml(item[0]) + '"' + (selected === item[0] ? ' selected' : '') + '>' + _escHtml(item[1]) + '</option>';
+    }).join('');
+}
+
+function _akTextValue(value) {
+    return value == null ? '' : String(value);
+}
+
+function _akDisplayValue(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
+function _cloudEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+
+function _cloudEntries(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function _cloudText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+
+function _cloudInputText(id) {
+    var el = document.getElementById(id);
+    return el ? _cloudText(el.value, '').trim() : '';
+}
+
+function _cloudSetInputText(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.value = _cloudText(value, '');
+}
+
+function _cloudMissingText(value) {
+    var values = Array.isArray(value) ? value : ((value == null || value === '') ? [] : [value]);
+    var text = values.map(function(item) {
+        return _cloudText(item, '');
+    }).filter(function(item) {
+        return !!item;
+    }).join(', ');
+    return text || 'identity';
+}
+
+function _akRenderConditionFields(index, condIndex, condition) {
+    var type = _akConditionType(condition.type);
+    if (type === 'slot_state_is') {
+        return '' +
+            '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(_akIntValue('slot_index', condition.slot_index))) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'slot_index\', this.value, \'int\')" /></div>' +
+            '<div class="auto-key-field"><label>状态 State</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'state\', this.value)">' + _akSlotStateOptions(condition.state) + '</select></div>';
+    }
+    if (type === 'burst_ready_is') {
+        var boolValue = _akBoolValue(condition.value, true);
+        return '' +
+            '<div class="auto-key-field"><label>目标值 Value</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'bool\')">' +
+                '<option value="true"' + (boolValue ? ' selected' : '') + '>已准备 Ready</option>' +
+                '<option value="false"' + (!boolValue ? ' selected' : '') + '>未准备 Not Ready</option>' +
+            '</select></div>';
+    }
+    if (type === 'profession_is' || type === 'player_name_is' || type === 'dungeon_is' || type === 'last_skill_is' || type === 'boss_mechanic_is' || type === 'boss_mechanic_family_is') {
+        return '' +
+            '<div class="auto-key-field span-2"><label>匹配值 Match Value</label><input type="text" value="' + _escHtml(_akTextValue(condition.value)) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value)" /></div>';
+    }
+    return '' +
+        '<div class="auto-key-field"><label>阈值 Threshold (%)</label><input type="number" min="0" max="100" value="' + _escHtml(String(Math.round(_clampNum(condition.value || 0, 0, 0, 1) * 100))) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'pct\')" /></div>';
+}
+
+function _akRenderConditionCard(index, condition, condIndex) {
+    return '' +
+        '<div class="auto-key-condition-card">' +
+            '<div class="auto-key-condition-head">' +
+                '<div class="auto-key-condition-title">条件 Condition ' + (condIndex + 1) + '</div>' +
+                '<div class="auto-key-card-actions">' +
+                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteCondition(' + index + ', ' + condIndex + '); return false;">删除 Delete</button>' +
+                '</div>' +
+            '</div>' +
+            '<div class="auto-key-condition-grid">' +
+                '<div class="auto-key-field"><label>条件类型 Type</label><select onchange="_akSetConditionType(' + index + ', ' + condIndex + ', this.value)">' + _akConditionTypeOptions(condition.type) + '</select></div>' +
+                _akRenderConditionFields(index, condIndex, condition) +
+            '</div>' +
+        '</div>';
+}
+
+function _akAddCondition(index, conditionType) {
+    var conditions = _akGetActionConditions(index);
+    conditions.push(_akDefaultCondition(conditionType));
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akDeleteCondition(index, condIndex) {
+    var conditions = _akGetActionConditions(index);
+    conditions.splice(condIndex, 1);
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akSetConditionType(index, condIndex, conditionType) {
+    var conditions = _akGetActionConditions(index);
+    if (!conditions[condIndex]) return;
+    conditions[condIndex] = _akDefaultCondition(conditionType);
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akDraftConditionField(index, condIndex, fieldName, value, kind) {
+    var conditions = _akGetActionConditions(index);
+    var condition = conditions[condIndex];
+    if (!condition) return;
+    if (kind === 'int') value = _akIntValue(fieldName, value);
+    if (kind === 'bool') value = String(value) === 'true';
+    if (fieldName === 'state') value = _akSlotState(value);
+    if (kind === 'pct') {
+        var pct = _clampNum(value, 0, 0, 100);
+        value = pct / 100;
+    }
+    condition[fieldName] = value;
+    _akSetActionConditions(index, conditions, false);
+}
+
+function _akPopulateEditorFields() {
+    var draft = _autoKeyDraftProfile;
+    var listEl = document.getElementById('auto-key-action-list');
+    if (!draft) {
+        if (listEl) {
+            listEl.innerHTML = '<div class="auto-key-empty">先从本地列表选择一个配置，或新建一个配置再开始编辑。<br>Select a profile from Local or create a new one to start editing.</div>';
+        }
+        ['ak-profile-name', 'ak-profile-profession-name', 'ak-profile-profession-id', 'ak-engine-tick-ms', 'ak-profile-description'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        if (document.getElementById('ak-engine-require-foreground')) document.getElementById('ak-engine-require-foreground').checked = true;
+        if (document.getElementById('ak-engine-pause-on-death')) document.getElementById('ak-engine-pause-on-death').checked = true;
+        _akRenderEditorIdentitySummary(null);
+        return;
+    }
+    document.getElementById('ak-profile-name').value = _profileText(draft.profile_name, '');
+    document.getElementById('ak-profile-profession-name').value = _profileText(draft.profession_name, '');
+    document.getElementById('ak-profile-profession-id').value = _akIntValue('profession_id', draft.profession_id);
+    document.getElementById('ak-engine-tick-ms').value = _akIntValue('tick_ms', draft.engine && draft.engine.tick_ms);
+    document.getElementById('ak-profile-description').value = _profileText(draft.description, '');
+    document.getElementById('ak-engine-require-foreground').checked = !(draft.engine && draft.engine.require_foreground === false);
+    document.getElementById('ak-engine-pause-on-death').checked = !(draft.engine && draft.engine.pause_on_death === false);
+    _akRenderEditorIdentitySummary(draft);
+    _akRenderActionList();
+}
+
+function _akRenderActionList() {
+    var listEl = document.getElementById('auto-key-action-list');
+    if (!listEl) return;
+    var draft = _autoKeyDraftProfile;
+    var actions = draft ? _profileEntries(draft.actions).map(_profileEntry) : [];
+    if (draft) draft.actions = actions;
+    if (!draft || !actions.length) {
+        listEl.innerHTML = '<div class="auto-key-empty">还没有动作。先新增一个动作并绑定到技能槽。<br>No actions yet. Add one and bind it to a skill slot.</div>';
+        return;
+    }
+    listEl.innerHTML = actions.map(function(action, index) {
+        var conditions = _akGetActionConditions(index);
+        var jsonText = _profileText(action._conditions_text, JSON.stringify(_profileEntries(action.conditions), null, 2));
+        var jsonStatus = action._conditions_error ?
+            '<div class="auto-key-json-status auto-key-status-error">JSON 未应用 / JSON not applied: ' + _escHtml(action._conditions_error) + '</div>' :
+            '<div class="auto-key-json-status">条件卡片会自动同步到高级 JSON。修改高级 JSON 后，离开输入框时会尝试应用。</div>';
+        return '' +
+            '<div class="auto-key-action-card">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">动作 Action ' + (index + 1) + ': ' + _escHtml(_profileText(action.label, '动作 Action ' + (index + 1))) + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', -1); return false;">上移 Up</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', 1); return false;">下移 Down</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akCloneAction(' + index + '); return false;">复制 Copy</button>' +
+                        '<button class="auto-key-btn warn" type="button" onclick="_akDeleteAction(' + index + '); return false;">删除 Delete</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-toolbar">' +
+                    '<label class="sao-toggle" style="max-width:180px;">' +
+                        '<input type="checkbox" ' + (action.enabled ? 'checked' : '') + ' onchange="_akDraftActionField(' + index + ', \'enabled\', this.checked, \'bool\')" />' +
+                        '<div class="toggle-track"><div class="toggle-thumb"></div></div>' +
+                        '<span>动作启用 Action Enabled</span>' +
+                    '</label>' +
+                    '<button class="auto-key-btn" type="button" onclick="_akAddCondition(' + index + '); return false;">新增条件 Add Condition</button>' +
+                '</div>' +
+                '<div class="auto-key-grid compact">' +
+                    '<div class="auto-key-field"><label>名称 Label</label><input type="text" value="' + _escHtml(_profileText(action.label, '')) + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(_akIntValue('slot_index', action.slot_index))) + '" oninput="_akDraftActionField(' + index + ', \'slot_index\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>按键 Key</label><input type="text" value="' + _escHtml(_profileText(action.key, '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>按下模式 Press Mode</label><select onchange="_akDraftActionField(' + index + ', \'press_mode\', this.value)"><option value="tap"' + (action.press_mode === 'tap' ? ' selected' : '') + '>点击 Tap</option><option value="hold"' + (action.press_mode === 'hold' ? ' selected' : '') + '>按住 Hold</option></select></div>' +
+                    '<div class="auto-key-field"><label>次数 Press Count</label><input type="number" min="1" max="20" value="' + _escHtml(String(_akIntValue('press_count', action.press_count))) + '" oninput="_akDraftActionField(' + index + ', \'press_count\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>间隔毫秒 Press Interval MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('press_interval_ms', action.press_interval_ms))) + '" oninput="_akDraftActionField(' + index + ', \'press_interval_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>按住毫秒 Hold MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('hold_ms', action.hold_ms))) + '" oninput="_akDraftActionField(' + index + ', \'hold_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>就绪延迟 Ready Delay MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('ready_delay_ms', action.ready_delay_ms))) + '" oninput="_akDraftActionField(' + index + ', \'ready_delay_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>最小复位 Min Rearm MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('min_rearm_ms', action.min_rearm_ms))) + '" oninput="_akDraftActionField(' + index + ', \'min_rearm_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>后置延迟 Post Delay MS</label><input type="number" min="0" value="' + _escHtml(String(_akIntValue('post_delay_ms', action.post_delay_ms))) + '" oninput="_akDraftActionField(' + index + ', \'post_delay_ms\', this.value, \'int\')" /></div>' +
+                '</div>' +
+                '<div class="auto-key-condition-list">' +
+                    (conditions.length ? conditions.map(function(condition, condIndex) {
+                        return _akRenderConditionCard(index, condition, condIndex);
+                    }).join('') : '<div class="auto-key-empty compact">这个动作还没有触发条件，表示只要技能槽就绪就会尝试按键。<br>No conditions yet. It will fire whenever the slot is ready.</div>') +
+                '</div>' +
+                '<details class="auto-key-details">' +
+                    '<summary>高级 JSON Conditions JSON</summary>' +
+                    '<div class="auto-key-details-body">' +
+                        '<div class="auto-key-field"><label>Conditions JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)" onchange="_akApplyActionConditionsJson(' + index + ', this.value)">' + _escHtml(jsonText) + '</textarea></div>' +
+                        jsonStatus +
+                    '</div>' +
+                '</details>' +
+                '<div class="auto-key-condition-note">支持的条件类型 Supported types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akRenderCloud() {
+    var state = _autoKeyState || {};
+    var identity = state.identity || {};
+    var auth = state.upload_auth || {};
+    var search = state.last_remote_search || {};
+    var query = search.query || {};
+    var resultsEl = document.getElementById('auto-key-cloud-results');
+    var uploadMetaEl = document.getElementById('ak-upload-auth-meta');
+    var uploadBtn = document.getElementById('ak-upload-active-btn');
+    _cloudSetInputText('ak-server-url', state.server_url);
+    _cloudSetInputText('ak-search-q', query.q);
+    _cloudSetInputText('ak-search-profile-name', query.profile_name);
+    _cloudSetInputText('ak-search-player-uid', query.player_uid);
+    _cloudSetInputText('ak-search-player-name', query.player_name);
+    _cloudSetInputText('ak-search-profession-name', query.profession_name);
+    if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = _cloudText(identity.player_uid, '--');
+    if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = _cloudText(identity.player_name, '--');
+    if (document.getElementById('ak-identity-profession-id')) {
+        var akProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+        document.getElementById('ak-identity-profession-id').textContent = akProfessionId > 0 ? String(akProfessionId) : '--';
+    }
+    if (document.getElementById('ak-identity-profession-name')) document.getElementById('ak-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');
+    if (uploadMetaEl) {
+        var bits = [];
+        if (identity.ready) {
+            bits.push('<span class="auto-key-pill auto-key-status-good">身份完整 Identity Ready</span>');
+        } else {
+            var akMissingText = _cloudMissingText(identity.missing);
+            bits.push('<span class="auto-key-pill auto-key-status-warn">缺少 ' + _escHtml(akMissingText) + '</span>');
+        }
+        if (auth.ready) {
+            bits.push('<span class="auto-key-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
+        } else if (auth.error) {
+            bits.push('<span class="auto-key-pill auto-key-status-error">' + _escHtml(auth.error) + '</span>');
+        } else {
+            bits.push('<span class="auto-key-pill auto-key-status-warn">凭证未获取 Auth Pending</span>');
+        }
+        if (auth.token_masked) bits.push('<span class="auto-key-pill">Token ' + _escHtml(auth.token_masked) + '</span>');
+        if (auth.expires_at) bits.push('<span class="auto-key-pill">Expires ' + _escHtml(auth.expires_at) + '</span>');
+        if (auth.mode) bits.push('<span class="auto-key-pill">' + _escHtml(String(auth.mode || '').toUpperCase()) + '</span>');
+        uploadMetaEl.innerHTML = bits.join('');
+    }
+    if (uploadBtn) {
+        uploadBtn.disabled = !identity.ready;
+    }
+    if (!resultsEl) return;
+    var results = _cloudEntries(search.results);
+    if (search.error) {
+        resultsEl.innerHTML = '<div class="auto-key-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
+        return;
+    }
+    if (!results.length) {
+        resultsEl.innerHTML = '<div class="auto-key-empty">还没有云端配置。先填写上面的筛选条件再搜索。<br>No cloud profiles yet. Enter filters above and start a search.</div>';
+        return;
+    }
+    resultsEl.innerHTML = results.map(function(rawItem) {
+        var item = _cloudEntry(rawItem);
+        var remoteId = _cloudText(item.id, '');
+        return '' +
+            '<div class="auto-key-cloud-card">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">' + _escHtml(_cloudText(item.profile_name, 'Remote #' + _cloudText(remoteId, '?'))) + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akDownloadRemote(' + _jsAttrArg(remoteId) + '); return false;">下载 Download</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span class="auto-key-pill">' + _escHtml('UID ' + _cloudText(item.player_uid, '--')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.player_name, '--')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.profession_name, '任意 Any')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(_cloudText(item.updated_at, _cloudText(item.created_at, ''))) + '</span>' +
+                '</div>' +
+                '<div class="auto-key-card-meta"><span>' + _escHtml(_cloudText(item.description, '暂无说明 / No description')) + '</span></div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akRenderTabState() {
+    _autoKeyTab = _menuTabName(_autoKeyTab);
+    document.querySelectorAll('#auto-key-tabs .auto-key-tab').forEach(function(tab) {
+        tab.classList.toggle('active', tab.getAttribute('data-tab') === _autoKeyTab);
+    });
+    document.querySelectorAll('#sub-autoKeys .auto-key-panel').forEach(function(panel) {
+        panel.classList.toggle('show', panel.getAttribute('data-tab') === _autoKeyTab);
+    });
+}
+
+function _renderAutoKeyUI() {
+    _akEnsureSelectedProfile();
+    _akRenderRuntime();
+    _akRenderLocal();
+    _akRenderCloud();
+    _akRenderTabState();
+    if (!_autoKeyDraftProfile || !_autoKeyDraftDirty) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, !_autoKeyDraftProfile);
+        _akPopulateEditorFields();
+    } else if (_autoKeyTab === 'editor') {
+        _akRenderEditorIdentitySummary(_autoKeyDraftProfile);
+        _akRenderActionList();
+    }
+}
+
+function _syncAutoKeyState(state) {
+    _autoKeyState = state || null;
+    _akEnsureSelectedProfile();
+    if (!_autoKeyDraftProfile || !_autoKeyDraftDirty || !_akFindProfile(_autoKeySelectedProfileId)) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+    }
+    _renderAutoKeyUI();
+}
+
+function _akSelectProfile(profileId, tabName) {
+    _autoKeySelectedProfileId = _profileText(profileId, '');
+    _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+    if (tabName) _autoKeyTab = _menuTabName(tabName);
+    _renderAutoKeyUI();
+}
+
+function _akSetTab(tabName) {
+    _autoKeyTab = _menuTabName(tabName);
+    if (_autoKeyTab === 'editor' && !_autoKeyDraftProfile) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+        _akPopulateEditorFields();
+    }
+    _renderAutoKeyUI();
+    if (_autoKeyTab === 'cloud') {
+        var state = _autoKeyState || {};
+        var identity = state.identity || {};
+        var auth = state.upload_auth || {};
+        if (identity.ready && !auth.ready && !auth.error) {
+            _akRefreshUploadAuth(false);
+        }
+    }
+}
+
+function _akIntValue(fieldName, value) {
+    var ranges = {
+        profession_id: [0, 0, 999999999],
+        tick_ms: [50, 10, 1000],
+        slot_index: [1, 1, 9],
+        press_count: [1, 1, 20],
+        press_interval_ms: [40, 0, 10000],
+        hold_ms: [80, 0, 10000],
+        ready_delay_ms: [0, 0, 60000],
+        min_rearm_ms: [800, 0, 120000],
+        post_delay_ms: [120, 0, 120000]
+    };
+    var r = ranges[fieldName] || [0, 0, 999999999];
+    return _clampInt(value, r[0], r[1], r[2]);
+}
+
+function _akDraftField(fieldName, value, kind) {
+    if (!_autoKeyDraftProfile) return;
+    if (kind === 'int') value = _akIntValue(fieldName, value);
+    _autoKeyDraftProfile[fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftEngineField(fieldName, value, kind) {
+    if (!_autoKeyDraftProfile) return;
+    if (!_autoKeyDraftProfile.engine) _autoKeyDraftProfile.engine = {};
+    if (kind === 'int') value = _akIntValue(fieldName, value);
+    if (kind === 'bool') value = !!value;
+    _autoKeyDraftProfile.engine[fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftActionField(index, fieldName, value, kind) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    if (kind === 'int') value = _akIntValue(fieldName, value);
+    if (kind === 'bool') value = !!value;
+    if (fieldName === 'key') value = _profileText(value, '').toUpperCase();
+    if (fieldName === 'press_mode') value = _akPressMode(value);
+    _autoKeyDraftProfile.actions[index][fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftActionConditions(index, text) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    _autoKeyDraftProfile.actions[index]._conditions_text = _profileText(text, '');
+    _autoKeyDraftDirty = true;
+}
+
+function _akApplyActionConditionsJson(index, text) {
+    var action = _akGetDraftAction(index);
+    if (!action) return;
+    var rawText = _profileText(text, '');
+    try {
+        var parsed = rawText.trim();
+        parsed = parsed ? JSON.parse(parsed) : [];
+        if (!Array.isArray(parsed)) throw new Error('must be an array');
+        action.conditions = _akClone(parsed);
+        action._conditions_text = JSON.stringify(action.conditions, null, 2);
+        action._conditions_error = '';
+        _autoKeyDraftDirty = true;
+        _akRenderActionList();
+    } catch (e) {
+        action._conditions_text = rawText;
+        action._conditions_error = e.message || String(e);
+        _autoKeyDraftDirty = true;
+        _akRenderActionList();
+        showAlert('AUTO KEYS', 'Action ' + (index + 1) + ' conditions JSON is invalid: ' + (e.message || String(e)), true);
+    }
+}
+
+function _akSerializeDraft() {
+    if (!_autoKeyDraftProfile) return null;
+    var draft = _akClone(_autoKeyDraftProfile);
+    draft.updated_at = new Date().toISOString();
+    draft.actions = _profileEntries(draft.actions).map(function(rawAction) {
+        var out = _profileEntry(_akClone(rawAction));
+        out.press_mode = _akPressMode(out.press_mode);
+        out.conditions = _profileEntries(out.conditions).map(function(rawCondition) {
+            return _akNormalizeCondition(rawCondition);
+        });
+        delete out._conditions_text;
+        delete out._conditions_error;
+        return out;
+    });
+    return draft;
+}
+
+function _akCreateProfile() {
+    _autoKeyDraftDirty = false;
+    _akCallApi('create_auto_key_profile', [], function(data) {
+        _autoKeySelectedProfileId = _profileText(data && data.state && data.state.active_profile_id, _autoKeySelectedProfileId);
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+        _autoKeyTab = 'editor';
+        _renderAutoKeyUI();
+        showToast('PROFILE CREATED');
+    });
+}
+
+function _akCopyProfile(profileId) {
+    _autoKeyDraftDirty = false;
+    _akCallApi('copy_auto_key_profile', [profileId], function() {
+        showToast('PROFILE COPIED');
+    });
+}
+
+function _akDeleteProfile(profileId) {
+    if (!window.confirm('Delete this auto key profile?')) return;
+    if (_profileText(_autoKeySelectedProfileId, '') === _profileText(profileId, '')) {
+        _autoKeyDraftProfile = null;
+        _autoKeyDraftDirty = false;
+    }
+    _akCallApi('delete_auto_key_profile', [profileId], function() {
+        showToast('PROFILE DELETED');
+    });
+}
+
+function _akActivateProfile(profileId) {
+    _akCallApi('activate_auto_key_profile', [profileId], function() {
+        showToast('PROFILE ACTIVATED');
+    });
+}
+
+function _akExportProfile(profileId) {
+    _akCallApi('export_auto_key_profile', [profileId], function(data) {
+        showAlert('AUTO KEYS', '已导出到 / Exported to:\n' + _profileText(data && data.path, ''), true);
+    });
+}
+
+// 「更多 ▾」下拉派发到聚合的档案管理动作(复制/导出/删除)。与 Tk _make_profile_more_button 1:1。
+function _akCardAction(profileId, action) {
+    if (!action) return;
+    if (action === 'copy') { _akCopyProfile(profileId); }
+    else if (action === 'export') { _akExportProfile(profileId); }
+    else if (action === 'delete') { _akDeleteProfile(profileId); }
+}
+
+function _akRefreshState() {
+    _akCallApi('get_auto_key_state', [], function() {
+        showToast('自动按键已刷新 AUTO KEY REFRESH');
+    });
+}
+
+function _loadInitialAutoKeyState() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_auto_key_state) return;
+    Promise.resolve().then(function() {
+        return api.get_auto_key_state();
+    }).then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.ok && data.state) {
+            _syncAutoKeyState(data.state);
+        } else if (data && data.ok === false) {
+            showToast(_menuApiMessage(data, 'AUTO KEY STATE LOAD FAILED'), 3200);
+        }
+    }).catch(function(err) {
+        showToast(String(err || 'AUTO KEY STATE LOAD FAILED'), 3200);
+    });
+}
+
+function _akAddAction() {
+    if (!_autoKeyDraftProfile) return;
+    var nextIndex = (_autoKeyDraftProfile.actions || []).length + 1;
+    _autoKeyDraftProfile.actions.push({
+        id: _akNewClientId('action'),
+        label: 'Action ' + nextIndex,
+        enabled: true,
+        slot_index: Math.min(9, nextIndex),
+        key: String(Math.min(9, nextIndex)),
+        press_mode: 'tap',
+        press_count: 1,
+        press_interval_ms: 40,
+        hold_ms: 80,
+        ready_delay_ms: 0,
+        min_rearm_ms: 800,
+        post_delay_ms: 120,
+        conditions: [],
+        _conditions_text: '[]',
+        _conditions_error: ''
+    });
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akCloneAction(index) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    var action = _akClone(_autoKeyDraftProfile.actions[index]);
+    action.id = _akNewClientId('action');
+    action.label = _profileText(action.label, 'Action') + ' Copy';
+    _autoKeyDraftProfile.actions.splice(index + 1, 0, action);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akDeleteAction(index) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions) return;
+    _autoKeyDraftProfile.actions.splice(index, 1);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akMoveAction(index, delta) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions) return;
+    var target = index + delta;
+    if (target < 0 || target >= _autoKeyDraftProfile.actions.length) return;
+    var item = _autoKeyDraftProfile.actions.splice(index, 1)[0];
+    _autoKeyDraftProfile.actions.splice(target, 0, item);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akSaveDraft() {
+    if (!_autoKeyDraftProfile) {
+        showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
+        return;
+    }
+    try {
+        var payload = _akSerializeDraft();
+        _akCallApi('save_auto_key_profile', [payload], function() {
+            _autoKeyDraftDirty = false;
+            _autoKeySelectedProfileId = _profileText(payload.id, _autoKeySelectedProfileId);
+            _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+            _renderAutoKeyUI();
+            showToast('PROFILE SAVED');
+        });
+    } catch (e) {
+        showAlert('AUTO KEYS', e.message || String(e), true);
+    }
+}
+
+function _akActivateDraft() {
+    if (!_autoKeyDraftProfile) return;
+    if (_autoKeyDraftDirty) {
+        showAlert('AUTO KEYS', '请先保存这个配置再启用。 / Save this profile before activating it.', true);
+        return;
+    }
+    _akActivateProfile(_autoKeyDraftProfile.id);
+}
+
+function _akExportDraft() {
+    if (!_autoKeyDraftProfile) return;
+    if (_autoKeyDraftDirty) {
+        showAlert('AUTO KEYS', '请先保存这个配置再导出。 / Save this profile before exporting it.', true);
+        return;
+    }
+    _akExportProfile(_autoKeyDraftProfile.id);
+}
+
+function _akImportProfile() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.start_auto_key_import_picker) {
+        showAlert('AUTO KEYS', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    _pickerConsumer = 'auto_key';
+    Promise.resolve().then(function() {
+        return api.start_auto_key_import_picker();
+    }).then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.ok && data.browser) {
+            showFilePicker(data.browser);
+            return;
+        }
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : '无法打开导入选择器 / Unable to open import picker', true);
+    }).catch(function(err) {
+        showAlert('AUTO KEYS', String(err || '无法打开导入选择器 / Unable to open import picker'), true);
+    });
+}
+
+function _akSaveCloudSettings(afterSave) {
+    var serverUrl = _cloudInputText('ak-server-url');
+    _callMenuSettingApi('set_auto_key_server_url', [serverUrl], 'AUTO KEYS', function(data) {
+        if (data && data.state) _syncAutoKeyState(data.state);
+        if (afterSave) {
+            afterSave();
+        } else {
+            showToast('SERVER SETTINGS SAVED');
+        }
+    });
+}
+
+function _akSearchRemote() {
+    _akSaveCloudSettings(function() {
+        var query = {
+            q: _cloudInputText('ak-search-q'),
+            profile_name: _cloudInputText('ak-search-profile-name'),
+            player_uid: _cloudInputText('ak-search-player-uid'),
+            player_name: _cloudInputText('ak-search-player-name'),
+            profession_name: _cloudInputText('ak-search-profession-name'),
+            page: 1,
+            page_size: 20
+        };
+        _akCallApi('search_remote_profiles', [query], function() {
+            showToast('CLOUD SEARCH COMPLETE');
+        });
+    });
+}
+
+function _akDownloadRemote(remoteId) {
+    _autoKeyDraftDirty = false;
+    _akCallApi('download_remote_profile', [remoteId], function() {
+        showToast('PROFILE DOWNLOADED');
+    });
+
+/* === Game Config Init === */
+    if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
+        _syncWatchedSlots(cfg.watched_slots);
+    }
+    /* Burst enabled */
+    if (cfg.burst_enabled !== undefined) {
+        document.getElementById('burst-enabled').checked = !!cfg.burst_enabled;
+    }
+    /* Sound */
+    if (cfg.sound_enabled !== undefined) {
+        document.getElementById('sound-enabled').checked = !!cfg.sound_enabled;
+    }
+    if (cfg.sound_volume !== undefined) {
+        var restoredVolume = _setSoundVolumeUI(cfg.sound_volume);
+    }
+    /* Data source */
+    if (cfg.panel_themes) {
+        _syncPanelThemes(cfg.panel_themes);
+    }
+    if (cfg.mem_data_source !== undefined) {
+        _memDataSource = _memSourceValue(cfg.mem_data_source);
+    }
+    if (cfg.data_source_map && typeof cfg.data_source_map === 'object') {
+        _syncDataSourceMap(cfg.data_source_map);
+    } else if (cfg.data_source !== undefined) {
+        var legacyMode = _sourceMode(cfg.data_source, 'packet');
+        var legacyMap = {};
+        _sourceComponents.forEach(function(key) {
+            legacyMap[key] = legacyMode;
+        });
+        _syncDataSourceMap(legacyMap);
+    }
+    _syncSourceButtons();
+    _syncMemSourceButtons();
+    _updateSourceSummary();
+    if (cfg.auto_key) {
+        _syncAutoKeyState(cfg.auto_key);
+    }
+    /* Boss bar mode */
+    if (cfg.boss_bar_mode !== undefined) {
+        _setBossBarModeUI(_bossBarModeValue(cfg.boss_bar_mode));
+    }
+    /* DPS meter toggle */
+    if (cfg.dps_enabled !== undefined) {
+        var dpsEl = document.getElementById('dps-enabled');
+        if (dpsEl) dpsEl.checked = !!cfg.dps_enabled;
+    }
+    /* Buff Monitor toggle */
+    if (cfg.buffmon_enabled !== undefined) {
+        var bmEl = document.getElementById('buffmon-enabled');
+        if (bmEl) bmEl.checked = !!cfg.buffmon_enabled;
+    }
+    /* DPS fade timeout */
+    if (cfg.dps_fade_timeout_s !== undefined) {
+        var restoredFadeTimeout = _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
+
+/* === Boss-Raid API & State === */
+var _brDraftDirty = false;
+var _brTab = 'local';
+
+function _brApiObject(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function _brParseApiResult(result) {
+    if (result === null || typeof result === 'undefined' || result === '') {
+        return { ok: false, message: 'Empty API response' };
+    }
+    if (typeof result === 'string') {
+        try {
+            var parsed = JSON.parse(result);
+            return _brApiObject(parsed) ? parsed : { ok: false, message: String(result) };
+        } catch (e) {
+            return { ok: false, message: result };
+        }
+    }
+    return _brApiObject(result) ? result : { ok: false, message: String(result) };
+}
+
+function _syncBossRaidState(state) {
+    var safeState = _profileEntry(state);
+    _bossRaidState = safeState;
+    var el = document.getElementById('boss-raid-enabled');
+    if (el) el.checked = !!safeState.enabled;
+    _brEnsureSelected();
+    if (!_brDraftProfile || !_brDraftDirty || !_brFindProfile(_brSelectedProfileId)) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    _brRenderLocal();
+    _brRenderEditor();
+    _brRenderCloud();
+    _brRenderRuntime();
+    _brSetTab(_brTab || 'local');
+}
+
+function _brCallApi(method, args, onOk) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api[method]) {
+        showAlert('BOSS RAID', 'pywebview API 不可用 / API unavailable: ' + method, true);
+        return;
+    }
+    var request;
+    try {
+        request = Promise.resolve(api[method].apply(api, args || []));
+    } catch (err) {
+        showAlert('BOSS RAID', String(err || 'API error'), true);
+        return;
+    }
+    request.then(function(result) {
+        var data = _brParseApiResult(result);
+        if (data && data.ok !== false) {
+            if (data.state) _syncBossRaidState(data.state);
+            if (onOk) onOk(data);
+        } else {
+            showAlert('BOSS RAID', (data && (data.message || data.error || data.detail)) || 'API error', true);
+        }
+    }).catch(function(err) {
+        showAlert('BOSS RAID', String(err), true);
+    });
+}
+
+function _brProfilesFull() {
+    return _profileEntries(_bossRaidState && _bossRaidState.profiles_full).map(_profileEntry);
+}
+
+function _brProfiles() {
+    return _profileEntries(_bossRaidState && _bossRaidState.profiles).map(_profileEntry);
+}
+
+function _brEnsureSelected() {
+    var profiles = _brProfilesFull();
+    if (!profiles.length) { _brSelectedProfileId = ''; return; }
+    var found = profiles.find(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        return _profileText(p.id, '') === _brSelectedProfileId;
+    });
+    if (found) return;
+    _brSelectedProfileId = _profileText((_bossRaidState && _bossRaidState.active_profile_id), _profileText(_profileEntry(profiles[0]).id, ''));
+}
+
+function _brFindProfile(id) {
+    var profiles = _brProfilesFull();
+    return profiles.find(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        return _profileText(p.id, '') === _profileText(id, '');
+    }) || null;
+}
+
+function _brLoadDraftFromState(profileId, force) {
+    var targetId = _profileText(profileId, _profileText(_brSelectedProfileId, _profileText(_bossRaidState && _bossRaidState.active_profile_id, '')));
+    var profile = _brFindProfile(targetId);
+    if (!profile) {
+        if (force) _brDraftProfile = null;
+        return;
+    }
+    if (!force && _brDraftProfile && _profileText(_brDraftProfile.id, '') === _profileText(profile.id, '')) {
+        return;
+    }
+    _brDraftProfile = JSON.parse(JSON.stringify(profile));
+    _brDraftDirty = false;
+}
+
+function _brSetTab(tab) {
+    _brTab = _menuTabName(tab);
+    document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(t) { t.classList.remove('active'); });
+    var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab="' + _menuTabName(_brTab) + '"]');
+    if (active) active.classList.add('active');
+    document.querySelectorAll('#sub-bossRaid .boss-raid-panel').forEach(function(p) { p.classList.remove('show'); });
+    var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab="' + _menuTabName(_brTab) + '"]');
+    if (panel) panel.classList.add('show');
+    if (_brTab === 'editor' && !_brDraftProfile) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    if (_brTab === 'editor') {
+        _brRenderEditor();
+    }
+    if (_brTab === 'cloud') {
+        var state = _bossRaidState || {};
+        var identity = state.identity || {};
+        var auth = state.upload_auth || {};
+        if (identity.ready && !auth.ready && !auth.error) {
+            _brRefreshUploadAuth(false);
+        }
+    }
+}
+
+function _brRenderLocal() {
+    var list = document.getElementById('boss-raid-profile-list');
+    if (!list) return;
+    var profiles = _brProfiles();
+    var activeId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
+    if (!profiles.length) {
+        list.innerHTML = '<div style="padding:12px;color:rgba(86,92,98,0.68);font-size:12px;">暂无配置 No profiles yet</div>';
+        return;
+    }
+    list.innerHTML = profiles.map(function(rawProfile) {
+        var p = _profileEntry(rawProfile);
+        var id = _profileText(p.id, '');
+        var isActive = (id === activeId);
+        var isSelected = (id === _brSelectedProfileId);
+        return '<div class="boss-raid-card' + (isActive ? ' active-profile' : '') + (isSelected ? ' selected' : '') +
+            '" onclick="_brSelectProfile(' + _jsAttrArg(id) + ')">' +
+            '<div class="boss-raid-card-info">' +
+                '<div class="boss-raid-card-name">' + _escHtml(_profileText(p.profile_name, 'Boss Raid')) + '</div>' +
+                '<div class="boss-raid-card-meta">HP: ' + _escHtml(_brNumText(p.boss_total_hp, '?')) + ' · Enrage: ' + _escHtml(_brNumText(p.enrage_time_s, 0)) + 's · P' + _escHtml(_brNumText(p.phase_count, 0)) + ' · TL' + _escHtml(_brNumText(p.timeline_count, 0)) + '</div>' +
+            '</div>' +
+            '<div class="boss-raid-card-actions">' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brActivateProfile(' + _jsAttrArg(id) + ');">激活 Activate</button>' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brEditProfile(' + _jsAttrArg(id) + ');">编辑 Edit</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function _brSelectProfile(id) {
+    _brSelectedProfileId = _profileText(id, '');
+    if (_brTab === 'editor' && !_brDraftDirty) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    _brRenderLocal();
+    if (_brTab === 'editor') _brRenderEditor();
+}
+
+function _brActivateProfile(id) {
+    _brSelectedProfileId = _profileText(id, '');
+    _brCallApi('activate_boss_raid_profile', [id], function() {
+        showToast('BOSS RAID ACTIVATED');
+    });
+}
+
+function _brEditProfile(id) {
+    _brSelectedProfileId = _profileText(id, '');
+    _brLoadDraftFromState(_brSelectedProfileId, true);
+    _brSetTab('editor');
+}
+
+function _brRenderEditor() {
+    _brRenderEditorFields();
+}
+
+function _brRenderEditorSummary(profile) {
+    var el = document.getElementById('br-editor-summary');
+    if (!el) return;
+    if (!profile) {
+        el.innerHTML = '' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">状态 State</span><span class="boss-raid-summary-value muted">未选择配置</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value muted">--</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value muted">--</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value muted">--</span></div>';
+        return;
+    }
+    var safeProfile = _profileEntry(profile);
+    el.innerHTML = '' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">配置 ID</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.id, '--')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.source, 'local')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.remote_id, '--')) + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value">' + _escHtml(_profileText(safeProfile.updated_at, '--')) + '</span></div>';
+}
+
+function _brRenderEditorFields() {
+    var p = _brDraftProfile;
+    var nameEl = document.getElementById('br-profile-name');
+    var hpEl = document.getElementById('br-boss-hp');
+    var enrageEl = document.getElementById('br-enrage-time');
+    var descEl = document.getElementById('br-description');
+    var simpleEl = document.getElementById('br-simple-mode');
+    var targetEl = document.getElementById('br-target-pattern');
+    var phasesEl = document.getElementById('br-phases-container');
+    if (!p) {
+        if (nameEl) nameEl.value = '';
+        if (hpEl) hpEl.value = 0;
+        if (enrageEl) enrageEl.value = 600;
+        if (descEl) descEl.value = '';
+        if (simpleEl) simpleEl.checked = true;
+        if (targetEl) targetEl.value = '';
+        if (phasesEl) {
+            phasesEl.innerHTML = '<div class="boss-raid-empty">先到本地页选择一个配置，或者新建一个配置，再开始编辑。<br>Select a profile from Local or create a new one to start editing.</div>';
+        }
+        _brRenderEditorSummary(null);
+        return;
+    }
+    if (nameEl) nameEl.value = _profileText(p.profile_name, '');
+    if (hpEl) hpEl.value = _brNumText(p.boss_total_hp, 0);
+    if (enrageEl) enrageEl.value = _brNumText(p.enrage_time_s, 600, 86400);
+    if (descEl) descEl.value = _profileText(p.description, '');
+    if (simpleEl) simpleEl.checked = p.simple_mode !== false;
+    if (targetEl) targetEl.value = _profileText(p.target_name_pattern, '');
+    _brRenderEditorSummary(p);
+    _brRenderPhases();
+}
+
+function _brEditorPhases() {
+    if (!_brDraftProfile) return [];
+    var phases = _profileEntries(_brDraftProfile.phases).map(function(rawPhase) {
+        var phase = _profileEntry(rawPhase);
+        phase.trigger = _profileEntry(phase.trigger);
+        phase.timelines = _profileEntries(phase.timelines).map(function(rawTl) {
+            var tl = _profileEntry(rawTl);
+            tl.condition = _profileEntry(tl.condition);
+            return tl;
+        });
+        return phase;
+    });
+    _brDraftProfile.phases = phases;
+    return phases;
+}
+
+function _brRenderPhases() {
+    var container = document.getElementById('br-phases-container');
+    if (!container || !_brDraftProfile) return;
+    var phases = _brEditorPhases();
+    var noValueTriggers = { manual: 1, breaking: 1, overdrive: 1, shield_broken: 1 };
+    // 这些触发类型的 value 是字符串(机制 key / 技能 id 文本), 与 boss_raid_engine
+    // normalize_phase 的 _string(value) 分支对齐; 其余 value 是数值。
+    var stringValueTriggers = { boss_mechanic: 1, boss_mechanic_family: 1, boss_skill: 1, boss_mechanic_skill: 1, ultimate_skill: 1 };
+    if (!phases.length) {
+        container.innerHTML = '<div class="boss-raid-empty compact">还没有阶段。点击上面的“新增阶段”开始配置。<br>No phases yet. Click "Add Phase" to start building the timeline.</div>';
+        return;
+    }
+    container.innerHTML = phases.map(function(phase, pi) {
+        var trigger = phase.trigger;
+        var timelines = phase.timelines;
+        return '<div class="br-phase-card">' +
+            '<div class="br-phase-head">' +
+                '<span class="br-phase-name">' + _escHtml(_profileText(phase.name, 'P' + (pi+1))) + '</span>' +
+                '<div style="display:flex;gap:4px;">' +
+                    '<button class="boss-raid-btn" type="button" onclick="_brAddTimeline(' + pi + '); return false;">+ 时间点</button>' +
+                    (phases.length > 1 ? '<button class="boss-raid-btn danger" type="button" onclick="_brRemovePhase(' + pi + '); return false;">删除</button>' : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="boss-raid-grid compact">' +
+                '<div class="boss-raid-field"><label>阶段名 Name</label><input type="text" value="' + _escHtml(_profileText(phase.name, '')) + '" oninput="_brDraftPhaseField(' + pi + ', \'name\', this.value)" /></div>' +
+                '<div class="boss-raid-field"><label>触发 Trigger</label><select onchange="_brDraftTriggerType(' + pi + ', this.value)">' +
+                    '<option value="manual"' + (trigger.type === 'manual' ? ' selected' : '') + '>手动 Manual</option>' +
+                    '<option value="time"' + (trigger.type === 'time' ? ' selected' : '') + '>时间(秒) Time</option>' +
+                    '<option value="dps_total"' + (trigger.type === 'dps_total' ? ' selected' : '') + '>总伤害 DPS Total</option>' +
+                    '<option value="hp_pct"' + (trigger.type === 'hp_pct' ? ' selected' : '') + '>血量% HP%</option>' +
+                    '<option value="breaking"' + (trigger.type === 'breaking' ? ' selected' : '') + '>进入破防 Breaking</option>' +
+                    '<option value="buff_event"' + (trigger.type === 'buff_event' ? ' selected' : '') + '>Buff事件 Buff Event</option>' +
+                    '<option value="shield_broken"' + (trigger.type === 'shield_broken' ? ' selected' : '') + '>盾破 Shield Broken</option>' +
+                    '<option value="overdrive"' + (trigger.type === 'overdrive' ? ' selected' : '') + '>暴走 Overdrive</option>' +
+                    '<option value="extinction_pct"' + (trigger.type === 'extinction_pct' ? ' selected' : '') + '>破灭条% Extinction%</option>' +
+                    '<option value="breaking_stage"' + (trigger.type === 'breaking_stage' ? ' selected' : '') + '>破防阶段 Break Stage</option>' +
+                    '<option value="boss_mechanic"' + (trigger.type === 'boss_mechanic' ? ' selected' : '') + '>Boss机制 Mechanic</option>' +
+                    '<option value="boss_mechanic_family"' + (trigger.type === 'boss_mechanic_family' ? ' selected' : '') + '>Boss机制族 Mech Family</option>' +
+                    '<option value="boss_skill"' + (trigger.type === 'boss_skill' ? ' selected' : '') + '>Boss技能 Boss Skill</option>' +
+                    '<option value="boss_mechanic_skill"' + (trigger.type === 'boss_mechanic_skill' ? ' selected' : '') + '>机制技能 Mech Skill</option>' +
+                    '<option value="ultimate_skill"' + (trigger.type === 'ultimate_skill' ? ' selected' : '') + '>奥义技能 Ultimate</option>' +
+                '</select></div>' +
+                (trigger.type in noValueTriggers ? '' :
+                    (trigger.type in stringValueTriggers ?
+                        '<div class="boss-raid-field"><label>触发值 Value</label><input type="text" value="' + _escHtml(_profileText(trigger.value, '')) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>' :
+                        '<div class="boss-raid-field"><label>触发值 Value</label><input type="number" min="0" value="' + _brNumAttr(trigger.value, 0, (trigger.type === 'hp_pct' || trigger.type === 'extinction_pct') ? 100 : null) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>')) +
+            '</div>' +
+            '<div class="br-phase-tl-list">' +
+                (timelines.length ? timelines.map(function(rawTl, ti) {
+                    var tl = _profileEntry(rawTl);
+                    var cond = _profileEntry(tl.condition);
+                    return '<div class="br-tl-row">' +
+                        '<input type="number" min="0" step="1" value="' + _brNumAttr(tl.time_s, 0) + '" title="秒 Seconds" placeholder="秒" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'time_s\',this.value,\'float\')" />' +
+                        '<input type="text" value="' + _escHtml(_profileText(tl.label, '')) + '" placeholder="标签 Label" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'label\',this.value)" />' +
+                        '<select onchange="_brDraftTlField(' + pi + ',' + ti + ',\'alert_type\',this.value)">' +
+                            '<option value="both"' + (tl.alert_type === 'both' ? ' selected' : '') + '>声+视</option>' +
+                            '<option value="sound"' + (tl.alert_type === 'sound' ? ' selected' : '') + '>声</option>' +
+                            '<option value="visual"' + (tl.alert_type === 'visual' ? ' selected' : '') + '>视</option>' +
+                        '</select>' +
+                        '<input type="number" min="0" step="1" value="' + _brNumAttr(tl.repeat_interval_s, 0) + '" title="重复间隔(秒) Repeat" placeholder="重复" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'repeat_interval_s\',this.value,\'float\')" />' +
+                        '<input type="number" min="0" step="1" value="' + _brNumAttr(tl.pre_warn_s, 0) + '" title="预警(秒) Pre-warn" placeholder="预警" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'pre_warn_s\',this.value,\'float\')" />' +
+                        '<input type="number" min="0" step="1" value="' + _brNumAttr(tl.duration_s, 0) + '" title="持续(秒) Duration" placeholder="持续" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'duration_s\',this.value,\'float\')" />' +
+                        '<select title="条件 Condition" onchange="_brDraftTlCondType(' + pi + ',' + ti + ',this.value)">' +
+                            '<option value="always"' + ((cond.type || 'always') === 'always' ? ' selected' : '') + '>总是 Always</option>' +
+                            '<option value="hp_pct"' + (cond.type === 'hp_pct' ? ' selected' : '') + '>血量% HP%</option>' +
+                            '<option value="shield_active"' + (cond.type === 'shield_active' ? ' selected' : '') + '>盾存在 Shield</option>' +
+                            '<option value="breaking"' + (cond.type === 'breaking' ? ' selected' : '') + '>破防中 Break</option>' +
+                        '</select>' +
+                        (cond.type === 'hp_pct' ? '<select title="比较 Comparator" onchange="_brDraftTlCondComparator(' + pi + ',' + ti + ',this.value)" style="width:46px;">' +
+                            ['>=','<=','>','<','=='].map(function(op){ return '<option value="' + _escHtml(op) + '"' + ((cond.comparator || '>=') === op ? ' selected' : '') + '>' + _escHtml(op) + '</option>'; }).join('') +
+                            '</select>' : '') +
+                        (cond.type === 'hp_pct' ? '<input type="number" min="0" max="100" value="' + _brNumAttr(cond.value, 0, 100) + '" title="条件值" placeholder="%" style="width:42px;" oninput="_brDraftTlCondValue(' + pi + ',' + ti + ',this.value)" />' : '') +
+                        '<button class="boss-raid-btn danger" type="button" onclick="_brRemoveTimeline(' + pi + ',' + ti + '); return false;" style="padding:2px 6px;font-size:11px;">×</button>' +
+                    '</div>';
+                }).join('') : '<div style="padding:4px 0;color:rgba(86,92,98,0.5);font-size:11px;">暂无时间点 No timelines</div>') +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _brDraftField(fieldName, value, kind) {
+    if (!_brDraftProfile) return;
+    if (kind === 'int') value = _clampInt(value, 0, 0, 999999999);
+    if (kind === 'bool') value = !!value;
+    _brDraftProfile[fieldName] = value;
+    _brDraftDirty = true;
+    if (fieldName === 'profile_name') _brRenderEditorSummary(_brDraftProfile);
+}
+
+function _brDraftPhaseField(pi, field, val) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi][field] = val;
+    _brDraftDirty = true;
+}
+function _brDraftTriggerType(pi, val) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].trigger.type = val;
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTriggerValue(pi, val) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var trig = phases[pi].trigger;
+    // 机制/技能类触发的 value 是字符串(key / id 文本), 与 boss_raid_engine
+    // normalize_phase 对齐; 不能 _clampNum 否则丢字符串。
+    if (trig.type === 'boss_mechanic' || trig.type === 'boss_mechanic_family' || trig.type === 'boss_skill' || trig.type === 'boss_mechanic_skill' || trig.type === 'ultimate_skill') {
+        trig.value = (val == null ? '' : String(val));
+    } else {
+        var pctLike = trig.type === 'hp_pct' || trig.type === 'extinction_pct';
+        trig.value = _clampNum(val, 0, 0, pctLike ? 100 : null);
+    }
+    _brDraftDirty = true;
+}
+function _brDraftTlField(pi, ti, field, val, type) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
+    if (!tls[ti]) return;
+    if (type === 'float') val = _clampNum(val, 0, 0, 86400);
+    tls[ti][field] = val;
+    _brDraftDirty = true;
+}
+
+function _brAddPhase() {
+    if (!_brDraftProfile) return;
+    var phases = _brEditorPhases();
+    var idx = phases.length + 1;
+    phases.push({ id: 'phase_new_' + Date.now(), name: 'P' + idx, trigger: { type: 'manual', value: 0 }, timelines: [] });
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brRemovePhase(pi) {
+    var phases = _brEditorPhases();
+    if (!phases.length) return;
+    phases.splice(pi, 1);
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brAddTimeline(pi) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].timelines.push({ id: 'tl_new_' + Date.now(), time_s: 30, label: 'Alert', alert_type: 'both', repeat_interval_s: 0, pre_warn_s: 0, duration_s: 0, condition: { type: 'always' } });
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brRemoveTimeline(pi, ti) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    phases[pi].timelines.splice(ti, 1);
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTlCondType(pi, ti, val) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
+    if (!tls[ti]) return;
+    tls[ti].condition.type = val;
+    if (val === 'hp_pct' && !tls[ti].condition.value) tls[ti].condition.value = 50;
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTlCondValue(pi, ti, val) {
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
+    if (!tls[ti]) return;
+    tls[ti].condition.value = _clampNum(val, 0, 0, 100);
+    _brDraftDirty = true;
+}
+function _brDraftTlCondComparator(pi, ti, val) {
+    // 与 Tk 时间线条件 Cmp 下拉 + engine _eval_comparator 对齐(web 此前无比较符控件,
+    // hp_pct 条件只能默认 '>='); 归一到引擎认得的 5 种, 其余回退 '>='。
+    var phases = _brEditorPhases();
+    if (!phases[pi]) return;
+    var tls = phases[pi].timelines;
+    if (!tls[ti]) return;
+    var allowed = { '>=': 1, '<=': 1, '>': 1, '<': 1, '==': 1 };
+    tls[ti].condition.comparator = allowed[val] ? val : '>=';
+    _brDraftDirty = true;
+}
+
+function _brSerializeDraft() {
+    if (!_brDraftProfile) return null;
+    var draft = JSON.parse(JSON.stringify(_brDraftProfile));
+    draft.updated_at = new Date().toISOString();
+    return draft;
+}
+
+function _brRenderRuntime() {
+    var el = document.getElementById('boss-raid-runtime');
+    if (!el) return;
+    var rt = (_bossRaidState && _bossRaidState.runtime) || {};
+    var state = rt.state || 'idle';
+    var text = 'Boss Raid: ' + state.toUpperCase();
+    if (state === 'running') {
+        var elapsedSeconds = _clampInt(rt.elapsed_s, 0, 0, 86400);
+        var dpsValue = _clampInt(rt.dps, 0, 0, Number.MAX_SAFE_INTEGER);
+        var damageValue = _clampInt(rt.total_damage, 0, 0, Number.MAX_SAFE_INTEGER);
+        var hpPct = _clampNum(rt.boss_hp_est_pct, 0, 0, 1);
+        var enrageSeconds = _clampInt(rt.enrage_remaining_s, 0, 0, 86400);
+        text += ' | ' + _profileText(rt.phase_name, 'P?');
+        text += ' | ' + elapsedSeconds + 's';
+        text += ' | DPS: ' + dpsValue;
+        text += ' | DMG: ' + damageValue;
+        if (hpPct > 0) {
+            text += ' | HP: ' + (Math.round(hpPct * 1000) / 10) + '%';
+        }
+        if (enrageSeconds > 0) text += ' | Enrage: ' + enrageSeconds + 's';
+    } else if (state === 'completed') {
+        text += ' | ✓ COMPLETED';
+    }
+    el.textContent = text;
+    // Update start/stop button label
+    var btnStart = document.getElementById('br-btn-start');
+    if (btnStart) {
+        if (state === 'running') {
+            btnStart.textContent = '■ 停止 Stop';
+            btnStart.className = 'boss-raid-btn danger';
+        } else {
+            btnStart.textContent = '▶ 开始 Start';
+            btnStart.className = 'boss-raid-btn primary';
+        }
+    }
+}
+
+function _brStartStop() {
+    var rt = (_bossRaidState && _bossRaidState.runtime) || {};
+    var state = rt.state || 'idle';
+    if (state === 'running') {
+        _brCallApi('boss_raid_stop', [], function() { showToast('BOSS RAID STOPPED'); });
+    } else {
+        _brCallApi('boss_raid_start', [], function() { showToast('BOSS RAID STARTED'); });
+    }
+}
+function _brNextPhase() {
+    _brCallApi('boss_raid_next_phase', [], function() { showToast('NEXT PHASE'); });
+}
+function _brReset() {
+    _brCallApi('boss_raid_reset', [], function() { showToast('BOSS RAID RESET'); });
+}
+
+function _toggleRaidEditorPanel() {
+    _callMenuSettingApi('toggle_raid_editor', [], 'BOSS RAID', function() {
+        showToast('BOSS RAID EDITOR');
+    });
+}
+function _toggleAutoKeyEditorPanel() {
+    _callMenuSettingApi('toggle_autokey_editor', [], 'AUTO KEYS', function() {
+        showToast('AUTO KEY EDITOR');
+    });
+}
+
+function _brRenderCloud() {
+    var state = _bossRaidState || {};
+    var identity = state.identity || {};
+    var auth = state.upload_auth || {};
+    var search = state.last_remote_search || {};
+    var query = search.query || {};
+    var resultsEl = document.getElementById('boss-raid-cloud-results');
+    var uploadMetaEl = document.getElementById('br-upload-auth-meta');
+    var uploadBtn = document.getElementById('br-upload-active-btn');
+    _cloudSetInputText('br-server-url', state.server_url);
+    _cloudSetInputText('br-search-q', query.q);
+    _cloudSetInputText('br-search-profile-name', query.profile_name);
+    _cloudSetInputText('br-search-player-uid', query.player_uid);
+    _cloudSetInputText('br-search-player-name', query.player_name);
+    if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = _cloudText(identity.player_uid, '--');
+    if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = _cloudText(identity.player_name, '--');
+    if (document.getElementById('br-identity-profession-id')) {
+        var brProfessionId = _clampInt(identity.profession_id, 0, 0, 999999999);
+        document.getElementById('br-identity-profession-id').textContent = brProfessionId > 0 ? String(brProfessionId) : '--';
+    }
+    if (document.getElementById('br-identity-profession-name')) document.getElementById('br-identity-profession-name').textContent = _cloudText(identity.profession_name, '--');
+    if (uploadMetaEl) {
+        var bits = [];
+        if (identity.ready) {
+            bits.push('<span class="boss-raid-pill auto-key-status-good">身份完整 Identity Ready</span>');
+        } else {
+            var brMissingText = _cloudMissingText(identity.missing);
+            bits.push('<span class="boss-raid-pill auto-key-status-warn">缺少 ' + _escHtml(brMissingText) + '</span>');
+        }
+        if (auth.ready) {
+            bits.push('<span class="boss-raid-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
+        } else if (auth.error) {
+            bits.push('<span class="boss-raid-pill auto-key-status-error">' + _escHtml(auth.error) + '</span>');
+        } else {
+            bits.push('<span class="boss-raid-pill auto-key-status-warn">凭证未获取 Auth Pending</span>');
+        }
+        if (auth.token_masked) bits.push('<span class="boss-raid-pill">Token ' + _escHtml(auth.token_masked) + '</span>');
+        if (auth.expires_at) bits.push('<span class="boss-raid-pill">Expires ' + _escHtml(auth.expires_at) + '</span>');
+        if (auth.mode) bits.push('<span class="boss-raid-pill">' + _escHtml(String(auth.mode || '').toUpperCase()) + '</span>');
+        uploadMetaEl.innerHTML = bits.join('');
+    }
+    if (uploadBtn) {
+        uploadBtn.disabled = !identity.ready || !state.local_profile_count;
+    }
+    if (!resultsEl) return;
+    var items = _cloudEntries(search.results);
+    if (search.error) {
+        resultsEl.innerHTML = '<div class="boss-raid-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
+        return;
+    }
+    if (!items.length) {
+        resultsEl.innerHTML = '<div class="boss-raid-empty">还没有云端结果。先填写上面的搜索条件，再发起搜索。<br>No cloud profiles yet. Fill in filters above and start a search.</div>';
+        return;
+    }
+    resultsEl.innerHTML = items.map(function(rawItem) {
+        var item = _cloudEntry(rawItem);
+        var remoteId = _cloudText(item.id, '');
+        return '<div class="boss-raid-card" onclick="_brDownloadRemote(' + _jsAttrArg(remoteId) + ')">' +
+            '<div class="boss-raid-card-info">' +
+                '<div class="boss-raid-card-name">' + _escHtml(_cloudText(item.profile_name, 'Boss')) + '</div>' +
+                '<div class="boss-raid-card-meta">by ' + _escHtml(_cloudText(item.player_name, '?')) + ' · UID: ' + _escHtml(_cloudText(item.player_uid, '--')) + ' · HP: ' + _escHtml(_brNumText(item.boss_total_hp, '?')) + ' · ' + _escHtml(_cloudText(item.updated_at, _cloudText(item.created_at, ''))) + '</div>' +
+            '</div>' +
+            '<div class="boss-raid-card-actions">' +
+                '<button class="boss-raid-btn primary" type="button" onclick="event.stopPropagation(); _brDownloadRemote(' + _jsAttrArg(remoteId) + '); return false;">下载 Download</button>' +
+            '</div></div>';
+    }).join('');
+}
+
+function _brCreateProfile() {
+    _brDraftDirty = false;
+    _brCallApi('create_boss_raid_profile', [], function(data) {
+        showToast('BOSS RAID CREATED');
+        _brSelectedProfileId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        _brSetTab('editor');
+    });
+}
+function _brImportProfile() {
+    _pickerConsumer = 'boss_raid';
+    _brCallApi('start_boss_raid_import_picker', [], function(data) {
+        if (data && data.browser) {
+            showFilePicker(data.browser);
+            return;
+        }
+        showAlert('BOSS RAID', '无法打开导入选择器 / Unable to open import picker', true);
+    });
+}
+function _brRefreshState() {
+    _brCallApi('get_boss_raid_state', [], function() {
+        showToast('BOSS RAID REFRESHED');
+    });
+}
+function _loadInitialBossRaidState() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_boss_raid_state) return;
+    Promise.resolve().then(function() {
+        return api.get_boss_raid_state();
+    }).then(function(result) {
+        var data = _brParseApiResult(result);
+        if (data && data.ok !== false && data.state) {
+            _syncBossRaidState(data.state);
+        } else if (data && data.ok === false) {
+            showToast(_menuApiMessage(data, 'BOSS RAID STATE LOAD FAILED'), 3200);
+        }
+    }).catch(function(err) {
+        showToast(String(err || 'BOSS RAID STATE LOAD FAILED'), 3200);
+    });
+}
+function _brSaveProfile() {
+    if (!_brDraftProfile) {
+        showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
+        return;
+    }
+    var payload = _brSerializeDraft();
+    _brCallApi('save_boss_raid_profile', [payload], function() {
+        _brDraftDirty = false;
+        _brSelectedProfileId = _profileText(payload.id, _brSelectedProfileId);
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        showToast('BOSS RAID SAVED');
+    });
+}
+function _brExportProfile() {
+    if (!_brDraftProfile) return;
+    if (_brDraftDirty) {
+        showAlert('BOSS RAID', '请先保存这个配置再导出。 / Save this profile before exporting it.', true);
+        return;
+    }
+    _brCallApi('export_boss_raid_profile', [_brDraftProfile.id], function(data) {
+        showAlert('BOSS RAID', '已导出到 / Exported to:\n' + _profileText(data && data.path, ''), true);
+    });
+}
+function _brDeleteProfile() {
+    if (!_brDraftProfile) return;
+    if (!window.confirm('Delete this boss raid profile?')) return;
+    _brCallApi('delete_boss_raid_profile', [_brDraftProfile.id], function() {
+        _brSelectedProfileId = _profileText(_bossRaidState && _bossRaidState.active_profile_id, '');
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        _brSetTab('local');
+        showToast('BOSS RAID DELETED');
+    });
+}
+
+function _brSaveCloudSettings(afterSave) {
+    var serverUrl = _cloudInputText('br-server-url');
+    _callMenuSettingApi('set_boss_raid_server_url', [serverUrl], 'BOSS RAID', function(data) {
+        if (data && data.state) _syncBossRaidState(data.state);
+        if (afterSave) {
+            afterSave();
+        } else {
+            showToast('SERVER SETTINGS SAVED');
+        }
+    });
+}
+
+function _brRefreshUploadAuth(force, afterReady) {
+    _brCallApi('refresh_boss_raid_upload_auth', [!!force], function() {
+        if (afterReady) afterReady();
+        if (force) showToast('AUTH REFRESHED');
+    });
+}
+
+function _brIssueToken() {
+    _brSaveCloudSettings(function() {
+        _brRefreshUploadAuth(true);
+    });
+}
+function _brUploadActive() {
+    var targetId = _brDraftProfile ? _cloudText(_brDraftProfile.id, '') : _cloudText(_bossRaidState && _bossRaidState.active_profile_id, '');
+    var identity = (_bossRaidState && _bossRaidState.identity) || {};
+    if (!targetId) {
+        showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
+        return;
+    }
+    if (!identity.ready) {
+        showAlert('BOSS RAID', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);
+        return;
+    }
+    if (_brDraftDirty) {
+        showAlert('BOSS RAID', '请先保存这个配置再上传。 / Save this profile before uploading it.', true);
+        return;
+    }
+    _brSaveCloudSettings(function() {
+        _brRefreshUploadAuth(false, function() {
+            _brCallApi('upload_boss_raid_profile', [targetId], function(data) {
+                showToast('BOSS RAID UPLOADED #' + _cloudText(data && data.remote_id, ''));
+            });
+        });
+    });
+}
+function _brSearchRemote() {
+    _brSaveCloudSettings(function() {
+        var query = {
+            q: _cloudInputText('br-search-q'),
+            profile_name: _cloudInputText('br-search-profile-name'),
+            player_uid: _cloudInputText('br-search-player-uid'),
+            player_name: _cloudInputText('br-search-player-name'),
+            page: 1,
+            page_size: 20
+        };
+        _brCallApi('search_boss_raid_remote', [query], function() {
+            showToast('BOSS RAID SEARCH COMPLETE');
+        });
+
+/* === Panel Toggles & Handlers === */
+    });
+}
+
+/* Boss Raid tab switching */
+document.getElementById('boss-raid-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    _brCallApi('set_boss_raid_enabled', [this.checked], function() {
+        showToast('BOSS RAID ' + (document.getElementById('boss-raid-enabled').checked ? 'ON' : 'OFF'));
+    });
+});
+document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(tab) {
+    tab.addEventListener('click', function(e) {
+        e.stopPropagation();
+        playSound('snd-click');
+        _brSetTab(this.getAttribute('data-tab'));
+    });
+});
+
+/* Boss bar mode selector */
+function _bossBarModeValue(value) {
+    var mode = String(value || '').trim().toLowerCase();
+    return (mode === 'always' || mode === 'boss_raid' || mode === 'off') ? mode : 'boss_raid';
+}
+
+function _setBossBarModeUI(mode) {
+    var safeMode = _bossBarModeValue(mode);
+    document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
+        btn.classList.toggle('active', _bossBarModeValue(btn.getAttribute('data-mode')) === safeMode);
+    });
+    return safeMode;
+}
+function _bossBarActiveMode() {
+    var active = document.querySelector('#boss-bar-mode-group .boss-bar-mode-btn.active');
+    return _bossBarModeValue(active ? active.getAttribute('data-mode') : 'boss_raid');
+}
+document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        playSound('snd-click');
+        var previousMode = _bossBarActiveMode();
+        var mode = _setBossBarModeUI(this.getAttribute('data-mode'));
+        var labels = { always: '有敌人就显示', boss_raid: '仅 Boss Raid', off: '关闭' };
+        _callMenuSettingApi('set_boss_bar_mode', [mode], 'BOSS HP BAR', function(data) {
+            var applied = _setBossBarModeUI(data && data.mode !== undefined ? data.mode : mode);
+            showToast('BOSS HP BAR: ' + (labels[applied] || applied));
+        }, function() {
+            _setBossBarModeUI(previousMode);
+        });
+    });
+});
+
+/* DPS meter toggle */
+(function() {
+    var el = document.getElementById('dps-enabled');
+    if (el) {
+        el.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var on = this.checked;
+            _setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
+        });
+    }
+})();
+
+/* Buff Monitor toggle */
+(function() {
+    var el = document.getElementById('buffmon-enabled');
+    if (el) {
+        el.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var on = this.checked;
+            _setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
+        });
+    }
+})();
+
+var _dpsFadeTimeoutValue = 5;
+var _dpsFadeTimeoutRequestSeq = 0;
+function _setDpsFadeTimeoutUI(val, commit) {
+    var v = _clampInt(val, _dpsFadeTimeoutValue, 0, 120);
+    var el = document.getElementById('dps-fade-timeout');
+    if (el) el.value = v;
+    if (commit !== false) _dpsFadeTimeoutValue = v;
+    return v;
+}
+function _setDpsFadeTimeout(val) {
+    var previousValue = _dpsFadeTimeoutValue;
+    var v = _setDpsFadeTimeoutUI(val, false);
+    var requestSeq = ++_dpsFadeTimeoutRequestSeq;
+    _callMenuSettingApi('set_dps_fade_timeout', [v], 'DPS METER', function(data) {
+        if (requestSeq !== _dpsFadeTimeoutRequestSeq) return;
+        var applied = data && data.timeout !== undefined ? data.timeout : (data && data.seconds !== undefined ? data.seconds : v);
+        _setDpsFadeTimeoutUI(applied);
+    }, function() {
+        if (requestSeq !== _dpsFadeTimeoutRequestSeq) return false;
+        _setDpsFadeTimeoutUI(previousValue);
+    });
+}
+
+function _setDpsLastReportAvailable(available) {
+    var btn = document.getElementById('dps-last-report-btn');
+    if (!btn) return;
+    btn.classList.toggle('disabled', !available);
+    btn.setAttribute('data-available', available ? '1' : '0');
+}
+
+function _showLastDpsReport() {
+    var btn = document.getElementById('dps-last-report-btn');
+    if (btn && btn.classList.contains('disabled')) {
+        showAlert('DPS METER', '暂无上一场战斗报告 / No last combat report yet.', true);
+        return;
+    }
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.show_last_dps_report) {
+        showAlert('DPS METER', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    window.pywebview.api.show_last_dps_report().then(function(result) {
+        var data = _menuParseApiResult(result);
+        if (!data || data.ok === false) {
+            showAlert('DPS METER', (data && (data.message || data.error || data.detail)) ? (data.message || data.error || data.detail) : '无法打开上一场战斗报告 / Unable to open last combat report', true);
+            return;
+        }
+        showToast('DPS REPORT: LAST REPORT');
+    }).catch(function(err) {
+
+/* === Linkage Management === */
+    });
+}
+
+/* ═══ Boss ↔ AutoKey Linkage ═══ */
+var _linkageMappings = [];
+
+function _initLinkageUI() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_linkage_state) return;
+    api.get_linkage_state().then(function(raw) {
+        var resp = _menuParseApiResult(raw);
+        if (!resp.ok) return;
+        var s = _menuApiObject(resp.state) ? resp.state : null;
+        if (!s) return;
+        var enabledEl = document.getElementById('linkage-enabled');
+        var debugEl = document.getElementById('linkage-debug');
+        var cdEl = document.getElementById('linkage-global-cd');
+        if (enabledEl) enabledEl.checked = !!s.enabled;
+        if (debugEl) debugEl.checked = !!s.debug_log;
+        if (cdEl) cdEl.value = _clampNum(s.global_cooldown_s, 1.0, 0, 60);
+        _linkageMappings = Array.isArray(s.mappings) ? s.mappings : [];
+        _renderLinkageMappings();
+    });
+}
+
+function _renderLinkageMappings() {
+    var container = document.getElementById('linkage-mappings');
+    if (!container) return;
+    var mappings = Array.isArray(_linkageMappings) ? _linkageMappings : [];
+    _linkageMappings = mappings;
+    if (mappings.length === 0) {
+        container.innerHTML = '<div style="font-size:10px;color:rgb(160,158,160);">No mappings. Click + to add.</div>';
+        return;
+    }
+    var triggerLabels = {
+        phase_enter: 'Phase Enter',
+        timeline_alert: 'Timeline Alert',
+        breaking: 'Breaking',
+        enrage: 'Enrage',
+    };
+    var html = '';
+    for (var i = 0; i < mappings.length; i++) {
+        var m = mappings[i] || {};
+        html += '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:4px 6px;background:rgba(245,243,240,0.80);border:1px solid rgba(201,198,198,0.45);border-radius:6px;">';
+        html += '<select data-idx="' + i + '" data-field="trigger_type" onchange="_updateMapping(this)" '
+             + 'style="font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);">';
+        ['phase_enter','timeline_alert','breaking','enrage'].forEach(function(t) {
+            html += '<option value="' + t + '"' + (m.trigger_type === t ? ' selected' : '') + '>' + (triggerLabels[t] || t) + '</option>';
+        });
+        html += '</select>';
+        html += '<input type="text" data-idx="' + i + '" data-field="trigger_match" value="' + _escAttr(_akTextValue(m.trigger_match)) + '" '
+             + 'placeholder="match..." onchange="_updateMapping(this)" '
+             + 'style="width:60px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
+        html += '<span style="font-size:9px;color:rgb(160,158,160);">→</span>';
+        html += '<input type="text" data-idx="' + i + '" data-field="action_key" value="' + _escAttr(_akTextValue(m.action_key)) + '" '
+             + 'placeholder="Key" onchange="_updateMapping(this)" '
+             + 'style="width:36px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);text-transform:uppercase;" />';
+        html += '<input type="text" data-idx="' + i + '" data-field="action_label" value="' + _escAttr(_akTextValue(m.action_label)) + '" '
+             + 'placeholder="Label" onchange="_updateMapping(this)" '
+             + 'style="width:50px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
+        html += '<span style="font-size:8px;color:rgb(185,183,183);cursor:pointer;" onclick="_removeLinkageMapping(' + i + ')">✕</span>';
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function _updateMapping(el) {
+    var idx = parseInt(el.getAttribute('data-idx'));
+    var field = el.getAttribute('data-field');
+    if (idx >= 0 && idx < _linkageMappings.length && field) {
+        _linkageMappings[idx][field] = el.value;
+        _saveLinkageMappings();
+    }
+}
+
+function _addLinkageMapping() {
+    _linkageMappings.push({
+        id: 'lnk_' + Math.random().toString(36).substring(2, 14),
+        enabled: true,
+        trigger_type: 'phase_enter',
+        trigger_match: '',
+        action_key: '',
+        action_label: '',
+        press_mode: 'tap',
+        hold_ms: 80,
+        press_count: 1,
+        cooldown_s: 3.0,
+    });
+    _renderLinkageMappings();
+    _saveLinkageMappings();
+}
+
+function _removeLinkageMapping(idx) {
+    _linkageMappings.splice(idx, 1);
+    _renderLinkageMappings();
+    _saveLinkageMappings();
+}
+
+function _saveLinkageMappings() {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && api.save_linkage_mappings) {
+        api.save_linkage_mappings(JSON.stringify(_linkageMappings));
+    }
+}
+
+function _setLinkageGlobalCD(val) {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && api.set_linkage_global_cooldown) {
+        var seconds = _clampNum(val, 1.0, 0, 60);
+        var el = document.getElementById('linkage-global-cd');
+        if (el) el.value = seconds;
+        api.set_linkage_global_cooldown(seconds);
+    }
+}
+
+(function() {
+    var elEnabled = document.getElementById('linkage-enabled');
+    if (elEnabled) {
+        elEnabled.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var api = window.pywebview && window.pywebview.api;
+            if (api && api.set_linkage_enabled) api.set_linkage_enabled(this.checked);
+            showToast('LINKAGE: ' + (this.checked ? 'ON' : 'OFF'));
+        });
+    }
+    var elDebug = document.getElementById('linkage-debug');
+    if (elDebug) {
+        elDebug.addEventListener('change', function(e) {
+            e.stopPropagation();
+            var api = window.pywebview && window.pywebview.api;
+            if (api && api.set_linkage_debug) api.set_linkage_debug(this.checked);
+        });
+    }
+    // Init on pywebview ready
+    if (window.pywebview && window.pywebview.api) {
+        _initLinkageUI();
+    } else {
+        window.addEventListener('pywebviewready', _initLinkageUI);
+    }
+})();
+
+/* ═══ Python bridge: expose JS functions ═══ */
+window.SAO = {
+    openMenu: openMenu,
+    closeMenu: closeMenu,
+    exitApp: exitApplication,
+    updateInfo: updateInfo,
+    updateBadge: updateBadge,
+    showAlert: showAlert,
+    closeAlert: closeAlert,
+    showToast: showToast,
+    setFisheyeBg: setFisheyeBg,
+    stopFisheyeBg: stopFisheyeBg,
+    showFilePicker: showFilePicker,
+    closeFilePicker: closeFilePicker,
+    setSessionPlayersPayload: setSessionPlayersPayload,
+    showSessionPlayers: showSessionPlayers,
+    toggleSessionPlayers: toggleSessionPlayers,
+    closeSessionPlayers: closeSessionPlayers,
+    showLeaderboard: showLeaderboard,
+    closeLeaderboard: closeLeaderboard,
+    syncAutoKeyState: _syncAutoKeyState,
+    syncBossRaidState: _syncBossRaidState,
+    restoreMenuSettings: restoreMenuSettings,
+    updateUpdaterState: updateUpdaterState,
+};
+
+setTimeout(function() {
+    _initPanelThemes();
+    _loadInitialAutoKeyState();
+    _loadInitialBossRaidState();
+    // System clock — SAO sci-fi style with seconds
+    function _menuClock() {
+        var el = document.getElementById('info-clock');
+        if (!el) return;
+        var now = new Date();
+        var h = String(now.getHours()).padStart(2,'0');
+        var m = String(now.getMinutes()).padStart(2,'0');
+        var s = String(now.getSeconds()).padStart(2,'0');
+        el.textContent = h + ':' + m + ':' + s;
+    }
+    _menuClock();
+    setInterval(_menuClock, 1000);
+}, 250);
+</script>
+
+<!-- ═══ Plugin popup menu (插件 popup — manager + plugin list) ═══ -->
+<style>
+#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
+    background:rgba(4,8,14,.55); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#plugin-popup-card { width:340px; max-height:72vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.97),rgba(9,14,22,.97));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; padding:0; }
+.ppm-head { display:flex; align-items:center; justify-content:space-between;
+    padding:12px 14px; border-bottom:1px solid rgba(117,205,255,.3);
+    font-weight:700; letter-spacing:.04em; color:#ffd46f; }
+#ppm-close { cursor:pointer; font-size:20px; line-height:1; color:#9fc0d8; padding:0 4px; }
+#ppm-list { padding:8px 10px 12px; }
+.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 8px; border-radius:8px; margin:3px 0; font-size:13px; }
+.ppm-row:hover { background:rgba(117,205,255,.08); }
+.ppm-manage { cursor:pointer; color:#73d7ff; font-weight:600; border:1px solid rgba(117,205,255,.3); }
+.ppm-name { cursor:pointer; flex:1; }
+.ppm-name small { color:#9fc0d8; margin-left:4px; }
+.ppm-btn { border:1px solid rgba(117,205,255,.5); background:rgba(19,48,74,.6); color:#e8f6ff;
+    border-radius:6px; padding:3px 9px; font-size:12px; cursor:pointer; }

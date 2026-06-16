@@ -165,6 +165,29 @@ public static class BridgeCommands
 
     public const string ActAggregateStatus = "act.aggregate.status";
 
+    // Python ACT runtime-action aliases exposed to plugins through
+    // ctx.call_runtime("act_mem_..."). C# registers them too so shared
+    // plugin/runtime callers receive a structured native response instead of
+    // WebBridge unknown_command while full MemProbe wiring is still pending.
+    public const string ActMemStatus = "act_mem_status";
+    public const string ActMemCatalog = "act_mem_catalog";
+    public const string ActMemSelf = "act_mem_self";
+    public const string ActMemEntities = "act_mem_entities";
+    public const string ActMemBoss = "act_mem_boss";
+    public const string ActMemBossActions = "act_mem_boss_actions";
+    public const string ActMemBossAction = "act_mem_boss_action";
+    public const string ActMemDamage = "act_mem_damage";
+    public const string ActMemSkillDamage = "act_mem_skill_damage";
+    public const string ActMemAttrMap = "act_mem_attr_map";
+    public const string ActMemResolveName = "act_mem_resolve_name";
+    public const string ActMemRead = "act_mem_read";
+    public const string ActMemReadMany = "act_mem_read_many";
+    public const string ActMemSearch = "act_mem_search";
+    public const string ActMemSearchStatus = "act_mem_search_status";
+    public const string ActMemNarrow = "act_mem_narrow";
+    public const string ActMemSearchCancel = "act_mem_search_cancel";
+    public const string ActMemSearchList = "act_mem_search_list";
+
     public const string ActMemScopeStatus = "act.mem_scope.status";
     public const string ActMemScopeSearch = "act.mem_scope.search";
     public const string ActMemScopeSearchStatus = "act.mem_scope.search_status";
@@ -222,6 +245,10 @@ public static class BridgeCommands
     public const string ActTriggersDisable = "act.triggers.disable";
     public const string ActTriggersReload = "act.triggers.reload";
     public const string ActTriggersTest = "act.triggers.test";
+    public const string ActTriggerExportPresets = "act_trigger_export_presets";
+    public const string ActTriggerImportPresets = "act_trigger_import_presets";
+    public const string ActTriggersExportPresets = "act.triggers.export_presets";
+    public const string ActTriggersImportPresets = "act.triggers.import_presets";
 }
 
 /// <summary>Canonical bridge event names emitted from C# to JS.</summary>

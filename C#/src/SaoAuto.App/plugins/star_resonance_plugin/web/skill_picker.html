@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>自定义技能 CD 监控</title>
+<link rel="stylesheet" href="act_panel_theme.css"/>
+<style>
+:root { --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    font-family: 'Segoe UI', 'yuanJWD', sans-serif;
+    font-size: 13px;
+    background: var(--act-shell-bg, rgba(16,24,35,0.92));
+    color: var(--act-fg, #cfd8e4);
+}
+
+.shell {
+    display: flex; flex-direction: column;
+    width: 100%; height: 100%;
+    padding: var(--sp-md);
+    gap: var(--sp-sm);
+}
+
+/* ── header ── */
+.header { display: flex; align-items: center; gap: var(--sp-sm); flex-shrink: 0; }
+.header h1 {
+    font-size: 14px; font-weight: 700;
+    color: var(--act-gold, #f0c456);
+    letter-spacing: 0.5px;
+}
+.header .slot-count {
+    margin-left: auto; font-size: 11px;
+    color: var(--act-muted, #607080);
+}
+.header .close-btn {
+    cursor: pointer; font-size: 16px; padding: 2px 6px;
+    color: var(--act-danger, #ff707a);
+    border: none; background: none;
+}
+.header .close-btn:hover { opacity: 0.7; }
+
+/* ── sections ── */
+.section-title {
+    font-size: 12px; font-weight: 700; padding: 4px 0;
+    letter-spacing: 0.3px;
+}
+.section-title.gold { color: var(--act-gold, #f0c456); }
+.section-title.cyan { color: var(--act-cyan, #68e4ff); }
+
+.sep { height: 1px; background: var(--act-border, #243040); flex-shrink: 0; }
+
+/* ── configured list ── */
+.configured-wrap {
+    flex-shrink: 0; max-height: 200px; overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--act-border, #304050) transparent;
+}
+.configured-empty {
+    font-size: 12px; color: var(--act-muted, #607080); padding: 8px 0;
+}
+
+/* ── search bar ── */
+.search-bar { display: flex; align-items: center; gap: var(--sp-sm); flex-shrink: 0; }
+.search-bar input[type="text"] {
+    flex: 1; max-width: 260px; padding: 4px 8px;
+    border: 1px solid var(--act-border, #304050);
+    border-radius: 4px; outline: none;
+    background: var(--act-input-bg, rgba(20,32,43,0.8));
+    color: var(--act-fg, #cfd8e4); font-size: 12px;
+}
+.search-bar input:focus { border-color: var(--act-cyan, #68e4ff); }
+.search-bar .btn-refresh {
+    padding: 4px 12px; border-radius: 4px; cursor: pointer;
+    background: var(--act-gold, #f0c456); color: #111; border: none;
+    font-size: 12px; font-weight: 600;
+}
+.search-bar .btn-refresh:hover { opacity: 0.85; }
+
+/* ── available list ── */
+.available-wrap { flex: 1; overflow-y: auto; scrollbar-width: thin;
+    scrollbar-color: var(--act-border, #304050) transparent; }
+
+/* ── table rows ── */
+.tbl-head, .tbl-row {
+    display: grid; align-items: center; padding: 3px 4px; gap: 4px;
+    font-size: 12px;
+}
+.tbl-head {
+    grid-template-columns: 16% 12% 12% 16% auto;
+    color: var(--act-muted, #607080); font-weight: 600;
+    position: sticky; top: 0; z-index: 1;
+    background: var(--act-shell-bg, rgba(16,24,35,0.92));
+}
+.tbl-row {
+    grid-template-columns: 16% 12% 12% 16% auto;
+    border-radius: 3px;
+}
+.tbl-row:nth-child(even) { background: rgba(255,255,255,0.02); }
+.tbl-row:hover { background: rgba(104,228,255,0.06); }
+
+.conf-head, .conf-row {
+    display: grid; align-items: center; padding: 3px 4px; gap: 4px;
+    font-size: 12px;
+}
+.conf-head {
+    grid-template-columns: 6% 20% 14% 10% 8% 8% auto;
+    color: var(--act-muted, #607080); font-weight: 600;
+    position: sticky; top: 0; z-index: 1;
+    background: var(--act-shell-bg, rgba(16,24,35,0.92));
+}
+.conf-row {
+    grid-template-columns: 6% 20% 14% 10% 8% 8% auto;
+    border-radius: 3px;
+}
+.conf-row:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+/* ── cell styles ── */
+.cell-name { font-weight: 600; }
+.cell-name.cyan { color: var(--act-cyan, #68e4ff); }
+.cell-name.muted { color: var(--act-muted, #607080); }
+.cell-id { color: var(--act-muted, #607080); font-size: 11px; }
+.cell-cd { font-size: 11px; }
+.cell-cd.ready { color: var(--act-ok, #7df2bf); }
+.cell-cd.cooldown { color: var(--act-gold, #f0c456); }
+.cell-parent { font-size: 11px; cursor: pointer; }
+.cell-parent.grouped { color: var(--act-gold, #f0c456); }
+.cell-parent.standalone { color: var(--act-muted, #607080); }
+.cell-toggle { cursor: pointer; font-size: 13px; text-align: center; }
+.cell-toggle.on { color: var(--act-ok, #7df2bf); }
+.cell-toggle.off { color: var(--act-danger, #ff707a); }
+.cell-action { cursor: pointer; font-weight: 600; font-size: 12px; }
+.cell-action.add { color: var(--act-cyan, #68e4ff); }
+.cell-action.add:hover { text-decoration: underline; }
+.cell-action.remove { color: var(--act-danger, #ff707a); }
+.cell-action.remove:hover { text-decoration: underline; }
+.cell-action.added { color: var(--act-muted, #607080); cursor: default; }
+</style>
+</head>
+<body>
+<div class="shell">
+    <div class="header">
+        <h1>◇ 自定义技能 CD 监控</h1>
+        <span class="slot-count" id="slotCount">已用 0/5 槽</span>
+        <button class="close-btn" onclick="SkillPicker.close()" title="关闭">×</button>
+    </div>
+
+    <div class="section-title gold">已监控的技能</div>
+    <div class="configured-wrap" id="configuredWrap">
+        <div class="conf-head">
+            <span>槽位</span><span>技能名</span><span>技能ID</span>
+            <span>归属槽</span><span>TTS</span><span>视觉</span><span>操作</span>
+        </div>
+        <div id="configuredList"></div>
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="search-bar">
+        <span class="section-title cyan">可用技能</span>
+        <input type="text" id="queryInput" placeholder="搜索技能名 / ID"/>
+        <button class="btn-refresh" onclick="SkillPicker.refresh()">刷新列表</button>
+    </div>
+
+    <div class="available-wrap" id="availableWrap">
+        <div class="tbl-head">
+            <span>技能名</span><span>ID</span><span>LevelID</span>
+            <span>CD状态</span><span>操作</span>
+        </div>
+        <div id="availableList"></div>
+    </div>
+</div>
+
+<script src="act_panel_theme.js"></script>
+<script>
+(function() {
+    'use strict';
+
+    var _monitors = [];
+    var _available = [];
+    var _monitoredSlids = {};
+
+    function _int(v, d) { var n = parseInt(v, 10); return isFinite(n) ? n : (d || 0); }
+
+    /* ── Host bridge ── */
+    function _call(method, args) {
+        try {
+            if (window.pywebview && window.pywebview.api && window.pywebview.api[method]) {
+                return window.pywebview.api[method].apply(null, args || []);
+            }
+        } catch(e) { console.error('[SkillPicker] bridge call failed:', method, e); }
+        return null;
+    }
+
+    /* ── Render configured monitors ── */
+    function renderConfigured(monitors) {
+        _monitors = monitors || [];
+        _monitoredSlids = {};
+        _monitors.forEach(function(m) { _monitoredSlids[m.skill_level_id] = true; });
+
+        var el = document.getElementById('slotCount');
+        if (el) el.textContent = '已用 ' + _monitors.length + '/5 槽';
+
+        var list = document.getElementById('configuredList');
+        if (!list) return;
+        list.innerHTML = '';
+
+        if (!_monitors.length) {
+            list.innerHTML = '<div class="configured-empty">尚未配置自定义技能监控</div>';
+            return;
+        }
+
+        _monitors.forEach(function(mon) {
+            var row = document.createElement('div');
+            row.className = 'conf-row';
+
+            var parentText = mon.parent_slot > 0 ? ('Slot ' + mon.parent_slot) : '独立';
+            var parentCls = mon.parent_slot > 0 ? 'grouped' : 'standalone';
+            var ttsCls = mon.tts_enabled ? 'on' : 'off';
+            var visCls = mon.visual_enabled ? 'on' : 'off';
+
+            row.innerHTML =
+                '<span>' + mon.slot + '</span>' +
+                '<span class="cell-name cyan">' + _esc(mon.name) + '</span>' +
+                '<span class="cell-id">' + mon.skill_level_id + '</span>' +
+                '<span class="cell-parent ' + parentCls + '" data-slot="' + mon.slot +
+                    '" data-parent="' + mon.parent_slot + '">' + parentText + '</span>' +
+                '<span class="cell-toggle ' + ttsCls + '" data-slot="' + mon.slot +
+                    '" data-field="tts_enabled" data-cur="' + (mon.tts_enabled?1:0) + '">' +
+                    (mon.tts_enabled ? '✓' : '✗') + '</span>' +
+                '<span class="cell-toggle ' + visCls + '" data-slot="' + mon.slot +
+                    '" data-field="visual_enabled" data-cur="' + (mon.visual_enabled?1:0) + '">' +
+                    (mon.visual_enabled ? '✓' : '✗') + '</span>' +
+                '<span class="cell-action remove" data-slot="' + mon.slot + '">✕ 移除</span>';
+
+            list.appendChild(row);
+        });
+
+        list.addEventListener('click', function(e) {
+            var t = e.target;
+            if (t.classList.contains('cell-parent')) {
+                var s = _int(t.dataset.slot); var p = _int(t.dataset.parent);
+                var np = (p + 1) % 10;
+                _call('update_monitor', [s, 'parent_slot', np]);
+                return;
+            }
+            if (t.classList.contains('cell-toggle')) {
+                var s2 = _int(t.dataset.slot);
+                var field = t.dataset.field;
+                var cur = _int(t.dataset.cur);
+                _call('update_monitor', [s2, field, cur ? false : true]);
+                return;
+            }
+            if (t.classList.contains('remove')) {
+                var s3 = _int(t.dataset.slot);
+                _call('remove_monitor', [s3]);
+            }
+        });
+    }
+
+    /* ── Render available skills ── */
+    function renderAvailable(skills) {
+        _available = skills || [];
+        var query = (document.getElementById('queryInput').value || '').trim().toLowerCase();
+        var filtered = _available;
+        if (query) {
+            filtered = _available.filter(function(s) {
+                return s.name.toLowerCase().indexOf(query) >= 0 ||
+                       String(s.skill_id).indexOf(query) >= 0 ||
+                       String(s.skill_level_id).indexOf(query) >= 0;
+            });
+        }
+
+        var list = document.getElementById('availableList');
+        if (!list) return;
+        list.innerHTML = '';
+
+        if (!filtered.length) {
+            var msg = query ? '无匹配技能' : '暂无可用技能 (需要在 hybrid 模式下游戏中获取)';
+            list.innerHTML = '<div class="configured-empty">' + msg + '</div>';
+            return;
+        }
+
+        var frag = document.createDocumentFragment();
+        var max = Math.min(filtered.length, 100);
+        for (var i = 0; i < max; i++) {
+            var skill = filtered[i];
+            var slid = skill.skill_level_id;
+            var already = !!_monitoredSlids[slid];
+            var row = document.createElement('div');
+            row.className = 'tbl-row';
+
+            var nameCls = already ? 'cell-name muted' : 'cell-name';
+            var cdText, cdCls;
+            if (skill.has_cd) {
+                cdText = (skill.remaining_ms / 1000).toFixed(1) + 's / ' +
+                         (skill.total_cd_ms / 1000).toFixed(0) + 's';
+                cdCls = 'cell-cd cooldown';
+            } else {
+                cdText = '就绪';
+                cdCls = 'cell-cd ready';
+            }
+
+            var actionHtml;
+            if (already) {
+                actionHtml = '<span class="cell-action added">已添加</span>';
+            } else {
+                actionHtml = '<span class="cell-action add" data-slid="' + slid +
+                    '" data-name="' + _esc(skill.name) + '">+ 添加</span>';
+            }
+
+            row.innerHTML =
+                '<span class="' + nameCls + '">' + _esc(skill.name) + '</span>' +
+                '<span class="cell-id">' + skill.skill_id + '</span>' +
+                '<span class="cell-id">' + slid + '</span>' +
+                '<span class="' + cdCls + '">' + cdText + '</span>' +
+                actionHtml;
+            frag.appendChild(row);
+        }
+        list.appendChild(frag);
+
+        list.addEventListener('click', function(e) {
+            var t = e.target;
+            if (t.classList.contains('add')) {
+                var slid2 = _int(t.dataset.slid);
+                var name = t.dataset.name || '';
+                _call('add_monitor', [slid2, name]);
+            }
+        });
+    }
+
+    function _esc(s) {
+        var d = document.createElement('div');
+        d.textContent = s || '';
+        return d.innerHTML;
+    }
+
+    /* ── Search debounce ── */
+    var _qTimer = null;
+    var queryInput = document.getElementById('queryInput');
+    if (queryInput) {
+        queryInput.addEventListener('input', function() {
+            clearTimeout(_qTimer);
+            _qTimer = setTimeout(function() { renderAvailable(_available); }, 300);
+        });
+        queryInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { clearTimeout(_qTimer); renderAvailable(_available); }
+        });
+    }
+
+    /* ── Public API ── */
+    window.SkillPicker = {
+        setConfigured: function(monitors) { renderConfigured(monitors); },
+        setAvailable: function(skills) { renderAvailable(skills); },
+        update: function(payload) {
+            if (payload.configured) renderConfigured(payload.configured);
+            if (payload.available) renderAvailable(payload.available);
+            if (payload.theme) {
+                try { window._applyPanelTheme(payload.theme); } catch(e) {}
+            }
+        },
+        refresh: function() { _call('refresh_picker', []); },
+        close: function() { _call('close_picker', []); },
+    };
+
+    /* ── Init theme ── */
+    try {
+        if (window._applyPanelTheme) window._applyPanelTheme('dark');
+    } catch(e) {}
+})();
+</script>
+</body>
+</html>

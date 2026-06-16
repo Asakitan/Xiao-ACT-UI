@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Report Export</title>
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Panel-scoped tokens: LAYOUT/SIZING only. ALL colors come from the shared
+   act_panel_theme.css var(--act-*) tokens so light/dark follow the host theme
+   and stay 1:1 with the flat Tk Entity reference. The shared theme already
+   targets .shell/.header/.card/.metric/.table/.pill/.badge/.empty/.toast with
+   !important, so this block only sets layout + colors that the shared file
+   leaves open. The metric/card TOP accent bar mirrors Tk metric_tile.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+    --r-sm: 4px; --r-md: 6px;
+    --fs-kicker: 10px; --fs-meta: 11px; --fs-body: 12px; --fs-title: 14px; --fs-metric: 18px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+
+.shell {
+    opacity: 0;
+    transform: translateY(8px) scale(.99);
+    transition: opacity .22s ease, transform .22s ease;
+}
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: var(--fs-kicker); color: var(--act-gold); text-transform: uppercase; }
+.title { margin-top: 2px; font-size: 19px; font-weight: 700; letter-spacing: .06em; color: var(--act-text); }
+.header-actions { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; font-size: var(--fs-body); }
+.badge { display: inline-block; padding: 3px 7px; font-size: var(--fs-kicker); }
+button, select { padding: 7px 11px; font-size: var(--fs-body); font-weight: 600; }
+button { cursor: pointer; }
+input { width: 100%; padding: 7px 9px; font-size: var(--fs-body); }
+
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: var(--sp-3); }
+.main { min-height: 0; overflow: auto; padding-right: var(--sp-1); }
+.card { position: relative; margin-bottom: var(--sp-3); padding: var(--sp-3); overflow: hidden; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.metric { position: relative; padding: var(--sp-2) var(--sp-2) 9px; overflow: hidden; }
+.metric::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--act-cyan); }
+.metric .label { color: var(--act-muted); font-size: var(--fs-meta); }
+.metric .value { margin-top: var(--sp-1); color: var(--act-gold); font-size: var(--fs-metric); font-weight: 700; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.table th, .table td { padding: 7px var(--sp-2); text-align: left; }
+.table th { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .08em; }
+.table td { color: var(--act-text); user-select: text; }
+.side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+.side-title { color: var(--act-gold); font-size: var(--fs-body); letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: var(--sp-2); border-bottom: 1px solid var(--act-edge-soft); padding-bottom: 5px; font-size: var(--fs-body); color: var(--act-muted); }
+.row strong { color: var(--act-text); text-align: right; }
+.history { flex: 1; min-height: 0; overflow: auto; font-size: var(--fs-meta); color: var(--act-muted); line-height: 1.45; }
+.history-item { padding: 7px; margin-bottom: 6px; user-select: text; }
+.history-actions { display: flex; gap: 5px; margin-top: 7px; }
+.history-actions button { flex: 1; padding: 5px 7px; font-size: var(--fs-meta); }
+.import-actions { display: flex; gap: 6px; align-items: center; }
+.import-actions input { flex: 1; min-width: 0; }
+.import-actions button { flex: 0 0 auto; padding: 7px 9px; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 240px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border-radius: 999px; padding: 8px 14px; font-size: var(--fs-body); transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only): kill shared decorative chrome + flatten per-page accents to a single 3px left rail. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+button,input,select,.action-btn{clip-path:none!important;border-radius:3px!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;background:var(--act-card-bg-2)!important;}
+.main,.list,.plugin-list,.side,.side-panel,.section,.summary,.chart-wrap,.preview{box-shadow:none!important;}
+.bar{background:var(--act-gold)!important;}.skill-row.heal .bar{background:var(--act-ok)!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.aca-tile::before,.metric::before,.group-card::before{content:none!important;display:none!important;}
+.aca-tile{border-left:3px solid var(--acc,var(--act-cyan))!important;}
+.metric{border-left:3px solid var(--act-cyan)!important;}
+.group-card{border-left:3px solid var(--act-gold)!important;}
+.aca-fill{box-shadow:none!important;}
+.aca-row.zebra{background:var(--act-card-bg-2)!important;}
+.aca-badge,.aca-sec-badge{background:transparent!important;border-radius:3px!important;}
+.group-head:hover{background:var(--act-card-bg-2)!important;}
+.death td{box-shadow:none!important;background:transparent!important;border-left:3px solid var(--act-danger)!important;}
+</style>
+<script src="act_panel_theme.js"></script>
+<script src="act_panel_util.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div>
+            <div class="kicker">ACT REPORT DELIVERY</div>
+            <div class="title">REPORT / EXPORT</div>
+        </div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">LOADING</div>
+            <select id="fmt"><option value="json">JSON</option><option value="csv">CSV</option><option value="html">HTML</option><option value="xml">XML</option><option value="xml.gz">XML.GZ</option><option value="xml.zip">XML.ZIP</option></select>
+            <button class="primary" type="button" onclick="ReportExport.refresh()">刷新</button>
+            <button type="button" onclick="ReportExport.exportFile()">导出</button>
+            <button type="button" onclick="ReportExport.copy()">复制</button>
+            <button type="button" onclick="ReportExport.copyMiniParse()">Mini Copy</button>
+            <button class="close" type="button" onclick="ReportExport.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="preview"><div class="empty">正在读取 ACT 报告...<br/>LOADING REPORT</div></main>
+        <aside class="side">
+            <div class="side-title">EXPORT SUMMARY</div>
+            <div class="row"><span>Encounter</span><strong id="sum-id">--</strong></div>
+            <div class="row"><span>Format</span><strong id="sum-format">JSON</strong></div>
+            <div class="row"><span>History</span><strong id="sum-count">0</strong></div>
+            <div class="row"><span>Storage</span><strong id="sum-storage">--</strong></div>
+            <div class="row"><span>Selective</span><strong id="sum-selective">ALL</strong></div>
+            <div class="side-title">OFFLINE IMPORT</div>
+            <div class="import-actions">
+                <input id="import-path" type="text" placeholder="replay, XML, XML.GZ, or XML.ZIP report path" />
+                <button type="button" onclick="ReportExport.chooseImportFile()">选择</button>
+            </div>
+            <button type="button" onclick="ReportExport.importFile()">导入 Import</button>
+            <div class="side-title">HISTORY</div>
+            <input id="history-query" type="text" placeholder="搜索历史 / Search" />
+            <button type="button" onclick="ReportExport.clearHistory()">清空历史 Clear</button>
+            <div class="history" id="history-list">暂无历史报告</div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+
+    var shell = document.getElementById('shell');
+    var preview = document.getElementById('preview');
+    var historyList = document.getElementById('history-list');
+    var toast = document.getElementById('toast');
+    var statusPill = document.getElementById('status-pill');
+    var fmtSelect = document.getElementById('fmt');
+    var historyQuery = document.getElementById('history-query');
+    var importPath = document.getElementById('import-path');
+    var toastTimer = null;
+    var lastPayload = null;
+    var searchTimer = null;
+
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function parseResult(result) {
+        if (typeof result === 'string') {
+            try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; }
+        }
+        return result || {};
+    }
+
+    function numericArg(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function safeLimit(value, fallback, hi) {
+        var number = Math.round(numericArg(value, fallback == null ? 20 : fallback));
+        if (!isFinite(number)) number = fallback == null ? 20 : fallback;
+        return Math.max(1, Math.min(hi == null ? 200 : hi, number));
+    }
+
+    function safeHistoryIndex(value, fallback) {
+        var number = Number(value);
+        if (!isFinite(number) || number < 0) number = Number(fallback || 0);
+        if (!isFinite(number) || number < 0) number = 0;
+        return Math.floor(number);
+    }
+    function listItems(value) { return Array.isArray(value) ? value : []; }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function finiteValue(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(finiteValue(value, 0))));
+    }
+    function valueText(value, fallback) {
+        return String(finiteValue(value, fallback));
+    }
+    function durationText(value) {
+        return valueText(value, 0) + 's';
+    }
+    function firstCountText() {
+        for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value == null || value === '') continue;
+            var number = Number(value);
+            if (isFinite(number)) return countText(number);
+        }
+        return '0';
+    }
+
+    function reportPayload(name, args) {
+        args = args || [];
+        if (name === 'get_report_export_status') return { limit: safeLimit(args[0], 20, 200), fmt: String(args[1] || 'json') };
+        if (name === 'export_last_report' || name === 'copy_report_export') return { fmt: String(args[0] || 'json') };
+        if (name === 'get_mini_parse_status' || name === 'preview_mini_parse' || name === 'copy_mini_parse') {
+            return { formatter_id: String(args[0] || 'summary_table') };
+        }
+        if (name === 'get_selective_parsing_status' || name === 'clear_selective_parsing') return {};
+        if (name === 'update_selective_parsing') return { policy: args[0] || {} };
+        if (name === 'get_history_status') return { limit: safeLimit(args[0], 20, 200), query: String(args[1] || '') };
+        if (name === 'load_history_report') return { index: safeHistoryIndex(args[0], 0), show: args[1] !== false };
+        if (name === 'delete_history_report') return { index: safeHistoryIndex(args[0], 0) };
+        if (name === 'clear_history_reports' || name === 'choose_offline_import_file') return {};
+        if (name === 'import_offline_report') {
+            return { path: String(args[0] || ''), persist: args[1] !== false, show: args[2] !== false };
+        }
+        if (name === 'toggle_report_export') return { action: 'toggle_report_export' };
+        return { args: args };
+    }
+
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') {
+            return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_report_export_status: 'act.report.status',
+                export_last_report: 'act.report.export',
+                copy_report_export: 'act.report.copy',
+                get_mini_parse_status: 'act.mini_parse.status',
+                preview_mini_parse: 'act.mini_parse.preview',
+                copy_mini_parse: 'act.mini_parse.copy',
+                get_selective_parsing_status: 'act.selective_parsing.status',
+                update_selective_parsing: 'act.selective_parsing.update',
+                clear_selective_parsing: 'act.selective_parsing.clear',
+                get_history_status: 'act.history.status',
+                load_history_report: 'act.history.load',
+                delete_history_report: 'act.history.delete',
+                clear_history_reports: 'act.history.clear',
+                choose_offline_import_file: 'act.offline_import.choose_file',
+                import_offline_report: 'act.offline_import.import',
+                toggle_report_export: 'ui.menu_action'
+            };
+            var payload = reportPayload(name, args || []);
+            return window.bridge.cmd(cmdMap[name] || ('act.report.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Report/export API unavailable', errors: ['Report/export API unavailable'] });
+    }
+
+    function showToast(message) {
+        toast.textContent = String(message || '');
+        toast.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800);
+    }
+
+    function fmt() { return fmtSelect.value || 'json'; }
+
+    function metric(label, value) {
+        return '<div class="metric"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div></div>';
+    }
+
+    function renderRows(rows) {
+        rows = objectItems(rows);
+        if (!rows.length) return '<div class="empty">暂无战斗成员数据</div>';
+        return '<table class="table"><thead><tr><th>#</th><th>Name</th><th>Damage</th><th>DPS</th><th>Heal</th></tr></thead><tbody>' +
+            rows.slice(0).map(function (row, idx) {
+                row = objectValue(row);
+                return '<tr><td>' + esc(row.rank || idx + 1) + '</td><td>' + esc(row.name || row.uid || '-') + '</td><td>' + esc(valueText(row.damage, 0)) + '</td><td>' + esc(valueText(row.dps, 0)) + '</td><td>' + esc(valueText(row.heal, 0)) + '</td></tr>';
+            }).join('') + '</tbody></table>';
+    }
+
+    function renderHistory(items) {
+        items = objectItems(items);
+        if (!items.length) {
+            historyList.textContent = '暂无历史报告';
+            return;
+        }
+        historyList.innerHTML = items.filter(function (_, idx) { return idx < 12; }).map(function (item, idx) {
+            item = objectValue(item);
+            var historyIndex = safeHistoryIndex(item._history_index, idx);
+            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(valueText(item.total_damage, 0)) + ' · dps=' + esc(valueText(item.total_dps, 0)) + '<br/><small>' + esc(durationText(item.elapsed_s)) + '</small><div class="history-actions"><button type="button" onclick="ReportExport.loadHistory(' + historyIndex + ')">载入</button><button type="button" onclick="ReportExport.deleteHistory(' + historyIndex + ')">删除</button></div></div>';
+        }).join('');
+    }
+
+    function render(payload) {
+        payload = objectValue(payload);
+        lastPayload = payload;
+        var p = objectValue(payload.preview);
+        var rows = objectItems(p.top_rows);
+        var historyItems = objectItems(payload.history);
+        var storage = objectValue(payload.storage_status);
+        statusPill.textContent = payload.ok ? 'READY' : 'MISSING';
+        statusPill.style.color = payload.ok ? 'var(--act-ok)' : 'var(--act-danger)';
+        document.getElementById('sum-id').textContent = payload.encounter_id || p.encounter_id || p.title || '--';
+        document.getElementById('sum-format').textContent = (payload.selected_format || fmt()).toUpperCase();
+        document.getElementById('sum-count').textContent = firstCountText(storage.count, historyItems.length);
+        // sqlite/archive 出错时不能继续装 READY (DB 锁死/损坏 → 空历史 + READY 误导)
+        var storageErr = String(objectValue(storage.sqlite).last_error || objectValue(storage.archive).last_error || '');
+        var storageEl = document.getElementById('sum-storage');
+        if (storageErr) {
+            storageEl.textContent = 'ERROR';
+            storageEl.style.color = 'var(--act-danger)';
+            storageEl.title = storageErr;
+        } else {
+            storageEl.textContent = storage.available ? 'READY' : 'N/A';
+            storageEl.style.color = '';
+            storageEl.title = '';
+        }
+        apiCall('get_selective_parsing_status', []).then(function (selective) {
+            var node = document.getElementById('sum-selective');
+            if (node) node.textContent = selective && selective.enabled ? String(selective.mode || 'ON').toUpperCase() : 'ALL';
+        }).catch(function () {});
+        renderHistory(historyItems);
+        if (!payload.ok && (!rows.length && !historyItems.length)) {
+            preview.innerHTML = '<div class="empty">' + esc(payload.message || '暂无可导出的 ACT 报告') + '</div>';
+            return;
+        }
+        preview.innerHTML = '<section class="card"><div class="metric-grid">' +
+            metric('Damage', valueText(p.total_damage, 0)) + metric('DPS', valueText(p.total_dps, 0)) +
+            metric('Heal', valueText(p.total_heal, 0)) + metric('Duration', durationText(p.elapsed_s)) +
+            '</div></section><section class="card"><div style="color:var(--act-gold);font-size:12px;letter-spacing:.12em;margin-bottom:8px;">TOP COMBATANTS</div>' + renderRows(rows) + '</section>';
+    }
+
+    function fallbackCopyText(text) {
+        var area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); }
+        finally { document.body.removeChild(area); }
+        if (!ok) throw new Error('clipboard unavailable');
+        return true;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).catch(function () { return fallbackCopyText(text); });
+        }
+        return Promise.resolve().then(function () { return fallbackCopyText(text); });
+    }
+
+    window.ReportExport = {
+        refresh: function () {
+            var query = historyQuery ? historyQuery.value : '';
+            return apiCall('get_report_export_status', [20, fmt()]).then(function (payload) {
+                payload = objectValue(payload);
+                if (!query) return payload;
+                return apiCall('get_history_status', [20, query]).then(function (historyPayload) {
+                    historyPayload = objectValue(historyPayload);
+                    payload.history = objectItems(historyPayload.encounters);
+                    payload.storage_status = objectValue(historyPayload.storage_status || payload.storage_status);
+                    return payload;
+                });
+            }).then(function (payload) {
+                render(payload);
+                return payload;
+            }).catch(function (err) {
+                render({ ok: false, message: String(err), errors: [String(err)] });
+            });
+        },
+        exportFile: function () {
+            return apiCall('export_last_report', [fmt()]).then(function (payload) {
+                render(payload);
+                showToast(payload.ok ? ('导出完成 ' + (payload.path || '')) : (payload.message || '导出失败'));
+                return payload;
+            });
+        },
+        copy: function () {
+            return apiCall('copy_report_export', [fmt()]).then(function (payload) {
+                var text = payload.text || JSON.stringify(lastPayload || {}, null, 2);
+                return copyText(text).then(function () { showToast(payload.ok ? '报告已复制' : (payload.message || '已复制当前状态')); }).catch(function () { showToast('报告复制失败'); return payload; });
+            });
+        },
+        copyMiniParse: function () {
+            return apiCall('copy_mini_parse', ['summary_table']).then(function (payload) {
+                var text = payload.text || '';
+                return copyText(text).then(function () { showToast(payload.ok ? 'Mini-Parse 已复制' : (payload.message || 'Mini-Parse 已复制当前文本')); }).catch(function () { showToast('Mini-Parse 复制失败'); return payload; });
+            });
+        },
+        loadHistory: function (index) {
+            return apiCall('load_history_report', [safeHistoryIndex(index, 0), true]).then(function (payload) {
+                showToast(payload.ok ? '历史报告已载入' : (payload.message || '载入失败'));
+                return ReportExport.refresh();
+            });
+        },
+        deleteHistory: function (index) {
+            if (!confirm('删除这条历史报告？')) return Promise.resolve();
+            return apiCall('delete_history_report', [safeHistoryIndex(index, 0)]).then(function (payload) {
+                showToast(payload.ok ? '历史报告已删除' : (payload.message || '删除失败'));
+                return ReportExport.refresh();
+            });
+        },
+        clearHistory: function () {
+            if (!confirm('清空全部历史报告？')) return Promise.resolve();
+            return apiCall('clear_history_reports', []).then(function (payload) {
+                showToast(payload.ok ? '历史已清空' : (payload.message || '清空失败'));
+                return ReportExport.refresh();
+            });
+        },
+        chooseImportFile: function () {
+            return apiCall('choose_offline_import_file', []).then(function (payload) {
+                if (payload.ok && payload.path && importPath) {
+                    importPath.value = payload.path;
+                    showToast('已选择导入文件');
+                } else if (!payload.cancelled) {
+                    showToast(payload.message || '选择文件失败');
+                }
+                return payload;
+            });
+        },
+        importFile: function () {
+            var path = importPath ? importPath.value.trim() : '';
+            if (!path) {
+                showToast('请先选择导入文件');
+                return Promise.resolve({ ok: false, message: 'No import file selected' });
+            }
+            return apiCall('import_offline_report', [path, true, true]).then(function (payload) {
+                showToast(payload.ok ? ('导入完成 ' + countText(payload.event_count) + ' events') : (payload.message || '导入失败'));
+                return ReportExport.refresh();
+            });
+        },
+        close: function () { apiCall('toggle_report_export'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+
+    fmtSelect.addEventListener('change', function () { ReportExport.refresh(); });
+    if (historyQuery) {
+        historyQuery.addEventListener('input', function () {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () { ReportExport.refresh(); }, 220);
+        });
+    }
+    setTimeout(function () {
+        shell.classList.add('visible');
+        window.ReportExport.refresh();
+    }, 40);
+})();
+</script>
+</body>
+</html>

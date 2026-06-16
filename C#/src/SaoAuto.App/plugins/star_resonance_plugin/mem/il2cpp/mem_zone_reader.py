@@ -1,0 +1,177 @@
+# -*- coding: utf-8 -*-
+"""mem_zone_reader - 读 AOE 危险区(ZoneEnt)的**成员判定**, 精准出圈零误差.
+
+★精确不靠估算半径(主人: 范围错了会害死人): 服务端自己在 ZoneComp.entitiesIdInZone_
+(ZList<long uuid>) 里维护"谁在这个区域内"——game 自己说玩家在不在圈里。精准出圈=
+玩家 uuid 从危险区成员列表消失即停, 而不是算半径+距离(半径在配置/native里逆不干净)。
+
+链路(全 auto-offset, 用活对象 klass 字段表): ZoneEnt(zoneDict_) → compList_ 里 ZoneComp
+→ entitiesIdInZone_(ZList) → items_/size_ → long uuid[]; ZoneEnt.zoneType_ 分危险/安全。
+实测: 玩家站区域内时其 uuid 确在 entitiesIdInZone_ 列表里(size=1 ids=[player_uuid])。
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Set
+
+from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
+
+_MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
+
+# ── Il2Cpp STRUCTURAL constants (runtime-defined, NOT game-class fields) ──
+# ZList<T>.items_ @0x18, .size_ @0x20; managed-array first-element offset 0x20.
+ZLIST_ITEMS_OFF = 0x18
+ZLIST_SIZE_OFF = 0x20
+ARRAY_ELEMS_OFF = 0x20
+
+# ── verified-live literal fallbacks (auto-offset preferred; resolved in __init__) ──
+ENT_ZONETYPE_OFF = 0x118        # ZoneEnt.zoneType_ (klass not bundled; fallback only)
+ENT_BASEID_OFF = 0xE0           # ZoneEnt(:ZEntity).BaseId (klass not bundled; fallback)
+ZONE_DICT_FALLBACK = 0x90       # ZEntityMgr.zoneDict_
+ENT_COMPLIST_FALLBACK = 0x60    # ZEntity.compList_
+ENT_UUID_FALLBACK = 0xC0        # ZEntity.Uuid
+ZONECOMP_ENTSINZONE_OFF = 0x70  # ZoneComp.entitiesIdInZone_ (resolved live via _zc_fmap)
+
+
+class ZoneReader:
+    def __init__(self, dps_source):
+        self._src = dps_source
+        self._pm = dps_source.sr.pm
+        # init-time auto-offset of the managed fields whose classes are in the
+        # curated bundle (Panda.ZGame.ZEntityMgr / .ZEntity). Live field-table or
+        # dump preferred; literal fallback when both miss.
+        try:
+            mgr = _ao.resolve(dps_source, "Panda.ZGame.ZEntityMgr",
+                              {"off_zone_dict": ("zoneDict_", ZONE_DICT_FALLBACK)})
+            ent = _ao.resolve(dps_source, "Panda.ZGame.ZEntity", {
+                "off_ent_complist": ("compList_", ENT_COMPLIST_FALLBACK),
+                "off_uuid": ("Uuid", ENT_UUID_FALLBACK),
+            })
+        except Exception:
+            mgr = ent = {}
+        self._off_zone_dict = int(mgr.get("off_zone_dict", ZONE_DICT_FALLBACK))
+        self._off_ent_complist = int(ent.get("off_ent_complist", ENT_COMPLIST_FALLBACK))
+        self._off_uuid = int(ent.get("off_uuid", ENT_UUID_FALLBACK))
+        self._zonecomp_klass = 0
+        self._off_entsinzone = 0
+        self._off_group = 0
+        self._zc_fields = None
+
+    def _kname(self, obj: int) -> str:
+        try:
+            kp = self._pm.read_u64(obj)
+            np = self._pm.read_u64(kp + 0x10)
+            b = self._pm.read_bytes(np, 64)
+            s = b.split(b"\x00", 1)[0]
+            return s.decode("ascii", "replace") if s else ""
+        except Exception:
+            return ""
+
+    def _zc_fmap(self, zonecomp: int) -> Dict[str, int]:
+        """活 ZoneComp 对象 klass 字段表 (auto-offset), 缓存。"""
+        if getattr(self, "_zc_fields", None) is None:
+            self._zc_fields = {}
+            try:
+                from plugins.star_resonance_plugin.mem.il2cpp.live_field_resolver import LiveFieldResolver
+                kp = self._pm.read_u64(zonecomp)
+                self._zc_fields = LiveFieldResolver(self._pm)._field_map(kp) or {}
+            except Exception:
+                self._zc_fields = {}
+        return self._zc_fields
+
+    def _resolve_entsinzone_off(self, zonecomp: int) -> int:
+        """从活 ZoneComp 对象的 klass 字段表解 entitiesIdInZone_ 偏移 (auto-offset)。"""
+        if self._off_entsinzone:
+            return self._off_entsinzone
+        off = self._zc_fmap(zonecomp).get("entitiesIdInZone_")
+        self._off_entsinzone = int(off) if off else ZONECOMP_ENTSINZONE_OFF
+        return self._off_entsinzone
+
+    def _resolve_group_off(self, zonecomp: int) -> int:
+        """ZoneComp.zoneGroupId_ 偏移 (auto-offset), 缓存。同批编号圈共享 group id。"""
+        if self._off_group:
+            return self._off_group
+        off = self._zc_fmap(zonecomp).get("zoneGroupId_")
+        self._off_group = int(off) if off else 0x38
+        return self._off_group
+
+    def _zone_comp(self, zone_obj: int) -> int:
+        cl = self._pm.read_u64(zone_obj + self._off_ent_complist) or 0
+        if not (_MINP <= cl <= _MAXP):
+            return 0
+        for i in range(16):
+            cp = self._pm.read_u64(cl + ARRAY_ELEMS_OFF + i * 8) or 0
+            if _MINP <= cp <= _MAXP and self._kname(cp) == "ZoneComp":
+                return cp
+        return 0
+
+    def _read_member_uuids(self, zonecomp: int) -> List[int]:
+        off = self._resolve_entsinzone_off(zonecomp)
+        zlist = self._pm.read_u64(zonecomp + off) or 0
+        if not (_MINP <= zlist <= _MAXP):
+            return []
+        items = self._pm.read_u64(zlist + ZLIST_ITEMS_OFF) or 0
+        size = self._pm.read_i32(zlist + ZLIST_SIZE_OFF) or 0
+        if not (_MINP <= items <= _MAXP) or not (0 <= size <= 256):
+            return []
+        out = []
+        for j in range(min(size, 64)):
+            v = self._pm.read_i64(items + ARRAY_ELEMS_OFF + j * 8)
+            if v:
+                out.append(int(v))
+        return out
+
+    def zones_containing(self, mgr_addr: int, player_uuid: int,
+                         zone_dict_off: int = 0) -> List[Dict]:
+        """返回玩家当前所在的全部区域 [{zone_uuid, zone_type, members_n}]。"""
+        zoff = zone_dict_off or self._off_zone_dict
+        out = []
+        try:
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
+            emr = EntityMgrReader(self._src)
+            d = self._pm.read_u64(mgr_addr + zoff) or 0
+            for key, zone in emr._read_dict_entries(d, max_entries=64):
+                zc = self._zone_comp(zone)
+                if not zc:
+                    continue
+                members = self._read_member_uuids(zc)
+                if player_uuid in members:
+                    zt = self._pm.read_i32(zone + ENT_ZONETYPE_OFF)
+                    out.append({"zone_uuid": int(key), "zone_obj": int(zone),
+                                "zone_type": zt, "members_n": len(members)})
+        except Exception:
+            pass
+        return out
+
+    def snapshot(self, mgr_addr: int, zone_dict_off: int = 0) -> List[Dict]:
+        """一次快照全部活动区域: [{zone_uuid, base_id, group_id, zone_type, members:set}]。
+        编号圈追踪器消费此快照按出现顺序编号 + 用 members 做命中归属。O(zones), 区域少。"""
+        zoff = zone_dict_off or self._off_zone_dict
+        out = []
+        try:
+            from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader
+            emr = EntityMgrReader(self._src)
+            emr.locate(0)        # 触发 off_ent_baseid 等 auto-offset 解析
+            baseid_off = int(getattr(emr, "off_ent_baseid", ENT_BASEID_OFF) or ENT_BASEID_OFF)
+            d = self._pm.read_u64(mgr_addr + zoff) or 0
+            for key, zone in emr._read_dict_entries(d, max_entries=64):
+                zc = self._zone_comp(zone)
+                if not zc:
+                    continue
+                members = self._read_member_uuids(zc)
+                base_id = self._pm.read_i64(zone + baseid_off)
+                gid = self._pm.read_i32(zc + self._resolve_group_off(zc))
+                zt = self._pm.read_i32(zone + ENT_ZONETYPE_OFF)
+                out.append({"zone_uuid": int(key), "zone_obj": int(zone),
+                            "base_id": int(base_id or 0), "group_id": int(gid or 0),
+                            "zone_type": int(zt or 0), "members": set(members)})
+        except Exception:
+            pass
+        return out
+
+    def player_zone_uuids(self, mgr_addr: int, player_uuid: int,
+                          zone_dict_off: int = 0) -> Set[int]:
+        return {z["zone_uuid"] for z in
+                self.zones_containing(mgr_addr, player_uuid, zone_dict_off)}
+
+
+__all__ = ["ZoneReader"]

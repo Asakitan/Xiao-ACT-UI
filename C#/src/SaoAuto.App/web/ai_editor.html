@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAO AI Editor</title>
+<style>
+:root {
+  --bg: #1e1e1e; --bg2: #252526; --bg-input: #2d2d2d; --bg-code: #1a1a2e;
+  --bg-tool: #1e2a1e; --bg-tool-result: #162016; --bg-user: #264f78;
+  --fg: #ccc; --fg-dim: #808080; --fg-bright: #e0e0e0;
+  --fg-accent: #4fc1ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
+  --fg-warning: #cca700; --fg-tool: #dcdcaa; --fg-code: #d4d4d4;
+  --border: #3c3c3c; --border-focus: #007acc;
+  --btn: #0e639c; --btn-hover: #1177bb; --selection: #264f78;
+  --scrollbar: #424242; --scrollbar-active: #686868;
+  --radius: 6px; --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  --sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--sans); font-size: 13px; color: var(--fg); background: var(--bg);
+       display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-active); }
+
+/* ── Header ── */
+.header { display: flex; align-items: center; background: var(--bg2); height: 36px;
+          padding: 0 12px; gap: 8px; flex-shrink: 0; -webkit-app-region: drag; user-select: none; }
+.header .title { color: var(--fg-accent); font-weight: 600; font-size: 13px; }
+.header select, .header input { -webkit-app-region: no-drag; background: var(--bg-input);
+  color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px;
+  font-size: 12px; font-family: var(--mono); outline: none; }
+.header select:focus, .header input:focus { border-color: var(--border-focus); }
+.header .spacer { flex: 1; }
+.header-btn { -webkit-app-region: no-drag; cursor: pointer; padding: 4px 8px; color: var(--fg-dim);
+  border-radius: 3px; font-size: 13px; transition: background .15s; }
+.header-btn:hover { background: #ffffff10; color: var(--fg); }
+
+/* ── Chat area ── */
+.chat-area { flex: 1; overflow-y: auto; padding: 12px 16px 12px 16px; }
+.msg { margin-bottom: 16px; animation: fadeIn .2s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+.msg-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.msg-role { font-weight: 600; font-size: 12px; }
+.msg-role.user { color: var(--fg-accent); }
+.msg-role.assistant { color: var(--fg-success); }
+.msg-role.system { color: var(--fg-warning); }
+.msg-role.tool { color: var(--fg-tool); }
+.msg-model { color: var(--fg-dim); font-size: 11px; }
+.msg-body { line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.msg-body p { margin-bottom: 6px; }
+
+/* Code blocks */
+.code-block { position: relative; background: var(--bg-code); border-radius: var(--radius);
+  margin: 8px 0; overflow: hidden; }
+.code-lang { display: block; padding: 4px 12px; font-size: 11px; color: var(--fg-dim);
+  background: #00000030; font-family: var(--mono); }
+.code-content { padding: 8px 12px; font-family: var(--mono); font-size: 12px;
+  color: var(--fg-code); overflow-x: auto; white-space: pre; line-height: 1.5; }
+.code-copy { position: absolute; top: 4px; right: 8px; cursor: pointer; color: var(--fg-dim);
+  font-size: 11px; padding: 2px 6px; border-radius: 3px; background: #00000040; }
+.code-copy:hover { background: #00000080; color: var(--fg); }
+
+/* Inline code */
+code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: var(--mono);
+  font-size: 12px; color: var(--fg-code); }
+
+/* Tool call */
+.tool-call { background: var(--bg-tool); border-radius: var(--radius); margin: 6px 0;
+  border-left: 3px solid var(--fg-tool); overflow: hidden; }
+.tool-call-header { padding: 6px 12px; font-family: var(--mono); font-size: 12px;
+  color: var(--fg-tool); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.tool-call-header .arrow { transition: transform .15s; font-size: 10px; }
+.tool-call-header.open .arrow { transform: rotate(90deg); }
+.tool-call-body { padding: 0 12px 8px; font-family: var(--mono); font-size: 11px;
+  color: var(--fg-dim); white-space: pre-wrap; display: none; }
+.tool-call-body.open { display: block; }
+
+.tool-result { background: var(--bg-tool-result); border-radius: var(--radius); margin: 6px 0;
+  border-left: 3px solid var(--fg-success); }
+.tool-result-header { padding: 6px 12px; font-family: var(--mono); font-size: 12px;
+  color: var(--fg-success); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.tool-result-body { padding: 0 12px 8px; font-family: var(--mono); font-size: 11px;
+  color: var(--fg-dim); white-space: pre-wrap; display: none; max-height: 300px; overflow-y: auto; }
+
+/* Error */
+.error-text { color: var(--fg-error); }
+
+/* Stream cursor */
+.stream-cursor::after { content: '▊'; color: var(--fg-accent); animation: blink .8s infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ── Input area ── */
+.input-area { flex-shrink: 0; background: var(--bg-input); border-top: 1px solid var(--border); }
+.input-hints { padding: 6px 16px 0; font-size: 11px; color: var(--fg-dim); }
+.input-wrap { padding: 0 12px 4px; }
+#input-editor { width: 100%; min-height: 60px; max-height: 200px; padding: 8px 12px;
+  background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
+  border-radius: var(--radius); font-family: var(--mono); font-size: 13px;
+  resize: vertical; outline: none; line-height: 1.5; }
+#input-editor:focus { border-color: var(--border-focus); }
+
+.btn-bar { display: flex; align-items: center; gap: 8px; padding: 0 12px 8px; }
+.btn { padding: 4px 14px; border-radius: 3px; cursor: pointer; font-size: 12px;
+  font-weight: 500; user-select: none; transition: background .15s; }
+.btn-primary { background: var(--btn); color: #fff; }
+.btn-primary:hover { background: var(--btn-hover); }
+.btn-secondary { background: var(--bg2); color: var(--fg-dim); }
+.btn-secondary:hover { background: #333; color: var(--fg); }
+.btn-danger { background: var(--bg2); color: var(--fg-error); }
+.token-count { margin-left: auto; color: var(--fg-dim); font-size: 11px; }
+
+/* ── Status bar ── */
+.status-bar { display: flex; align-items: center; height: 22px; padding: 0 12px;
+  background: var(--bg2); font-size: 11px; color: var(--fg-dim); flex-shrink: 0; }
+
+/* ── Settings modal ── */
+.modal-overlay { position: fixed; inset: 0; background: #00000080; display: none;
+  align-items: center; justify-content: center; z-index: 100; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  width: 520px; max-height: 90vh; overflow-y: auto; padding: 20px; }
+.modal h2 { color: var(--fg-accent); font-size: 15px; margin-bottom: 16px; }
+.modal label { display: block; color: var(--fg); font-size: 12px; margin-top: 10px; margin-bottom: 3px; }
+.modal input, .modal select, .modal textarea {
+  width: 100%; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 10px; font-size: 13px; font-family: var(--mono); outline: none; }
+.modal input:focus, .modal select:focus, .modal textarea:focus { border-color: var(--border-focus); }
+.modal textarea { min-height: 80px; resize: vertical; }
+.modal-btns { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+.modal-status { margin-top: 8px; font-size: 12px; }
+
+/* ── Tools panel ── */
+.tools-panel { display: none; }
+.tools-panel.open { display: block; position: fixed; right: 0; top: 36px; bottom: 22px;
+  width: 340px; background: var(--bg); border-left: 1px solid var(--border); z-index: 50;
+  overflow-y: auto; padding: 12px; }
+.tools-panel h3 { color: var(--fg-accent); font-size: 13px; margin-bottom: 8px; }
+.tool-cat { color: var(--fg-accent); font-size: 12px; font-weight: 600; margin-top: 12px; }
+.tool-item { padding: 4px 0 4px 12px; }
+.tool-name { color: var(--fg-tool); font-family: var(--mono); font-size: 12px; }
+.tool-desc { color: var(--fg-dim); font-size: 11px; margin-left: 12px; }
+.tool-confirm { color: var(--fg-warning); font-size: 10px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <span class="title">✦ SAO AI Editor</span>
+  <select id="provider-select">
+    <option value="openai">OpenAI</option>
+    <option value="anthropic">Anthropic</option>
+    <option value="deepseek">DeepSeek</option>
+    <option value="ollama">Ollama</option>
+    <option value="custom">Custom</option>
+  </select>
+  <input id="model-input" placeholder="Model name" style="width:160px">
+  <span class="spacer"></span>
+  <span class="header-btn" id="btn-new" title="New Chat">✚ New</span>
+  <span class="header-btn" id="btn-tools" title="Tools">🔧</span>
+  <span class="header-btn" id="btn-settings" title="Settings">⚙</span>
+</div>
+
+<!-- Chat area -->
+<div class="chat-area" id="chat-area"></div>
+
+<!-- Tools panel (right sidebar) -->
+<div class="tools-panel" id="tools-panel">
+  <h3>🔧 Engine Tools</h3>
+  <div id="tools-list"></div>
+</div>
+
+<!-- Input area -->
+<div class="input-area">
+  <div class="input-hints">Enter 发送 · Shift+Enter 换行 · Ctrl+L 清屏</div>
+  <div class="input-wrap">
+    <textarea id="input-editor" rows="3" placeholder="Ask anything..."></textarea>
+  </div>
+  <div class="btn-bar">
+    <span class="btn btn-primary" id="btn-send">▶ Send</span>
+    <span class="btn btn-danger" id="btn-stop" style="display:none">■ Stop</span>
+    <span class="btn btn-secondary" id="btn-clear">🗑 Clear</span>
+    <span class="btn btn-secondary" id="btn-export">📋 Export</span>
+    <span class="token-count" id="token-count">0 tokens</span>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <span id="status-text">Ready</span>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <h2>⚙ AI Editor Settings</h2>
+    <label>Provider</label>
+    <select id="s-provider">
+      <option value="openai">OpenAI</option>
+      <option value="anthropic">Anthropic</option>
+      <option value="deepseek">DeepSeek</option>
+      <option value="ollama">Ollama</option>
+      <option value="custom">Custom</option>
+    </select>
+    <label>API Key</label>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input id="s-apikey" type="password" style="flex:1">
+      <span class="btn btn-secondary" id="s-toggle-key" style="padding:4px 8px;font-size:11px">👁</span>
+    </div>
+    <label>Base URL (leave empty for default)</label>
+    <input id="s-baseurl" placeholder="https://api.openai.com/v1">
+    <label>Model</label>
+    <input id="s-model" placeholder="gpt-4o">
+    <label>Temperature</label>
+    <input id="s-temperature" type="number" step="0.1" min="0" max="2" value="0.7">
+    <label>Max Tokens</label>
+    <input id="s-maxtokens" type="number" value="4096">
+    <label>System Prompt</label>
+    <textarea id="s-sysprompt" rows="4"></textarea>
+    <div class="modal-status" id="s-status"></div>
+    <div class="modal-btns">
+      <span class="btn btn-secondary" id="s-test">Test Connection</span>
+      <span class="btn btn-secondary" id="s-cancel">Cancel</span>
+      <span class="btn btn-primary" id="s-save">Save</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── State ──
+  let config = { provider: 'openai', api_key: '', base_url: '', model: '', temperature: 0.7, max_tokens: 4096, system_prompt: '' };
+  let messages = [];
+  let isStreaming = false;
+  let totalTokens = 0;
+  let toolsOpen = false;
+  let tools = [];
+
+  // ── DOM refs ──
+  const chatArea = document.getElementById('chat-area');
+  const inputEditor = document.getElementById('input-editor');
+  const statusText = document.getElementById('status-text');
+  const tokenCount = document.getElementById('token-count');
+
+  // ── Bridge ──
+  function bridgeCmd(name, payload) {
+    if (window.bridge && window.bridge.cmd) return window.bridge.cmd(name, payload);
+    return Promise.resolve(null);
+  }
+
+  function bridgeOn(name, cb) {
+    if (window.bridge && window.bridge.on) return window.bridge.on(name, cb);
+  }
+
+  // ── Init ──
+  async function init() {
+    const saved = await bridgeCmd('ai_editor_load_config', {});
+    if (saved) Object.assign(config, saved);
+    syncConfigToUI();
+
+    const t = await bridgeCmd('ai_editor_list_tools', {});
+    if (t && t.tools) tools = t.tools;
+    renderToolsPanel();
+
+    // Subscribe to streaming events
+    bridgeOn('ai_editor_stream_delta', (d) => onStreamDelta(d));
+    bridgeOn('ai_editor_stream_end', (d) => onStreamEnd(d));
+    bridgeOn('ai_editor_tool_start', (d) => onToolStart(d));
+    bridgeOn('ai_editor_tool_end', (d) => onToolEnd(d));
+    bridgeOn('ai_editor_error', (d) => onError(d));
+    bridgeOn('ai_editor_idle', () => onIdle());
+
+    appendSystemMessage(
+      '✦ SAO AI Editor\n' +
+      '多模型LLM编辑器, 支持 OpenAI / Claude / DeepSeek / Ollama\n' +
+      '引擎工具已就绪: 内存读取 · 实体查询 · DPS数据 · Boss状态 · 触发器 · 设置 · Python执行\n\n' +
+      '先在 ⚙ Settings 中配置 API Key, 然后开始对话。'
+    );
+  }
+
+  // ── Render messages ──
+  function createMsgEl(role, model) {
+    const el = document.createElement('div');
+    el.className = 'msg';
+    const hdr = document.createElement('div');
+    hdr.className = 'msg-header';
+    const roleSpan = document.createElement('span');
+    roleSpan.className = 'msg-role ' + role;
+    roleSpan.textContent = role === 'user' ? '● You' : role === 'assistant' ? '● Assistant' : role === 'tool' ? '● Tool' : '● System';
+    hdr.appendChild(roleSpan);
+    if (model) { const m = document.createElement('span'); m.className = 'msg-model'; m.textContent = model; hdr.appendChild(m); }
+    el.appendChild(hdr);
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    el.appendChild(body);
+    chatArea.appendChild(el);
+    chatArea.scrollTop = chatArea.scrollHeight;
+    return body;
+  }
+
+  function appendSystemMessage(text) {
+    const body = createMsgEl('system', '');
+    body.textContent = text;
+    body.style.color = 'var(--fg-dim)';
+  }
+
+  function renderMarkdown(container, text) {
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    parts.forEach(part => {
+      if (part.startsWith('```') && part.endsWith('```')) {
+        let inner = part.slice(3, -3);
+        let lang = '';
+        const nl = inner.indexOf('\n');
+        if (nl > 0) {
+          const firstLine = inner.slice(0, nl).trim();
+          if (/^\w+$/.test(firstLine)) { lang = firstLine; inner = inner.slice(nl + 1); }
+        }
+        const block = document.createElement('div');
+        block.className = 'code-block';
+        if (lang) { const l = document.createElement('span'); l.className = 'code-lang'; l.textContent = lang; block.appendChild(l); }
+        const content = document.createElement('pre');
+        content.className = 'code-content';
+        content.textContent = inner;
+        block.appendChild(content);
+        const copy = document.createElement('span');
+        copy.className = 'code-copy';
+        copy.textContent = 'Copy';
+        copy.onclick = () => { navigator.clipboard.writeText(inner); copy.textContent = 'Copied!'; setTimeout(() => copy.textContent = 'Copy', 1500); };
+        block.appendChild(copy);
+        container.appendChild(block);
+      } else {
+        renderInlineMarkdown(container, part);
+      }
+    });
+  }
+
+  function renderInlineMarkdown(container, text) {
+    const parts = text.split(/(`[^`]+`)/g);
+    parts.forEach(part => {
+      if (part.startsWith('`') && part.endsWith('`')) {
+        const code = document.createElement('code');
+        code.textContent = part.slice(1, -1);
+        container.appendChild(code);
+      } else {
+        const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
+        boldParts.forEach(bp => {
+          if (bp.startsWith('**') && bp.endsWith('**')) {
+            const b = document.createElement('strong');
+            b.textContent = bp.slice(2, -2);
+            container.appendChild(b);
+          } else {
+            container.appendChild(document.createTextNode(bp));
+          }
+        });
+      }
+    });
+  }
+
+  function renderToolCall(container, name, args) {
+    const el = document.createElement('div');
+    el.className = 'tool-call';
+    const hdr = document.createElement('div');
+    hdr.className = 'tool-call-header';
+    hdr.innerHTML = '<span class="arrow">▸</span> Tool Call: ' + escHtml(name);
+    const body = document.createElement('div');
+    body.className = 'tool-call-body';
+    try { body.textContent = JSON.stringify(JSON.parse(args), null, 2); } catch { body.textContent = args; }
+    hdr.onclick = () => { hdr.classList.toggle('open'); body.classList.toggle('open'); };
+    el.appendChild(hdr); el.appendChild(body);
+    container.appendChild(el);
+  }
+
+  function renderToolResult(container, name, result) {
+    const el = document.createElement('div');
+    el.className = 'tool-result';
+    const hdr = document.createElement('div');
+    hdr.className = 'tool-result-header';
+    hdr.innerHTML = '<span class="arrow">▸</span> Result: ' + escHtml(name);
+    const body = document.createElement('div');
+    body.className = 'tool-result-body';
+    try { body.textContent = JSON.stringify(JSON.parse(result), null, 2); } catch { body.textContent = result; }
+    hdr.onclick = () => { hdr.classList.toggle('open'); body.classList.toggle('open'); };
+    el.appendChild(hdr); el.appendChild(body);
+    container.appendChild(el);
+  }
+
+  function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  // ── Streaming ──
+  let currentStreamBody = null;
+  let streamBuffer = '';
+
+  function onStreamDelta(d) {
+    if (!currentStreamBody) return;
+    streamBuffer += (d.content || '');
+    currentStreamBody.textContent = streamBuffer;
+    currentStreamBody.classList.add('stream-cursor');
+    chatArea.scrollTop = chatArea.scrollHeight;
+  }
+
+  function onStreamEnd(d) {
+    if (currentStreamBody) {
+      currentStreamBody.classList.remove('stream-cursor');
+      currentStreamBody.textContent = '';
+      renderMarkdown(currentStreamBody, streamBuffer);
+      if (d.tool_calls) {
+        d.tool_calls.forEach(tc => renderToolCall(currentStreamBody, tc.name, tc.arguments));
+      }
+      if (d.error) {
+        const err = document.createElement('div');
+        err.className = 'error-text';
+        err.textContent = '⚠ ' + d.error;
+        currentStreamBody.appendChild(err);
+      }
+    }
+    if (d.usage && d.usage.total_tokens) { totalTokens += d.usage.total_tokens; tokenCount.textContent = totalTokens + ' tokens'; }
+    currentStreamBody = null;
+    streamBuffer = '';
+    setStatus(d.tool_calls ? 'Executing tools...' : 'Ready');
+  }
+
+  function onToolStart(d) { setStatus('Tool: ' + d.name + '...'); }
+  function onToolEnd(d) {
+    if (currentStreamBody || chatArea.lastElementChild) {
+      const target = currentStreamBody || chatArea.lastElementChild.querySelector('.msg-body');
+      if (target) renderToolResult(target, d.name || '?', d.result || '');
+    }
+  }
+  function onError(d) {
+    const body = createMsgEl('system', '');
+    body.className = 'msg-body error-text';
+    body.textContent = '⚠ Error: ' + (d.error || d);
+    setStatus('Error');
+  }
+  function onIdle() {
+    setStatus('Ready');
+    document.getElementById('btn-send').style.display = '';
+    document.getElementById('btn-stop').style.display = 'none';
+  }
+
+  // ── Actions ──
+  async function doSend() {
+    const text = inputEditor.value.trim();
+    if (!text || isStreaming) return;
+    inputEditor.value = '';
+    inputEditor.style.height = 'auto';
+
+    if (!config.api_key && config.provider !== 'ollama') {
+      appendSystemMessage('⚠ 请先在 ⚙ Settings 中配置 API Key');
+      return;
+    }
+
+    // Render user message
+    const userBody = createMsgEl('user', '');
+    userBody.textContent = text;
+    messages.push({ role: 'user', content: text });
+
+    // Start assistant stream
+    isStreaming = true;
+    document.getElementById('btn-send').style.display = 'none';
+    document.getElementById('btn-stop').style.display = '';
+    setStatus('Thinking...');
+
+    currentStreamBody = createMsgEl('assistant', config.model);
+    streamBuffer = '';
+
+    await bridgeCmd('ai_editor_send', { text, config });
+  }
+
+  function doStop() {
+    bridgeCmd('ai_editor_cancel', {});
+    isStreaming = false;
+    onIdle();
+  }
+
+  function doClear() {
+    chatArea.innerHTML = '';
+    messages = [];
+    totalTokens = 0;
+    tokenCount.textContent = '0 tokens';
+    bridgeCmd('ai_editor_new_chat', {});
+    appendSystemMessage('New conversation started.');
+  }
+
+  function doExport() {
+    bridgeCmd('ai_editor_export', {}).then(data => {
+      if (data) { navigator.clipboard.writeText(typeof data === 'string' ? data : JSON.stringify(data, null, 2)); setStatus('Exported to clipboard'); }
+    });
+  }
+
+  // ── Settings ──
+  function openSettings() {
+    document.getElementById('s-provider').value = config.provider;
+    document.getElementById('s-apikey').value = config.api_key;
+    document.getElementById('s-baseurl').value = config.base_url;
+    document.getElementById('s-model').value = config.model;
+    document.getElementById('s-temperature').value = config.temperature;
+    document.getElementById('s-maxtokens').value = config.max_tokens;
+    document.getElementById('s-sysprompt').value = config.system_prompt;
+    document.getElementById('s-status').textContent = '';
+    document.getElementById('settings-modal').classList.add('open');
+  }
+
+  function closeSettings() { document.getElementById('settings-modal').classList.remove('open'); }
+
+  async function testConnection() {
+    const s = document.getElementById('s-status');
+    s.textContent = 'Testing...'; s.style.color = 'var(--fg-dim)';
+    const result = await bridgeCmd('ai_editor_test_connection', {
+      provider: document.getElementById('s-provider').value,
+      api_key: document.getElementById('s-apikey').value,
+      base_url: document.getElementById('s-baseurl').value,
+      model: document.getElementById('s-model').value,
+    });
+    if (result && result.ok) { s.textContent = result.message; s.style.color = 'var(--fg-success)'; }
+    else { s.textContent = (result && result.message) || 'Failed'; s.style.color = 'var(--fg-error)'; }
+  }
+
+  function saveSettings() {
+    config.provider = document.getElementById('s-provider').value;
+    config.api_key = document.getElementById('s-apikey').value;
+    config.base_url = document.getElementById('s-baseurl').value;
+    config.model = document.getElementById('s-model').value;
+    config.temperature = parseFloat(document.getElementById('s-temperature').value) || 0.7;
+    config.max_tokens = parseInt(document.getElementById('s-maxtokens').value) || 4096;
+    config.system_prompt = document.getElementById('s-sysprompt').value;
+    syncConfigToUI();
+    bridgeCmd('ai_editor_save_config', config);
+    closeSettings();
+  }
+
+  function syncConfigToUI() {
+    document.getElementById('provider-select').value = config.provider;
+    document.getElementById('model-input').value = config.model;
+  }
+
+  // ── Tools panel ──
+  function toggleTools() {
+    toolsOpen = !toolsOpen;
+    document.getElementById('tools-panel').classList.toggle('open', toolsOpen);
+  }
+
+  function renderToolsPanel() {
+    const list = document.getElementById('tools-list');
+    list.innerHTML = '';
+    let lastCat = '';
+    tools.forEach(t => {
+      if (t.category !== lastCat) {
+        lastCat = t.category;
+        const cat = document.createElement('div');
+        cat.className = 'tool-cat';
+        cat.textContent = '▸ ' + lastCat;
+        list.appendChild(cat);
+      }
+      const item = document.createElement('div');
+      item.className = 'tool-item';
+      item.innerHTML = '<span class="tool-name">' + escHtml(t.name) + '</span>' +
+        (t.requires_confirm ? ' <span class="tool-confirm">⚠</span>' : '') +
+        '<div class="tool-desc">' + escHtml(t.description) + '</div>';
+      list.appendChild(item);
+    });
+  }
+
+  // ── Event bindings ──
+  document.getElementById('btn-send').onclick = doSend;
+  document.getElementById('btn-stop').onclick = doStop;
+  document.getElementById('btn-clear').onclick = doClear;
+  document.getElementById('btn-export').onclick = doExport;
+  document.getElementById('btn-new').onclick = doClear;
+  document.getElementById('btn-tools').onclick = toggleTools;
+  document.getElementById('btn-settings').onclick = openSettings;
+  document.getElementById('s-test').onclick = testConnection;
+  document.getElementById('s-save').onclick = saveSettings;
+  document.getElementById('s-cancel').onclick = closeSettings;
+  document.getElementById('s-toggle-key').onclick = () => {
+    const inp = document.getElementById('s-apikey');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  };
+
+  inputEditor.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    if (e.key === 'l' && e.ctrlKey) { e.preventDefault(); doClear(); }
+  });
+
+  // Auto-resize input
+  inputEditor.addEventListener('input', () => {
+    inputEditor.style.height = 'auto';
+    inputEditor.style.height = Math.min(inputEditor.scrollHeight, 200) + 'px';
+  });
+
+  // Provider change syncs model
+  document.getElementById('provider-select').onchange = (e) => {
+    config.provider = e.target.value;
+    const defaults = { openai: 'gpt-4o', anthropic: 'claude-sonnet-4-20250514', deepseek: 'deepseek-chat', ollama: 'llama3.1', custom: '' };
+    if (!config.model) document.getElementById('model-input').value = defaults[config.provider] || '';
+  };
+  document.getElementById('model-input').onchange = (e) => { config.model = e.target.value; };
+
+  // Close modal on overlay click
+  document.getElementById('settings-modal').onclick = (e) => { if (e.target.id === 'settings-modal') closeSettings(); };
+
+  function setStatus(text) { statusText.textContent = text; }
+
+  // ── Start ──
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
+</body>
+</html>

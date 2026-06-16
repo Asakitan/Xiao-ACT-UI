@@ -68,10 +68,14 @@ public sealed class ActRuntime
             BridgeCommands.ActTimelineFilter => EmptyStatus(commandName, "timeline"),
 
             BridgeCommands.ActTriggersStatus => EmptyStatus(commandName, "triggers", new JsonObject { ["rules"] = new JsonArray() }),
+            BridgeCommands.ActTriggerExportPresets or
+            BridgeCommands.ActTriggersExportPresets => TriggerExportPresets(commandName),
             BridgeCommands.ActTriggersEnable or
             BridgeCommands.ActTriggersDisable or
             BridgeCommands.ActTriggersReload or
-            BridgeCommands.ActTriggersTest => Unsupported(commandName, payload, "ACT trigger runtime is not implemented in the C# host yet."),
+            BridgeCommands.ActTriggersTest or
+            BridgeCommands.ActTriggerImportPresets or
+            BridgeCommands.ActTriggersImportPresets => Unsupported(commandName, payload, "ACT trigger runtime is not implemented in the C# host yet."),
 
             BridgeCommands.ActHistoryStatus or
             BridgeCommands.ActHistoryLoad => EmptyStatus(commandName, "history", new JsonObject { ["entries"] = new JsonArray() }),
@@ -87,12 +91,32 @@ public sealed class ActRuntime
             BridgeCommands.ActSelectiveParsingClear => EmptyStatus(commandName, "selective_parsing"),
 
             BridgeCommands.ActAggregateStatus => EmptyStatus(commandName, "aggregate", new JsonObject { ["rows"] = new JsonArray() }),
-            BridgeCommands.ActMemScopeStatus or
-            BridgeCommands.ActMemScopeSearchStatus => EmptyStatus(commandName, "mem_scope", new JsonObject { ["results"] = new JsonArray() }),
+
+            BridgeCommands.ActMemStatus => MemoryStatus(commandName),
+            BridgeCommands.ActMemCatalog => MemoryCatalog(commandName),
+            BridgeCommands.ActMemSelf => MemorySelf(commandName),
+            BridgeCommands.ActMemEntities => MemoryEntities(commandName),
+            BridgeCommands.ActMemBoss => MemoryBoss(commandName),
+            BridgeCommands.ActMemBossActions => MemoryBossActions(commandName),
+            BridgeCommands.ActMemBossAction => MemoryBossAction(commandName, payload),
+            BridgeCommands.ActMemDamage => MemoryDamage(commandName),
+            BridgeCommands.ActMemSkillDamage => MemorySkillDamage(commandName, payload),
+            BridgeCommands.ActMemResolveName => MemoryResolveName(commandName, payload),
+            BridgeCommands.ActMemSearchStatus => MemorySearchStatus(commandName, payload),
+            BridgeCommands.ActMemSearchList => MemorySearchList(commandName),
+            BridgeCommands.ActMemSearchCancel => MemorySearchCancel(commandName, payload),
+            BridgeCommands.ActMemAttrMap or
+            BridgeCommands.ActMemRead or
+            BridgeCommands.ActMemReadMany or
+            BridgeCommands.ActMemSearch or
+            BridgeCommands.ActMemNarrow => Unsupported(commandName, payload, "ACT live memory access is not attached to the C# host yet."),
+
+            BridgeCommands.ActMemScopeStatus => MemoryScopeStatus(commandName, payload),
+            BridgeCommands.ActMemScopeSearchStatus => MemorySearchStatus(commandName, payload),
             BridgeCommands.ActMemScopeSearch or
             BridgeCommands.ActMemScopeNarrow or
             BridgeCommands.ActMemScopeCancel or
-            BridgeCommands.ActMemScopeAttrMap => Unsupported(commandName, payload, "ACT memory scope is not implemented in the C# host yet."),
+            BridgeCommands.ActMemScopeAttrMap => Unsupported(commandName, payload, "ACT live memory scope is not attached to the C# host yet."),
 
             BridgeCommands.ActActionLogStatus or
             BridgeCommands.ActActionLogSearch or
@@ -241,6 +265,178 @@ public sealed class ActRuntime
         ["preview"] = string.Empty,
         ["text"] = string.Empty,
         ["event_count"] = 0,
+    };
+
+    private static JsonObject TriggerExportPresets(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["kind"] = "act_trigger_presets",
+        ["schema_version"] = 1,
+        ["count"] = 0,
+        ["rules"] = new JsonArray(),
+    };
+
+    private JsonObject MemoryScopeStatus(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["surface"] = "mem_scope",
+        ["status"] = MemoryStatus(BridgeCommands.ActMemStatus),
+        ["catalog"] = MemoryCatalog(BridgeCommands.ActMemCatalog),
+        ["self"] = MemorySelf(BridgeCommands.ActMemSelf),
+        ["entities"] = MemoryEntities(BridgeCommands.ActMemEntities),
+        ["damage"] = MemoryDamage(BridgeCommands.ActMemDamage),
+        ["query"] = ReadString(payload, "query"),
+        ["dtype"] = string.IsNullOrWhiteSpace(ReadString(payload, "dtype")) ? "i32" : ReadString(payload, "dtype"),
+        ["job_id"] = ReadString(payload, "job_id"),
+        ["results"] = new JsonArray(),
+    };
+
+    private static JsonObject MemoryStatus(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["mode"] = "csharp-native",
+        ["active"] = false,
+        ["bridge"] = "csharp-native",
+        ["armed"] = false,
+        ["provider_mode"] = "unattached",
+        ["process_attached"] = false,
+        ["module_base"] = 0,
+        ["last_error"] = string.Empty,
+        ["message"] = "C# ACT memory facade is present; live MemProbe access is not attached yet.",
+    };
+
+    private static JsonObject MemoryCatalog(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["categories"] = new JsonArray
+        {
+            MemoryCatalogEntry("status", "Status", BridgeCommands.ActMemStatus, true, "Memory facade status."),
+            MemoryCatalogEntry("self", "Self", BridgeCommands.ActMemSelf, true, "Cached player identity snapshot."),
+            MemoryCatalogEntry("entities", "Entities", BridgeCommands.ActMemEntities, true, "Visible entity cache."),
+            MemoryCatalogEntry("search", "Search", BridgeCommands.ActMemSearch, false, "Live heap search requires MemProbe attachment."),
+        },
+    };
+
+    private static JsonObject MemoryCatalogEntry(string id, string name, string action, bool available, string hint) => new()
+    {
+        ["id"] = id,
+        ["name"] = name,
+        ["action"] = action,
+        ["available"] = available,
+        ["hint"] = hint,
+        ["example"] = new JsonObject(),
+    };
+
+    private JsonObject MemorySelf(string commandName)
+    {
+        var snapshot = _states?.Snapshot;
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["command"] = commandName,
+            ["self"] = new JsonObject
+            {
+                ["uid"] = snapshot?.SelfUuid.ToString() ?? string.Empty,
+                ["player_uid"] = snapshot?.PlayerId ?? string.Empty,
+                ["player_name"] = snapshot?.PlayerName ?? string.Empty,
+                ["profession_id"] = snapshot?.ProfessionId ?? 0,
+                ["profession_name"] = snapshot?.ProfessionName ?? string.Empty,
+                ["level"] = snapshot?.LevelBase ?? 0,
+                ["hp_current"] = snapshot?.HpCurrent ?? 0,
+                ["hp_max"] = snapshot?.HpMax ?? 0,
+                ["stamina_current"] = snapshot?.StaminaCurrent ?? 0,
+                ["stamina_max"] = snapshot?.StaminaMax ?? 0,
+                ["in_combat"] = snapshot?.InCombat ?? false,
+                ["source"] = snapshot is null ? "empty" : "gamestate",
+            },
+        };
+    }
+
+    private static JsonObject MemoryEntities(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["entities"] = new JsonArray(),
+        ["monsters"] = new JsonArray(),
+        ["npcs"] = new JsonArray(),
+        ["count"] = 0,
+    };
+
+    private static JsonObject MemoryBoss(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["boss"] = null,
+    };
+
+    private static JsonObject MemoryBossActions(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["actions"] = new JsonArray(),
+    };
+
+    private static JsonObject MemoryBossAction(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["uuid"] = ReadString(payload, "uuid"),
+        ["action"] = null,
+    };
+
+    private static JsonObject MemoryDamage(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["source"] = "empty",
+        ["totals"] = new JsonObject(),
+    };
+
+    private static JsonObject MemorySkillDamage(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["uuid"] = ReadString(payload, "uuid"),
+        ["skills"] = new JsonObject(),
+    };
+
+    private static JsonObject MemoryResolveName(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["kind"] = string.IsNullOrWhiteSpace(ReadString(payload, "kind")) ? "monster" : ReadString(payload, "kind"),
+        ["id"] = ReadString(payload, "id"),
+        ["name"] = string.Empty,
+    };
+
+    private static JsonObject MemorySearchStatus(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["job_id"] = ReadString(payload, "job_id"),
+        ["state"] = "not_found",
+        ["progress"] = 1.0,
+        ["count"] = 0,
+        ["results"] = new JsonArray(),
+    };
+
+    private static JsonObject MemorySearchCancel(string commandName, JsonObject? payload) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["job_id"] = ReadString(payload, "job_id"),
+        ["state"] = "not_found",
+    };
+
+    private static JsonObject MemorySearchList(string commandName) => new()
+    {
+        ["ok"] = true,
+        ["command"] = commandName,
+        ["jobs"] = new JsonArray(),
     };
 
     private static JsonObject EmptyStatus(string commandName, string surface, JsonObject? extra = null)

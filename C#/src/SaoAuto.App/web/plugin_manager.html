@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Plugin Manager</title>
+<style>
+:root {
+    --bg: rgba(11, 18, 28, 0.72);
+    --panel: rgba(22, 35, 54, 0.88);
+    --panel2: rgba(8, 14, 22, 0.72);
+    --line: rgba(117, 205, 255, 0.52);
+    --line2: rgba(255, 214, 117, 0.72);
+    --text: rgba(232, 246, 255, 0.96);
+    --muted: rgba(177, 203, 223, 0.78);
+    --danger: #ff6b82;
+    --ok: #7df2bf;
+    --warn: #ffd46f;
+    --blue: #73d7ff;
+}
+* { box-sizing: border-box; }
+html, body {
+    margin: 0;
+    width: 100%;
+    min-height: 100%;
+    background: transparent;
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+}
+body {
+    padding: 14px;
+}
+.plugin-shell {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 28px);
+    min-height: 460px;
+    border: 1px solid var(--line);
+    background:
+        linear-gradient(135deg, rgba(102, 204, 255, 0.16), transparent 18%, transparent 74%, rgba(255, 219, 120, 0.12)),
+        linear-gradient(180deg, rgba(18, 31, 47, 0.94), rgba(9, 14, 22, 0.88));
+    box-shadow:
+        0 0 32px rgba(88, 199, 255, 0.22),
+        inset 0 0 28px rgba(109, 216, 255, 0.10);
+    border-radius: 12px;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+    transition: opacity .22s ease, transform .22s ease;
+}
+.plugin-shell.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+.plugin-shell::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        180deg,
+        rgba(255,255,255,0.035) 0,
+        rgba(255,255,255,0.035) 1px,
+        transparent 1px,
+        transparent 7px
+    );
+    mix-blend-mode: screen;
+}
+.plugin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 58px;
+    padding: 10px 14px 8px 18px;
+    border-bottom: 1px solid rgba(117, 205, 255, 0.35);
+    background: linear-gradient(90deg, rgba(18, 59, 94, 0.76), rgba(11, 22, 35, 0.58));
+}
+.title-block { display: flex; flex-direction: column; gap: 2px; }
+.kicker {
+    letter-spacing: 0.18em;
+    font-size: 10px;
+    color: var(--line2);
+    text-shadow: 0 0 10px rgba(255, 214, 117, 0.52);
+}
+.title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.status-pill {
+    min-width: 92px;
+    text-align: center;
+    padding: 5px 9px;
+    border: 1px solid rgba(117, 205, 255, 0.42);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(8, 14, 22, 0.62);
+    font-size: 12px;
+}
+button {
+    border: 1px solid rgba(117, 205, 255, 0.48);
+    background: linear-gradient(180deg, rgba(61, 143, 201, 0.42), rgba(19, 48, 74, 0.58));
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+button:hover { transform: translateY(-1px); box-shadow: 0 0 16px rgba(107, 214, 255, 0.25); }
+button:active { transform: translateY(0); }
+button.primary { border-color: rgba(255, 214, 117, 0.74); color: #fff8da; }
+button.danger { border-color: rgba(255, 107, 130, 0.7); }
+button.close {
+    width: 30px; height: 30px; padding: 0;
+    border-radius: 50%;
+    font-size: 16px;
+}
+.plugin-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 12px;
+    height: calc(100% - 58px);
+    padding: 12px;
+}
+.plugin-list {
+    min-height: 0;
+    overflow: auto;
+    padding-right: 4px;
+}
+.plugin-card {
+    position: relative;
+    margin-bottom: 10px;
+    border: 1px solid rgba(117, 205, 255, 0.34);
+    border-left: 3px solid rgba(117, 205, 255, 0.75);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(27, 46, 68, 0.86), rgba(9, 16, 26, 0.82));
+    box-shadow: inset 0 0 18px rgba(117, 205, 255, 0.06);
+    padding: 12px;
+}
+.plugin-card.active { border-left-color: var(--ok); }
+.plugin-card.disabled { border-left-color: rgba(160, 164, 170, 0.72); opacity: .84; }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.plugin-name { font-size: 16px; font-weight: 700; letter-spacing: .04em; }
+.plugin-id { margin-top: 2px; font-size: 11px; color: var(--muted); word-break: break-all; }
+.badges { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.badge {
+    border: 1px solid rgba(117, 205, 255, 0.38);
+    border-radius: 999px;
+    padding: 3px 7px;
+    font-size: 10px;
+    color: var(--muted);
+    background: rgba(8, 14, 22, 0.44);
+}
+.badge.ok { color: var(--ok); border-color: rgba(125,242,191,.62); }
+.badge.warn { color: var(--warn); border-color: rgba(255,212,111,.62); }
+.badge.bad { color: var(--danger); border-color: rgba(255,107,130,.62); }
+.meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    margin: 10px 0;
+    font-size: 11px;
+    color: var(--muted);
+}
+.meta-grid span { color: var(--text); }
+.plugin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.plugin-actions select.card-more {
+    border: 1px solid rgba(117, 205, 255, 0.48);
+    background: linear-gradient(180deg, rgba(61, 143, 201, 0.42), rgba(19, 48, 74, 0.58));
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 9px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.plugin-actions select.card-more option { background: #13304a; color: var(--text); }
+.error-box, .log-box {
+    margin-top: 8px;
+    border: 1px solid rgba(255, 107, 130, 0.36);
+    background: rgba(70, 18, 28, 0.34);
+    color: #ffd8de;
+    border-radius: 8px;
+    padding: 7px 8px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    user-select: text;
+}
+.log-box {
+    border-color: rgba(117, 205, 255, 0.26);
+    background: rgba(6, 12, 20, 0.45);
+    color: rgba(215, 236, 255, 0.82);
+    max-height: 72px;
+    overflow: auto;
+}
+.side-panel {
+    min-height: 0;
+    border: 1px solid rgba(117, 205, 255, 0.30);
+    border-radius: 10px;
+    background: rgba(8, 14, 22, 0.52);
+    padding: 12px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.side-title { color: var(--line2); font-size: 12px; letter-spacing: .16em; }
+.summary-grid { display: grid; gap: 8px; }
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(117, 205, 255, 0.16);
+    padding-bottom: 5px;
+    font-size: 12px;
+    color: var(--muted);
+}
+.summary-row strong { color: var(--text); }
+.help {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+}
+.toast {
+    position: absolute;
+    left: 50%; bottom: 18px;
+    transform: translateX(-50%) translateY(12px);
+    opacity: 0;
+    pointer-events: none;
+    border: 1px solid rgba(255, 214, 117, 0.58);
+    background: rgba(8, 14, 22, 0.88);
+    color: #fff7d2;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 12px;
+    transition: opacity .16s ease, transform .16s ease;
+}
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    min-height: 260px;
+    color: var(--muted);
+    border: 1px dashed rgba(117, 205, 255, 0.28);
+    border-radius: 10px;
+    text-align: center;
+    line-height: 1.6;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<script src="act_panel_theme.js"></script>
+<script>window.__SAO_SURFACE__ = 'plugin_ui';</script>
+<script src="plugin_layer.js"></script>
+<style>
+.pm-tabs { display: flex; gap: 8px; padding: 8px 12px 0; }
+.pm-tab {
+    border: 1px solid rgba(117,205,255,.42);
+    background: rgba(8,14,22,.5);
+    color: var(--muted);
+    border-radius: 8px 8px 0 0;
+    padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.pm-tab:hover { color: var(--ink, #e8f0f4); border-color: rgba(117,205,255,.6); background: rgba(16,26,40,.7); }
+.pm-tab.active { color: #fff8da; border-color: rgba(255,214,117,.74); background: rgba(22,35,54,.85); }
+#manage-body { height: calc(100% - 58px - 40px); }
+.panels-body { height: calc(100% - 58px - 40px); overflow: auto; padding: 12px; }
+.panels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.panel-card {
+    border: 1px solid rgba(117,205,255,.34);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(27,46,68,.86), rgba(9,16,26,.82));
+    padding: 12px;
+}
+.panel-card-head { color: var(--line2); font-size: 11px; letter-spacing: .12em; margin-bottom: 6px; }
+</style>
+<style>
+/* Flat + token migration (ACT panel): drop the bespoke dark chrome so Plugin Manager reads
+   flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
+   resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
+   no bevels, no glow) and re-tokenise the custom tab / panel-card / card-more classes the
+   shared theme does not target, so light mode stays legible. Last style block in <head>
+   so it wins source-order over the shared theme's !important chrome. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+.kicker{text-shadow:none!important;}
+button,input,select,.action-btn{clip-path:none!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.plugin-actions select.card-more{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge)!important;border-radius:3px!important;color:var(--act-text)!important;}
+.plugin-actions select.card-more option{background:var(--act-shell-bg-2)!important;color:var(--act-text)!important;}
+.pm-tab{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge-soft)!important;border-bottom:none!important;color:var(--act-muted)!important;border-radius:4px 4px 0 0!important;}
+.pm-tab:hover{background:var(--act-card-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-text)!important;}
+.pm-tab.active{background:var(--act-shell-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-gold)!important;}
+.panel-card{border:1px solid var(--act-edge-soft)!important;border-left:3px solid var(--act-cyan)!important;border-radius:4px!important;background:var(--act-card-bg)!important;box-shadow:none!important;}
+.panel-card-head{color:var(--act-gold)!important;}
+</style>
+</head>
+<body>
+<div class="plugin-shell" id="shell">
+    <div class="plugin-header">
+        <div class="title-block">
+            <div class="kicker">ACT EXTENSION PLATFORM</div>
+            <div class="title">PLUGIN MANAGER</div>
+        </div>
+        <div class="header-actions">
+            <div class="status-pill" id="plugin-count">0 ACTIVE</div>
+            <button class="primary" type="button" onclick="PluginManager.refresh()">刷新 Refresh</button>
+            <button type="button" onclick="PluginManager.importPlugin()">导入 Import</button>
+            <button type="button" onclick="PluginManager.reloadAll()">重载 Reload</button>
+            <button class="close" type="button" onclick="PluginManager.close()">×</button>
+        </div>
+    </div>
+    <div class="pm-tabs">
+        <div class="pm-tab active" id="tab-manage" onclick="PluginManager.showTab('manage')">管理 Manage</div>
+        <div class="pm-tab" id="tab-panels" onclick="PluginManager.showTab('panels')">面板 Panels</div>
+    </div>
+    <div class="plugin-body" id="manage-body">
+        <div class="plugin-list" id="plugin-list">
+            <div class="empty">正在读取插件状态...<br/>LOADING PLUGINS</div>
+        </div>
+        <aside class="side-panel">
+            <div class="side-title">RUNTIME STATUS</div>
+            <div class="summary-grid">
+                <div class="summary-row"><span>Total</span><strong id="sum-total">0</strong></div>
+                <div class="summary-row"><span>Active</span><strong id="sum-active">0</strong></div>
+                <div class="summary-row"><span>Event Topics</span><strong id="sum-topics">0</strong></div>
+                <div class="summary-row"><span>Subscribers</span><strong id="sum-subs">0</strong></div>
+            </div>
+            <div class="side-title">SDK QUICK START</div>
+            <div class="help">
+                <strong>一键导入</strong>：点上方「导入 Import」选一个 <strong>.zip</strong> 插件包(内含 plugin.json + plugin.py)，自动装进 <strong>user_plugins/</strong> 并启用即用，无需编译。<br/><br/>
+                或手动放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与 <strong>plugin.py</strong>。<br/><br/>
+                插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>。第三方依赖写进 <strong>requirements.txt</strong> 并 vendor 进 <strong>vendor/</strong>，用 <strong>ctx.ensure_requirements()</strong> 加载。<br/><br/>
+                推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
+            </div>
+        </aside>
+    </div>
+    <div class="panels-body" id="panels-body" style="display:none;">
+        <div class="panels-grid" id="panels-grid">
+            <div class="empty">无插件 UI 面板<br/>NO PLUGIN PANELS</div>
+        </div>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+
+    var shell = document.getElementById('shell');
+    var list = document.getElementById('plugin-list');
+    var toast = document.getElementById('toast');
+    var toastTimer = null;
+
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function parseResult(result) {
+        if (typeof result === 'string') {
+            try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; }
+        }
+        return result || {};
+    }
+
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+
+    function objectItems(value) {
+        return listItems(value).filter(function (item) {
+            return item && typeof item === 'object' && !Array.isArray(item);
+        });
+    }
+    function finiteNumber(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+    function countNumber(value) {
+        return Math.max(0, Math.floor(finiteNumber(value, 0)));
+    }
+    function countText(value) {
+        return String(countNumber(value));
+    }
+    function firstCountText() {
+        for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value == null || value === '') continue;
+            var number = Number(value);
+            if (isFinite(number)) return countText(number);
+        }
+        return '0';
+    }
+
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') {
+            return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var mapped = pluginCommand(name, args || []);
+            return window.bridge.cmd(mapped.name, mapped.payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Plugin API unavailable' });
+    }
+
+    function pluginCommand(name, args) {
+        var maps = {
+            get_plugin_status: 'act.plugins.status',
+            list_plugins: 'act.plugins.list',
+            enable_plugin: 'act.plugins.enable',
+            disable_plugin: 'act.plugins.disable',
+            reload_plugins: 'act.plugins.reload',
+            pin_plugin: 'act.plugins.pin',
+            import_plugin_dialog: 'act.plugins.import_dialog',
+            import_plugin: 'act.plugins.import',
+            uninstall_plugin: 'act.plugins.uninstall',
+            get_plugin_hotkeys: 'act.plugins.hotkeys',
+            set_plugin_hotkey: 'act.plugins.set_hotkey',
+            get_plugin_ui_panels: 'act.plugins.ui_panels',
+            render_ui_panel: 'act.plugins.render_ui_panel',
+            invoke_ui_action: 'act.plugins.invoke_ui_action'
+        };
+        var cmd = maps[name] || ('act.plugins.' + name);
+        if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys' || name === 'get_plugin_ui_panels') return { name: cmd, payload: {} };
+        if (name === 'enable_plugin' || name === 'disable_plugin' || name === 'uninstall_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || '') } };
+        if (name === 'reload_plugins') return { name: cmd, payload: args[0] ? { plugin_id: String(args[0] || '') } : {} };
+        if (name === 'pin_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || ''), pinned: args[1] !== false } };
+        if (name === 'import_plugin') return { name: cmd, payload: { archive_path: String(args[0] || '') } };
+        if (name === 'set_plugin_hotkey') return { name: cmd, payload: { action: String(args[0] || ''), key: String(args[1] || '') } };
+        if (name === 'render_ui_panel') return { name: cmd, payload: { panel_id: String(args[0] || ''), payload: pluginPayloadArg(args, 1) } };
+        if (name === 'invoke_ui_action') return { name: cmd, payload: { panel_id: String(args[0] || ''), action_id: String(args[1] || ''), payload: pluginPayloadArg(args, 2) } };
+        return { name: cmd, payload: { args: args } };
+    }
+
+    function pluginPayloadArg(args, index) {
+        if (!args || args.length <= index || args[index] == null) return '';
+        return args[index];
+    }
+
+    function sigOf(value) {
+        try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
+    }
+
+    function panelKey(panel) {
+        return String(panel && (panel.id || panel.panel_id) || '');
+    }
+
+    function clearPanelCards(grid, html) {
+        var cards = PluginManager._panelCards || {};
+        Object.keys(cards).forEach(function (key) {
+            var entry = cards[key];
+            if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+        });
+        PluginManager._panelCards = Object.create(null);
+        PluginManager._panelEmptyHtml = html || '';
+        if (html && grid.__panelEmptyHtml !== html) {
+            grid.innerHTML = html;
+            grid.__panelEmptyHtml = html;
+        } else if (!html && grid.__panelEmptyHtml) {
+            grid.textContent = '';
+            grid.__panelEmptyHtml = '';
+        }
+    }
+
+    function panelEntry(grid, panel) {
+        var key = panelKey(panel);
+        if (!key) return null;
+        var cards = PluginManager._panelCards || (PluginManager._panelCards = Object.create(null));
+        var entry = cards[key];
+        if (!entry || !entry.card || !entry.card.isConnected) {
+            var card = document.createElement('div');
+            card.className = 'panel-card';
+            var head = document.createElement('div');
+            head.className = 'panel-card-head';
+            card.appendChild(head);
+            var body = document.createElement('div');
+            card.appendChild(body);
+            entry = cards[key] = {
+                card: card,
+                head: head,
+                body: body,
+                action: function (action, payload) { PluginManager.panelAction(key, action, payload); },
+                metaSig: '',
+                renderSig: ''
+            };
+        }
+        var label = (panel.title || panel.id) + ' · ' + (panel.plugin_id || '');
+        if (entry.metaSig !== label) {
+            entry.head.textContent = label;
+            entry.metaSig = label;
+        }
+        grid.appendChild(entry.card);
+        return entry;
+    }
+
+    function showToast(message) {
+        toast.textContent = String(message || '');
+        toast.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800);
+    }
+
+    function badge(label, cls) {
+        return '<span class="badge ' + (cls || '') + '">' + esc(label) + '</span>';
+    }
+
+    function jsArg(value) {
+        return esc(JSON.stringify(String(value == null ? '' : value)));
+    }
+
+    function renderCard(plugin) {
+        plugin = objectValue(plugin);
+        var active = !!plugin.active;
+        var enabled = !!plugin.enabled;
+        var cls = 'plugin-card' + (active ? ' active' : '') + (!enabled ? ' disabled' : '');
+        var stateBadges = [];
+        stateBadges.push(badge(active ? 'ACTIVE' : (enabled ? 'LOADED OFF' : 'DISABLED'), active ? 'ok' : (enabled ? 'warn' : '')));
+        if (plugin.pinned) stateBadges.push(badge('★ PINNED', 'warn'));
+        stateBadges.push(badge(plugin.declares_panel ? '▣ 面板' : '无面板', plugin.declares_panel ? 'ok' : ''));
+        var hotkeyCount = countNumber(plugin.hotkey_count);
+        var failureCount = countNumber(plugin.failures);
+        var eventFailureCount = countNumber(plugin.event_failures);
+        if (hotkeyCount > 0) stateBadges.push(badge('⌨ ' + countText(hotkeyCount), 'ok'));
+        if (plugin.loaded) stateBadges.push(badge('LOADED', 'ok'));
+        if (failureCount > 0) stateBadges.push(badge('FAIL ' + countText(failureCount), 'bad'));
+        if (eventFailureCount > 0) stateBadges.push(badge('EVENT ' + countText(eventFailureCount), 'bad'));
+        var logs = listItems(plugin.logs).slice(-5);
+        var canEnable = !enabled;
+        var idArg = jsArg(plugin.id);
+        var actions = '';
+        actions += '<button type="button" class="primary" onclick="PluginManager.enable(' + idArg + ')"' + (canEnable ? '' : ' disabled') + '>启用 Enable</button>';
+        actions += '<button type="button" class="danger" onclick="PluginManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
+        // 重载/置顶/卸载收进「更多 ▾」(select 即开即用, 与 raid_editor 试▾ 同款)
+        actions += '<select class="card-more" onchange="if(this.value){var k=this.value;this.selectedIndex=0;PluginManager.cardAction(' + idArg + ',k);}">';
+        actions += '<option value="">更多 ▾</option>';
+        actions += '<option value="reload"' + (enabled ? '' : ' disabled') + '>重载 Reload</option>';
+        actions += '<option value="' + (plugin.pinned ? 'unpin' : 'pin') + '">' + (plugin.pinned ? '★ 取消置顶' : '☆ 置顶 Pin') + '</option>';
+        if (plugin.user_installed) {
+            actions += '<option value="uninstall">卸载 Uninstall</option>';
+        }
+        actions += '</select>';
+        return '<article class="' + cls + '">' +
+            '<div class="card-top"><div><div class="plugin-name">' + esc(plugin.name || plugin.id) + '</div><div class="plugin-id">' + esc(plugin.id || '') + '</div></div><div class="badges">' + stateBadges.join('') + '</div></div>' +
+            '<div class="meta-grid">' +
+                '<div>Version: <span>' + esc(plugin.version || '-') + '</span></div>' +
+                '<div>Subscriptions: <span>' + esc(countText(plugin.subscription_count)) + '</span></div>' +
+                '<div>Games: <span>' + esc(listItems(plugin.game_ids).join(', ') || '-') + '</span></div>' +
+                '<div>Permissions: <span>' + esc(listItems(plugin.permissions).join(', ') || '-') + '</span></div>' +
+                '<div>Capabilities: <span>' + esc(listItems(plugin.capability_ids).join(', ') || '-') + '</span></div>' +
+                '<div style="grid-column:1/-1">Entry: <span>' + esc(plugin.entry || '-') + '</span></div>' +
+            '</div>' +
+            (plugin.last_error ? '<div class="error-box">' + esc(plugin.last_error) + '</div>' : '') +
+            (logs.length ? '<div class="log-box">' + logs.map(esc).join('<br/>') + '</div>' : '') +
+            '<div class="plugin-actions">' + actions + '</div>' +
+        '</article>';
+    }
+
+    function render(data) {
+        data = objectValue(data);
+        var plugins = objectItems(data.plugins);
+        var activeCount = countText(data.active_count);
+        var pluginTotal = firstCountText(data.plugin_count, plugins.length);
+        document.getElementById('sum-total').textContent = pluginTotal;
+        document.getElementById('sum-active').textContent = activeCount;
+        document.getElementById('plugin-count').textContent = activeCount + ' / ' + pluginTotal + ' ACTIVE';
+        var bus = objectValue(data.event_bus);
+        var topicListCount = listItems(bus.topics).length;
+        document.getElementById('sum-topics').textContent = topicListCount ? countText(topicListCount) : countText(bus.topic_count);
+        document.getElementById('sum-subs').textContent = firstCountText(bus.subscriber_count, bus.subscriptions);
+        if (!plugins.length) {
+            list.innerHTML = '<div class="empty">未发现插件。<br/>把 plugin.json 和 plugin.py 放到 plugins/&lt;id&gt;/ 下面即可。</div>';
+            return;
+        }
+        list.innerHTML = plugins.map(renderCard).join('');
+    }
+
+    var PluginManager = {
+        fadeIn: function () {
+            requestAnimationFrame(function () { shell.classList.add('visible'); });
+        },
+        fadeOut: function () {
+            shell.classList.remove('visible');
+        },
+        refresh: function () {
+            return apiCall('get_plugin_status', []).then(function (data) {
+                render(data);
+                if (data.ok === false) showToast(data.message || 'Plugin API failed');
+                return data;
+            });
+        },
+        reloadAll: function () {
+            return apiCall('reload_plugins', ['']).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Reload failed') : '插件已重载');
+                return PluginManager.refresh();
+            });
+        },
+        importPlugin: function () {
+            return apiCall('import_plugin_dialog', []).then(function (data) {
+                if (data && data.cancelled) { showToast('已取消导入'); return data; }
+                showToast(data.ok === false ? (data.message || '导入失败') : (data.message || '已导入'));
+                return PluginManager.refresh();
+            });
+        },
+        uninstall: function (id) {
+            // 卸载移除已安装插件、不可撤销 → 二次确认 (与 menu.html 档案删除的
+            // window.confirm 一致; Tk 端走 SAODialog 同款守护)。
+            if (!window.confirm('卸载插件 ' + id + ' ? 此操作不可撤销。\nUninstall this plugin? This cannot be undone.')) return;
+            return apiCall('uninstall_plugin', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || '卸载失败') : (data.message || (id + ' 已卸载')));
+                return PluginManager.refresh();
+            });
+        },
+        cardAction: function (id, key) {
+            if (key === 'reload') return PluginManager.reload(id);
+            if (key === 'pin') return PluginManager.pin(id, true);
+            if (key === 'unpin') return PluginManager.pin(id, false);
+            if (key === 'uninstall') return PluginManager.uninstall(id);
+        },
+        reload: function (id) {
+            return apiCall('reload_plugins', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Reload failed') : id + ' reloaded');
+                return PluginManager.refresh();
+            });
+        },
+        enable: function (id) {
+            return apiCall('enable_plugin', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Enable failed') : id + ' enabled');
+                return PluginManager.refresh();
+            });
+        },
+        disable: function (id) {
+            return apiCall('disable_plugin', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Disable failed') : id + ' disabled');
+                return PluginManager.refresh();
+            });
+        },
+        pin: function (id, pinned) {
+            return apiCall('pin_plugin', [id, pinned]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Pin failed') : (pinned ? id + ' pinned' : id + ' unpinned'));
+                return PluginManager.refresh();
+            });
+        },
+        close: function () {
+            var api = window.pywebview && window.pywebview.api;
+            PluginManager.fadeOut();
+            setTimeout(function () {
+                if (api && typeof api.menu_action === 'function') api.menu_action('toggle_plugin_manager');
+                else if (api && typeof api.toggle_plugin_manager === 'function') api.toggle_plugin_manager();
+            }, 120);
+        },
+        updateStatus: function (data) {
+            render(parseResult(data));
+        },
+        showTab: function (name) {
+            var manage = name !== 'panels';
+            document.getElementById('manage-body').style.display = manage ? '' : 'none';
+            document.getElementById('panels-body').style.display = manage ? 'none' : '';
+            document.getElementById('tab-manage').classList.toggle('active', manage);
+            document.getElementById('tab-panels').classList.toggle('active', !manage);
+            PluginManager._panelsActive = !manage;
+            if (!manage) PluginManager.renderPanels();
+        },
+        panelAction: function (panelId, action, payload) {
+            return apiCall('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})]).then(function () {
+                return PluginManager.renderPanels();
+            });
+        },
+        renderPanels: function () {
+            var grid = document.getElementById('panels-grid');
+            var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
+            var seq = ++PluginManager._panelSeq;
+            return apiCall('get_plugin_ui_panels', []).then(function (data) {
+                if (seq !== PluginManager._panelSeq) return;
+                var panels = objectItems(objectValue(data).panels).filter(function (p) { return p.available && !p.hidden; });
+                if (!panels.length) {
+                    clearPanelCards(grid, '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>');
+                    return;
+                }
+                if (grid.__panelEmptyHtml) {
+                    grid.textContent = '';
+                    grid.__panelEmptyHtml = '';
+                }
+                var seen = Object.create(null);
+                panels.forEach(function (p) {
+                    var key = panelKey(p);
+                    var entry = panelEntry(grid, p);
+                    if (!entry) return;
+                    seen[key] = true;
+                    apiCall('render_ui_panel', [key, '']).then(function (r) {
+                        if (seq !== PluginManager._panelSeq || !entry.card.isConnected) return;
+                        var spec = (r && r.spec) || { nodes: [] };
+                        var renderSig = (renderSpec ? 'hook:' : 'text:') + sigOf(spec);
+                        if (entry.renderSig === renderSig) return;
+                        entry.renderSig = renderSig;
+                        if (renderSpec) {
+                            renderSpec(spec, entry.body, entry.action);
+                        } else {
+                            entry.body.textContent = JSON.stringify(spec);
+                        }
+                    });
+                });
+                var cards = PluginManager._panelCards || {};
+                Object.keys(cards).forEach(function (key) {
+                    if (seen[key]) return;
+                    var entry = cards[key];
+                    if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+                    delete cards[key];
+                });
+            });
+        }
+    };
+
+    window.PluginManager = PluginManager;
+    PluginManager._panelsActive = false;
+    PluginManager._panelCards = Object.create(null);
+    PluginManager._panelSeq = 0;
+    setInterval(function () { if (PluginManager._panelsActive && !document.hidden) PluginManager.renderPanels(); }, 1000);
+    window.addEventListener('pywebviewready', function () { PluginManager.refresh(); });
+    setTimeout(function () {
+        PluginManager.fadeIn();
+        PluginManager.refresh();
+    }, 120);
+})();
+</script>
+</body>
+</html>

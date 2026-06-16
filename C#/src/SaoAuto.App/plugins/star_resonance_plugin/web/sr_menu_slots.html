@@ -1,0 +1,434 @@
+            <ul class="child-menu" id="sub-skillEffects" data-group="skillEffects">
+                <li class="widget-row">
+                    <div class="widget-label">SKILL SLOTS</div>
+                    <div class="slot-grid" id="slot-grid">
+                        <div class="slot-chk active" data-slot="1">1</div>
+                        <div class="slot-chk active" data-slot="2">2</div>
+                        <div class="slot-chk active" data-slot="3">3</div>
+                        <div class="slot-chk active" data-slot="4">4</div>
+                        <div class="slot-chk active" data-slot="5">5</div>
+                        <div class="slot-chk active" data-slot="6">6</div>
+                        <div class="slot-chk active" data-slot="7">7</div>
+                        <div class="slot-chk active" data-slot="8">8</div>
+                        <div class="slot-chk active" data-slot="9">9</div>
+                    </div>
+                    <div class="widget-note">所选技能槽全部转好时，将触发 Burst Ready 提示。</div>
+                </li>
+                <li class="widget-row">
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="burst-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>BURST MODE ALERT</span>
+                    </label>
+                    <div class="widget-note">关闭后保留冷却跟踪，但不再弹出动画提醒。</div>
+                </li>
+            </ul>
+
+            <!-- Auto Keys sub-menu -->
+            <ul class="child-menu auto-key-menu" id="sub-autoKeys" data-group="autoKeys">
+                <li class="widget-row">
+                    <div class="widget-label">自动按键 Auto Key Engine</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="auto-key-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>自动脚本启用 Auto Script Active</span>
+                    </label>
+                    <div class="auto-key-runtime" id="auto-key-runtime">自动按键运行状态 Auto Key Runtime: Idle</div>
+                    <div style="margin:6px 0 2px 0;">
+                        <button class="boss-raid-btn" type="button" onclick="_toggleAutoKeyEditorPanel(); return false;">📊 可视化面板 Visual Panel</button>
+                    </div>
+                    <div class="widget-note">F6 可以快速切换自动按键。动作会使用 packet 技能状态、HP、STA、Burst 状态、前台检测和死亡暂停规则。 F6 toggles the engine instantly using packet skill state, HP, STA, burst state, foreground checks, and death pause rules.</div>
+                </li>
+                <li class="widget-row auto-key-shell-row">
+                    <div class="auto-key-tabs" id="auto-key-tabs">
+                        <button class="auto-key-tab active" data-tab="local" type="button">本地 Local</button>
+                        <button class="auto-key-tab" data-tab="editor" type="button">编辑 Editor</button>
+                        <button class="auto-key-tab" data-tab="cloud" type="button">云端 Cloud</button>
+                    </div>
+                    <div class="auto-key-shell">
+                        <div class="auto-key-panel show" data-tab="local">
+                            <div class="auto-key-toolbar">
+                                <button class="auto-key-btn primary" type="button" onclick="_akCreateProfile(); return false;">新建配置 New Profile</button>
+                                <button class="auto-key-btn" type="button" onclick="_akImportProfile(); return false;">导入 JSON Import JSON</button>
+                                <button class="auto-key-btn" type="button" onclick="_akRefreshState(); return false;">刷新 Refresh</button>
+                            </div>
+                            <div class="auto-key-list" id="auto-key-profile-list"></div>
+                        </div>
+                        <div class="auto-key-panel" data-tab="editor">
+                            <div class="auto-key-editor-layout">
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">基本信息 Basic Info</div>
+                                        <div class="auto-key-section-note">先写配置名和用途。当前角色的 UID、名字、职业信息会自动读取并作为上传身份使用。</div>
+                                    </div>
+                                    <div class="auto-key-grid">
+                                        <div class="auto-key-field">
+                                            <label for="ak-profile-name">配置名称 Profile Name</label>
+                                            <input id="ak-profile-name" type="text" placeholder="例如：副本连招 / Example: Dungeon Rotation" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-engine-tick-ms">轮询毫秒 Tick MS</label>
+                                            <input id="ak-engine-tick-ms" type="number" min="10" step="10" />
+                                        </div>
+                                        <div class="auto-key-field span-2">
+                                            <label for="ak-profile-description">用途说明 Description</label>
+                                            <textarea id="ak-profile-description" placeholder="写清楚这套脚本什么时候用、适合什么场景 / Explain what this profile does and when to use it"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-summary-grid" id="ak-editor-identity-summary"></div>
+                                    <details class="auto-key-details">
+                                        <summary>高级角色限制 Advanced Role Filter</summary>
+                                        <div class="auto-key-details-body">
+                                            <div class="auto-key-grid compact">
+                                                <div class="auto-key-field">
+                                                    <label for="ak-profile-profession-name">职业名称 Profession Name</label>
+                                                    <input id="ak-profile-profession-name" type="text" placeholder="留空则不限制职业 / Leave empty for any profession" />
+                                                </div>
+                                                <div class="auto-key-field">
+                                                    <label for="ak-profile-profession-id">职业 ID Profession ID</label>
+                                                    <input id="ak-profile-profession-id" type="number" min="0" step="1" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </section>
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">运行规则 Runtime</div>
+                                        <div class="auto-key-section-note">这里控制脚本是否必须前台、死亡是否暂停，以及保存/启用操作。</div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <label class="sao-toggle" style="max-width:220px;">
+                                            <input type="checkbox" id="ak-engine-require-foreground" />
+                                            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                            <span>需要前台 Require Foreground</span>
+                                        </label>
+                                        <label class="sao-toggle" style="max-width:220px;">
+                                            <input type="checkbox" id="ak-engine-pause-on-death" />
+                                            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                            <span>死亡暂停 Pause On Death</span>
+                                        </label>
+                                        <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">保存配置 Save Profile</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">启用 Activate</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">导出 Export</button>
+                                    </div>
+                                </section>
+                                <section class="auto-key-section auto-key-actions-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">动作编辑 Action Builder</div>
+                                        <div class="auto-key-section-note">每个动作对应一个技能槽。先填按键，再用条件卡片决定什么时候触发。</div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn primary" type="button" onclick="_akAddAction(); return false;">新增动作 Add Action</button>
+                                    </div>
+                                    <div class="auto-key-action-list" id="auto-key-action-list"></div>
+                                </section>
+                            </div>
+                        </div>
+                        <div class="auto-key-panel" data-tab="cloud">
+                            <div class="auto-key-cloud-layout">
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">当前角色 / 上传凭证 Identity & Upload Auth</div>
+                                        <div class="auto-key-section-note">系统会用当前识别到的 UID、角色名、职业 ID 自动申请短时凭证。</div>
+                                    </div>
+                                    <div class="auto-key-grid">
+                                        <div class="auto-key-field span-2">
+                                            <label for="ak-server-url">欢迎使用咲ACT！</label>
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-summary-grid">
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">UID</span><span class="auto-key-summary-value" id="ak-identity-uid">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">玩家名 Player</span><span class="auto-key-summary-value" id="ak-identity-name">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">职业 ID</span><span class="auto-key-summary-value" id="ak-identity-profession-id">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">职业名 Profession</span><span class="auto-key-summary-value" id="ak-identity-profession-name">--</span></div>
+                                    </div>
+                                    <div class="auto-key-cloud-meta" id="ak-upload-auth-meta"></div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">保存服务器 Save Server</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akRefreshUploadAuth(true); return false;">刷新凭证 Refresh Auth</button>
+                                        <button class="auto-key-btn primary" id="ak-upload-active-btn" type="button" onclick="_akUploadActive(); return false;">上传当前配置 Upload Active</button>
+                                    </div>
+                                </section>
+                                <section class="auto-key-section auto-key-cloud-results-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">云端搜索 Cloud Search</div>
+                                        <div class="auto-key-section-note">按配置名、作者 UID、角色名或职业搜索并下载别人的脚本配置。</div>
+                                    </div>
+                                    <div class="auto-key-grid compact">
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-q">关键字 Keyword</label>
+                                            <input id="ak-search-q" type="text" placeholder="配置 / 玩家 / 职业 / Profile / Player / Profession" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-profile-name">配置名称 Profile Name</label>
+                                            <input id="ak-search-profile-name" type="text" placeholder="配置名称 / Profile name" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-player-uid">玩家 UID Player UID</label>
+                                            <input id="ak-search-player-uid" type="text" placeholder="玩家 UID / UID" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-player-name">玩家名称 Player Name</label>
+                                            <input id="ak-search-player-name" type="text" placeholder="玩家名称 / Player name" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-profession-name">职业 Profession</label>
+                                            <input id="ak-search-profession-name" type="text" placeholder="职业 / Profession" />
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">搜索 Search</button>
+                                    </div>
+                                    <div class="auto-key-cloud-results" id="auto-key-cloud-results"></div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">BOSS ↔ AUTOKEY LINKAGE</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="linkage-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>联动 Linkage ON/OFF</span>
+                    </label>
+                    <div class="widget-note" style="margin-bottom:8px;">Boss Raid 阶段/时间轴事件触发自动按键。 Boss raid phase/timeline events trigger auto key presses.</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="linkage-debug" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Debug Log</span>
+                    </label>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                        <label style="font-size:10px;color:rgb(140,138,140);white-space:nowrap;">Global CD (s):</label>
+                        <input type="number" id="linkage-global-cd" min="0" max="60" step="0.5" value="1.0"
+                               style="width:60px;padding:2px 4px;font-size:10px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);"
+                               onchange="_setLinkageGlobalCD(this.value)" />
+                    </div>
+                    <div id="linkage-mappings" style="display:flex;flex-direction:column;gap:6px;"></div>
+                    <button class="boss-bar-mode-btn" type="button" onclick="_addLinkageMapping()" style="margin-top:6px;flex:0 0 auto;min-width:auto;">+ Add Mapping</button>
+                </li>
+            </ul>
+
+            <!-- Boss Raid sub-menu -->
+            <ul class="child-menu boss-raid-menu" id="sub-bossRaid" data-group="bossRaid">
+                <li class="widget-row">
+                    <div class="widget-label">Boss Raid 时间轴</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="boss-raid-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Boss Raid 启用 Enable</span>
+                    </label>
+                    <div class="boss-raid-runtime" id="boss-raid-runtime">Boss Raid: Idle</div>
+                    <div class="boss-raid-controls" id="boss-raid-controls" style="display:flex;gap:6px;margin:6px 0;">
+                        <button class="boss-raid-btn primary" type="button" id="br-btn-start" onclick="_brStartStop(); return false;">▶ 开始 Start</button>
+                        <button class="boss-raid-btn" type="button" onclick="_brNextPhase(); return false;">⏭ 下一阶段 Next</button>
+                        <button class="boss-raid-btn danger" type="button" onclick="_brReset(); return false;">↺ 重置 Reset</button>
+                    </div>
+                    <div style="margin:6px 0 2px 0;">
+                        <button class="boss-raid-btn" type="button" onclick="_toggleRaidEditorPanel(); return false;">📊 可视化面板 Visual Panel</button>
+                    </div>
+                    <div class="widget-note">F7 开始/停止，F8 切换阶段。配置 Boss 血量与狂暴计时器，时间轴触发点会弹出提醒和音效。 F7 start/stop, F8 next phase. Set boss HP, enrage timer, and timeline alerts.</div>
+                </li>
+                <li class="widget-row boss-raid-shell-row">
+                    <div class="boss-raid-tabs" id="boss-raid-tabs">
+                        <button class="boss-raid-tab active" data-tab="local" type="button">本地 Local</button>
+                        <button class="boss-raid-tab" data-tab="editor" type="button">编辑 Editor</button>
+                        <button class="boss-raid-tab" data-tab="cloud" type="button">云端 Cloud</button>
+                    </div>
+                    <div class="boss-raid-shell">
+                        <!-- Local tab -->
+                        <div class="boss-raid-panel show" data-tab="local">
+                            <div class="boss-raid-toolbar">
+                                <button class="boss-raid-btn primary" type="button" onclick="_brCreateProfile(); return false;">新建配置 New</button>
+                                <button class="boss-raid-btn" type="button" onclick="_brImportProfile(); return false;">导入 Import</button>
+                                <button class="boss-raid-btn" type="button" onclick="_brRefreshState(); return false;">刷新 Refresh</button>
+                            </div>
+                            <div class="boss-raid-list" id="boss-raid-profile-list"></div>
+                        </div>
+                        <!-- Editor tab -->
+                        <div class="boss-raid-panel" data-tab="editor">
+                            <div class="boss-raid-editor-layout">
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">基本信息 Basic Info</div>
+                                        <div class="boss-raid-section-note">从本地列表选择一个配置后即可编辑。Boss 名、总血量、目标匹配和阶段时间轴都会保存在当前 profile。</div>
+                                    </div>
+                                    <div class="boss-raid-grid">
+                                        <div class="boss-raid-field">
+                                            <label for="br-profile-name">配置名称 Name</label>
+                                            <input id="br-profile-name" type="text" placeholder="Boss 名称" oninput="_brDraftField('profile_name', this.value)" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-boss-hp">Boss 总血量 Total HP</label>
+                                            <input id="br-boss-hp" type="number" min="0" step="100000" value="0" oninput="_brDraftField('boss_total_hp', this.value, 'int')" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-enrage-time">狂暴时间(秒) Enrage(s)</label>
+                                            <input id="br-enrage-time" type="number" min="0" step="10" value="600" oninput="_brDraftField('enrage_time_s', this.value, 'int')" />
+                                        </div>
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-description">说明 Description</label>
+                                            <textarea id="br-description" placeholder="说明" oninput="_brDraftField('description', this.value)"></textarea>
+                                        </div>
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-target-pattern">目标匹配 Target Pattern (正则)</label>
+                                            <input id="br-target-pattern" type="text" placeholder="例: 冰龙|Ice Dragon" oninput="_brDraftField('target_name_pattern', this.value)" />
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-summary-grid" id="br-editor-summary"></div>
+                                    <label class="sao-toggle" style="margin-top:6px;">
+                                        <input type="checkbox" id="br-simple-mode" checked onchange="_brDraftField('simple_mode', this.checked, 'bool')" />
+                                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                        <span>简易模式 Simple Mode (只看计时器和 DPS)</span>
+                                    </label>
+                                </section>
+                                <section class="boss-raid-section" id="br-phases-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">阶段 Phases</div>
+                                        <button class="boss-raid-btn" type="button" onclick="_brAddPhase(); return false;">+ 新增阶段</button>
+                                    </div>
+                                    <div id="br-phases-container"></div>
+                                </section>
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn primary" type="button" onclick="_brSaveProfile(); return false;">保存 Save</button>
+                                        <button class="boss-raid-btn" type="button" onclick="_brExportProfile(); return false;">导出 Export</button>
+                                        <button class="boss-raid-btn danger" type="button" onclick="_brDeleteProfile(); return false;">删除 Delete</button>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                        <!-- Cloud tab -->
+                        <div class="boss-raid-panel" data-tab="cloud">
+                            <div class="boss-raid-cloud-layout">
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">当前角色 / 上传凭证 Identity & Upload Auth</div>
+                                        <div class="boss-raid-section-note">上传会使用当前识别到的 UID、角色名和职业信息申请短时凭证。</div>
+                                    </div>
+                                    <div class="boss-raid-grid">
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-server-url">欢迎使用咲ACT！</label>
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-summary-grid">
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">UID</span><span class="boss-raid-summary-value" id="br-identity-uid">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">玩家名 Player</span><span class="boss-raid-summary-value" id="br-identity-name">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">职业 ID</span><span class="boss-raid-summary-value" id="br-identity-profession-id">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">职业名 Profession</span><span class="boss-raid-summary-value" id="br-identity-profession-name">--</span></div>
+                                    </div>
+                                    <div class="boss-raid-cloud-meta" id="br-upload-auth-meta"></div>
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn" type="button" onclick="_brSaveCloudSettings(); return false;">保存服务器 Save Server</button>
+                                        <button class="boss-raid-btn" type="button" onclick="_brIssueToken(); return false;">刷新凭证 Refresh Auth</button>
+                                        <button class="boss-raid-btn primary" id="br-upload-active-btn" type="button" onclick="_brUploadActive(); return false;">上传当前 Upload Active</button>
+                                    </div>
+                                </section>
+                                <section class="boss-raid-section boss-raid-cloud-results-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">云端搜索 Cloud Search</div>
+                                        <div class="boss-raid-section-note">按配置名、玩家 UID、角色名搜索并下载 Boss Raid 时间轴配置。</div>
+                                    </div>
+                                    <div class="boss-raid-grid compact">
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-q">关键字 Keyword</label>
+                                            <input id="br-search-q" type="text" placeholder="Boss / 玩家 / 关键字" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-profile-name">配置名 Profile Name</label>
+                                            <input id="br-search-profile-name" type="text" placeholder="配置名称" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-player-uid">玩家 UID Player UID</label>
+                                            <input id="br-search-player-uid" type="text" placeholder="玩家 UID" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-player-name">玩家名称 Player Name</label>
+                                            <input id="br-search-player-name" type="text" placeholder="玩家名称" />
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn primary" type="button" onclick="_brSearchRemote(); return false;">搜索 Search</button>
+                                    </div>
+                                    <div class="boss-raid-cloud-results" id="boss-raid-cloud-results"></div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </li>
+            </ul>
+
+            <!-- Panels & Actions sub-menu -->
+            <ul class="child-menu" id="sub-panels" data-group="panels">
+                <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
+                <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
+                <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
+                <li data-action="toggle_session_players"><i class="menu-glyph mi-mid"></i><span>本次登录玩家 Session Players</span></li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">SOUND</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="sound-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>SFX ON/OFF</span>
+                    </label>
+                    <input type="range" class="sao-slider" id="sound-volume" min="0" max="100" value="70" />
+                    <div class="widget-note">控制菜单提示音与 Burst Ready 音效，不影响游戏本体声音。</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">渲染血条 Boss HP Bar</div>
+                    <div class="boss-bar-mode-group" id="boss-bar-mode-group">
+                        <button class="boss-bar-mode-btn" data-mode="always" type="button">有敌人就显示 Always</button>
+                        <button class="boss-bar-mode-btn active" data-mode="boss_raid" type="button">仅 Boss Raid Only</button>
+                        <button class="boss-bar-mode-btn" data-mode="off" type="button">关闭 Off</button>
+                    </div>
+                    <div class="widget-note">控制独立 Boss 血条窗口何时显示。「有敌人就显示」= 收到怪物数据即显示；「仅 Boss Raid」= 只在 Boss Raid 运行时显示。</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">DPS METER</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="dps-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>DPS 计算器 DPS Calculator</span>
+                    </label>
+                    <div class="widget-note">待机时保持隐藏，进入战斗后自动弹出，空闲后自动隐藏。点击角色可查看技能明细，并可随时打开上一场报告。 Hidden while idle, auto-shows on combat, auto-hides after combat, and keeps the last report available.</div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                        <span style="font-size:11px;color:rgb(140,138,140);">空闲隐藏/结算 Idle timeout (s)</span>
+                        <input type="number" id="dps-fade-timeout" min="0" max="120" step="1" value="5" style="width:52px;font-size:11px;padding:2px 4px;border:1px solid rgba(201,198,198,0.60);border-radius:3px;background:rgba(255,255,255,0.85);color:rgb(100,99,100);" onchange="_setDpsFadeTimeout(this.value)" />
+                    </div>
+                    <div class="mode-group" style="margin-top:8px;">
+                        <div class="mode-btn disabled" id="dps-last-report-btn" onclick="_showLastDpsReport()">查看上一场报告 LAST REPORT</div>
+                    </div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">BUFF MONITOR</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="buffmon-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Buff 监视器 Buff Monitor</span>
+                    </label>
+                    <div class="widget-note">显示在 ID 面板正上方的半透明 buff 倒计时面板，自动跟随当前锁定 Boss。 Semi-transparent buff timer panel anchored above the ID plate, follows the locked boss target.</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">DATA PIPELINE</div>
+                    <div class="mem-source-group" id="mem-source-group">
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="tcp" type="button">TCP</button>
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="memory" type="button">MEM</button>
+                        <button class="boss-bar-mode-btn mem-source-btn active" data-mode="hybrid" type="button">HYBRID</button>
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="auto" type="button">AUTO</button>
+                    </div>
+                    <div class="widget-note">MEM 为纯内存模式；HYBRID 使用 mem_probe 主数据，并保留 TCP 伤害事件兜底。</div>
+                    <div class="source-summary" id="data-source-summary" style="display:none">
+                        HP: NETWORK · LV: NETWORK · STA: VISION · SKILL: VISION
+                    </div>
+                    <div class="mode-group" style="display:none; margin-top: 6px;">
+                        <div class="mode-btn active" id="open-data-source-panel">CONFIGURE</div>
+                    </div>
+                </li>
+            </ul>

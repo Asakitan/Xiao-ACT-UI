@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Death Recap</title>
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Panel-scoped tokens: LAYOUT/SIZING only. All COLORS come from the shared
+   act_panel_theme.css var(--act-*) tokens so light/dark follow the host theme
+   and stay 1:1 with the flat Tk Entity reference. Shell chrome (flat border,
+   corner brackets, header, table, side, toast) is owned by the shared theme
+   via !important; here we only style layout + custom kind/payload/death markup.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+    --r-sm: 4px; --r-md: 6px;
+    --fs-kicker: 10px; --fs-meta: 11px; --fs-body: 12px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+.shell { opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: var(--fs-kicker); color: var(--act-gold); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; color: var(--act-text); }
+.actions { display: flex; gap: var(--sp-2); align-items: center; }
+input#entity { width: 116px; }
+input#window { width: 116px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: var(--sp-3); }
+.main { min-height: 0; overflow: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.table th, .table td { padding: 8px 9px; text-align: left; vertical-align: top; }
+.table th { position: sticky; top: 0; z-index: 1; font-size: var(--fs-meta); letter-spacing: .08em; }
+.death td { background: color-mix(in srgb, var(--act-danger) 14%, transparent); box-shadow: inset 3px 0 0 var(--act-danger); }
+.table tbody tr.evt { cursor: pointer; }
+.table tbody tr.evt:hover { background: color-mix(in srgb, var(--act-cyan) 10%, transparent); }
+.table tr.detail td { background: var(--act-card-bg-2); }
+.kind { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .08em; }
+.payload { color: var(--act-muted); font-size: var(--fs-meta); line-height: 1.45; user-select: text; }
+.side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+.side-title { color: var(--act-gold); font-size: var(--fs-body); letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 5px; font-size: var(--fs-body); }
+.row strong { text-align: right; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border-radius: 999px; padding: 8px 14px; font-size: var(--fs-body); transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--act-edge); border-radius: 999px; }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only): kill shared decorative chrome + flatten per-page accents to a single 3px left rail. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+button,input,select,.action-btn{clip-path:none!important;border-radius:3px!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;background:var(--act-card-bg-2)!important;}
+.main,.list,.plugin-list,.side,.side-panel,.section,.summary,.chart-wrap,.preview{box-shadow:none!important;}
+.bar{background:var(--act-gold)!important;}.skill-row.heal .bar{background:var(--act-ok)!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.aca-tile::before,.metric::before,.group-card::before{content:none!important;display:none!important;}
+.aca-tile{border-left:3px solid var(--acc,var(--act-cyan))!important;}
+.metric{border-left:3px solid var(--act-cyan)!important;}
+.group-card{border-left:3px solid var(--act-gold)!important;}
+.aca-fill{box-shadow:none!important;}
+.aca-row.zebra{background:var(--act-card-bg-2)!important;}
+.aca-badge,.aca-sec-badge{background:transparent!important;border-radius:3px!important;}
+.group-head:hover{background:var(--act-card-bg-2)!important;}
+.death td{box-shadow:none!important;background:transparent!important;border-left:3px solid var(--act-danger)!important;}
+</style>
+<script src="act_panel_theme.js"></script>
+<script src="act_panel_util.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT DEATH WINDOW</div><div class="title">DEATH RECAP</div></div>
+        <div class="actions">
+            <input id="entity" type="text" placeholder="entity id" onkeydown="if(event.key==='Enter') DeathRecap.refresh()" />
+            <input id="window" type="number" min="1" value="8" title="window seconds" onkeydown="if(event.key==='Enter') DeathRecap.refresh()" />
+            <button class="primary" type="button" onclick="DeathRecap.refresh()">刷新</button>
+            <button class="close" type="button" onclick="DeathRecap.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="rows"><div class="empty">正在读取死亡回放...<br/>LOADING DEATH RECAP</div></main>
+        <aside class="side">
+            <div class="side-title">SUMMARY</div>
+            <button type="button" onclick="DeathRecap.copy()">复制 Copy JSON</button>
+            <div class="row"><span>Death</span><strong id="sum-death">-</strong></div>
+            <div class="row"><span>Incoming</span><strong id="sum-damage">0</strong></div>
+            <div class="row"><span>Healing</span><strong id="sum-heal">0</strong></div>
+            <div class="row"><span>Shield</span><strong id="sum-shield">0</strong></div>
+            <div class="row"><span>Rows</span><strong id="sum-rows">0</strong></div>
+            <div class="row"><span>Window</span><strong id="sum-window">0ms</strong></div>
+            <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var rowsEl = document.getElementById('rows');
+    var toast = document.getElementById('toast');
+    var entity = document.getElementById('entity');
+    var windowInput = document.getElementById('window');
+    var toastTimer = null;
+    function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function finiteNumberArg(value, fallback) {
+        var n = Number(value);
+        if (!isFinite(n)) n = Number(fallback || 0);
+        return isFinite(n) ? n : 0;
+    }
+    function positiveNumberArg(value, fallback) {
+        var n = finiteNumberArg(value, fallback || 1);
+        if (n <= 0) n = finiteNumberArg(fallback, 1);
+        return Math.max(0.001, n);
+    }
+    function positiveIntArg(value, fallback) {
+        return Math.max(1, Math.floor(positiveNumberArg(value, fallback || 1)));
+    }
+    function safeWindowSeconds(value) {
+        return positiveNumberArg(value, 8.0);
+    }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object'; });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(finiteNumberArg(value, 0))));
+    }
+    function numberText(value, fallback) {
+        return String(finiteNumberArg(value, fallback));
+    }
+    function looseValueText(value, fallback) {
+        if (value == null || value === '') return fallback;
+        if (typeof value === 'number') return isFinite(value) ? String(value) : fallback;
+        var text = String(value);
+        var trimmed = text.trim();
+        var lower = trimmed.toLowerCase();
+        if (lower === 'nan' || lower === 'infinity' || lower === '+infinity' || lower === '-infinity') return fallback;
+        var numeric = Number(trimmed);
+        if (trimmed && isFinite(numeric)) return String(numeric);
+        if (trimmed && !isNaN(numeric)) return fallback;
+        return text;
+    }
+    function deathRecapPayload(name, args) {
+        args = args || [];
+        if (name === 'get_death_recap_status' || name === 'copy_death_recap') {
+            return {
+                limit: positiveIntArg(args[0], 80),
+                window_s: safeWindowSeconds(args[1]),
+                entity_id: args[2] == null || args[2] === '' ? null : args[2]
+            };
+        }
+        if (name === 'toggle_death_recap') return { action: 'toggle_death_recap' };
+        return { args: args };
+    }
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var map = { get_death_recap_status: 'act.death_recap.status', copy_death_recap: 'act.death_recap.copy', toggle_death_recap: 'ui.menu_action' };
+            var payload = deathRecapPayload(name, args || []);
+            return window.bridge.cmd(map[name] || name, payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Death recap API unavailable', rows: [], summary: {} });
+    }
+    function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
+    function render(data) {
+        data = objectValue(data);
+        var rows = objectItems(data.rows);
+        var summary = objectValue(data.summary);
+        var death = objectValue(data.death);
+        var win = objectValue(data.window);
+        var errorCount = listItems(data.errors).length;
+        document.getElementById('sum-death').textContent = death.name || death.entity_id || '-';
+        document.getElementById('sum-damage').textContent = numberText(summary.incoming_damage, 0);
+        document.getElementById('sum-heal').textContent = numberText(summary.healing, 0);
+        document.getElementById('sum-shield').textContent = numberText(summary.shield, 0);
+        document.getElementById('sum-rows').textContent = countText(rows.length);
+        document.getElementById('sum-window').textContent = ActTime.fmtDur(win.before_ms);
+        document.getElementById('sum-errors').textContent = String(errorCount);
+        if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无死亡回放。<br/>等待 death/is_dead/hp=0 事件。</div>'; return; }
+        rowsEl.innerHTML = '<table class="table"><thead><tr><th>Delta</th><th>Time</th><th>Kind</th><th>Actor</th><th>Target</th><th>Amount</th><th>Detail</th></tr></thead><tbody>' + rows.map(function (row) {
+            row = row && typeof row === 'object' ? row : {};
+            var payload = objectValue(row.payload);
+            var main = '<tr class="evt ' + (row.is_death ? 'death' : '') + '" onclick="DeathRecap.toggleRow(this)"><td>' + esc(ActTime.fmtSigned(row.relative_ms)) + '</td><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="kind">' + esc(ActText.topic(row.kind || row.topic, '-')) + '</span></td><td>' + esc(row.actor || '-') + '</td><td>' + esc(row.target || '-') + '</td><td>' + esc(looseValueText(row.amount, '')) + '</td><td><div class="payload">' + esc(row.label || '') + '</div></td></tr>';
+            var detail = '<tr class="detail" style="display:none;"><td colspan="7"><div class="payload">' + esc(JSON.stringify(payload)) + '</div></td></tr>';
+            return main + detail;
+        }).join('') + '</tbody></table>';
+    }
+    window.DeathRecap = {
+        refresh: function () { return apiCall('get_death_recap_status', [80, safeWindowSeconds(windowInput.value), entity.value || null]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Death recap failed'); return data; }); },
+        copy: function () { return apiCall('copy_death_recap', [80, safeWindowSeconds(windowInput.value), entity.value || null]).then(function (data) { data = data || {}; render(data); if (!data.text) { showToast(data.ok === false ? (data.message || 'Death recap copy failed') : 'Death recap copy payload empty'); return data; } return Promise.resolve().then(function () { if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard unavailable'); return navigator.clipboard.writeText(data.text); }).then(function () { showToast('Death recap copied'); return data; }).catch(function () { showToast('Death recap copy failed'); return data; }); }); },
+        close: function () { apiCall('toggle_death_recap'); },
+        toggleRow: function (tr) { var d = tr.nextElementSibling; if (d && d.classList.contains('detail')) d.style.display = (d.style.display === 'none' ? '' : 'none'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+    entity.addEventListener('change', function () { DeathRecap.refresh(); });
+    windowInput.addEventListener('change', function () { DeathRecap.refresh(); });
+    setTimeout(function () { shell.classList.add('visible'); DeathRecap.refresh(); }, 40);
+})();
+</script>
+</body>
+</html>

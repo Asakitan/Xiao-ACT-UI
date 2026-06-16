@@ -1,0 +1,37 @@
+{
+  "id": "midi_piano_plugin",
+  "name": "MIDI 钢琴演奏家",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "description": "把 MIDI 自动弹成游戏电子琴：mido 解析 → 智能编排 → 60键(CTRL/SHIFT)/88键(</>)键位映射 → ctypes 扫描码注入。支持自动识别(自动选60/88+自动移调)、手动切键、调速、移调、延音、分通道、覆盖率/状态显示、folder-scan 曲库、可改键热键、前台门控。依赖随包自带、无需全局安装。",
+  "enabled": true,
+  "requires": ["star_resonance"],
+  "subscriptions": [],
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "MIDI 钢琴", "description": "MIDI 自动演奏控制台 + 子面板(钢琴键盘/音符卷帘/MIDI分析/设置)",
+     "actions": [
+       "play_pause", "stop",
+       "speed_up", "speed_down",
+       "transpose_up", "transpose_down", "transpose_auto",
+       "mode_classic", "mode_extended", "mode_auto",
+       "toggle_legato", "toggle_foreground_gate", "toggle_auto_detect",
+       "page_size_up", "page_size_down",
+       "lib_refresh", "lib_prev", "lib_next", "select_file", "open_file",
+       "roll_prev", "roll_next",
+       "view_main", "view_kbd", "view_roll", "view_analysis", "view_settings",
+       "win_kbd", "win_roll", "win_analysis", "win_settings",
+       "channel_toggle", "channel_oct_up", "channel_oct_down",
+       "preview_play", "preview_stop",
+       "refresh"
+     ]}
+  ],
+  "settings_schema": {
+    "auto_detect": {"type": "boolean", "default": true, "description": "载入曲目时自动识别 60/88 键并自动移调。"},
+    "require_foreground": {"type": "boolean", "default": true, "description": "仅当游戏窗口在前台时才注入按键（防误触）。"},
+    "legato_overlap": {"type": "boolean", "default": false, "description": "连音重叠（音符延音到下一个音符）。"},
+    "page_size": {"type": "integer", "default": 8, "description": "曲库每页显示的曲目数。"},
+    "extra_midi_dir": {"type": "string", "default": "", "description": "额外的 MIDI 曲库目录（除插件自带 assets/midi 外再扫描此目录）。"}
+  },
+  "permissions": []
+}

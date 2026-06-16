@@ -1,0 +1,864 @@
+# -*- coding: utf-8 -*-
+"""Boss Raid → Auto Key linkage controller.
+
+Listens to boss raid phase/timeline events and triggers mapped auto-key actions.
+Supports cooldown, dedup, execution lock, and debug logging.
+"""
+
+import copy
+import json
+import threading
+import time
+import uuid
+from typing import Any, Callable, Dict, List, Optional
+
+# ════════════════════════════════════════
+#  Helpers
+# ════════════════════════════════════════
+
+def _s(v: Any) -> str:
+    return str(v or "").strip()
+
+
+def _bool(v: Any, default: bool = False) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        t = v.strip().lower()
+        return t in ("1", "true", "yes", "on")
+    return bool(v) if isinstance(v, (int, float)) else default
+
+
+def _float(v: Any, default: float = 0.0, lo: Optional[float] = None,
+           hi: Optional[float] = None) -> float:
+    try:
+        r = float(v)
+    except Exception:
+        r = default
+    if lo is not None:
+        r = max(lo, r)
+    if hi is not None:
+        r = min(hi, r)
+    return r
+
+
+def _int(v: Any, default: int = 0, lo: Optional[int] = None,
+         hi: Optional[int] = None) -> int:
+    try:
+        r = int(v)
+    except Exception:
+        r = default
+    if lo is not None:
+        r = max(lo, r)
+    if hi is not None:
+        r = min(hi, r)
+    return r
+
+
+def _new_id() -> str:
+    return f"lnk_{uuid.uuid4().hex[:12]}"
+
+
+# ════════════════════════════════════════
+#  Data model
+# ════════════════════════════════════════
+
+TRIGGER_TYPES = (
+    # legacy, text-classified by on_boss_raid_alert (kept for back-compat):
+    "phase_enter",      # boss raid enters a phase matching trigger_match
+    "timeline_alert",   # timeline fires an alert matching trigger_match
+    "breaking",         # boss enters breaking state (alert text)
+    "enrage",           # enrage timer reached
+    # memory-driven, skill_id-accurate, fired by on_boss_action:
+    "boss_cast",        # boss begins casting skill_id (auto-dodge — the reliable signal)
+    "boss_breaking",    # offensive window: boss enters/changes breaking stage
+    "boss_overdrive",   # offensive window: boss enters overdrive
+    "boss_stun",        # offensive window: boss stunned
+    "mechanic",         # raid-profile mechanic resolved by the boss raid engine
+)
+
+# trigger types driven by the mem boss-action feed (not the alert text path)
+MEM_TRIGGER_TYPES = ("boss_cast", "boss_breaking", "boss_overdrive", "boss_stun",
+                     "mechanic")
+
+
+def _norm_sequence(raw: Any) -> list:
+    out = []
+    for step in (raw or []):
+        if not isinstance(step, dict):
+            continue
+        k = _s(step.get("key")).upper()
+        if not k:
+            continue
+        out.append({"key": k,
+                    "delay_ms": _int(step.get("delay_ms"), 0, 0, 10000),
+                    "hold_ms": _int(step.get("hold_ms"), 0, 0, 10000)})
+    return out
+
+
+def make_default_mapping() -> Dict[str, Any]:
+    return {
+        "id": _new_id(),
+        "enabled": True,
+        "trigger_type": "boss_cast",
+        "trigger_match": "",     # legacy text match (phase_enter/timeline_alert)
+        "skill_id": 0,           # boss_cast: 0 = any skill, else exact match
+        "boss_base_id": 0,       # 0 = any boss, else scope to this boss template
+        "mechanic_id": "",       # mechanic: "" = any mechanic, else exact id
+        "delay_ms": 0,           # react N ms AFTER the edge (late press)
+        "lead_ms": 0,            # react N ms BEFORE cast_end (needs cast_duration)
+        "action_key": "",        # key to press (e.g. "1", "Q", "SPACE")
+        "action_label": "",      # human-readable label
+        "press_mode": "tap",     # tap | hold
+        "hold_ms": 80,
+        "press_count": 1,
+        "sequence": [],          # [{key, delay_ms}] offensive combo; non-empty overrides press_count
+        "cooldown_s": 3.0,
+    }
+
+
+def normalize_mapping(raw: Any) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    trigger = _s(src.get("trigger_type")).lower()
+    if trigger not in TRIGGER_TYPES:
+        trigger = "phase_enter"
+    press_mode = _s(src.get("press_mode")).lower()
+    if press_mode not in ("tap", "hold"):
+        press_mode = "tap"
+    return {
+        "id": _s(src.get("id")) or _new_id(),
+        "enabled": _bool(src.get("enabled"), True),
+        "trigger_type": trigger,
+        "trigger_match": _s(src.get("trigger_match")),
+        "skill_id": _int(src.get("skill_id"), 0, 0),
+        "boss_base_id": _int(src.get("boss_base_id"), 0, 0),
+        "mechanic_id": _s(src.get("mechanic_id")),
+        "delay_ms": _int(src.get("delay_ms"), 0, 0, 60000),
+        "lead_ms": _int(src.get("lead_ms"), 0, 0, 60000),
+        "action_key": _s(src.get("action_key")).upper(),
+        "action_label": _s(src.get("action_label")),
+        "press_mode": press_mode,
+        "hold_ms": _int(src.get("hold_ms"), 80, 0, 10000),
+        "press_count": _int(src.get("press_count"), 1, 1, 20),
+        "sequence": _norm_sequence(src.get("sequence")),
+        "cooldown_s": _float(src.get("cooldown_s"), 3.0, 0.0, 600.0),
+    }
+
+
+def default_linkage_config() -> Dict[str, Any]:
+    return {
+        "enabled": False,
+        "dodge_enabled": False,  # master auto-dodge switch (mechanic inline dodges) — 高风险, 默认关
+        "global_cooldown_s": 1.0,
+        "debug_log": False,
+        "mappings": [],
+    }
+
+
+def normalize_linkage_config(raw: Any) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    mappings = []
+    for item in (src.get("mappings") or []):
+        if isinstance(item, dict):
+            mappings.append(normalize_mapping(item))
+    return {
+        "enabled": _bool(src.get("enabled"), False),
+        "dodge_enabled": _bool(src.get("dodge_enabled"), False),
+        "global_cooldown_s": _float(src.get("global_cooldown_s"), 1.0, 0.0, 60.0),
+        "debug_log": _bool(src.get("debug_log"), False),
+        "mappings": mappings,
+    }
+
+
+def set_dodge_enabled(settings, enabled: bool) -> Dict[str, Any]:
+    """Flip the master auto-dodge switch and persist (panic hotkey + editor)."""
+    cfg = load_linkage_config(settings)
+    cfg["dodge_enabled"] = bool(enabled)
+    return save_linkage_config(settings, cfg)
+
+
+def load_linkage_config(settings) -> Dict[str, Any]:
+    return normalize_linkage_config(settings.get("boss_autokey_linkage", {}))
+
+
+def save_linkage_config(settings, config: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_linkage_config(config)
+    settings.set("boss_autokey_linkage", normalized)
+    settings.save()
+    return normalized
+
+
+def build_linkage_state(config: Dict[str, Any],
+                        engine_status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "enabled": _bool(config.get("enabled"), False),
+        "global_cooldown_s": config.get("global_cooldown_s", 1.0),
+        "debug_log": _bool(config.get("debug_log"), False),
+        "mappings": copy.deepcopy(config.get("mappings", [])),
+        "runtime": copy.deepcopy(engine_status or {}),
+    }
+
+
+# ════════════════════════════════════════
+#  Runtime Controller
+# ════════════════════════════════════════
+
+class BossAutoKeyLinkage:
+    """Bridges boss raid events to auto-key actions.
+
+    Wraps the on_alert callback of the boss raid engine to intercept
+    phase/timeline events and fire mapped keystrokes.
+    """
+
+    # 定向躲避按住的移动键 — 偏移连招命中这些键会松错 director 的按住态, 故躲避中跳过
+    _MOVE_KEYS = frozenset({"W", "A", "S", "D"})
+
+    def __init__(self, settings,
+                 send_key: Optional[Callable[[str, str, int, int], None]] = None,
+                 on_log: Optional[Callable[[str], None]] = None,
+                 foreground_gate: Optional[Callable[[], bool]] = None,
+                 dodge_active_gate: Optional[Callable[[], bool]] = None):
+        """
+        Args:
+            settings: SettingsManager instance
+            send_key: callable(key, press_mode, hold_ms, press_count) → fires a keystroke
+            on_log: callable(message) → debug log output
+            foreground_gate: callable() → False blocks key emission (game not
+                foreground); re-checked right before sending so delayed dodges
+                die when the game loses focus mid-wait
+            dodge_active_gate: callable() → True 表示定向躲避正按住 WASD; 此时
+                跳过连招里的移动键(W/A/S/D), 防穿插松错 director 的按住态
+        """
+        self._settings = settings
+        self._send_key = send_key
+        self._on_log = on_log
+        self._foreground_gate = foreground_gate
+        self._dodge_active_gate = dodge_active_gate
+
+        self._lock = threading.Lock()
+        self._last_fire: Dict[str, float] = {}   # mapping_id → last fire time
+        self._global_last_fire: float = 0.0
+        self._fire_count: int = 0
+        self._panic_epoch: int = 0   # 每次 panic_stop +1, 在飞的发键线程据此自杀
+
+    def panic_stop(self) -> None:
+        """急停: 作废所有在途(等待中/序列进行中)的发键线程。F12 与 AutoDodgeDirector
+        .release_all() 同步调用 — 否则 hold 型连招会无视急停继续发, 破坏 panic。"""
+        with self._lock:
+            self._panic_epoch += 1
+
+    def on_boss_raid_alert(self, title: str, message: str):
+        """Called when boss raid engine fires an alert (phase change, timeline, enrage, etc.).
+
+        Determines if the alert matches any configured mapping and fires the action.
+        """
+        config = load_linkage_config(self._settings)
+        if not _bool(config.get("enabled"), False):
+            return
+
+        trigger_type, trigger_label = self._classify_alert(title, message)
+        if not trigger_type:
+            return
+
+        self._debug(config, f"[Linkage] Alert: type={trigger_type} label='{trigger_label}' msg='{message}'")
+
+        with self._lock:
+            now = time.time()
+            global_cd = _float(config.get("global_cooldown_s"), 1.0)
+            if global_cd > 0 and (now - self._global_last_fire) < global_cd:
+                self._debug(config, f"[Linkage] Skipped: global cooldown ({global_cd}s)")
+                return
+
+            for mapping in config.get("mappings", []):
+                if not _bool(mapping.get("enabled"), True):
+                    continue
+                if _s(mapping.get("trigger_type")) != trigger_type:
+                    continue
+                match_pattern = _s(mapping.get("trigger_match"))
+                if match_pattern and match_pattern.lower() not in trigger_label.lower():
+                    continue
+                key = _s(mapping.get("action_key"))
+                if not key:
+                    continue
+
+                # Cooldown check
+                mid = _s(mapping.get("id"))
+                per_cooldown = _float(mapping.get("cooldown_s"), 3.0)
+                prev_last = self._last_fire.get(mid, 0.0)
+                if per_cooldown > 0 and (now - prev_last) < per_cooldown:
+                    self._debug(config, f"[Linkage] Skipped '{mapping.get('action_label', key)}': cooldown ({per_cooldown}s)")
+                    continue
+
+                # Fire
+                prev_global = self._global_last_fire
+                self._last_fire[mid] = now
+                self._global_last_fire = now
+                self._fire_count += 1
+
+                label = _s(mapping.get("action_label")) or key
+                self._debug(config, f"[Linkage] FIRE: '{label}' key={key}")
+
+                # 经 _dispatch_mapping 走前台门(此路径历史上裸发键绕过了门),
+                # 被门拦下时退还冷却, 不烧掉真机制的窗口
+                self._dispatch_mapping(
+                    mapping, None,
+                    on_blocked=lambda m=mid, n=now, p=prev_last, g=prev_global:
+                        self._refund_fire(m, n, p, g))
+                break  # Only fire first matching mapping per alert
+
+    def on_boss_action(self, action: Dict[str, Any]):
+        """Mem-feed driven, skill_id-accurate boss reaction. Parallel to
+        on_boss_raid_alert; reuses the same cooldown/dedup/global-cooldown machinery.
+
+        Fires `boss_cast` on a cast-start edge (matched by skill_id, scoped by
+        boss_base_id) and the offensive windows `boss_breaking`/`boss_overdrive`/
+        `boss_stun` only on the rising edge (the engine sets *_edge flags).
+
+        Mechanic events (the engine resolved a raid-profile mechanic) carry
+        `mechanic_id` (+ optional inline `mechanic_dodge` dict and a
+        `dodge_wait_s` countdown alignment). The inline dodge is gated by the
+        independent `dodge_enabled` master switch; user-defined `mechanic`
+        trigger mappings go through the regular `enabled` path."""
+        config = load_linkage_config(self._settings)
+        if not isinstance(action, dict):
+            return
+        enabled = _bool(config.get("enabled"), False)
+        dodge_enabled = _bool(config.get("dodge_enabled"), False)
+        mechanic_id = _s(action.get("mechanic_id"))
+        inline_dodge = action.get("mechanic_dodge")
+        has_inline = mechanic_id and isinstance(inline_dodge, dict) and (
+            _s(inline_dodge.get("action_key")) or inline_dodge.get("sequence"))
+        if not enabled and not (dodge_enabled and has_inline):
+            return
+
+        base_id = _int(action.get("boss_base_id"), 0)
+        skill_id = _int(action.get("skill_id"), 0)
+        cast_edge = _s(action.get("cast_edge")).lower()
+        cast_dur = action.get("cast_duration_ms")
+        dodge_wait = action.get("dodge_wait_s")
+
+        fired_types = []
+        if mechanic_id:
+            fired_types.append("mechanic")
+        # fire on any cast-start edge, including instant skills (skill_id 0, e.g. a
+        # counterattack); skill_id matching below still scopes per-skill mappings.
+        if cast_edge == "start":
+            fired_types.append("boss_cast")
+        if action.get("breaking_edge"):
+            fired_types.append("boss_breaking")
+        if action.get("overdrive_edge"):
+            fired_types.append("boss_overdrive")
+        if action.get("stun_edge"):
+            fired_types.append("boss_stun")
+        if not fired_types:
+            return
+
+        with self._lock:
+            now = time.time()
+            # mechanic inline dodge: independent of `enabled` and of the global
+            # cooldown (a dodge must never be starved by an offensive combo).
+            if has_inline and dodge_enabled:
+                mech_key = f"mech:{mechanic_id}"
+                per_cd = _float(inline_dodge.get("cooldown_s"), 3.0)
+                prev_mech = self._last_fire.get(mech_key, 0.0)
+                if not (per_cd > 0 and (now - prev_mech) < per_cd):
+                    self._last_fire[mech_key] = now
+                    self._fire_count += 1
+                    self._debug(config, f"[Linkage] MECH_DODGE fire: mech={mechanic_id} "
+                                         f"name='{action.get('mechanic_name') or ''}'")
+                    self._dispatch_mapping(inline_dodge, cast_dur,
+                                           wait_override_s=dodge_wait,
+                                           gate=self._dodge_still_enabled,
+                                           on_blocked=lambda k=mech_key, n=now, p=prev_mech:
+                                               self._refund_fire(k, n, p))
+                    return   # one fire per action
+
+            if not enabled:
+                return
+            global_cd = _float(config.get("global_cooldown_s"), 1.0)
+            if global_cd > 0 and (now - self._global_last_fire) < global_cd:
+                return
+            for trig_type in fired_types:
+                for mapping in config.get("mappings", []):
+                    if not _bool(mapping.get("enabled"), True):
+                        continue
+                    if _s(mapping.get("trigger_type")) != trig_type:
+                        continue
+                    m_base = _int(mapping.get("boss_base_id"), 0)
+                    if m_base and base_id and m_base != base_id:
+                        continue
+                    if trig_type == "boss_cast":
+                        m_skill = _int(mapping.get("skill_id"), 0)
+                        if m_skill and m_skill != skill_id:
+                            continue
+                    if trig_type == "mechanic":
+                        m_mech = _s(mapping.get("mechanic_id"))
+                        if m_mech and m_mech != mechanic_id:
+                            continue
+                    key = _s(mapping.get("action_key"))
+                    seq = mapping.get("sequence") or []
+                    if not key and not seq:
+                        continue
+                    mid = _s(mapping.get("id"))
+                    per_cd = _float(mapping.get("cooldown_s"), 3.0)
+                    prev_last = self._last_fire.get(mid, 0.0)
+                    if per_cd > 0 and (now - prev_last) < per_cd:
+                        continue
+                    prev_global = self._global_last_fire
+                    self._last_fire[mid] = now
+                    self._global_last_fire = now
+                    self._fire_count += 1
+                    self._debug(config, f"[Linkage] BOSS_ACTION fire: type={trig_type} "
+                                         f"skill={skill_id} base={base_id} "
+                                         f"label='{mapping.get('action_label') or key}'")
+                    self._dispatch_mapping(
+                        mapping, cast_dur,
+                        wait_override_s=dodge_wait if trig_type == "mechanic" else None,
+                        on_blocked=lambda m=mid, n=now, p=prev_last, g=prev_global:
+                            self._refund_fire(m, n, p, g))
+                    return   # one fire per action
+
+    def _dodge_still_enabled(self) -> bool:
+        """Live re-read of the master dodge switch (panic kills in-flight waits)."""
+        try:
+            cfg = load_linkage_config(self._settings)
+            return _bool(cfg.get("dodge_enabled"), False)
+        except Exception:
+            return True
+
+    def _refund_fire(self, mid: str, stamped: float, prev: float,
+                     prev_global: Optional[float] = None) -> None:
+        """被门拦下的发键退还冷却 — 拦截不应烧掉下一次真触发的冷却窗口。
+        只在时间戳仍是本次盖的章时回退(期间有新触发则不动)。"""
+        with self._lock:
+            if self._last_fire.get(mid) == stamped:
+                if prev > 0:
+                    self._last_fire[mid] = prev
+                else:
+                    self._last_fire.pop(mid, None)
+            if prev_global is not None and self._global_last_fire == stamped:
+                self._global_last_fire = prev_global
+
+    def _dispatch_mapping(self, mapping: Dict[str, Any], cast_dur: Any,
+                          wait_override_s: Any = None,
+                          gate: Optional[Callable[[], bool]] = None,
+                          skip_foreground: bool = False,
+                          on_blocked: Optional[Callable[[], None]] = None):
+        """Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence.
+        `wait_override_s` replaces the delay/lead computation (countdown-aligned
+        mechanic dodges). `gate` is re-checked after the wait; the foreground
+        gate is re-checked too unless `skip_foreground` (editor dry-run).
+        `on_blocked` runs if the pre-send gate blocks (cooldown refund)."""
+        delay_ms = _int(mapping.get("delay_ms"), 0)
+        lead_ms = _int(mapping.get("lead_ms"), 0)
+        wait_s = max(0.0, delay_ms / 1000.0)
+        if lead_ms and isinstance(cast_dur, (int, float)) and cast_dur > 0:
+            wait_s = max(0.0, (float(cast_dur) - lead_ms) / 1000.0)
+        if isinstance(wait_override_s, (int, float)) and wait_override_s >= 0:
+            wait_s = float(wait_override_s)
+        seq = list(mapping.get("sequence") or [])
+        key = _s(mapping.get("action_key"))
+        press_mode = _s(mapping.get("press_mode")) or "tap"
+        hold_ms = _int(mapping.get("hold_ms"), 80)
+        press_count = _int(mapping.get("press_count"), 1)
+        send = self._send_key
+        fg_gate = None if skip_foreground else self._foreground_gate
+        if not send:
+            return
+        start_epoch = self._panic_epoch   # panic_stop() 后此快照失配 → 自杀
+
+        def _blocked() -> bool:
+            if self._panic_epoch != start_epoch:   # F12 急停作废在飞动作
+                return True
+            if gate is not None:
+                try:
+                    if not gate():
+                        return True
+                except Exception:
+                    pass
+            if fg_gate is not None:
+                try:
+                    if not fg_gate():
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        def _skip_move(k: str) -> bool:
+            # 定向躲避正按住 WASD 时, 跳过连招里的移动键 — 否则 tap/release
+            # 会松错 director 的按住态, 躲避方向错位 (审查: WASD-combo 冲突)
+            if k.upper() not in self._MOVE_KEYS or self._dodge_active_gate is None:
+                return False
+            try:
+                return bool(self._dodge_active_gate())
+            except Exception:
+                return False
+
+        def _run():
+            try:
+                if wait_s > 0:
+                    time.sleep(wait_s)
+                if _blocked():
+                    if on_blocked is not None:
+                        try:
+                            on_blocked()
+                        except Exception:
+                            pass
+                    return
+                if seq:
+                    for step in seq:
+                        d = _int(step.get("delay_ms"), 0)
+                        if d > 0:
+                            time.sleep(d / 1000.0)
+                            if _blocked():
+                                return
+                        sk = _s(step.get("key"))
+                        if not sk or _skip_move(sk):
+                            continue
+                        sh = _int(step.get("hold_ms"), 0)
+                        if sh > 0:
+                            send(sk, "hold", sh, 1)
+                        else:
+                            send(sk, "tap", 0, 1)
+                elif key and not _skip_move(key):
+                    send(key, press_mode, hold_ms, press_count)
+            except Exception:
+                pass
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def fire_mapping_test(self, mapping: Any) -> bool:
+        """Editor dry-run: fire a mapping/dodge dict immediately, skipping
+        enable flags, cooldowns and the foreground gate (keys land in whatever
+        window is focused — callers must warn the user)."""
+        if not isinstance(mapping, dict) or not self._send_key:
+            return False
+        if not (_s(mapping.get("action_key")) or mapping.get("sequence")):
+            return False
+        self._dispatch_mapping(mapping, None, wait_override_s=0.0,
+                               skip_foreground=True)
+        return True
+
+    def _classify_alert(self, title: str, message: str):
+        """Determine trigger_type and label from an alert."""
+        msg = _s(message)
+        if not msg:
+            return None, ""
+
+        # Phase enter: "→ P2" or "▶ Profile — START"
+        if msg.startswith("→ "):
+            return "phase_enter", msg[2:].strip()
+        if msg.startswith("▶ "):
+            return "phase_enter", msg[2:].strip()
+
+        # Enrage
+        if "ENRAGE" in msg.upper():
+            return "enrage", msg
+
+        # Completed
+        if "COMPLETED" in msg.upper():
+            return None, ""  # Don't trigger on completion
+
+        # Timeline alert — anything else from "Boss Raid" title
+        if _s(title).lower() in ("boss raid",):
+            return "timeline_alert", msg
+
+        return None, ""
+
+    def get_status(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "total_fires": self._fire_count,
+                "last_global_fire": self._global_last_fire,
+            }
+
+    def reset(self):
+        with self._lock:
+            self._last_fire.clear()
+            self._global_last_fire = 0.0
+            self._fire_count = 0
+
+    def _debug(self, config: Dict[str, Any], msg: str):
+        if _bool(config.get("debug_log"), False) and self._on_log:
+            try:
+                self._on_log(msg)
+            except Exception:
+                pass
+
+
+# ════════════════════════════════════════
+#  Boss Reactions editor (shared by Tk + WebView)
+# ════════════════════════════════════════
+
+# ── name resolution (authoritative live cache → static tables, pure dict lookup) ──
+
+# skill ids can live in any of several name tables (a boss cast / mechanic / monster
+# skill); probe them in order and take the first real hit.
+_SKILL_NAME_KINDS = ("skill", "boss_skill", "boss_mechanic_skill",
+                     "monster_skill", "ultimate_skill", "scripted_skill")
+
+
+def _name_resolver():
+    try:
+        from tools.tablekit.name_tables import names
+        return names
+    except Exception:
+        return None
+
+
+def _lookup(nm, kind: str, id_: int) -> str:
+    if not nm or not id_:
+        return ""
+    fn = getattr(nm, kind, None)
+    if not callable(fn):
+        return ""
+    try:
+        return (fn(id_, default="") or "").strip()
+    except Exception:
+        return ""
+
+
+def _resolve_skill_name(nm, sid: int) -> str:
+    for kind in _SKILL_NAME_KINDS:
+        v = _lookup(nm, kind, sid)
+        if v:
+            return v
+    return ""
+
+
+def _resolve_boss_name(nm, bid: int) -> str:
+    return _lookup(nm, "boss", bid) or _lookup(nm, "monster", bid)
+
+
+def _resolve_scene_name(nm, scene_id: int, dungeon_id: int) -> str:
+    return _lookup(nm, "dungeon", dungeon_id) or _lookup(nm, "dungeon", scene_id)
+
+
+def _build_boss_detail(sel_boss: int, boss_name: str, obs: list) -> Dict[str, Any]:
+    """Group one boss's observations into the aggregation views the editor renders:
+    casts (the buffs it applies), mechanics/states, and a time-ordered timeline.
+    Plus a per-boss-unit summary."""
+    skills = [o for o in obs if o.get("kind") == "skill"]
+    mechanics = [o for o in obs if o.get("kind") in ("mechanic", "state")]
+    timeline = []
+    for o in obs:
+        at = o.get("time_fixed_s")
+        fixed = at is not None
+        if at is None:
+            at = o.get("elapsed_s")
+        if at is None:
+            continue
+        timeline.append({
+            "id": _int(o.get("id"), 0),
+            "skill_id": _int(o.get("skill_id") or o.get("id"), 0),
+            "name": _s(o.get("name")), "kind": _s(o.get("kind")),
+            "at_s": round(float(at), 1), "is_fixed": bool(fixed),
+            "count": _int(o.get("count"), 0), "tags": list(o.get("tags") or []),
+            "hp_line_pct": o.get("hp_line_pct"),
+        })
+    timeline.sort(key=lambda r: r["at_s"])
+    durs = [int(o["last_cast_duration_ms"]) for o in skills if o.get("last_cast_duration_ms")]
+    hp_lines = sorted({round(float(o["hp_line_pct"]), 4) for o in obs
+                       if o.get("hp_line_pct") is not None}, reverse=True)
+    summary = {
+        "skill_count": len(skills),
+        "mechanic_count": len(mechanics),
+        "hp_line_count": len(hp_lines),
+        "hp_lines": hp_lines,
+        "approx_duration_ms": max(durs) if durs else None,
+        "total_observed": sum(_int(o.get("count"), 0) for o in obs),
+    }
+    return {"base_id": int(sel_boss), "name": boss_name, "summary": summary,
+            "skills": skills, "mechanics": mechanics, "timeline": timeline}
+
+
+def build_boss_reactions_state(settings, engine, state_mgr,
+                               scene_key: Any = None,
+                               boss_base_id: Any = None) -> Dict[str, Any]:
+    """Single data contract for the dual-UI Boss Reactions editor.
+
+    Assembles the linkage mappings + the engine's live cast state + the persisted
+    per-scene/per-boss observed skills & mechanics (tagged, name-resolved) grouped
+    into casts/mechanics/timeline aggregation views, so the Tk panel and the
+    WebView raid editor render identically. `scene_key` selects which map/scene to
+    browse (None = live); `boss_base_id` selects which boss (None = first/live).
+
+    Names (scene / boss / skill) are resolved at read time from the authoritative
+    name cache, so historical observations recorded before a name was known still
+    display correctly. Observations are scoped to the SELECTED boss only (not every
+    boss in the scene) — combined with the entity-free status read, this is what
+    keeps opening the editor cheap in crowded raids."""
+    cfg = load_linkage_config(settings)
+    nm = _name_resolver()
+    gs = getattr(state_mgr, "state", None) if state_mgr else None
+    cur_scene_id = _int(getattr(gs, "dungeon_scene_id", 0), 0) if gs else 0
+    cur_dungeon_id = _int(getattr(gs, "dungeon_id", 0), 0) if gs else 0
+    cur_scene_name = _s(getattr(gs, "dungeon_name", "")) if gs else ""
+    cur_scene_key = str(cur_scene_id or cur_dungeon_id or 0)
+    selected = str(scene_key) if scene_key not in (None, "") else cur_scene_key
+
+    try:
+        scenes = [dict(s) for s in (engine.get_observed_scenes() if engine else [])]
+    except Exception:
+        scenes = []
+    for s in scenes:
+        if not _s(s.get("name")):
+            s["name"] = _resolve_scene_name(nm, _int(s.get("scene_id"), 0),
+                                            _int(s.get("dungeon_id"), 0))
+    # always surface the live scene so the user sees where they are, even pre-obs
+    if cur_scene_key and cur_scene_key not in {str(s.get("scene_key")) for s in scenes}:
+        scenes = [{"scene_key": cur_scene_key, "scene_id": cur_scene_id,
+                   "dungeon_id": cur_dungeon_id,
+                   "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id),
+                   "boss_count": 0, "last_seen": 0.0}] + scenes
+    # surface profile map names so scenes appear before any in-game obs;
+    # each profile carries dungeon_id + map_name (sub-map, e.g. 天启的神槛)
+    # — same dungeon_id can have multiple sub-maps, each gets its own entry
+    try:
+        from plugins.star_resonance_plugin.engines.boss_raid_engine import load_boss_raid_config
+        raid_cfg = load_boss_raid_config(settings)
+        existing_keys = {str(s.get("scene_key")) for s in scenes}
+        for prof in raid_cfg.get("profiles") or []:
+            did = _int(prof.get("dungeon_id"), 0)
+            map_name = _s(prof.get("map_name"))
+            pid = _s(prof.get("id"))
+            # scene_key = "dungeon_id:profile_id" so each sub-map is distinct
+            dk = "%d:%s" % (did, pid) if map_name else str(did)
+            if not did or dk in existing_keys:
+                continue
+            existing_keys.add(dk)
+            label = map_name or _s(prof.get("profile_name")) or \
+                _resolve_scene_name(nm, 0, did)
+            scenes.append({"scene_key": dk, "scene_id": 0,
+                           "dungeon_id": did, "map_name": map_name,
+                           "name": label,
+                           "boss_count": 0, "last_seen": 0.0})
+    except Exception:
+        pass
+    try:
+        bosses = [dict(b) for b in (engine.get_observed_bosses(selected) if engine else [])]
+    except Exception:
+        bosses = []
+    for b in bosses:
+        stored = _s(b.get("name"))
+        resolved = _resolve_boss_name(nm, _int(b.get("base_id"), 0))
+        if resolved:
+            b["name"] = resolved          # authoritative (live cache → table) wins
+        elif stored.isdigit():
+            b["name"] = ""                # bogus uuid-ish stored name → UI falls back to #base_id
+    try:
+        status = engine.get_status(include_entities=False) if engine else {}
+    except TypeError:
+        status = engine.get_status() if engine else {}   # engine predates the kwarg
+    except Exception:
+        status = {}
+
+    # selected boss: explicit → first recorded → live target
+    sel_boss = _int(boss_base_id, 0)
+    if not sel_boss and bosses:
+        sel_boss = _int(bosses[0].get("base_id"), 0)
+    if not sel_boss:
+        sel_boss = _int(status.get("boss_base_id"), 0)
+    observed_skills: Dict[str, Any] = {}
+    boss_detail = None
+    if engine is not None and sel_boss:
+        try:
+            obs_map = engine.get_observed_boss_skills(sel_boss, selected) or {}
+            obs = list(obs_map.get(sel_boss) or obs_map.get(str(sel_boss)) or [])
+        except Exception:
+            obs = []
+        for o in obs:
+            if o.get("kind") == "skill" and not _s(o.get("name")):
+                o["name"] = _resolve_skill_name(nm, _int(o.get("id"), 0))
+        bname = next((_s(b.get("name")) for b in bosses
+                      if _int(b.get("base_id"), 0) == sel_boss), "") \
+            or _resolve_boss_name(nm, sel_boss)
+        observed_skills = {str(sel_boss): obs}
+        boss_detail = _build_boss_detail(sel_boss, bname, obs)
+
+    # Availability is gated on the user's SELECTED data-source mode, not the live
+    # gs.data_source (which GameState never populates — the old check was always
+    # False, hiding recorded skills behind the "switch to hybrid" banner). Boss
+    # skills are now recorded in BOTH tcp (buff_list diff) and hybrid/memory feeds,
+    # so the editor is usable whenever recognition is running (engine present).
+    def _setting(key):
+        try:
+            return str(settings.get(key) or "")
+        except Exception:
+            return ""
+    data_source = (_setting("mem_data_source") or _setting("data_source") or "tcp").lower()
+    mem_available = bool(engine is not None and data_source in ("tcp", "memory", "hybrid", "auto"))
+    mappings = cfg.get("mappings", [])
+    cast_name = _s(status.get("boss_cast_skill_name")) \
+        or _resolve_skill_name(nm, _int(status.get("boss_cast_skill_id"), 0))
+    current = {
+        "uuid": str(_int(status.get("boss_uuid"), 0)),
+        "base_id": _int(status.get("boss_base_id"), 0),
+        "cast_skill_id": _int(status.get("boss_cast_skill_id"), 0),
+        "cast_skill_name": cast_name,
+        "cast_active": _bool(status.get("boss_cast_active"), False),
+        "breaking_stage": status.get("boss_breaking_stage"),
+        "in_overdrive": _bool(status.get("boss_in_overdrive"), False),
+        "stun": _bool(status.get("boss_stun"), False),
+        "hp_pct": round(_float(status.get("boss_hp_est_pct"), 0.0), 4),
+    }
+    return {
+        "ok": True,
+        "enabled": _bool(cfg.get("enabled"), False),
+        "dodge_enabled": _bool(cfg.get("dodge_enabled"), False),
+        "global_cooldown_s": cfg.get("global_cooldown_s", 1.0),
+        "debug_log": _bool(cfg.get("debug_log"), False),
+        "data_source": data_source or "tcp",
+        "mem_available": mem_available,
+        "self_dead": _bool(status.get("self_dead"), False),
+        "current_scene": {"scene_key": cur_scene_key, "scene_id": cur_scene_id,
+                          "dungeon_id": cur_dungeon_id,
+                          "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id)},
+        "selected_scene_key": selected,
+        "selected_boss_base_id": int(sel_boss),
+        "scenes": scenes,
+        "current_boss": current,
+        "bosses": bosses,
+        "observed_skills": observed_skills,
+        "boss_detail": boss_detail,
+        "mappings": mappings,
+        "offensive_windows": [m for m in mappings
+                              if _s(m.get("trigger_type")) in ("boss_breaking", "boss_overdrive", "boss_stun")],
+    }
+
+
+def upsert_mapping(settings, mapping: Any) -> Dict[str, Any]:
+    """Insert or replace one linkage mapping (by id) and persist. Returns config."""
+    cfg = load_linkage_config(settings)
+    m = normalize_mapping(mapping)
+    mappings = cfg.get("mappings", [])
+    for i, ex in enumerate(mappings):
+        if ex.get("id") == m["id"]:
+            mappings[i] = m
+            break
+    else:
+        mappings.append(m)
+    cfg["mappings"] = mappings
+    return save_linkage_config(settings, cfg)
+
+
+def delete_mapping(settings, mapping_id: str) -> Dict[str, Any]:
+    cfg = load_linkage_config(settings)
+    cfg["mappings"] = [m for m in cfg.get("mappings", []) if m.get("id") != str(mapping_id)]
+    return save_linkage_config(settings, cfg)
+
+
+__all__ = [
+    "BossAutoKeyLinkage",
+    "build_linkage_state",
+    "build_boss_reactions_state",
+    "upsert_mapping",
+    "delete_mapping",
+    "default_linkage_config",
+    "load_linkage_config",
+    "make_default_mapping",
+    "normalize_linkage_config",
+    "normalize_mapping",
+    "save_linkage_config",
+    "set_dodge_enabled",
+]

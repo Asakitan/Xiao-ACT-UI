@@ -1,0 +1,75 @@
+{
+    "id": "star_resonance",
+    "name": "星痕共鸣 Star Resonance",
+    "version": "1.0.0",
+    "entry": "plugin.py",
+    "description": "星痕共鸣游戏适配器 — TCP/内存抓包、DPS面板、Boss血条、HP面板、AutoKey、BossRaid、Buff监视、技能CD、地图横幅、死亡回放",
+    "enabled": true,
+    "game_ids": ["star_resonance"],
+    "permissions": [
+        "engine_access",
+        "input_control",
+        "memory_access",
+        "packet_capture",
+        "early_load"
+    ],
+    "capabilities": [
+        {
+            "id": "parser_adapters",
+            "title": "Star Resonance TCP/Memory Parser",
+            "description": "Protobuf packet decoding + IL2CPP memory reading"
+        },
+        {
+            "id": "ui_panels",
+            "title": "Game HUD Panels",
+            "description": "DPS / BossHP / HP / Alert / SkillFX / BuffMon / AutoKey / BossRaid / Commander / MapBanner / MechBanner / SkillPicker / TriggerTimer / DeathRecap / CombatantDrilldown",
+            "actions": [
+                "toggle_dps", "toggle_boss_hp", "toggle_hp", "toggle_alert",
+                "toggle_skillfx", "toggle_buffmon", "toggle_autokey",
+                "toggle_bossraid", "toggle_commander"
+            ]
+        },
+        {
+            "id": "menu_categories",
+            "title": "Game Menu Categories",
+            "description": "自动 / Boss / Burst / 面板 (game-specific items)"
+        },
+        {
+            "id": "data_sources",
+            "title": "Packet + Memory Data Sources",
+            "description": "TCP packet capture via Npcap + IL2CPP memory reader"
+        }
+    ],
+    "settings_schema": {
+        "mem_data_source": {
+            "type": "string",
+            "default": "tcp",
+            "description": "Data source mode: tcp / memory / hybrid / auto"
+        },
+        "dps_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show DPS overlay"
+        },
+        "burst_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show burst readiness indicator"
+        },
+        "buffmon_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show buff monitor"
+        },
+        "boss_bar_mode": {
+            "type": "string",
+            "default": "boss_raid",
+            "description": "Boss HP bar visibility: always / boss_raid / off"
+        },
+        "sound_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable sound effects"
+        }
+    }
+}

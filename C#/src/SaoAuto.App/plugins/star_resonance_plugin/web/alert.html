@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+@font-face {
+    font-family: 'sao';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'saoLatin';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF;
+}
+
+@font-face {
+    font-family: 'yuanJWD';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'yuanJWDCJK';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+:root {
+    --font-ui: 'saoLatin', 'sao', 'yuanJWDCJK', 'yuanJWD', 'Segoe UI', sans-serif;
+    --title-bg: rgba(255, 255, 255, 0.82);
+    --body-bg: rgba(234, 233, 233, 0.76);
+    --footer-bg: rgba(255, 255, 255, 0.80);
+    --title-fg: rgb(100, 99, 100);
+    --body-fg: rgb(100, 96, 96);
+    --alert-shadow: rgba(0, 0, 0, 0.30);
+}
+.theme-dark {
+    --title-bg: rgba(18, 24, 34, 0.90);
+    --body-bg: rgba(14, 18, 28, 0.85);
+    --footer-bg: rgba(20, 26, 36, 0.88);
+    --title-fg: rgb(200, 215, 230);
+    --body-fg: rgb(180, 195, 210);
+    --alert-shadow: rgba(0, 0, 0, 0.45);
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+/* Container-level pass-through for saoalert: shell passes clicks to desktop/game; only interactive children capture */
+.alert-shell {
+    pointer-events: none;
+}
+.alert-box,
+.alert-title,
+.alert-body,
+.alert-footer,
+.alert-shell button {
+    pointer-events: auto;
+}
+
+.alert-shell {
+    width: 392px;
+    opacity: 0;
+    transform: scale(0.78);
+    transform-origin: center center;
+}
+
+body.show .alert-shell {
+    animation: system-alert-open 0.46s ease forwards;
+}
+
+body.closing .alert-shell {
+    animation: system-alert-close 0.40s ease forwards;
+}
+
+.alert-box {
+    overflow: hidden;
+    border-radius: 2px;
+    box-shadow: 0 0 32px 4px var(--alert-shadow);
+}
+
+.alert-title {
+    height: 68px;
+    background: var(--title-bg);
+    box-shadow: var(--alert-shadow) 0 13px 12px 0, rgba(0, 0, 0, .1) 0 13px 15px 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.alert-title span {
+    max-width: 344px;
+    overflow: hidden;
+    /* 长标题换行成至多两行（68px 标题区容得下），仍超出才省略——与 Tk 端一致 */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    text-align: center;
+    line-height: 24px;
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: 1px;
+    color: var(--title-fg);
+}
+
+.alert-body {
+    min-height: 106px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 22px;
+    background: var(--body-bg);
+    color: var(--body-fg);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.7;
+    text-align: center;
+    white-space: pre-line;
+}
+
+.alert-footer {
+    height: 20px;
+    position: relative;
+    overflow: hidden;
+    background: var(--footer-bg);
+    box-shadow: rgba(0, 0, 0, .07) 0 -10px 12px 0, rgba(0, 0, 0, .08) 0 -2px 12px 0;
+}
+
+.alert-footer::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    top: 9px;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        rgba(104, 228, 255, 0),
+        rgba(104, 228, 255, 0.92),
+        rgba(243, 175, 18, 0.82),
+        rgba(243, 175, 18, 0)
+    );
+}
+
+@keyframes system-alert-open {
+    0% {
+        opacity: 0;
+        transform: scale(0.78);
+    }
+    55% {
+        opacity: 1;
+        transform: scale(1.02);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes system-alert-close {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: scale(0.90) translateY(-8px);
+    }
+}
+</style>
+</head>
+<body>
+    <div class="alert-shell">
+        <div class="alert-box">
+            <div class="alert-title"><span id="alert-title">提示</span></div>
+            <div class="alert-body" id="alert-body">内容</div>
+            <div class="alert-footer"></div>
+        </div>
+    </div>
+
+<script>
+let _alertLastSig = '';
+let _alertShowing = false;
+
+function showAlert(title, body) {
+    const t = title || '提示';
+    const b = body || '';
+    const sig = t + '\u0001' + b;
+    document.getElementById('alert-title').textContent = t;
+    document.getElementById('alert-body').textContent = b;
+    // v2.1.17: dedup back-to-back showAlert() with identical content while
+    // the alert is still on screen. Python pushes the same payload twice
+    // (immediate + 350 ms safety net) to survive cold-start WebView2 races;
+    // without this guard the animation would replay and look like a
+    // double pop.
+    if (_alertShowing && sig === _alertLastSig
+            && !document.body.classList.contains('closing')) {
+        return;
+    }
+    _alertLastSig = sig;
+    _alertShowing = true;
+    document.body.classList.remove('closing');
+    document.body.classList.remove('show');
+    void document.body.offsetWidth;
+    document.body.classList.add('show');
+}
+
+function beginClose() {
+    if (!document.body.classList.contains('show')) return;
+    _alertShowing = false;
+    _alertLastSig = '';
+    document.body.classList.add('closing');
+}
+
+window.AlertPanel = {
+    showAlert: showAlert,
+    beginClose: beginClose
+};
+</script>
+<script>
+// Theme initialization
+(function(){
+    var panel='alert', darkCls='theme-dark', fallback='dark';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    apply(fallback);
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
+</script>
+</body>
+</html>
+

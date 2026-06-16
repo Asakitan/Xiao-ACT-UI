@@ -1,0 +1,2503 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SAO DPS</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+@font-face{font-family:'sao';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'saoLatin';src:url('fonts/SAOWelcome.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+:root{
+    --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
+    /* v2.2.0: SAO Alert flat hi-tech palette ── pure white + slight gray.
+       透明度沿用各面板自身 alpha (没动). */
+    --panel-bg:rgba(255,255,255,0.82);
+    --panel-bg-2:rgba(234,233,233,0.78);
+    --panel-edge:rgba(178,180,182,0.55);
+    --panel-line:rgba(255,255,255,0.62);
+    --text-main:rgb(100,99,100);
+    --text-muted:rgb(142,138,140);
+    --gold:rgb(222,166,32);
+    --gold-soft:rgba(222,166,32,0.22);
+    --cyan:rgba(104,228,255,0.55);
+    --cyan-strong:rgba(104,228,255,0.92);
+    --cyan-edge:rgba(104,228,255,0.46);
+    --green-a:rgb(211,234,124);
+    --green-b:rgb(154,211,52);
+    --heal-a:rgb(173,223,93);
+    --heal-b:rgb(117,184,45);
+    --shadow:rgba(31,34,40,0.22);
+    --danger:rgb(239,104,78);
+    /* semantic tokens (parity with DPS_THEME_LIGHT) */
+    --badge-live:rgb(82,140,48);
+    --rank-2:rgb(160,170,185);
+    --rank-3:rgb(180,140,90);
+    --stat-green:rgb(92,150,44);
+    --corner-gold:rgb(222,190,80);
+    --bar-gold-a:rgba(222,166,32,0.200);
+    --bar-gold-b:rgba(222,166,32,0.031);
+    --bar-heal-a:rgba(154,211,52,0.239);
+    --bar-heal-b:rgba(154,211,52,0.031);
+    --tab-inactive-fill:rgba(40,55,75,0.471);
+    --tab-inactive-border:rgba(50,100,130,0.392);
+    --tab-active-fill:rgba(222,190,80,0.137);
+    --tab-active-border:rgba(222,190,80,0.863);
+    --btn-bg:rgba(255,255,255,0.439);
+    --btn-border:rgba(178,180,182,1.000);
+    --btn-live-color:rgb(68,144,162);
+}
+.theme-dark{
+    --panel-bg:rgba(20,24,32,0.961);
+    --panel-bg-2:rgba(16,18,26,0.980);
+    --panel-edge:rgba(60,180,220,0.784);
+    --panel-line:rgba(104,228,255,0.471);
+    --text-main:rgb(220,225,230);
+    --text-muted:rgb(120,135,150);
+    --gold:rgb(222,190,80);
+    --gold-soft:rgba(222,190,80,0.157);
+    --cyan:rgba(104,228,255,0.55);
+    --cyan-strong:rgba(104,228,255,0.92);
+    --cyan-edge:rgba(60,180,220,0.46);
+    --green-a:rgb(80,200,120);
+    --green-b:rgb(60,180,100);
+    --heal-a:rgb(80,200,120);
+    --heal-b:rgb(60,180,100);
+    --shadow:rgba(0,0,0,0.35);
+    --danger:rgb(239,104,78);
+    /* semantic tokens (parity with DPS_THEME_DARK) */
+    --badge-live:rgb(104,228,255);
+    --rank-2:rgb(160,170,185);
+    --rank-3:rgb(180,140,90);
+    --stat-green:rgb(110,200,80);
+    --corner-gold:rgb(222,190,80);
+    --bar-gold-a:rgba(222,190,80,0.275);
+    --bar-gold-b:rgba(222,190,80,0.059);
+    --bar-heal-a:rgba(80,200,120,0.275);
+    --bar-heal-b:rgba(80,200,120,0.059);
+    --tab-inactive-fill:rgba(25,35,50,0.549);
+    --tab-inactive-border:rgba(40,80,110,0.471);
+    --tab-active-fill:rgba(222,190,80,0.196);
+    --tab-active-border:rgba(222,190,80,0.941);
+    --btn-bg:rgba(40,55,75,0.706);
+    --btn-border:rgba(70,150,190,0.627);
+    --btn-live-color:rgb(180,235,255);
+}
+html,body{
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:transparent;
+    color:var(--text-main);
+    font-family:var(--font-sao);
+    user-select:none;
+    -webkit-user-select:none;
+}
+body{padding:10px}
+.dps-shell{
+    position:relative;
+    width:100%;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+    /* v2.2.0: 切角 + 青色描边 (DPS 变体: 右上 + 左下小切角) */
+    border:1px solid var(--cyan-edge);
+    border-radius:2px;
+    clip-path:polygon(
+        0 0,
+        calc(100% - 22px) 0, 100% 22px,
+        100% 100%,
+        22px 100%, 0 calc(100% - 22px)
+    );
+    overflow:hidden;
+    box-shadow:
+        2px 4px 18px var(--shadow),
+        inset 0 1px 0 rgba(255,255,255,0.55),
+        inset 0 0 18px rgba(255,255,255,0.18);
+    opacity:0;  /* hidden until fadeInDps() is called */
+    transition:filter 150ms ease, box-shadow 150ms ease;
+    will-change:opacity,transform,filter;
+}
+.dps-shell.detail-mode{
+    min-width:520px;
+    min-height:420px;
+}
+.dps-shell.impact-hit-blur{
+    animation:dps-shell-impact-hit 2500ms cubic-bezier(.18,.88,.32,1) both;
+}
+.dps-shell.mega-hit-blur{
+    animation:dps-shell-mega-hit 5000ms cubic-bezier(.18,.88,.24,1) both;
+}
+.dps-shell.starburst-hit-blur{
+    animation:dps-shell-starburst-hit 8000ms cubic-bezier(.16,.86,.20,1) both;
+}
+.dps-shell.entering{
+    animation:dps-enter 280ms cubic-bezier(.22,1,.36,1) both;
+}
+.dps-shell.exiting{
+    animation:dps-exit 260ms ease both;
+}
+.dps-shell::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(0deg,transparent 0 3px,rgba(255,255,255,0.055) 3px 4px);
+    pointer-events:none;
+}
+.dps-shell::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    border:1px solid rgba(255,255,255,0.20);
+    border-radius:2px;
+    pointer-events:none;
+    /* v2.2.0: 顶部细青色高亮 + 底部青-金渐变线 (sao_alert footer 风格) */
+    background:
+        linear-gradient(180deg, rgba(104,228,255,0.35) 0, rgba(104,228,255,0) 2px) top/100% 2px no-repeat,
+        linear-gradient(90deg, rgba(104,228,255,0) 0%, rgba(104,228,255,0.85) 30%, rgba(243,175,18,0.78) 70%, rgba(243,175,18,0) 100%) bottom/100% 1px no-repeat;
+}
+.panel-flash-layer{
+    position:absolute;
+    inset:0;
+    z-index:1;
+    opacity:0;
+    pointer-events:none;
+    border-radius:6px;
+    background:
+        radial-gradient(circle at 50% 18%, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.38) 13%, rgba(255,255,255,0.00) 46%),
+        linear-gradient(90deg, rgba(104,228,255,0.00) 0%, rgba(104,228,255,0.34) 22%, rgba(255,255,255,0.74) 50%, rgba(222,166,32,0.42) 78%, rgba(222,166,32,0.00) 100%),
+        linear-gradient(180deg, rgba(255,255,255,0.00) 0%, rgba(165,240,255,0.10) 26%, rgba(255,234,176,0.16) 62%, rgba(255,255,255,0.00) 100%);
+    mix-blend-mode:screen;
+    filter:saturate(1.18);
+}
+.panel-flash-layer::before,
+.panel-flash-layer::after{
+    content:'';
+    position:absolute;
+    pointer-events:none;
+    opacity:0;
+}
+.panel-flash-layer::before{
+    inset:-26% -40%;
+    background:
+        linear-gradient(116deg,
+            rgba(255,255,255,0.00) 18%,
+            rgba(135,238,255,0.00) 28%,
+            rgba(255,255,255,0.98) 40%,
+            rgba(104,228,255,0.92) 45%,
+            rgba(255,235,186,0.76) 53%,
+            rgba(255,255,255,0.00) 66%);
+    transform:translateX(-132%) skewX(-18deg);
+    filter:blur(10px);
+    mix-blend-mode:screen;
+}
+.panel-flash-layer::after{
+    inset:0;
+    border-radius:6px;
+    background:
+        repeating-linear-gradient(180deg, rgba(255,255,255,0.00) 0 7px, rgba(255,255,255,0.16) 7px 8px),
+        linear-gradient(90deg, rgba(70,209,245,0.00) 0%, rgba(70,209,245,0.18) 34%, rgba(255,224,148,0.24) 68%, rgba(255,255,255,0.00) 100%);
+    mix-blend-mode:screen;
+}
+.panel-flash-layer.impact-flash{
+    animation:dps-panel-impact-flash 2500ms cubic-bezier(.18,.88,.32,1) both;
+}
+.panel-flash-layer.impact-flash::before{
+    animation:dps-panel-impact-blade 2500ms cubic-bezier(.18,.88,.32,1) both;
+}
+.panel-flash-layer.impact-flash::after{
+    animation:dps-panel-impact-grid 2500ms linear both;
+}
+.panel-flash-layer.mega-flash{
+    animation:dps-panel-mega-flash 5000ms cubic-bezier(.18,.88,.24,1) both;
+}
+.panel-flash-layer.mega-flash::before{
+    animation:dps-panel-mega-blade 5000ms cubic-bezier(.18,.88,.24,1) both;
+}
+.panel-flash-layer.mega-flash::after{
+    animation:dps-panel-mega-grid 5000ms linear both;
+}
+.panel-flash-layer.starburst-flash{
+    background:
+        radial-gradient(circle at 50% 16%, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.42) 13%, rgba(255,255,255,0.00) 48%),
+        linear-gradient(90deg, rgba(61,126,255,0.00) 0%, rgba(61,126,255,0.44) 24%, rgba(245,250,255,0.90) 50%, rgba(255,170,204,0.46) 78%, rgba(255,170,204,0.00) 100%),
+        linear-gradient(180deg, rgba(24,36,82,0.00) 0%, rgba(48,88,168,0.16) 26%, rgba(255,181,205,0.18) 62%, rgba(255,255,255,0.00) 100%);
+    animation:dps-panel-starburst-flash 8000ms cubic-bezier(.16,.86,.20,1) both;
+}
+.panel-flash-layer.starburst-flash::before{
+    background:
+        linear-gradient(116deg,
+            rgba(255,255,255,0.00) 16%,
+            rgba(60,122,255,0.00) 28%,
+            rgba(236,246,255,0.98) 40%,
+            rgba(88,166,255,0.96) 45%,
+            rgba(255,255,255,0.96) 50%,
+            rgba(255,162,197,0.94) 56%,
+            rgba(255,255,255,0.00) 70%);
+    filter:blur(12px);
+    animation:dps-panel-starburst-blade 8000ms cubic-bezier(.16,.86,.20,1) both;
+}
+.panel-flash-layer.starburst-flash::after{
+    background:
+        repeating-linear-gradient(180deg, rgba(255,255,255,0.00) 0 6px, rgba(255,255,255,0.18) 6px 7px),
+        linear-gradient(90deg, rgba(61,126,255,0.00) 0%, rgba(61,126,255,0.24) 28%, rgba(255,255,255,0.24) 50%, rgba(255,170,204,0.28) 74%, rgba(255,255,255,0.00) 100%);
+    animation:dps-panel-starburst-grid 8000ms linear both;
+}
+@keyframes dps-enter{
+    from{opacity:0;transform:translateY(10px) scale(0.985)}
+    to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes dps-exit{
+    from{opacity:1;transform:translateY(0) scale(1)}
+    to{opacity:0;transform:translateY(8px) scale(0.985)}
+}
+@keyframes dps-shell-impact-hit{
+    0%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+    12%{
+        filter:blur(0.72px) brightness(1.09) saturate(1.12);
+        box-shadow:
+            0 0 22px rgba(104,228,255,0.28),
+            0 0 34px rgba(255,255,255,0.14),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.52),
+            inset 0 0 24px rgba(104,228,255,0.14);
+    }
+    34%{
+        filter:blur(0.28px) brightness(1.04) saturate(1.08);
+        box-shadow:
+            0 0 12px rgba(104,228,255,0.16),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.48),
+            inset 0 0 18px rgba(104,228,255,0.10);
+    }
+    62%{
+        filter:blur(0.18px) brightness(1.05) saturate(1.10);
+        box-shadow:
+            0 0 14px rgba(104,228,255,0.14),
+            0 0 20px rgba(255,255,255,0.10),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.46),
+            inset 0 0 16px rgba(104,228,255,0.10);
+    }
+    100%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+}
+@keyframes dps-shell-mega-hit{
+    0%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+    8%{
+        filter:blur(1.08px) brightness(1.16) saturate(1.24);
+        box-shadow:
+            0 0 24px rgba(104,228,255,0.34),
+            0 0 44px rgba(222,166,32,0.26),
+            0 0 62px rgba(255,255,255,0.18),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.58),
+            inset 0 0 28px rgba(255,255,255,0.18);
+    }
+    22%{
+        filter:blur(0.54px) brightness(1.10) saturate(1.18);
+        box-shadow:
+            0 0 18px rgba(104,228,255,0.24),
+            0 0 34px rgba(222,166,32,0.18),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.54),
+            inset 0 0 24px rgba(255,255,255,0.16);
+    }
+    38%{
+        filter:blur(0.26px) brightness(1.06) saturate(1.10);
+        box-shadow:
+            0 0 14px rgba(222,166,32,0.18),
+            0 0 22px rgba(104,228,255,0.14),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.50),
+            inset 0 0 18px rgba(255,255,255,0.14);
+    }
+    52%{
+        filter:blur(0.58px) brightness(1.09) saturate(1.15);
+        box-shadow:
+            0 0 18px rgba(104,228,255,0.18),
+            0 0 30px rgba(222,166,32,0.20),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.54),
+            inset 0 0 22px rgba(255,255,255,0.16);
+    }
+    66%{
+        filter:blur(0.88px) brightness(1.14) saturate(1.24);
+        box-shadow:
+            0 0 22px rgba(104,228,255,0.26),
+            0 0 38px rgba(222,166,32,0.24),
+            0 0 58px rgba(255,244,210,0.18),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.58),
+            inset 0 0 28px rgba(255,255,255,0.18);
+    }
+    82%{
+        filter:blur(0.34px) brightness(1.08) saturate(1.12);
+        box-shadow:
+            0 0 16px rgba(222,166,32,0.16),
+            0 0 24px rgba(104,228,255,0.12),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.50),
+            inset 0 0 18px rgba(255,255,255,0.14);
+    }
+    100%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+}
+@keyframes dps-shell-starburst-hit{
+    0%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+    6%{
+        filter:blur(1.18px) brightness(1.20) saturate(1.28);
+        box-shadow:
+            0 0 30px rgba(88,166,255,0.34),
+            0 0 54px rgba(255,170,204,0.22),
+            0 0 74px rgba(255,255,255,0.20),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.62),
+            inset 0 0 32px rgba(235,244,255,0.20);
+    }
+    18%{
+        filter:blur(0.56px) brightness(1.12) saturate(1.18);
+        box-shadow:
+            0 0 20px rgba(88,166,255,0.24),
+            0 0 34px rgba(255,170,204,0.18),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.56),
+            inset 0 0 24px rgba(255,255,255,0.16);
+    }
+    34%{
+        filter:blur(0.94px) brightness(1.18) saturate(1.24);
+        box-shadow:
+            0 0 28px rgba(88,166,255,0.30),
+            0 0 48px rgba(255,170,204,0.24),
+            0 0 62px rgba(255,246,250,0.18),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.60),
+            inset 0 0 30px rgba(255,232,242,0.18);
+    }
+    50%{
+        filter:blur(0.42px) brightness(1.10) saturate(1.14);
+        box-shadow:
+            0 0 16px rgba(88,166,255,0.18),
+            0 0 28px rgba(255,170,204,0.16),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.54),
+            inset 0 0 20px rgba(255,255,255,0.14);
+    }
+    66%{
+        filter:blur(1.06px) brightness(1.22) saturate(1.30);
+        box-shadow:
+            0 0 32px rgba(88,166,255,0.36),
+            0 0 56px rgba(255,170,204,0.28),
+            0 0 80px rgba(255,255,255,0.22),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.62),
+            inset 0 0 34px rgba(255,238,245,0.20);
+    }
+    82%{
+        filter:blur(0.34px) brightness(1.08) saturate(1.12);
+        box-shadow:
+            0 0 14px rgba(88,166,255,0.16),
+            0 0 24px rgba(255,170,204,0.14),
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.50),
+            inset 0 0 18px rgba(255,255,255,0.14);
+    }
+    100%{
+        filter:blur(0) brightness(1) saturate(1);
+        box-shadow:
+            2px 4px 18px var(--shadow),
+            inset 0 1px 0 rgba(255,255,255,0.42),
+            inset 0 0 18px rgba(255,255,255,0.10);
+    }
+}
+@keyframes dps-panel-impact-flash{
+    0%{opacity:0}
+    10%{opacity:0.98}
+    24%{opacity:0.62}
+    44%{opacity:0.34}
+    66%{opacity:0.20}
+    82%{opacity:0.10}
+    100%{opacity:0}
+}
+@keyframes dps-panel-mega-flash{
+    0%{opacity:0}
+    6%{opacity:1}
+    16%{opacity:0.78}
+    30%{opacity:0.56}
+    44%{opacity:0.42}
+    58%{opacity:0.68}
+    72%{opacity:0.32}
+    86%{opacity:0.20}
+    100%{opacity:0}
+}
+@keyframes dps-panel-impact-blade{
+    0%{opacity:0;transform:translateX(-132%) skewX(-18deg) scaleX(0.94)}
+    14%{opacity:0.95}
+    42%{opacity:0.70}
+    72%{opacity:0.16;transform:translateX(62%) skewX(-18deg) scaleX(1.03)}
+    100%{opacity:0;transform:translateX(116%) skewX(-18deg) scaleX(1.05)}
+}
+@keyframes dps-panel-mega-blade{
+    0%{opacity:0;transform:translateX(-136%) skewX(-18deg) scaleX(0.92)}
+    10%{opacity:1}
+    20%{opacity:0.88;transform:translateX(8%) skewX(-18deg) scaleX(1.02)}
+    30%{opacity:0.24;transform:translateX(88%) skewX(-18deg) scaleX(1.08)}
+    36%{opacity:0;transform:translateX(132%) skewX(-18deg) scaleX(1.10)}
+    44%{opacity:0;transform:translateX(-96%) skewX(-18deg) scaleX(0.94)}
+    52%{opacity:0.94}
+    64%{opacity:0.30;transform:translateX(96%) skewX(-18deg) scaleX(1.10)}
+    70%{opacity:0;transform:translateX(128%) skewX(-18deg) scaleX(1.12)}
+    78%{opacity:0;transform:translateX(-72%) skewX(-18deg) scaleX(0.98)}
+    86%{opacity:0.68}
+    100%{opacity:0;transform:translateX(112%) skewX(-18deg) scaleX(1.06)}
+}
+@keyframes dps-panel-impact-grid{
+    0%{opacity:0}
+    12%{opacity:0.30}
+    36%{opacity:0.18}
+    64%{opacity:0.12}
+    100%{opacity:0}
+}
+@keyframes dps-panel-mega-grid{
+    0%{opacity:0}
+    8%{opacity:0.42}
+    24%{opacity:0.24}
+    42%{opacity:0.20}
+    58%{opacity:0.28}
+    78%{opacity:0.12}
+    100%{opacity:0}
+}
+@keyframes dps-panel-starburst-flash{
+    0%{opacity:0}
+    4%{opacity:1}
+    14%{opacity:0.78}
+    26%{opacity:0.46}
+    38%{opacity:0.70}
+    52%{opacity:0.34}
+    66%{opacity:0.62}
+    82%{opacity:0.20}
+    100%{opacity:0}
+}
+@keyframes dps-panel-starburst-blade{
+    0%{opacity:0;transform:translateX(-138%) skewX(-18deg) scaleX(0.92)}
+    8%{opacity:1}
+    18%{opacity:0.22;transform:translateX(92%) skewX(-18deg) scaleX(1.08)}
+    24%{opacity:0;transform:translateX(136%) skewX(-18deg) scaleX(1.10)}
+    32%{opacity:0;transform:translateX(-104%) skewX(-18deg) scaleX(0.94)}
+    42%{opacity:0.96}
+    54%{opacity:0.28;transform:translateX(102%) skewX(-18deg) scaleX(1.12)}
+    60%{opacity:0;transform:translateX(138%) skewX(-18deg) scaleX(1.14)}
+    68%{opacity:0;transform:translateX(-78%) skewX(-18deg) scaleX(0.98)}
+    78%{opacity:0.82}
+    90%{opacity:0.24;transform:translateX(108%) skewX(-18deg) scaleX(1.10)}
+    100%{opacity:0;transform:translateX(138%) skewX(-18deg) scaleX(1.12)}
+}
+@keyframes dps-panel-starburst-grid{
+    0%{opacity:0}
+    6%{opacity:0.44}
+    18%{opacity:0.26}
+    38%{opacity:0.18}
+    54%{opacity:0.32}
+    72%{opacity:0.18}
+    88%{opacity:0.08}
+    100%{opacity:0}
+}
+.corner{
+    position:absolute;
+    width:18px;
+    height:18px;
+    pointer-events:none;
+    z-index:3;
+}
+.corner.tl{top:2px;left:2px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)}
+.corner.br{right:2px;bottom:2px;border-bottom:2px solid var(--corner-gold);border-right:2px solid var(--corner-gold)}
+.dps-header{
+    position:relative;
+    z-index:2;
+    flex:0 0 auto;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:10px;
+    padding:12px 14px 10px;
+    border-bottom:1px solid rgba(160,162,150,0.5);
+    cursor:move;
+}
+.header-copy{min-width:0;flex:1}
+.eyebrow{
+    font-size:10px;
+    letter-spacing:2.2px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.title-row{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-top:4px;
+}
+.title{
+    font-size:18px;
+    letter-spacing:1.6px;
+    white-space:nowrap;
+}
+.mode-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:2px 8px;
+    min-height:22px;
+    border:1px solid rgba(160,162,150,0.64);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    background:rgba(255,255,255,0.42);
+    color:var(--gold);
+    font-size:10px;
+    letter-spacing:1.1px;
+    text-transform:uppercase;
+}
+.mode-badge.live{color:var(--badge-live)}
+.mode-badge.report{color:var(--gold)}
+.act-badge{
+    display:none;
+    align-items:center;
+    gap:5px;
+    padding:2px 7px;
+    min-height:22px;
+    border:1px solid rgba(104,228,255,0.46);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    background:rgba(104,228,255,0.10);
+    color:rgb(68,144,162);
+    font-size:10px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+}
+.act-badge.show{display:inline-flex}
+.act-badge.report{border-color:rgba(222,166,32,0.58);background:rgba(222,166,32,0.12);color:var(--gold)}
+.summary{
+    margin-top:6px;
+    font-size:10px;
+    letter-spacing:0.85px;
+    color:var(--text-muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.header-actions{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+}
+.sao-btn{
+    min-width:56px;
+    padding:6px 7px;
+    border:1px solid var(--btn-border);
+    background:var(--btn-bg);
+    color:var(--text-main);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    font-family:var(--font-sao);
+    font-size:10px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+    cursor:pointer;
+    transition:background 140ms ease,color 140ms ease,border-color 140ms ease,transform 140ms ease;
+}
+.sao-btn:hover{
+    background:rgba(222,166,32,0.92);
+    border-color:rgba(222,166,32,0.86);
+    color:rgb(251,245,231);
+    transform:translateY(-1px);
+}
+.sao-btn.active{
+    background:var(--tab-active-fill);
+    border-color:var(--tab-active-border);
+    color:var(--gold);
+}
+.sao-btn.secondary.active{
+    background:rgba(104,228,255,0.12);
+    border-color:rgba(104,228,255,0.72);
+    color:var(--btn-live-color);
+}
+.sao-btn.detail-toggle.active{
+    background:var(--tab-active-fill);
+    border-color:var(--tab-active-border);
+    color:var(--gold);
+}
+.sao-btn.danger:hover{
+    background:rgba(239,104,78,0.92);
+    border-color:rgba(239,104,78,0.82);
+}
+/* 更多▾ 聚合菜单：EXPORT / RESET 收进父按钮，减薄头部按钮排 */
+.more-wrap{position:relative;}
+.more-menu{
+    position:absolute;
+    top:calc(100% + 4px);
+    right:0;
+    z-index:40;
+    display:none;
+    flex-direction:column;
+    gap:4px;
+    min-width:138px;
+    padding:5px;
+    border:1px solid var(--btn-border);
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+}
+.more-menu.open{display:flex;}
+.more-menu .sao-btn{width:100%;text-align:left;clip-path:none;}
+.sao-btn.disabled,
+.sao-btn:disabled{
+    opacity:0.42;
+    cursor:default;
+    pointer-events:none;
+}
+.dps-tabs{
+    position:relative;
+    z-index:2;
+    flex:0 0 auto;
+    display:flex;
+    gap:8px;
+    padding:10px 14px 8px;
+}
+.dps-tab{
+    flex:1;
+    padding:6px 10px;
+    text-align:center;
+    border:1px solid var(--tab-inactive-border);
+    background:var(--tab-inactive-fill);
+    clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px);
+    font-size:10px;
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+    cursor:pointer;
+    color:var(--text-muted);
+}
+.dps-tab.active{
+    color:var(--gold);
+    background:var(--tab-active-fill);
+    border-color:var(--tab-active-border);
+}
+.content{
+    position:relative;
+    z-index:2;
+    flex:1 1 auto;
+    min-height:0;
+    padding:0 14px 10px;
+}
+.list-view,.detail-view{
+    width:100%;
+    height:100%;
+    display:none;
+    flex-direction:column;
+}
+.list-view.show,.detail-view.show{display:flex}
+.list-frame,.skill-frame{
+    flex:1;
+    min-height:0;
+    background:rgba(255,255,255,0.18);
+    border:1px solid rgba(160,162,150,0.42);
+    border-radius:4px;
+    overflow:auto;
+}
+.list-frame::-webkit-scrollbar,.skill-frame::-webkit-scrollbar{width:6px}
+.list-frame::-webkit-scrollbar-thumb,.skill-frame::-webkit-scrollbar-thumb{
+    background:rgba(160,162,150,0.42);
+    border-radius:999px;
+}
+.entity-row{
+    position:relative;
+    margin:6px;
+    padding:8px 10px;
+    overflow:hidden;
+    border:1px solid rgba(160,162,150,0.32);
+    background:rgba(255,255,255,0.48);
+    clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px);
+    cursor:pointer;
+    will-change:filter,box-shadow,background-color,border-color;
+    isolation:isolate;
+}
+.entity-row::before,
+.entity-row::after{
+    content:'';
+    position:absolute;
+    pointer-events:none;
+    opacity:0;
+}
+.entity-row::before{
+    inset:-24% -36%;
+    z-index:0;
+    background:
+        linear-gradient(116deg,
+            rgba(255,255,255,0.00) 20%,
+            rgba(255,255,255,0.00) 30%,
+            rgba(255,255,255,0.88) 42%,
+            rgba(104,228,255,0.94) 47%,
+            rgba(255,243,206,0.62) 55%,
+            rgba(255,255,255,0.00) 68%);
+    transform:translateX(-128%) skewX(-18deg);
+    filter:blur(7px);
+    mix-blend-mode:screen;
+}
+.entity-row::after{
+    inset:0;
+    z-index:0;
+    background:
+        radial-gradient(circle at 50% 50%, rgba(255,255,255,0.24) 0%, rgba(255,255,255,0.00) 70%),
+        repeating-linear-gradient(135deg, rgba(255,255,255,0.00) 0 10px, rgba(255,255,255,0.13) 10px 12px);
+    mix-blend-mode:screen;
+}
+.entity-row.self{border-left:3px solid rgba(222,166,32,0.86)}
+.entity-row:hover{
+    border-color:rgba(222,166,32,0.52);
+    background:rgba(255,247,232,0.84);
+}
+.entity-row.impact-hit{
+    animation:entity-impact-hit 2500ms cubic-bezier(.18,.88,.32,1) both;
+}
+.entity-row.mega-hit{
+    animation:entity-mega-hit 5000ms cubic-bezier(.18,.88,.24,1) both;
+}
+.entity-row.starburst-hit{
+    animation:entity-starburst-hit 8000ms cubic-bezier(.16,.86,.20,1) both;
+}
+.entity-row.impact-hit::before{
+    animation:entity-impact-blade 2500ms cubic-bezier(.18,.88,.32,1) both;
+}
+.entity-row.impact-hit::after{
+    animation:entity-impact-grid 2500ms linear both;
+}
+.entity-row.mega-hit::before{
+    animation:entity-mega-blade 5000ms cubic-bezier(.18,.88,.24,1) both;
+}
+.entity-row.mega-hit::after{
+    animation:entity-mega-grid 5000ms linear both;
+}
+.entity-row.starburst-hit::before{
+    background:
+        linear-gradient(116deg,
+            rgba(255,255,255,0.00) 18%,
+            rgba(63,124,255,0.00) 28%,
+            rgba(236,246,255,0.96) 40%,
+            rgba(88,166,255,0.94) 46%,
+            rgba(255,255,255,0.92) 50%,
+            rgba(255,168,200,0.88) 57%,
+            rgba(255,255,255,0.00) 70%);
+    filter:blur(8px);
+    animation:entity-starburst-blade 8000ms cubic-bezier(.16,.86,.20,1) both;
+}
+.entity-row.starburst-hit::after{
+    background:
+        radial-gradient(circle at 50% 50%, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0.00) 70%),
+        repeating-linear-gradient(135deg,
+            rgba(255,255,255,0.00) 0 8px,
+            rgba(88,166,255,0.16) 8px 10px,
+            rgba(255,170,204,0.16) 10px 12px,
+            rgba(255,255,255,0.00) 12px 18px);
+    animation:entity-starburst-grid 8000ms linear both;
+}
+.entity-row.impact-hit .entity-name,
+.entity-row.impact-hit .entity-value-main{
+    color:rgb(57,126,146);
+    text-shadow:0 0 10px rgba(104,228,255,0.26);
+}
+.entity-row.mega-hit .entity-name,
+.entity-row.mega-hit .entity-value-main{
+    color:rgb(196,135,16);
+    text-shadow:0 0 12px rgba(255,220,112,0.34);
+}
+.entity-row.starburst-hit .entity-name,
+.entity-row.starburst-hit .entity-value-main{
+    color:rgb(110,118,182);
+    text-shadow:
+        0 0 10px rgba(88,166,255,0.30),
+        0 0 16px rgba(255,170,204,0.20);
+}
+@keyframes entity-impact-hit{
+    0%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+    12%{
+        filter:brightness(1.28) blur(0.95px) saturate(1.10);
+        border-color:rgba(104,228,255,0.92);
+        box-shadow:
+            0 0 18px rgba(104,228,255,0.38),
+            0 0 34px rgba(255,255,255,0.16),
+            inset 0 0 28px rgba(104,228,255,0.22);
+        background:rgba(236,251,255,0.96);
+    }
+    30%{
+        filter:brightness(1.12) blur(0.34px) saturate(1.08);
+        border-color:rgba(104,228,255,0.70);
+        box-shadow:
+            0 0 14px rgba(104,228,255,0.24),
+            inset 0 0 18px rgba(104,228,255,0.14);
+        background:rgba(230,247,251,0.86);
+    }
+    56%{
+        filter:brightness(1.06) blur(0.12px);
+        border-color:rgba(104,228,255,0.46);
+        box-shadow:
+            0 0 8px rgba(104,228,255,0.16),
+            inset 0 0 10px rgba(104,228,255,0.08);
+        background:rgba(224,243,247,0.72);
+    }
+    76%{
+        filter:brightness(1.04) blur(0.10px);
+        border-color:rgba(104,228,255,0.34);
+        box-shadow:
+            0 0 6px rgba(104,228,255,0.12),
+            inset 0 0 8px rgba(104,228,255,0.06);
+        background:rgba(223,242,246,0.64);
+    }
+    100%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+}
+@keyframes entity-mega-hit{
+    0%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+    8%{
+        filter:brightness(1.36) blur(1.08px) saturate(1.20);
+        border-color:rgba(222,166,32,0.96);
+        box-shadow:
+            0 0 24px rgba(222,166,32,0.46),
+            0 0 42px rgba(104,228,255,0.18),
+            inset 0 0 30px rgba(222,166,32,0.24);
+        background:rgba(255,248,224,0.98);
+    }
+    20%{
+        filter:brightness(1.18) blur(0.40px) saturate(1.14);
+        border-color:rgba(104,228,255,0.78);
+        box-shadow:
+            0 0 20px rgba(104,228,255,0.28),
+            inset 0 0 20px rgba(222,166,32,0.20);
+        background:rgba(255,245,219,0.94);
+    }
+    34%{
+        filter:brightness(1.10) blur(0.18px);
+        border-color:rgba(222,166,32,0.60);
+        box-shadow:
+            0 0 12px rgba(222,166,32,0.20),
+            0 0 18px rgba(104,228,255,0.12);
+        background:rgba(255,241,210,0.86);
+    }
+    48%{
+        filter:brightness(1.18) blur(0.48px) saturate(1.12);
+        border-color:rgba(255,240,179,0.82);
+        box-shadow:
+            0 0 20px rgba(255,230,150,0.28),
+            0 0 34px rgba(104,228,255,0.16),
+            inset 0 0 22px rgba(255,233,180,0.18);
+        background:rgba(255,247,224,0.94);
+    }
+    64%{
+        filter:brightness(1.22) blur(0.64px) saturate(1.18);
+        border-color:rgba(142,236,255,0.88);
+        box-shadow:
+            0 0 24px rgba(104,228,255,0.30),
+            0 0 42px rgba(255,225,135,0.22),
+            inset 0 0 24px rgba(130,234,255,0.18);
+        background:rgba(242,250,255,0.96);
+    }
+    82%{
+        filter:brightness(1.06) blur(0.10px);
+        border-color:rgba(222,166,32,0.44);
+        box-shadow:0 0 8px rgba(222,166,32,0.14);
+        background:rgba(255,239,208,0.74);
+    }
+    100%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+}
+@keyframes entity-starburst-hit{
+    0%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+    6%{
+        filter:brightness(1.42) blur(1.16px) saturate(1.26);
+        border-color:rgba(88,166,255,0.96);
+        box-shadow:
+            0 0 26px rgba(88,166,255,0.40),
+            0 0 46px rgba(255,170,204,0.24),
+            inset 0 0 34px rgba(228,240,255,0.24);
+        background:rgba(240,247,255,0.98);
+    }
+    18%{
+        filter:brightness(1.18) blur(0.42px) saturate(1.16);
+        border-color:rgba(255,170,204,0.78);
+        box-shadow:
+            0 0 18px rgba(255,170,204,0.26),
+            0 0 28px rgba(88,166,255,0.18),
+            inset 0 0 20px rgba(255,222,234,0.18);
+        background:rgba(255,244,249,0.92);
+    }
+    34%{
+        filter:brightness(1.28) blur(0.72px) saturate(1.22);
+        border-color:rgba(88,166,255,0.88);
+        box-shadow:
+            0 0 24px rgba(88,166,255,0.32),
+            0 0 38px rgba(255,170,204,0.20),
+            inset 0 0 26px rgba(232,242,255,0.20);
+        background:rgba(243,248,255,0.96);
+    }
+    50%{
+        filter:brightness(1.12) blur(0.22px);
+        border-color:rgba(255,170,204,0.58);
+        box-shadow:
+            0 0 12px rgba(255,170,204,0.18),
+            0 0 20px rgba(88,166,255,0.14),
+            inset 0 0 14px rgba(255,225,236,0.14);
+        background:rgba(250,240,245,0.84);
+    }
+    66%{
+        filter:brightness(1.36) blur(0.96px) saturate(1.28);
+        border-color:rgba(255,240,248,0.92);
+        box-shadow:
+            0 0 28px rgba(88,166,255,0.34),
+            0 0 48px rgba(255,170,204,0.28),
+            0 0 58px rgba(255,255,255,0.18),
+            inset 0 0 30px rgba(255,236,243,0.20);
+        background:rgba(250,246,255,0.98);
+    }
+    84%{
+        filter:brightness(1.08) blur(0.14px);
+        border-color:rgba(88,166,255,0.42);
+        box-shadow:
+            0 0 10px rgba(88,166,255,0.16),
+            0 0 16px rgba(255,170,204,0.12);
+        background:rgba(239,243,250,0.76);
+    }
+    100%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+}
+@keyframes entity-impact-blade{
+    0%{opacity:0;transform:translateX(-128%) skewX(-18deg) scaleX(0.96)}
+    14%{opacity:0.92}
+    36%{opacity:0.66;transform:translateX(18%) skewX(-18deg) scaleX(1.02)}
+    66%{opacity:0.18;transform:translateX(82%) skewX(-18deg) scaleX(1.05)}
+    100%{opacity:0;transform:translateX(118%) skewX(-18deg) scaleX(1.06)}
+}
+@keyframes entity-mega-blade{
+    0%{opacity:0;transform:translateX(-132%) skewX(-18deg) scaleX(0.94)}
+    10%{opacity:1}
+    18%{opacity:0.90;transform:translateX(6%) skewX(-18deg) scaleX(1.02)}
+    28%{opacity:0.22;transform:translateX(92%) skewX(-18deg) scaleX(1.08)}
+    34%{opacity:0;transform:translateX(126%) skewX(-18deg) scaleX(1.10)}
+    42%{opacity:0;transform:translateX(-88%) skewX(-18deg) scaleX(0.96)}
+    52%{opacity:0.94}
+    62%{opacity:0.26;transform:translateX(96%) skewX(-18deg) scaleX(1.10)}
+    68%{opacity:0;transform:translateX(128%) skewX(-18deg) scaleX(1.12)}
+    76%{opacity:0;transform:translateX(-60%) skewX(-18deg) scaleX(0.98)}
+    86%{opacity:0.62}
+    100%{opacity:0;transform:translateX(108%) skewX(-18deg) scaleX(1.05)}
+}
+@keyframes entity-impact-grid{
+    0%{opacity:0}
+    12%{opacity:0.26}
+    32%{opacity:0.18}
+    64%{opacity:0.10}
+    100%{opacity:0}
+}
+@keyframes entity-mega-grid{
+    0%{opacity:0}
+    8%{opacity:0.36}
+    22%{opacity:0.24}
+    42%{opacity:0.18}
+    58%{opacity:0.24}
+    78%{opacity:0.10}
+    100%{opacity:0}
+}
+@keyframes entity-starburst-blade{
+    0%{opacity:0;transform:translateX(-134%) skewX(-18deg) scaleX(0.94)}
+    8%{opacity:1}
+    18%{opacity:0.24;transform:translateX(94%) skewX(-18deg) scaleX(1.08)}
+    24%{opacity:0;transform:translateX(128%) skewX(-18deg) scaleX(1.10)}
+    32%{opacity:0;transform:translateX(-92%) skewX(-18deg) scaleX(0.96)}
+    42%{opacity:0.96}
+    54%{opacity:0.28;transform:translateX(98%) skewX(-18deg) scaleX(1.12)}
+    60%{opacity:0;transform:translateX(130%) skewX(-18deg) scaleX(1.14)}
+    68%{opacity:0;transform:translateX(-66%) skewX(-18deg) scaleX(1.00)}
+    78%{opacity:0.80}
+    90%{opacity:0.20;transform:translateX(104%) skewX(-18deg) scaleX(1.10)}
+    100%{opacity:0;transform:translateX(132%) skewX(-18deg) scaleX(1.12)}
+}
+@keyframes entity-starburst-grid{
+    0%{opacity:0}
+    6%{opacity:0.38}
+    18%{opacity:0.24}
+    36%{opacity:0.16}
+    54%{opacity:0.30}
+    74%{opacity:0.16}
+    90%{opacity:0.08}
+    100%{opacity:0}
+}
+.entity-bar{
+    position:absolute;
+    left:0;
+    top:0;
+    bottom:0;
+    width:0;
+    background:linear-gradient(90deg,var(--bar-gold-a),var(--bar-gold-b));
+}
+.entity-row.heal .entity-bar{
+    background:linear-gradient(90deg,var(--bar-heal-a),var(--bar-heal-b));
+}
+.entity-main{
+    position:relative;
+    z-index:1;
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+.rank{
+    width:20px;
+    flex:0 0 20px;
+    text-align:center;
+    font-size:11px;
+    color:var(--text-muted);
+}
+.rank.r1{color:var(--gold)}
+.rank.r2{color:var(--rank-2)}
+.rank.r3{color:var(--rank-3)}
+.entity-meta{
+    min-width:0;
+    flex:1;
+}
+.entity-name{
+    font-size:12px;
+    letter-spacing:0.7px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.entity-sub{
+    margin-top:2px;
+    font-size:9px;
+    letter-spacing:0.75px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.entity-value{
+    text-align:right;
+    white-space:nowrap;
+}
+.entity-value-main{
+    font-size:13px;
+    color:var(--text-main);
+}
+.entity-value-sub{
+    margin-top:2px;
+    font-size:9px;
+    color:var(--text-muted);
+}
+/* MEM cross-check badge: the game's own DamageDataMgr total next to the TCP figure. */
+.mem-badge{
+    color:#7fd6ff;
+    opacity:0.85;
+    font-weight:600;
+}
+.empty{
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    text-align:center;
+    color:var(--text-muted);
+    font-size:11px;
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+}
+.detail-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:8px;
+}
+.back-btn{
+    min-width:44px;
+    padding:6px 0;
+}
+.detail-title{
+    min-width:0;
+    flex:1;
+    font-size:13px;
+    letter-spacing:0.8px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.detail-badge{
+    color:var(--text-muted);
+    font-size:9px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+}
+.detail-grid{
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:8px;
+    margin-bottom:8px;
+}
+.dps-shell:not(.detail-mode) .detail-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.dps-shell.detail-mode .stat-card{
+    min-height:62px;
+}
+.stat-card{
+    padding:8px 8px 7px;
+    min-height:56px;
+    background:rgba(255,255,255,0.38);
+    border:1px solid rgba(160,162,150,0.34);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+}
+.stat-label{
+    font-size:8px;
+    letter-spacing:1px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.stat-value{
+    margin-top:6px;
+    font-size:14px;
+    color:var(--text-main);
+}
+.stat-value.gold{color:var(--gold)}
+.stat-value.green{color:var(--stat-green)}
+/* Skill detail rows — "rank board · layered card": rank badge + name +
+   value/share on the first line, sub-meta on the second, an independent
+   thin heat-gradient track on the third. Mirrors the Tk Entity cockpit 1:1.
+   The old design (a full-row fill bar with text smeared on top) is gone. */
+.skill-row{
+    position:relative;
+    margin:6px;
+    padding:7px 10px 9px;
+    border:1px solid rgba(160,162,150,0.28);
+    border-radius:6px;
+    background:rgba(255,255,255,0.40);
+    box-sizing:border-box;
+    transition:background .15s ease;
+}
+.skill-row:hover{background:rgba(255,255,255,0.60)}
+.skill-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+.skill-rank{
+    flex:0 0 auto;
+    min-width:20px;
+    height:17px;
+    line-height:17px;
+    padding:0 4px;
+    box-sizing:border-box;
+    text-align:center;
+    font-size:10px;
+    font-weight:700;
+    border-radius:4px;
+    color:var(--text-muted);
+    font-variant-numeric:tabular-nums;
+}
+.skill-rank.r1{color:#2a1d05;background:linear-gradient(135deg,#ffd964,#e0a820)}
+.skill-rank.r2{color:#1c2026;background:linear-gradient(135deg,#e7edf5,#aab4c4)}
+.skill-rank.r3{color:#241208;background:linear-gradient(135deg,#e2a868,#bf7438)}
+.skill-name{
+    flex:1;
+    min-width:0;
+    font-size:12px;
+    letter-spacing:0.4px;
+    color:var(--text-main);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.skill-num{
+    flex:0 0 auto;
+    font-size:13px;
+    font-weight:700;
+    color:var(--gold);
+    font-variant-numeric:tabular-nums;
+}
+.skill-pct{
+    flex:0 0 auto;
+    min-width:34px;
+    text-align:right;
+    font-size:10px;
+    color:var(--text-muted);
+    font-variant-numeric:tabular-nums;
+}
+.skill-sub{
+    margin-top:3px;
+    padding-left:28px;
+    font-size:9px;
+    letter-spacing:0.5px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.skill-track{
+    margin-top:6px;
+    margin-left:28px;
+    height:5px;
+    border-radius:3px;
+    background:rgba(128,130,120,0.22);
+    overflow:hidden;
+}
+.skill-fill{
+    height:100%;
+    border-radius:3px;
+    background:var(--gold);
+    transition:width .2s ease;
+}
+.dps-footer{
+    position:relative;
+    z-index:2;
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:8px 14px;
+    min-height:40px;
+    border-top:1px solid rgba(160,162,150,0.42);
+    background:rgba(255,255,255,0.30);
+}
+.footer-line{
+    min-width:0;
+    flex:1;
+    font-size:10px;
+    letter-spacing:0.85px;
+    color:var(--text-muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.footer-line.right{text-align:right}
+.resize-grip{
+    position:absolute;
+    right:4px;
+    bottom:4px;
+    z-index:5;
+    width:24px;
+    height:24px;
+    display:none;
+    cursor:nwse-resize;
+}
+.dps-shell.detail-mode .resize-grip{display:block}
+.resize-grip::before,
+.resize-grip::after{
+    content:'';
+    position:absolute;
+    right:3px;
+    bottom:3px;
+    width:18px;
+    height:18px;
+    border-right:1px solid rgba(222,166,32,0.82);
+    border-bottom:1px solid rgba(222,166,32,0.82);
+}
+.resize-grip::after{
+    right:8px;
+    bottom:8px;
+    width:9px;
+    height:9px;
+    opacity:0.75;
+}
+</style>
+</head>
+<body>
+<div class="dps-shell" id="dps-shell">
+    <div class="panel-flash-layer" id="panel-flash-layer"></div>
+    <span class="corner tl"></span>
+    <span class="corner br"></span>
+
+    <div class="dps-header" id="dps-header">
+        <div class="header-copy">
+            <div class="eyebrow">Tactical Analytics</div>
+            <div class="title-row">
+                <div class="title">DPS / HPS</div>
+                <div class="mode-badge live" id="mode-badge">LIVE</div>
+                <div class="act-badge" id="act-badge">ACT V1</div>
+            </div>
+            <div class="summary" id="summary-text">WAITING FOR COMBAT DATA</div>
+        </div>
+        <div class="header-actions">
+            <button class="sao-btn secondary active" id="btn-live" type="button" onclick="_activateLive()">LIVE</button>
+            <button class="sao-btn detail-toggle" id="btn-detail" type="button" onclick="_toggleDetailMode()">DETAIL</button>
+            <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">REPORT</button>
+            <button class="sao-btn" id="btn-history" type="button" onclick="_activateHistory()">HISTORY</button>
+            <div class="more-wrap" id="more-wrap">
+                <button class="sao-btn" id="btn-more" type="button" onclick="_toggleMoreMenu()">MORE ▾</button>
+                <div class="more-menu" id="more-menu">
+                    <button class="sao-btn" id="btn-export" type="button" onclick="_moreExport()">EXPORT</button>
+                    <button class="sao-btn danger" id="btn-reset" type="button" onclick="_moreReset()">RESET</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="dps-tabs" id="dps-tabs">
+        <div class="dps-tab active" data-tab="damage">Damage</div>
+        <div class="dps-tab" data-tab="heal">Healing</div>
+    </div>
+
+    <div class="content">
+        <div class="list-view show" id="list-view">
+            <div class="list-frame" id="list-frame"></div>
+        </div>
+
+        <div class="detail-view" id="detail-view">
+            <div class="detail-head">
+                <button class="sao-btn back-btn" id="btn-detail-back" type="button" onclick="_closeDetail()">BACK</button>
+                <div class="detail-title" id="detail-title">Entity</div>
+                <div class="detail-badge" id="detail-badge">LIVE DETAIL</div>
+            </div>
+            <div class="detail-grid" id="detail-grid"></div>
+            <div class="skill-frame" id="detail-skills"></div>
+        </div>
+    </div>
+
+    <div class="dps-footer">
+        <div class="footer-line" id="footer-left">ELAPSED 00:00</div>
+        <div class="footer-line right" id="footer-right">TOTAL 0</div>
+    </div>
+    <div class="resize-grip" id="resize-grip"></div>
+</div>
+
+<script>
+var _currentTab = 'damage';
+var _viewMode = 'live';
+var _liveSnapshot = _emptySnapshot();
+var _lastReport = null;
+var _historySnapshot = null;
+var _detailUid = '';
+var _detailVisible = false;
+var _detailMode = false;
+var _liveDetailCache = {};
+var _actSnapshot = null;
+var _lastHitFxSeq = 0;
+var _pendingHitFx = null;
+var _rowFxTimers = {};
+var _panelFxTimer = null;
+var _panelBlurTimer = null;
+var _hitFxMaxAgeMs = 9000;
+var _hitFxDurationsMs = {
+    impact: 2500,
+    mega: 5000,
+    starburst: 8000
+};
+
+function _emptySnapshot() {
+    return {
+        encounter_active: false,
+        elapsed_s: 0,
+        total_damage: 0,
+        total_heal: 0,
+        total_dps: 0,
+        total_hps: 0,
+        entities: [],
+        hit_fx: null
+    };
+}
+
+function _finiteNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+}
+
+function _nonNegNum(v, fallback) {
+    return Math.max(0, _finiteNum(v, fallback == null ? 0 : fallback));
+}
+
+function _nonNegInt(v, fallback) {
+    return Math.max(0, Math.round(_finiteNum(v, fallback == null ? 0 : fallback)));
+}
+
+function _clamp01(v, fallback) {
+    return Math.max(0, Math.min(1, _finiteNum(v, fallback == null ? 0 : fallback)));
+}
+
+function _isObjectValue(v) {
+    return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function _objectValue(v) {
+    return _isObjectValue(v) ? v : {};
+}
+
+function _listItems(v) {
+    return Array.isArray(v) ? v : [];
+}
+
+function _objectItems(v) {
+    return _listItems(v).filter(function(item) {
+        return _isObjectValue(item);
+    });
+}
+
+function _barPct(value, maxValue) {
+    var max = _nonNegNum(maxValue, 0);
+    if (max <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round(_nonNegNum(value, 0) / max * 100)));
+}
+
+function _fmtNum(v) {
+    v = _nonNegNum(v, 0);
+    if (v >= 1000000) return (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'M';
+    if (v >= 1000) return (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'K';
+    return Math.round(v).toLocaleString();
+}
+
+// MEM cross-check badge: per-encounter DPS from the game's own DamageDataMgr (its cumulative
+// total scoped to the MEM combat window). The raw total is meaningless as a per-fight figure
+// (only accrues at the Association dummy), so the badge shows DPS, matching the Tk _draw_row.
+function _memBadge(tcpAmount, entity) {
+    var mdps = _nonNegNum((entity && entity.mem_dps) || 0, 0);
+    if (!mdps) return '';
+    return ' · <span class="mem-badge">MEM ' + _fmtNum(mdps) + '/s</span>';
+}
+
+function _fmtTime(s) {
+    s = _nonNegNum(s, 0);
+    var mm = Math.floor(s / 60);
+    var ss = Math.floor(s % 60);
+    return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+}
+
+function _pct(v) {
+    return Math.round(_clamp01(v, 0) * 100) + '%';
+}
+
+function _escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+
+function _idText(value) {
+    return String(value == null ? '' : value);
+}
+
+function _uidKey(value) {
+    return _idText(value);
+}
+
+function _hasUid(value) {
+    var key = _uidKey(value);
+    return key !== '' && key !== '0';
+}
+
+function _jsArg(value) {
+    return _escHtml(JSON.stringify(_idText(value)));
+}
+
+function _fmtFightPoint(fp) {
+    fp = _nonNegNum(fp, 0);
+    if (fp <= 0) return '';
+    if (fp >= 1000000) return (fp / 1000000).toFixed(2) + 'M';
+    if (fp >= 1000) return (fp / 1000).toFixed(fp >= 100000 ? 0 : 1) + 'K';
+    return fp.toLocaleString();
+}
+
+function _buildEntitySub(entity) {
+    var parts = [];
+    if (entity.profession) parts.push(entity.profession);
+    var fp = _nonNegNum(entity.fight_point || 0, 0);
+    if (fp > 0) parts.push(_fmtFightPoint(fp));
+    if (parts.length) return parts.join(' · ');
+    return _viewMode === 'report' ? 'Last report entry' : 'Live combat entry';
+}
+
+function _currentData() {
+    if (_viewMode === 'history' && _historySnapshot) return _historySnapshot;
+    if (_viewMode === 'report' && _lastReport) return _lastReport;
+    return _liveSnapshot || _emptySnapshot();
+}
+
+function _actRowsDataFallback(baseData) {
+    var spec = _objectValue(_objectValue(_actSnapshot).render_spec);
+    var rows = spec.mode === 'live' ? _objectItems(spec.rows) : [];
+    if (!rows.length) return baseData || _emptySnapshot();
+    var totals = _objectValue(spec.totals);
+    var out = Object.assign({}, baseData || _emptySnapshot());
+    out.encounter_active = spec.mode === 'live';
+    out.elapsed_s = _nonNegNum(totals.elapsed_s || out.elapsed_s || 0, 0);
+    out.total_damage = _nonNegNum(totals.damage || out.total_damage || 0, 0);
+    out.total_heal = _nonNegNum(totals.heal || out.total_heal || 0, 0);
+    out.total_dps = _nonNegNum(totals.dps || out.total_dps || 0, 0);
+    out.total_hps = _nonNegNum(totals.hps || out.total_hps || 0, 0);
+    out.entities = rows.map(function(row, idx) {
+        var uid = _uidKey(row.uid);
+        return Object.assign({}, row, {
+            uid: uid,
+            name: row.name || ('Player_' + uid),
+            profession: row.profession || '',
+            damage_total: _nonNegNum(row.damage || row.damage_total || 0, 0),
+            heal_total: _nonNegNum(row.heal || row.heal_total || 0, 0),
+            dps: _nonNegNum(row.dps || 0, 0),
+            hps: _nonNegNum(row.hps || 0, 0),
+            damage_pct: _clamp01(row.damage_pct || 0, 0),
+            is_self: !!row.is_self,
+            act_rank: _nonNegInt(row.rank || (idx + 1), idx + 1)
+        });
+    });
+    return out;
+}
+
+function _currentListData() {
+    var data = _currentData();
+    if (_viewMode === 'live') return _actRowsDataFallback(data);
+    return data;
+}
+
+function _hasReport() {
+    return !!(_objectItems(_objectValue(_lastReport).entities).length);
+}
+
+function _normalizeHitFxTier(tier) {
+    tier = String(tier || '');
+    if (tier === 'starburst') return 'starburst';
+    if (tier === 'mega') return 'mega';
+    return 'impact';
+}
+
+function _hitFxDurationMs(tier) {
+    tier = _normalizeHitFxTier(tier);
+    return _hitFxDurationsMs[tier] || _hitFxDurationsMs.impact;
+}
+
+function _hitFxFlashClass(tier) {
+    tier = _normalizeHitFxTier(tier);
+    if (tier === 'starburst') return 'starburst-flash';
+    if (tier === 'mega') return 'mega-flash';
+    return 'impact-flash';
+}
+
+function _hitFxShellClass(tier) {
+    tier = _normalizeHitFxTier(tier);
+    if (tier === 'starburst') return 'starburst-hit-blur';
+    if (tier === 'mega') return 'mega-hit-blur';
+    return 'impact-hit-blur';
+}
+
+function _hitFxRowClass(tier) {
+    tier = _normalizeHitFxTier(tier);
+    if (tier === 'starburst') return 'starburst-hit';
+    if (tier === 'mega') return 'mega-hit';
+    return 'impact-hit';
+}
+
+function _flashPanelForHit(tier) {
+    tier = _normalizeHitFxTier(tier);
+    var layer = document.getElementById('panel-flash-layer');
+    var shell = _dpsShell();
+    var flashCls = _hitFxFlashClass(tier);
+    var shellCls = _hitFxShellClass(tier);
+    var duration = _hitFxDurationMs(tier);
+    if (!layer) return;
+    if (_panelFxTimer) clearTimeout(_panelFxTimer);
+    if (_panelBlurTimer) clearTimeout(_panelBlurTimer);
+    if (shell) {
+        shell.classList.remove('impact-hit-blur', 'mega-hit-blur', 'starburst-hit-blur');
+        void shell.offsetWidth;
+        shell.classList.add(shellCls);
+    }
+    layer.classList.remove('impact-flash', 'mega-flash', 'starburst-flash');
+    void layer.offsetWidth;
+    layer.classList.add(flashCls);
+    _panelFxTimer = setTimeout(function() {
+        layer.classList.remove('impact-flash', 'mega-flash', 'starburst-flash');
+        _panelFxTimer = null;
+    }, duration + 80);
+    _panelBlurTimer = setTimeout(function() {
+        if (shell) shell.classList.remove('impact-hit-blur', 'mega-hit-blur', 'starburst-hit-blur');
+        _panelBlurTimer = null;
+    }, duration + 80);
+}
+
+function _clearTransientHitFx() {
+    _pendingHitFx = null;
+    if (_panelFxTimer) {
+        clearTimeout(_panelFxTimer);
+        _panelFxTimer = null;
+    }
+    if (_panelBlurTimer) {
+        clearTimeout(_panelBlurTimer);
+        _panelBlurTimer = null;
+    }
+    var shell = _dpsShell();
+    if (shell) shell.classList.remove('impact-hit-blur', 'mega-hit-blur', 'starburst-hit-blur');
+    var layer = document.getElementById('panel-flash-layer');
+    if (layer) layer.classList.remove('impact-flash', 'mega-flash', 'starburst-flash');
+    Object.keys(_rowFxTimers).forEach(function(key) {
+        clearTimeout(_rowFxTimers[key]);
+    });
+    _rowFxTimers = {};
+    document.querySelectorAll('.entity-row.impact-hit, .entity-row.mega-hit, .entity-row.starburst-hit').forEach(function(row) {
+        row.classList.remove('impact-hit', 'mega-hit', 'starburst-hit');
+    });
+}
+
+function _captureHitFx(data) {
+    var fx = data && data.hit_fx;
+    if (!fx) return;
+    var seq = _nonNegInt(fx.seq, 0);
+    if (!seq || seq <= _lastHitFxSeq) return;
+    _lastHitFxSeq = seq;
+    var tsMs = _nonNegNum(fx.generated_at, 0) * 1000;
+    if (tsMs > 0 && (Date.now() - tsMs) > _hitFxMaxAgeMs) return;
+    if (_viewMode !== 'live') return;
+    _pendingHitFx = fx;
+    _flashPanelForHit(_normalizeHitFxTier(fx.tier));
+}
+
+function _applyPendingHitFx() {
+    if (!_pendingHitFx) return;
+    var uid = _uidKey(_pendingHitFx.uid);
+    if (!_hasUid(uid)) {
+        _pendingHitFx = null;
+        return;
+    }
+    var row = _findEntityRowByUid(uid);
+    if (!row) return;
+    var tier = _normalizeHitFxTier(_pendingHitFx.tier);
+    var cls = _hitFxRowClass(tier);
+    var duration = _hitFxDurationMs(tier);
+    if (_rowFxTimers[uid]) clearTimeout(_rowFxTimers[uid]);
+    row.classList.remove('impact-hit', 'mega-hit', 'starburst-hit');
+    void row.offsetWidth;
+    row.classList.add(cls);
+    _rowFxTimers[uid] = setTimeout(function() {
+        row.classList.remove('impact-hit', 'mega-hit', 'starburst-hit');
+        delete _rowFxTimers[uid];
+    }, duration + 80);
+    _pendingHitFx = null;
+}
+
+function _findEntity(data, uid) {
+    var entities = _objectItems(_objectValue(data).entities);
+    var key = _uidKey(uid);
+    if (!_hasUid(key)) return null;
+    for (var i = 0; i < entities.length; i++) {
+        if (_uidKey(entities[i].uid) === key) return entities[i];
+    }
+    return null;
+}
+
+function _findEntityRowByUid(uid) {
+    var key = _uidKey(uid);
+    if (!_hasUid(key)) return null;
+    var rows = document.querySelectorAll('.entity-row[data-uid]');
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-uid') === key) return rows[i];
+    }
+    return null;
+}
+
+function _pickDetailUid() {
+    if (_hasUid(_detailUid)) return _uidKey(_detailUid);
+    var entities = _objectItems(_objectValue(_currentData()).entities).slice();
+    for (var i = 0; i < entities.length; i++) {
+        if (entities[i].is_self && _hasUid(entities[i].uid)) {
+            return _uidKey(entities[i].uid);
+        }
+    }
+    if (_currentTab === 'heal') {
+        entities.sort(function(a, b) { return _nonNegNum(b.heal_total || 0, 0) - _nonNegNum(a.heal_total || 0, 0); });
+    } else {
+        entities.sort(function(a, b) { return _nonNegNum(b.damage_total || 0, 0) - _nonNegNum(a.damage_total || 0, 0); });
+    }
+    return entities.length ? _uidKey(entities[0].uid) : '';
+}
+
+function _callDpsApi(name) {
+    try {
+        if (!window.pywebview || !window.pywebview.api || !window.pywebview.api[name]) return null;
+        var args = Array.prototype.slice.call(arguments, 1);
+        return window.pywebview.api[name].apply(window.pywebview.api, args);
+    } catch (e) {
+        return null;
+    }
+}
+
+function _syncDetailChrome() {
+    var shell = _dpsShell();
+    if (shell) shell.classList.toggle('detail-mode', !!_detailMode);
+    var btn = document.getElementById('btn-detail');
+    if (btn) {
+        btn.classList.toggle('active', !!_detailMode);
+        btn.textContent = _detailMode ? 'NORMAL' : 'DETAIL';
+    }
+    var back = document.getElementById('btn-detail-back');
+    if (back) back.textContent = _detailMode ? 'NORMAL' : 'BACK';
+}
+
+function _requestDetailWindowMode(active) {
+    _callDpsApi('set_detail_mode', !!active);
+}
+
+function _setMode(mode) {
+    _viewMode = (mode === 'report' || mode === 'history') ? mode : 'live';
+    document.getElementById('btn-live').classList.toggle('active', _viewMode === 'live' && !_detailMode);
+    document.getElementById('btn-report').classList.toggle('active', _viewMode === 'report' && !_detailMode);
+    var historyBtn = document.getElementById('btn-history');
+    if (historyBtn) historyBtn.classList.toggle('active', _viewMode === 'history' && !_detailMode);
+    _syncDetailChrome();
+
+    var badge = document.getElementById('mode-badge');
+    badge.textContent = _viewMode === 'history' ? 'HISTORY' : (_viewMode === 'report' ? 'LAST REPORT' : 'LIVE');
+    badge.classList.toggle('live', _viewMode === 'live');
+    badge.classList.toggle('report', _viewMode === 'report' || _viewMode === 'history');
+}
+
+function _renderActMeta() {
+    var badge = document.getElementById('act-badge');
+    if (!badge) return;
+    var spec = (_actSnapshot && _actSnapshot.render_spec) || null;
+    if (!spec) {
+        badge.classList.remove('show', 'report');
+        badge.textContent = 'ACT V1';
+        return;
+    }
+    var mode = String(spec.mode || _viewMode || 'live').toUpperCase();
+    var specSources = (spec.sources || {});
+    var snapSources = ((_actSnapshot && _actSnapshot.sources) || {});
+    var source = ((specSources.summary || {}).data_source) || ((snapSources.summary || {}).data_source) || ((specSources.packet || {}).data_source) || ((snapSources.packet || {}).data_source) || 'tcp';
+    var hpSource = ((spec.boss || {}).hp_source) || '';
+    var bits = ['ACT V' + String(spec.version || 1), mode, String(source || 'tcp').toUpperCase()];
+    if (hpSource && hpSource !== 'none') bits.push('BOSS ' + String(hpSource).toUpperCase());
+    badge.textContent = bits.join(' · ');
+    badge.classList.add('show');
+    badge.classList.toggle('report', mode === 'REPORT' || mode === 'HISTORY');
+}
+
+function _latestActTriggerText() {
+    var triggers = _objectValue(_objectValue(_actSnapshot).triggers);
+    var emitted = _objectItems(triggers.emitted);
+    var recent = _objectItems(triggers.recent);
+    var events = emitted.length ? emitted : recent;
+    if (!events.length) return '';
+    var ev = emitted.length ? (events[events.length - 1] || {}) : (events[0] || {});
+    var label = ev.message || ev.label || ev.rule_id || ev.trigger_type || '';
+    if (!label) return '';
+    return 'ACT ALERT ' + String(label).toUpperCase();
+}
+
+function _switchListView() {
+    _detailVisible = false;
+    _detailUid = '';
+    document.getElementById('detail-view').classList.remove('show');
+    document.getElementById('list-view').classList.add('show');
+}
+
+function _switchDetailView() {
+    document.getElementById('list-view').classList.remove('show');
+    document.getElementById('detail-view').classList.add('show');
+}
+
+// 脏签名守卫: html 没变就跳过 innerHTML 重建, 省掉相同数据下的整块
+// DOM 重排, 也避免命中特效类被无关重建掐掉。
+function _setHtml(el, html) {
+    if (!el) return;
+    if (el._saoLastHtml === html) return;
+    el._saoLastHtml = html;
+    el.innerHTML = html;
+}
+
+function _renderHeader() {
+    _setMode(_viewMode);
+    _renderActMeta();
+    var data = _currentListData();
+    var summary = document.getElementById('summary-text');
+    if (_viewMode === 'report') {
+        if (!_hasReport()) {
+            summary.textContent = 'NO LAST REPORT AVAILABLE';
+        } else {
+            summary.textContent = 'LAST REPORT · ' + (_lastReport.completed_local_time || 'COMPLETED');
+        }
+    } else if (data.encounter_active) {
+        summary.textContent = 'LIVE DPS ' + _fmtNum(data.total_dps || 0) + ' · LIVE HPS ' + _fmtNum(data.total_hps || 0);
+    } else {
+        summary.textContent = 'WAITING FOR COMBAT DATA';
+    }
+    var triggerText = _latestActTriggerText();
+    if (triggerText && _viewMode === 'live') summary.textContent += ' · ' + triggerText;
+}
+
+function _renderFooter() {
+    var data = _currentListData();
+    var left = document.getElementById('footer-left');
+    var right = document.getElementById('footer-right');
+    if (_viewMode === 'report' && _hasReport()) {
+        left.textContent = 'COMPLETED ' + (_lastReport.completed_local_time || _fmtTime(data.elapsed_s || 0));
+        right.textContent = 'TOTAL ' + _fmtNum(data.total_damage || 0) + ' · HEAL ' + _fmtNum(data.total_heal || 0);
+        return;
+    }
+    left.textContent = 'ELAPSED ' + _fmtTime(data.elapsed_s || 0);
+    right.textContent = 'TOTAL ' + _fmtNum(data.total_damage || 0) + ' · HEAL ' + _fmtNum(data.total_heal || 0);
+}
+
+function _renderList() {
+    if (_detailVisible) return;
+    var data = _objectValue(_currentListData());
+    var entities = _objectItems(data.entities).slice();
+    var frame = document.getElementById('list-frame');
+
+    if (_currentTab === 'heal') {
+        entities.sort(function(a, b) { return _nonNegNum(b.heal_total || 0, 0) - _nonNegNum(a.heal_total || 0, 0); });
+    }
+
+    if (!entities.length) {
+        _setHtml(frame, '<div class="empty">' + (_viewMode === 'report' ? 'NO REPORT DATA' : 'NO LIVE COMBAT DATA') + '</div>');
+        return;
+    }
+
+    var maxVal = 0;
+    for (var i = 0; i < entities.length; i++) {
+        var val = _currentTab === 'heal' ? _nonNegNum(entities[i].heal_total || 0, 0) : _nonNegNum(entities[i].damage_total || 0, 0);
+        if (val > maxVal) maxVal = val;
+    }
+
+    var html = '';
+    for (var j = 0; j < entities.length; j++) {
+        var entity = entities[j];
+        var amount = _currentTab === 'heal' ? _nonNegNum(entity.heal_total || 0, 0) : _nonNegNum(entity.damage_total || 0, 0);
+        var rate = _currentTab === 'heal' ? _nonNegNum(entity.hps || 0, 0) : _nonNegNum(entity.dps || 0, 0);
+        var pct = _currentTab === 'heal'
+            ? (_nonNegNum(data.total_heal || 0, 0) > 0 ? amount / Math.max(1, _nonNegNum(data.total_heal || 0, 0)) : 0)
+            : _clamp01(entity.damage_pct || 0, 0);
+        var barPct = _barPct(amount, maxVal);
+        var rankCls = j < 3 ? ' r' + (j + 1) : '';
+        var uidKey = _uidKey(entity.uid);
+        html += ''
+            + '<div class="entity-row ' + (_currentTab === 'heal' ? 'heal' : '') + (entity.is_self ? ' self' : '') + '" data-uid="' + _escHtml(uidKey) + '" onclick="_openDetail(' + _jsArg(uidKey) + ')">'
+            +   '<div class="entity-bar" style="width:' + barPct + '%"></div>'
+            +   '<div class="entity-main">'
+            +     '<div class="rank' + rankCls + '">' + (j + 1) + '</div>'
+            +     '<div class="entity-meta">'
+            +       '<div class="entity-name">' + _escHtml(entity.name || ('Player_' + entity.uid)) + '</div>'
+            +       '<div class="entity-sub">' + _escHtml(_buildEntitySub(entity)) + '</div>'
+            +     '</div>'
+            +     '<div class="entity-value">'
+            +       '<div class="entity-value-main">' + _fmtNum(amount) + '</div>'
+            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + _memBadge(amount, entity) + '</div>'
+            +     '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+    _setHtml(frame, html);
+    _applyPendingHitFx();
+}
+
+function _renderDetailBase(entity) {
+    if (!entity) {
+        _setHtml(document.getElementById('detail-grid'), '<div class="empty">NO DETAIL DATA</div>');
+        _setHtml(document.getElementById('detail-skills'), '<div class="empty">NO SKILL DATA</div>');
+        return;
+    }
+
+    document.getElementById('detail-title').textContent =
+        (entity.name || ('Player_' + entity.uid)) + (entity.profession ? ' · ' + entity.profession : '')
+        + (_nonNegNum(entity.fight_point || 0, 0) > 0 ? ' · ' + _fmtFightPoint(entity.fight_point) : '');
+    document.getElementById('detail-badge').textContent = _viewMode === 'report' ? 'LAST REPORT DETAIL' : 'LIVE DETAIL';
+
+    var stats = [
+        ['Damage', _fmtNum(entity.damage_total || 0), 'gold'],
+        ['DPS', _fmtNum(entity.dps || 0), ''],
+        ['Healing', _fmtNum(entity.heal_total || 0), 'green'],
+        ['HPS', _fmtNum(entity.hps || 0), ''],
+        ['Crit', _pct(entity.crit_rate || 0), ''],
+        ['Max Hit', _fmtNum(entity.max_hit || 0), 'gold'],
+        ['Hits', String(_nonNegInt(entity.damage_hits || 0, 0)), ''],
+        ['Time', _fmtTime(entity.elapsed_s || 0), '']
+    ];
+    var html = '';
+    for (var i = 0; i < stats.length; i++) {
+        html += ''
+            + '<div class="stat-card">'
+            +   '<div class="stat-label">' + stats[i][0] + '</div>'
+            +   '<div class="stat-value ' + stats[i][2] + '">' + stats[i][1] + '</div>'
+            + '</div>';
+    }
+    _setHtml(document.getElementById('detail-grid'), html);
+}
+
+// Heat gradient by relative output: low → cold blue, mid → gold, high → hot
+// red. Pure function so the Tk Entity cockpit mirrors it byte-for-byte.
+function _heatColor(ratio) {
+    ratio = _clamp01(ratio, 0);
+    var cold = [60, 176, 255], mid = [255, 200, 72], hot = [255, 96, 78];
+    var a, b, t;
+    if (ratio < 0.5) { a = cold; b = mid; t = ratio / 0.5; }
+    else { a = mid; b = hot; t = (ratio - 0.5) / 0.5; }
+    return [
+        Math.round(a[0] + (b[0] - a[0]) * t),
+        Math.round(a[1] + (b[1] - a[1]) * t),
+        Math.round(a[2] + (b[2] - a[2]) * t)
+    ];
+}
+
+function _renderSkillRows(entity) {
+    var skills = (entity && entity.skills) ? entity.skills.slice() : [];
+    var frame = document.getElementById('detail-skills');
+    if (!skills.length) {
+        _setHtml(frame, '<div class="empty">' + (_viewMode === 'report' ? 'NO SKILL DATA IN LAST REPORT' : 'WAITING FOR LIVE SKILL DETAIL') + '</div>');
+        return;
+    }
+
+    skills.sort(function(a, b) {
+        var av = Math.max(_nonNegNum(a.total || 0, 0), _nonNegNum(a.heal_total || 0, 0));
+        var bv = Math.max(_nonNegNum(b.total || 0, 0), _nonNegNum(b.heal_total || 0, 0));
+        return bv - av;
+    });
+
+    var maxVal = 0, sumVal = 0;
+    for (var i = 0; i < skills.length; i++) {
+        var current = Math.max(_nonNegNum(skills[i].total || 0, 0), _nonNegNum(skills[i].heal_total || 0, 0));
+        if (current > maxVal) maxVal = current;
+        sumVal += current;
+    }
+
+    var html = '';
+    for (var j = 0; j < skills.length; j++) {
+        var sk = skills[j];
+        var dmg = _nonNegNum(sk.total || 0, 0);
+        var heal = _nonNegNum(sk.heal_total || 0, 0);
+        var amount = Math.max(dmg, heal);
+        var isHeal = heal > dmg;
+        var hits = isHeal ? _nonNegInt(sk.heal_hits || 0, 0) : _nonNegInt(sk.hits || 0, 0);
+        var critRate = _clamp01(sk.crit_rate || 0, 0);
+        var crit = !isHeal && hits > 0 && critRate > 0 ? ' · CRIT ' + _pct(critRate) : '';
+        var ratio = maxVal > 0 ? _clamp01(amount / maxVal, 0) : 0;       // bar length vs. top skill
+        var share = sumVal > 0 ? _clamp01(amount / sumVal, 0) : 0;        // share of total output
+        var rgb = _heatColor(ratio);
+        var fill = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+        var glow = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.45)';
+        var numColor = isHeal ? 'var(--stat-green)' : fill;
+        var rank = j + 1;
+        var rankCls = rank <= 3 ? ' r' + rank : '';
+        var sub = (isHeal ? 'HEAL' : 'DMG') + ' · ×' + hits + crit;
+        html += ''
+            + '<div class="skill-row' + (isHeal ? ' heal' : '') + '">'
+            +   '<div class="skill-head">'
+            +     '<span class="skill-rank' + rankCls + '">' + rank + '</span>'
+            +     '<span class="skill-name">' + _escHtml(sk.skill_name || sk.name || sk.skill_id || 'Unknown Skill') + '</span>'
+            +     '<span class="skill-num" style="color:' + numColor + '">' + _fmtNum(amount) + '</span>'
+            +     '<span class="skill-pct">' + _pct(share) + '</span>'
+            +   '</div>'
+            +   '<div class="skill-sub">' + _escHtml(sub) + '</div>'
+            +   '<div class="skill-track"><div class="skill-fill" style="width:' + _barPct(amount, maxVal) + '%;background:' + fill + ';box-shadow:0 0 6px ' + glow + '"></div></div>'
+            + '</div>';
+    }
+    _setHtml(frame, html);
+}
+
+function _renderDetail() {
+    if (!_detailVisible) return;
+    var data = _viewMode === 'live' ? _currentListData() : _currentData();
+    var base = _findEntity(data, _detailUid);
+    var detail = null;
+    if (_viewMode === 'report') {
+        detail = base;
+    } else {
+        detail = _liveDetailCache[_uidKey(_detailUid)] || base;
+    }
+    _renderDetailBase(detail);
+    _renderSkillRows(detail);
+}
+
+function _renderAll() {
+    _renderHeader();
+    _renderFooter();
+    if (_detailVisible) {
+        _switchDetailView();
+        _renderDetail();
+    } else {
+        _switchListView();
+        _renderList();
+    }
+}
+
+function showLive(data) {
+    _liveSnapshot = _objectValue(data);
+    _viewMode = 'live';
+    _captureHitFx(_liveSnapshot);
+    if (_detailVisible) {
+        if (!_hasUid(_detailUid)) _detailUid = _pickDetailUid();
+        _syncDetailChrome();
+        _renderAll();
+        if (_hasUid(_detailUid) && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
+            window.pywebview.api.get_entity_detail(_detailUid);
+        }
+        return;
+    }
+    _detailVisible = false;
+    _detailUid = '';
+    _renderAll();
+}
+
+function showActSnapshot(snapshot) {
+    _actSnapshot = _isObjectValue(snapshot) ? snapshot : null;
+    if (_viewMode === 'live') {
+        _renderAll();
+    } else {
+        _renderActMeta();
+        _renderHeader();
+    }
+}
+
+function updateDps(data) {
+    _liveSnapshot = _objectValue(data);
+    _captureHitFx(_liveSnapshot);
+    if (_viewMode === 'live') {
+        _renderAll();
+    } else {
+        _renderHeader();
+        _renderFooter();
+    }
+}
+
+function showLastReport(report) {
+    _lastReport = _isObjectValue(report) ? report : null;
+    _clearTransientHitFx();
+    _viewMode = 'report';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    _renderAll();
+}
+
+function showHistoryReport(report) {
+    _historySnapshot = _isObjectValue(report) ? report : null;
+    _clearTransientHitFx();
+    _viewMode = 'history';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    _renderAll();
+}
+
+function updateDetail(data) {
+    data = _objectValue(data);
+    if (!data) return;
+    var uidKey = _uidKey(data.uid);
+    if (!_hasUid(uidKey)) return;
+    _liveDetailCache[_uidKey(data.uid)] = data;
+    if (_viewMode === 'live' && _detailVisible && _uidKey(_detailUid) === uidKey) {
+        _renderDetail();
+    }
+}
+
+function _openDetail(uid, keepPanelMode) {
+    _detailUid = _uidKey(uid);
+    if (!_hasUid(_detailUid)) return;
+    _detailVisible = true;
+    if (keepPanelMode) _detailMode = true;
+    _syncDetailChrome();
+    _switchDetailView();
+    _renderDetail();
+    if (_viewMode === 'live' && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
+        window.pywebview.api.get_entity_detail(_detailUid);
+    }
+}
+
+function _closeDetail() {
+    if (_detailMode) {
+        _detailMode = false;
+        _detailVisible = false;
+        _detailUid = '';
+        _syncDetailChrome();
+        _requestDetailWindowMode(false);
+        _switchListView();
+        _renderList();
+        return;
+    }
+    _switchListView();
+    _renderList();
+}
+
+function _toggleDetailMode() {
+    if (_detailMode) {
+        _closeDetail();
+        return;
+    }
+    var uid = _pickDetailUid();
+    _detailMode = true;
+    _requestDetailWindowMode(true);
+    _openDetail(uid, true);
+}
+
+function _activateLive() {
+    _viewMode = 'live';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.request_live_snapshot) {
+        window.pywebview.api.request_live_snapshot();
+        return;
+    }
+    _renderAll();
+}
+
+function _activateReport() {
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.show_last_report) {
+        window.pywebview.api.show_last_report().then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            if (!data || data.ok === false) {
+                _renderHeader();
+                document.getElementById('summary-text').textContent = (data && data.message) ? data.message : 'NO LAST REPORT AVAILABLE';
+            }
+        }).catch(function() {
+            _renderHeader();
+            document.getElementById('summary-text').textContent = 'NO LAST REPORT AVAILABLE';
+        });
+        return;
+    }
+    if (!_hasReport()) {
+        _renderHeader();
+        document.getElementById('summary-text').textContent = 'NO LAST REPORT AVAILABLE';
+        return;
+    }
+    _viewMode = 'report';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    _renderAll();
+}
+
+function _activateHistory() {
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.list_history) {
+        window.pywebview.api.list_history(20).then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            if (data && data.ok && data.items && data.items.length) {
+                showHistoryReport(data.items[0]);
+            } else {
+                _renderHeader();
+                document.getElementById('summary-text').textContent = 'NO HISTORY AVAILABLE';
+            }
+        }).catch(function() {
+            _renderHeader();
+            document.getElementById('summary-text').textContent = 'NO HISTORY AVAILABLE';
+        });
+    }
+}
+
+var _moreResetArmTimer = null;
+
+function _toggleMoreMenu(forceClose) {
+    var menu = document.getElementById('more-menu');
+    if (!menu) return;
+    if (forceClose === true) { menu.classList.remove('open'); _disarmMoreReset(); return; }
+    if (menu.classList.toggle('open') === false) _disarmMoreReset();
+}
+
+function _disarmMoreReset() {
+    clearTimeout(_moreResetArmTimer);
+    _moreResetArmTimer = null;
+    var btn = document.getElementById('btn-reset');
+    if (btn) btn.textContent = 'RESET';
+}
+
+function _moreExport() {
+    _toggleMoreMenu(true);
+    _exportReport();
+}
+
+function _moreReset() {
+    // 两段式确认：第一次点击进入 CONFIRM? 态，3 秒内再点才真正重置
+    var btn = document.getElementById('btn-reset');
+    if (!btn) { _reset(); return; }
+    if (_moreResetArmTimer) {
+        _disarmMoreReset();
+        _toggleMoreMenu(true);
+        _reset();
+        return;
+    }
+    btn.textContent = 'CONFIRM?';
+    _moreResetArmTimer = setTimeout(_disarmMoreReset, 3000);
+}
+
+document.addEventListener('click', function (e) {
+    var wrap = document.getElementById('more-wrap');
+    if (wrap && !wrap.contains(e.target)) _toggleMoreMenu(true);
+});
+
+function _exportReport() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.export_last_report) {
+        window.pywebview.api.export_last_report('csv').then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            document.getElementById('summary-text').textContent = (data && data.ok)
+                ? ('EXPORTED ' + data.path)
+                : ((data && data.message) ? data.message : 'EXPORT FAILED');
+        }).catch(function() {
+            document.getElementById('summary-text').textContent = 'EXPORT FAILED';
+        });
+    }
+}
+
+function _reset() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.reset_dps) {
+        window.pywebview.api.reset_dps();
+    }
+    _clearTransientHitFx();
+    _viewMode = 'live';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = '';
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    _liveSnapshot = _emptySnapshot();
+    _liveDetailCache = {};
+    _renderAll();
+}
+
+document.getElementById('dps-tabs').addEventListener('click', function(e) {
+    var tab = e.target && e.target.getAttribute('data-tab');
+    if (!tab) return;
+    _currentTab = tab;
+    document.querySelectorAll('.dps-tab').forEach(function(el) {
+        el.classList.toggle('active', el.getAttribute('data-tab') === tab);
+    });
+    if (_detailVisible) _renderDetail();
+    else _renderList();
+});
+
+(function() {
+    var header = document.getElementById('dps-header');
+    var mouseDown = false;
+    var dragging = false;
+    var startX = 0;
+    var startY = 0;
+    var lastX = 0;
+    var lastY = 0;
+    var threshold = 5;
+
+    header.addEventListener('mousedown', function(e) {
+        if (e.target.closest('button')) return;
+        mouseDown = true;
+        dragging = false;
+        startX = lastX = e.screenX;
+        startY = lastY = e.screenY;
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!mouseDown) return;
+        if (!dragging) {
+            if (Math.abs(e.screenX - startX) < threshold && Math.abs(e.screenY - startY) < threshold) {
+                return;
+            }
+            dragging = true;
+        }
+        var dx = e.screenX - lastX;
+        var dy = e.screenY - lastY;
+        lastX = e.screenX;
+        lastY = e.screenY;
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.window_drag) {
+            window.pywebview.api.window_drag(dx, dy);
+        }
+    });
+
+    document.addEventListener('mouseup', function() {
+        mouseDown = false;
+        dragging = false;
+    });
+})();
+
+(function() {
+    var grip = document.getElementById('resize-grip');
+    if (!grip) return;
+    var resizing = false;
+    var startX = 0;
+    var startY = 0;
+    var startW = 0;
+    var startH = 0;
+    var lastW = 0;
+    var lastH = 0;
+    var minW = 520;
+    var minH = 420;
+    var maxW = 1180;
+    var maxH = 900;
+
+    function clamp(v, lo, hi) {
+        return Math.max(lo, Math.min(hi, Math.round(_finiteNum(v, lo))));
+    }
+
+    grip.addEventListener('mousedown', function(e) {
+        if (!_detailMode) return;
+        resizing = true;
+        startX = e.screenX;
+        startY = e.screenY;
+        startW = window.innerWidth || document.documentElement.clientWidth || 760;
+        startH = window.innerHeight || document.documentElement.clientHeight || 560;
+        lastW = startW;
+        lastH = startH;
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!resizing) return;
+        lastW = clamp(startW + (e.screenX - startX), minW, maxW);
+        lastH = clamp(startH + (e.screenY - startY), minH, maxH);
+        _callDpsApi('resize_dps', lastW, lastH, false);
+        e.preventDefault();
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (!resizing) return;
+        resizing = false;
+        _callDpsApi('resize_dps', lastW, lastH, true);
+    });
+})();
+
+function snd(name) {
+    try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.play_sound) {
+            window.pywebview.api.play_sound(name);
+        }
+    } catch (e) {}
+}
+
+var _dpsAnimTimer = null;
+function _dpsShell() {
+    return document.getElementById('dps-shell');
+}
+function _clearDpsAnimState() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    shell.classList.remove('exiting');
+    /* keep 'entering' so animation forwards-fill maintains opacity:1 */
+}
+function fadeInDps() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    if (_dpsAnimTimer) clearTimeout(_dpsAnimTimer);
+    shell.classList.remove('exiting', 'entering');
+    void shell.offsetWidth;
+    shell.classList.add('entering');
+    /* no timer to remove 'entering' — forwards fill keeps opacity:1 */
+}
+function fadeOutDps() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    if (_dpsAnimTimer) clearTimeout(_dpsAnimTimer);
+    shell.classList.remove('entering', 'exiting');
+    void shell.offsetWidth;
+    shell.classList.add('exiting');
+    _dpsAnimTimer = setTimeout(_clearDpsAnimState, 280);
+}
+
+window.addEventListener('beforeunload', function() {
+    _clearDpsAnimState();
+});
+
+window.DpsMeter = {
+    updateDps: updateDps,
+    updateDetail: updateDetail,
+    showLive: showLive,
+    showActSnapshot: showActSnapshot,
+    showLastReport: showLastReport,
+    fadeOut: fadeOutDps,
+    fadeIn: fadeInDps,
+    setDetailMode: function(active) {
+        _detailMode = !!active;
+        if (!_detailMode) {
+            _detailVisible = false;
+            _detailUid = '';
+        }
+        _syncDetailChrome();
+        _renderAll();
+    }
+};
+
+_renderAll();
+</script>
+<script>
+// Theme initialization
+(function(){
+    var panel='dps', darkCls='theme-dark', fallback='dark';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    apply(fallback);
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
+</script>
+</body>
+</html>
+

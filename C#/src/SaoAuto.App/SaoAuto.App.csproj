@@ -30,13 +30,23 @@
 
   <!-- C# standalone runtime resources. Do not reference the Python source
        tree here: the C# client must build and launch from the C#
-       tree alone. Full-fidelity assets can be migrated into these local
-       web/assets folders in later parity slices. -->
+       tree alone. Python-packaged runtime resources are mirrored locally
+       and copied as content only. -->
   <ItemGroup>
+    <Compile Remove="plugins\**\*.cs" />
     <Content Include="web\**\*.*" Link="web\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="assets\**\*.*" Link="assets\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="plugins\**\*.*" Link="plugins\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="shaders\**\*.*" Link="shaders\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="drivers\**\*.*" Link="drivers\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Bug fix (user 2026-06-01): embed icon.ico as a WPF resource so the

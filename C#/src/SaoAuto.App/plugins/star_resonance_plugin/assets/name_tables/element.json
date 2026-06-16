@@ -1,0 +1,12 @@
+{
+  "_comment": "EDamageProperty (proto/star_resonance.proto EDamageProperty 0..8). HAND-CURATED, NOT in hybrid_name_tables._RUNTIME_KINDS — safe from cross-repo name-table regeneration. id -> {name(CN), color(hex), icon(emoji)}.",
+  "0": {"name": "通用", "color": "#B0B8C4", "icon": "⚔"},
+  "1": {"name": "火", "color": "#FF6B35", "icon": "🔥"},
+  "2": {"name": "水", "color": "#2E9BFF", "icon": "💧"},
+  "3": {"name": "雷", "color": "#B45AFF", "icon": "⚡"},
+  "4": {"name": "木", "color": "#3FBF5F", "icon": "🌿"},
+  "5": {"name": "风", "color": "#46E0B0", "icon": "🌪"},
+  "6": {"name": "岩", "color": "#C8923C", "icon": "🪨"},
+  "7": {"name": "光", "color": "#FFD95A", "icon": "✨"},
+  "8": {"name": "暗", "color": "#9B6BD6", "icon": "🌑"}
+}
