@@ -82,7 +82,7 @@ try:
 except Exception:
     _NTRVM = None
 
-# XiaoACTprocessReading 内核驱动后端 (可选 — 驱动未加载时自动跳过)
+# optional backend
 try:
     from mem_probe import driver_backend as _drv
 except Exception:

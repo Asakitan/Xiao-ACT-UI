@@ -16,8 +16,8 @@ if exist "%ROOT%mem_probe\driver_backend.py" (
     dir /b "%ROOT%mem_probe\driver_backend*.pyd" >nul 2>&1
     if errorlevel 1 echo WARNING: driver_backend.pyd not built, source will ship unprotected
 )
-if exist "%ROOT%drivers\XiaoACTloader.sys" (
-    echo   encrypting drivers...
+if exist "%ROOT%mem_probe\_encrypt_drivers.py" (
+    echo   encrypting backend data...
     python "%ROOT%mem_probe\_encrypt_drivers.py"
 )
 
