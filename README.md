@@ -1,6 +1,6 @@
 # SAO ACT UI
 
-通用 ACT（Advanced Combat Tracker）平台，提供 SAO 风格透明覆盖界面、插件化游戏适配、DPS/HPS 统计框架与自动化引擎。平台本身不绑定任何游戏——游戏支持通过插件提供。
+通用 NervGear ACT 平台，提供 SAO 风格透明覆盖界面、插件化游戏适配、DPS/HPS 统计框架与自动化引擎。平台本身不绑定任何游戏——游戏支持通过插件提供。
 
 - 当前版本：`5.0.0`（以 `python/config.py` 的 `APP_VERSION` 为准）
 - 运行平台：Windows 10 / 11
@@ -28,7 +28,7 @@ sao_auto/
 
 ### 平台层
 
-平台提供通用能力，不依赖任何插件：
+平台提供通用能力：
 
 - **NerveGear 按钮**：64px 圆形入口（dark/light 主题，可拖动），左键打开 SAO 菜单
 - **SAO 菜单**：平台固定 5 分类（控制/ACT/插件/皮肤/关于）+ 插件动态贡献分类
