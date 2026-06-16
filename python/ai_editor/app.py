@@ -233,6 +233,20 @@ class AIEditorAPI:
                     "requires_confirm": False,
                     "parameters": t.input_schema,
                 })
+        # Add extension-contributed tools
+        try:
+            from ai_editor.extensions import load_all_extension_tools
+            for et in load_all_extension_tools():
+                fn = et.get("function", {})
+                tools.append({
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "category": f"ext:{et.get('extension_id','')}",
+                    "requires_confirm": False,
+                    "parameters": fn.get("parameters", {}),
+                })
+        except Exception:
+            pass
         return {"tools": tools}
 
     def execute_tool(self, name: str, arguments: str = "{}") -> str:

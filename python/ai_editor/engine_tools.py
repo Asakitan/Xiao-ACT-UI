@@ -1,13 +1,19 @@
-"""SAO engine interfaces exposed as LLM-callable tools.
+"""LLM-callable tools — aligned with VSCode's built-in tool set.
 
-Each tool wraps a real engine API so the LLM can inspect and control the ACT
-runtime.  Tools are grouped by category and registered in the global
-ToolRegistry on ``register_engine_tools(gui_ref)``.
+Core tools mirror VSCode Copilot's tool design:
+  editFile, readFile, listFiles, searchFiles, runTerminal,
+  askQuestion, taskComplete, getConfirmation
+
+Plus one aggregate ``engine`` tool for all game-engine queries,
+keeping the tool list clean for the LLM.
 """
 
 from __future__ import annotations
 
+import glob
 import json
+import os
+import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
@@ -15,1173 +21,501 @@ from ai_editor.tool_registry import ToolRegistry
 
 
 def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
-    """Register all engine tools, using *gui_ref* to reach live state."""
-
-    # ── helpers ───────────────────────────────────────────────────────────
-    def _settings():
-        return getattr(gui_ref, 'settings', None) or getattr(gui_ref, '_cfg_settings_ref', None)
-
-    def _state():
-        return getattr(gui_ref, '_game_state', None) or {}
-
-    def _dps():
-        return getattr(gui_ref, '_dps_tracker', None)
-
-    def _packet_bridge():
-        return getattr(gui_ref, '_packet_bridge', None)
-
-    def _mem_bridge():
-        pb = _packet_bridge()
-        if pb:
-            return getattr(pb, '_unified_data_source', None)
-        return getattr(gui_ref, '_mem_bridge', None)
-
-    def _encounter():
-        return getattr(gui_ref, '_encounter_manager', None)
-
-    def _boss_raid():
-        return getattr(gui_ref, '_boss_raid_engine', None)
-
-    def _trigger_engine():
-        return getattr(gui_ref, '_trigger_engine', None)
-
-    def _auto_key():
-        return getattr(gui_ref, '_auto_key_engine', None)
-
-    def _plugin_manager():
-        return getattr(gui_ref, '_plugin_manager', None)
+    """Register VSCode-aligned tools + engine aggregate."""
 
     # ==================================================================
-    # Category: game_state — read-only game state queries
+    # VSCode Core: File Operations
     # ==================================================================
 
     registry.register(
-        name="get_game_state",
-        description="获取当前游戏状态快照: 角色名/UID/等级/职业/HP/场景等",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _format_game_state(gui_ref),
-        category="game_state",
-    )
-
-    registry.register(
-        name="get_self_entity",
-        description="获取自身实体完整属性 (HP/MP/攻击力/防御等全部attr)",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_self_entity(gui_ref),
-        category="game_state",
-    )
-
-    registry.register(
-        name="get_entity_list",
-        description="获取当前视野内所有实体列表 (玩家/怪物/NPC)",
+        name="readFile",
+        description="Read a file's content. Returns the text content of the specified file.",
         parameters={
             "type": "object",
             "properties": {
-                "kind": {
-                    "type": "string",
-                    "description": "过滤类型: player/monster/npc/all",
-                    "default": "all",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "最多返回数量",
-                    "default": 50,
-                },
+                "path": {"type": "string", "description": "Absolute or relative file path"},
+                "startLine": {"type": "integer", "description": "Start line (1-based, optional)"},
+                "endLine": {"type": "integer", "description": "End line (inclusive, optional)"},
             },
+            "required": ["path"],
         },
-        handler=lambda kind="all", limit=50: _get_entity_list(gui_ref, kind, int(limit)),
-        category="game_state",
+        handler=lambda path, startLine=0, endLine=0: _read_file(path, int(startLine), int(endLine)),
+        category="file",
     )
 
     registry.register(
-        name="get_entity_detail",
-        description="获取指定实体的详细属性 (按UUID或名字)",
+        name="editFile",
+        description="Create or edit a file. Can write full content or replace a specific range.",
         parameters={
             "type": "object",
             "properties": {
-                "uuid": {"type": "integer", "description": "实体UUID"},
-                "name": {"type": "string", "description": "实体名字 (模糊匹配)"},
+                "path": {"type": "string", "description": "File path to create or edit"},
+                "content": {"type": "string", "description": "New file content (full or partial)"},
+                "startLine": {"type": "integer", "description": "Start line to replace (1-based, 0=full rewrite)"},
+                "endLine": {"type": "integer", "description": "End line to replace (inclusive)"},
             },
+            "required": ["path", "content"],
         },
-        handler=lambda uuid=0, name="": _get_entity_detail(gui_ref, int(uuid) if uuid else 0, str(name)),
-        category="game_state",
-    )
-
-    # ==================================================================
-    # Category: dps — DPS tracker and combat data
-    # ==================================================================
-
-    registry.register(
-        name="get_dps_summary",
-        description="获取当前/上次战斗的DPS汇总: 每人总伤/DPS/占比",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_dps_summary(gui_ref),
-        category="dps",
-    )
-
-    registry.register(
-        name="get_combat_status",
-        description="获取战斗状态: 是否战斗中/持续时间/参与人数/Boss信息",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_combat_status(gui_ref),
-        category="dps",
-    )
-
-    registry.register(
-        name="get_skill_breakdown",
-        description="获取指定玩家的技能伤害分解",
-        parameters={
-            "type": "object",
-            "properties": {
-                "player_name": {"type": "string", "description": "玩家名字"},
-            },
-            "required": ["player_name"],
-        },
-        handler=lambda player_name: _get_skill_breakdown(gui_ref, player_name),
-        category="dps",
-    )
-
-    registry.register(
-        name="get_dps_report",
-        description="获取上一场战斗的完整DPS报告",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_dps_report(gui_ref),
-        category="dps",
-    )
-
-    registry.register(
-        name="get_encounter_reports",
-        description="获取最近N场战斗报告摘要",
-        parameters={
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "最多返回场数", "default": 5},
-            },
-        },
-        handler=lambda limit=5: _get_encounter_reports(gui_ref, int(limit)),
-        category="dps",
-    )
-
-    # ==================================================================
-    # Category: event — 事件总线
-    # ==================================================================
-
-    registry.register(
-        name="publish_event",
-        description="在ACT事件总线上发布事件",
-        parameters={
-            "type": "object",
-            "properties": {
-                "topic": {"type": "string", "description": "事件主题"},
-                "payload": {"description": "事件数据"},
-            },
-            "required": ["topic"],
-        },
-        handler=lambda topic, payload=None: _publish_event(gui_ref, topic, payload),
-        category="event",
+        handler=lambda path, content, startLine=0, endLine=0: _edit_file(path, content, int(startLine), int(endLine)),
+        category="file",
         requires_confirm=True,
     )
 
     registry.register(
-        name="get_event_stats",
-        description="获取事件总线统计信息",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_event_stats(gui_ref),
-        category="event",
-    )
-
-    # ==================================================================
-    # Category: memory_status — 内存数据源状态
-    # ==================================================================
-
-    registry.register(
-        name="get_memory_status",
-        description="获取内存数据源连接状态和健康度",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_memory_status(gui_ref),
-        category="memory",
-    )
-
-    registry.register(
-        name="get_memory_entities",
-        description="从内存直接读取实体列表 (绕过TCP)",
+        name="listFiles",
+        description="List files and directories at a path. Returns names with type indicators.",
         parameters={
             "type": "object",
             "properties": {
-                "include_monsters": {"type": "boolean", "default": True},
-                "include_npcs": {"type": "boolean", "default": False},
+                "path": {"type": "string", "description": "Directory path (default: current directory)", "default": "."},
+                "pattern": {"type": "string", "description": "Glob pattern to filter (e.g. '*.py')", "default": ""},
+                "recursive": {"type": "boolean", "description": "Recurse into subdirectories", "default": False},
+                "limit": {"type": "integer", "description": "Max entries to return", "default": 100},
             },
         },
-        handler=lambda include_monsters=True, include_npcs=False: _get_memory_entities(gui_ref, include_monsters, include_npcs),
-        category="memory",
-    )
-
-    # ==================================================================
-    # Category: boss — Boss状态和Raid
-    # ==================================================================
-
-    registry.register(
-        name="get_boss_status",
-        description="获取当前Boss状态: HP/破韧值/护盾/技能/机制",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_boss_status(gui_ref),
-        category="boss",
+        handler=lambda path=".", pattern="", recursive=False, limit=100: _list_files(path, pattern, bool(recursive), int(limit)),
+        category="file",
     )
 
     registry.register(
-        name="get_raid_mechanics",
-        description="获取Boss机制列表 (已配置的Raid机制)",
+        name="searchFiles",
+        description="Search for text in files using grep/regex. Returns matching lines with context.",
         parameters={
             "type": "object",
             "properties": {
-                "boss_id": {"type": "integer", "description": "Boss模板ID (0=当前Boss)"},
+                "query": {"type": "string", "description": "Search text or regex pattern"},
+                "path": {"type": "string", "description": "Directory to search in", "default": "."},
+                "pattern": {"type": "string", "description": "File glob filter (e.g. '*.py')", "default": ""},
+                "caseSensitive": {"type": "boolean", "description": "Case-sensitive search", "default": False},
+                "regex": {"type": "boolean", "description": "Treat query as regex", "default": False},
+                "limit": {"type": "integer", "description": "Max results", "default": 50},
             },
+            "required": ["query"],
         },
-        handler=lambda boss_id=0: _get_raid_mechanics(gui_ref, int(boss_id)),
-        category="boss",
+        handler=lambda query, path=".", pattern="", caseSensitive=False, regex=False, limit=50: _search_files(query, path, pattern, bool(caseSensitive), bool(regex), int(limit)),
+        category="file",
     )
 
     # ==================================================================
-    # Category: buff — Buff/状态效果
+    # VSCode Core: Terminal / Shell
     # ==================================================================
 
     registry.register(
-        name="get_buff_list",
-        description="获取指定实体的Buff列表 (自身或Boss)",
+        name="runTerminal",
+        description="Execute a shell command and return stdout/stderr. Timeout 30s.",
         parameters={
             "type": "object",
             "properties": {
-                "target": {"type": "string", "description": "self/boss/指定uuid", "default": "self"},
+                "command": {"type": "string", "description": "Shell command to execute"},
+                "cwd": {"type": "string", "description": "Working directory (optional)", "default": ""},
             },
+            "required": ["command"],
         },
-        handler=lambda target="self": _get_buff_list(gui_ref, target),
-        category="buff",
-    )
-
-    registry.register(
-        name="get_skill_cooldowns",
-        description="获取自身技能冷却状态",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_skill_cooldowns(gui_ref),
-        category="buff",
-    )
-
-    # ==================================================================
-    # Category: combat — 战斗事件/历史
-    # ==================================================================
-
-    registry.register(
-        name="get_damage_events",
-        description="获取最近的伤害事件流 (最新N条)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
-            },
-        },
-        handler=lambda limit=20: _get_damage_events(gui_ref, int(limit)),
-        category="combat",
-    )
-
-    registry.register(
-        name="get_encounter_history",
-        description="获取战斗历史记录 (最近N场)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "最多返回场数", "default": 10},
-            },
-        },
-        handler=lambda limit=10: _get_encounter_history(gui_ref, int(limit)),
-        category="combat",
-    )
-
-    # ==================================================================
-    # Category: automation — 自动操作
-    # ==================================================================
-
-    registry.register(
-        name="get_auto_key_status",
-        description="获取自动按键引擎状态 (是否运行/当前配置)",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_auto_key_status(gui_ref),
-        category="automation",
-    )
-
-    registry.register(
-        name="toggle_auto_key",
-        description="启动/停止自动按键引擎",
-        parameters={
-            "type": "object",
-            "properties": {
-                "enabled": {"type": "boolean", "description": "true=启动, false=停止"},
-            },
-            "required": ["enabled"],
-        },
-        handler=lambda enabled: _toggle_auto_key(gui_ref, bool(enabled)),
-        category="automation",
-        requires_confirm=True,
-    )
-
-    registry.register(
-        name="get_auto_key_config",
-        description="获取自动按键配置详情",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_auto_key_config(gui_ref),
-        category="automation",
-    )
-
-    # ==================================================================
-    # Category: memory — 内存读取 (低级接口)
-    # ==================================================================
-
-    registry.register(
-        name="mem_read_bytes",
-        description="读取进程内存指定地址的原始字节 (hex)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "address": {"type": "string", "description": "内存地址 (十六进制, 如 '0x7FF12345')"},
-                "size": {"type": "integer", "description": "读取字节数", "default": 64},
-            },
-            "required": ["address"],
-        },
-        handler=lambda address, size=64: _mem_read_bytes(gui_ref, address, int(size)),
-        category="memory",
-        requires_confirm=True,
-    )
-
-    registry.register(
-        name="mem_read_string",
-        description="读取内存中的字符串 (UTF-16LE, Il2Cpp String)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "address": {"type": "string", "description": "字符串对象地址 (十六进制)"},
-            },
-            "required": ["address"],
-        },
-        handler=lambda address: _mem_read_string(gui_ref, address),
-        category="memory",
-    )
-
-    registry.register(
-        name="mem_scan_pattern",
-        description="在内存中搜索字节模式 (AOB scan)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "字节模式, 如 '48 8B 05 ?? ?? ?? ?? 48 85 C0'"},
-                "module": {"type": "string", "description": "模块名 (如 'GameAssembly.dll'), 空=全进程"},
-                "limit": {"type": "integer", "description": "最多返回结果数", "default": 10},
-            },
-            "required": ["pattern"],
-        },
-        handler=lambda pattern, module="", limit=10: _mem_scan_pattern(gui_ref, pattern, module, int(limit)),
-        category="memory",
-        requires_confirm=True,
-    )
-
-    registry.register(
-        name="mem_get_module_info",
-        description="获取进程模块信息 (基址/大小/路径)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "module_name": {"type": "string", "description": "模块名, 空=列出所有模块", "default": ""},
-            },
-        },
-        handler=lambda module_name="": _mem_get_module_info(gui_ref, module_name),
-        category="memory",
-    )
-
-    # ==================================================================
-    # Category: trigger — 触发器/计时器
-    # ==================================================================
-
-    registry.register(
-        name="get_triggers",
-        description="获取所有触发器/计时器配置和状态",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_triggers(gui_ref),
-        category="trigger",
-    )
-
-    registry.register(
-        name="fire_trigger",
-        description="手动触发一个触发器",
-        parameters={
-            "type": "object",
-            "properties": {
-                "trigger_id": {"type": "string", "description": "触发器ID"},
-            },
-            "required": ["trigger_id"],
-        },
-        handler=lambda trigger_id: _fire_trigger(gui_ref, trigger_id),
-        category="trigger",
+        handler=lambda command, cwd="": _run_terminal(command, cwd),
+        category="terminal",
         requires_confirm=True,
     )
 
     # ==================================================================
-    # Category: settings — 配置读写
+    # VSCode Core: Interaction
     # ==================================================================
 
     registry.register(
-        name="get_setting",
-        description="读取ACT设置项",
+        name="askQuestion",
+        description="Ask the user a question and wait for their response. Use for clarification.",
         parameters={
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "设置键名"},
+                "question": {"type": "string", "description": "Question to ask the user"},
             },
-            "required": ["key"],
+            "required": ["question"],
         },
-        handler=lambda key: _get_setting(gui_ref, key),
-        category="settings",
+        handler=lambda question: {"type": "question", "question": question, "note": "Displayed to user in chat"},
+        category="interaction",
     )
 
     registry.register(
-        name="set_setting",
-        description="写入ACT设置项",
+        name="taskComplete",
+        description="Signal that the current task is complete. Include a summary.",
         parameters={
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "设置键名"},
-                "value": {"description": "设置值"},
+                "summary": {"type": "string", "description": "Summary of what was accomplished"},
             },
-            "required": ["key", "value"],
+            "required": ["summary"],
         },
-        handler=lambda key, value: _set_setting(gui_ref, key, value),
-        category="settings",
+        handler=lambda summary: {"status": "complete", "summary": summary},
+        category="interaction",
+    )
+
+    registry.register(
+        name="getConfirmation",
+        description="Ask the user to confirm a potentially dangerous action before proceeding.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "Description of the action to confirm"},
+                "risk": {"type": "string", "description": "Risk level: low/medium/high", "default": "medium"},
+            },
+            "required": ["action"],
+        },
+        handler=lambda action, risk="medium": {"type": "confirmation", "action": action, "risk": risk},
+        category="interaction",
         requires_confirm=True,
     )
 
     # ==================================================================
-    # Category: plugin — 插件管理
+    # VSCode Core: Editor
     # ==================================================================
 
     registry.register(
-        name="list_plugins",
-        description="列出已安装的插件及其状态",
+        name="editor_getContent",
+        description="Get the current content of the active editor tab.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: _list_plugins(gui_ref),
-        category="plugin",
-    )
-
-    registry.register(
-        name="toggle_plugin",
-        description="启用/禁用指定插件",
-        parameters={
-            "type": "object",
-            "properties": {
-                "plugin_id": {"type": "string", "description": "插件ID"},
-                "enabled": {"type": "boolean", "description": "true=启用, false=禁用"},
-            },
-            "required": ["plugin_id", "enabled"],
-        },
-        handler=lambda plugin_id, enabled: _toggle_plugin(gui_ref, plugin_id, bool(enabled)),
-        category="plugin",
-        requires_confirm=True,
-    )
-
-    # ==================================================================
-    # Category: system — 系统/杂项
-    # ==================================================================
-
-    registry.register(
-        name="get_system_info",
-        description="获取ACT系统信息: 版本/运行时间/UI模式/数据源",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: _get_system_info(gui_ref),
-        category="system",
-    )
-
-    registry.register(
-        name="eval_python",
-        description="在ACT Python环境中执行表达式并返回结果",
-        parameters={
-            "type": "object",
-            "properties": {
-                "expression": {"type": "string", "description": "Python表达式"},
-            },
-            "required": ["expression"],
-        },
-        handler=lambda expression: _eval_python(gui_ref, expression),
-        category="system",
-        requires_confirm=True,
-    )
-
-    registry.register(
-        name="exec_python",
-        description="在ACT Python环境中执行代码块 (多行, 有副作用)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "Python代码块"},
-            },
-            "required": ["code"],
-        },
-        handler=lambda code: _exec_python(gui_ref, code),
-        category="system",
-        requires_confirm=True,
-    )
-
-    # ==================================================================
-    # Category: editor — 编辑器操作 (通过JS bridge控制前端编辑器)
-    # ==================================================================
-
-    registry.register(
-        name="editor_get_content",
-        description="获取编辑器当前内容",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: {"note": "Use window.pywebview.api.editor_get_content() from JS"},
+        handler=lambda: {"note": "Resolved via JS bridge — returns editor text + language"},
         category="editor",
     )
 
     registry.register(
-        name="editor_set_content",
-        description="设置编辑器内容 (替换全部)",
+        name="editor_setContent",
+        description="Set the content of the active editor tab.",
         parameters={
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "新内容"},
-                "language": {"type": "string", "description": "语言模式 (python/javascript/json等)", "default": ""},
-                "filename": {"type": "string", "description": "文件名 (用于语言检测)", "default": ""},
+                "content": {"type": "string", "description": "Content to set"},
+                "language": {"type": "string", "description": "Language mode", "default": ""},
             },
             "required": ["content"],
         },
-        handler=lambda content, language="", filename="": {"note": "Dispatched to editor via JS bridge", "content_length": len(content)},
+        handler=lambda content, language="": {"note": "Dispatched via JS bridge", "length": len(content)},
         category="editor",
     )
 
     registry.register(
-        name="editor_insert_text",
-        description="在编辑器光标位置插入文本",
-        parameters={
-            "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": "要插入的文本"},
-            },
-            "required": ["text"],
-        },
-        handler=lambda text: {"note": "Dispatched to editor via JS bridge", "text_length": len(text)},
-        category="editor",
-    )
-
-    registry.register(
-        name="editor_get_selection",
-        description="获取编辑器当前选中文本",
+        name="editor_getSelection",
+        description="Get the currently selected text in the editor.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: {"note": "Use window.pywebview.api.editor_get_selection() from JS"},
+        handler=lambda: {"note": "Resolved via JS bridge"},
         category="editor",
     )
 
+    # ==================================================================
+    # Engine aggregate — single entry point for all game queries
+    # ==================================================================
+
     registry.register(
-        name="editor_go_to_line",
-        description="跳转到编辑器指定行号",
+        name="engine",
+        description=(
+            "Query the SAO ACT game engine. Accepts an 'action' parameter to select what to query.\n"
+            "Available actions:\n"
+            "  game_state — player name, level, HP, scene\n"
+            "  entity_list — all visible entities (players/monsters/NPCs)\n"
+            "  dps_summary — current combat DPS table\n"
+            "  dps_report — last encounter full report\n"
+            "  boss_status — boss HP, break, shield\n"
+            "  combat_status — in_combat, duration\n"
+            "  buff_list — buffs on self or boss\n"
+            "  auto_key_status — auto-key engine state\n"
+            "  memory_status — memory data source health\n"
+            "  system_info — ACT version, uptime, data source\n"
+            "  plugins — installed plugin list\n"
+            "  settings_get — read a setting (pass 'key')\n"
+            "  settings_set — write a setting (pass 'key' and 'value')\n"
+            "  eval — evaluate a Python expression (pass 'expression')\n"
+            "  exec — execute Python code block (pass 'code')\n"
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "line": {"type": "integer", "description": "行号 (从1开始)"},
+                "action": {"type": "string", "description": "Which engine query to run"},
+                "key": {"type": "string", "description": "Parameter for settings_get/set", "default": ""},
+                "value": {"description": "Value for settings_set", "default": None},
+                "expression": {"type": "string", "description": "Python expression for eval", "default": ""},
+                "code": {"type": "string", "description": "Python code for exec", "default": ""},
+                "target": {"type": "string", "description": "Target for buff_list (self/boss)", "default": "self"},
             },
-            "required": ["line"],
+            "required": ["action"],
         },
-        handler=lambda line: {"note": "Dispatched to editor via JS bridge", "line": line},
-        category="editor",
-    )
-
-    registry.register(
-        name="editor_find_replace",
-        description="在编辑器中查找替换",
-        parameters={
-            "type": "object",
-            "properties": {
-                "find": {"type": "string", "description": "查找文本"},
-                "replace": {"type": "string", "description": "替换文本"},
-                "all": {"type": "boolean", "description": "是否全部替换", "default": False},
-            },
-            "required": ["find", "replace"],
-        },
-        handler=lambda find, replace, all=False: {"note": "Dispatched to editor via JS bridge"},
-        category="editor",
-    )
-
-    registry.register(
-        name="editor_get_language",
-        description="获取编辑器当前语言模式",
-        parameters={"type": "object", "properties": {}},
-        handler=lambda: {"note": "Use window.pywebview.api.editor_get_language() from JS"},
-        category="editor",
+        handler=lambda **kw: _engine_dispatch(gui_ref, **kw),
+        category="engine",
     )
 
 
 # ======================================================================
-# Handler implementations
+# File operation handlers
 # ======================================================================
 
-def _format_game_state(gui_ref: Any) -> Dict[str, Any]:
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    return {
-        "uid": gs.get("uid", 0),
-        "name": gs.get("name", ""),
-        "level": gs.get("level", 0),
-        "profession": gs.get("profession", ""),
-        "hp": gs.get("hp", 0),
-        "max_hp": gs.get("max_hp", 0),
-        "scene": gs.get("scene", ""),
-        "scene_id": gs.get("scene_id", 0),
-        "in_combat": gs.get("in_combat", False),
-        "server": gs.get("server", ""),
-    }
-
-
-def _get_self_entity(gui_ref: Any) -> Dict[str, Any]:
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    uid = gs.get("uid", 0)
-    rows = getattr(gui_ref, '_rows', None) or {}
-    self_row = None
-    if isinstance(rows, dict):
-        for r in rows.values():
-            if isinstance(r, dict) and r.get("uid") == uid:
-                self_row = r
-                break
-    if self_row:
-        return {k: v for k, v in self_row.items() if not k.startswith("_")}
-    return {"uid": uid, "name": gs.get("name", ""), "note": "entity data not available via DPS rows"}
-
-
-def _get_entity_list(gui_ref: Any, kind: str, limit: int) -> List[Dict[str, Any]]:
-    entities = []
-    rows = getattr(gui_ref, '_rows', None) or {}
-    if isinstance(rows, dict):
-        for r in rows.values():
-            if not isinstance(r, dict):
-                continue
-            rk = r.get("kind", "")
-            if kind != "all" and rk != kind:
-                continue
-            entities.append({
-                "uuid": r.get("uuid", 0),
-                "name": r.get("name", ""),
-                "kind": rk,
-                "hp": r.get("hp", 0),
-                "max_hp": r.get("max_hp", 0),
-                "level": r.get("level", 0),
-                "total_damage": r.get("total_damage", 0),
-                "dps": r.get("dps", 0),
-            })
-    return entities[:limit]
-
-
-def _get_entity_detail(gui_ref: Any, uuid: int, name: str) -> Dict[str, Any]:
-    rows = getattr(gui_ref, '_rows', None) or {}
-    if isinstance(rows, dict):
-        for r in rows.values():
-            if not isinstance(r, dict):
-                continue
-            if uuid and r.get("uuid") == uuid:
-                return {k: v for k, v in r.items() if not k.startswith("_")}
-            if name and name.lower() in str(r.get("name", "")).lower():
-                return {k: v for k, v in r.items() if not k.startswith("_")}
-    return {"error": "Entity not found"}
-
-
-def _get_dps_summary(gui_ref: Any) -> Dict[str, Any]:
-    tracker = getattr(gui_ref, '_dps_tracker', None)
-    if not tracker:
-        return {"error": "DPS tracker not available"}
+def _read_file(path: str, start: int = 0, end: int = 0) -> Dict[str, Any]:
     try:
-        summary = getattr(tracker, 'get_summary', lambda: None)()
-        if summary:
-            return summary if isinstance(summary, dict) else {"data": str(summary)}
-    except Exception:
-        pass
-    rows = getattr(gui_ref, '_rows', None) or {}
-    result = []
-    if isinstance(rows, dict):
-        for r in rows.values():
-            if isinstance(r, dict) and r.get("total_damage", 0) > 0:
-                result.append({
-                    "name": r.get("name", "?"),
-                    "total_damage": r.get("total_damage", 0),
-                    "dps": r.get("dps", 0),
-                    "pct": r.get("damage_pct", 0),
-                })
-    return {"players": sorted(result, key=lambda x: x["total_damage"], reverse=True)}
-
-
-def _get_combat_status(gui_ref: Any) -> Dict[str, Any]:
-    enc = getattr(gui_ref, '_encounter_manager', None)
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    result: Dict[str, Any] = {
-        "in_combat": gs.get("in_combat", False),
-    }
-    if enc:
-        result["duration"] = getattr(enc, 'combat_duration', 0)
-        result["encounter_count"] = getattr(enc, 'encounter_count', 0)
-    return result
-
-
-def _get_skill_breakdown(gui_ref: Any, player_name: str) -> Dict[str, Any]:
-    tracker = getattr(gui_ref, '_dps_tracker', None)
-    if not tracker:
-        return {"error": "DPS tracker not available"}
-    try:
-        breakdown = getattr(tracker, 'get_skill_breakdown', None)
-        if callable(breakdown):
-            return breakdown(player_name)
+        path = os.path.abspath(path)
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        if start > 0:
+            s = max(0, start - 1)
+            e = end if end > 0 else len(lines)
+            selected = lines[s:e]
+            return {"path": path, "lines": len(selected), "startLine": start,
+                    "content": "".join(selected)}
+        return {"path": path, "lines": len(lines), "content": "".join(lines[:5000]),
+                "truncated": len(lines) > 5000}
     except Exception as exc:
         return {"error": str(exc)}
-    return {"error": "Skill breakdown not implemented"}
 
 
-def _get_boss_status(gui_ref: Any) -> Dict[str, Any]:
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    result: Dict[str, Any] = {}
-    boss_hp = gs.get("boss_hp") or gs.get("boss_current_hp")
-    boss_max = gs.get("boss_max_hp")
-    if boss_hp is not None:
-        result["boss_hp"] = boss_hp
-        result["boss_max_hp"] = boss_max
-    result["boss_break"] = gs.get("boss_break", {})
-    result["boss_shield"] = gs.get("boss_shield", {})
-    result["boss_name"] = gs.get("boss_name", "")
-    return result if any(v for v in result.values()) else {"note": "No boss in combat"}
-
-
-def _get_raid_mechanics(gui_ref: Any, boss_id: int) -> Dict[str, Any]:
-    engine = getattr(gui_ref, '_boss_raid_engine', None)
-    if not engine:
-        return {"error": "Boss raid engine not available"}
+def _edit_file(path: str, content: str, start: int = 0, end: int = 0) -> Dict[str, Any]:
     try:
-        mechs = getattr(engine, 'get_mechanics', None)
-        if callable(mechs):
-            return mechs(boss_id) if boss_id else mechs()
+        path = os.path.abspath(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if start > 0:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            s = max(0, start - 1)
+            e = end if end > 0 else start
+            new_lines = content.split("\n")
+            lines[s:e] = [l + "\n" for l in new_lines]
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            return {"ok": True, "path": path, "linesModified": len(new_lines)}
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return {"ok": True, "path": path, "bytesWritten": len(content.encode("utf-8"))}
     except Exception as exc:
         return {"error": str(exc)}
-    return {"note": "No mechanics configured"}
 
 
-def _mem_read_bytes(gui_ref: Any, address: str, size: int) -> Dict[str, Any]:
-    size = min(size, 4096)
+def _list_files(path: str, pattern: str, recursive: bool, limit: int) -> Dict[str, Any]:
     try:
-        addr = int(address, 16) if isinstance(address, str) else int(address)
-    except ValueError:
-        return {"error": f"Invalid address: {address}"}
-    bridge = getattr(gui_ref, '_mem_bridge', None)
-    if not bridge:
-        pb = getattr(gui_ref, '_packet_bridge', None)
-        if pb:
-            bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge:
-        return {"error": "Memory bridge not available"}
-    reader = getattr(bridge, '_mem_reader', None) or getattr(bridge, 'mem_reader', None)
-    if not reader:
-        return {"error": "Memory reader not available"}
-    try:
-        read_fn = getattr(reader, 'read_bytes', None)
-        if callable(read_fn):
-            data = read_fn(addr, size)
-            if data:
-                return {
-                    "address": hex(addr),
-                    "size": len(data),
-                    "hex": data.hex(),
-                    "ascii": "".join(chr(b) if 32 <= b < 127 else "." for b in data),
-                }
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "Read failed"}
-
-
-def _mem_read_string(gui_ref: Any, address: str) -> Dict[str, Any]:
-    try:
-        addr = int(address, 16) if isinstance(address, str) else int(address)
-    except ValueError:
-        return {"error": f"Invalid address: {address}"}
-    bridge = getattr(gui_ref, '_mem_bridge', None)
-    if not bridge:
-        pb = getattr(gui_ref, '_packet_bridge', None)
-        if pb:
-            bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge:
-        return {"error": "Memory bridge not available"}
-    reader = getattr(bridge, '_mem_reader', None) or getattr(bridge, 'mem_reader', None)
-    if not reader:
-        return {"error": "Memory reader not available"}
-    try:
-        read_fn = getattr(reader, 'read_bytes', None)
-        if callable(read_fn):
-            header = read_fn(addr, 0x20)
-            if header and len(header) >= 0x14:
-                import struct
-                length = struct.unpack_from('<i', header, 0x10)[0]
-                if 0 < length < 1024:
-                    str_data = read_fn(addr + 0x14, length * 2)
-                    if str_data:
-                        return {"address": hex(addr), "value": str_data.decode('utf-16-le', errors='replace')}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "String read failed"}
-
-
-def _mem_scan_pattern(gui_ref: Any, pattern: str, module: str, limit: int) -> Dict[str, Any]:
-    return {"error": "AOB scan via AI editor not yet implemented — use mem_scope panel"}
-
-
-def _mem_get_module_info(gui_ref: Any, module_name: str) -> Any:
-    bridge = getattr(gui_ref, '_mem_bridge', None)
-    if not bridge:
-        pb = getattr(gui_ref, '_packet_bridge', None)
-        if pb:
-            bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge:
-        return {"error": "Memory bridge not available"}
-    reader = getattr(bridge, '_mem_reader', None) or getattr(bridge, 'mem_reader', None)
-    if not reader:
-        return {"error": "Memory reader not available"}
-    try:
-        modules_fn = getattr(reader, 'enum_modules', None) or getattr(reader, 'list_modules', None)
-        if callable(modules_fn):
-            mods = modules_fn()
-            if module_name:
-                mods = [m for m in mods if module_name.lower() in str(m.get('name', '')).lower()]
-            return {"modules": mods[:50]}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "Module enumeration not available"}
-
-
-def _get_triggers(gui_ref: Any) -> Dict[str, Any]:
-    engine = getattr(gui_ref, '_trigger_engine', None)
-    if not engine:
-        return {"error": "Trigger engine not available"}
-    try:
-        triggers = getattr(engine, 'get_all_triggers', None)
-        if callable(triggers):
-            return {"triggers": triggers()}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"note": "No triggers configured"}
-
-
-def _fire_trigger(gui_ref: Any, trigger_id: str) -> Dict[str, Any]:
-    engine = getattr(gui_ref, '_trigger_engine', None)
-    if not engine:
-        return {"error": "Trigger engine not available"}
-    try:
-        fire = getattr(engine, 'fire_trigger', None)
-        if callable(fire):
-            fire(trigger_id)
-            return {"ok": True, "trigger_id": trigger_id}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "Fire not available"}
-
-
-def _get_setting(gui_ref: Any, key: str) -> Any:
-    s = getattr(gui_ref, 'settings', None)
-    if not s:
-        return {"error": "Settings not available"}
-    return {"key": key, "value": s.get(key)}
-
-
-def _set_setting(gui_ref: Any, key: str, value: Any) -> Dict[str, Any]:
-    s = getattr(gui_ref, 'settings', None)
-    if not s:
-        return {"error": "Settings not available"}
-    s.set(key, value)
-    try:
-        s.save()
-    except Exception:
-        pass
-    return {"ok": True, "key": key}
-
-
-def _list_plugins(gui_ref: Any) -> Dict[str, Any]:
-    pm = getattr(gui_ref, '_plugin_manager', None)
-    if not pm:
-        return {"error": "Plugin manager not available"}
-    try:
-        plugins = getattr(pm, 'list_plugins', None)
-        if callable(plugins):
-            return {"plugins": plugins()}
-        manifests = getattr(pm, '_manifests', None) or {}
-        enabled = getattr(pm, '_enabled', None) or {}
+        path = os.path.abspath(path)
+        if pattern:
+            if recursive:
+                entries = glob.glob(os.path.join(path, "**", pattern), recursive=True)
+            else:
+                entries = glob.glob(os.path.join(path, pattern))
+        else:
+            if recursive:
+                entries = []
+                for root, dirs, files in os.walk(path):
+                    for f in files:
+                        entries.append(os.path.join(root, f))
+                        if len(entries) >= limit:
+                            break
+                    if len(entries) >= limit:
+                        break
+            else:
+                entries = [os.path.join(path, e) for e in os.listdir(path)]
         result = []
-        for pid, m in manifests.items():
+        for e in entries[:limit]:
+            is_dir = os.path.isdir(e)
             result.append({
-                "id": pid,
-                "name": m.get("name", pid),
-                "version": m.get("version", "?"),
-                "enabled": enabled.get(pid, False),
+                "name": os.path.relpath(e, path),
+                "type": "directory" if is_dir else "file",
+                "size": os.path.getsize(e) if not is_dir else 0,
             })
-        return {"plugins": result}
+        return {"path": path, "entries": result, "total": len(result),
+                "truncated": len(entries) > limit}
     except Exception as exc:
         return {"error": str(exc)}
 
 
-def _toggle_plugin(gui_ref: Any, plugin_id: str, enabled: bool) -> Dict[str, Any]:
-    pm = getattr(gui_ref, '_plugin_manager', None)
-    if not pm:
-        return {"error": "Plugin manager not available"}
+def _search_files(query: str, path: str, pattern: str, case_sensitive: bool,
+                  regex: bool, limit: int) -> Dict[str, Any]:
+    import re
     try:
-        toggle = getattr(pm, 'set_enabled', None) or getattr(pm, 'toggle_plugin', None)
-        if callable(toggle):
-            toggle(plugin_id, enabled)
-            return {"ok": True, "plugin_id": plugin_id, "enabled": enabled}
+        path = os.path.abspath(path)
+        flags = 0 if case_sensitive else re.IGNORECASE
+        if regex:
+            pat = re.compile(query, flags)
+        else:
+            pat = re.compile(re.escape(query), flags)
+        results = []
+        file_pattern = pattern or "*"
+        for fpath in glob.glob(os.path.join(path, "**", file_pattern), recursive=True):
+            if os.path.isdir(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    for i, line in enumerate(f, 1):
+                        if pat.search(line):
+                            results.append({
+                                "file": os.path.relpath(fpath, path),
+                                "line": i,
+                                "text": line.rstrip()[:200],
+                            })
+                            if len(results) >= limit:
+                                break
+            except (OSError, UnicodeDecodeError):
+                continue
+            if len(results) >= limit:
+                break
+        return {"query": query, "results": results, "total": len(results)}
     except Exception as exc:
         return {"error": str(exc)}
-    return {"error": "Toggle not available"}
 
 
-def _get_system_info(gui_ref: Any) -> Dict[str, Any]:
+# ======================================================================
+# Terminal handler
+# ======================================================================
+
+def _run_terminal(command: str, cwd: str = "") -> Dict[str, Any]:
+    try:
+        kwargs: Dict[str, Any] = {
+            "shell": True, "capture_output": True, "text": True, "timeout": 30,
+        }
+        if cwd:
+            kwargs["cwd"] = os.path.abspath(cwd)
+        result = subprocess.run(command, **kwargs)
+        return {
+            "exitCode": result.returncode,
+            "stdout": result.stdout[:8000] if result.stdout else "",
+            "stderr": result.stderr[:4000] if result.stderr else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out (30s)", "exitCode": -1}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ======================================================================
+# Engine aggregate dispatcher
+# ======================================================================
+
+def _engine_dispatch(gui_ref: Any, action: str = "", **kw) -> Any:
+    handlers = {
+        "game_state": lambda: _game_state(gui_ref),
+        "entity_list": lambda: _entity_list(gui_ref),
+        "dps_summary": lambda: _dps_summary(gui_ref),
+        "dps_report": lambda: _dps_report(gui_ref),
+        "boss_status": lambda: _boss_status(gui_ref),
+        "combat_status": lambda: _combat_status(gui_ref),
+        "buff_list": lambda: _buff_list(gui_ref, kw.get("target", "self")),
+        "auto_key_status": lambda: _auto_key_status(gui_ref),
+        "memory_status": lambda: _memory_status(gui_ref),
+        "system_info": lambda: _system_info(gui_ref),
+        "plugins": lambda: _plugins(gui_ref),
+        "settings_get": lambda: _settings_get(gui_ref, kw.get("key", "")),
+        "settings_set": lambda: _settings_set(gui_ref, kw.get("key", ""), kw.get("value")),
+        "eval": lambda: _eval(gui_ref, kw.get("expression", "")),
+        "exec": lambda: _exec(gui_ref, kw.get("code", "")),
+    }
+    fn = handlers.get(action)
+    if not fn:
+        return {"error": f"Unknown engine action: {action}", "available": list(handlers.keys())}
+    try:
+        return fn()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ── Engine sub-handlers ──
+
+def _game_state(g: Any) -> Dict:
+    gs = getattr(g, '_game_state', None) or {}
+    return {k: gs.get(k) for k in ("uid", "name", "level", "profession", "hp", "max_hp", "scene", "scene_id", "in_combat")}
+
+def _entity_list(g: Any) -> List:
+    rows = getattr(g, '_rows', None) or {}
+    return [
+        {k: r.get(k) for k in ("uuid", "name", "kind", "hp", "max_hp", "level", "total_damage", "dps")}
+        for r in (rows.values() if isinstance(rows, dict) else []) if isinstance(r, dict)
+    ][:50]
+
+def _dps_summary(g: Any) -> Dict:
+    rows = getattr(g, '_rows', None) or {}
+    players = sorted(
+        [{"name": r.get("name"), "damage": r.get("total_damage", 0), "dps": r.get("dps", 0), "pct": r.get("damage_pct", 0)}
+         for r in (rows.values() if isinstance(rows, dict) else []) if isinstance(r, dict) and r.get("total_damage", 0) > 0],
+        key=lambda x: x["damage"], reverse=True,
+    )
+    return {"players": players}
+
+def _dps_report(g: Any) -> Dict:
+    t = getattr(g, '_dps_tracker', None)
+    if t:
+        fn = getattr(t, 'get_last_report', None)
+        if callable(fn):
+            r = fn()
+            if r: return r if isinstance(r, dict) else {"data": str(r)}
+    return {"note": "No report available"}
+
+def _boss_status(g: Any) -> Dict:
+    gs = getattr(g, '_game_state', None) or {}
+    return {k: gs.get(k) for k in ("boss_hp", "boss_max_hp", "boss_break", "boss_shield", "boss_name") if gs.get(k) is not None}
+
+def _combat_status(g: Any) -> Dict:
+    gs = getattr(g, '_game_state', None) or {}
+    enc = getattr(g, '_encounter_manager', None)
+    r = {"in_combat": gs.get("in_combat", False)}
+    if enc:
+        r["duration"] = getattr(enc, 'combat_duration', 0)
+        r["encounter_count"] = getattr(enc, 'encounter_count', 0)
+    return r
+
+def _buff_list(g: Any, target: str) -> Dict:
+    gs = getattr(g, '_game_state', None) or {}
+    if target == "boss":
+        return {"target": "boss", "buffs": gs.get("boss_buffs", [])}
+    return {"target": target, "buffs": getattr(g, '_buffmon_data', {}).get("buff_list", [])}
+
+def _auto_key_status(g: Any) -> Dict:
+    ak = getattr(g, '_auto_key_engine', None)
+    if not ak: return {"available": False}
+    return {"available": True, "running": getattr(ak, 'is_running', False), "enabled": getattr(ak, 'enabled', False)}
+
+def _memory_status(g: Any) -> Dict:
+    bridge = getattr(g, '_mem_bridge', None)
+    if not bridge:
+        pb = getattr(g, '_packet_bridge', None)
+        if pb: bridge = getattr(pb, '_unified_data_source', None)
+    if not bridge: return {"connected": False}
+    fn = getattr(bridge, 'status', None)
+    if callable(fn):
+        try: return fn()
+        except: pass
+    return {"connected": True, "type": type(bridge).__name__}
+
+def _system_info(g: Any) -> Dict:
     try:
         from config import APP_VERSION
     except ImportError:
         APP_VERSION = "?"
-    s = getattr(gui_ref, 'settings', None)
+    s = getattr(g, 'settings', None)
     return {
         "version": APP_VERSION,
         "ui_mode": s.get("ui_mode", "?") if s else "?",
         "data_source": s.get("data_source", "?") if s else "?",
-        "mem_data_source": s.get("mem_data_source", "?") if s else "?",
-        "uptime_s": round(time.monotonic() - getattr(gui_ref, '_start_time', time.monotonic()), 1),
+        "uptime_s": round(time.monotonic() - getattr(g, '_start_time', time.monotonic()), 1),
     }
 
+def _plugins(g: Any) -> Dict:
+    pm = getattr(g, '_plugin_manager', None)
+    if not pm: return {"plugins": []}
+    manifests = getattr(pm, '_manifests', None) or {}
+    enabled = getattr(pm, '_enabled', None) or {}
+    return {"plugins": [{"id": pid, "name": m.get("name", pid), "enabled": enabled.get(pid, False)} for pid, m in manifests.items()]}
 
-def _eval_python(gui_ref: Any, expression: str) -> Dict[str, Any]:
-    ns = {"gui": gui_ref, "json": json, "time": time}
+def _settings_get(g: Any, key: str) -> Any:
+    s = getattr(g, 'settings', None)
+    return {"key": key, "value": s.get(key) if s else None}
+
+def _settings_set(g: Any, key: str, value: Any) -> Dict:
+    s = getattr(g, 'settings', None)
+    if not s: return {"error": "Settings not available"}
+    s.set(key, value)
+    try: s.save()
+    except: pass
+    return {"ok": True, "key": key}
+
+def _eval(g: Any, expression: str) -> Dict:
     try:
-        result = eval(expression, {"__builtins__": __builtins__}, ns)
-        return {"result": result}
+        return {"result": eval(expression, {"__builtins__": __builtins__}, {"gui": g, "json": json, "time": time})}
     except Exception as exc:
         return {"error": str(exc)}
 
-
-def _exec_python(gui_ref: Any, code: str) -> Dict[str, Any]:
-    ns = {"gui": gui_ref, "json": json, "time": time, "_output": []}
-    wrapped = code + "\n"
+def _exec(g: Any, code: str) -> Dict:
+    ns = {"gui": g, "json": json, "time": time, "_output": []}
     try:
-        exec(wrapped, {"__builtins__": __builtins__}, ns)
+        exec(code + "\n", {"__builtins__": __builtins__}, ns)
         return {"ok": True, "output": ns.get("_output", [])}
     except Exception as exc:
         return {"error": str(exc)}
-
-
-# -- Buff/Cooldown --
-
-def _get_buff_list(gui_ref: Any, target: str) -> Dict[str, Any]:
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    if target == "boss":
-        boss_buffs = gs.get("boss_buffs") or gs.get("boss_buff_list", [])
-        return {"target": "boss", "buffs": boss_buffs if isinstance(boss_buffs, list) else []}
-    rows = getattr(gui_ref, '_rows', None) or {}
-    uid = gs.get("uid", 0) if target == "self" else int(target) if target.isdigit() else 0
-    for r in (rows.values() if isinstance(rows, dict) else []):
-        if isinstance(r, dict) and r.get("uuid") == uid:
-            return {"target": uid, "buffs": r.get("buffs", []), "debuffs": r.get("debuffs", [])}
-    buffmon = getattr(gui_ref, '_buffmon_data', None) or {}
-    if isinstance(buffmon, dict) and buffmon.get("buff_list"):
-        return {"target": target, "buffs": buffmon["buff_list"]}
-    return {"target": target, "buffs": [], "note": "Buff data not available via current data source"}
-
-
-def _get_skill_cooldowns(gui_ref: Any) -> Dict[str, Any]:
-    ak = getattr(gui_ref, '_auto_key_engine', None)
-    if ak:
-        cds = getattr(ak, 'get_cooldowns', None)
-        if callable(cds):
-            return {"cooldowns": cds()}
-    gs = getattr(gui_ref, '_game_state', None) or {}
-    watched = gs.get("watched_skills") or gs.get("burst_slots", [])
-    return {"watched_skills": watched, "note": "Detailed cooldown tracking requires auto_key_engine"}
-
-
-# -- Combat events/history --
-
-def _get_damage_events(gui_ref: Any, limit: int) -> Dict[str, Any]:
-    tracker = getattr(gui_ref, '_dps_tracker', None)
-    if tracker:
-        events_fn = getattr(tracker, 'get_recent_events', None) or getattr(tracker, 'get_damage_log', None)
-        if callable(events_fn):
-            try:
-                return {"events": events_fn(limit)}
-            except Exception:
-                pass
-    enc = getattr(gui_ref, '_encounter_manager', None)
-    if enc:
-        log_fn = getattr(enc, 'get_event_log', None)
-        if callable(log_fn):
-            try:
-                return {"events": log_fn(limit)}
-            except Exception:
-                pass
-    return {"events": [], "note": "Damage event log not available from current data source"}
-
-
-def _get_encounter_history(gui_ref: Any, limit: int) -> Dict[str, Any]:
-    enc = getattr(gui_ref, '_encounter_manager', None)
-    if enc:
-        hist_fn = getattr(enc, 'get_history', None) or getattr(enc, 'encounter_history', None)
-        if callable(hist_fn):
-            try:
-                return {"encounters": hist_fn(limit)}
-            except Exception:
-                pass
-        count = getattr(enc, 'encounter_count', 0)
-        return {"encounter_count": count, "note": "Detailed history API not exposed by encounter_manager"}
-    return {"encounters": [], "note": "Encounter manager not available"}
-
-
-# -- Auto-key --
-
-def _get_auto_key_status(gui_ref: Any) -> Dict[str, Any]:
-    ak = getattr(gui_ref, '_auto_key_engine', None)
-    if not ak:
-        return {"available": False, "note": "Auto-key engine not initialized"}
-    return {
-        "available": True,
-        "running": getattr(ak, 'is_running', False),
-        "enabled": getattr(ak, 'enabled', False),
-        "mode": getattr(ak, 'mode', ''),
-    }
-
-
-def _toggle_auto_key(gui_ref: Any, enabled: bool) -> Dict[str, Any]:
-    ak = getattr(gui_ref, '_auto_key_engine', None)
-    if not ak:
-        return {"error": "Auto-key engine not available"}
-    try:
-        if enabled:
-            start = getattr(ak, 'start', None) or getattr(ak, 'enable', None)
-            if callable(start):
-                start()
-                return {"ok": True, "enabled": True}
-        else:
-            stop = getattr(ak, 'stop', None) or getattr(ak, 'disable', None)
-            if callable(stop):
-                stop()
-                return {"ok": True, "enabled": False}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "Toggle not available"}
-
-
-def _get_auto_key_config(gui_ref: Any) -> Dict[str, Any]:
-    ak = getattr(gui_ref, '_auto_key_engine', None)
-    if not ak:
-        return {"error": "Auto-key engine not available"}
-    try:
-        cfg_fn = getattr(ak, 'get_config', None)
-        if callable(cfg_fn):
-            return {"config": cfg_fn()}
-    except Exception:
-        pass
-    return {
-        "mode": getattr(ak, 'mode', ''),
-        "interval": getattr(ak, 'interval', 0),
-        "keys": getattr(ak, 'keys', []),
-    }
-
-
-# -- DPS reports --
-
-def _get_dps_report(gui_ref: Any) -> Dict[str, Any]:
-    tracker = getattr(gui_ref, '_dps_tracker', None)
-    if tracker:
-        fn = getattr(tracker, 'get_last_report', None)
-        if callable(fn):
-            try:
-                report = fn()
-                if report:
-                    return report if isinstance(report, dict) else {"data": str(report)}
-            except Exception as exc:
-                return {"error": str(exc)}
-    return {"note": "No DPS report available"}
-
-
-def _get_encounter_reports(gui_ref: Any, limit: int) -> Dict[str, Any]:
-    enc = getattr(gui_ref, '_encounter_manager', None)
-    if enc:
-        fn = getattr(enc, 'recent_reports', None)
-        if callable(fn):
-            try:
-                return {"reports": fn(limit)}
-            except Exception as exc:
-                return {"error": str(exc)}
-    return {"reports": [], "note": "Encounter manager reports not available"}
-
-
-# -- Event bus --
-
-def _publish_event(gui_ref: Any, topic: str, payload: Any) -> Dict[str, Any]:
-    bus = getattr(gui_ref, '_event_bus', None)
-    if not bus:
-        pm = getattr(gui_ref, '_plugin_manager', None)
-        if pm:
-            bus = getattr(pm, '_event_bus', None)
-    if not bus:
-        return {"error": "Event bus not available"}
-    try:
-        pub = getattr(bus, 'publish', None)
-        if callable(pub):
-            pub(topic, payload)
-            return {"ok": True, "topic": topic}
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {"error": "Publish not available"}
-
-
-def _get_event_stats(gui_ref: Any) -> Dict[str, Any]:
-    bus = getattr(gui_ref, '_event_bus', None)
-    if not bus:
-        pm = getattr(gui_ref, '_plugin_manager', None)
-        if pm:
-            bus = getattr(pm, '_event_bus', None)
-    if not bus:
-        return {"error": "Event bus not available"}
-    return {
-        "published": getattr(bus, 'published', 0),
-        "retained": getattr(bus, 'retained', 0),
-        "subscriber_count": getattr(bus, 'subscriber_count', 0),
-    }
-
-
-# -- Memory source status --
-
-def _get_memory_status(gui_ref: Any) -> Dict[str, Any]:
-    bridge = getattr(gui_ref, '_mem_bridge', None)
-    if not bridge:
-        pb = getattr(gui_ref, '_packet_bridge', None)
-        if pb:
-            bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge:
-        return {"connected": False, "note": "Memory bridge not available"}
-    status_fn = getattr(bridge, 'status', None)
-    if callable(status_fn):
-        try:
-            return status_fn()
-        except Exception as exc:
-            return {"error": str(exc)}
-    return {
-        "connected": True,
-        "type": type(bridge).__name__,
-    }
-
-
-def _get_memory_entities(gui_ref: Any, include_monsters: bool, include_npcs: bool) -> Dict[str, Any]:
-    bridge = getattr(gui_ref, '_mem_bridge', None)
-    if not bridge:
-        pb = getattr(gui_ref, '_packet_bridge', None)
-        if pb:
-            bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge:
-        return {"error": "Memory bridge not available"}
-    ent_fn = getattr(bridge, 'entities', None)
-    if callable(ent_fn):
-        try:
-            return {"entities": ent_fn(include_monsters=include_monsters, include_npcs=include_npcs)}
-        except Exception as exc:
-            return {"error": str(exc)}
-    return {"error": "Memory entity reader not available"}

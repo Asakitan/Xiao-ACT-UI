@@ -95,26 +95,26 @@ def test_tool_registry() -> None:
     register_engine_tools(reg, _FakeGui())
 
     tools = reg.list_tools()
-    _check(f"tools registered: {len(tools)}", len(tools) >= 20)
+    _check(f"tools registered: {len(tools)}", len(tools) >= 10)
 
     cats = reg.categories()
-    _check(f"categories: {cats}", len(cats) >= 7)
+    _check(f"categories: {cats}", len(cats) >= 4)
 
     schemas = reg.to_openai_tools()
     _check(f"OpenAI schemas: {len(schemas)}", len(schemas) == len(tools))
 
-    # Execute a tool
-    result = reg.execute("get_game_state", "{}")
+    # Execute engine aggregate tool
+    result = reg.execute("engine", json.dumps({"action": "game_state"}))
     data = json.loads(result)
     _check(f"get_game_state exec: uid={data.get('uid')}", data.get("uid") == 12345)
 
-    result = reg.execute("get_system_info", "{}")
+    result = reg.execute("engine", json.dumps({"action": "system_info"}))
     data = json.loads(result)
-    _check(f"get_system_info exec", "version" in data)
+    _check(f"engine(system_info) exec", "version" in data)
 
-    result = reg.execute("eval_python", '{"expression": "2 + 2"}')
+    result = reg.execute("engine", json.dumps({"action": "eval", "expression": "2 + 2"}))
     data = json.loads(result)
-    _check(f"eval_python: 2+2={data.get('result')}", data.get("result") == 4)
+    _check(f"engine(eval): 2+2={data.get('result')}", data.get("result") == 4)
 
     result = reg.execute("nonexistent_tool", "{}")
     data = json.loads(result)
@@ -199,7 +199,7 @@ def test_bridge() -> None:
     _check("load_config", "provider" in result)
 
     result = bridge.handle_command("ai_editor_list_tools", {})
-    _check(f"list_tools: {len(result.get('tools', []))}", len(result.get("tools", [])) >= 20)
+    _check(f"list_tools: {len(result.get('tools', []))}", len(result.get("tools", [])) >= 10)
 
     result = bridge.handle_command("ai_editor_list_history", {})
     _check("list_history", "entries" in result)

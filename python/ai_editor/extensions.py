@@ -255,3 +255,87 @@ def list_installed() -> List[Dict[str, Any]]:
 
 def is_installed(ext_id: str) -> bool:
     return os.path.isfile(os.path.join(_extensions_dir(), f"{ext_id}.json"))
+
+
+# ---------------------------------------------------------------------------
+# Extension tool loading — parse package.json contributes
+# ---------------------------------------------------------------------------
+
+def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
+    """Extract tool definitions from an installed extension's package.json.
+
+    Reads ``contributes.chatParticipants``, ``contributes.menus``,
+    ``contributes.commands``, and ``contributes.languageModelTools``
+    to discover tools the extension provides.
+    """
+    state_path = os.path.join(_extensions_dir(), f"{ext_id}.json")
+    if not os.path.isfile(state_path):
+        return []
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        manifest = state.get("manifest", {})
+        if not manifest:
+            return []
+        contributes = manifest.get("contributes", {})
+        tools: List[Dict[str, Any]] = []
+
+        # languageModelTools (VSCode proposed API)
+        for t in contributes.get("languageModelTools", []):
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": f"ext_{ext_id.replace('.','_')}_{t.get('name','')}",
+                    "description": f"[{ext_id}] {t.get('modelDescription', t.get('displayName', ''))}",
+                    "parameters": t.get("inputSchema", {"type": "object", "properties": {}}),
+                },
+                "source": "extension",
+                "extension_id": ext_id,
+                "original_name": t.get("name", ""),
+            })
+
+        # chatParticipants → register as tools
+        for p in contributes.get("chatParticipants", []):
+            pid = p.get("id", "")
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": f"ext_{ext_id.replace('.','_')}_chat_{pid.replace('.','_')}",
+                    "description": f"[{ext_id}] Chat participant: {p.get('fullName', p.get('name', pid))}",
+                    "parameters": {"type": "object", "properties": {
+                        "message": {"type": "string", "description": "Message to send"},
+                    }, "required": ["message"]},
+                },
+                "source": "extension",
+                "extension_id": ext_id,
+                "participant_id": pid,
+            })
+
+        # commands → register as callable tools
+        for cmd in contributes.get("commands", []):
+            cmd_id = cmd.get("command", "")
+            if not cmd_id:
+                continue
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": f"ext_{ext_id.replace('.','_')}_cmd_{cmd_id.replace('.','_')}",
+                    "description": f"[{ext_id}] Command: {cmd.get('title', cmd_id)}",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                "source": "extension",
+                "extension_id": ext_id,
+                "command_id": cmd_id,
+            })
+
+        return tools
+    except Exception:
+        return []
+
+
+def load_all_extension_tools() -> List[Dict[str, Any]]:
+    """Load tools from all installed extensions."""
+    all_tools = []
+    for entry in list_installed():
+        all_tools.extend(load_extension_tools(entry["id"]))
+    return all_tools
