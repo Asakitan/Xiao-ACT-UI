@@ -2,6 +2,10 @@
 # Extracted from platform config.py during 5.0.0 restructure.
 from typing import Any, Dict, List, Tuple
 
+GAME_PROCESS_NAMES: list = ["star.exe"]
+GAME_WINDOW_KEYWORDS: list = ["Star", "星痕共鸣"]
+GAME_MAIN_MODULE: str = "GameAssembly.dll"
+
 # GPU 渲染开关: GLFW/ModernGL 后端可用时默认全开 (LinkStart 开场动画依赖默认创建 GPU 窗口),
 # 不要用环境变量门控; 后端不可用或窗口创建失败时自动回退到 ULW/CPU 路径。
 USE_GPU_MENU_HUD = True

@@ -534,8 +534,8 @@ def _get_config_dir():
 
 CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")
 
-GAME_WINDOW_KEYWORDS: list = ["Star", "星痕共鸣"]
-GAME_PROCESS_NAMES: list = ["star.exe"]
+GAME_WINDOW_KEYWORDS: list = []
+GAME_PROCESS_NAMES: list = []
 
 
 class SettingsManager:

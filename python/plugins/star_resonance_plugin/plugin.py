@@ -411,10 +411,59 @@ def _build_panel_items():
     ]
 
 
+def _inject_game_constants():
+    """Inject game-specific constants into platform modules at load time."""
+    from plugins.star_resonance_plugin.sr_config import (
+        GAME_PROCESS_NAMES, GAME_WINDOW_KEYWORDS, GAME_MAIN_MODULE,
+    )
+    import config
+    config.GAME_PROCESS_NAMES = GAME_PROCESS_NAMES
+    config.GAME_WINDOW_KEYWORDS = GAME_WINDOW_KEYWORDS
+    try:
+        from mem_probe.process import set_game_process_names
+        set_game_process_names(GAME_PROCESS_NAMES)
+    except Exception:
+        pass
+    try:
+        from mem_probe.mem_access import set_game_main_module, set_ecr_factory
+        set_game_main_module(GAME_MAIN_MODULE)
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import EntityCombatReader
+        set_ecr_factory(EntityCombatReader)
+    except Exception:
+        pass
+    try:
+        from mem_probe.unified_source import set_bridge_classes, set_root_pointer_cache_fn
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+        set_bridge_classes(MemStateBridge, MemSelfStateProvider)
+
+        def _rpc_health(bridge):
+            src = getattr(getattr(bridge, "_entity_provider", None), "_src", None) \
+                or getattr(getattr(bridge, "_provider", None), "_src", None)
+            if src is None:
+                return {"game_key": "", "entries": 0, "names": []}
+            game_key = str(getattr(src, "game_key", "") or "")
+            if not game_key:
+                sr = getattr(src, "sr", None)
+                meta = getattr(sr, "bundle_meta", None) if sr is not None else None
+                if isinstance(meta, dict):
+                    game_key = str(meta.get("ga_sha256_first_1mb") or "")
+            if not game_key:
+                return {"game_key": "", "entries": 0, "names": []}
+            from plugins.star_resonance_plugin.mem.il2cpp import root_pointer_cache as _rpc
+            return _rpc.coverage(game_key)
+
+        set_root_pointer_cache_fn(_rpc_health)
+    except Exception:
+        pass
+
+
 def on_load(ctx):
     """Plugin entry point — register menu categories and initialize game engines."""
     global _ctx
     _ctx = ctx
+
+    _inject_game_constants()
 
     # Bootstrap runtime deps from plugin's own libs/vendor/requirements.txt
     ctx.ensure_requirements(install=True)

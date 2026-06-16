@@ -5,7 +5,7 @@
 输出:
     anchors.json 新增字段 pointer_chain:
         {
-            "module": "GameAssembly.dll",
+            "module": "<main_module>",
             "module_base_when_found": "0x7ff6...",
             "static_offset": "0x...",   # 静态段内的偏移
             "deref_offsets": ["0x10", "0x40", "0x20"],
@@ -45,12 +45,20 @@ if _SAO_AUTO_ROOT not in sys.path:
     sys.path.insert(0, _SAO_AUTO_ROOT)
 
 from .process import (
-    StarProcess, StarProcessError, ModuleInfo,
+    GameProcess, GameProcessError, ModuleInfo,
     is_admin,
 )
 from mem_probe import cy_memscan as _cy
 
 DEFAULT_ANCHORS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anchors.json")
+
+
+def _get_preferred_modules() -> tuple:
+    try:
+        from config import POINTER_CHAIN_PREFERRED_MODULES
+        return tuple(m.lower() for m in POINTER_CHAIN_PREFERRED_MODULES)
+    except Exception:
+        return ()
 
 # 回溯参数
 _OBJECT_BACK_DELTAS = (
@@ -94,7 +102,7 @@ def _addr_in_module(addr: int, idx: List[Tuple[int, int, str]]) -> Optional[Tupl
 
 
 def _scan_pointers_to(
-    pm: StarProcess, targets: Set[int], *, max_hits_per_level: int = _MAX_PTR_PER_LEVEL,
+    pm: GameProcess, targets: Set[int], *, max_hits_per_level: int = _MAX_PTR_PER_LEVEL,
     include_image: bool = True,
 ) -> Dict[int, int]:
     """全堆 + 模块静态段扫: 8 字节对齐 i64, 值落在 targets 中则记录.
@@ -171,7 +179,7 @@ class PointerLevel:
 
 
 def backtrace(
-    pm: StarProcess,
+    pm: GameProcess,
     anchor_addr: int,
     *,
     max_depth: int = 3,
@@ -209,8 +217,7 @@ def backtrace(
                     print(f"      ... +{len(ptrs)-shown} more")
                     break
         if lvl.static_hits:
-            # 优先选 GameAssembly / unityplayer / Star.exe 这类
-            preferred_priority = ("gameassembly.dll", "unityplayer.dll", "starbase.dll", "star.exe")
+            preferred_priority = _get_preferred_modules()
             def rank(item):
                 _p_addr, mod, _off, _pt = item
                 low = mod.lower()
@@ -242,7 +249,7 @@ def backtrace(
 
 
 def _build_chain(
-    pm: StarProcess,
+    pm: GameProcess,
     final_anchor: int,
     levels: List[PointerLevel],
     static_hit: Tuple[int, str, int, int],
@@ -292,7 +299,7 @@ def _build_chain(
 
 
 # ───────────────────────── 解析 / 验证 ─────────────────────────
-def resolve_chain(pm: StarProcess, chain: Dict) -> Optional[int]:
+def resolve_chain(pm: GameProcess, chain: Dict) -> Optional[int]:
     """用当前进程的模块基址走一遍 chain, 返回最终地址 (即 self_hp 的当前地址)."""
     mod_name = chain["module"]
     mods = pm.list_modules()
@@ -334,8 +341,8 @@ def cmd_backtrace(args) -> int:
         return 1
     anchor_addr = int(hp_addr_s, 16)
     try:
-        pm = StarProcess()
-    except StarProcessError as e:
+        pm = GameProcess()
+    except GameProcessError as e:
         print(f"[fail] {e}", file=sys.stderr)
         return 2
     try:
@@ -366,8 +373,8 @@ def cmd_resolve(args) -> int:
         print("[fail] anchors 中无 pointer_chain; 先跑 backtrace", file=sys.stderr)
         return 1
     try:
-        pm = StarProcess()
-    except StarProcessError as e:
+        pm = GameProcess()
+    except GameProcessError as e:
         print(f"[fail] {e}", file=sys.stderr)
         return 2
     try:
@@ -393,8 +400,8 @@ def cmd_verify(args) -> int:
         return 1
     cur_anchor = int(cur_anchor_s, 16)
     try:
-        pm = StarProcess()
-    except StarProcessError as e:
+        pm = GameProcess()
+    except GameProcessError as e:
         print(f"[fail] {e}", file=sys.stderr)
         return 2
     try:

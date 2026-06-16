@@ -8,7 +8,7 @@ second process handle and never blocks the UI thread for the heavy first scans.
 
 Invariants:
   - READ ONLY. The process handle is ``PROCESS_VM_READ`` only (see
-    ``mem_probe.process.StarProcess``); no write path is imported or reachable.
+    ``mem_probe.process.GameProcess``); no write path is imported or reachable.
   - Every public method returns a JSON-safe dict and never raises. When memory is
     inactive it returns ``{"ok": False, "reason": <code>, "hint": <human text>}``.
   - 64-bit addresses are emitted as hex strings and uuids/large words as strings
@@ -18,7 +18,7 @@ Live engine reachability (resolved fresh on every call, mode can flip at runtime
   owner._packet_engine._mem_source._bridge   (hybrid / auto / memory-with-TCP)
   owner._mem_bridge                          (memory-only without TCP)
 from the bridge:
-  ._entity_provider._pm / ._damage_reader.pm  -> shared StarProcess (already open)
+  ._entity_provider._pm / ._damage_reader.pm  -> shared GameProcess (already open)
   ._entity_provider._ecr                       -> EntityCombatReader
   ._provider._src.sr.pm                        -> force-open path (worker thread only)
 """
@@ -32,7 +32,7 @@ from typing import Any, Optional, Sequence
 # Heap pointer plausibility (matches the readers / cy_memscan bounds).
 _PTR_LO = 0x10000
 _PTR_HI = 0x7FFFFFFFFFFF
-_CLASS_NAME_OFF = 0x10          # Il2CppClass.name pointer offset
+_CLASS_NAME_OFF = 0x10          # class struct → name pointer offset (set by plugin)
 _JS_SAFE = (1 << 53) - 1
 
 _VALID_DTYPES = ("i32", "u32", "i64", "u64", "f32", "f64", "utf16")
@@ -103,7 +103,7 @@ def _bridge_kind(owner: Any, bridge: Any) -> str:
 
 
 def resolve_pm(bridge: Any) -> Optional[Any]:
-    """Non-blocking StarProcess: reuse a handle the background loop already opened."""
+    """Non-blocking GameProcess: reuse a handle the background loop already opened."""
     if bridge is None:
         return None
     ep = getattr(bridge, "_entity_provider", None)
@@ -121,7 +121,7 @@ def resolve_pm(bridge: Any) -> Optional[Any]:
 
 
 def resolve_pm_blocking(bridge: Any) -> Optional[Any]:
-    """StarProcess, forcing the resolver open if needed. Worker-thread only."""
+    """GameProcess, forcing the resolver open if needed. Worker-thread only."""
     pm = resolve_pm(bridge)
     if pm is not None:
         return pm
@@ -138,21 +138,43 @@ def resolve_pm_blocking(bridge: Any) -> Optional[Any]:
 
 # ───────────────────────── address hint decoder ─────────────────────────
 
+_GAME_MAIN_MODULE: str = ""
+_ECR_FACTORY = None
+
+
+def set_game_main_module(name: str) -> None:
+    """Plugin injection: set the game's main module name at runtime."""
+    global _GAME_MAIN_MODULE
+    _GAME_MAIN_MODULE = str(name or "")
+
+
+def set_ecr_factory(factory) -> None:
+    """Plugin injection: set EntityCombatReader constructor for attr_map()."""
+    global _ECR_FACTORY
+    _ECR_FACTORY = factory
+
+
+def _main_module_name() -> str:
+    return _GAME_MAIN_MODULE.lower()
+
+
 def _ga_base(pm: Any, modules) -> int:
+    target = _main_module_name()
+    if not target:
+        return 0
     for m in modules or ():
-        if str(getattr(m, "name", "")).lower() == "gameassembly.dll":
+        if str(getattr(m, "name", "")).lower() == target:
             return int(getattr(m, "base", 0) or 0)
     return 0
 
 
-# GameAssembly (base, size) is constant for a process lifetime; status/read polls
-# were re-enumerating modules and re-scanning for it on every call. Memoize per
+# Main game module (base, size) is constant for a process lifetime; memoize per
 # process handle so a cache hit skips the list_modules() walk entirely.
 _GA_BS_CACHE: dict = {}
 
 
 def _ga_base_size(pm: Any, modules=None):
-    """Return cached (ga_base, ga_size) for GameAssembly.dll.
+    """Return cached (base, size) for the game's main module.
 
     On a cache miss enumerates modules (using ``modules`` if already fetched by the
     caller, else ``pm.list_modules()``) and derives base+size once. Only a
@@ -277,7 +299,7 @@ class MemSearchManager:
     """Background value-scan / narrow jobs over the live process. Never blocks UI.
 
     One per owner (stashed as ``owner._mem_search_mgr``) so the per-call facade and
-    a cached ``ctx.mem`` share one job registry. The shared StarProcess handle is
+    a cached ``ctx.mem`` share one job registry. The shared GameProcess handle is
     read-only and ReadProcessMemory is thread-safe per call, so the worker reads
     concurrently with the entity loop without a lock (it never calls the heavy
     snapshot path that ``_sr_lock`` guards)."""
@@ -787,9 +809,10 @@ class MemAccess:
             pm = resolve_pm(b)
             if pm is None:
                 return _err("not_armed", "属性读取器尚未挂载")
+            if _ECR_FACTORY is None:
+                return _err("not_armed", "属性读取器未注册（需要游戏插件）")
             try:
-                from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader  # plugin-provided via il2cpp namespace
-                ecr = EntityCombatReader(pm)
+                ecr = _ECR_FACTORY(pm)
             except Exception as exc:
                 return _err("process_gone", f"无法创建属性读取器: {exc}")
         try:

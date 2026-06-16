@@ -24,22 +24,16 @@ from typing import Any, Callable, Optional
 from mem_probe import cy_memscan as _cy_memscan
 
 # Game-specific bridges are injected by plugins at runtime via
-# set_bridge_factory(). Default: try il2cpp (Star Resonance plugin
-# registers this path); graceful fallback if unavailable.
+# set_bridge_classes(). Platform never imports game modules directly.
 _MemStateBridge = None
 _MemSelfStateProvider = None
+_root_pointer_cache_fn = None
 
-def _ensure_bridges():
-    global _MemStateBridge, _MemSelfStateProvider
-    if _MemStateBridge is not None:
-        return
-    try:
-        from mem_probe.il2cpp.mem_state_bridge import MemStateBridge as _MSB
-        from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider as _MSSP
-        _MemStateBridge = _MSB
-        _MemSelfStateProvider = _MSSP
-    except ImportError:
-        pass
+
+def set_root_pointer_cache_fn(fn) -> None:
+    """Plugin injection: set the root pointer cache health callback."""
+    global _root_pointer_cache_fn
+    _root_pointer_cache_fn = fn
 
 def set_bridge_classes(state_bridge_cls, self_state_provider_cls):
     """Plugin injection point: register game-specific bridge classes."""
@@ -102,7 +96,6 @@ class UnifiedDataSource:
         self._start_lock = threading.RLock()
         self._policy = self._build_policy()
 
-        _ensure_bridges()
         if _MemStateBridge is None:
             raise RuntimeError("No memory state bridge available — game plugin not loaded")
         self._bridge = _MemStateBridge(
@@ -431,21 +424,10 @@ class UnifiedDataSource:
         return {}
 
     def _root_pointer_cache_health(self) -> dict:
+        if _root_pointer_cache_fn is None:
+            return {"game_key": "", "entries": 0, "names": []}
         try:
-            src = getattr(getattr(self._bridge, "_entity_provider", None), "_src", None) \
-                or getattr(getattr(self._bridge, "_provider", None), "_src", None)
-            if src is None:
-                return {"game_key": "", "entries": 0, "names": []}
-            game_key = str(getattr(src, "game_key", "") or "")
-            if not game_key:
-                sr = getattr(src, "sr", None)
-                meta = getattr(sr, "bundle_meta", None) if sr is not None else None
-                if isinstance(meta, dict):
-                    game_key = str(meta.get("ga_sha256_first_1mb") or "")
-            if not game_key:
-                return {"game_key": "", "entries": 0, "names": []}
-            from mem_probe.il2cpp import root_pointer_cache as _rpc
-            return _rpc.coverage(game_key)
+            return _root_pointer_cache_fn(self._bridge)
         except Exception:
             return {"game_key": "", "entries": 0, "names": []}
 

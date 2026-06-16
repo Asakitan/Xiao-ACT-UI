@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, List, Sequence
 
 from mem_probe import cy_memscan as _cy
-from .process import StarProcess
+from .process import GameProcess
 
 _SCAN_WORKERS = max(2, min(os.cpu_count() or 4, 8) - 1)
 
@@ -86,7 +86,7 @@ def _find_all_in_chunk(buf: bytes, needle: bytes, *, align: int = 1) -> Iterable
 
 
 def scan(
-    pm: StarProcess,
+    pm: GameProcess,
     value,
     dtype: str,
     *,
@@ -103,7 +103,7 @@ def scan(
     align: 对齐字节. 0 表示 dtype 默认对齐 (i32/f32=4, i64/f64=8, u32=4 等),
            1 表示不对齐, 任意字节边界。
     max_hits: 命中数上限, 超过即停止扫描 (避免内存爆炸; 通常 utf16 短串才会触发)。
-    max_region_size: 跳过过大的区域 (默认 256 MiB), 主要是 GameAssembly.dll
+    max_region_size: 跳过过大的区域 (默认 256 MiB), 主要是大型模块映像
            的 IL2CPP 元数据段, 静态数据扫描没意义又拖慢速度。
     """
     needle = encode_value(value, dtype)
@@ -162,7 +162,7 @@ def _scan_one_region(pm, region_base, region_size, v, find_fn, chunk, max_per):
 
 
 def _scan_aligned_int(
-    pm: StarProcess,
+    pm: GameProcess,
     value: int,
     max_hits: int,
     max_region_size: int,
@@ -221,7 +221,7 @@ def _scan_aligned_int(
 
 
 def narrow(
-    pm: StarProcess,
+    pm: GameProcess,
     addrs: Sequence[int],
     value,
     dtype: str,

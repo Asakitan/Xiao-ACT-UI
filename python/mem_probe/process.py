@@ -1,11 +1,11 @@
 """通用进程附加与基础读取封装.
 
-只暴露 ``GameProcess`` (别名 ``StarProcess``) 一个类, 内部用 pymem
-完成 OpenProcess + ReadProcessMemory. 所有读操作均包裹 try/except,
-失败返回 None 而不是抛, 因为内存扫描场景下触碰未映射页是常态。
+只暴露 ``GameProcess`` 一个类, 内部用 pymem 完成 OpenProcess +
+ReadProcessMemory. 所有读操作均包裹 try/except, 失败返回 None 而不是抛,
+因为内存扫描场景下触碰未映射页是常态。
 
-进程名通过 ``config.GAME_PROCESS_NAMES`` 或构造函数 ``process_name``
-参数指定, 平台本身不硬编码任何游戏进程名。
+进程名通过构造函数 ``process_name`` 参数或 ``GAME_PROCESS_NAMES``
+(插件通过 ``set_game_process_names()`` 注入) 指定。
 
 依赖: pymem>=1.13 (PoC 可选依赖, 未在打包 spec 中)
 """
@@ -20,12 +20,13 @@ import time
 from dataclasses import dataclass
 from typing import Iterator, List, Optional
 
-# 保持与主项目 config.GAME_PROCESS_NAMES 同源, 避免硬编码漂移。
-try:
-    # tools/mem_probe/process.py -> sao_auto/ 在 sys.path 顶层时直接 import
-    from config import GAME_PROCESS_NAMES  # type: ignore
-except Exception:
-    GAME_PROCESS_NAMES = []
+GAME_PROCESS_NAMES: list = []
+
+
+def set_game_process_names(names: list) -> None:
+    """Plugin injection: set the process-name candidates at runtime."""
+    global GAME_PROCESS_NAMES
+    GAME_PROCESS_NAMES = list(names)
 
 
 # ───────────────────────── Win32 常量 / 结构体 ─────────────────────────
@@ -252,8 +253,11 @@ class MemoryRegion:
 
 
 # ───────────────────────── 主类 ─────────────────────────
-class StarProcessError(RuntimeError):
+class GameProcessError(RuntimeError):
     pass
+
+
+StarProcessError = GameProcessError
 
 
 class GameProcess:
@@ -263,7 +267,7 @@ class GameProcess:
         try:
             import pymem  # noqa: F401  延迟 import, 主程序不强依赖
         except ImportError as e:
-            raise StarProcessError(
+            raise GameProcessError(
                 "pymem 未安装。请在源码运行环境执行: pip install pymem"
             ) from e
 
@@ -284,9 +288,9 @@ class GameProcess:
                 found_pid = pid
                 attached_name = name
                 break
-            last_err = StarProcessError(f"process not found: {name}")
+            last_err = GameProcessError(f"process not found: {name}")
         if found_pid is None:
-            raise StarProcessError(
+            raise GameProcessError(
                 f"未找到游戏进程 (尝试候选: {candidates})。请确认目标进程正在运行。"
                 + (f" 最后错误: {last_err}" if last_err else "")
             )
@@ -304,11 +308,11 @@ class GameProcess:
             if _DRIVER_OK:
                 if _drv.attach(found_pid):
                     drv_attached = True
-                    print(f"[StarProcess] driver backend attached (pid={found_pid})")
+                    print(f"[GameProcess] driver backend attached (pid={found_pid})")
                     try:
                         from mem_probe import cy_memscan as _cy
                         if _cy.driver_attach(found_pid):
-                            print(f"[StarProcess] cython driver fast-path activated")
+                            print(f"[GameProcess] cython driver fast-path activated")
                     except Exception:
                         pass
 
@@ -330,7 +334,7 @@ class GameProcess:
                 self._pm.process_id = found_pid
                 self._pm.process_handle = 0
             else:
-                raise StarProcessError(
+                raise GameProcessError(
                     f"找到进程 {attached_name} 但无法 OpenProcess; "
                     f"可能被反作弊保护或需要管理员权限。原始错误: {e}"
                 ) from e
@@ -370,7 +374,7 @@ class GameProcess:
         try:
             mods = list(self._pm.list_modules())
         except Exception as e:
-            raise StarProcessError(f"list_modules 失败: {e}") from e
+            raise GameProcessError(f"list_modules 失败: {e}") from e
         out: List[ModuleInfo] = []
         for m in mods:
             try:
@@ -390,7 +394,7 @@ class GameProcess:
         for m in self.list_modules():
             if m.name.lower() == target:
                 return m
-        raise StarProcessError(f"主模块 {target} 在模块列表中未找到")
+        raise GameProcessError(f"主模块 {target} 在模块列表中未找到")
 
     # ───── 内存区域 ─────
     def iter_regions(
@@ -660,7 +664,7 @@ class GameProcess:
         except Exception:
             pass
 
-    def __enter__(self) -> "StarProcess":
+    def __enter__(self) -> "GameProcess":
         return self
 
     def __exit__(self, *exc) -> None:

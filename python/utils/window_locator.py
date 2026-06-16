@@ -11,7 +11,11 @@ import re
 import threading
 from typing import Optional, Tuple, List
 
-from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
+try:
+    from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
+except ImportError:
+    GAME_WINDOW_KEYWORDS = []
+    GAME_PROCESS_NAMES = []
 
 
 # ═══════════════════════════════════════════════
