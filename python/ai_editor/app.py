@@ -94,6 +94,9 @@ class AIEditorAPI:
                 name, json.loads(args) if isinstance(args, str) else args
             )
 
+        # @-mention variable resolver
+        self._controller.resolve_variable = self._resolve_variable
+
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
 
@@ -151,7 +154,7 @@ class AIEditorAPI:
                     setattr(self._engine.config, k, v)
         return {"ok": True}
 
-    def send_message(self, text: str, config: Optional[Dict] = None) -> Dict:
+    def send_message(self, text: str, config: Optional[Dict] = None, agent_mode: bool = False) -> Dict:
         if not text or not text.strip():
             return {"error": "Empty message"}
         self._ensure_engine()
@@ -160,8 +163,31 @@ class AIEditorAPI:
                 self._engine.config.provider = config["provider"]
             if config.get("model"):
                 self._engine.config.model = config["model"]
-        self._controller.send(text.strip())
+        self._controller.send(text.strip(), agent_mode=agent_mode)
         return {"ok": True}
+
+    def _resolve_variable(self, name: str) -> str:
+        """Resolve @-mention variables by reading editor state."""
+        if name == "selection":
+            r = self.editor_get_selection()
+            return r.get("selection", "")
+        if name == "editor":
+            r = self.editor_get_content()
+            return r.get("content", "")
+        if name == "file":
+            if self._window:
+                try:
+                    return self._window.evaluate_js("editorFileName") or "untitled"
+                except Exception:
+                    pass
+            return "untitled"
+        if name == "language":
+            r = self.editor_get_language()
+            return r.get("language", "plaintext")
+        if name == "state":
+            r = self.execute_tool("get_game_state", "{}")
+            return r
+        return ""
 
     def cancel(self) -> Dict:
         if self._controller:

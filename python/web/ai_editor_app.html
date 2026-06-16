@@ -404,9 +404,9 @@ pre.code-block code .type { color:var(--fg-type); }
   <!-- Content -->
   <div class="content">
     <!-- Tab bar -->
-    <div class="tab-bar">
-      <div class="tab active" data-tab="editor">📝 Editor</div>
-      <div class="tab-add" title="New tab">+</div>
+    <div class="tab-bar" id="tab-bar">
+      <div class="tab active" data-tab-id="0">📝 untitled <span class="close" onclick="closeTab(0,event)">×</span></div>
+      <div class="tab-add" onclick="addTab()">+</div>
     </div>
 
     <!-- Editor area -->
@@ -449,13 +449,18 @@ pre.code-block code .type { color:var(--fg-type); }
           <div style="position:relative">
             <div class="slash-popup" id="slash-popup"></div>
             <div class="chat-input-row">
-              <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ for commands)"></textarea>
+              <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ commands, @ context)"></textarea>
               <button class="send-btn" id="send-btn" onclick="doSend()">Send</button>
             </div>
+            <!-- @-mention popup -->
+            <div class="slash-popup" id="at-popup"></div>
           </div>
           <div class="chat-toolbar">
-            <span class="hint">Enter 发送 · Shift+Enter 换行 · / 命令</span>
+            <span class="hint">Enter 发送 · / 命令 · @file @selection @editor @state</span>
             <span class="spacer"></span>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--fg-dim)" title="Agent Mode: autonomous plan→execute→verify">
+              <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Agent
+            </label>
             <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■ Stop</span>
             <span class="toolbar-btn" onclick="uploadImage()" title="Attach image (vision)">📷</span>
             <span class="token-count" id="token-count">0 tokens</span>
@@ -1347,6 +1352,141 @@ document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>{
   i._clickHandler=()=>switchSidebar(i.dataset.panel);
   i.addEventListener('click',i._clickHandler);
 });
+
+// ── Multi-tab editor ──
+let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0}];
+let activeTab=0, nextTabId=1;
+
+function addTab(name,content,lang){
+  const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0};
+  tabs.push(tab);
+  renderTabs();
+  switchTab(tab.id);
+  if(content)openInEditor(content,lang);
+}
+
+function closeTab(id,event){
+  if(event)event.stopPropagation();
+  if(tabs.length<=1)return;
+  saveCurrentTab();
+  tabs=tabs.filter(t=>t.id!==id);
+  if(activeTab===id)switchTab(tabs[0].id);
+  renderTabs();
+}
+
+function switchTab(id){
+  saveCurrentTab();
+  activeTab=id;
+  const tab=tabs.find(t=>t.id===id);
+  if(tab){
+    $('editor-text').value=tab.content;
+    setEditorLanguage(tab.language);
+    $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
+    updateLineNums();updateCursorPos();
+    if(tab.content){$('editor-welcome').style.display='none';$('editor-container').style.display='flex'}
+  }
+  renderTabs();
+}
+
+function saveCurrentTab(){
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart}
+}
+
+function renderTabs(){
+  const bar=$('tab-bar');bar.innerHTML='';
+  tabs.forEach(t=>{
+    const el=document.createElement('div');
+    el.className='tab'+(t.id===activeTab?' active':'');
+    el.dataset.tabId=t.id;
+    el.innerHTML=esc(t.name)+' <span class="close" onclick="closeTab('+t.id+',event)">×</span>';
+    el.onclick=()=>switchTab(t.id);
+    bar.appendChild(el);
+  });
+  const add=document.createElement('div');add.className='tab-add';add.textContent='+';
+  add.onclick=()=>addTab();bar.appendChild(add);
+}
+window.addTab=addTab;window.closeTab=closeTab;
+
+// Update openInEditor to use tabs
+const _origOpenInEditor=openInEditor;
+openInEditor=function(code,lang){
+  saveCurrentTab();
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(tab){tab.content=code;tab.name=(lang||'code').slice(0,12);tab.language=lang||'plaintext'}
+  _origOpenInEditor(code,lang);
+  renderTabs();
+};
+
+// ── Terminal execution ──
+async function execTerminalCmd(cmd){
+  if(!cmd)return;
+  const out=$('terminal-output');
+  out.textContent+='$ '+cmd+'\n';
+  const r=await call('execute_tool','exec_python',JSON.stringify({code:
+    "import subprocess;_r=subprocess.run("+JSON.stringify(cmd)+",shell=True,capture_output=True,text=True,timeout=30);_output.append(_r.stdout or '');_output.append(_r.stderr or '')"}));
+  try{const d=JSON.parse(r);(d.output||[]).forEach(o=>{if(o)out.textContent+=o})}
+  catch{out.textContent+=r+'\n'}
+  out.textContent+='\n';
+  out.scrollTop=out.scrollHeight;
+}
+
+// Terminal input (basic)
+const termOut=$('terminal-output');
+termOut.setAttribute('contenteditable','false');
+termOut.insertAdjacentHTML('afterend',
+  '<div style="display:flex;padding:4px 12px;background:var(--bg-panel)">'+
+  '<span style="color:var(--fg-success);font:12px var(--mono)">$ </span>'+
+  '<input id="term-input" style="flex:1;background:transparent;color:var(--fg);border:none;outline:none;font:12px var(--mono)" placeholder="Enter command...">'+
+  '</div>');
+$('term-input')&&$('term-input').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){const cmd=this.value.trim();this.value='';if(cmd)execTerminalCmd(cmd)}
+});
+
+// ── @-mention popup ──
+const AT_VARS=[['@file','Current file name'],['@selection','Selected text in editor'],
+  ['@editor','Full editor content'],['@state','Game state'],['@language','Editor language']];
+
+chatInp.addEventListener('input',function(){
+  const v=this.value,pos=this.selectionStart;
+  const before=v.substring(0,pos);
+  const atMatch=before.match(/@(\w*)$/);
+  const slashMatch=v.match(/^\/\w*/);
+  const atPopup=$('at-popup');
+
+  if(atMatch&&!slashMatch){
+    const prefix=atMatch[1].toLowerCase();
+    const matches=AT_VARS.filter(a=>a[0].substring(1).startsWith(prefix));
+    if(matches.length){
+      atPopup.innerHTML=matches.map(a=>
+        '<div class="slash-item" onclick="pickAtVar(\''+a[0]+'\')">'+
+        '<span class="cmd">'+esc(a[0])+'</span><span class="desc">'+esc(a[1])+'</span></div>').join('');
+      atPopup.classList.add('open');
+    } else atPopup.classList.remove('open');
+  } else atPopup.classList.remove('open');
+});
+window.pickAtVar=function(v){$('at-popup').classList.remove('open');
+  const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;
+  const before=val.substring(0,pos).replace(/@\w*$/,v+' ');
+  inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
+
+// ── Agent Mode in doSend ──
+const _origDoSend=doSend;
+doSend=async function(){
+  const inp=$('chat-input'),text=inp.value.trim();
+  if(!text||streaming)return;
+  inp.value='';inp.style.height='auto';
+  $('at-popup').classList.remove('open');
+  if(text.startsWith('/')){execSlash(text);return}
+  if(!config.api_key&&config.provider!=='ollama'){appendSystem('⚠ 请先配置 API Key');return}
+  createMsg('user').textContent=text;
+  streaming=true;$('send-btn').disabled=true;$('send-btn').textContent='...';$('stop-btn').style.display='';
+  setStatus('Thinking...');
+  currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
+  const agentMode=$('agent-mode-cb')&&$('agent-mode-cb').checked;
+  await call('send_message',text,{provider:config.provider,model:config.model},agentMode);
+};
+window.doSend=doSend;
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();

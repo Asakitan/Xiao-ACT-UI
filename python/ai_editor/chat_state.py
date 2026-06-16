@@ -124,6 +124,7 @@ class ChatController:
         self._thread: Optional[threading.Thread] = None
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
         self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
+        self._agent_mode: bool = False
 
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
@@ -135,6 +136,7 @@ class ChatController:
         self.on_tool_confirm: Optional[Callable[[str, str, str], bool]] = None  # call_id, name, args → allow?
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_idle: Optional[Callable[[], None]] = None
+        self.resolve_variable: Optional[Callable[[str], str]] = None  # @mention resolver
 
         # Confirmation state
         self._confirm_event: Optional[threading.Event] = None
@@ -144,24 +146,53 @@ class ChatController:
     def is_running(self) -> bool:
         return self._running
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, agent_mode: bool = False) -> None:
         if self._running:
             return
-        user_msg = ChatMessage(role="user", content=text)
+        resolved = self._resolve_at_mentions(text)
+        user_msg = ChatMessage(role="user", content=resolved)
         self.conversation.add_message(user_msg)
         if self.on_message_added:
             self.on_message_added(user_msg)
         self._running = True
+        self._agent_mode = agent_mode
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
+
+    # @-mention variable resolution
+    def _resolve_at_mentions(self, text: str) -> str:
+        """Replace @file, @selection, @editor, @state etc with real content."""
+        import re
+        def _replace(m):
+            var = m.group(1).lower()
+            if var == "selection" and self.resolve_variable:
+                r = self.resolve_variable("selection")
+                return f"[Selected text: {r}]" if r else "@selection"
+            if var == "editor" and self.resolve_variable:
+                r = self.resolve_variable("editor")
+                return f"[Editor content ({len(r)} chars)]:\n```\n{r[:2000]}\n```" if r else "@editor"
+            if var == "file" and self.resolve_variable:
+                r = self.resolve_variable("file")
+                return f"[Current file: {r}]" if r else "@file"
+            if var == "state" and self.resolve_variable:
+                r = self.resolve_variable("state")
+                return f"[Game state: {r}]" if r else "@state"
+            if var == "language" and self.resolve_variable:
+                r = self.resolve_variable("language")
+                return f"[Language: {r}]" if r else "@language"
+            return m.group(0)
+        return re.sub(r'@(\w+)', _replace, text)
 
     def cancel(self) -> None:
         self.engine.cancel()
         self._running = False
 
+    MAX_AGENT_ROUNDS = 25
+
     def _run_loop(self) -> None:
+        max_rounds = self.MAX_AGENT_ROUNDS if self._agent_mode else self.MAX_TOOL_ROUNDS
         try:
-            for _round in range(self.MAX_TOOL_ROUNDS):
+            for _round in range(max_rounds):
                 if not self._running:
                     break
 
@@ -211,7 +242,18 @@ class ChatController:
                     self.on_stream_end(assistant_msg)
 
                 if not resp.tool_calls:
-                    break
+                    if not self._agent_mode:
+                        break
+                    # Agent mode: continue if the response ends with a continuation signal
+                    content_lower = (resp.content or "").strip().lower()
+                    continues = content_lower.endswith("...") or "[continue]" in content_lower
+                    if not continues:
+                        break
+                    # Auto-inject continuation prompt
+                    cont_msg = ChatMessage(role="user", content="Continue with the next step.")
+                    self.conversation.add_message(cont_msg)
+                    if self.on_message_added:
+                        self.on_message_added(cont_msg)
 
                 for tc in resp.tool_calls:
                     if not self._running:
