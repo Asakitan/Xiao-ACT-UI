@@ -243,12 +243,15 @@ def _show_tk_license_gate():
 
 def run_ui():
     """根据 settings.json 中的 ui_mode 启动对应 UI."""
+    # ── Phase 0: 授权验证 (阻塞, 在 LinkStart / 引擎加载之前) ──
+    _show_tk_license_gate()
+
     # 读取 ui_mode 设置
-    ui_mode = 'webview'  # default
+    ui_mode = 'entity'  # default: Entity/Tk
     try:
         from config import SettingsManager
         _s = SettingsManager()
-        ui_mode = _s.get('ui_mode', 'webview') or 'webview'
+        ui_mode = _s.get('ui_mode', 'entity') or 'entity'
         if ui_mode == 'sao':
             ui_mode = 'entity'
     except Exception:
@@ -257,7 +260,6 @@ def run_ui():
     if ui_mode == 'entity':
         print('[SAO Auto] UI mode: entity (tkinter)')
         try:
-            _show_tk_license_gate()
             from sao_gui import SAOPlayerGUI
             app = SAOPlayerGUI()
             app.run()
