@@ -58,6 +58,22 @@ class AIEditorAPI:
         self._registry = ToolRegistry()
         register_engine_tools(self._registry, self._gui_ref or _DummyGui())
 
+        # Initialize MCP servers
+        self._mcp = None
+        try:
+            from ai_editor.mcp_client import McpManager, load_mcp_configs
+            settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+            getter = (lambda k, d=None: settings.get(k, d)) if settings else None
+            configs = load_mcp_configs(getter)
+            if configs:
+                self._mcp = McpManager()
+                for cfg in configs:
+                    ok = self._mcp.add_server(cfg)
+                    if ok:
+                        print(f"[MCP] Connected: {cfg.id} ({len([t for c in [self._mcp._clients[cfg.id]] for t in c.tools])} tools)")
+        except Exception as exc:
+            print(f"[MCP] Init failed: {exc}")
+
         sp = config.system_prompt or self._default_system_prompt()
         conv = Conversation(system_prompt=sp)
         self._controller = ChatController(self._engine, self._registry, conv)
@@ -70,6 +86,13 @@ class AIEditorAPI:
         self._controller.on_tool_confirm = self._on_tool_confirm
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
+
+        # Inject MCP tools into controller
+        if self._mcp:
+            self._controller.extra_tools = self._mcp.to_openai_tools()
+            self._controller.mcp_dispatch = lambda name, args: self._mcp.call_tool(
+                name, json.loads(args) if isinstance(args, str) else args
+            )
 
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
@@ -158,16 +181,58 @@ class AIEditorAPI:
 
     def list_tools(self) -> Dict:
         self._ensure_engine()
-        return {"tools": [
+        tools = [
             {"name": t.name, "description": t.description,
              "category": t.category, "requires_confirm": t.requires_confirm,
              "parameters": t.parameters}
             for t in self._registry.list_tools()
-        ]}
+        ]
+        # Add MCP tools
+        if self._mcp:
+            for t in self._mcp.all_tools():
+                tools.append({
+                    "name": f"mcp_{t.server_id}_{t.name}",
+                    "description": f"[MCP:{t.server_id}] {t.description}",
+                    "category": f"mcp:{t.server_id}",
+                    "requires_confirm": False,
+                    "parameters": t.input_schema,
+                })
+        return {"tools": tools}
 
     def execute_tool(self, name: str, arguments: str = "{}") -> str:
         self._ensure_engine()
+        if name.startswith("mcp_") and self._mcp:
+            args = json.loads(arguments) if isinstance(arguments, str) else arguments
+            return self._mcp.call_tool(name, args)
         return self._registry.execute(name, arguments)
+
+    def list_mcp_servers(self) -> Dict:
+        self._ensure_engine()
+        if not self._mcp:
+            return {"servers": []}
+        return {"servers": self._mcp.list_servers()}
+
+    def add_mcp_server(self, config: Dict) -> Dict:
+        self._ensure_engine()
+        if not self._mcp:
+            from ai_editor.mcp_client import McpManager
+            self._mcp = McpManager()
+        from ai_editor.mcp_client import McpServerConfig
+        cfg = McpServerConfig(
+            id=config.get("id", ""),
+            name=config.get("name", config.get("id", "")),
+            transport=config.get("transport", "stdio"),
+            command=config.get("command", ""),
+            args=config.get("args", []),
+            url=config.get("url", ""),
+        )
+        ok = self._mcp.add_server(cfg)
+        return {"ok": ok, "id": cfg.id, "tools": len(self._mcp._clients.get(cfg.id, type('',(),{'tools':[]})()).tools) if ok else 0}
+
+    def remove_mcp_server(self, server_id: str) -> Dict:
+        if self._mcp:
+            self._mcp.remove_server(server_id)
+        return {"ok": True}
 
     def test_connection(self, cfg: Dict) -> Dict:
         self._ensure_engine()

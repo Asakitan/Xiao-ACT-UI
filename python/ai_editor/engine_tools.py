@@ -167,6 +167,96 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
     )
 
     # ==================================================================
+    # Category: buff — Buff/状态效果
+    # ==================================================================
+
+    registry.register(
+        name="get_buff_list",
+        description="获取指定实体的Buff列表 (自身或Boss)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "self/boss/指定uuid", "default": "self"},
+            },
+        },
+        handler=lambda target="self": _get_buff_list(gui_ref, target),
+        category="buff",
+    )
+
+    registry.register(
+        name="get_skill_cooldowns",
+        description="获取自身技能冷却状态",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_skill_cooldowns(gui_ref),
+        category="buff",
+    )
+
+    # ==================================================================
+    # Category: combat — 战斗事件/历史
+    # ==================================================================
+
+    registry.register(
+        name="get_damage_events",
+        description="获取最近的伤害事件流 (最新N条)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
+            },
+        },
+        handler=lambda limit=20: _get_damage_events(gui_ref, int(limit)),
+        category="combat",
+    )
+
+    registry.register(
+        name="get_encounter_history",
+        description="获取战斗历史记录 (最近N场)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最多返回场数", "default": 10},
+            },
+        },
+        handler=lambda limit=10: _get_encounter_history(gui_ref, int(limit)),
+        category="combat",
+    )
+
+    # ==================================================================
+    # Category: automation — 自动操作
+    # ==================================================================
+
+    registry.register(
+        name="get_auto_key_status",
+        description="获取自动按键引擎状态 (是否运行/当前配置)",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_auto_key_status(gui_ref),
+        category="automation",
+    )
+
+    registry.register(
+        name="toggle_auto_key",
+        description="启动/停止自动按键引擎",
+        parameters={
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "description": "true=启动, false=停止"},
+            },
+            "required": ["enabled"],
+        },
+        handler=lambda enabled: _toggle_auto_key(gui_ref, bool(enabled)),
+        category="automation",
+        requires_confirm=True,
+    )
+
+    registry.register(
+        name="get_auto_key_config",
+        description="获取自动按键配置详情",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: _get_auto_key_config(gui_ref),
+        category="automation",
+    )
+
+    # ==================================================================
     # Category: memory — 内存读取 (低级接口)
     # ==================================================================
 
@@ -802,3 +892,119 @@ def _exec_python(gui_ref: Any, code: str) -> Dict[str, Any]:
         return {"ok": True, "output": ns.get("_output", [])}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# -- Buff/Cooldown --
+
+def _get_buff_list(gui_ref: Any, target: str) -> Dict[str, Any]:
+    gs = getattr(gui_ref, '_game_state', None) or {}
+    if target == "boss":
+        boss_buffs = gs.get("boss_buffs") or gs.get("boss_buff_list", [])
+        return {"target": "boss", "buffs": boss_buffs if isinstance(boss_buffs, list) else []}
+    rows = getattr(gui_ref, '_rows', None) or {}
+    uid = gs.get("uid", 0) if target == "self" else int(target) if target.isdigit() else 0
+    for r in (rows.values() if isinstance(rows, dict) else []):
+        if isinstance(r, dict) and r.get("uuid") == uid:
+            return {"target": uid, "buffs": r.get("buffs", []), "debuffs": r.get("debuffs", [])}
+    buffmon = getattr(gui_ref, '_buffmon_data', None) or {}
+    if isinstance(buffmon, dict) and buffmon.get("buff_list"):
+        return {"target": target, "buffs": buffmon["buff_list"]}
+    return {"target": target, "buffs": [], "note": "Buff data not available via current data source"}
+
+
+def _get_skill_cooldowns(gui_ref: Any) -> Dict[str, Any]:
+    ak = getattr(gui_ref, '_auto_key_engine', None)
+    if ak:
+        cds = getattr(ak, 'get_cooldowns', None)
+        if callable(cds):
+            return {"cooldowns": cds()}
+    gs = getattr(gui_ref, '_game_state', None) or {}
+    watched = gs.get("watched_skills") or gs.get("burst_slots", [])
+    return {"watched_skills": watched, "note": "Detailed cooldown tracking requires auto_key_engine"}
+
+
+# -- Combat events/history --
+
+def _get_damage_events(gui_ref: Any, limit: int) -> Dict[str, Any]:
+    tracker = getattr(gui_ref, '_dps_tracker', None)
+    if tracker:
+        events_fn = getattr(tracker, 'get_recent_events', None) or getattr(tracker, 'get_damage_log', None)
+        if callable(events_fn):
+            try:
+                return {"events": events_fn(limit)}
+            except Exception:
+                pass
+    enc = getattr(gui_ref, '_encounter_manager', None)
+    if enc:
+        log_fn = getattr(enc, 'get_event_log', None)
+        if callable(log_fn):
+            try:
+                return {"events": log_fn(limit)}
+            except Exception:
+                pass
+    return {"events": [], "note": "Damage event log not available from current data source"}
+
+
+def _get_encounter_history(gui_ref: Any, limit: int) -> Dict[str, Any]:
+    enc = getattr(gui_ref, '_encounter_manager', None)
+    if enc:
+        hist_fn = getattr(enc, 'get_history', None) or getattr(enc, 'encounter_history', None)
+        if callable(hist_fn):
+            try:
+                return {"encounters": hist_fn(limit)}
+            except Exception:
+                pass
+        count = getattr(enc, 'encounter_count', 0)
+        return {"encounter_count": count, "note": "Detailed history API not exposed by encounter_manager"}
+    return {"encounters": [], "note": "Encounter manager not available"}
+
+
+# -- Auto-key --
+
+def _get_auto_key_status(gui_ref: Any) -> Dict[str, Any]:
+    ak = getattr(gui_ref, '_auto_key_engine', None)
+    if not ak:
+        return {"available": False, "note": "Auto-key engine not initialized"}
+    return {
+        "available": True,
+        "running": getattr(ak, 'is_running', False),
+        "enabled": getattr(ak, 'enabled', False),
+        "mode": getattr(ak, 'mode', ''),
+    }
+
+
+def _toggle_auto_key(gui_ref: Any, enabled: bool) -> Dict[str, Any]:
+    ak = getattr(gui_ref, '_auto_key_engine', None)
+    if not ak:
+        return {"error": "Auto-key engine not available"}
+    try:
+        if enabled:
+            start = getattr(ak, 'start', None) or getattr(ak, 'enable', None)
+            if callable(start):
+                start()
+                return {"ok": True, "enabled": True}
+        else:
+            stop = getattr(ak, 'stop', None) or getattr(ak, 'disable', None)
+            if callable(stop):
+                stop()
+                return {"ok": True, "enabled": False}
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"error": "Toggle not available"}
+
+
+def _get_auto_key_config(gui_ref: Any) -> Dict[str, Any]:
+    ak = getattr(gui_ref, '_auto_key_engine', None)
+    if not ak:
+        return {"error": "Auto-key engine not available"}
+    try:
+        cfg_fn = getattr(ak, 'get_config', None)
+        if callable(cfg_fn):
+            return {"config": cfg_fn()}
+    except Exception:
+        pass
+    return {
+        "mode": getattr(ak, 'mode', ''),
+        "interval": getattr(ak, 'interval', 0),
+        "keys": getattr(ak, 'keys', []),
+    }

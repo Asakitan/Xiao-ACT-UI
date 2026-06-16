@@ -122,6 +122,8 @@ class ChatController:
         self.conversation = conversation or Conversation()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
+        self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
 
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
@@ -173,7 +175,10 @@ class ChatController:
                     self.on_message_added(assistant_msg)
 
                 messages = self.conversation.to_api_messages()
-                tools = self.registry.to_openai_tools() or None
+                tools = self.registry.to_openai_tools()
+                if self.extra_tools:
+                    tools = (tools or []) + self.extra_tools
+                tools = tools or None
 
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
                     if delta.content and self.on_stream_delta:
@@ -231,7 +236,10 @@ class ChatController:
                                     self.on_tool_end(tc.id, result)
                                 continue
 
-                    result = self.registry.execute(tc.name, tc.arguments)
+                    if tc.name.startswith("mcp_") and self.mcp_dispatch:
+                        result = self.mcp_dispatch(tc.name, tc.arguments)
+                    else:
+                        result = self.registry.execute(tc.name, tc.arguments)
                     tc.result = result
 
                     tool_msg = ChatMessage(
