@@ -170,30 +170,6 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             topmost = False
 
-        ak_on = False
-        br_on = False
-        if self._cfg_settings_ref:
-            try:
-                ak_on = bool(self._load_auto_key_config().get('enabled', False))
-            except Exception:
-                ak_on = False
-            try:
-                br_on = bool(self._load_boss_raid_config().get('enabled', False))
-            except Exception:
-                br_on = False
-
-        snd_on = bool(self._get_setting('sound_enabled', True))
-        dps_on = bool(self._get_setting('dps_enabled', True))
-        dps_report_available = bool(self._get_dps_last_report_available())
-        buffmon_on = bool(self._get_setting('buffmon_enabled', True))
-        burst_on = bool(self._get_setting('burst_enabled', True))
-        burst_slots = self._normalize_watched_skill_slots(
-            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
-        )
-        if not burst_slots:
-            burst_slots = [1]
-        boss_bar_mode = str(self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid')
-        mem_data_source = self._get_mem_data_source()
         update_label = self._build_update_menu_label()
         try:
             plugin_status = self._get_act_plugin_menu_status()
@@ -329,16 +305,6 @@ class SAOPlayerGUIMenuMixin:
             hotkey_sig,
             bool(getattr(self, '_recognition_active', False)),
             topmost,
-            ak_on,
-            br_on,
-            snd_on,
-            dps_on,
-            dps_report_available,
-            buffmon_on,
-            burst_on,
-            tuple(burst_slots),
-            boss_bar_mode,
-            mem_data_source,
             bool(self._panels_hidden),
             update_label,
             plugin_sig,
@@ -410,31 +376,7 @@ class SAOPlayerGUIMenuMixin:
         recog_label = '识别: ON' if getattr(self, '_recognition_active', False) else '识别: OFF'
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
 
-        ak_config = self._load_auto_key_config() if self._cfg_settings_ref else {}
-        ak_on = bool(ak_config.get('enabled', False))
-        ak_label = f'AutoKey: {"ON" if ak_on else "OFF"}' + _k('toggle_auto_script')
-
-        br_config = self._load_boss_raid_config() if self._cfg_settings_ref else {}
-        br_on = bool(br_config.get('enabled', False))
-        br_label = f'BossRaid: {"ON" if br_on else "OFF"}' + _k('boss_raid_start')
-
-        snd_on = bool(self._get_setting('sound_enabled', True))
-        dps_on = bool(self._get_setting('dps_enabled', True))
-        dps_report_available = self._get_dps_last_report_available()
-        burst_on = bool(self._get_setting('burst_enabled', True))
-        burst_slots = self._normalize_watched_skill_slots(
-            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
-        )
-        if not burst_slots:
-            burst_slots = [1]
-        burst_slot_set = set(burst_slots)
-        burst_slots_disp = ','.join(str(s) for s in burst_slots)
-        boss_bar_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-        boss_bar_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
-        boss_bar_disp = boss_bar_labels.get(boss_bar_mode, boss_bar_mode)
-        mem_mode = self._get_mem_data_source()
-        mem_mode_labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
-        mem_mode_disp = mem_mode_labels.get(mem_mode, mem_mode.upper())
+        # 游戏菜单分类由插件通过 register_menu_category 动态注入
         plugin_status = self._get_act_plugin_menu_status()
         plugin_total = _finite_int(plugin_status.get('plugin_count'), 0, lo=0)
         plugin_active = _finite_int(plugin_status.get('active_count'), 0, lo=0)
@@ -485,106 +427,9 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             session_visible = False
         session_count = len(getattr(self, '_session_players', {}) or {})
-        auto_items = [
-            {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
-            {'icon': '◆', 'label': 'AutoKey Quick Panel', 'command': self._toggle_autokey_panel},
-            {'icon': '◇', 'label': 'AutoKey Detail Editor', 'command': self._toggle_autokey_detail_panel},
-        ]
-
-        boss_items = [
-            {'icon': '⚔', 'label': br_label, 'command': self._toggle_boss_raid},
-            {'icon': '▸', 'label': '下一阶段' + _k('boss_raid_next_phase'), 'command': self._boss_raid_next_phase},
-            {'icon': '◆', 'label': 'BossRaid Quick Panel', 'command': self._toggle_bossraid_panel},
-            {'icon': '◇', 'label': 'BossRaid Detail Editor', 'command': self._toggle_bossraid_detail_panel},
-        ]
-
-        custom_monitors = self._get_custom_monitors()
-        custom_count = len(custom_monitors)
-        custom_names = ', '.join(m['name'] for m in custom_monitors[:3])
-        if custom_count > 3:
-            custom_names += f' +{custom_count - 3}'
-
-        burst_items = [
-            {'icon': '◆', 'label': f'爆发提示: {"ON" if burst_on else "OFF"}', 'command': self._toggle_burst_enabled},
-            {'icon': '◇', 'label': f'Burst技能槽: [{burst_slots_disp}]',
-             'command': lambda: self._show_entity_alert('BURST SKILLS', f'当前槽位: {burst_slots_disp}', display_time=3.0)},
-            {'icon': '─', 'label': '──────────'},
-        ]
-        for slot in range(1, 10):
-            burst_items.append({
-                'icon': '◆' if slot in burst_slot_set else '◇',
-                'label': f'Burst槽 {slot}' + (' ✓' if slot in burst_slot_set else ''),
-                'command': lambda s=slot: self._toggle_burst_slot(s),
-            })
-        burst_items.append({'icon': '─', 'label': '──────────'})
-        burst_items.append({
-            'icon': '✦', 'label': f'自定义技能CD ({custom_count}/5)' + (f': {custom_names}' if custom_names else ''),
-            'command': self._open_skill_picker,
-        })
-
-        panel_items = [
-            {'icon': '◈', 'label': 'Commander', 'command': self._toggle_commander_panel},
-            {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
-            {'icon': '◆' if session_visible else '◇',
-             'label': f'Session Players: {session_count}人' + (' ✓' if session_visible else ''),
-             'command': self._toggle_session_players_panel},
-            {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
-            {'icon': '─', 'label': '──────────'},
-        ]
-
-        # ── 面板皮肤子菜单 ──
-        _cfg = self._cfg_settings_ref or self.settings
-        _theme_settings = _cfg.get('panel_themes', {})
-        _overlay_map = {
-            'dps': ('◆', 'DPS'),
-            'hp': ('♥', 'HP'),
-            'bosshp': ('⚔', 'BossHP'),
-            'skillfx': ('✦', 'SkillFX'),
-            'alert': ('!', 'Alert'),
-            'act': ('▣', 'ACT'),
-            'buffmon': ('✦', 'BuffMon'),
-        }
-        skin_items = []
-        skin_items.append({'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')})
-        skin_items.append({'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')})
-        skin_items.append({'icon': '─', 'label': '──────────'})
-        for _key, (_ico, _lbl) in _overlay_map.items():
-            _cur = _theme_settings.get(_key, 'dark')
-            skin_items.append({
-                'icon': _ico,
-                'label': f'{_lbl}: {_cur.upper()}',
-                'command': lambda k=_key: self._toggle_panel_theme(k),
-            })
-
-        buffmon_on = bool(self._get_setting('buffmon_enabled', True))
-        # 「面板」分类只保留真·面板入口 + DPS 报告系列。
-        # 音效/音量/Boss血条/Buff监视器/数据源 等纯设置开关已迁往「控制」分类
-        # (v4.x: 面板分类回归"开/关面板"职责, 全局开关归到设置)。
-        panel_items.extend([
-            {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
-            # DPS 面板行为设置(与 web menu DPS 区的「空闲隐藏」数字框对齐); 紧贴
-            # DPS 开关便于发现。命令列表无数字框, 故点一下循环到下一预设档。
-            {'icon': '⏱', 'label': f'DPS空闲隐藏: {self._dps_fade_timeout_label()}',
-             'command': self._cycle_dps_fade_timeout},
-            {'icon': '◆' if dps_report_available else '◇',
-             'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
-             'command': self._show_last_dps_report_menu},
-            {'icon': '◆' if dps_report_available else '◇',
-             'label': 'DPS历史报告' + (' ✓' if dps_report_available else ' (暂无)'),
-             'command': self._show_dps_history_menu},
-            {'icon': '⬇' if dps_report_available else '◇',
-             'label': '导出DPS报告' + (' ✓' if dps_report_available else ' (暂无)'),
-             'command': self._export_last_dps_report_menu},
-        ])
-
-        # 「控制」(设置) 分类: 从「面板」迁移过来的全局开关性设置。
-        control_setting_items = [
-            {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
-            {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
-            {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
-            {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
-            {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
-            {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
+        skin_items = [
+            {'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')},
+            {'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')},
         ]
 
         act_items = [
@@ -611,14 +456,8 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '⚙', 'label': recog_label + _k('toggle_recognition'), 'command': self._toggle_recognition_menu},
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
                 {'icon': '─', 'label': '──────────'},
-                *control_setting_items,
-                {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
-            '自动': auto_items,
-            'Boss': boss_items,
-            'Burst': burst_items,
-            '面板': panel_items,
             'ACT': act_items,
             '插件': plugin_items,
             '皮肤': skin_items,
