@@ -271,6 +271,7 @@ class PluginRecord:
     entry: str
     enabled: bool = True
     game_ids: tuple[str, ...] = ("star_resonance",)
+    requires: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     capabilities: tuple[dict[str, Any], ...] = ()
     settings_schema: Mapping[str, Any] = field(default_factory=dict)
@@ -303,6 +304,7 @@ class PluginRecord:
             "loaded": self.loaded,
             "active": self.active,
             "game_ids": list(self.game_ids),
+            "requires": list(self.requires),
             "permissions": list(self.permissions),
             "capabilities": [dict(cap) for cap in self.capabilities],
             "capability_ids": [str(cap.get("id")) for cap in self.capabilities if cap.get("id")],
@@ -484,6 +486,7 @@ class PluginContext:
         self._manager = manager
         self._record = record
         self.engine = EngineAccess(manager, record)
+        self.path = record.path
         #: Declarative UI builder (see :mod:`act_platform.ui_spec`).
         self.ui = UI
         self._mem_access: Any = None
@@ -507,6 +510,28 @@ class PluginContext:
             facade = MemAccess(self.owner)
             self._mem_access = facade
         return facade
+
+    @property
+    def web_path(self) -> str:
+        """Absolute path to this plugin's ``web/`` directory (may not exist)."""
+        return os.path.join(self._record.path, "web")
+
+    @property
+    def assets_path(self) -> str:
+        """Absolute path to this plugin's ``assets/`` directory (may not exist)."""
+        return os.path.join(self._record.path, "assets")
+
+    def resolve_web(self, filename: str) -> Optional[str]:
+        """Resolve a web resource file inside this plugin's ``web/`` dir.
+
+        Returns the absolute path if the file exists, else None.
+        The host's webview can use this to load plugin HTML panels.
+        """
+        target = os.path.abspath(os.path.join(self.web_path, str(filename or "")))
+        base = os.path.abspath(self.web_path)
+        if os.path.commonpath([base, target]) != base:
+            return None
+        return target if os.path.isfile(target) else None
 
     @property
     def event_bus(self) -> EventBus:
@@ -1152,12 +1177,40 @@ class PluginManager:
                 continue
         return False
 
+    def _topo_sorted_ids(self) -> list[str]:
+        """Return plugin ids sorted so that ``requires`` dependencies load first."""
+        ids = sorted(self._records)
+        loaded: set[str] = set()
+        ordered: list[str] = []
+        visited: set[str] = set()
+
+        def _visit(pid: str) -> None:
+            if pid in visited:
+                return
+            visited.add(pid)
+            rec = self._records.get(pid)
+            if rec:
+                for dep in rec.requires:
+                    if dep in self._records:
+                        _visit(dep)
+            ordered.append(pid)
+
+        for pid in ids:
+            _visit(pid)
+        return ordered
+
     def load_all(self) -> dict[str, Any]:
         if not self._records:
             self.discover()
-        for plugin_id in sorted(self._records):
+        for plugin_id in self._topo_sorted_ids():
             record = self._records[plugin_id]
             if record.enabled:
+                if record.requires:
+                    missing = [r for r in record.requires
+                               if r not in self._records or not self._records[r].loaded]
+                    if missing:
+                        record.last_error = f"missing prerequisites: {', '.join(missing)}"
+                        continue
                 self.load_plugin(plugin_id)
         self._initial_loaded = True
         return self.status()
@@ -1282,6 +1335,17 @@ class PluginManager:
             ext_kind: [dict(bucket[key]) for key in sorted(bucket)]
             for ext_kind, bucket in self._extensions.items()
         }
+
+    def resolve_plugin_web(self, plugin_id: str, filename: str) -> Optional[str]:
+        """Resolve a web resource from a specific plugin's ``web/`` dir."""
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return None
+        target = os.path.abspath(os.path.join(record.path, "web", str(filename or "")))
+        base = os.path.abspath(os.path.join(record.path, "web"))
+        if os.path.commonpath([base, target]) != base:
+            return None
+        return target if os.path.isfile(target) else None
 
     def get_menu_categories(self) -> dict[str, dict[str, Any]]:
         """Return all plugin-contributed menu categories sorted by priority.
@@ -1952,6 +2016,7 @@ class PluginManager:
             entry=entry,
             enabled=bool(manifest.get("enabled", True)),
             game_ids=tuple(str(x) for x in manifest.get("game_ids", ["star_resonance"])),
+            requires=tuple(str(x).strip() for x in manifest.get("requires", []) if str(x or "").strip()),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
