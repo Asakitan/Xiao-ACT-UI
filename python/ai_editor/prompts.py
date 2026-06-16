@@ -23,23 +23,24 @@ modes (WebView overlay or Tkinter) and provides:
 
 **Platform (built-in):**
 - Plugin SDK with event bus, declarative UI spec, and render hooks
-- TCP packet capture and IL2CPP memory reading data sources
+- DPS/HPS tracker, encounter manager, combat analytics (game-agnostic)
 - Trigger/timer engine with hotkey support
-- SAO-style menu system, GPU overlay rendering, LinkStart animation
-- Settings persistence, update system, and extension marketplace
+- SAO-style menu system (NerveGear button + fisheye), GPU overlay rendering, LinkStart animation
+- Generic memory scanner infrastructure (``mem_probe/``)
+- Settings persistence and update system
 
-**Plugin-provided (game-specific, loaded at runtime):**
-- DPS/HPS tracking and encounter analysis
-- Boss HP, break/shield monitoring, raid mechanic alerts
+**Star Resonance plugin** (``plugins/star_resonance_plugin/``):
+- TCP packet capture (Npcap) + IL2CPP memory reading dual data sources
+- Boss HP/break/shield overlay, raid mechanic alerts (TTS + banner + directional dodge)
 - Buff/debuff monitoring and skill cooldown tracking
-- Auto-key automation with burst sequences
-- Any other game-specific logic
+- Auto-key automation with burst sequences and boss-reaction linkage
+- DPS/HP/Alert/SkillFX/BuffMon/MapBanner/MechBanner overlay panels
+- Game-specific menu categories (AutoKey / Boss / Burst / Panels)
 
-Plugins live in ``plugins/`` and register their capabilities through the \
-SDK. The platform itself has no game-specific code. \
-``plugins/star_resonance_plugin/`` is the reference example plugin — \
-study its structure when building new plugins or understanding how \
-game-specific features integrate with the platform.
+Plugins live in ``plugins/`` and register capabilities through the SDK. \
+The platform itself has zero game-specific imports. \
+``plugins/star_resonance_plugin/`` is the reference plugin — \
+study its ``plugin.py`` on_load when building new game adapters.
 
 ## Your Tools
 
@@ -67,7 +68,7 @@ Plus one aggregate tool for the running engine:
 **Platform actions** (always available): `system_info`, `plugins`, \
 `settings_get`, `settings_set`, `memory_status`, `eval`, `exec`
 
-**Plugin actions** (available when a game plugin is loaded): \
+**Star Resonance plugin actions** (available when the SR plugin is loaded): \
 `game_state`, `entity_list`, `dps_summary`, `dps_report`, \
 `boss_status`, `combat_status`, `buff_list`, `auto_key_status`
 
