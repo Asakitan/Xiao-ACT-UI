@@ -623,6 +623,7 @@ class SAOPlayerGUIMenuMixin:
             '插件': plugin_items,
             '皮肤': skin_items,
             '关于': [
+                {'icon': '🔑', 'label': '授权管理', 'command': self._show_license_panel_from_menu},
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},
                 {'icon': '✎', 'label': '修改角色资料', 'command': self._edit_profile},

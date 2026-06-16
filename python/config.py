@@ -338,6 +338,7 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://doi.sakisense.top:15018"
+DEFAULT_LICENSE_SERVER = "http://doi.sakisense.top:15522"
 UPDATE_CHANNEL = "stable"
 UPDATE_TARGET = "windows-x64"
 

@@ -257,6 +257,13 @@ class SAOPlayerGUIDialogsMixin:
             "Alt+A 打开 SAO 菜单\n"
             "右键悬浮按钮查看更多选项"))
 
+    def _show_license_panel_from_menu(self):
+        if self._sao_menu is not None and self._sao_menu.visible:
+            self._sao_menu.close()
+        from gui_modules.sao_gui_license import reset_license_dialog_dismissed, show_license_dialog
+        reset_license_dialog_dismissed()
+        self.root.after(400, lambda: show_license_dialog(self._float))
+
     def _edit_profile(self):
         """打开角色资料编辑对话框"""
         dialog = getattr(self, '_profile_dialog_ref', None)

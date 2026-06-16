@@ -481,6 +481,32 @@ class SAOWebAPI:
     def play_sound(self, name: str):
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
+    # ── License API ──
+
+    def license_status(self):
+        try:
+            from license import get_license_manager
+            return json.dumps(get_license_manager().get_status(), ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"tier": "free", "is_paid": False, "error": str(e)})
+
+    def license_activate(self, key):
+        try:
+            from license import get_license_manager
+            result = get_license_manager().activate(str(key or '').strip())
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)})
+
+    def license_done(self, dismissed=False):
+        if dismissed:
+            try:
+                from gui_modules.sao_gui_license import _dismiss_license_dialog
+                _dismiss_license_dialog()
+            except Exception:
+                pass
+        threading.Thread(target=self._g._close_license_panel, daemon=True).start()
+
     def exit_app(self):
         threading.Thread(target=self._g._exit_with_animation, daemon=True).start()
 
@@ -2776,6 +2802,10 @@ class SAOWebViewGUI:
         self._last_update_popup_key = ''
         self._identity_alert_kind = ''
 
+        # License panel
+        self._license_win = None
+        self._license_done_event = threading.Event()
+
         # JS API
         self._api = SAOWebAPI(self)
 
@@ -4899,6 +4929,23 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # License panel — 授权验证弹窗 (启动时显示)
+        license_url = _web_file_uri('license_panel.html')
+        _lic_w, _lic_h = 460, 420
+        _lic_x = max(0, int(monitor_left + (_sw - _lic_w) / 2))
+        _lic_y = max(0, int(monitor_top + (_sh - _lic_h) / 2))
+        self._license_win = webview.create_window(
+            'SAO-License', license_url,
+            width=_lic_w, height=_lic_h,
+            x=_lic_x, y=_lic_y,
+            frameless=True,
+            easy_drag=True,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -6098,8 +6145,53 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
+    def _close_license_panel(self):
+        try:
+            if self._license_win:
+                self._license_win.destroy()
+                self._license_win = None
+        except Exception:
+            pass
+        self._license_done_event.set()
+
+    def _show_license_gate(self):
+        try:
+            from license import get_license_manager
+            mgr = get_license_manager()
+            if mgr.is_paid:
+                self._license_done_event.set()
+                return
+        except Exception:
+            self._license_done_event.set()
+            return
+
+        try:
+            from gui_modules.sao_gui_license import is_license_dialog_dismissed
+            if is_license_dialog_dismissed():
+                self._license_done_event.set()
+                return
+        except Exception:
+            pass
+
+        try:
+            if self._license_win:
+                self._license_win.show()
+        except Exception:
+            self._license_done_event.set()
+            return
+
+        self._license_done_event.wait(timeout=120)
+
+        try:
+            if self._license_win:
+                self._license_win.destroy()
+                self._license_win = None
+        except Exception:
+            pass
+
     def _on_webview_started(self):
         def _init():
+            self._show_license_gate()
             self._lock_hp_position(2.0)
             self._hp_hit_regions_ready = False
             self._hp_js_hit_regions_ready = False
@@ -10016,12 +10108,32 @@ class SAOWebViewGUI:
             'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
             'toggle_skill_drilldown': lambda: (self._show_skill_drilldown() if not self._skill_drilldown_visible else self._hide_skill_drilldown()),
             'toggle_session_players': self._toggle_session_players_menu,
+            'show_license_panel': self._show_license_panel_from_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
         fn = _map.get(action)
         if fn:
             threading.Thread(target=fn, daemon=True).start()
+
+    def _show_license_panel_from_menu(self):
+        from gui_modules.sao_gui_license import reset_license_dialog_dismissed
+        reset_license_dialog_dismissed()
+        try:
+            import webview
+            license_url = _web_file_uri('license_panel.html')
+            self._license_done_event = threading.Event()
+            self._license_win = webview.create_window(
+                'SAO-License', license_url,
+                width=460, height=420,
+                frameless=True,
+                easy_drag=True,
+                transparent=True,
+                on_top=True,
+                js_api=self._api,
+            )
+        except Exception as e:
+            print(f'[license] panel show failed: {e}', flush=True)
 
     # ════════════════════════════════════════
     #  识别状态循环

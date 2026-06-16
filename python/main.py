@@ -211,6 +211,36 @@ def _register_apply_on_exit():
     atexit.register(_hook)
 
 
+def _show_tk_license_gate():
+    """启动前显示 Tk 授权验证弹窗 (阻塞到用户关闭)"""
+    try:
+        from license import get_license_manager
+        mgr = get_license_manager()
+        if mgr.is_paid:
+            print('[license] paid license detected, skipping dialog')
+            return
+    except Exception as e:
+        print(f'[license] check failed: {e}')
+        return
+
+    try:
+        from gui_modules.sao_gui_license import is_license_dialog_dismissed
+        if is_license_dialog_dismissed():
+            print('[license] dialog previously dismissed, skipping')
+            return
+    except Exception:
+        pass
+
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        from gui_modules.sao_gui_license import show_license_dialog
+        show_license_dialog(root)
+    except Exception as e:
+        print(f'[license] dialog failed: {e}')
+
+
 def run_ui():
     """根据 settings.json 中的 ui_mode 启动对应 UI."""
     # 读取 ui_mode 设置
@@ -227,6 +257,7 @@ def run_ui():
     if ui_mode == 'entity':
         print('[SAO Auto] UI mode: entity (tkinter)')
         try:
+            _show_tk_license_gate()
             from sao_gui import SAOPlayerGUI
             app = SAOPlayerGUI()
             app.run()
