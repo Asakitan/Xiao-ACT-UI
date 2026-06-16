@@ -61,34 +61,15 @@ class SAOPlayerGUIFisheyeMixin:
       * self._fisheye_close_suppress_until (float)
       * self._lift_loop_active (bool)
       * self._destroyed (bool)
-      * self._sao_menu, self._panels_hidden, the per-panel handles
-        (_status_panel, _update_panel, _autokey_panel, _bossraid_panel,
-        _autokey_detail_panel, _bossraid_detail_panel, _commander_panel)
+      * self._sao_menu, self._panels_hidden, per-panel handles (dynamic)
       * self._session_players_panel
       * self.root (the Tk root)
     """
 
-    _FISHEYE_PANEL_ATTRS = (
-        '_status_panel',
-        '_update_panel',
-        '_autokey_panel',
-        '_bossraid_panel',
-        '_autokey_detail_panel',
-        '_bossraid_detail_panel',
-        '_commander_panel',
-        '_act_plugin_manager_panel',
-        '_act_trigger_timer_panel',
-        '_act_data_source_health_panel',
-        '_act_report_export_panel',
-        '_act_offline_import_panel',
-        '_act_timeline_vcr_panel',
-        '_act_aggregate_panel',
-        '_act_action_log_panel',
-        '_act_death_recap_panel',
-        '_act_graph_timeseries_panel',
-        '_act_combatant_drilldown_panel',
-        '_act_skill_drilldown_panel',
-    )
+    @staticmethod
+    def _detect_panel_attrs(obj):
+        """Dynamically find all panel attribute names on the owner."""
+        return tuple(k for k in vars(obj) if k.endswith('_panel') and k.startswith('_'))
 
     def _fisheye_close_suppressed(self) -> bool:
         try:
@@ -303,7 +284,7 @@ class SAOPlayerGUIFisheyeMixin:
     def _iter_fisheye_panels(self):
         seen = set()
         attrs = tuple(getattr(self, '_ACT_PANEL_ATTRS', ()) or ())
-        for attr in self._FISHEYE_PANEL_ATTRS + attrs:
+        for attr in self._detect_panel_attrs(self) + tuple(attrs):
             if attr in seen:
                 continue
             seen.add(attr)

@@ -4884,23 +4884,6 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
-        # License panel — 授权验证弹窗 (启动时显示)
-        license_url = _web_file_uri('license_panel.html')
-        _lic_w, _lic_h = 460, 420
-        _lic_x = max(0, int(monitor_left + (_sw - _lic_w) / 2))
-        _lic_y = max(0, int(monitor_top + (_sh - _lic_h) / 2))
-        self._license_win = webview.create_window(
-            'SAO-License', license_url,
-            width=_lic_w, height=_lic_h,
-            x=_lic_x, y=_lic_y,
-            frameless=True,
-            easy_drag=True,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -6109,44 +6092,8 @@ class SAOWebViewGUI:
             pass
         self._license_done_event.set()
 
-    def _show_license_gate(self):
-        try:
-            from license import get_license_manager
-            mgr = get_license_manager()
-            if mgr.is_paid:
-                self._license_done_event.set()
-                return
-        except Exception:
-            self._license_done_event.set()
-            return
-
-        try:
-            from gui_modules.sao_gui_license import is_license_dialog_dismissed
-            if is_license_dialog_dismissed():
-                self._license_done_event.set()
-                return
-        except Exception:
-            pass
-
-        try:
-            if self._license_win:
-                self._license_win.show()
-        except Exception:
-            self._license_done_event.set()
-            return
-
-        self._license_done_event.wait(timeout=120)
-
-        try:
-            if self._license_win:
-                self._license_win.destroy()
-                self._license_win = None
-        except Exception:
-            pass
-
     def _on_webview_started(self):
         def _init():
-            self._show_license_gate()
             self._lock_hp_position(2.0)
             self._hp_hit_regions_ready = False
             self._hp_js_hit_regions_ready = False
@@ -6475,35 +6422,7 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
-            # 用缓存名替换默认 "Player"
-            cached_name = self._state_mgr.state.player_name
-            if cached_name:
-                self._username = cached_name
-                self._eval_hp(f'setUsername("{self._safe_js(cached_name)}")')
-                print(f'[SAO] 从缓存加载角色名: {cached_name}')
-            cached_lv = self._state_mgr.state.level_base
-            cached_lv_extra = self._state_mgr.state.level_extra
-            if cached_lv > 0:
-                self._level = cached_lv
-                cached_hp = max(0, int(self._state_mgr.state.hp_current or 0))
-                cached_hp_max = max(1, int(self._state_mgr.state.hp_max or 1))
-                if cached_lv_extra > 0:
-                    cached_level_str = f'{cached_lv}(+{cached_lv_extra})'
-                else:
-                    cached_level_str = str(cached_lv)
-                self._eval_hp(f'updateHP({cached_hp}, {cached_hp_max}, "{cached_level_str}")')
-            # 同步缓存的职业/UID到 id-plate
-            cached_prof = self._state_mgr.state.profession_name
-            cached_uid = self._state_mgr.state.player_id
-            if cached_prof or cached_uid:
-                import json as _j
-                info = {}
-                if cached_prof:
-                    info['profession'] = cached_prof
-                if cached_uid:
-                    info['uid'] = cached_uid
-                self._eval_hp(f'setPlayerInfo({_j.dumps(info, ensure_ascii=False)})')
-                print(f'[SAO] 从缓存加载: 职业={cached_prof}, UID={cached_uid}')
+            # 游戏状态缓存恢复由插件 on_load 处理 (通过 set_owner_attr)
 
             # 5.0.0: 引擎由插件 on_load 创建 (DPS/AutoKey/BossRaid/MemBridge...)
             self._reconfigure_data_engines(restart_packet=not bool(getattr(self, '_packet_engine', None)))

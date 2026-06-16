@@ -213,7 +213,7 @@ from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin  # noqa: 
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin  # noqa: E402
 from gui_modules.sao_gui_status_updater_mixin import SAOPlayerGUIStatusUpdaterMixin  # noqa: E402
 from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin  # noqa: E402
-from gui_modules.sao_gui_engine_lifecycle_mixin import SAOPlayerGUIEngineLifecycleMixin  # noqa: E402
+# EngineLifecycleMixin moved to plugin
 # Game mixins (PacketCallbacksMixin/DamageEventsMixin) moved to plugin in 5.0.0
 from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin  # noqa: E402
 from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin  # noqa: E402
@@ -224,7 +224,7 @@ from gui_modules.sao_gui_link_animation_mixin import SAOPlayerGUILinkAnimationMi
 from gui_modules.sao_gui_misc_mixin import SAOPlayerGUIMiscMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIEngineLifecycleMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin, SAOPlayerGUISessionMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin, SAOPlayerGUISessionMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)

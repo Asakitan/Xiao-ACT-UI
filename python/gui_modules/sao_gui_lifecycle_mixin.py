@@ -250,57 +250,21 @@ class SAOPlayerGUILifecycleMixin:
                     panel.destroy()
             except Exception:
                 pass
-        # 销毁 ULW 覆盖层 + 配置面板
-        for ov in [self._dps_overlay, self._boss_hp_overlay, self._hp_overlay,
-                   self._alert_overlay, getattr(self, '_map_banner_overlay', None),
-                   getattr(self, '_mech_banner_overlay', None),
-                   self._skillfx_overlay,
-                   self._self_buff_overlay, self._boss_buff_overlay]:
-            try:
-                if ov:
-                    ov.destroy()
-            except Exception:
-                pass
-        for pnl in [
-            getattr(self, '_autokey_panel', None),
-            getattr(self, '_bossraid_panel', None),
-            getattr(self, '_autokey_detail_panel', None),
-            getattr(self, '_bossraid_detail_panel', None),
-            getattr(self, '_commander_panel', None),
-            getattr(self, '_act_plugin_manager_panel', None),
-            getattr(self, '_act_trigger_timer_panel', None),
-            getattr(self, '_act_data_source_health_panel', None),
-            getattr(self, '_act_report_export_panel', None),
-            getattr(self, '_act_offline_import_panel', None),
-            getattr(self, '_act_timeline_vcr_panel', None),
-            getattr(self, '_act_aggregate_panel', None),
-            getattr(self, '_act_action_log_panel', None),
-            getattr(self, '_act_death_recap_panel', None),
-            getattr(self, '_act_graph_timeseries_panel', None),
-            getattr(self, '_act_combatant_drilldown_panel', None),
-            getattr(self, '_act_skill_drilldown_panel', None),
-            getattr(self, '_mem_scope_panel', None),
-        ]:
-            try:
-                if pnl:
-                    pnl.destroy()
-            except Exception:
-                pass
-        self._dps_overlay = None
-        self._boss_hp_overlay = None
-        self._hp_overlay = None
-        self._alert_overlay = None
-        self._map_banner_overlay = None
-        self._mech_banner_overlay = None
-        self._mech_alert_controller = None
-        self._skillfx_overlay = None
-        self._self_buff_overlay = None
-        self._boss_buff_overlay = None
-        self._autokey_panel = None
-        self._bossraid_panel = None
-        self._autokey_detail_panel = None
-        self._bossraid_detail_panel = None
-        self._commander_panel = None
+        # 销毁所有注册的覆盖层 + 面板 (动态遍历, 不硬编码名称)
+        for attr_name in list(vars(self)):
+            if attr_name.endswith('_overlay') or attr_name.endswith('_panel'):
+                obj = getattr(self, attr_name, None)
+                if obj is not None:
+                    try:
+                        destroy = getattr(obj, 'destroy', None)
+                        if callable(destroy):
+                            destroy()
+                    except Exception:
+                        pass
+                    try:
+                        setattr(self, attr_name, None)
+                    except Exception:
+                        pass
         self._act_plugin_manager_panel = None
         self._act_trigger_timer_panel = None
         self._act_data_source_health_panel = None
