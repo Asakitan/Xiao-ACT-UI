@@ -1,10 +1,12 @@
 # ACT 平台架构
 
-> 当前版本：`4.6.74`（review-chain Batch 202）。本文与 `docs/ACT_UI_PARITY_SDK.md`、`docs/HYBRID_MEMORY_TCP.md`、`docs/PLUGIN_SDK.md`、`docs/GAME_STATE_API.md` 配套使用。
+> 当前版本：`5.0.0`。配套文档：`docs/ACT_UI_PARITY_SDK.md`、`docs/HYBRID_MEMORY_TCP.md`、`docs/PLUGIN_SDK.md`、`docs/GAME_STATE_API.md`、`docs/AI_EDITOR.md`。
 
-SAO Auto 的 ACT 平台是一个共享的运行时，统一处理实时战斗遥测、回放校验、插件、报告、触发器，以及两套一方 UI 表面：WebView 与 Entity/Tk。
+SAO Auto 的 ACT 平台是一个**游戏无关的共享运行时**，统一处理实时战斗遥测、回放校验、插件、报告、触发器，以及三套 UI 表面：WebView 叠层、Entity/Tk、AI Editor（独立 pywebview IDE 窗口）。
 
-任何 ACT 功能在 WebView 与 Entity 都能访问到同一个共享后端能力之前，都不算完成。
+游戏特定逻辑（DPS 面板、Boss 监控、Buff 追踪、自动按键等）全部由插件提供。平台本身零游戏特定 import。`plugins/star_resonance_plugin/` 是参考插件——新游戏适配器应当参照其 `plugin.py` on_load 结构。
+
+任何 ACT 功能在所有 UI 表面都能访问到同一个共享后端能力之前，都不算完成。
 
 ## 运行时目标
 
@@ -31,6 +33,7 @@ SAO Auto 的 ACT 平台是一个共享的运行时，统一处理实时战斗遥
 | 历史/导出 | `engines/dps_history.py` | 滚动战斗持久化、追加式 JSONL 归档、轻量搜索，以及 JSON/CSV/HTML/XML 与压缩 XML 的导入导出。 |
 | TCP 桥接 | `net/packet_bridge.py` | 拥有抓包、解析器适配器创建、包回调、数据源健康。 |
 | 混合内存源 | `mem_probe/unified_source.py` | 只读的"自身状态"内存桥接，供 memory/hybrid/auto 模式使用。 |
+| AI Editor | `ai_editor/` | 独立 pywebview IDE 窗口，多 Provider LLM 对话（OpenAI / Anthropic 原生 / 兼容 API），VSCode 对齐的 tool calling，MCP 服务器集成，VSCode Marketplace 扩展浏览器，dark/light 主题。详见 `docs/AI_EDITOR.md`。 |
 
 ## 数据流
 
