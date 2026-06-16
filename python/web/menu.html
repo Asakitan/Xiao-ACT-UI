@@ -9108,6 +9108,40 @@ setTimeout(function() {
         }
     });
 })();
+
+/* ═══ Plugin Web Extension API ═══
+ * Plugins can inject CSS, HTML sub-menus, and JS into the menu at runtime.
+ * Usage from Python (via pywebview bridge):
+ *   window._pluginMenuApi.addCss(cssText)
+ *   window._pluginMenuApi.addSlot(groupId, htmlString)
+ *   window._pluginMenuApi.addScript(jsUrl | jsText)
+ *   window._pluginMenuApi.ready()  — true after DOMContentLoaded
+ */
+window._pluginMenuApi = {
+    ready: function() { return true; },
+    addCss: function(css) {
+        var s = document.createElement('style');
+        s.textContent = css;
+        document.head.appendChild(s);
+    },
+    addSlot: function(groupId, html) {
+        var target = document.getElementById('child-bar');
+        if (!target) return;
+        var div = document.createElement('div');
+        div.setAttribute('data-plugin-group', groupId);
+        div.innerHTML = html;
+        target.appendChild(div);
+    },
+    addScript: function(src) {
+        if (src.indexOf('<') === -1 && (src.indexOf('/') !== -1 || src.indexOf('.js') !== -1)) {
+            var s = document.createElement('script');
+            s.src = src;
+            document.body.appendChild(s);
+        } else {
+            try { (0, eval)(src); } catch(e) { console.error('[pluginMenuApi] script error', e); }
+        }
+    },
+};
 </script>
 </body>
 </html>
