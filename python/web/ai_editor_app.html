@@ -283,6 +283,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { flex:1; }
 .chat-toolbar .token-count { color:var(--fg-dim); }
+.ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
+.ctx-bar { width:48px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
+.ctx-fill { height:100%; border-radius:3px; background:var(--fg-success); transition:width .3s; }
+.ctx-fill.warn { background:var(--fg-warning); }
+.ctx-fill.crit { background:var(--fg-error); }
+.model-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 8px; background:var(--bg3);
+  border:1px solid var(--border); border-radius:10px; font-size:11px; color:var(--fg-dim);
+  cursor:pointer; white-space:nowrap; }
+.model-chip:hover { color:var(--fg); border-color:var(--fg-dim); }
+.model-chip .provider-badge { font-size:9px; opacity:0.6; }
 .toolbar-btn { color:var(--fg-dim); cursor:pointer; padding:2px 8px; border-radius:3px; }
 .toolbar-btn:hover { background:var(--bg-hover); color:var(--fg); }
 
@@ -656,7 +666,11 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
               <span class="toolbar-btn" onclick="uploadImage()" title="Attach image (vision)">📷</span>
               <span class="toolbar-btn" onclick="clearChat()" title="Clear">🗑</span>
               <span class="toolbar-btn" onclick="exportChat()" title="Export">📋</span>
-              <span class="token-count" id="token-count">0 tokens</span>
+              <span class="model-chip" id="model-chip" onclick="openSettings()" title="Change model">-</span>
+              <span class="ctx-usage" id="ctx-usage" title="Context window usage">
+                <span id="ctx-text">0 tokens</span>
+                <span class="ctx-bar"><span class="ctx-fill" id="ctx-fill" style="width:0%"></span></span>
+              </span>
             </div>
           </div>
         </div>
@@ -767,11 +781,17 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
       <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Custom Models</summary>
       <div style="padding:8px 0;font-size:12px">
         <div id="s-custom-models-list"></div>
-        <div style="display:flex;gap:4px;margin-top:6px">
-          <input id="s-cm-name" placeholder="model-name" style="flex:2;font-size:11px">
-          <input id="s-cm-input" placeholder="maxInput" type="number" style="flex:1;font-size:11px" value="128000">
-          <input id="s-cm-output" placeholder="maxOutput" type="number" style="flex:1;font-size:11px" value="4096">
+        <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+          <input id="s-cm-name" placeholder="model-name" style="flex:2;font-size:11px;min-width:120px">
+          <input id="s-cm-input" placeholder="maxInput" type="number" style="flex:1;font-size:11px;min-width:70px" value="128000">
+          <input id="s-cm-output" placeholder="maxOutput" type="number" style="flex:1;font-size:11px;min-width:70px" value="4096">
           <button class="send-btn" style="font-size:10px;padding:2px 8px" onclick="addCustomModel()">Add</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px;font-size:11px;color:var(--fg-dim)">
+          <label><input type="checkbox" id="s-cm-tools" checked> Tools</label>
+          <label><input type="checkbox" id="s-cm-vision"> Vision</label>
+          <label><input type="checkbox" id="s-cm-thinking"> Thinking</label>
+          <label><input type="checkbox" id="s-cm-streaming" checked> Streaming</label>
         </div>
       </div>
     </details>
@@ -1252,7 +1272,7 @@ function onStreamEnd(d){
     if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id));
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
   }
-  if(d.usage){totalTokens+=(d.usage.total_tokens||0);$('token-count').textContent=totalTokens+' tokens';$('status-tokens').textContent=totalTokens+' tokens'}
+  if(d.usage){updateContextUsage(totalTokens+(d.usage.total_tokens||0))}
   if(d.model)$('status-model').textContent=d.model;
   currentMsgBody=null;streamBuf='';
   setStatus(d.tool_calls?'Executing tools...':'Ready');
@@ -1348,7 +1368,7 @@ async function doSend(){
 
 async function doStop(){await call('cancel');onIdle()}
 async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
-  $('token-count').textContent='0 tokens';$('status-tokens').textContent='0 tokens';
+  updateContextUsage(0);
   appendSystem('New conversation started.')}
 async function clearChat(){newChat()}
 async function exportChat(){const d=await call('export_chat');if(d){navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus('Exported to clipboard')}}
@@ -1749,20 +1769,12 @@ document.addEventListener('mousemove',e=>{if(!splitterDragging)return;
 document.addEventListener('mouseup',()=>{splitterDragging=false;splitter.classList.remove('dragging')});
 
 // ── Settings ──
-const MODEL_CTX={
-  'gpt-4o':{i:128000,o:16384},'gpt-4o-mini':{i:128000,o:16384},'gpt-4-turbo':{i:128000,o:4096},
-  'o1':{i:200000,o:100000},'o3':{i:200000,o:100000},'o3-mini':{i:200000,o:100000},'o4-mini':{i:200000,o:100000},
-  'codex-mini-latest':{i:200000,o:100000},
-  'claude-sonnet-4-20250514':{i:200000,o:16384},'claude-opus-4-20250514':{i:200000,o:16384},
-  'claude-haiku-3-5':{i:200000,o:8192},'claude-3-5-sonnet':{i:200000,o:8192},
-  'deepseek-chat':{i:64000,o:8192},'deepseek-coder':{i:64000,o:8192},'deepseek-reasoner':{i:64000,o:8192},
-  'llama3.1':{i:128000,o:4096},'qwen2.5':{i:128000,o:8192},
-};
-function showModelInfo(){
+async function showModelInfo(){
   const m=$('s-model').value.trim(),el=$('s-model-info');if(!el)return;
-  const ctx=MODEL_CTX[m];
-  if(ctx){el.innerHTML='Context: <b>'+Math.round(ctx.i/1000)+'K</b> input · <b>'+Math.round(ctx.o/1000)+'K</b> output · Compress at <b>'+Math.round(ctx.i*0.9/1000)+'K</b>'}
-  else{el.textContent=m?'Unknown model — default 128K context':''}
+  if(!m){el.textContent='';return}
+  const r=await call('get_model_info',m);
+  if(r&&r.max_input){el.innerHTML='Context: <b>'+Math.round(r.max_input/1000)+'K</b> input · <b>'+Math.round(r.max_output/1000)+'K</b> output · Compress at <b>'+Math.round(r.compact_at/1000)+'K</b>'}
+  else{el.textContent='Custom model — default 128K context. Add via Custom Models below.'}
 }
 function openSettings(){
   $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
@@ -1828,7 +1840,19 @@ window.saveSettings=saveSettings;
 
 function syncUI(){
   $('provider-sel').value=config.provider;$('model-inp').value=config.model;
-  $('status-model').textContent=config.model||config.provider;
+  const mname=config.model||config.provider;
+  $('status-model').textContent=mname;
+  if($('model-chip'))$('model-chip').textContent=mname;
+}
+function updateContextUsage(usedTokens){
+  totalTokens=usedTokens;
+  const ctxEl=$('ctx-text'),fillEl=$('ctx-fill');if(!ctxEl||!fillEl)return;
+  const cw=(config.context_window&&config.context_window.max_input)||128000;
+  const pct=Math.min(100,Math.round(usedTokens/cw*100));
+  ctxEl.textContent=usedTokens>=1000?Math.round(usedTokens/1000)+'K / '+Math.round(cw/1000)+'K':usedTokens+' / '+Math.round(cw/1000)+'K';
+  fillEl.style.width=pct+'%';
+  fillEl.className='ctx-fill'+(pct>=90?' crit':pct>=75?' warn':'');
+  $('status-tokens').textContent=usedTokens+' tokens';
 }
 $('provider-sel').onchange=e=>{config.provider=e.target.value;
   const defs={openai:'gpt-4o',anthropic:'claude-sonnet-4-20250514',deepseek:'deepseek-chat',ollama:'llama3.1',custom:''};
@@ -1875,12 +1899,15 @@ async function renderCustomModels(){
   const el=$('s-custom-models-list');if(!el)return;
   const models=r.models;const keys=Object.keys(models).sort();
   el.innerHTML='';
+  if(!keys.length){el.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:2px 0">No models defined. Add models below to configure context window and capabilities.</div>';return}
   keys.forEach(m=>{const c=models[m];
+    const caps=[];if(c.tools)caps.push('T');if(c.vision)caps.push('V');if(c.thinking)caps.push('R');if(c.streaming)caps.push('S');
     const row=document.createElement('div');
     row.style.cssText='display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px';
     row.innerHTML='<span style="flex:2;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis" title="'+esc(m)+'">'+esc(m)+'</span>'
-      +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_input/1000)+'K</span>'
-      +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_output/1000)+'K</span>';
+      +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_input/1000)+'K/'+Math.round(c.max_output/1000)+'K</span>'
+      +'<span style="color:var(--fg-dim)">'+caps.join('')+'</span>'
+      +'<span style="cursor:pointer;opacity:0.5;color:var(--fg-error)" onclick="delModel(\''+esc(m)+'\')">✕</span>';
     el.appendChild(row);
   });
 }
@@ -1888,9 +1915,15 @@ async function addCustomModel(){
   const name=$('s-cm-name').value.trim();if(!name)return;
   const inp=parseInt($('s-cm-input').value)||128000;
   const out=parseInt($('s-cm-output').value)||4096;
-  await call('save_custom_model',name,inp,out);
+  const tools=$('s-cm-tools')&&$('s-cm-tools').checked;
+  const vision=$('s-cm-vision')&&$('s-cm-vision').checked;
+  const thinking=$('s-cm-thinking')&&$('s-cm-thinking').checked;
+  const streaming=$('s-cm-streaming')?$('s-cm-streaming').checked:true;
+  await call('save_custom_model',name,inp,out,tools,vision,thinking,streaming);
   $('s-cm-name').value='';renderCustomModels();showModelInfo();
 }
+async function delModel(name){await call('delete_custom_model',name);renderCustomModels();showModelInfo()}
+window.delModel=delModel;
 window.addCustomModel=addCustomModel;
 
 $('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings()};

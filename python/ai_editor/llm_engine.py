@@ -52,91 +52,76 @@ _PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
     },
 }
 
-MODEL_CONTEXT_WINDOWS: Dict[str, Dict[str, int]] = {
-    "gpt-4o":                   {"max_input": 128000, "max_output": 16384},
-    "gpt-4o-mini":              {"max_input": 128000, "max_output": 16384},
-    "gpt-4-turbo":              {"max_input": 128000, "max_output": 4096},
-    "gpt-4":                    {"max_input":   8192, "max_output": 4096},
-    "gpt-3.5-turbo":            {"max_input":  16384, "max_output": 4096},
-    "o1":                       {"max_input": 200000, "max_output": 100000},
-    "o1-mini":                  {"max_input": 128000, "max_output": 65536},
-    "o3":                       {"max_input": 200000, "max_output": 100000},
-    "o3-mini":                  {"max_input": 200000, "max_output": 100000},
-    "o4-mini":                  {"max_input": 200000, "max_output": 100000},
-    "codex-mini-latest":        {"max_input": 200000, "max_output": 100000},
-    "claude-sonnet-4-20250514": {"max_input": 200000, "max_output": 16384},
-    "claude-opus-4-20250514":   {"max_input": 200000, "max_output": 16384},
-    "claude-haiku-3-5":         {"max_input": 200000, "max_output": 8192},
-    "claude-3-5-sonnet":        {"max_input": 200000, "max_output": 8192},
-    "deepseek-chat":            {"max_input":  64000, "max_output": 8192},
-    "deepseek-coder":           {"max_input":  64000, "max_output": 8192},
-    "deepseek-reasoner":        {"max_input":  64000, "max_output": 8192},
-    "llama3.1":                 {"max_input": 128000, "max_output": 4096},
-    "qwen2.5":                  {"max_input": 128000, "max_output": 8192},
-}
+# Model registry — fully user-driven. No hardcoded models.
+# Users add models via Settings → Custom Models or settings.json ai_editor.custom_models.
+# Default context for unknown models: 128K input, 4K output, all capabilities enabled.
 
-MODEL_CAPABILITIES: Dict[str, Dict[str, bool]] = {
-    "gpt-4o":                   {"tools": True, "vision": True, "thinking": False, "streaming": True},
-    "gpt-4o-mini":              {"tools": True, "vision": True, "thinking": False, "streaming": True},
-    "o1":                       {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "o3":                       {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "o3-mini":                  {"tools": True, "vision": False, "thinking": True, "streaming": True},
-    "o4-mini":                  {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "codex-mini-latest":        {"tools": True, "vision": False, "thinking": True, "streaming": True},
-    "claude-sonnet-4-20250514": {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "claude-opus-4-20250514":   {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "claude-haiku-3-5":         {"tools": True, "vision": True, "thinking": False, "streaming": True},
-    "claude-3-5-sonnet":        {"tools": True, "vision": True, "thinking": True, "streaming": True},
-    "deepseek-chat":            {"tools": True, "vision": False, "thinking": False, "streaming": True},
-    "deepseek-coder":           {"tools": True, "vision": False, "thinking": False, "streaming": True},
-    "deepseek-reasoner":        {"tools": True, "vision": False, "thinking": True, "streaming": True},
-    "llama3.1":                 {"tools": True, "vision": False, "thinking": False, "streaming": True},
-    "qwen2.5":                  {"tools": True, "vision": True, "thinking": False, "streaming": True},
-}
-
-
-def get_model_capabilities(model: str) -> Dict[str, bool]:
-    """Return per-model feature flags. Unknown models get conservative defaults."""
-    if model in MODEL_CAPABILITIES:
-        return dict(MODEL_CAPABILITIES[model])
-    for prefix, caps in MODEL_CAPABILITIES.items():
-        if model.startswith(prefix.rsplit("-", 1)[0]):
-            return dict(caps)
-    return {"tools": True, "vision": False, "thinking": False, "streaming": True}
-
+_DEFAULT_CONTEXT: Dict[str, int] = {"max_input": 128000, "max_output": 4096}
+_DEFAULT_CAPS: Dict[str, bool] = {"tools": True, "vision": False, "thinking": False, "streaming": True}
 
 COMPACTION_RATIO = 0.9
 
-_custom_models: Dict[str, Dict[str, int]] = {}
+_model_registry: Dict[str, Dict[str, Any]] = {}
 
 
-def set_custom_models(models: Dict[str, Dict[str, int]]) -> None:
-    """Merge user-defined model context windows (from settings)."""
-    _custom_models.clear()
-    _custom_models.update(models)
+def register_model(name: str, max_input: int = 0, max_output: int = 0,
+                    tools: bool = True, vision: bool = False,
+                    thinking: bool = False, streaming: bool = True) -> None:
+    """Register or update a model's context window and capabilities."""
+    _model_registry[name] = {
+        "max_input": max_input or _DEFAULT_CONTEXT["max_input"],
+        "max_output": max_output or _DEFAULT_CONTEXT["max_output"],
+        "tools": tools, "vision": vision,
+        "thinking": thinking, "streaming": streaming,
+    }
+
+
+def unregister_model(name: str) -> None:
+    _model_registry.pop(name, None)
+
+
+def set_custom_models(models: Dict[str, Any]) -> None:
+    """Bulk load models from settings. Each value is a dict with optional keys:
+    max_input, max_output, tools, vision, thinking, streaming."""
+    for name, cfg in models.items():
+        if isinstance(cfg, dict):
+            register_model(
+                name,
+                max_input=cfg.get("max_input", 0),
+                max_output=cfg.get("max_output", 0),
+                tools=cfg.get("tools", True),
+                vision=cfg.get("vision", False),
+                thinking=cfg.get("thinking", False),
+                streaming=cfg.get("streaming", True),
+            )
 
 
 def get_model_context(model: str) -> Dict[str, int]:
     """Return {max_input, max_output} for a model.
-
-    Priority: user custom_models > built-in table > prefix match > default 128K.
-    """
-    if model in _custom_models:
-        return dict(_custom_models[model])
-    if model in MODEL_CONTEXT_WINDOWS:
-        return dict(MODEL_CONTEXT_WINDOWS[model])
-    for src in (_custom_models, MODEL_CONTEXT_WINDOWS):
-        for prefix, ctx in src.items():
-            if model.startswith(prefix.rsplit("-", 1)[0]):
-                return dict(ctx)
-    return {"max_input": 128000, "max_output": 4096}
+    Checks registry first, then prefix match, then default 128K."""
+    entry = _model_registry.get(model)
+    if entry:
+        return {"max_input": entry["max_input"], "max_output": entry["max_output"]}
+    for prefix, e in _model_registry.items():
+        if model.startswith(prefix.rsplit("-", 1)[0]):
+            return {"max_input": e["max_input"], "max_output": e["max_output"]}
+    return dict(_DEFAULT_CONTEXT)
 
 
-def list_all_models() -> Dict[str, Dict[str, int]]:
-    """Return merged model table (built-in + custom overrides)."""
-    merged = dict(MODEL_CONTEXT_WINDOWS)
-    merged.update(_custom_models)
-    return merged
+def get_model_capabilities(model: str) -> Dict[str, bool]:
+    """Return per-model feature flags. Unknown models get all-enabled defaults."""
+    entry = _model_registry.get(model)
+    if entry:
+        return {k: entry.get(k, v) for k, v in _DEFAULT_CAPS.items()}
+    for prefix, e in _model_registry.items():
+        if model.startswith(prefix.rsplit("-", 1)[0]):
+            return {k: e.get(k, v) for k, v in _DEFAULT_CAPS.items()}
+    return dict(_DEFAULT_CAPS)
+
+
+def list_all_models() -> Dict[str, Dict[str, Any]]:
+    """Return all registered models."""
+    return dict(_model_registry)
 
 
 def compaction_threshold(model: str) -> int:

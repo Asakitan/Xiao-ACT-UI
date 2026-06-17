@@ -1046,30 +1046,32 @@ class AIEditorAPI:
         from ai_editor.llm_engine import list_all_models
         return {"models": list_all_models()}
 
-    def save_custom_model(self, model_name: str, max_input: int,
-                          max_output: int = 4096) -> Dict:
-        """Add/override a model's context window in settings."""
-        from ai_editor.llm_engine import set_custom_models, _custom_models
-        _custom_models[model_name] = {"max_input": max_input,
-                                       "max_output": max_output}
-        self._save_custom_models_to_settings()
+    def save_custom_model(self, model_name: str, max_input: int = 128000,
+                          max_output: int = 4096, tools: bool = True,
+                          vision: bool = False, thinking: bool = False,
+                          streaming: bool = True) -> Dict:
+        """Add or update a model definition."""
+        from ai_editor.llm_engine import register_model
+        register_model(model_name, max_input, max_output,
+                       tools, vision, thinking, streaming)
+        self._save_models_to_settings()
         return {"ok": True, "model": model_name}
 
     def delete_custom_model(self, model_name: str) -> Dict:
-        from ai_editor.llm_engine import _custom_models
-        _custom_models.pop(model_name, None)
-        self._save_custom_models_to_settings()
+        from ai_editor.llm_engine import unregister_model
+        unregister_model(model_name)
+        self._save_models_to_settings()
         return {"ok": True}
 
-    def _save_custom_models_to_settings(self) -> None:
-        from ai_editor.llm_engine import _custom_models
+    def _save_models_to_settings(self) -> None:
+        from ai_editor.llm_engine import _model_registry
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
         if not settings:
             return
         ai = settings.get("ai_editor", {}) or {}
         if not isinstance(ai, dict):
             ai = {}
-        ai["custom_models"] = dict(_custom_models)
+        ai["custom_models"] = dict(_model_registry)
         settings.set("ai_editor", ai)
         try:
             settings.save()
