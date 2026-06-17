@@ -17,7 +17,7 @@ if ROOT not in sys.path:
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
 from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore
-from gui_modules.sao_gui_action_log import ActionLogPanel, _finite_float, _finite_int
+from plugins.star_resonance_plugin.panels.sao_gui_action_log import ActionLogPanel, _finite_float, _finite_int
 
 
 class FakeOwner:
@@ -449,7 +449,7 @@ class ActActionLogRuntimeTests(unittest.TestCase):
 
         from unittest import mock
 
-        with mock.patch("gui_modules.sao_gui_action_log.act_action_log_status") as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_action_log.act_action_log_status") as status_fn:
             status_fn.return_value = {"ok": True, "rows": [], "cursor": {}, "analytics": {}}
             panel.refresh()
 
@@ -477,7 +477,7 @@ class ActActionLogRuntimeTests(unittest.TestCase):
 
         from unittest import mock
 
-        with mock.patch("gui_modules.sao_gui_action_log.act_action_log_status") as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_action_log.act_action_log_status") as status_fn:
             self.assertEqual(panel.refresh(), {"ok": True, "cached": True})
 
         status_fn.assert_not_called()
@@ -556,7 +556,7 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertNotIn("inf", panel._summary_var.value.lower() + panel._status_var.value.lower())
 
     def test_action_log_group_numeric_helpers_filter_bad_values(self) -> None:
-        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_action_log.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "panels" / "sao_gui_action_log.py").read_text(encoding="utf-8")
 
         self.assertNotIn("max(1.0, *[float(group.get('total_value') or 0.0)", source)
         self.assertNotIn("int(group.get('count') or 0)", source)

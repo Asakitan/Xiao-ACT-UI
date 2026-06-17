@@ -5,8 +5,13 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
+const platformRoot = path.resolve(__dirname, "..", "..", "..");
 
 function read(rel) {
+  for (const base of [root, platformRoot]) {
+    const candidate = path.join(base, rel);
+    if (fs.existsSync(candidate)) return fs.readFileSync(candidate, "utf8");
+  }
   return fs.readFileSync(path.join(root, rel), "utf8");
 }
 

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Timeline VCR</title>
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Panel-scoped tokens: LAYOUT/SIZING only. ALL colors come from the shared
+   act_panel_theme.css var(--act-*) tokens (the shared .shell/.header/.event/.row
+   rules drive chrome, edges, text, accents) so light/dark follow the host theme
+   and stay 1:1 with the flat Tk Entity reference.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+    --r-sm: 4px; --r-md: 6px;
+    --fs-kicker: 10px; --fs-meta: 11px; --fs-body: 12px; --fs-title: 14px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+.shell { opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: var(--fs-kicker); color: var(--act-gold); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; color: var(--act-text); }
+.header-actions { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; font-size: var(--fs-body); }
+input { width: 190px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-3); }
+.main { min-height: 0; overflow: auto; padding-right: var(--sp-1); }
+.side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: var(--sp-3); }
+.side-title { color: var(--act-gold); font-size: var(--fs-body); letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--act-edge-soft); padding-bottom: 5px; font-size: var(--fs-body); color: var(--act-muted); }
+.row strong { color: var(--act-text); text-align: right; }
+/* .event: shared theme paints the card (border, cyan left rail, bg). Layout only here.
+   Type is signalled on a SINGLE channel — the shared cyan LEFT rail — to avoid the
+   prior cyan-rail-vs-coloured-top-bar clash. The shared theme already overrides the
+   rail heal->ok(green) and skill->gold; we add damage->danger(red) and leave
+   boss/boss_state on the default cyan rail so all four types stay distinct. */
+.event { position: relative; margin-bottom: var(--sp-2); padding: 10px 12px; user-select: text; cursor: pointer; overflow: hidden; }
+.event.damage { border-left-color: var(--act-danger) !important; }
+.evt-caret { color: var(--act-gold); margin-right: 4px; }
+.evt-payload { margin: 7px 0 0; color: var(--act-muted); font-size: var(--fs-meta); line-height: 1.45; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; user-select: text; }
+.event-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.event-title { font-size: var(--fs-title); color: var(--act-text); font-weight: 700; }
+.event-topic { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .10em; }
+.event-meta { margin-top: 5px; color: var(--act-muted); font-size: var(--fs-body); line-height: 1.45; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border-radius: 999px; padding: 8px 14px; font-size: var(--fs-body); transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--act-edge); border-radius: 999px; }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only): kill shared decorative chrome + flatten per-page accents to a single 3px left rail. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+button,input,select,.action-btn{clip-path:none!important;border-radius:3px!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;background:var(--act-card-bg-2)!important;}
+.main,.list,.plugin-list,.side,.side-panel,.section,.summary,.chart-wrap,.preview{box-shadow:none!important;}
+.bar{background:var(--act-gold)!important;}.skill-row.heal .bar{background:var(--act-ok)!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.aca-tile::before,.metric::before,.group-card::before{content:none!important;display:none!important;}
+.aca-tile{border-left:3px solid var(--acc,var(--act-cyan))!important;}
+.metric{border-left:3px solid var(--act-cyan)!important;}
+.group-card{border-left:3px solid var(--act-gold)!important;}
+.aca-fill{box-shadow:none!important;}
+.aca-row.zebra{background:var(--act-card-bg-2)!important;}
+.aca-badge,.aca-sec-badge{background:transparent!important;border-radius:3px!important;}
+.group-head:hover{background:var(--act-card-bg-2)!important;}
+.death td{box-shadow:none!important;background:transparent!important;border-left:3px solid var(--act-danger)!important;}
+</style>
+<script src="act_panel_theme.js"></script>
+<script src="act_panel_util.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT ENCOUNTER TIMELINE</div><div class="title">TIMELINE / VCR</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <input id="query" type="text" placeholder="搜索事件 / Search" />
+            <select id="speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+            <button class="primary" type="button" onclick="TimelineVcr.refresh()">刷新</button>
+            <button class="close" type="button" onclick="TimelineVcr.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="event-list"><div class="empty">正在读取 ACT 时间线...<br/>LOADING TIMELINE</div></main>
+        <aside class="side">
+            <div class="side-title">VCR CONTROL</div>
+            <button type="button" onclick="TimelineVcr.play()">播放 Play</button>
+            <button type="button" onclick="TimelineVcr.pause()">暂停 Pause</button>
+            <button type="button" onclick="TimelineVcr.step(-1000)">后退 Step -1s</button>
+            <button type="button" onclick="TimelineVcr.step(1000)">前进 Step +1s</button>
+            <button type="button" onclick="TimelineVcr.seek(0)">回到 0ms</button>
+            <div class="side-title">STATUS</div>
+            <div class="row"><span>Events</span><strong id="sum-events">0</strong></div>
+            <div class="row"><span>Cursor</span><strong id="sum-cursor">0ms</strong></div>
+            <div class="row"><span>Speed</span><strong id="sum-speed">1x</strong></div>
+            <div class="row"><span>Playing</span><strong id="sum-playing">NO</strong></div>
+            <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var list = document.getElementById('event-list');
+    var toast = document.getElementById('toast');
+    var query = document.getElementById('query');
+    var speed = document.getElementById('speed');
+    var toastTimer = null;
+    var searchTimer = null;
+    var expandedEvents = {};
+
+    function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function numericArg(value, fallback) {
+        if (value == null || value === '') return fallback;
+        var n = Number(value);
+        if (!isFinite(n)) n = Number(fallback || 0);
+        return isFinite(n) ? n : 0;
+    }
+    function clampIntArg(value, fallback, lo, hi) {
+        var n = Math.round(numericArg(value, fallback));
+        if (lo != null) n = Math.max(lo, n);
+        if (hi != null) n = Math.min(hi, n);
+        return n;
+    }
+    function safeLimit(value) {
+        return clampIntArg(value, 80, 1, 500);
+    }
+    function safeDeltaMs(value) {
+        return clampIntArg(value, 1000, -86400000, 86400000);
+    }
+    function safeCursorMs(value) {
+        return clampIntArg(value, 0, 0, 86400000);
+    }
+    function safeSpeed(value) {
+        var n = numericArg(value, 1);
+        return Math.max(0.1, Math.min(8, n));
+    }
+    function listItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function objectItems(value) {
+        return listItems(value).filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); });
+    }
+    function objectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    function countText(value) {
+        return String(Math.max(0, Math.floor(numericArg(value, 0))));
+    }
+    function keyNumberText(value) {
+        return String(numericArg(value, 0));
+    }
+    function looseValueText(value, fallback) {
+        if (value == null || value === '') return fallback;
+        if (typeof value === 'number') return isFinite(value) ? String(value) : fallback;
+        var text = String(value);
+        var trimmed = text.trim();
+        var lower = trimmed.toLowerCase();
+        if (lower === 'nan' || lower === 'infinity' || lower === '+infinity' || lower === '-infinity') return fallback;
+        var numeric = Number(trimmed);
+        if (trimmed && isFinite(numeric)) return String(numeric);
+        if (trimmed && !isNaN(numeric)) return fallback;
+        return text;
+    }
+    function eventTopicClass(topic) {
+        topic = String(topic || '').toLowerCase();
+        if (topic.indexOf('damage') >= 0 || topic.indexOf('death') >= 0) return ' damage';
+        return '';
+    }
+    function timelinePayload(name, args) {
+        args = args || [];
+        if (name === 'get_timeline_status') return { limit: safeLimit(args[0]), query: String(args[1] || '') };
+        if (name === 'play_timeline') return { speed: safeSpeed(args[0]) };
+        if (name === 'pause_timeline') return {};
+        if (name === 'step_timeline') return { delta_ms: safeDeltaMs(args[0]) };
+        if (name === 'seek_timeline') return { cursor_ms: safeCursorMs(args[0]) };
+        if (name === 'set_timeline_speed') return { speed: safeSpeed(args[0]) };
+        if (name === 'filter_timeline') return { query: String(args[0] || '') };
+        if (name === 'toggle_timeline_vcr') return { action: 'toggle_timeline_vcr' };
+        return { args: args };
+    }
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_timeline_status: 'act.timeline.status', play_timeline: 'act.timeline.play', pause_timeline: 'act.timeline.pause',
+                step_timeline: 'act.timeline.step', seek_timeline: 'act.timeline.seek', set_timeline_speed: 'act.timeline.speed', filter_timeline: 'act.timeline.filter',
+                toggle_timeline_vcr: 'ui.menu_action'
+            };
+            var payload = timelinePayload(name, args || []);
+            return window.bridge.cmd(cmdMap[name] || ('act.timeline.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Timeline API unavailable', events: [] });
+    }
+    function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
+    function eventKey(ev, idx) {
+        return String(ev.id || ev.event_id || ev.key || (keyNumberText(ev.time_ms) + '|' + (ev.topic || '') + '|' + (ev.label || '') + '|' + idx));
+    }
+    function setListHtml(html, preserveScroll) {
+        var top = list.scrollTop || 0;
+        var left = list.scrollLeft || 0;
+        list.innerHTML = html;
+        if (preserveScroll) {
+            list.scrollTop = top;
+            list.scrollLeft = left;
+        }
+    }
+    function render(data, options) {
+        data = objectValue(data);
+        options = options || {};
+        var preserveScroll = options.preserveScroll !== false;
+        var events = objectItems(data.events);
+        var errorCount = listItems(data.errors).length;
+        document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : (data.playing ? 'PLAYING' : 'READY');
+        document.getElementById('status-pill').style.color = data.ok === false ? 'var(--act-danger)' : (data.playing ? 'var(--act-ok)' : 'var(--act-muted)');
+        document.getElementById('sum-events').textContent = countText(events.length);
+        document.getElementById('sum-cursor').textContent = ActTime.fmtDur(data.cursor_ms);
+        document.getElementById('sum-speed').textContent = String(safeSpeed(data.speed)) + 'x';
+        document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
+        document.getElementById('sum-errors').textContent = String(errorCount);
+        if (!events.length) { setListHtml('<div class="empty">暂无 ACT 时间线事件。<br/>开始识别或 replay 后会出现事件。</div>', preserveScroll); return; }
+        setListHtml(events.map(function (ev, idx) {
+            var key = eventKey(ev, idx);
+            var open = !!expandedEvents[key];
+            var payload = objectValue(ev.payload);
+            return '<article class="event' + eventTopicClass(ev.topic || '') + '" data-key="' + esc(key) + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">' + (open ? '▾' : '▸') + '</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ActText.topic(ev.topic, '-')) + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ActText.source(ev.source, '-')) + ' · value=' + esc(looseValueText(ev.value, '')) + '</div><pre class="evt-payload" style="' + (open ? '' : 'display:none;') + '">' + esc(JSON.stringify(payload)) + '</pre></article>';
+        }).join(''), preserveScroll);
+    }
+    window.TimelineVcr = {
+        refresh: function (options) { options = options || {}; return apiCall('get_timeline_status', [80, query.value || '']).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Timeline failed'); return data; }); },
+        play: function () { return apiCall('play_timeline', [safeSpeed(speed.value)]).then(function (data) { render(data, { preserveScroll: true }); showToast('VCR playing'); return data; }); },
+        pause: function () { return apiCall('pause_timeline', []).then(function (data) { render(data, { preserveScroll: true }); showToast('VCR paused'); return data; }); },
+        step: function (delta) { return apiCall('step_timeline', [delta || 1000]).then(function (data) { render(data, { preserveScroll: true }); return data; }); },
+        seek: function (cursorMs) { return apiCall('seek_timeline', [cursorMs || 0]).then(function (data) { render(data, { preserveScroll: true }); return data; }); },
+        close: function () { apiCall('toggle_timeline_vcr'); },
+        toggleEvent: function (el) {
+            var pre = el.querySelector('.evt-payload'); var caret = el.querySelector('.evt-caret');
+            if (!pre) return;
+            var open = pre.style.display !== 'none';
+            var key = el.getAttribute('data-key') || '';
+            pre.style.display = open ? 'none' : '';
+            if (caret) caret.textContent = open ? '▸' : '▾';
+            if (key) {
+                if (open) { delete expandedEvents[key]; } else { expandedEvents[key] = true; }
+            }
+        },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+    speed.addEventListener('change', function () { apiCall('set_timeline_speed', [safeSpeed(speed.value)]).then(function (data) { render(data, { preserveScroll: true }); }); });
+    query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { apiCall('filter_timeline', [query.value || '']).then(function (data) { render(data, { preserveScroll: false }); }); }, 220); });
+    setTimeout(function () { shell.classList.add('visible'); TimelineVcr.refresh(); }, 40);
+})();
+</script>
+</body>
+</html>

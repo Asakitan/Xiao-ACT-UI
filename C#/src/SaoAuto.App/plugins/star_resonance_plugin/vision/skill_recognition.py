@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from config import (
+from plugins.star_resonance_plugin.sr_config import (
     BAR_COLORS,
     SKILL_BASELINE_DIR,
     get_skill_slot_client_rects,

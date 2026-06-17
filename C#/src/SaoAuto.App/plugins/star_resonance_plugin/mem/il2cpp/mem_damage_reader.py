@@ -219,10 +219,14 @@ class MemDamageReader:
         """
         if not _plaus(zdict):
             return None
-        cnt = self.pm.read_i32(zdict + ZDICT_COUNT_OFF) or 0
+        import struct as _st
+        hdr = self.pm.read_bytes(zdict, max(ZDICT_COUNT_OFF, ZDICT_ENTRIES_OFF) + 8)
+        if not hdr or len(hdr) < ZDICT_ENTRIES_OFF + 8:
+            return None
+        cnt = _st.unpack_from("<i", hdr, ZDICT_COUNT_OFF)[0]
         if cnt <= 0 or cnt > 100000:
             return None
-        entries = self.pm.read_u64(zdict + ZDICT_ENTRIES_OFF)
+        entries = _st.unpack_from("<Q", hdr, ZDICT_ENTRIES_OFF)[0]
         if not _plaus(entries):
             return None
         alen = self.pm.read_u32(entries + ARRAY_LEN_OFF) or 0

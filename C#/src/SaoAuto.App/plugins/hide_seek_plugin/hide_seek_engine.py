@@ -315,7 +315,7 @@ class HideSeekEngine:
 
     def _tick(self):
         # Find game window
-        found = self._locator.find_game_window()
+        found = self._locator.find_target_window()
         if not found:
             self._fire_status('Game window not found', self._current_step)
             return
@@ -642,7 +642,7 @@ class HideSeekEngine:
     ) -> Optional[np.ndarray]:
         """Capture client area of game window → BGR numpy array."""
         try:
-            from vision.recognition import _capture_hwnd_client
+            from plugins.star_resonance_plugin.vision.recognition import _capture_hwnd_client
             img, method = _capture_hwnd_client(hwnd, client_rect)
             raw_type = type(img)
             normalized = self._coerce_bgr_array(img)

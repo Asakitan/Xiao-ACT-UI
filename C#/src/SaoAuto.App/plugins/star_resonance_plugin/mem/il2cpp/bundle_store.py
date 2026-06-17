@@ -48,7 +48,7 @@ def compute_running_game_key() -> Optional[tuple]:
     except ImportError:
         # 退化: 用 pymem 拿模块路径
         try:
-            from mem_probe.process import StarProcess
+            from ..process import StarProcess
             sp = StarProcess()
             try:
                 ga = next(m for m in sp.list_modules() if m.name.lower() == "gameassembly.dll")

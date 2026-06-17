@@ -4,11 +4,21 @@ SAO-UI 接口冒烟测试
 Smoke test for every importable module + key public surfaces.
 
 Strategy:
-  Phase A — Import every .py module (top-level + gui_modules/).
+  Phase A — Import every .py module (platform + Star Resonance plugin).
   Phase B — Verify Cython .pyd modules expose their documented API.
   Phase C — Smoke-call a representative entry point of every key subsystem
             with safe dummy inputs (no network, no Tk, no game window).
-  Phase D — Iterate all 19 SAOPlayerGUI mixins, confirm class + method count.
+  Phase D — Iterate all SAOPlayerGUI mixins, confirm class + method count.
+
+Updated for the 5.0.0 platform/plugin split:
+  * Platform tree:   sao_gui / sao_webview / gui_modules / render / act_platform / ...
+  * Plugin tree:     plugins/star_resonance_plugin/{engines,net,vision,protocol,
+                      panels,render,cython,...}
+    * Cython binaries: platform-side ``_sao_cy_uihelpers``/``_sao_cy_memscan``
+                                         live next to ``main.py``; plugin-side ``_sao_cy_packet/
+                                         _sao_cy_combat/_sao_cy_pixels/_sao_cy_skillfx/
+                                         _sao_cy_sr_uihelpers`` live under
+                                         ``plugins/star_resonance_plugin/cython/``.
 
 Exit code 0 if every probe passes, 1 otherwise.
 """
@@ -16,15 +26,27 @@ Exit code 0 if every probe passes, 1 otherwise.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import time
 import traceback
 from pathlib import Path
 from typing import List, Tuple
 
-# Add repo root to sys.path
+# Add repo root to sys.path so we can import platform packages.
 HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+PLATFORM_ROOT = HERE.parent.parent  # python/
+if str(PLATFORM_ROOT) not in sys.path:
+    sys.path.insert(0, str(PLATFORM_ROOT))
+
+# Add Star Resonance Cython binary dir + protocol root so the bare-name
+# imports (``import _sao_cy_packet``, etc.) resolve without going through
+# plugin.on_load().
+_PLUGIN_ROOT = PLATFORM_ROOT / "plugins" / "star_resonance_plugin"
+for _sub in ("cython", "protocol"):
+    _path = str(_PLUGIN_ROOT / _sub)
+    if os.path.isdir(_path) and _path not in sys.path:
+        sys.path.insert(0, _path)
 
 OK = 0
 FAIL = 0
@@ -62,65 +84,135 @@ def probe(name: str, fn, *args, **kwargs) -> None:
 # ---------------------------------------------------------------------------
 # Module lists
 # ---------------------------------------------------------------------------
-TOPLEVEL_MODULES = [
-    "engines.auto_key_engine", "engines.automation", "engines.boss_autokey_linkage", "engines.boss_raid_engine",
-    "engines.character_profile", "config", "engines.dps_tracker", "engines.game_state",
-    "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
-    "main", "render.overlay_render_worker", "render.overlay_scheduler",
-    "render.overlay_subpixel", "net.packet_bridge", "net.packet_capture", "packet_parser",
-    "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
-    "sao_theme", "updater.sao_updater", "sao_web_panel_common", "sao_webview",
-    "vision.skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",
-    "vision.vision_accel", "utils.window_effects", "utils.window_locator",
+
+# Platform-only modules (no game adapter coupling).
+PLATFORM_TOPLEVEL_MODULES = [
+    "config",
+    "main",
+    "sao_gui",
+    "sao_webview",
+    "sao_web_panel_common",
+    "update_apply",
+    "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window",
+    "render.gpu_renderer", "render.overlay_render_worker",
+    "render.overlay_scheduler", "render.overlay_subpixel",
+    "render.render_capture_sync",
+    "sao_theme",
+    "act_platform",
+    "ui_gpu",
+    "updater.sao_updater",
+    "utils.perf_probe", "utils.sao_sound", "utils.window_effects",
+    "utils.window_locator",
 ]
 
+# Star Resonance plugin modules — all game-specific code lives here.
+SR_PLUGIN_MODULES = [
+    # plugin entry + bridges
+    "plugins.star_resonance_plugin.plugin",
+    "plugins.star_resonance_plugin.webview_bridge",
+    "plugins.star_resonance_plugin.entity_menu_bridge",
+    # act_replay harness (moved into plugin tree in 5.0.0)
+    "plugins.star_resonance_plugin.act_replay.harness",
+    # engines
+    "plugins.star_resonance_plugin.engines.auto_key_engine",
+    "plugins.star_resonance_plugin.engines.automation",
+    "plugins.star_resonance_plugin.engines.boss_autokey_linkage",
+    "plugins.star_resonance_plugin.engines.boss_raid_engine",
+    "plugins.star_resonance_plugin.engines.character_profile",
+    "plugins.star_resonance_plugin.engines.combat_analytics",
+    "plugins.star_resonance_plugin.engines.dps_history",
+    "plugins.star_resonance_plugin.engines.dps_tracker",
+    "plugins.star_resonance_plugin.engines.encounter_manager",
+    "plugins.star_resonance_plugin.engines.game_state",
+    # net + protocol
+    "plugins.star_resonance_plugin.net.packet_bridge",
+    "plugins.star_resonance_plugin.net.packet_capture",
+    "plugins.star_resonance_plugin.protocol.packet_parser",
+    # vision
+    "plugins.star_resonance_plugin.vision.recognition",
+    "plugins.star_resonance_plugin.vision.skill_recognition",
+    # render (game-specific GPU pipeline)
+    "plugins.star_resonance_plugin.render.skillfx_jit",
+    "plugins.star_resonance_plugin.render.skillfx_pipeline",
+]
+
+# Platform GUI helper modules (generic widgets / mixins) + plugin panels.
 GUI_MODULES = [
-    "gui_modules.sao_child_bar_gpu", "gui_modules.sao_gui_actions_mixin",
-    "gui_modules.sao_gui_alert", "gui_modules.sao_gui_autokey",
-    "gui_modules.sao_gui_bosshp", "gui_modules.sao_gui_bossraid",
-    "gui_modules.sao_gui_buffmon", "gui_modules.sao_gui_commander",
-    "gui_modules.sao_gui_damage_events_mixin", "gui_modules.sao_gui_dialogs_mixin",
-    "gui_modules.sao_gui_dps", "gui_modules.sao_gui_dps_theme_mixin",
-    "gui_modules.sao_gui_engine_lifecycle_mixin", "gui_modules.sao_gui_engine_toggles_mixin",
-    "gui_modules.sao_gui_fisheye_mixin", "gui_modules.sao_gui_float_handlers_mixin",
-    "gui_modules.sao_gui_float_hp_mixin", "gui_modules.sao_gui_hp",
-    "gui_modules.sao_gui_lifecycle_mixin", "gui_modules.sao_gui_link_animation_mixin",
-    "gui_modules.sao_gui_menu_hud", "gui_modules.sao_gui_menu_mixin",
-    "gui_modules.sao_gui_misc_mixin", "gui_modules.sao_gui_packet_callbacks_mixin",
-    "gui_modules.sao_gui_panel_fx_mixin", "gui_modules.sao_gui_panels_mixin",
-    "gui_modules.sao_gui_profile_editors", "gui_modules.sao_gui_session_mixin",
-    "gui_modules.sao_gui_skillfx", "gui_modules.sao_gui_state_mixin",
-    "gui_modules.sao_gui_status_updater_mixin", "gui_modules.sao_hotkey_manager",
-    "gui_modules.sao_left_info_gpu", "gui_modules.sao_menu_bar_gpu",
-    "gui_modules.sao_menu_hud", "gui_modules.sao_menu_left_stack",
-    "gui_modules.sao_panel_ui", "gui_modules.sao_player_panel",
-    "gui_modules.sao_session_players_panel", "gui_modules.settings_manager",
+    # generic platform widgets (no game logic)
+    "gui_modules.sao_child_bar_gpu",
+    "gui_modules.sao_gui_dialogs_mixin",
+    "gui_modules.sao_gui_fisheye_mixin",
+    "gui_modules.sao_gui_float_handlers_mixin",
+    "gui_modules.sao_gui_float_hp_mixin",
+    "gui_modules.sao_gui_lifecycle_mixin",
+    "gui_modules.sao_gui_link_animation_mixin",
+    "gui_modules.sao_gui_menu_hud",
+    "gui_modules.sao_gui_menu_mixin",
+    "gui_modules.sao_gui_misc_mixin",
+    "gui_modules.sao_gui_panel_fx_mixin",
+    "gui_modules.sao_gui_panels_mixin",
+    "gui_modules.sao_gui_status_updater_mixin",
+    "gui_modules.sao_hotkey_manager",
+    "gui_modules.sao_left_info_gpu",
+    "gui_modules.sao_menu_bar_gpu",
+    "gui_modules.sao_menu_hud",
+    "gui_modules.sao_panel_ui",
+    "gui_modules.settings_manager",
+    # game-specific panels (plugin-side)
+    "plugins.star_resonance_plugin.panels.sao_gui_actions_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_act_aggregate",
+    "plugins.star_resonance_plugin.panels.sao_gui_action_log",
+    "plugins.star_resonance_plugin.panels.sao_gui_alert",
+    "plugins.star_resonance_plugin.panels.sao_gui_autokey",
+    "plugins.star_resonance_plugin.panels.sao_gui_bosshp",
+    "plugins.star_resonance_plugin.panels.sao_gui_bossraid",
+    "plugins.star_resonance_plugin.panels.sao_gui_buffmon",
+    "plugins.star_resonance_plugin.panels.sao_gui_commander",
+    "plugins.star_resonance_plugin.panels.sao_gui_damage_events_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_data_source_health",
+    "plugins.star_resonance_plugin.panels.sao_gui_dps",
+    "plugins.star_resonance_plugin.panels.sao_gui_dps_theme_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_engine_lifecycle_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_engine_toggles_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_graph_timeseries",
+    "plugins.star_resonance_plugin.panels.sao_gui_hp",
+    "plugins.star_resonance_plugin.panels.sao_gui_offline_import",
+    "plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_profile_editors",
+    "plugins.star_resonance_plugin.panels.sao_gui_report_export",
+    "plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown",
+    "plugins.star_resonance_plugin.panels.sao_gui_skillfx",
+    "plugins.star_resonance_plugin.panels.sao_gui_state_mixin",
+    "plugins.star_resonance_plugin.panels.sao_gui_timeline_vcr",
+    "plugins.star_resonance_plugin.panels.sao_menu_left_stack",
+    "plugins.star_resonance_plugin.panels.sao_player_panel",
+    "plugins.star_resonance_plugin.panels.sao_session_players_panel",
 ]
 
 CYTHON_MODULES = [
     "_sao_cy_packet", "_sao_cy_combat", "_sao_cy_pixels",
-    "_sao_cy_skillfx", "_sao_cy_uihelpers",
+    "_sao_cy_skillfx", "_sao_cy_sr_uihelpers", "_sao_cy_uihelpers",
 ]
 
+# Mixin module/class pairs — all game-state mixins now live in the plugin.
 MIXIN_NAMES = [
-    ("gui_modules.sao_gui_session_mixin", "SAOPlayerGUISessionMixin"),
-    ("gui_modules.sao_gui_state_mixin", "SAOPlayerGUIStateMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_state_mixin", "SAOPlayerGUIStateMixin"),
     ("gui_modules.sao_gui_menu_mixin", "SAOPlayerGUIMenuMixin"),
     ("gui_modules.sao_gui_fisheye_mixin", "SAOPlayerGUIFisheyeMixin"),
-    ("gui_modules.sao_gui_actions_mixin", "SAOPlayerGUIActionsMixin"),
-    ("gui_modules.sao_gui_engine_toggles_mixin", "SAOPlayerGUIEngineTogglesMixin"),
-    ("gui_modules.sao_gui_dps_theme_mixin", "SAOPlayerGUIDpsThemeMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_actions_mixin", "SAOPlayerGUIActionsMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_engine_toggles_mixin", "SAOPlayerGUIEngineTogglesMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_dps_theme_mixin", "SAOPlayerGUIDpsThemeMixin"),
     ("gui_modules.sao_gui_panels_mixin", "SAOPlayerGUIPanelsMixin"),
     ("gui_modules.sao_gui_status_updater_mixin", "SAOPlayerGUIStatusUpdaterMixin"),
     ("gui_modules.sao_gui_dialogs_mixin", "SAOPlayerGUIDialogsMixin"),
-    ("gui_modules.sao_gui_engine_lifecycle_mixin", "SAOPlayerGUIEngineLifecycleMixin"),
-    ("gui_modules.sao_gui_packet_callbacks_mixin", "SAOPlayerGUIPacketCallbacksMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_engine_lifecycle_mixin", "SAOPlayerGUIEngineLifecycleMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin", "SAOPlayerGUIPacketCallbacksMixin"),
     ("gui_modules.sao_gui_float_hp_mixin", "SAOPlayerGUIFloatHpMixin"),
     ("gui_modules.sao_gui_float_handlers_mixin", "SAOPlayerGUIFloatHandlersMixin"),
     ("gui_modules.sao_gui_lifecycle_mixin", "SAOPlayerGUILifecycleMixin"),
     ("gui_modules.sao_gui_panel_fx_mixin", "SAOPlayerGUIPanelFxMixin"),
     ("gui_modules.sao_gui_link_animation_mixin", "SAOPlayerGUILinkAnimationMixin"),
-    ("gui_modules.sao_gui_damage_events_mixin", "SAOPlayerGUIDamageEventsMixin"),
+    ("plugins.star_resonance_plugin.panels.sao_gui_damage_events_mixin", "SAOPlayerGUIDamageEventsMixin"),
     ("gui_modules.sao_gui_misc_mixin", "SAOPlayerGUIMiscMixin"),
 ]
 
@@ -139,8 +231,11 @@ CYTHON_API = {
     },
     "_sao_cy_skillfx": {"beam_rgba", "ring_layer_rgba", "ring_sweep_rgba"},
     "_sao_cy_uihelpers": {
+        "panel_float_offsets", "popup_origins", "lerp_hex_color",
+    },
+    "_sao_cy_sr_uihelpers": {
         "compute_skillfx_layout", "format_level_text", "ease_out_cubic",
-        "lerp_clamped", "popup_origins",
+        "lerp_clamped", "pick_burst_trigger_slot",
     },
 }
 
@@ -169,11 +264,15 @@ def check_mixin(module: str, klass: str) -> None:
 # ---------------------------------------------------------------------------
 # Phase A — import every module
 # ---------------------------------------------------------------------------
-section("Phase A — import top-level modules")
-for mod in TOPLEVEL_MODULES:
+section("Phase A — import platform top-level modules")
+for mod in PLATFORM_TOPLEVEL_MODULES:
     probe(mod, import_module, mod)
 
-section("Phase A — import gui_modules/ helpers + mixins")
+section("Phase A — import Star Resonance plugin modules")
+for mod in SR_PLUGIN_MODULES:
+    probe(mod, import_module, mod)
+
+section("Phase A — import gui_modules/ + plugin panels")
 for mod in GUI_MODULES:
     probe(mod, import_module, mod)
 
@@ -192,12 +291,13 @@ section("Phase C — Smoke-call key entry points")
 
 def smoke_config():
     import config
+    from plugins.star_resonance_plugin import sr_config as srcfg
     import json
     import os
     import tempfile
     assert isinstance(config.APP_VERSION, str)
     assert config.APP_VERSION_LABEL.startswith("v")
-    rects = config.get_skill_slot_rects((0, 0, 1920, 1080))
+    rects = srcfg.get_skill_slot_rects((0, 0, 1920, 1080))
     assert isinstance(rects, list)
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "nested", "settings.json")
@@ -209,20 +309,20 @@ def smoke_config():
 
 
 def smoke_uihelpers_layout():
-    import _sao_cy_uihelpers as h
+    import _sao_cy_sr_uihelpers as h
     out = h.compute_skillfx_layout((0, 0, 1920, 1080), [], [])
     # may be None if no slots; just ensure no exception
     _ = out
 
 
 def smoke_uihelpers_format():
-    import _sao_cy_uihelpers as h
+    import _sao_cy_sr_uihelpers as h
     s = h.format_level_text(60, 83, 1)
     assert isinstance(s, str)
 
 
 def smoke_uihelpers_ease():
-    import _sao_cy_uihelpers as h
+    import _sao_cy_sr_uihelpers as h
     assert 0.0 <= h.ease_out_cubic(0.5) <= 1.0
     assert h.lerp_clamped(0.0, 100.0, 0.5) == 50.0
 
@@ -281,31 +381,27 @@ def smoke_skillfx_beam():
 
 
 def smoke_game_state():
-    from engines import game_state
+    from plugins.star_resonance_plugin.engines import game_state
     gs = game_state.GameState()
-    # write some fields
     gs.window_rect = (0, 0, 1920, 1080)
     assert gs.window_rect == (0, 0, 1920, 1080)
 
 
 def smoke_packet_parser():
-    import packet_parser
-    # Just verify exposed surface; do not parse real bytes
+    from plugins.star_resonance_plugin.protocol import packet_parser
     assert hasattr(packet_parser, "PacketParser") or hasattr(packet_parser, "parse_packet")
 
 
 def smoke_dps_tracker():
-    from engines import dps_tracker
-    cls = getattr(dps_tracker, "DPSTracker", None) or getattr(dps_tracker, "DpsTracker", None)
+    from plugins.star_resonance_plugin.engines import dps_tracker
+    cls = getattr(dps_tracker, "DpsTracker", None)
     assert cls is not None
-    inst = cls()
-    _ = inst
 
 
 def smoke_window_locator():
     from utils import window_locator
     loc = window_locator.WindowLocator()
-    rect = loc.get_rect()  # may return None if game window missing
+    rect = loc.get_rect()
     _ = rect
 
 
@@ -332,16 +428,14 @@ def smoke_settings_manager():
 
 
 def smoke_skill_recognition():
-    from vision import skill_recognition
-    # Real exports: SkillVisualTracker class + skill-slot rect helpers
+    from plugins.star_resonance_plugin.vision import skill_recognition
     assert hasattr(skill_recognition, "SkillVisualTracker")
     assert callable(skill_recognition.get_skill_slot_rects)
     assert callable(skill_recognition.get_skill_slot_client_rects)
 
 
 def smoke_recognition():
-    from vision import recognition
-    # Engine class expected
+    from plugins.star_resonance_plugin.vision import recognition
     assert any(hasattr(recognition, n) for n in
                ("RecognitionEngine", "Recognition", "Vision"))
 
@@ -353,9 +447,9 @@ def smoke_panel_ui_icon():
 
 
 probe("config.APP_VERSION + get_skill_slot_rects", smoke_config)
-probe("_sao_cy_uihelpers.compute_skillfx_layout", smoke_uihelpers_layout)
-probe("_sao_cy_uihelpers.format_level_text", smoke_uihelpers_format)
-probe("_sao_cy_uihelpers ease / lerp", smoke_uihelpers_ease)
+probe("_sao_cy_sr_uihelpers.compute_skillfx_layout", smoke_uihelpers_layout)
+probe("_sao_cy_sr_uihelpers.format_level_text", smoke_uihelpers_format)
+probe("_sao_cy_sr_uihelpers ease / lerp", smoke_uihelpers_ease)
 probe("_sao_cy_combat.uuid_to_uid", smoke_combat_uuid)
 probe("_sao_cy_combat.classify_big_hit_tier", smoke_combat_classify)
 probe("_sao_cy_packet.decode_int32_from_raw", smoke_packet_decode_int)

@@ -5,20 +5,14 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+import _bootstrap  # noqa: F401
 
 from act_platform.adapters import (
     ParserAdapterMetadata,
     PluginParserAdapter,
-    StarResonanceParserAdapter,
-    built_in_parser_adapters,
-    create_builtin_parser_adapter,
     create_plugin_parser_adapter,
     plugin_parser_adapters,
 )
@@ -26,6 +20,7 @@ from act_platform.plugins import PluginManager
 from act_platform.runtime import ensure_act_event_bus
 from plugins.star_resonance_plugin.engines.game_state import GameStateManager
 from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
+from plugins.star_resonance_plugin.net.parser_adapter import StarResonanceParserAdapter
 
 
 PLUGIN_PARSER_CODE = r'''
@@ -168,8 +163,8 @@ def _write_plugin(root: str, plugin_id: str, code: str) -> PluginManager:
 
 
 class ActParserAdapterTests(unittest.TestCase):
-    def test_built_in_star_adapter_metadata_is_serializable(self) -> None:
-        adapters = built_in_parser_adapters()
+    def test_star_adapter_metadata_is_serializable(self) -> None:
+        adapters = [StarResonanceParserAdapter().metadata.to_dict()]
 
         self.assertEqual(len(adapters), 1)
         self.assertEqual(adapters[0]["adapter_id"], "star_resonance_tcp")
@@ -198,8 +193,7 @@ class ActParserAdapterTests(unittest.TestCase):
         self.assertEqual(fallback.priority, 0.0)
 
     def test_star_adapter_wraps_packet_parser_and_health(self) -> None:
-        adapter = create_builtin_parser_adapter("star_resonance_tcp")
-        self.assertIsInstance(adapter, StarResonanceParserAdapter)
+        adapter = StarResonanceParserAdapter()
         parser = adapter.create_parser(on_self_update=lambda player: None, preferred_uid=42)
 
         adapter.start()

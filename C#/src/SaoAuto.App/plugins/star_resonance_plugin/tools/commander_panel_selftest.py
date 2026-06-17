@@ -8,7 +8,7 @@ from unittest import mock
 
 import _bootstrap  # noqa: F401
 
-from gui_modules.sao_gui_commander import CommanderPanel
+from plugins.star_resonance_plugin.panels.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin
 
 
@@ -71,7 +71,7 @@ class CommanderPanelTests(unittest.TestCase):
         panel._last_signature = None
 
         with (
-            mock.patch("gui_modules.sao_gui_commander.clear_frame"),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_commander.clear_frame"),
             mock.patch.object(CommanderPanel, "_render_team_tab", lambda self: None),
         ):
             panel._render_if_needed(force=False)

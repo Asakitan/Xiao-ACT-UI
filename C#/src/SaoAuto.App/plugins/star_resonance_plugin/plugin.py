@@ -8,6 +8,15 @@ The platform has ZERO imports from this plugin.
 
 from __future__ import annotations
 
+import os
+import sys
+
+_PLUGIN_ROOT = os.path.dirname(os.path.abspath(__file__))
+for _subdir in ("cython", "protocol"):
+    _path = os.path.join(_PLUGIN_ROOT, _subdir)
+    if os.path.isdir(_path) and _path not in sys.path:
+        sys.path.insert(0, _path)
+
 _ctx = None
 _engines_started = False
 
@@ -80,6 +89,13 @@ def _init_game_engines(ctx):
     if cfg is None:
         ctx.log('[SR] No cfg_settings_ref on owner, skipping engine init')
         return
+    bridge = getattr(owner, '_webview_extension', None)
+
+    def _bridge_callback(name: str):
+        fn = getattr(bridge, name, None) if bridge is not None else None
+        if callable(fn):
+            return fn
+        return getattr(owner, name, None)
 
     # ── GameStateManager ──
     try:
@@ -125,7 +141,7 @@ def _init_game_engines(ctx):
         except Exception:
             _rules = []
         trigger_engine = ActTriggerEngine(_rules)
-        _finalize_hook = getattr(owner, '_on_dps_report_finalized', None)
+        _finalize_hook = _bridge_callback('_on_dps_report_finalized')
         if callable(_finalize_hook):
             dps_tracker.register_finalized_hook(_finalize_hook)
         ctx.engine.set_owner_attr('_dps_history_store', dps_history)
@@ -148,12 +164,12 @@ def _init_game_engines(ctx):
         data_mode = str(cfg.get('mem_data_source', 'tcp') or 'tcp').lower()
         packet_engine = PacketBridge(
             state_mgr, cfg,
-            on_damage=getattr(owner, '_on_packet_damage', None),
-            on_monster_update=getattr(owner, '_on_monster_update', None),
-            on_boss_event=getattr(owner, '_on_boss_event', None),
-            on_scene_change=getattr(owner, '_on_scene_change', None),
-            on_skill_event=getattr(owner, '_on_skill_event', None),
-            on_dungeon_event=getattr(owner, '_on_dungeon_event', None),
+            on_damage=_bridge_callback('_on_packet_damage'),
+            on_monster_update=_bridge_callback('_on_monster_update'),
+            on_boss_event=_bridge_callback('_on_boss_event'),
+            on_scene_change=_bridge_callback('_on_scene_change'),
+            on_skill_event=_bridge_callback('_on_skill_event'),
+            on_dungeon_event=_bridge_callback('_on_dungeon_event'),
             data_source=data_mode,
             plugin_manager=ensure_act_plugin_manager(owner, load=False),
             event_bus=ensure_act_event_bus(owner),
@@ -240,7 +256,7 @@ def _init_game_engines(ctx):
             state_mgr, cfg,
             on_alert=_on_boss_alert,
             on_sound=lambda name: play_sound(name),
-            on_boss_action=getattr(owner, '_on_boss_action_with_gate', None),
+            on_boss_action=_bridge_callback('_on_boss_action_with_gate'),
             on_mechanic=getattr(owner, '_on_mechanic_event', None),
         )
         ctx.engine.set_owner_attr('_boss_raid_engine', br)
@@ -359,7 +375,10 @@ def _build_auto_items():
         return []
     ak = getattr(owner, '_auto_key_engine', None)
     ak_on = bool(ak and getattr(ak, 'running', False))
+    recog_on = bool(getattr(owner, '_recognition_active', False))
     return [
+        {'icon': '⚙', 'label': f'识别: {"ON" if recog_on else "OFF"}',
+         'command': getattr(owner, '_toggle_recognition_menu', lambda: None)},
         {'icon': '⚡', 'label': f'AutoKey: {"ON" if ak_on else "OFF"}',
          'command': getattr(owner, '_toggle_auto_script', lambda: None)},
         {'icon': '◆', 'label': 'AutoKey Quick Panel',
@@ -398,6 +417,73 @@ def _build_burst_items():
     ]
 
 
+def _safe_count(value) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def _safe_mapping(value) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _build_act_items():
+    owner = _ctx.engine.owner if _ctx else None
+    if owner is None:
+        return []
+    from act_platform.runtime import (
+        act_action_log_status,
+        act_aggregate_status,
+        act_combatant_drilldown_status,
+        act_data_source_health,
+        act_death_recap_status,
+        act_graph_timeseries_status,
+        act_report_status,
+        act_skill_drilldown_status,
+        act_timeline_status,
+        act_trigger_status,
+    )
+
+    def _call(fn, fallback, **kwargs):
+        try:
+            return fn(owner, **kwargs)
+        except Exception:
+            return fallback
+
+    trigger = _call(act_trigger_status, {})
+    source = _call(act_data_source_health, {})
+    source_summary = _safe_mapping(_safe_mapping(source.get('sources')).get('summary'))
+    report = _call(act_report_status, {}, limit=12)
+    report_preview = _safe_mapping(report.get('preview'))
+    timeline = _call(act_timeline_status, {}, limit=24)
+    action_log = _call(act_action_log_status, {}, limit=24)
+    aggregate = _call(act_aggregate_status, {}, limit=240, top_n=12)
+    aggregate_counts = _safe_mapping(aggregate.get('raw_counts'))
+    death = _call(act_death_recap_status, {}, limit=24)
+    death_summary = _safe_mapping(death.get('summary'))
+    graph = _call(act_graph_timeseries_status, {}, limit=24)
+    combatant = _call(act_combatant_drilldown_status, {})
+    skill = _call(act_skill_drilldown_status, {}, limit=24)
+    rows = _safe_count(aggregate_counts.get('rows'))
+    aggregate_label = f"{rows}/{_safe_count(aggregate_counts.get('skills'))}/{_safe_count(aggregate_counts.get('monsters'))}"
+    source_label = str(source_summary.get('data_source') or source.get('requested_mode') or 'ACT').upper()
+    source_state = str(source.get('status') or 'missing').upper()
+    return [
+        {'icon': '⏱', 'label': f"ACT触发/计时: {_safe_count(trigger.get('rule_count'))}/{_safe_count(trigger.get('timer_count'))}", 'command': getattr(owner, '_toggle_act_trigger_timer_panel', lambda: None)},
+        {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_state}', 'command': getattr(owner, '_toggle_act_data_source_health_panel', lambda: None)},
+        {'icon': '⬇', 'label': f"ACT报告/导出: {'READY' if report.get('ok') else 'EMPTY'}/{_safe_count(report_preview.get('total_damage'))}", 'command': getattr(owner, '_toggle_act_report_export_panel', lambda: None)},
+        {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': getattr(owner, '_toggle_act_offline_import_panel', lambda: None)},
+        {'icon': '▶', 'label': f"ACT时间线/VCR: {'PLAY' if timeline.get('playing') else 'READY'}/{len(timeline.get('events') or [])}", 'command': getattr(owner, '_toggle_act_timeline_vcr_panel', lambda: None)},
+        {'icon': '▣', 'label': f"ACT聚合驾驶舱: {'READY' if aggregate.get('ok') and rows else 'EMPTY'}/{aggregate_label}", 'command': getattr(owner, '_toggle_act_aggregate_panel', lambda: None)},
+        {'icon': '▤', 'label': f"ACT行为日志: {'READY' if action_log.get('ok') else 'EMPTY'}/{len(action_log.get('rows') or [])}", 'command': getattr(owner, '_toggle_act_action_log_panel', lambda: None)},
+        {'icon': '✚', 'label': f"ACT死亡回放: {'READY' if _safe_count(death_summary.get('death_events')) else 'EMPTY'}/{_safe_count(death_summary.get('incoming_damage'))}", 'command': getattr(owner, '_toggle_act_death_recap_panel', lambda: None)},
+        {'icon': '⌁', 'label': f"ACT图表/曲线: {'READY' if graph.get('ok') else 'EMPTY'}/{graph.get('selected_metric') or 'damage'}/{_safe_count(graph.get('row_count'))}", 'command': getattr(owner, '_toggle_act_graph_timeseries_panel', lambda: None)},
+        {'icon': '◎', 'label': f"ACT成员钻取: {'READY' if combatant.get('ok') else 'EMPTY'}/{combatant.get('combatant_id') or 'NONE'}/{len(combatant.get('skills') or [])}", 'command': getattr(owner, '_toggle_act_combatant_drilldown_panel', lambda: None)},
+        {'icon': '✦', 'label': f"ACT技能钻取: {'READY' if skill.get('ok') else 'EMPTY'}/{skill.get('skill_id') or 'NONE'}/{len(skill.get('timeline_refs') or [])}", 'command': getattr(owner, '_toggle_act_skill_drilldown_panel', lambda: None)},
+    ]
+
+
 def _build_panel_items():
     owner = _ctx.engine.owner if _ctx else None
     if owner is None:
@@ -408,7 +494,73 @@ def _build_panel_items():
          'command': getattr(owner, '_toggle_dps_enabled', lambda: None)},
         {'icon': '◈', 'label': 'Commander',
          'command': getattr(owner, '_toggle_commander_panel', lambda: None)},
+        {'icon': '◎', 'label': 'Session Players',
+         'command': getattr(owner, '_toggle_session_players_panel', lambda: None)},
     ]
+
+
+def _inject_game_constants():
+    """Register plugin-owned runtime modules at load time.
+
+    Registers plugin-owned mem_access / unified_source into sys.modules under
+    the ``mem_probe.*`` namespace so platform code that does
+    ``from mem_probe.mem_access import MemAccess`` still works after the files
+    moved from platform to plugin.
+    """
+    import sys
+    from plugins.star_resonance_plugin.sr_config import GAME_MAIN_MODULE
+
+    # ── Register game modules into mem_probe namespace ──
+    try:
+        import mem_probe
+        from plugins.star_resonance_plugin.mem import mem_access as _ma
+        from plugins.star_resonance_plugin.mem import unified_source as _us
+        sys.modules['mem_probe.mem_access'] = _ma
+        sys.modules['mem_probe.unified_source'] = _us
+        mem_probe.mem_access = _ma
+        mem_probe.unified_source = _us
+    except Exception:
+        pass
+
+    # ── Inject game-specific factories into the now-registered mem_access ──
+    try:
+        from plugins.star_resonance_plugin.mem.mem_access import (
+            set_game_main_module, set_ecr_factory,
+        )
+        set_game_main_module(GAME_MAIN_MODULE)
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import EntityCombatReader
+        set_ecr_factory(EntityCombatReader)
+    except Exception:
+        pass
+
+    # ── Inject bridge classes into unified_source ──
+    try:
+        from plugins.star_resonance_plugin.mem.unified_source import (
+            set_bridge_classes, set_root_pointer_cache_fn,
+        )
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
+        from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+        set_bridge_classes(MemStateBridge, MemSelfStateProvider)
+
+        def _rpc_health(bridge):
+            src = getattr(getattr(bridge, "_entity_provider", None), "_src", None) \
+                or getattr(getattr(bridge, "_provider", None), "_src", None)
+            if src is None:
+                return {"game_key": "", "entries": 0, "names": []}
+            game_key = str(getattr(src, "game_key", "") or "")
+            if not game_key:
+                sr = getattr(src, "sr", None)
+                meta = getattr(sr, "bundle_meta", None) if sr is not None else None
+                if isinstance(meta, dict):
+                    game_key = str(meta.get("ga_sha256_first_1mb") or "")
+            if not game_key:
+                return {"game_key": "", "entries": 0, "names": []}
+            from plugins.star_resonance_plugin.mem.il2cpp import root_pointer_cache as _rpc
+            return _rpc.coverage(game_key)
+
+        set_root_pointer_cache_fn(_rpc_health)
+    except Exception:
+        pass
 
 
 def on_load(ctx):
@@ -416,11 +568,35 @@ def on_load(ctx):
     global _ctx
     _ctx = ctx
 
+    _inject_game_constants()
+
+    # Bootstrap runtime deps from plugin's own libs/vendor/requirements.txt
+    ctx.ensure_requirements(install=True)
+
     _ensure_toplevel_defaults(ctx)
+
+    # Register the plugin's ACT trigger / DPS-history / name-resolver runtime
+    # handlers with the platform so the platform no longer needs to import
+    # plugin code or hard-code owner attributes to reach trigger/dps logic.
+    # See ``act_runtime_bridge`` for the dispatch contract.
+    try:
+        from act_platform.runtime import register_extension_runtime
+        from plugins.star_resonance_plugin.act_runtime_bridge import extension_runtime_provider
+        register_extension_runtime(extension_runtime_provider)
+    except Exception as exc:
+        ctx.log(f'[SR] act_runtime_bridge register FAILED: {exc}')
+
+    from plugins.star_resonance_plugin.webview_bridge import install_webview_bridge
+    install_webview_bridge(ctx)
+    from plugins.star_resonance_plugin.entity_menu_bridge import install_entity_menu_bridge
+    install_entity_menu_bridge(ctx)
+    from plugins.star_resonance_plugin.ai_actions import install_ai_engine_actions
+    install_ai_engine_actions(ctx.engine.owner)
 
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
     ctx.register_menu_category('Boss', '⚔', _build_boss_items, priority=20)
     ctx.register_menu_category('Burst', 'B', _build_burst_items, priority=30)
+    ctx.register_menu_category('ACT', 'A', _build_act_items, priority=35)
     ctx.register_menu_category('面板', '◈', _build_panel_items, priority=40)
 
     _init_game_engines(ctx)
@@ -444,5 +620,10 @@ def on_unload():
     global _ctx, _engines_started
     if _ctx is not None:
         _ctx.log('[SR] Star Resonance plugin unloading')
+        try:
+            from plugins.star_resonance_plugin.ai_actions import uninstall_ai_engine_actions
+            uninstall_ai_engine_actions(_ctx.engine.owner)
+        except Exception:
+            pass
     _ctx = None
     _engines_started = False

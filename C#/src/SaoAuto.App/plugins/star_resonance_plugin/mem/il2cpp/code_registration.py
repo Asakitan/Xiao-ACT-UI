@@ -59,7 +59,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.process import StarProcess
+from ..process import StarProcess
 
 # ─────────── 已知常量 ───────────
 

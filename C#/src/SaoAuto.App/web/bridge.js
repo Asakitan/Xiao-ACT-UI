@@ -1,119 +1,130 @@
+// S187 — C# WebView2 bridge shim.
+//
+// Exposes a small `window.bridge` API to all pages loaded into the
+// WebView2 host. Mirrors Python's `inject_bridge.js` posture: parses
+// the {type, name, payload} envelope coming from C# and dispatches to
+// per-event subscribers; outbound calls wrap into the same envelope
+// and `postMessage` to the host.
+//
+// Contract (matches BridgeMessage in C#):
+//   inbound:  { type: 'event' | 'reply', name: string, payload: any }
+//   outbound: { type: 'command', name: string, payload: any }
+//
+// Public surface:
+//   window.bridge.on(name, cb)           — subscribe to events; returns unsub
+//   window.bridge.off(name, cb)          — explicit unsub
+//   window.bridge.cmd(name, payload)     — promise resolved with reply.payload
+//   window.bridge.ready                  — Promise resolved once the shim has wired up
+//   window.bridge.version                — string, sanity check from console
 (function () {
-  'use strict';
+    "use strict";
 
-  const bridge = window.bridge || {};
-  const pending = {};
-  const subscribers = {};
-
-  bridge.version = bridge.version || 'csharp-standalone-2';
-  bridge.ready = bridge.ready || Promise.resolve(!!(window.chrome && window.chrome.webview));
-
-  function normalizePayload(payload) {
-    return payload && typeof payload === 'object' && !Array.isArray(payload)
-      ? payload
-      : { value: payload };
-  }
-
-  function post(message) {
-    if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-      window.chrome.webview.postMessage(message);
-      return true;
+    if (window.bridge && window.bridge.version) {
+        return; // already injected (defensive against double-inject)
     }
-    return false;
-  }
 
-  function remember(name, resolve) {
-    const key = String(name || '');
-    pending[key] = pending[key] || [];
-    pending[key].push(resolve);
-  }
+    var subscribers = Object.create(null); // name -> [cb]
+    var pending = Object.create(null);     // name -> [resolve]
+    var nextSeq = 1;
 
-  function resolvePending(name, payload) {
-    const key = String(name || '');
-    const queue = pending[key];
-    if (!queue || !queue.length) return false;
-    const resolve = queue.shift();
-    resolve(payload || {});
-    return true;
-  }
+    var debug = window.__bridge_debug__ = { inboundCount: 0, lastEnvelope: null, lastError: null };
 
-  function emit(name, payload, message) {
-    const key = String(name || '');
-    const list = subscribers[key];
-    if (list) {
-      list.slice().forEach(function (callback) {
-        try { callback(payload || {}, message || null); } catch (_) {}
-      });
+    function dispatch(envelope) {
+        try {
+            debug.inboundCount++;
+            debug.lastEnvelope = envelope;
+            var msg = typeof envelope === 'string' ? JSON.parse(envelope) : envelope;
+            if (!msg || typeof msg !== 'object') return;
+            var type = msg.type;
+            var name = msg.name;
+            var payload = msg.payload;
+            if (type === 'event' || type === 'reply') {
+                var list = subscribers[name];
+                if (list) {
+                    for (var i = 0; i < list.length; i++) {
+                        try { list[i](payload, msg); } catch (e) { /* swallow */ }
+                    }
+                }
+                if (type === 'reply') {
+                    var awaiters = pending[name];
+                    if (awaiters && awaiters.length) {
+                        var resolve = awaiters.shift();
+                        try { resolve(payload); } catch (e) { /* swallow */ }
+                    }
+                }
+            }
+        } catch (e) {
+            debug.lastError = String(e);
+            // Malformed envelope — log to console, don't crash the page.
+            if (window.console) console.warn('[bridge] dispatch failed', e);
+        }
     }
-    try {
-      window.dispatchEvent(new CustomEvent('sao:bridge:' + key, { detail: payload || {} }));
-    } catch (_) {}
-  }
 
-  function parseMessage(data) {
-    if (!data) return null;
-    if (typeof data === 'string') {
-      try { return JSON.parse(data); } catch (_) { return null; }
+    function on(name, cb) {
+        if (!subscribers[name]) subscribers[name] = [];
+        subscribers[name].push(cb);
+        return function () { off(name, cb); };
     }
-    if (typeof data === 'object') return data;
-    return null;
-  }
 
-  function handleHostMessage(event) {
-    const message = parseMessage(event && event.data);
-    if (!message || !message.type || !message.name) return;
-    if (message.type === 'reply') {
-      emit(message.name, message.payload || {}, message);
-      resolvePending(message.name, message.payload || {});
-      return;
+    function off(name, cb) {
+        var list = subscribers[name];
+        if (!list) return;
+        var idx = list.indexOf(cb);
+        if (idx >= 0) list.splice(idx, 1);
     }
-    if (message.type === 'event') {
-      emit(message.name, message.payload || {}, message);
+
+    function cmd(name, payload) {
+        var envelope = { type: 'command', name: name, payload: payload || {} };
+        try {
+            window.chrome.webview.postMessage(envelope);
+        } catch (e) {
+            return Promise.reject(e);
+        }
+        return new Promise(function (resolve) {
+            if (!pending[name]) pending[name] = [];
+            pending[name].push(resolve);
+        });
     }
-  }
 
-  try {
-    if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
-      window.chrome.webview.addEventListener('message', handleHostMessage);
+    // Wire the inbound channel as soon as window.chrome.webview is available.
+    function wire() {
+        try {
+            if (!window.chrome || !window.chrome.webview) {
+                // Page loaded outside WebView2; the shim is a no-op.
+                return false;
+            }
+            window.chrome.webview.addEventListener('message', function (e) {
+                // CoreWebView2.PostWebMessageAsString delivers a string in
+                // e.data; postMessageAsJson would deliver a parsed object.
+                dispatch(e.data);
+            });
+            return true;
+        } catch (err) {
+            if (window.console) console.warn('[bridge] wire failed', err);
+            return false;
+        }
     }
-  } catch (_) {}
 
-  bridge.notify = bridge.notify || function notify(message) {
-    try {
-      post({ type: 'event', name: 'ui.notify', payload: { message: String(message || '') } });
-    } catch (_) {}
-  };
+    var wired = wire();
+    var readyResolve;
+    var readyPromise = new Promise(function (r) { readyResolve = r; });
+    if (wired) {
+        readyResolve(true);
+    } else if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+            wire();
+            readyResolve(!!(window.chrome && window.chrome.webview));
+        });
+    } else {
+        readyResolve(false);
+    }
 
-  bridge.on = bridge.on || function on(name, callback) {
-    const key = String(name || '');
-    if (typeof callback !== 'function') return function () {};
-    subscribers[key] = subscribers[key] || [];
-    subscribers[key].push(callback);
-    return function () { bridge.off(key, callback); };
-  };
-
-  bridge.off = bridge.off || function off(name, callback) {
-    const key = String(name || '');
-    const list = subscribers[key];
-    if (!list) return;
-    const index = list.indexOf(callback);
-    if (index >= 0) list.splice(index, 1);
-  };
-
-  bridge.cmd = bridge.cmd || function cmd(command, payload) {
-    const name = String(command || '');
-    const body = normalizePayload(payload || {});
-    return new Promise(function (resolve) {
-      remember(name, resolve);
-      if (!post({ type: 'command', name: name, payload: body })) {
-        resolve({ ok: true, standalone: true, command: name, payload: body });
-      }
-    });
-  };
-
-  bridge.call = bridge.call || function call(command, payload) {
-    return bridge.cmd(command, payload);
-  };
-
-  window.bridge = bridge;
+    window.bridge = {
+        version: 's187',
+        on: on,
+        off: off,
+        cmd: cmd,
+        ready: readyPromise,
+        _wired: function () { return !!(window.chrome && window.chrome.webview); },
+    };
 })();

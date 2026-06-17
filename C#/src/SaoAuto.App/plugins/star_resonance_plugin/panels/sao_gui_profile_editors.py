@@ -33,7 +33,7 @@ from sao_web_panel_common import (
     panel_font,
     place_corner_accents,
 )
-from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
+from plugins.star_resonance_plugin.panels.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
 
 from plugins.star_resonance_plugin.engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
@@ -47,7 +47,7 @@ from plugins.star_resonance_plugin.engines.auto_key_engine import (
     upsert_profile as upsert_auto_key_profile,
 )
 
-from engines.boss_raid_engine import (
+from plugins.star_resonance_plugin.engines.boss_raid_engine import (
     clone_profile as clone_boss_raid_profile,
     delete_profile as delete_boss_raid_profile,
     export_profile_to_default_path as export_boss_raid_profile,

@@ -52,7 +52,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe import cy_memscan as _cy  # noqa: E402
-from mem_probe.process import StarProcess  # noqa: E402
+from ..process import StarProcess  # noqa: E402
+from plugins.star_resonance_plugin.mem.cy_combat import find_skill_cd_arrays_in_blob as _find_skill_cd  # noqa: E402
 
 
 # Field offsets (proto wire layout) for CharSerialize / UserFightAttr /
@@ -616,7 +617,7 @@ class AnchorMemoryReader:
                 if blob is None:
                     off += chunk
                     continue
-                cands = _cy.find_skill_cd_arrays_in_blob(
+                cands = _find_skill_cd(
                     blob, base + off, anchor_skill_set, 50, 1024, 256
                 )
                 if not cands:

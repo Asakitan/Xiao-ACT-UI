@@ -196,7 +196,6 @@ html, body {
 }
 
 .position,
-.leftInfoBox,
 .child-menu,
 .child-menu li span,
 .child-menu li .shortcut,
@@ -204,10 +203,6 @@ html, body {
 .des,
 .toast,
 .current-file,
-.picker-header span,
-.picker-path-bar,
-.picker-item,
-.btn-use-folder,
 .lb-box,
 .lb-tab,
 .lb-row,
@@ -910,7 +905,14 @@ html, body {
     background: rgba(104, 228, 255, 0.85);
     cursor: pointer;
     box-shadow: 0 0 6px rgba(104, 228, 255, 0.4);
-/* Game CSS (Burst Slots) — injected by plugin */
+}
+.mode-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid rgba(244, 244, 244, 0.4);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(223,225,217,0.52));
+    font-family: var(--font-sao);
     font-size: 10px;
     letter-spacing: 0.8px;
     color: rgba(100, 99, 100, 0.75);
@@ -934,373 +936,6 @@ html, body {
     opacity: 0.45;
     cursor: not-allowed;
 }
-.source-summary {
-    width: 100%;
-    padding: 8px 10px;
-    border: 1px solid rgba(244, 244, 244, 0.38);
-    border-radius: 9px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(226,228,220,0.46));
-    color: rgba(100, 99, 100, 0.82);
-    font-family: var(--font-ui);
-    font-size: 10px;
-    letter-spacing: 0.55px;
-    line-height: 1.6;
-}
-.mem-source-group {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-    margin-top: 6px;
-}
-.source-msgbox {
-    width: 420px;
-}
-.source-dialog-body {
-    padding: 14px 18px 8px;
-    background: rgba(250, 250, 246, 0.88);
-}
-.source-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(110, 112, 96, 0.12);
-}
-.source-row:last-of-type {
-    border-bottom: none;
-}
-.child-menu.auto-key-menu {
-    min-width: 860px;
-    top: -44px;
-}
-/* Game CSS (Auto-Key) — injected by plugin */
-/* ═══════════════════════════════════════
-   LeftInfo — player info panel
-   ═══════════════════════════════════════ */
-.leftInfo {
-    position: absolute;
-    left: calc(-25px - 240px);
-    top: -180px;
-}
-
-.leftInfoBox {
-    opacity: 0;
-    filter: blur(14px);
-    transition: opacity 0.4s ease, filter 0.42s ease;
-}
-.leftInfoBox.show {
-    opacity: 1;
-    filter: blur(0px);
-    animation: padding_open 1s ease forwards;
-}
-
-.leftInfoBox .top {
-    background: var(--info-top);
-    width: 240px;
-    height: 252px;
-    overflow: hidden;
-    position: relative;
-}
-
-.top .title {
-    margin: 0 10px;
-    padding-top: 10px;
-    padding-bottom: 7px;
-    border-bottom: 2px solid var(--menu-border-strong);
-    letter-spacing: 1px;
-    text-align: center;
-    font-size: 15px;
-    color: var(--menu-text);
-}
-
-.right-triangle {
-    width: 18px;
-    height: 14px;
-    position: absolute;
-    top: 200px;
-    left: 100%;
-    clip-path: polygon(100% 50%, 0 100%, 0 0);
-    background: var(--info-top);
-}
-
-.bottom-triangle {
-    width: 15px;
-    height: 10px;
-    position: absolute;
-    top: 0;
-    left: 30px;
-    clip-path: polygon(50% 100%, 100% 0, 0 0);
-    background: var(--info-bottom);
-}
-
-.leftInfoBox .bottom {
-    background: var(--info-bottom);
-    width: 240px;
-    height: 54px;
-    position: relative;
-    overflow: hidden;
-}
-
-.bottom .des {
-    text-align: left;
-    padding: 14px 10px;
-    font-size: 13px;
-    color: var(--menu-text);
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* ═══ Session Players — right-side Saomenu panel ═══ */
-.sessionPlayers {
-    position: absolute;
-    left: 74px;
-    top: -180px;
-    width: 336px;
-    opacity: 0;
-    pointer-events: none;
-    filter: blur(12px);
-    transform: translateX(28px);
-    transition: opacity 0.4s ease, transform 0.52s cubic-bezier(0.16, 1, 0.3, 1), filter 0.42s ease, left 0.20s ease;
-    will-change: opacity, transform, filter;
-    z-index: 120;
-}
-.sessionPlayers.with-child {
-    left: 346px;
-}
-.sessionPlayers.show {
-    opacity: 1;
-    pointer-events: auto;
-    filter: blur(0);
-    transform: translateX(0);
-}
-.sessionPlayers.session-open-anim {
-    animation: session-panel-open 1s ease forwards;
-}
-.sessionPlayersBox {
-    width: 100%;
-    max-height: min(520px, calc(100vh - 92px));
-    overflow: hidden;
-    background: rgba(247, 247, 246, 0.96);
-    border: 1px solid rgba(201,198,198,0.58);
-    border-radius: 2px;
-    box-shadow: 0 20px 42px rgba(31,34,40,0.20), inset 0 0 0 1px rgba(104,228,255,0.08);
-    transform-origin: 0 50%;
-    will-change: transform, filter;
-}
-.sessionPlayers.session-open-anim .sessionPlayersBox {
-    animation: sp-panel-open 1s ease forwards;
-}
-@keyframes session-panel-open {
-    0%   { opacity: 0; transform: translateX(64px) scale(0.985); filter: blur(14px); }
-    50%  { opacity: 1; transform: translateX(0) scale(1); filter: blur(0); }
-    100% { opacity: 1; transform: translateX(0) scale(1); filter: blur(0); }
-}
-@keyframes sp-panel-open {
-    0%   { transform: translateX(34px) scale(0.985); filter: blur(10px); }
-    50%  { transform: translateX(0) scale(1); filter: blur(0); }
-    100% { transform: translateX(0) scale(1); filter: blur(0); }
-}
-.sp-header {
-    height: 58px;
-    background: rgba(252,252,252,0.94);
-    border-bottom: 2px solid var(--menu-border-strong);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 0 15px;
-}
-.sp-title {
-    color: rgb(100,99,100);
-    font-size: 14px;
-    font-weight: 800;
-    letter-spacing: 2px;
-}
-.sp-subtitle {
-    color: rgb(154,154,154);
-    font-size: 11px;
-    margin-top: 2px;
-}
-.sp-columns {
-    height: 30px;
-    display: grid;
-    grid-template-columns: 1.3fr 92px 92px;
-    align-items: center;
-    gap: 8px;
-    padding: 0 13px;
-    background: rgba(236,240,244,0.95);
-    color: #7a8792;
-    font-family: var(--font-ui);
-    font-weight: 700;
-    font-size: 10px;
-    letter-spacing: 0.4px;
-    line-height: 1;
-}
-.sp-columns span {
-    display: block;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.sp-columns span:last-child { text-align: right; }
-.sp-list {
-    max-height: min(404px, calc(100vh - 190px));
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    background: rgba(238,238,238,0.88);
-    padding: 6px 7px 8px;
-}
-.sp-list::-webkit-scrollbar { width: 5px; }
-.sp-list::-webkit-scrollbar-track { background: rgba(200,200,200,0.18); }
-.sp-list::-webkit-scrollbar-thumb {
-    background: rgba(243,175,18,0.42);
-    border-radius: 3px;
-}
-.sp-row {
-    min-height: 38px;
-    display: grid;
-    grid-template-columns: 1.3fr 92px 92px;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
-    margin-bottom: 5px;
-    background: rgba(255,255,255,0.84);
-    border: 1px solid rgba(201,198,198,0.34);
-    box-shadow: inset 3px 0 0 rgba(134,223,255,0.72);
-    color: var(--menu-control-text);
-    font-size: 12px;
-    animation: sp-row-open 0.28s cubic-bezier(.2,.84,.22,1) both;
-    animation-delay: var(--sp-delay, 0ms);
-    will-change: opacity, transform, filter;
-}
-@keyframes sp-row-open {
-    0%   { opacity: 0; transform: translateX(18px); filter: blur(5px); }
-    66%  { opacity: 1; transform: translateX(-2px); filter: blur(0.5px); }
-    100% { opacity: 1; transform: translateX(0); filter: blur(0); }
-}
-.sp-row:nth-child(even) {
-    background: rgba(247,248,249,0.88);
-}
-.sp-row.self {
-    background: rgba(255,250,240,0.94);
-    box-shadow: inset 3px 0 0 rgba(243,175,18,0.95);
-    font-weight: 700;
-}
-.sp-name {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    color: #4f5962;
-}
-.sp-uid {
-    font-family: var(--font-sao);
-    color: #8a97a3;
-    text-align: center;
-    font-size: 10px;
-}
-.sp-power {
-    font-family: var(--font-sao);
-    color: #6d7379;
-    text-align: right;
-    font-size: 11px;
-}
-.sp-row.self .sp-power { color: #d9980e; }
-.sp-empty {
-    padding: 36px 12px;
-    text-align: center;
-    color: #aaa;
-    font-size: 12px;
-    line-height: 1.6;
-    animation: sp-row-open 0.28s cubic-bezier(.2,.84,.22,1) both;
-}
-.sp-more {
-    padding: 11px 10px 9px;
-    margin: 2px 0 4px;
-    text-align: center;
-    color: #9a8a68;
-    font-size: 11px;
-    letter-spacing: 0.3px;
-    animation: sp-row-open 0.24s cubic-bezier(.2,.84,.22,1) both;
-}
-
-/* LeftInfo panel animations */
-@keyframes padding_open {
-    0%   { padding-left: 240px; padding-top: 252px; padding-bottom: 54px; opacity: 0; }
-    50%  { padding-left: 0; padding-top: 0; opacity: 1; }
-    100% { padding-bottom: 0; }
-}
-
-/* ═══ SAO-style Clock ═══ */
-.sao-clock-container {
-    text-align: center;
-    padding: 10px 4px 6px;
-    border-top: 1px solid var(--menu-border);
-}
-.sao-clock-frame {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-}
-.sao-clock-bracket {
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 14px;
-    color: rgba(243,175,18,0.38);
-    font-weight: 300;
-}
-.sao-clock-digits {
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 16px;
-    letter-spacing: 2px;
-    color: rgba(100,99,100,0.78);
-    text-shadow: 0 0 6px rgba(243,175,18,0.18);
-    animation: sao-clock-pulse 4s ease-in-out infinite;
-}
-.sao-clock-label {
-    font-size: 9px;
-    letter-spacing: 3px;
-    color: rgba(140,135,138,0.56);
-    margin-top: 3px;
-    text-transform: uppercase;
-}
-@keyframes sao-clock-pulse {
-    0%, 100% { opacity: 0.72; text-shadow: 0 0 6px rgba(243,175,18,0.18); }
-    50%      { opacity: 1.0;  text-shadow: 0 0 10px rgba(243,175,18,0.35); }
-}
-
-/* ═══ Info Panel Content ═══ */
-.info-content {
-    padding: 12px;
-}
-
-.info-stat {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 4px;
-    border-bottom: 1px solid var(--menu-border);
-    font-size: 13px;
-    color: var(--menu-text);
-}
-.info-stat:last-child { border-bottom: none; }
-.info-stat .label { color: var(--menu-text-muted); }
-.info-stat .value { color: var(--menu-text); font-weight: 500; }
-
-.xp-bar-container {
-    margin: 8px 4px;
-    height: 6px;
-    background: rgba(188, 192, 198, 0.36);
-    border-radius: 3px;
-    overflow: hidden;
-}
-.xp-bar-fill {
-    height: 100%;
-    background: linear-gradient(to right, rgb(243, 175, 18), rgb(255, 210, 80));
-    border-radius: 3px;
-    transition: width 0.5s ease;
-}
-
 /* ═══════════════════════════════════════
    ChildBar — sub-menu items
    ═══════════════════════════════════════ */
@@ -1523,8 +1158,7 @@ html, body {
     color: #999;
 }
 
-/* ═══ File Picker Dialog ═══ */
-/* Picker float (sinusoidal, ≤4px) */
+/* Shared float (sinusoidal, ≤4px) */
 @keyframes picker-float {
     0%   { transform: translate(0px,   0px); }
     15%  { transform: translate(-2px,  1.5px); }
@@ -1533,99 +1167,6 @@ html, body {
     75%  { transform: translate(2.5px, 1px); }
     100% { transform: translate(0px,   0px); }
 }
-.saoPickerBox {
-    width: 480px;
-    box-shadow: 0 0 32px 4px rgba(0,0,0,0.35);
-    border-radius: 2px;
-    display: flex;
-    flex-direction: column;
-    animation: XOpen ease 0.4s forwards, picker-float 9s ease-in-out 0.5s infinite;
-}
-.picker-header {
-    height: 52px;
-    background: rgba(255, 255, 255, 0.85);
-    box-shadow: rgba(0,0,0,.25) 0 8px 12px 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
-.picker-header span {
-    font-weight: 800;
-    color: rgb(100, 99, 100);
-    font-size: 16px;
-    letter-spacing: 2px;
-}
-.picker-path-bar {
-    background: rgba(66, 140, 230, 0.1);
-    padding: 6px 14px;
-    font-size: 11px;
-    color: rgba(50, 110, 200, 0.9);
-    font-family: var(--font-ui);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex-shrink: 0;
-    border-bottom: 1px solid rgba(66,140,230,0.18);
-}
-.picker-list {
-    overflow-y: auto;
-    background: rgba(238, 238, 238, 0.88);
-    flex: 1;
-    max-height: 320px;
-}
-.picker-list::-webkit-scrollbar { width: 4px; }
-.picker-list::-webkit-scrollbar-track { background: rgba(200,200,200,0.2); }
-.picker-list::-webkit-scrollbar-thumb { background: rgba(66,140,230,0.35); border-radius: 2px; }
-.picker-item {
-    display: flex;
-    align-items: center;
-    padding: 9px 14px;
-    cursor: pointer;
-    border-bottom: 1px solid rgba(210,210,210,0.4);
-    font-size: 13px;
-    color: var(--menu-control-text);
-    gap: 8px;
-    transition: background 0.1s;
-}
-.picker-item:last-child { border-bottom: none; }
-.picker-item:hover { background: rgba(243,175,18,0.15); }
-.picker-item.is-dir  { color: rgb(55, 120, 210); }
-.picker-item.is-up   { color: rgb(140,140,140); font-style: italic; }
-.picker-item i {
-    font-style: normal;
-    min-width: 28px;
-    text-align: center;
-}
-.picker-item.is-dir .menu-glyph {
-    color: rgba(243, 175, 18, 0.92);
-}
-.picker-item .item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.picker-item .item-info { font-size: 10px; color: #aaa; white-space: nowrap; }
-.picker-empty { padding: 28px; text-align: center; color: #aaa; font-size: 13px; }
-.picker-footer {
-    height: 58px;
-    background: rgba(255,255,255,0.82);
-    box-shadow: rgba(0,0,0,.07) 0 -10px 12px 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 24px;
-    flex-shrink: 0;
-}
-.btn-use-folder {
-    padding: 6px 14px;
-    background: rgba(66,140,230,0.8);
-    color: #fff;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    letter-spacing: 1px;
-    display: none;
-    transition: background 0.15s;
-}
-.btn-use-folder:hover { background: rgba(66,140,230,1); }
-.picker-mode-folder .btn-use-folder { display: block; }
 
 /* ═══════════════════════════════════════
    Leaderboard Dialog
@@ -2093,8 +1634,24 @@ html, body {
     gap: 8px;
     margin-top: 14px;
 }
-.saoUpdaterActions .auto-key-btn {
+.saoUpdaterActions .sao-updater-btn {
     min-width: 102px;
+    border: 1px solid rgba(104, 228, 255, 0.45);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.84);
+    color: rgba(72, 78, 86, 0.96);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    padding: 7px 12px;
+    cursor: pointer;
+}
+.saoUpdaterActions .sao-updater-btn.primary {
+    background: rgba(104, 228, 255, 0.28);
+}
+.saoUpdaterActions .sao-updater-btn.warn {
+    border-color: rgba(243, 175, 18, 0.42);
 }
 @media (max-width: 560px) {
     .saoUpdaterDock {
@@ -2118,7 +1675,7 @@ html, body {
     .saoUpdaterActions {
         flex-direction: column-reverse;
     }
-    .saoUpdaterActions .auto-key-btn {
+    .saoUpdaterActions .sao-updater-btn {
         width: 100%;
     }
 }
@@ -2177,8 +1734,6 @@ html, body {
     animation: tv-off-anim 0.55s cubic-bezier(0.3, 0, 0.9, 1) forwards;
 }
 
-/* Game CSS (Boss Raid) — injected by plugin */
-/* ═══════════════════════════════════════
 /* ═══════════════════════════════════════
    Hidden scrollbar (keep scroll but no visual bar on right)
    ═══════════════════════════════════════ */
@@ -2216,77 +1771,18 @@ html, body {
             <span class="frame-scan"></span>
         </div>
 
-
-        <!-- LeftInfo Panel -->
-        <div class="leftInfo" id="left-info">
-            <div class="leftInfoBox" id="info-box">
-                <div class="top">
-                    <i class="right-triangle"></i>
-                    <div class="title" id="info-username">Player</div>
-                    <div class="info-content">
-                        <div class="info-stat">
-                            <span class="label">等级</span>
-                            <span class="value" id="info-level">Lv.1</span>
-                        </div>
-                        <div class="xp-bar-container">
-                            <div class="xp-bar-fill" id="info-xp" style="width:0%"></div>
-                        </div>
-                        <div class="info-stat">
-                            <span class="label">职业</span>
-                            <span class="value" id="info-profession">剑士</span>
-                        </div>
-                        <div class="info-stat">
-                            <span class="label">HP</span>
-                            <span class="value" id="info-hp" style="color:#86dfff">—</span>
-                        </div>
-                        <div class="info-stat">
-                            <span class="label">STA</span>
-                            <span class="value" id="info-sta" style="color:#f3af12">—</span>
-                        </div>
-                        <div class="sao-clock-container">
-                            <div class="sao-clock-frame">
-                                <span class="sao-clock-bracket">[</span>
-                                <span class="sao-clock-digits" id="info-clock">--:--:--</span>
-                                <span class="sao-clock-bracket">]</span>
-                            </div>
-                            <div class="sao-clock-label">SYSTEM TIME</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="bottom">
-                    <i class="bottom-triangle"></i>
-                    <div class="des" id="info-des">SAO Auto — 游戏辅助 UI</div>
-                </div>
-            </div>
-        </div>
-
         <!-- MenuBar Circles -->
         <ul class="item_box" id="menu-bar">
-            <li class="item active" data-name="userInfo" data-idx="0">
-                <div class="in-circle"><span class="sao-icon sao-icon-user"></span></div>
-            </li>
-            <li class="item" data-name="skillEffects" data-idx="1">
-                <div class="in-circle"><span class="sao-icon sao-icon-skill"></span></div>
-            </li>
-            <li class="item" data-name="autoKeys" data-idx="2">
-                <div class="in-circle"><span class="sao-icon sao-icon-keys"></span></div>
-            </li>
-            <li class="item" data-name="bossRaid" data-idx="3">
-                <div class="in-circle"><span class="sao-icon sao-icon-boss"></span></div>
-            </li>
-            <li class="item" data-name="panels" data-idx="4">
-                <div class="in-circle"><span class="sao-icon sao-icon-settings"></span></div>
-            </li>
-            <li class="item" data-name="act" data-idx="5">
+            <li class="item active" data-name="act" data-idx="0">
                 <div class="in-circle"><span class="sao-icon sao-icon-act"></span></div>
             </li>
-            <li class="item" data-name="plugins" data-idx="6">
+            <li class="item" data-name="plugins" data-idx="1">
                 <div class="in-circle"><span style="font-size:17px;line-height:1;color:var(--menu-icon);">⬢</span></div>
             </li>
-            <li class="item" data-name="theme" data-idx="7">
+            <li class="item" data-name="theme" data-idx="2">
                 <div class="in-circle"><span class="sao-icon sao-icon-theme"></span></div>
             </li>
-            <li class="item" data-name="about" data-idx="8">
+            <li class="item" data-name="about" data-idx="3">
                 <div class="in-circle"><span class="sao-icon sao-icon-about"></span></div>
             </li>
         </ul>
@@ -2298,17 +1794,10 @@ html, body {
                 <div class="circle-dot"></div>
             </div>
 
-            <!-- Skill Effects sub-menu -->
-            <!-- Game sub-menus (skillEffects/autoKeys/bossRaid/panels) removed — injected by plugin -->
-
-            <!-- Plugins sub-menu (专用插件分类 tab board — pin/toggle/manage) -->
+            <!-- Plugins sub-menu -->
             <ul class="child-menu" id="sub-plugins" data-group="plugins">
                 <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>⚙ 插件管理面板 Manage</span></li>
                 <li data-action="reload_plugins_all"><i class="menu-glyph mi-mid"></i><span>↻ 重载全部插件 Reload</span></li>
-                <li class="sep"></li>
-                <li class="widget-row" style="padding:0;">
-                    <div id="plugins-cat-list" style="display:flex;flex-direction:column;gap:4px;"><div class="ppm-empty">加载中…</div></div>
-                </li>
             </ul>
 
             <!-- ACT sub-menu -->
@@ -2344,35 +1833,14 @@ html, body {
                         <button class="boss-bar-mode-btn" id="theme-all-dark" type="button" onclick="_setAllThemes('dark')">全部 Dark</button>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;font-size:12px;">
-                        <div class="mode-btn" id="theme-dps" onclick="_toggleTheme('dps')" style="cursor:pointer;text-align:center;padding:3px 6px;">DPS: Dark</div>
                         <div class="mode-btn" id="theme-hp" onclick="_toggleTheme('hp')" style="cursor:pointer;text-align:center;padding:3px 6px;">HP: Dark</div>
-                        <div class="mode-btn" id="theme-bosshp" onclick="_toggleTheme('bosshp')" style="cursor:pointer;text-align:center;padding:3px 6px;">BossHP: Dark</div>
-                        <div class="mode-btn" id="theme-skillfx" onclick="_toggleTheme('skillfx')" style="cursor:pointer;text-align:center;padding:3px 6px;">SkillFX: Dark</div>
                         <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Dark</div>
                         <div class="mode-btn" id="theme-act" onclick="_toggleTheme('act')" style="cursor:pointer;text-align:center;padding:3px 6px;">ACT: Dark</div>
-                        <div class="mode-btn" id="theme-buffmon" onclick="_toggleTheme('buffmon')" style="cursor:pointer;text-align:center;padding:3px 6px;">BuffMon: Dark</div>
                     </div>
                 </li>
             </ul>
         </div>
 
-        <!-- Session Players Panel -->
-        <div class="sessionPlayers" id="session-players">
-            <div class="sessionPlayersBox">
-                <div class="sp-header">
-                    <div class="sp-title">SESSION PLAYERS</div>
-                    <div class="sp-subtitle" id="sp-summary">本次登录出现过 0 人</div>
-                </div>
-                <div class="sp-columns">
-                    <span>NAME</span>
-                    <span>UID</span>
-                    <span>POWER</span>
-                </div>
-                <div class="sp-list" id="sp-list">
-                    <div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -2386,16 +1854,55 @@ html, body {
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
-<!-- File Picker Dialog -->
-<div class="saoMsgBox_fa" id="filepicker-dialog">
-    <div class="saoPickerBox" id="filepicker-box">
-        <div class="picker-header"><span id="picker-title">选择文件</span></div>
-        <div class="picker-path-bar" id="picker-path"></div>
-        <div class="picker-list" id="picker-list"></div>
-        <div class="picker-footer">
-            <div class="btn-use-folder" id="picker-use-folder">✔ 使用此文件夹</div>
-            <div class="btn-circle btn-close" id="picker-close"><div class="inner"></div></div>
-        </div>
+<style>
+/* Generic plugin popup and detached plugin panel. Plugin/game-specific menu rows are injected at runtime. */
+#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
+    background:rgba(4,8,14,.56); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#plugin-popup-card { width:360px; max-height:76vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
+.ppm-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; border-bottom:1px solid rgba(117,205,255,.24); color:#ffd46f; font-weight:700; }
+#ppm-close, #pd-close { cursor:pointer; font-size:18px; color:#e8f6ff; }
+#ppm-list { padding:10px 12px; }
+.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 8px; border:1px solid rgba(117,205,255,.20); border-radius:8px;
+    background:rgba(8,14,22,.36); margin-bottom:6px; font-size:12px; }
+.ppm-row small { color:rgba(232,246,255,.66); }
+.ppm-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ppm-btn { border:1px solid rgba(117,205,255,.42); border-radius:6px; background:rgba(19,48,74,.6);
+    color:#e8f6ff; padding:3px 7px; font-size:12px; cursor:pointer; }
+.ppm-sep { height:1px; background:rgba(117,205,255,.18); margin:7px 0; }
+.ppm-empty { color:rgba(232,246,255,.72); font-size:12px; text-align:center; padding:12px; line-height:1.5; }
+.ppm-open:hover { background:rgba(117,205,255,.10); border-radius:8px; }
+#plugin-detached-overlay { display:none; position:fixed; inset:0; z-index:100000;
+    background:rgba(4,8,14,.6); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#pd-card { width:380px; max-height:80vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
+#pd-body, #pd-hotkeys { padding:10px 12px; }
+#pd-hotkeys { border-top:1px solid rgba(117,205,255,.2); }
+.pd-hk-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:5px 2px; font-size:12px; }
+.pd-hk-row select { background:rgba(19,48,74,.6); color:#e8f6ff;
+    border:1px solid rgba(117,205,255,.5); border-radius:6px; padding:2px 6px; font-size:12px; }
+.pd-hk-title { color:#ffd46f; font-weight:700; font-size:12px; letter-spacing:.06em; margin-bottom:4px; }
+</style>
+<div id="plugin-popup-overlay">
+    <div id="plugin-popup-card">
+        <div class="ppm-head"><span>🧩 插件菜单 Plugins</span><span id="ppm-close">×</span></div>
+        <div id="ppm-list"><div class="ppm-empty">加载中…</div></div>
+    </div>
+</div>
+<div id="plugin-detached-overlay">
+    <div id="pd-card">
+        <div class="ppm-head"><span id="pd-title">Plugin</span><span id="pd-close">×</span></div>
+        <div id="pd-body"><div class="ppm-empty">加载中…</div></div>
+        <div id="pd-hotkeys"></div>
     </div>
 </div>
 
@@ -2428,56 +1935,6 @@ html, body {
                 <div class="lb-btn" id="lb-next">NEXT</div>
             </div>
             <div class="btn-circle btn-close" id="lb-close"><div class="inner"></div></div>
-        </div>
-    </div>
-</div>
-
-<!-- Data Source Dialog -->
-<div class="saoMsgBox_fa" id="source-dialog" style="display:none" aria-hidden="true">
-    <div class="saoMsgBox source-msgbox">
-        <div class="alert-title"><span>DATA SOURCE</span></div>
-        <div class="source-dialog-body">
-            <div class="source-row">
-                <div class="source-name">HP</div>
-                <div class="mode-group">
-                    <div class="mode-btn source-mode-btn" data-component="hp" data-mode="packet">NETWORK</div>
-                    <div class="mode-btn source-mode-btn" data-component="hp" data-mode="vision">VISION</div>
-                </div>
-            </div>
-            <div class="source-row">
-                <div class="source-name">LEVEL</div>
-                <div class="mode-group">
-                    <div class="mode-btn source-mode-btn" data-component="level" data-mode="packet">NETWORK</div>
-                    <div class="mode-btn source-mode-btn" data-component="level" data-mode="vision">VISION</div>
-                </div>
-            </div>
-            <div class="source-row">
-                <div class="source-name">STA</div>
-                <div class="mode-group">
-                    <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="packet">NETWORK</div>
-                    <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="vision">VISION</div>
-                </div>
-            </div>
-            <div class="source-row">
-                <div class="source-name">SKILL CD</div>
-                <div class="mode-group">
-                    <div class="mode-btn source-mode-btn" data-component="skills" data-mode="packet">NETWORK</div>
-                    <div class="mode-btn source-mode-btn" data-component="skills" data-mode="vision">VISION</div>
-                </div>
-            </div>
-            <div class="source-row">
-                <div class="source-name">NAME / UID</div>
-                <div class="mode-group">
-                    <div class="mode-btn source-mode-btn" data-component="identity" data-mode="packet">NETWORK</div>
-                    <div class="mode-btn source-mode-btn" data-component="identity" data-mode="vision">VISION</div>
-                </div>
-            </div>
-            <div class="source-note">
-                Packet stays closest to raw game state. Vision uses the on-screen HUD and now runs through the OpenCV/OpenCL preprocessing path when the local machine supports it.
-            </div>
-        </div>
-        <div class="alert-footer">
-            <div class="btn-circle btn-close" id="source-close"><div class="inner"></div></div>
         </div>
     </div>
 </div>
@@ -2515,9 +1972,9 @@ html, body {
                 <span class="saoUpdaterProgressText" id="sao-updater-progress-text">0%</span>
             </div>
             <div class="saoUpdaterActions">
-                <button class="auto-key-btn warn" id="sao-updater-skip" type="button">跳过此版本</button>
-                <button class="auto-key-btn" id="sao-updater-later" type="button">稍后</button>
-                <button class="auto-key-btn primary" id="sao-updater-action" type="button">立即更新</button>
+                <button class="sao-updater-btn warn" id="sao-updater-skip" type="button">跳过此版本</button>
+                <button class="sao-updater-btn" id="sao-updater-later" type="button">稍后</button>
+                <button class="sao-updater-btn primary" id="sao-updater-action" type="button">立即更新</button>
             </div>
         </div>
     </div>
@@ -2531,287 +1988,37 @@ html, body {
 var overlay = document.getElementById('popup-overlay');
 var menuBar = document.getElementById('menu-bar');
 var childBar = document.getElementById('child-bar');
-var infoBox = document.getElementById('info-box');
 var cbLine = document.getElementById('cb-line');
 var cbArrow = document.getElementById('cb-arrow');
-var sessionPlayersEl = document.getElementById('session-players');
-var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
-var _sessionPlayersVisible = false;
-var _sessionPlayersManualHidden = false;
-var _sessionPlayersAnimTimer = null;
-var _spRenderRows = [];
-var _spRenderedCount = 0;
-var _spRenderToken = 0;
-var _spRenderPending = false;
-var _SP_INITIAL_ROWS = 80;
-var _SP_BATCH_ROWS = 120;
-var _memDataSource = 'hybrid';
+var currentActive = null;
 
-var currentActive = 'userInfo';
-var menuOpen = false;
-var _sourceComponents = ['hp', 'level', 'stamina', 'skills', 'identity'];
-var _sourceDefaults = {
-    hp: 'packet',
-    level: 'packet',
-    stamina: 'vision',
-    skills: 'packet',
-    identity: 'packet'
-};
-var _dataSourceMap = {
-    hp: 'packet',
-    level: 'packet',
-    stamina: 'vision',
-    skills: 'packet',
-    identity: 'packet'
-};
-
-function _sourceComponentName(value) {
-    var key = String(value || '').trim().toLowerCase();
-    return _sourceComponents.indexOf(key) >= 0 ? key : '';
+function _profileEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
 }
-
-function _sourceMode(value, fallback) {
-    var text = String(value || '').trim().toLowerCase();
-    if (text === 'ocr' || text === 'vision' || text === 'screen' || text === 'screen_vision') return 'vision';
-    if (text === 'packet' || text === 'network' || text === 'network_capture') return 'packet';
-    return fallback || 'packet';
-}
-
-function _componentDefault(component) {
-    var key = _sourceComponentName(component);
-    return key ? _sourceDefaults[key] : 'packet';
-}
-
-function _componentSourceValue(component, value) {
-    var key = _sourceComponentName(component);
-    if (!key) return '';
-    if (key === 'stamina') return 'vision';
-    if (key === 'skills') return 'packet';
-    return _sourceMode(value, _componentDefault(key));
-}
-
-function _syncDataSourceMap(map) {
-    var source = (map && typeof map === 'object') ? map : {};
-    _sourceComponents.forEach(function(key) {
-        _dataSourceMap[key] = _componentSourceValue(key, source[key]);
-    });
-}
-
-function _memSourceValue(value) {
-    var mode = String(value || '').trim().toLowerCase();
-    return ['tcp', 'memory', 'hybrid', 'auto'].indexOf(mode) >= 0 ? mode : 'hybrid';
-}
-
-function _sourceLabel(mode) {
-    return _sourceMode(mode, 'packet') === 'vision' ? 'VISION' : 'NETWORK';
-}
-
-function _memSourceLabel(mode) {
-    mode = _memSourceValue(mode);
-    if (mode === 'memory') return 'MEM';
-    if (mode === 'hybrid') return 'HYBRID';
-    if (mode === 'auto') return 'AUTO';
-    return 'TCP';
-}
-
-function _syncMemSourceButtons() {
-    _memDataSource = _memSourceValue(_memDataSource);
-    document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
-        btn.classList.toggle('active', _memSourceValue(btn.getAttribute('data-mode')) === _memDataSource);
-    });
-}
-
-function _syncSourceButtons() {
-    document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
-        var component = _sourceComponentName(btn.getAttribute('data-component'));
-        var mode = _sourceMode(btn.getAttribute('data-mode'), 'packet');
-        btn.classList.toggle('active', component && _componentSourceValue(component, _dataSourceMap[component]) === mode);
-    });
-}
-
-function _updateSourceSummary() {
-    _syncDataSourceMap(_dataSourceMap);
-    var summary = [
-        'DATA: ' + _memSourceLabel(_memDataSource),
-        'HP: ' + _sourceLabel(_dataSourceMap.hp),
-        'LV: ' + _sourceLabel(_dataSourceMap.level),
-        'STA: ' + _sourceLabel(_dataSourceMap.stamina),
-        'SKILL: ' + _sourceLabel(_dataSourceMap.skills)
-    ].join(' · ');
-    document.getElementById('data-source-summary').textContent = summary;
-}
-
-function _syncSessionPlayersAnchor(withChild) {
-    if (!sessionPlayersEl) return;
-    sessionPlayersEl.classList.toggle('with-child', !!withChild);
-}
-
-function _spText(value, fallback) {
+function _profileText(value, fallback) {
     if (value == null) return fallback;
     var text = String(value);
     return text ? text : fallback;
 }
-
-function _makeSessionPlayerRow(row, idx) {
-    row = (row && typeof row === 'object') ? row : {};
-    var el = document.createElement('div');
-    el.className = 'sp-row' + (row.is_self ? ' self' : '');
-    el.style.setProperty('--sp-delay', (Math.max(0, idx || 0) % 12) * 18 + 'ms');
-    var name = _spText(row.name, '--');
-    if (row.is_self && name !== '--') name = '* ' + name;
-    el.innerHTML =
-        '<div class="sp-name" title="' + _escHtml(_spText(row.name, '')) + '">' + _escHtml(name) + '</div>' +
-        '<div class="sp-uid">' + _escHtml(_spText(row.uid, '--')) + '</div>' +
-        '<div class="sp-power">' + _escHtml(_spText(row.fight_power, '--')) + '</div>';
-    return el;
+function _emitMenuEvent(type, detail) {
+    try {
+        window.dispatchEvent(new CustomEvent('sao-menu-' + type, { detail: detail || {} }));
+    } catch (_) {}
 }
-
-function _syncSessionPlayersMore(list) {
-    var old = list.querySelector('.sp-more');
-    if (old) old.remove();
-    if (_spRenderedCount >= _spRenderRows.length) return;
-    var more = document.createElement('div');
-    more.className = 'sp-more';
-    more.textContent = '继续滚动加载 · 已载入 ' + _spRenderedCount + '/' + _spRenderRows.length;
-    list.appendChild(more);
+function _menuItemName(item) {
+    return item ? String(item.getAttribute('data-name') || '') : '';
 }
-
-function _renderSessionPlayersBatch(token, batchSize) {
-    var list = document.getElementById('sp-list');
-    if (!list || token !== _spRenderToken) return;
-    _spRenderPending = false;
-    var old = list.querySelector('.sp-more');
-    if (old) old.remove();
-    var start = _spRenderedCount;
-    var end = Math.min(_spRenderRows.length, start + Math.max(1, batchSize || _SP_BATCH_ROWS));
-    var frag = document.createDocumentFragment();
-    for (var i = start; i < end; i++) {
-        frag.appendChild(_makeSessionPlayerRow(_spRenderRows[i], i));
+function _firstMenuName() {
+    return _menuItemName(menuBar.querySelector('.item'));
+}
+function _menuItemForName(name) {
+    var needle = String(name || '');
+    var items = menuBar.querySelectorAll('.item');
+    for (var i = 0; i < items.length; i++) {
+        if (_menuItemName(items[i]) === needle) return items[i];
     }
-    list.appendChild(frag);
-    _spRenderedCount = end;
-    _syncSessionPlayersMore(list);
-    if (_spRenderedCount < _spRenderRows.length && list.scrollHeight <= list.clientHeight + 8) {
-        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
-    }
+    return null;
 }
-
-function _scheduleSessionPlayersBatch(batchSize) {
-    if (_spRenderPending || _spRenderedCount >= _spRenderRows.length) return;
-    _spRenderPending = true;
-    var token = _spRenderToken;
-    window.requestAnimationFrame(function() {
-        _renderSessionPlayersBatch(token, batchSize || _SP_BATCH_ROWS);
-    });
-}
-
-function _maybeRenderMoreSessionPlayers() {
-    var list = document.getElementById('sp-list');
-    if (!list || _spRenderedCount >= _spRenderRows.length) return;
-    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 96) {
-        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
-    }
-}
-
-function openSourceDialog() {
-    playSound('snd-panel');
-    _syncSourceButtons();
-    document.getElementById('source-dialog').classList.add('show');
-}
-
-function closeSourceDialog() {
-    document.getElementById('source-dialog').classList.remove('show');
-}
-
-function _renderSessionPlayers(dataJson, reveal) {
-    var data = dataJson || _sessionPlayersPayload;
-    if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch (e) { data = {}; }
-    }
-    _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
-    var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
-    var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);
-    var summary = document.getElementById('sp-summary');
-    var list = document.getElementById('sp-list');
-    _spRenderToken += 1;
-    _spRenderPending = false;
-    _spRenderRows = rows;
-    _spRenderedCount = 0;
-    summary.textContent = '本次登录出现过 ' + total + ' 人' +
-        (_sessionPlayersPayload.self_uid ? ' · SELF ' + _sessionPlayersPayload.self_uid : '');
-    list.textContent = '';
-    list.scrollTop = 0;
-    if (!rows.length) {
-        list.innerHTML = '<div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>';
-    } else {
-        _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
-    }
-    if (reveal && sessionPlayersEl && menuOpen) {
-        var wasVisible = _sessionPlayersVisible && sessionPlayersEl.classList.contains('show');
-        _sessionPlayersVisible = true;
-        sessionPlayersEl.classList.add('show');
-        if (!wasVisible) {
-            _playSessionPlayersOpenAnimation();
-        }
-    }
-}
-
-function _playSessionPlayersOpenAnimation() {
-    if (!sessionPlayersEl) return;
-    var box = sessionPlayersEl.querySelector('.sessionPlayersBox');
-    if (_sessionPlayersAnimTimer) {
-        clearTimeout(_sessionPlayersAnimTimer);
-        _sessionPlayersAnimTimer = null;
-    }
-    sessionPlayersEl.classList.remove('session-open-anim');
-    sessionPlayersEl.style.animation = 'none';
-    if (box) {
-        box.style.animation = 'none';
-        void sessionPlayersEl.offsetWidth;
-        void box.offsetWidth;
-        box.style.animation = '';
-    } else {
-        void sessionPlayersEl.offsetWidth;
-    }
-    sessionPlayersEl.style.animation = '';
-    sessionPlayersEl.classList.add('session-open-anim');
-    _sessionPlayersAnimTimer = setTimeout(function() {
-        if (sessionPlayersEl) {
-            sessionPlayersEl.classList.remove('session-open-anim');
-        }
-        _sessionPlayersAnimTimer = null;
-    }, 1040);
-}
-
-function setSessionPlayersPayload(dataJson) {
-    _renderSessionPlayers(dataJson, _sessionPlayersVisible || (menuOpen && !_sessionPlayersManualHidden));
-}
-
-function showSessionPlayers(dataJson) {
-    _sessionPlayersManualHidden = false;
-    _renderSessionPlayers(dataJson, true);
-}
-
-function toggleSessionPlayers(dataJson) {
-    showSessionPlayers(dataJson || _sessionPlayersPayload);
-}
-
-function closeSessionPlayers(manual) {
-    _sessionPlayersVisible = false;
-    _sessionPlayersManualHidden = !!manual;
-    if (sessionPlayersEl) {
-        sessionPlayersEl.classList.remove('show');
-        sessionPlayersEl.classList.remove('session-open-anim');
-    }
-}
-
-(function() {
-    var list = document.getElementById('sp-list');
-    if (list) {
-        list.addEventListener('scroll', _maybeRenderMoreSessionPlayers, { passive: true });
-    }
-})();
-
 /* ═══ Sound helpers — via Python bridge ═══ */
 var _soundVolumeValue = 70;
 var _soundVolumeRequestSeq = 0;
@@ -3020,7 +2227,6 @@ function openMenu(x, y) {
     var targetTop = Math.max(48, Math.min(y || defaultTop, maxTop));
     pos.style.left = targetLeft + 'px';
     pos.style.top  = targetTop + 'px';
-    pos.classList.remove('auto-key-layout');
     pos.classList.remove('menu-focus-out');
     pos.classList.remove('menu-focus-in');
     void pos.offsetWidth;
@@ -3039,12 +2245,9 @@ function openMenu(x, y) {
         el.classList.remove('active');
     });
 
-    /* Show userInfo by default */
     currentActive = null;
-    activateCircle('userInfo');
-    _syncSessionPlayersAnchor(false);
-    _sessionPlayersManualHidden = false;
-    showSessionPlayers(_sessionPlayersPayload);
+    var defaultName = _firstMenuName();
+    if (defaultName) activateCircle(defaultName);
 }
 
 function closeMenu() {
@@ -3053,7 +2256,6 @@ function closeMenu() {
     playSound('snd-dismiss');
     stopFisheyeBg();
     var pos = document.getElementById('menu-position');
-    pos.classList.remove('auto-key-layout');
     pos.classList.remove('menu-focus-in');
     pos.classList.remove('menu-focus-out');
     void pos.offsetWidth;
@@ -3071,8 +2273,7 @@ function closeMenu() {
         overlay.classList.remove('visible', 'closing');
         tvoff.classList.remove('active');
         hideAllSubMenus();
-        infoBox.classList.remove('show');
-        closeSessionPlayers();
+        _emitMenuEvent('close', {});
     }, 550);
 }
 
@@ -3142,40 +2343,37 @@ overlay.addEventListener('click', function(e) {
 
 /* ═══ Circle activation ═══ */
 function activateCircle(name) {
+    name = String(name || '');
+    if (!name) return;
     playSound('snd-click');
-    var pos = document.getElementById('menu-position');
 
     /* Toggle if same circle */
     if (currentActive === name) {
-        if (name === 'userInfo') {
-            infoBox.classList.add('show');
+        var currentItem = _menuItemForName(name);
+        if (currentItem && currentItem.getAttribute('data-menu-persistent') === '1') {
+            hideAllSubMenus();
             cbLine.classList.remove('show');
             cbArrow.classList.remove('show');
-            pos.classList.remove('auto-key-layout');
-            _syncSessionPlayersAnchor(false);
-            showSessionPlayers(_sessionPlayersPayload);
+            _emitMenuEvent('activate', { name: name, repeated: true, hasSubmenu: false });
             return;
         }
-        var items = menuBar.querySelectorAll('.item');
-        var first = items[0];
-        if (first.classList.contains('active')) {
-            first.classList.remove('active');
+        if (currentItem && currentItem.classList.contains('active')) {
+            currentItem.classList.remove('active');
             hideAllSubMenus();
-            infoBox.classList.remove('show');
             cbLine.classList.remove('show');
             cbArrow.classList.remove('show');
-            pos.classList.remove('auto-key-layout');
-            _syncSessionPlayersAnchor(false);
             currentActive = null;
+            _emitMenuEvent('deactivate', { name: name });
         }
         return;
     }
 
-    currentActive = name;
-
     /* Rotate the clicked item to top */
     var items = Array.from(menuBar.querySelectorAll('.item'));
     var targetIdx = items.findIndex(function(el) { return el.getAttribute('data-name') === name; });
+    if (targetIdx < 0) return;
+
+    currentActive = name;
 
     /* Move target to first position */
     if (targetIdx > 0) {
@@ -3191,30 +2389,20 @@ function activateCircle(name) {
 
     /* Show appropriate content */
     hideAllSubMenus();
-    pos.classList.toggle('auto-key-layout', name === 'autoKeys' || name === 'bossRaid');
-
-    if (name === 'userInfo') {
-        infoBox.classList.add('show');
-        playSound('snd-panel');
+    var sub = document.getElementById('sub-' + name);
+    if (sub) {
+        sub.classList.add('show');
+        playSound('snd-menu');
+        /* Update line height using rendered height so large panels also fit */
+        var rect = sub.getBoundingClientRect();
+        cbLine.style.height = Math.max(48, Math.round(rect.height - 18)) + 'px';
+        cbLine.classList.add('show');
+        cbArrow.classList.add('show');
+        _emitMenuEvent('activate', { name: name, hasSubmenu: true });
+    } else {
         cbLine.classList.remove('show');
         cbArrow.classList.remove('show');
-        _syncSessionPlayersAnchor(false);
-    } else {
-        infoBox.classList.remove('show');
-        var sub = document.getElementById('sub-' + name);
-        if (sub) {
-            sub.classList.add('show');
-            if (name === 'plugins' && window.renderPluginsCategory) window.renderPluginsCategory();
-            _syncSessionPlayersAnchor(true);
-            playSound('snd-menu');
-            /* Update line height using rendered height so large panels also fit */
-            var rect = sub.getBoundingClientRect();
-            cbLine.style.height = Math.max(48, Math.round(rect.height - 18)) + 'px';
-            cbLine.classList.add('show');
-            cbArrow.classList.add('show');
-        } else {
-            _syncSessionPlayersAnchor(false);
-        }
+        _emitMenuEvent('activate', { name: name, hasSubmenu: false });
     }
 }
 
@@ -3222,155 +2410,34 @@ function hideAllSubMenus() {
     document.querySelectorAll('.child-menu').forEach(function(el) {
         el.classList.remove('show');
     });
-    document.getElementById('menu-position').classList.remove('auto-key-layout');
-    _syncSessionPlayersAnchor(false);
 }
 
-/* ═══ File Picker ═══ */
-var _pickerMode = 'file';
-var _pickerConsumer = '';
-var _pickerCurrentDir = '';
+menuBar.addEventListener('click', function(e) {
+    var item = e.target && e.target.closest ? e.target.closest('.item') : null;
+    if (!item || !menuBar.contains(item)) return;
+    e.stopPropagation();
+    activateCircle(item.getAttribute('data-name'));
+});
 
-function _pickerPayload(dataJson) {
-    if (typeof dataJson === 'string') {
-        try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }
-    }
-    return (dataJson && typeof dataJson === 'object') ? dataJson : {};
-}
-
-function _pickerModeValue(value) {
-    return value === 'folder' ? 'folder' : 'file';
-}
-
-function _pickerEntry(entry) {
-    return (entry && typeof entry === 'object') ? entry : {};
-}
-
-function _pickerEntryText(value) {
-    if (value == null) return '';
-    var text = String(value);
-    return text ? text : '';
-}
-
-function _pickerConsumerLabel(consumer) {
-    return consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS';
-}
-
-function _pickerParseResult(consumer, result) {
-    var fn = window['_' + (consumer === 'boss_raid' ? 'br' : 'ak') + 'ParseApiResult'];
-    return typeof fn === 'function' ? fn(result) : result;
-}
-
-function showFilePicker(dataJson) {
-    var data = _pickerPayload(dataJson);
-    _pickerMode = _pickerModeValue(data.mode);
-    _pickerCurrentDir = _pickerEntryText(data.current);
-    var parentPath = _pickerEntryText(data.parent);
-    var dirs = Array.isArray(data.dirs) ? data.dirs : [];
-    var files = Array.isArray(data.files) ? data.files : [];
-    document.getElementById('picker-title').textContent = _pickerMode === 'folder' ? '选择文件夹' : '选择文件';
-    document.getElementById('picker-path').textContent = _pickerCurrentDir;
-    document.getElementById('filepicker-box').className =
-        'saoPickerBox' + (_pickerMode === 'folder' ? ' picker-mode-folder' : '');
-
-    var list = document.getElementById('picker-list');
-    list.innerHTML = '';
-
-    if (parentPath) {
-        var upEl = document.createElement('div');
-        upEl.className = 'picker-item is-up';
-        upEl.innerHTML = '<i class="menu-glyph mi-up"></i><span class="item-name">.. 上级目录</span>';
-        upEl.addEventListener('click', function() {
-            playSound('snd-click');
-            _pickerBrowse(parentPath);
-        });
-        list.appendChild(upEl);
-    }
-
-    dirs.forEach(function(rawDir) {
-        var d = _pickerEntry(rawDir);
-        var el = document.createElement('div');
-        el.className = 'picker-item is-dir';
-        el.innerHTML = '<i class="menu-glyph mi-dir"></i><span class="item-name">' + _escHtml(_pickerEntryText(d.name)) + '</span>';
-        el.addEventListener('click', function() {
-            playSound('snd-click');
-            _pickerBrowse(_pickerEntryText(d.path));
-        });
-        list.appendChild(el);
-    });
-
-    files.forEach(function(rawFile) {
-        var f = _pickerEntry(rawFile);
-        var el = document.createElement('div');
-        el.className = 'picker-item';
-        var sizeBytes = _clampNum(f.size, 0, 0, Number.MAX_SAFE_INTEGER);
-        var infoStr = sizeBytes > 0 ? '<span class="item-info">' + _fmtSize(sizeBytes) + '</span>' : '';
-        el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(_pickerEntryText(f.name)) + '</span>' + infoStr;
-        el.addEventListener('click', function() {
-            var consumer = _pickerConsumer || 'auto_key';
-            var filePath = _pickerEntryText(f.path);
-            playSound('snd-click');
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.select_file) {
-                var request = Promise.resolve().then(function() {
-                    return window.pywebview.api.select_file(filePath, consumer);
-                });
-                closeFilePicker();
-                request.then(function(result) {
-                    var data = _pickerParseResult(consumer, result);
-                    if (data && data.state) {
-                        if (consumer === 'boss_raid') {
-                            _syncBossRaidState(data.state);
-                        } else {
-                            _syncAutoKeyState(data.state);
-                        }
-                    }
-                    if (data && data.ok) {
-                        showToast(consumer === 'boss_raid' ? 'BOSS RAID IMPORTED' : 'IMPORT COMPLETE');
-                    } else if (data && data.message) {
-                        showAlert(_pickerConsumerLabel(consumer), data.message, true);
-                    }
-                }).catch(function(err) {
-                    showAlert(_pickerConsumerLabel(consumer), String(err || '无法导入文件 / Unable to import file'), true);
-                });
-            } else {
-                closeFilePicker();
-                showAlert(_pickerConsumerLabel(consumer), 'pywebview API 不可用 / pywebview API is not available', true);
-            }
-        });
-        list.appendChild(el);
-    });
-
-    if (!parentPath && !dirs.length && !files.length) {
-        list.innerHTML = '<div class="picker-empty">暂无 MIDI 文件</div>';
-    }
-
-    playSound('snd-alert');
-    document.getElementById('filepicker-dialog').classList.add('show');
-}
-
-function closeFilePicker() {
-    document.getElementById('filepicker-dialog').classList.remove('show');
-    _pickerConsumer = '';
-}
-
-function _pickerBrowse(path) {
-    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.browse_dir) {
-        showAlert('FILE PICKER', 'pywebview API 不可用 / pywebview API is not available', true);
+childBar.addEventListener('click', function(e) {
+    var li = e.target && e.target.closest ? e.target.closest('.child-menu li') : null;
+    if (!li || !childBar.contains(li)) return;
+    e.stopPropagation();
+    var action = li.getAttribute('data-action');
+    if (!action) return;
+    playSound('snd-click');
+    if (action === 'exit') {
+        exitApplication();
         return;
     }
-    Promise.resolve().then(function() {
-        return window.pywebview.api.browse_dir(path);
-    }).then(function(result) {
-        var d = _pickerPayload(result);
-        if (d.error) {
-            showAlert('FILE PICKER', _pickerEntryText(d.error), true);
-        }
-        d.mode = _pickerModeValue(_pickerMode);
-        showFilePicker(d);
-    }).catch(function(err) {
-        showAlert('FILE PICKER', String(err || '无法打开目录 / Unable to open folder'), true);
-    });
-}
+    if (action === 'reload_plugins_all') {
+        _callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {
+            showToast('PLUGINS RELOADED');
+        });
+        return;
+    }
+    _callMenuSettingApi('menu_action', [action], 'MENU');
+});
 
 function _escHtml(s) {
     return String(s == null ? '' : s)
@@ -3407,223 +2474,10 @@ function _clampNum(value, fallback, lo, hi) {
 function _clampInt(value, fallback, lo, hi) {
     return Math.round(_clampNum(value, fallback, lo, hi));
 }
-document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
-    btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        var component = _sourceComponentName(this.getAttribute('data-component'));
-        var mode = _componentSourceValue(component, this.getAttribute('data-mode'));
-        if (!component || !mode) return;
-        var previousMap = {};
-        _sourceComponents.forEach(function(key) { previousMap[key] = _dataSourceMap[key]; });
-        playSound('snd-click');
-        _dataSourceMap[component] = mode;
-        _syncSourceButtons();
-        _updateSourceSummary();
-        _callMenuSettingApi('set_component_source', [component, mode], 'DATA SOURCE', function(data) {
-            if (data && data.data_source_map && typeof data.data_source_map === 'object') {
-                _syncDataSourceMap(data.data_source_map);
-            } else if (data && data.component !== undefined && data.mode !== undefined) {
-                var returnedComponent = _sourceComponentName(data.component);
-                if (returnedComponent) _dataSourceMap[returnedComponent] = _componentSourceValue(returnedComponent, data.mode);
-            }
-            _syncSourceButtons();
-            _updateSourceSummary();
-        }, function() {
-            _syncDataSourceMap(previousMap);
-            _syncSourceButtons();
-            _updateSourceSummary();
-        });
-    });
-});
-document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
-    btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        var mode = _memSourceValue(this.getAttribute('data-mode'));
-        var previousMode = _memDataSource;
-        playSound('snd-click');
-        _memDataSource = mode;
-        _syncMemSourceButtons();
-        _updateSourceSummary();
-        _callMenuSettingApi('set_data_source', [mode], 'DATA SOURCE', function(data) {
-            _memDataSource = _memSourceValue(data && data.mode !== undefined ? data.mode : mode);
-            _syncMemSourceButtons();
-            _updateSourceSummary();
-        }, function() {
-            _memDataSource = _memSourceValue(previousMode);
-            _syncMemSourceButtons();
-            _updateSourceSummary();
-        });
-    });
-});
-
-/* ═══ Restore settings from Python on menu open ═══ */
-var _autoKeyState = null;
-var _autoKeySelectedProfileId = '';
-var _autoKeyDraftProfile = null;
-var _autoKeyDraftDirty = false;
-var _autoKeyTab = 'local';
-
-if (document.querySelector('.menu-hint')) {
-    document.querySelector('.menu-hint').textContent = 'F5 识别 RECOGNITION / F6 自动按键 AUTO KEY';
-}
-
-function _menuApiObject(value) {
-    return !!(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function _menuParseApiResult(result) {
-    if (result === null || typeof result === 'undefined' || result === '') {
-        return { ok: false, message: 'Empty API response' };
-    }
-    if (typeof result === 'string') {
-        try {
-            var parsed = JSON.parse(result);
-            return _menuApiObject(parsed) ? parsed : { ok: false, message: String(result) };
-        } catch (e) {
-            return { ok: false, message: result };
-        }
-    }
-    return _menuApiObject(result) ? result : { ok: false, message: String(result) };
-}
-
-function _menuApiMessage(data, fallback) {
-    data = _menuApiObject(data) ? data : {};
-    return _profileText(data.message, _profileText(data.error, _profileText(data.detail, fallback)));
-}
-
-function _menuToggleResult(result, expected) {
-    if (result === null || typeof result === 'undefined' || result === '') {
-        return { ok: true, enabled: !!expected };
-    }
-    var data = _menuParseApiResult(result);
-    if (data.ok !== false && data.enabled === undefined) data.enabled = !!expected;
-    return data;
-}
-
-function _setBridgeBackedCheckbox(el, methodName, requested, label) {
-    var api = window.pywebview && window.pywebview.api;
-    var on = !!requested;
-    if (!api || !api[methodName]) {
-        el.checked = !on;
-        showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);
-        return;
-    }
-    Promise.resolve(api[methodName](on)).then(function(result) {
-        var data = _menuToggleResult(result, on);
-        if (!data || data.ok === false) {
-            if (data && data.enabled !== undefined) el.checked = !!data.enabled;
-            else el.checked = !on;
-            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
-            return;
-        }
-        el.checked = !!data.enabled;
-        showToast(label + ': ' + (el.checked ? 'ON' : 'OFF'));
-    }).catch(function(err) {
-        el.checked = !on;
-        showAlert(label, String(err || '设置失败 / Unable to update setting'), true);
-    });
-}
-
-function _callMenuSettingApi(methodName, args, label, onOk, onFail) {
-    var api = window.pywebview && window.pywebview.api;
-    if (!api || !api[methodName]) {
-        var missing = { ok: false, message: 'pywebview API 不可用 / pywebview API is not available' };
-        if (onFail && onFail(missing) === false) return;
-        showAlert(label, missing.message, true);
-        return;
-    }
-    var promise;
-    try {
-        promise = Promise.resolve(api[methodName].apply(api, args || []));
-    } catch (err) {
-        var thrown = { ok: false, message: String(err || '设置失败 / Unable to update setting') };
-        if (onFail && onFail(thrown) === false) return;
-        showAlert(label, thrown.message, true);
-        return;
-    }
-    promise.then(function(result) {
-        var data = (result === null || typeof result === 'undefined' || result === '') ? { ok: true } : _menuParseApiResult(result);
-        if (!data || data.ok === false) {
-            if (onFail && onFail(data) === false) return;
-            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
-            return;
-        }
-        if (onOk) onOk(data);
-    }).catch(function(err) {
-        var failed = { ok: false, message: String(err || '设置失败 / Unable to update setting') };
-        if (onFail && onFail(failed) === false) return;
-        showAlert(label, failed.message, true);
-    });
-}
-
-    var targetId = _autoKeyDraftProfile ? _cloudText(_autoKeyDraftProfile.id, '') : _cloudText(_autoKeyState && _autoKeyState.active_profile_id, '');
-    var identity = (_autoKeyState && _autoKeyState.identity) || {};
-    if (!targetId) {
-        showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
-        return;
-    }
-    if (!identity.ready) {
-        showAlert('AUTO KEYS', '当前角色信息不完整，无法上传。缺少: ' + _cloudMissingText(identity.missing), true);
-        return;
-    }
-    if (_autoKeyDraftDirty) {
-        showAlert('AUTO KEYS', '请先保存这个配置再上传。 / Save this profile before uploading it.', true);
-        return;
-    }
-    _akSaveCloudSettings(function() {
-        _akRefreshUploadAuth(false, function() {
-            _akCallApi('upload_auto_key_profile', [targetId], function(data) {
-                showToast('UPLOAD COMPLETE #' + _cloudText(data && data.remote_id, ''));
-            });
-        });
-    });
-}
-
-document.getElementById('auto-key-enabled').addEventListener('change', function(e) {
-    e.stopPropagation();
-    _akCallApi('set_auto_key_enabled', [this.checked], function() {
-        showToast('自动按键 AUTO KEY ' + (document.getElementById('auto-key-enabled').checked ? '开启 ON' : '关闭 OFF'));
-    });
-});
-
-document.querySelectorAll('#auto-key-tabs .auto-key-tab').forEach(function(tab) {
-    tab.addEventListener('click', function(e) {
-        e.stopPropagation();
-        playSound('snd-click');
-        _akSetTab(this.getAttribute('data-tab'));
-    });
-});
-
-['ak-profile-name', 'ak-profile-profession-name', 'ak-profile-description'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('input', function() {
-        var fieldMap = {
-            'ak-profile-name': 'profile_name',
-            'ak-profile-profession-name': 'profession_name',
-            'ak-profile-description': 'description'
-        };
-        _akDraftField(fieldMap[id], this.value);
-    });
-});
-
-document.getElementById('ak-profile-profession-id').addEventListener('input', function() {
-    _akDraftField('profession_id', this.value, 'int');
-});
-document.getElementById('ak-engine-tick-ms').addEventListener('input', function() {
-    _akDraftEngineField('tick_ms', this.value, 'int');
-});
-document.getElementById('ak-engine-require-foreground').addEventListener('change', function() {
-    _akDraftEngineField('require_foreground', this.checked, 'bool');
-});
-document.getElementById('ak-engine-pause-on-death').addEventListener('change', function() {
-    _akDraftEngineField('pause_on_death', this.checked, 'bool');
-});
-
 /* ═══ Panel Theme toggles ═══ */
 var _panelThemes = {};
-var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act', 'buffmon'];
-var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true, buffmon: true };
+var _themePanels = ['hp', 'alert', 'act'];
+var _themeDefaultDark = { hp: true, alert: true, act: true };
 var _themeRequestSeq = 0;
 
 function _themePanelName(panel) {
@@ -3765,11 +2619,6 @@ function _initPanelThemes() {
 
 function restoreMenuSettings(cfg) {
     if (!cfg) return;
-    /* Watched slots */
-    if (cfg.watched_slots && Array.isArray(cfg.watched_slots) && typeof _syncWatchedSlots === 'function') {
-        _syncWatchedSlots(cfg.watched_slots);
-    }
-    }
 }
 
 /* ═══ Alert dialog ═══ */
@@ -3811,17 +2660,12 @@ function showToast(msg, duration) {
 /* ═══ API: update info panel ═══ */
 function updateInfo(data) {
     data = _profileEntry(data);
-    if (data.username !== undefined) document.getElementById('info-username').textContent = _profileText(data.username, '');
-    if (data.level !== undefined) document.getElementById('info-level').textContent = 'Lv.' + data.level;
-    if (data.xp_pct !== undefined) {
-        var xpPct = _clampNum(data.xp_pct, 0, 0, 100);
-        document.getElementById('info-xp').style.width = xpPct + '%';
+    window.__saoMenuInfoPayload = data;
+    _emitMenuEvent('info', data);
+    var currentFile = document.getElementById('current-file');
+    if (currentFile && data.file !== undefined) {
+        currentFile.textContent = '♪ ' + _profileText(data.file, '');
     }
-    if (data.profession !== undefined) document.getElementById('info-profession').textContent = _profileText(data.profession, '');
-    if (data.hp !== undefined) document.getElementById('info-hp').textContent = data.hp;
-    if (data.sta !== undefined) document.getElementById('info-sta').textContent = data.sta;
-    if (data.des !== undefined) document.getElementById('info-des').textContent = _profileText(data.des, '');
-    if (data.file !== undefined) document.getElementById('current-file').textContent = '♪ ' + _profileText(data.file, '');
 }
 
 /* ═══ API: update toggle badges ═══ */
@@ -4124,10 +2968,6 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         if (document.getElementById('lb-dialog').classList.contains('show')) {
             closeLeaderboard();
-        } else if (document.getElementById('source-dialog').classList.contains('show')) {
-            closeSourceDialog();
-        } else if (document.getElementById('filepicker-dialog').classList.contains('show')) {
-            closeFilePicker();
         } else if (document.getElementById('alert-dialog').classList.contains('show')) {
             closeAlert();
         } else if (menuOpen) {
@@ -4421,60 +3261,10 @@ document.getElementById('lb-tabs').querySelectorAll('.lb-tab').forEach(function(
     });
 });
 
-/* ═══════════════════════════════════════════════
-   Boss Raid — state / tabs / profile CRUD UI
-   ═══════════════════════════════════════════════ */
-var _bossRaidState = null;
-var _brSelectedProfileId = '';
-var _brDraftProfile = null;
-var _brDraftDirty = false;
-var _brTab = 'local';
-
-    _brCallApi('download_boss_raid_remote', [remoteId], function() {
-        _brSetTab('local');
-        showToast('BOSS RAID DOWNLOADED');
-    });
-}
-
-.ppm-arrow { color:#73d7ff; }
-.ppm-open:hover { background:rgba(117,205,255,.10); border-radius:8px; }
-/* Detached per-plugin panel */
-#plugin-detached-overlay { display:none; position:fixed; inset:0; z-index:100000;
-    background:rgba(4,8,14,.6); align-items:center; justify-content:center;
-    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
-#pd-card { width:380px; max-height:80vh; overflow:auto;
-    border:1px solid rgba(117,205,255,.5); border-radius:12px;
-    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
-    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
-#pd-body, #pd-hotkeys { padding:10px 12px; }
-#pd-hotkeys { border-top:1px solid rgba(117,205,255,.2); }
-.pd-hk-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
-    padding:5px 2px; font-size:12px; }
-.pd-hk-row select { background:rgba(19,48,74,.6); color:#e8f6ff;
-    border:1px solid rgba(117,205,255,.5); border-radius:6px; padding:2px 6px; font-size:12px; }
-.pd-hk-title { color:#ffd46f; font-weight:700; font-size:12px; letter-spacing:.06em; margin-bottom:4px; }
-</style>
-<div id="plugin-popup-overlay">
-    <div id="plugin-popup-card">
-        <div class="ppm-head"><span>🧩 插件菜单 Plugins</span><span id="ppm-close">×</span></div>
-        <div id="ppm-list"><div class="ppm-empty">加载中…</div></div>
-    </div>
-</div>
-<div id="plugin-detached-overlay">
-    <div id="pd-card">
-        <div class="ppm-head"><span id="pd-title">Plugin</span><span id="pd-close">×</span></div>
-        <div id="pd-body"><div class="ppm-empty">加载中…</div></div>
-        <div id="pd-hotkeys"></div>
-    </div>
-</div>
-<script>
 (function () {
     function api() { return window.pywebview && window.pywebview.api; }
     function parse(r) { try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }
-    function esc(v) {
-        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    function esc(v) { return typeof _escHtml === 'function' ? _escHtml(v) : String(v == null ? '' : v); }
     window.showPluginPopup = function () {
         var ov = document.getElementById('plugin-popup-overlay');
         if (ov) { ov.style.display = 'flex'; window.renderPluginPopup(); }
@@ -4484,7 +3274,6 @@ var _brTab = 'local';
         if (ov) ov.style.display = 'none';
     };
 
-    // ── Detached per-plugin panel (the plugin's own GUI + hotkey config) ──
     var _pdPlugin = '';
     var _pdTimer = null;
     var _pdPanelCards = Object.create(null);
@@ -4532,12 +3321,12 @@ var _brTab = 'local';
         var ov = document.getElementById('plugin-detached-overlay');
         if (ov) ov.style.display = 'flex';
         renderPluginDetachedPanels();
-        buildPluginDetachedHotkeys();  // built once so the dropdown isn't reset on refresh
+        buildPluginDetachedHotkeys();
         if (_pdTimer) clearInterval(_pdTimer);
         _pdTimer = setInterval(function () {
             var o = document.getElementById('plugin-detached-overlay');
             if (!o || o.style.display === 'none') { clearInterval(_pdTimer); _pdTimer = null; return; }
-            if (document.hidden) return;  // 菜单窗口隐藏时跳过重渲, 计时器保留待恢复
+            if (document.hidden) return;
             renderPluginDetachedPanels();
         }, 800);
     };
@@ -4601,9 +3390,6 @@ var _brTab = 'local';
         var title = document.getElementById('pd-title');
         var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
         if (!a || !body || !a.get_plugin_ui_panels) return;
-        // Request id: async render_ui_panel results from a superseded refresh
-        // (the 800ms timer can fire while the previous fetch is still pending)
-        // are discarded so they don't paint into orphaned/cleared cards.
         var mySeq = ++_pdSeq;
         Promise.resolve(a.get_plugin_ui_panels()).then(parse).then(function (data) {
             if (mySeq !== _pdSeq) return;
@@ -4648,22 +3434,18 @@ var _brTab = 'local';
             var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return _pluginId(h.plugin_id) === _pdPlugin; });
             if (!hks.length) { hkBox.innerHTML = ''; return; }
             var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);
-            // 可选键位: 纯 F 键 + CTRL/ALT 组合 (Tk sao_gui_plugin_manager._HK_CHOICES 与此 1:1)。
-            var GROUPS = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
+            var groups = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
             var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
             hks.forEach(function (h) {
                 var cur = _pluginText(h.current_key, '').toUpperCase();
-                // 「默认」项: 声明默认键被别的动作占走时置灰 (set_hotkey 的
-                // 清除分支会拒绝)。
                 var dk = _pluginText(h.default_key, '').toUpperCase();
                 var dTaken = dk && _pluginOwn.call(occupied, dk) && dk !== cur;
                 var opts = '<option value=""' + (dTaken ? ' disabled' : '') + '>默认 Default'
                     + (dTaken ? ' (' + dk + ' · ' + esc(_pluginText(occupied[dk], '')) + ')' : '') + '</option>';
-                GROUPS.forEach(function (g) {
+                groups.forEach(function (g) {
                     opts += '<optgroup label="' + g[1] + '">';
                     for (var i = 1; i <= 12; i++) {
                         var k = g[0] + 'F' + i;
-                        // 被占用的键置灰并标注归属 (动作自身现值豁免)。
                         var taken = _pluginOwn.call(occupied, k) && k !== cur;
                         opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '')
                             + (taken ? ' disabled' : '') + '>' + k
@@ -4681,7 +3463,6 @@ var _brTab = 'local';
         var sel = e.target;
         if (!sel || sel.tagName !== 'SELECT' || !sel.getAttribute('data-action')) return;
         if (!sel.closest || !sel.closest('#pd-hotkeys')) return;
-        // set 被拒 (键被占用/不可解析) 时重建下拉, 选项回弹到改前值。
         _callMenuSettingApi('set_plugin_hotkey', [sel.getAttribute('data-action'), sel.value], 'PLUGIN HOTKEYS', function() {
             buildPluginDetachedHotkeys();
             showToast('HOTKEY UPDATED');
@@ -4692,7 +3473,6 @@ var _brTab = 'local';
     document.addEventListener('click', function (e) {
         if (e.target.id === 'plugin-detached-overlay' || e.target.id === 'pd-close') window.hidePluginDetached();
     });
-    // Shared plugin row builder (pinned-first list with toggle + pin buttons).
     function buildPluginRows(plugins) {
         plugins = _pluginObjectItems(plugins);
         var html = '';
@@ -4729,15 +3509,12 @@ var _brTab = 'local';
                 : (html + '<div class="ppm-empty">未发现插件 No plugins</div>');
         });
     };
-    // Inline plugin category (the dedicated 「插件」 tab board panel).
-    // The 「插件」 category tab is a panel LAUNCHER: only enabled + panel-declaring
-    // plugins are listed; a row click opens that plugin's detached panel.
     window.renderPluginsCategory = function () {
         var list = document.getElementById('plugins-cat-list');
         if (!list) return;
         fetchPluginMenu().then(function (data) {
             var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins).filter(function (p) {
-                return p.active && p.declares_panel;  // active = loaded + running
+                return p.active && p.declares_panel;
             });
             if (!plugins.length) {
                 list.innerHTML = '<div class="ppm-empty">无已启用面板插件<br/>去 Manage 启用</div>';
@@ -4756,10 +3533,6 @@ var _brTab = 'local';
             list.innerHTML = html;
         });
     };
-    // Delegated clicks for the inline category list. MUST bind on the list
-    // container (not document): the enclosing `.child-menu li` handler calls
-    // e.stopPropagation(), so a document-level listener would never fire — but
-    // the container is a descendant of that li, so it fires first while bubbling.
     var _catList = document.getElementById('plugins-cat-list');
     if (_catList) _catList.addEventListener('click', function (e) {
         var row = e.target.closest && e.target.closest('.ppm-open');
@@ -4797,14 +3570,6 @@ var _brTab = 'local';
     });
 })();
 
-/* ═══ Plugin Web Extension API ═══
- * Plugins can inject CSS, HTML sub-menus, and JS into the menu at runtime.
- * Usage from Python (via pywebview bridge):
- *   window._pluginMenuApi.addCss(cssText)
- *   window._pluginMenuApi.addSlot(groupId, htmlString)
- *   window._pluginMenuApi.addScript(jsUrl | jsText)
- *   window._pluginMenuApi.ready()  — true after DOMContentLoaded
- */
 window._pluginMenuApi = {
     ready: function() { return true; },
     addCss: function(css) {
@@ -4828,8 +3593,26 @@ window._pluginMenuApi = {
         } else {
             try { (0, eval)(src); } catch(e) { console.error('[pluginMenuApi] script error', e); }
         }
-    },
+    }
 };
+
+window.SAO = Object.assign(window.SAO || {}, {
+    openMenu: openMenu,
+    closeMenu: closeMenu,
+    exitApp: exitApplication,
+    updateInfo: updateInfo,
+    updateBadge: updateBadge,
+    showAlert: showAlert,
+    closeAlert: closeAlert,
+    showToast: showToast,
+    setFisheyeBg: setFisheyeBg,
+    stopFisheyeBg: stopFisheyeBg,
+    showLeaderboard: showLeaderboard,
+    closeLeaderboard: closeLeaderboard,
+    restoreMenuSettings: restoreMenuSettings,
+    updateUpdaterState: updateUpdaterState
+});
+
 </script>
 </body>
 </html>

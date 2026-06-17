@@ -50,10 +50,12 @@ try:
 except Exception:
     _gow = None  # type: ignore[assignment]
 from render.overlay_subpixel import subpixel_alpha_composite
-from render.skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
-from render.skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
-from render.skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
-from render.skillfx_jit import warmup as _jit_warmup
+from plugins.star_resonance_plugin.render.skillfx_jit import (
+    fast_beam_rgba as _jit_fast_beam_rgba,
+    fast_ring_layer_rgba as _jit_fast_ring_rgba,
+    fast_ring_sweep_rgba as _jit_fast_sweep_rgba,
+    warmup as _jit_warmup,
+)
 
 # Exercise the mandatory Cython kernels off the UI thread so the first burst
 # has all imports and memoryview setup paid before it appears.
@@ -300,8 +302,8 @@ class BurstReadyOverlay:
         theme = get_panel_theme('skillfx', theme_name)
         if not theme:
             return
-        # SkillFX uses module-level constants → mutate the module
-        from gui_modules import sao_gui_skillfx as _mod
+        # Theme values are module-level constants in this plugin panel.
+        from plugins.star_resonance_plugin.panels import sao_gui_skillfx as _mod
         for key, value in theme.items():
             setattr(_mod, key, value)
         self._theme_name = theme_name
@@ -1150,7 +1152,7 @@ void main() {
         fall back to the PIL path.
         """
         try:
-            from render.skillfx_pipeline import get_skillfx_pipeline
+            from plugins.star_resonance_plugin.render.skillfx_pipeline import get_skillfx_pipeline
         except Exception:
             return None
         pipe = get_skillfx_pipeline()

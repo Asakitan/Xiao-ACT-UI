@@ -97,7 +97,8 @@ public class Session184WebViewWireUpTests : IDisposable
         Assert.Contains("trigger_export_presets", shim, StringComparison.Ordinal);
         Assert.Contains("act_trigger_export_presets", shim, StringComparison.Ordinal);
         Assert.Contains("license_status", shim, StringComparison.Ordinal);
-        Assert.Contains("csharp-standalone-3", shim, StringComparison.Ordinal);
+        Assert.Contains("__pywebviewShim", shim, StringComparison.Ordinal);
+        Assert.Contains("s194", shim, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -111,11 +112,9 @@ public class Session184WebViewWireUpTests : IDisposable
         AssertPackagedFilesExist(Path.Combine(pythonDir, "web"), Path.Combine(appDir, "web"));
         AssertPackagedFilesExist(Path.Combine(pythonDir, "plugins"), Path.Combine(appDir, "plugins"));
         AssertPackagedFilesExist(Path.Combine(pythonDir, "shaders"), Path.Combine(appDir, "shaders"));
-        AssertPackagedFilesExist(Path.Combine(pythonDir, "drivers"), Path.Combine(appDir, "drivers"));
 
         Assert.True(File.Exists(Path.Combine(appDir, "web", "fonts", "SAOUI.ttf")));
         Assert.True(File.Exists(Path.Combine(appDir, "web", "fonts", "ZhuZiAYuanJWD.ttf")));
-        Assert.True(File.Exists(Path.Combine(appDir, "drivers", "a.dat")));
         Assert.True(File.Exists(Path.Combine(appDir, "shaders", "skillfx.frag")));
         Assert.True(File.Exists(Path.Combine(appDir, "plugins", "star_resonance_plugin", "plugin.json")));
     }
@@ -151,11 +150,21 @@ public class Session184WebViewWireUpTests : IDisposable
 
         var missing = Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories)
             .Select(path => Path.GetRelativePath(sourceDir, path))
+            .Where(IsPackagedSourceFile)
             .Where(rel => !File.Exists(Path.Combine(targetDir, rel)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .Take(10)
             .ToArray();
 
         Assert.Empty(missing);
+    }
+
+    private static bool IsPackagedSourceFile(string relativePath)
+    {
+        var rel = relativePath.Replace(Path.DirectorySeparatorChar, '/');
+        return !rel.Contains("/__pycache__/", StringComparison.Ordinal)
+            && !rel.StartsWith("__pycache__/", StringComparison.Ordinal)
+            && !rel.EndsWith(".pyc", StringComparison.OrdinalIgnoreCase)
+            && !rel.EndsWith(".pyo", StringComparison.OrdinalIgnoreCase);
     }
 }

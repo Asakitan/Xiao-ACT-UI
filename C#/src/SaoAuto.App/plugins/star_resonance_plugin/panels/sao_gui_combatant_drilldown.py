@@ -391,7 +391,7 @@ class CombatantDrilldownPanel:
         panel = getattr(self.owner, '_act_skill_drilldown_panel', None)
         if panel is None:
             try:
-                from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
+                from plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown import SkillDrilldownPanel
                 panel = SkillDrilldownPanel(self.root, self.owner)
                 setattr(self.owner, '_act_skill_drilldown_panel', panel)
             except Exception as exc:

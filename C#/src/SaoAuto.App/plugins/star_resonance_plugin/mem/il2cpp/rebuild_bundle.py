@@ -33,7 +33,7 @@ from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex  
 from plugins.star_resonance_plugin.mem.il2cpp.mem_dump_metadata import (  # noqa: E402
     find_metadata_in_process, dump_metadata,
 )
-from mem_probe.process import StarProcess  # noqa: E402
+from ..process import StarProcess  # noqa: E402
 
 
 DUMPER_DIR = os.path.join(ROOT, 'mem_probe', 'il2cpp', 'tools', 'Il2CppDumper')

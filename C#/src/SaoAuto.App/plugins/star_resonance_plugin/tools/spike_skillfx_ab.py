@@ -25,7 +25,7 @@ import math
 import numpy as np
 from PIL import Image
 
-from render import skillfx_pipeline as sp
+from plugins.star_resonance_plugin.render import skillfx_pipeline as sp
 
 
 W, H = 1920, 1080

@@ -23,6 +23,7 @@ deferred until start).
 """
 
 REFRESH_S = 50.0  # re-show the persistent alert before its 60 s auto-hide
+ALERT_KIND = "hide_seek"
 
 _ctx = None
 _engine = None
@@ -37,6 +38,7 @@ def on_load(ctx):
     _engine = None
     _refresh_token = ""
     _engine_class = None
+    _register_persistent_alert_kind()
     ctx.register_ui_panel(
         "hide_seek",
         {"title": "Auto Hide & Seek",
@@ -67,6 +69,27 @@ def on_disable():
 
 def on_unload():
     _stop("unloaded")
+    _unregister_persistent_alert_kind()
+
+
+def _register_persistent_alert_kind():
+    owner = getattr(_ctx, "owner", None) if _ctx is not None else None
+    fn = getattr(owner, "_register_persistent_alert_kind", None)
+    if callable(fn):
+        try:
+            fn(ALERT_KIND)
+        except Exception:
+            pass
+
+
+def _unregister_persistent_alert_kind():
+    owner = getattr(_ctx, "owner", None) if _ctx is not None else None
+    fn = getattr(owner, "_unregister_persistent_alert_kind", None)
+    if callable(fn):
+        try:
+            fn(ALERT_KIND)
+        except Exception:
+            pass
 
 
 # ── engine plumbing ──────────────────────────────────────────────────────────
@@ -99,7 +122,7 @@ def _start():
     cls = _get_engine_class()
     _engine = cls(locator=_get_locator(), on_status=_on_status)
     _engine.start()
-    _ctx.notify("AUTO HIDE & SEEK", "自动躲猫猫已启动", duration_s=60.0, kind="hide_seek")
+    _ctx.notify("AUTO HIDE & SEEK", "自动躲猫猫已启动", duration_s=60.0, kind=ALERT_KIND)
     _refresh_token = _ctx.set_interval(_refresh_alert, REFRESH_S)
     _ctx.request_redraw("hide_seek")
     _ctx.log("hide_seek started")
@@ -141,7 +164,7 @@ def _refresh_alert():
     if _stopped:
         return
     if _ctx and _running():
-        _ctx.notify("AUTO HIDE & SEEK", "自动躲猫猫运行中", duration_s=60.0, kind="hide_seek")
+        _ctx.notify("AUTO HIDE & SEEK", "自动躲猫猫运行中", duration_s=60.0, kind=ALERT_KIND)
         _ctx.request_redraw("hide_seek")
 
 
@@ -178,5 +201,5 @@ def _on_action(action_id, _payload=None):
                 if _ctx:
                     _ctx.log(f"start failed: {exc}")
                     _ctx.notify("AUTO HIDE & SEEK", "启动失败：检查游戏窗口/模板资源",
-                                duration_s=4.0, kind="hide_seek")
+                                duration_s=4.0, kind=ALERT_KIND)
     return _render()

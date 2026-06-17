@@ -89,7 +89,7 @@ from plugins.star_resonance_plugin.panels.sao_gui_dps import (
     _has_cjk, _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 )
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
 WS_EX_TRANSPARENT = 0x00000020

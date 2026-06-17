@@ -1,3 +1,45 @@
+            <div class="leftInfo" id="left-info" data-sr-menu-host="position">
+                <div class="leftInfoBox" id="info-box">
+                    <div class="top">
+                        <i class="right-triangle"></i>
+                        <div class="title" id="info-username"></div>
+                        <div class="info-content">
+                            <div class="info-stat">
+                                <span class="label">等级</span>
+                                <span class="value" id="info-level">Lv.1</span>
+                            </div>
+                            <div class="xp-bar-container">
+                                <div class="xp-bar-fill" id="info-xp" style="width:0%"></div>
+                            </div>
+                            <div class="info-stat">
+                                <span class="label">身份</span>
+                                <span class="value" id="info-profession"></span>
+                            </div>
+                            <div class="info-stat">
+                                <span class="label">HP</span>
+                                <span class="value" id="info-hp" style="color:#86dfff">—</span>
+                            </div>
+                            <div class="info-stat">
+                                <span class="label">STA</span>
+                                <span class="value" id="info-sta" style="color:#f3af12">—</span>
+                            </div>
+                            <div class="sao-clock-container">
+                                <div class="sao-clock-frame">
+                                    <span class="sao-clock-bracket">[</span>
+                                    <span class="sao-clock-digits" id="info-clock">--:--:--</span>
+                                    <span class="sao-clock-bracket">]</span>
+                                </div>
+                                <div class="sao-clock-label">SYSTEM TIME</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bottom">
+                        <i class="bottom-triangle"></i>
+                        <div class="des" id="info-des">SAO Auto — 游戏辅助 UI</div>
+                    </div>
+                </div>
+            </div>
+
             <ul class="child-menu" id="sub-skillEffects" data-group="skillEffects">
                 <li class="widget-row">
                     <div class="widget-label">SKILL SLOTS</div>
@@ -23,6 +65,84 @@
                     <div class="widget-note">关闭后保留冷却跟踪，但不再弹出动画提醒。</div>
                 </li>
             </ul>
+
+            <div class="sessionPlayers" id="session-players">
+                <div class="sessionPlayersBox">
+                    <div class="sp-header">
+                        <div class="sp-title">SESSION PLAYERS</div>
+                        <div class="sp-subtitle" id="sp-summary">本次登录出现过 0 人</div>
+                    </div>
+                    <div class="sp-columns">
+                        <span>NAME</span>
+                        <span>UID</span>
+                        <span>POWER</span>
+                    </div>
+                    <div class="sp-list" id="sp-list">
+                        <div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="saoMsgBox_fa" id="filepicker-dialog">
+                <div class="saoPickerBox" id="filepicker-box">
+                    <div class="picker-header"><span id="picker-title">选择文件</span></div>
+                    <div class="picker-path-bar" id="picker-path"></div>
+                    <div class="picker-list" id="picker-list"></div>
+                    <div class="picker-footer">
+                        <div class="btn-use-folder" id="picker-use-folder">✔ 使用此文件夹</div>
+                        <div class="btn-circle btn-close" id="picker-close"><div class="inner"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="saoMsgBox_fa" id="source-dialog" style="display:none" aria-hidden="true">
+                <div class="saoMsgBox source-msgbox">
+                    <div class="alert-title"><span>DATA SOURCE</span></div>
+                    <div class="source-dialog-body">
+                        <div class="source-row">
+                            <div class="source-name">HP</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="hp" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="hp" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">LEVEL</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="level" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="level" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">STA</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">SKILL CD</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="skills" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="skills" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">NAME / UID</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="identity" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="identity" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-note">
+                            Packet stays closest to raw game state. Vision uses the on-screen HUD and now runs through the OpenCV/OpenCL preprocessing path when the local machine supports it.
+                        </div>
+                    </div>
+                    <div class="alert-footer">
+                        <div class="btn-circle btn-close" id="source-close"><div class="inner"></div></div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Auto Keys sub-menu -->
             <ul class="child-menu auto-key-menu" id="sub-autoKeys" data-group="autoKeys">

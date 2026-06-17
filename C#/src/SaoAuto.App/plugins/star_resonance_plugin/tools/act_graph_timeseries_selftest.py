@@ -12,7 +12,7 @@ from unittest import mock
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
-from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
+from plugins.star_resonance_plugin.panels.sao_gui_graph_timeseries import GraphTimeseriesPanel
 
 
 class FakeOwner:
@@ -37,7 +37,7 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
         bus.publish("damage", {"timestamp": 100.0, "attacker": "Kirito", "damage": 1000}, source_name="tcp", source_kind="packet")
         bus.publish("heal", {"timestamp": 101.0, "name": "Asuna", "heal": 250}, source_name="tcp", source_kind="packet")
         bus.publish("damage", {"timestamp": 102.0, "attacker": "Kirito", "damage_total": 1500}, source_name="tcp", source_kind="packet")
-        bus.publish("boss", {"timestamp": 103.0, "message": "Boss HP", "boss_hp_pct": 0.72}, source_name="memory", source_kind="runtime")
+        bus.publish("boss", {"timestamp": 103.0, "message": "Target HP", "target_hp_pct": 0.72}, source_name="memory", source_kind="runtime")
         return owner
 
     def test_graph_status_contains_parity_fields(self) -> None:
@@ -123,7 +123,7 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
         rendered: list[dict] = []
         panel._render_status = lambda status: rendered.append(dict(status))
 
-        with mock.patch("gui_modules.sao_gui_graph_timeseries.act_graph_timeseries_status") as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_graph_timeseries.act_graph_timeseries_status") as status_fn:
             cached = panel.refresh()
 
         self.assertEqual(cached["series"], {"cached": True})
@@ -132,7 +132,7 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
 
         panel._metric_var.set("heal")
         status_payload = {"ok": True, "selected_metric": "heal", "series": {"fresh": True}, "filters": {"query": "Kirito", "topic": "damage"}}
-        with mock.patch("gui_modules.sao_gui_graph_timeseries.act_graph_timeseries_status", return_value=status_payload) as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_graph_timeseries.act_graph_timeseries_status", return_value=status_payload) as status_fn:
             refreshed = panel.refresh()
 
         self.assertEqual(refreshed["selected_metric"], "heal")

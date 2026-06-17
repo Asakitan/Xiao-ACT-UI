@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse, struct, sys, os, time
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)
 if _ROOT not in sys.path: sys.path.insert(0,_ROOT)
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 ESTATE={0:"default",1:"singing",2:"skill",9:"DEAD",10:"stiff",11:"swimstiff",12:"born"}
 
 def main():

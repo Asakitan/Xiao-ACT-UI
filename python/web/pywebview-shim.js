@@ -535,6 +535,21 @@
         test_trigger: function (ruleId) {
             return call('act.triggers.test', { rule_id: String(ruleId || '') });
         },
+        trigger_export_presets: function (ruleIds) {
+            return call('act_trigger_export_presets', { rule_ids: Array.isArray(ruleIds) ? ruleIds : [] });
+        },
+        trigger_import_presets: function (payload, replace) {
+            return call('act_trigger_import_presets', { payload: payload || {}, replace: !!replace });
+        },
+        license_status: function () {
+            return Promise.resolve(JSON.stringify({
+                ok: true,
+                is_paid: false,
+                tier: 'free',
+                hwid: 'standalone',
+                source: 'standalone'
+            }));
+        },
         // Generic escape hatch: any unhandled name routes through
         // `ui.legacy_call` so the C# side can log + decide.
         _call: call,

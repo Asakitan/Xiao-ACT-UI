@@ -101,6 +101,7 @@ class BossDurationProbe:
 
     def read_buffs(self, ent_addr: int) -> List[dict]:
         """Read BuffComp -> [{uuid, base_id, create_ms, duration_ms}, ...]. Bounded."""
+        import struct as _st
         if not _plaus(ent_addr):
             return []
         comp = self.pm.read_u64(ent_addr + self.off_buffcomp)
@@ -109,26 +110,35 @@ class BossDurationProbe:
         zlist = self.pm.read_u64(comp + self.off_buffcomp_list)
         if not _plaus(zlist):
             return []
-        size = self.pm.read_u32(zlist + ZLIST_SIZE_OFF) or 0
-        if size <= 0:
+        zlhdr = self.pm.read_bytes(zlist, ZLIST_SIZE_OFF + 4)
+        if not zlhdr or len(zlhdr) < ZLIST_SIZE_OFF + 4:
+            return []
+        items = _st.unpack_from("<Q", zlhdr, ZLIST_ITEMS_OFF)[0]
+        size = _st.unpack_from("<I", zlhdr, ZLIST_SIZE_OFF)[0]
+        if size <= 0 or not _plaus(items):
             return []
         size = min(int(size), _MAX_BUFFS)
-        items = self.pm.read_u64(zlist + ZLIST_ITEMS_OFF)
-        if not _plaus(items):
-            return []
         arr_len = self.pm.read_u32(items + ARR_LEN_OFF) or 0
         n = min(size, int(arr_len))
+        ptrs_blob = self.pm.read_bytes(items + ARR_ELEMS_OFF, n * 8)
+        if not ptrs_blob or len(ptrs_blob) < n * 8:
+            return []
+        bi_fields_end = max(self.off_bi_uuid, self.off_bi_baseid,
+                            self.off_bi_create, self.off_bi_duration) + 8
         out: List[dict] = []
         for i in range(n):
-            bi = self.pm.read_u64(items + ARR_ELEMS_OFF + i * 8)
+            bi = _st.unpack_from("<Q", ptrs_blob, i * 8)[0]
             if not _plaus(bi):
                 continue
             try:
+                blob = self.pm.read_bytes(bi, bi_fields_end)
+                if not blob or len(blob) < bi_fields_end:
+                    continue
                 out.append({
-                    "uuid": int(self.pm.read_u32(bi + self.off_bi_uuid) or 0),
-                    "base_id": int(self.pm.read_u32(bi + self.off_bi_baseid) or 0),
-                    "create_ms": int(self.pm.read_i64(bi + self.off_bi_create) or 0),
-                    "duration_ms": int(self.pm.read_i64(bi + self.off_bi_duration) or 0),
+                    "uuid": int(_st.unpack_from("<I", blob, self.off_bi_uuid)[0]),
+                    "base_id": int(_st.unpack_from("<I", blob, self.off_bi_baseid)[0]),
+                    "create_ms": int(_st.unpack_from("<q", blob, self.off_bi_create)[0]),
+                    "duration_ms": int(_st.unpack_from("<q", blob, self.off_bi_duration)[0]),
                 })
             except Exception:
                 continue

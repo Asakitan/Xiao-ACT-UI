@@ -15,7 +15,7 @@ from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDps
 from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import (
     _DEFAULT_CACHE, _key, _load, _save, validate_cache_entry,
 )
-from mem_probe.process import StarProcessError
+from ..process import StarProcessError
 
 CLS = "Zproto.CharSerialize"
 SENT_FIELD = "Attr"

@@ -127,8 +127,7 @@ class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
         self._fisheye_hit_layer = None
         self._fisheye_close_suppress_until = 0.0
         self._sao_panel_transition_until = 0.0
-        for attr in self._FISHEYE_PANEL_ATTRS:
-            setattr(self, attr, None)
+        self._plugin_panel = None
         self._plugin_detached_panels = {}
         self.prepared_for_panel = 0
         self.stopped = 0

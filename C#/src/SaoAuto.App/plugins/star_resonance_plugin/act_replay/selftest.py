@@ -1,0 +1,820 @@
+# -*- coding: utf-8 -*-
+"""Smoke test for the offline ACT replay / TCP parser contract.
+
+Run from ``sao_auto``:
+
+    python -m act_replay.selftest
+
+This is intentionally not under ``tests/`` because the repository currently
+ignores that directory.  It is a lightweight validation command for agents and
+developers working on the TCP-first ACT stack.
+"""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+from act_platform.selftest import run_selftest as run_act_platform_selftest
+from plugins.star_resonance_plugin.engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
+from plugins.star_resonance_plugin.engines.dps_tracker import DpsTracker
+from plugins.star_resonance_plugin.engines.encounter_manager import EncounterManager
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager
+from plugins.star_resonance_plugin.panels.sao_gui_dps import DpsOverlay
+from plugins.star_resonance_plugin.panels.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
+from plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
+from plugins.star_resonance_plugin.protocol.packet_parser.enums import NotifyMethod
+from plugins.star_resonance_plugin.protocol.packet_parser.parser import PacketParser
+from sao_webview import SAOWebViewGUI
+from plugins.star_resonance_plugin.tools.act_ui_parity import run_selftest as run_act_ui_parity_selftest
+import plugins.star_resonance_plugin.protocol.packet_parser.parser as parser_mod
+
+from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
+from .fixture_io import load_fixture_events
+from .harness import ActReplayHarness
+
+
+class _FakePb:
+    """Tiny protobuf stand-in for parser handler contract checks."""
+
+    def SyncClientUseSkill(self):
+        return SimpleNamespace(
+            SkillTargetUuid=987654321064,
+            SkillLevelId=110101,
+            ParseFromString=lambda _data: None,
+        )
+
+    def SyncServerSkillEnd(self):
+        return SimpleNamespace(
+            SkillUuid=777,
+            ParseFromString=lambda _data: None,
+        )
+
+    def SyncServerSkillStageEnd(self):
+        return SimpleNamespace(
+            SkillStageEndInfo=SimpleNamespace(
+                SkillUuid=777,
+                StageId=1,
+                NewStageId=2,
+                ConditionId=0,
+            ),
+            ParseFromString=lambda _data: None,
+        )
+
+    def SyncDungeonData(self):
+        target_data = {
+            1: SimpleNamespace(TargetId=1302101, Nums=1, Complete=0),
+        }
+        vdata = SimpleNamespace(
+            SceneUuid=42001,
+            DungeonSceneInfo=SimpleNamespace(Difficulty=3),
+            Target=SimpleNamespace(TargetData=target_data),
+            HasField=lambda name: name in {"DungeonSceneInfo", "Target"},
+        )
+        return SimpleNamespace(
+            VData=vdata,
+            ParseFromString=lambda _data: None,
+        )
+
+    def SyncDungeonDirtyData(self):
+        return SimpleNamespace(
+            VData=SimpleNamespace(Buffer=b"dirty-buffer"),
+            ParseFromString=lambda _data: None,
+        )
+
+    def EnterScene(self):
+        player_ent = SimpleNamespace(
+            Uuid=(36668136 << 16) | 640,
+            HasField=lambda name: False,
+        )
+        info = SimpleNamespace(
+            SceneAttrs=object(),
+            SubsceneAttrs=object(),
+            PlayerEnt=player_ent,
+            SceneGuid="demo-scene",
+            ConnectGuid="demo-connect",
+            HasField=lambda name: name == "PlayerEnt",
+        )
+        return SimpleNamespace(
+            EnterSceneInfo=info,
+            ParseFromString=lambda _data: None,
+        )
+
+
+class _FakeDpsActGui(SAOPlayerGUIDpsThemeMixin):
+    """No-Tk stand-in for Entity/Tk ACT snapshot source-priority checks."""
+
+    def __init__(self) -> None:
+        self._dps_tracker = None
+        self._dps_history_store = None
+        self._state_mgr = GameStateManager()
+        self._encounter_mgr = None
+        self._packet_engine = {"data_source": "packet", "running": True}
+        self._mem_bridge = {"data_source": "memory", "running": True}
+
+
+class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeMixin):
+    """No-Tk stand-in for Entity/Tk packet callback → ACT snapshot checks."""
+
+    def __init__(self) -> None:
+        self._dps_tracker = DpsTracker()
+        self._dps_history_store = None
+        self._state_mgr = GameStateManager()
+        self._encounter_mgr = EncounterManager()
+        self._packet_engine = {"data_source": "packet", "running": True}
+        self._mem_bridge = None
+        self._act_trigger_engine = ActTriggerEngine([
+            {"id": "runtime_damage_alert", "type": "damage_total", "threshold": 30000},
+        ])
+        self._boss_raid_engine = None
+        self._bb_recent_targets = {}
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._bb_last_hp_motion_ts = 0.0
+        self._scene_hide_token = 0
+        self._last_boss_hp_push_sig = None
+        self._scene_combat_reset_pending = False
+        self._scene_combat_reset_anchor = {}
+        self._pending_combat_reset_deadline = 0.0
+        self._boss_buff_overlay = None
+        self._dps_overlay = None
+        self.push_count = 0
+        self.last_snapshot = {}
+
+    def _cancel_dps_idle_reset_after(self):
+        pass
+
+    def _maybe_apply_pending_combat_reset(self, _event, _is_self_combat_target):
+        pass
+
+    def _normalize_damage_event_for_self(self, event):
+        return event
+
+    def _normalize_damage_event_target_for_entity(self, event):
+        return event
+
+    def _is_known_friendly_uid(self, _uid):
+        return False
+
+    def _boss_monster_usable(self, monster):
+        return bool(monster)
+
+    def _push_dps_act_snapshot(self, *args, **kwargs):
+        self.push_count += 1
+        self.last_snapshot = self._get_dps_act_snapshot()
+
+
+class _FakeWebViewRuntimeActGui:
+    """No-window stand-in for WebView packet callback → ACT snapshot checks."""
+
+    def __init__(self) -> None:
+        self._dps_tracker = DpsTracker()
+        self._dps_history_store = None
+        self._state_mgr = GameStateManager()
+        self._encounter_mgr = EncounterManager()
+        self._packet_engine = {"data_source": "packet", "running": True}
+        self._mem_bridge = None
+        self._act_trigger_engine = ActTriggerEngine([
+            {"id": "runtime_damage_alert", "type": "damage_total", "threshold": 30000},
+        ])
+        self._boss_raid_engine = None
+        self._bb_recent_targets = {}
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._pending_combat_reset_after = 0.0
+        self._pending_combat_reset_reason = ''
+        self._last_boss_hp_push_sig = None
+        self.push_count = 0
+        self.last_snapshot = {}
+
+    def _current_player_uid_int(self):
+        return 36668136
+
+    def _normalize_damage_event_for_self(self, event):
+        return event
+
+    def _normalize_damage_event_target_for_webview(self, event):
+        return event
+
+    def _maybe_apply_pending_combat_reset(self, _event, _is_self_combat_target):
+        pass
+
+    def _boss_monster_usable(self, monster):
+        return bool(monster)
+
+    def _push_dps_act_snapshot(self, *args, **kwargs):
+        self.push_count += 1
+        self.last_snapshot = self._build_dps_act_snapshot()
+
+    def _build_dps_act_snapshot(self, history_limit: int = 20):
+        return SAOWebViewGUI._build_dps_act_snapshot(self, history_limit)
+
+
+class _MemoryHistoryStore:
+    """Tiny in-memory report store for encounter finalize contract checks."""
+
+    def __init__(self) -> None:
+        self.reports = []
+
+    def add_report(self, report):
+        self.reports.append(dict(report or {}))
+
+    def latest_report(self):
+        return dict(self.reports[-1]) if self.reports else None
+
+    def list_reports(self, _limit=20):
+        return [dict(report) for report in self.reports]
+
+
+def build_demo_events():
+    return load_fixture_events("demo_events")
+
+
+def _assert_fixture_loader_contract() -> None:
+    self_uid, events = build_demo_events()
+    assert self_uid == 36668136, self_uid
+    assert len(events) == 8, events
+    assert events[0].get("kind") == "enter_scene", events[0]
+    assert events[-1].get("kind") == "server_end", events[-1]
+
+
+def _assert_game_state_contract() -> None:
+    state_mgr = GameStateManager()
+    dungeon = dungeon_event(
+        "sync_dungeon_data",
+        dungeon_id=42001,
+        scene_uuid=42001,
+        dungeon_difficulty=3,
+    )
+    skill = skill_event(
+        "server_end",
+        method_id=NotifyMethod.SYNC_SERVER_SKILL_END,
+        skill_uuid=777,
+    )
+    state_mgr.update(
+        dungeon_id=42001,
+        dungeon_scene_id=42001,
+        dungeon_difficulty=3,
+        last_dungeon_event=dungeon,
+        last_skill_event=skill,
+    )
+    dungeon["kind"] = "mutated_after_update"
+    skill["kind"] = "mutated_after_update"
+    context = state_mgr.snapshot().to_dict()
+    assert context["dungeon_id"] == 42001, context
+    assert context["dungeon_scene_id"] == 42001, context
+    assert context["dungeon_difficulty"] == 3, context
+    assert context["last_dungeon_event"].get("kind") == "sync_dungeon_data", context
+    assert context["last_skill_event"].get("kind") == "server_end", context
+
+
+def _assert_parser_handler_contract() -> None:
+    skill_events = []
+    dungeon_events = []
+    self_uid = 36668136
+    fake_pb = _FakePb()
+    old_ensure_pb = parser_mod._ensure_pb
+    old_decode_fields = parser_mod._decode_fields
+    old_parse_dungeon_dirty_buffer = parser_mod._parse_dungeon_dirty_buffer
+    old_extract_scene_basic_id = parser_mod._extract_scene_basic_id_from_attrs
+    old_is_player = parser_mod._is_player
+    old_uuid_to_uid = parser_mod._uuid_to_uid
+    parser_mod._ensure_pb = lambda: fake_pb
+    parser_mod._decode_fields = lambda _data: {1: [42001]}
+    parser_mod._parse_dungeon_dirty_buffer = lambda _data: (
+        2,
+        [{"target_id": 1302101, "nums": 2, "complete": 1}],
+    )
+    parser_mod._extract_scene_basic_id_from_attrs = lambda _attrs: 155001
+    parser_mod._is_player = lambda _uuid: True
+    parser_mod._uuid_to_uid = lambda _uuid: self_uid
+    try:
+        parser = PacketParser(
+            on_self_update=lambda _player: None,
+            on_skill_event=skill_events.append,
+            on_dungeon_event=dungeon_events.append,
+            preferred_uid=self_uid,
+        )
+        parser._current_uuid = (self_uid << 16) | 640
+        parser._on_enter_scene(b"")
+        parser._on_notify_start_playing_dungeon(b"")
+        parser._on_sync_client_use_skill(b"")
+        parser._on_sync_server_skill_stage_end(b"")
+        parser._on_sync_server_skill_end(b"")
+        parser._on_sync_dungeon_data(b"")
+        parser._on_sync_dungeon_dirty_data(b"")
+    finally:
+        parser_mod._ensure_pb = old_ensure_pb
+        parser_mod._decode_fields = old_decode_fields
+        parser_mod._parse_dungeon_dirty_buffer = old_parse_dungeon_dirty_buffer
+        parser_mod._extract_scene_basic_id_from_attrs = old_extract_scene_basic_id
+        parser_mod._is_player = old_is_player
+        parser_mod._uuid_to_uid = old_uuid_to_uid
+
+    assert [event.get("kind") for event in skill_events] == [
+        "client_use",
+        "server_stage_end",
+        "server_end",
+    ], skill_events
+    client_use, stage_end, server_end = skill_events
+    assert client_use["source"] == "tcp", client_use
+    assert client_use["method_id"] == NotifyMethod.SYNC_CLIENT_USE_SKILL, client_use
+    assert client_use["skill_level_id"] == 110101, client_use
+    assert client_use["target_uuid"] == 987654321064, client_use
+    assert client_use["caster_uid"] == self_uid, client_use
+    assert stage_end["method_id"] == NotifyMethod.SYNC_SERVER_SKILL_STAGE_END, stage_end
+    assert stage_end["skill_uuid"] == 777, stage_end
+    assert stage_end["stage_id"] == 1, stage_end
+    assert stage_end["new_stage_id"] == 2, stage_end
+    assert server_end["method_id"] == NotifyMethod.SYNC_SERVER_SKILL_END, server_end
+    assert server_end["skill_uuid"] == 777, server_end
+
+    assert [event.get("kind") for event in dungeon_events] == [
+        "enter_scene",
+        "start_playing_dungeon",
+        "sync_dungeon_data",
+        "sync_dungeon_dirty_data",
+    ], dungeon_events
+    enter_scene, start_dungeon, dungeon, dirty = dungeon_events
+    assert enter_scene["source"] == "tcp", enter_scene
+    assert enter_scene["scene_id"] == 155001, enter_scene
+    assert enter_scene["scene_guid"] == "demo-scene", enter_scene
+    assert enter_scene["connect_guid"] == "demo-connect", enter_scene
+    assert enter_scene["player_uid"] == self_uid, enter_scene
+    assert start_dungeon["source"] == "tcp", start_dungeon
+    assert start_dungeon["dungeon_id"] == 42001, start_dungeon
+    assert dungeon["source"] == "tcp", dungeon
+    assert dungeon["dungeon_id"] == 42001, dungeon
+    assert dungeon["scene_uuid"] == 42001, dungeon
+    assert dungeon["dungeon_difficulty"] == 3, dungeon
+    assert dungeon["targets"] == [{"target_id": 1302101, "nums": 1, "complete": 0}], dungeon
+    assert dirty["source"] == "tcp", dirty
+    assert dirty["dungeon_id"] == 42001, dirty
+    assert dirty["flow_state"] == 2, dirty
+    assert dirty["targets"] == [{"target_id": 1302101, "nums": 2, "complete": 1}], dirty
+
+    harness = ActReplayHarness()
+    snap = harness.replay([*dungeon_events, *skill_events])
+    context = snap.get("context") or {}
+    assert context["dungeon_id"] == 42001, context
+    assert context["dungeon_scene_id"] == 42001, context
+    assert context["dungeon_difficulty"] == 3, context
+    assert context["last_dungeon_event"].get("kind") == "sync_dungeon_dirty_data", context
+    assert context["last_skill_event"].get("kind") == "server_end", context
+
+
+def _assert_entity_act_source_priority() -> None:
+    gui = _FakeDpsActGui()
+    snap = gui._get_dps_act_snapshot()
+    assert snap.get("sources", {}).get("packet", {}).get("data_source") == "packet", snap
+    assert snap.get("sources", {}).get("memory", {}).get("data_source") == "memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("data_source") == "packet+memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("hybrid") is True, snap
+    gui._packet_engine = None
+    snap = gui._get_dps_act_snapshot()
+    assert "packet" not in snap.get("sources", {}), snap
+    assert snap.get("sources", {}).get("memory", {}).get("data_source") == "memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("data_source") == "memory", snap
+
+
+def _assert_entity_render_rows_contract() -> None:
+    overlay = DpsOverlay.__new__(DpsOverlay)
+    overlay._act_snapshot = {
+        "render_spec": {
+            "mode": "live",
+            "totals": {"damage": 3000, "heal": 1200},
+            "rows": [
+                {"rank": 1, "uid": 1001, "name": "Alice", "damage": 2000, "heal": 200, "dps": 100, "hps": 10, "is_self": True},
+                {"rank": 2, "uid": 1002, "name": "Bob", "damage": 1000, "heal": 1000, "dps": 50, "hps": 50, "is_self": False},
+            ],
+        }
+    }
+    overlay._view_mode = "live"
+    overlay._current_tab = "damage"
+    overlay._scroll_offset = 0
+    overlay._self_uid = 1001
+    overlay._rows = {}
+    rows = DpsOverlay._build_view_rows(overlay)
+    assert len(rows) == 2, rows
+    assert rows[0]["uid"] == 1001, rows
+    assert rows[0]["amount"] == 2000, rows
+    assert rows[0]["pct"] == 2000 / 3000, rows
+    assert rows[0]["fallback_sub"] == "ACT RENDER ROW", rows
+    overlay._current_tab = "heal"
+    rows = DpsOverlay._build_view_rows(overlay)
+    assert rows[0]["uid"] == 1002, rows
+    assert rows[0]["amount"] == 1000, rows
+    assert rows[0]["pct"] == 1000 / 1200, rows
+
+
+def _assert_entity_trigger_summary_contract() -> None:
+    overlay = DpsOverlay.__new__(DpsOverlay)
+    overlay._act_snapshot = {"triggers": {"emitted": [
+        {"message": "Older alert"},
+        {"message": "Boss shield break"},
+    ]}}
+    assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT BOSS SHIELD BREAK", overlay._act_snapshot
+    overlay._act_snapshot = {"triggers": {"recent": [{"label": "Damage threshold"}]}}
+    assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT DAMAGE THRESHOLD", overlay._act_snapshot
+    overlay._act_snapshot = {"triggers": {}}
+    assert DpsOverlay._act_trigger_text(overlay) == "", overlay._act_snapshot
+
+
+def _assert_trigger_rule_normalize_contract() -> None:
+    hp_rule = normalize_trigger_rule({"id": "hp", "type": "boss_hp_pct_below", "threshold": 35})
+    assert hp_rule["threshold"] == 0.35, hp_rule
+    event_rule = normalize_trigger_rule({"id": "evt", "type": "boss_event_type", "event_type": 101})
+    assert event_rule["threshold"] == 101.0, event_rule
+    assert event_rule["match"] == "101", event_rule
+    field_rule = normalize_trigger_rule({
+        "id": "field",
+        "type": "field_match",
+        "field": "context.last_skill_kind",
+        "operator": "eq",
+        "match": "server_end",
+    })
+    assert field_rule["field"] == "context.last_skill_kind", field_rule
+    assert field_rule["operator"] == "eq", field_rule
+    timer_rule = normalize_trigger_rule({"id": "timer", "type": "timer_preset", "duration_s": 12})
+    assert timer_rule["type"] == "timer_preset", timer_rule
+    assert timer_rule["duration_s"] == 12.0, timer_rule
+    engine = ActTriggerEngine([field_rule, timer_rule])
+    events = engine.evaluate({"render_spec": {
+        "mode": "test",
+        "encounter": {"id": "field-test", "status": "active", "duration_s": 13},
+        "totals": {"elapsed_s": 13},
+        "context": {"last_skill_kind": "server_end"},
+    }}, now=10.0)
+    event_ids = {event.get("rule_id") for event in events}
+    assert {"field", "timer"}.issubset(event_ids), events
+
+
+def _assert_live_name_table_contract() -> None:
+    from tools.tablekit.name_tables import NameResolver, _load_live_act_matches
+    assert _load_live_act_matches("buff").get(2203640) == "聚能之力"
+    resolver = NameResolver()
+    assert resolver.buff(2203640, default="") == "聚能之力", resolver.coverage()
+
+
+def _assert_entity_damage_callback_act_contract() -> None:
+    gui = _FakeRuntimeActGui()
+    event = damage_event(
+        attacker_uid=36668136,
+        attacker_uuid=(36668136 << 16) | 640,
+        attacker_is_self=True,
+        target_uuid=987654321064,
+        target_is_player=False,
+        target_is_monster=True,
+        target_is_combat_target=True,
+        skill_id=1101,
+        skill_key=1101,
+        damage=32100,
+    )
+    gui._on_packet_damage(event)
+    assert gui.push_count == 1, gui.push_count
+    snap = gui.last_snapshot
+    assert snap.get("live", {}).get("total_damage") == 32100, snap
+    assert snap.get("encounter", {}).get("status") == "active", snap
+    assert snap.get("encounter", {}).get("last_damage_event", {}).get("damage") == 32100, snap
+    assert snap.get("render_spec", {}).get("mode") == "live", snap
+    assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 32100, snap
+    assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+    trigger_ids = {event.get("rule_id") for event in (snap.get("triggers", {}).get("emitted") or [])}
+    assert "runtime_damage_alert" in trigger_ids, snap
+
+
+def _assert_entity_monster_update_act_contract() -> None:
+    gui = _FakeRuntimeActGui()
+    target_uuid = 987654321064
+    gui._bb_last_target_uuid = target_uuid
+    gui._on_monster_update(monster_update_event(
+        uuid=target_uuid,
+        hp=450000,
+        max_hp=900000,
+        shield_active=True,
+        shield_pct=0.4,
+        breaking_stage=0,
+        has_break_data=True,
+        extinction_pct=0.2,
+    ))
+    assert gui.push_count == 1, gui.push_count
+    boss = gui.last_snapshot.get("render_spec", {}).get("boss", {})
+    assert boss.get("current_hp") == 450000, gui.last_snapshot
+    assert boss.get("total_hp") == 900000, gui.last_snapshot
+    assert boss.get("hp_pct") == 0.5, gui.last_snapshot
+    assert boss.get("shield_active") is True, gui.last_snapshot
+
+
+def _assert_webview_damage_callback_act_contract() -> None:
+    gui = _FakeWebViewRuntimeActGui()
+    event = damage_event(
+        attacker_uid=36668136,
+        attacker_uuid=(36668136 << 16) | 640,
+        attacker_is_self=True,
+        target_uuid=987654321064,
+        target_is_player=False,
+        target_is_monster=True,
+        target_is_combat_target=True,
+        skill_id=1101,
+        skill_key=1101,
+        damage=65400,
+    )
+    SAOWebViewGUI._on_packet_damage(gui, event)
+    assert gui.push_count == 1, gui.push_count
+    snap = gui.last_snapshot
+    assert snap.get("live", {}).get("total_damage") == 65400, snap
+    assert snap.get("encounter", {}).get("status") == "active", snap
+    assert snap.get("encounter", {}).get("last_damage_event", {}).get("damage") == 65400, snap
+    assert snap.get("render_spec", {}).get("mode") == "live", snap
+    assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 65400, snap
+    assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+    trigger_ids = {event.get("rule_id") for event in (snap.get("triggers", {}).get("emitted") or [])}
+    assert "runtime_damage_alert" in trigger_ids, snap
+
+
+def _assert_webview_monster_update_act_contract() -> None:
+    gui = _FakeWebViewRuntimeActGui()
+    target_uuid = 987654321064
+    gui._bb_last_target_uuid = target_uuid
+    SAOWebViewGUI._on_monster_update(gui, monster_update_event(
+        uuid=target_uuid,
+        hp=450000,
+        max_hp=900000,
+        shield_active=True,
+        shield_pct=0.4,
+        breaking_stage=0,
+        has_break_data=True,
+        extinction_pct=0.2,
+    ))
+    assert gui.push_count == 1, gui.push_count
+    boss = gui.last_snapshot.get("render_spec", {}).get("boss", {})
+    assert boss.get("current_hp") == 450000, gui.last_snapshot
+    assert boss.get("total_hp") == 900000, gui.last_snapshot
+    assert boss.get("hp_pct") == 0.5, gui.last_snapshot
+    assert boss.get("shield_active") is True, gui.last_snapshot
+
+
+def _assert_encounter_finalize_contract() -> None:
+    self_uid, events = build_demo_events()
+    store = _MemoryHistoryStore()
+    harness = ActReplayHarness(history_store=store)
+    harness.encounter_mgr.register_finalized_hook(store.add_report)
+    harness.set_self_uid(self_uid)
+    harness.replay(events)
+    assert harness.encounter_mgr.finalize_if_idle(now=events[-1]["timestamp"] + 60.0), store.reports
+    snap = harness.snapshot()
+    latest = snap.get("last_report") or {}
+    history = snap.get("history") or []
+    encounter = snap.get("encounter") or {}
+    assert latest.get("status") == "finalized", latest
+    assert latest.get("report_reason") == "idle_timeout", latest
+    assert latest.get("dungeon_id") == 42001, latest
+    assert latest.get("dungeon_scene_id") == 155001, latest
+    assert latest.get("boss_uuid") == 987654321064, latest
+    assert latest.get("damage_events") == 1, latest
+    assert history and history[-1].get("report_id") == latest.get("report_id"), history
+    assert encounter.get("status") == "idle", encounter
+    assert encounter.get("last_final_report_id") == latest.get("report_id"), encounter
+
+
+def _assert_monster_update_act_contract() -> None:
+    self_uid = 36668136
+    target_uuid = 987654321064
+    harness = ActReplayHarness()
+    harness.set_self_uid(self_uid)
+    snap = harness.replay([
+        monster_update_event(
+            uuid=target_uuid,
+            name="Demo Boss",
+            hp=750000,
+            max_hp=1000000,
+            has_break_data=True,
+            breaking_stage=1,
+            extinction_pct=0.4,
+            shield_active=True,
+            shield_pct=0.2,
+        ),
+        damage_event(
+            attacker_uid=self_uid,
+            attacker_uuid=(self_uid << 16) | 640,
+            attacker_is_self=True,
+            target_uuid=target_uuid,
+            target_is_player=False,
+            target_is_monster=True,
+            target_is_combat_target=True,
+            skill_id=1101,
+            skill_key=1101,
+            damage=1000,
+        ),
+    ])
+    context = snap.get("context") or {}
+    render_boss = (snap.get("render_spec") or {}).get("boss") or {}
+    assert context["boss_current_hp"] == 750000, context
+    assert context["boss_total_hp"] == 1000000, context
+    assert context["boss_hp_est_pct"] == 0.75, context
+    assert context["boss_hp_source"] == "packet", context
+    assert context["boss_raid_active"] is False, context
+    assert context["boss_breaking_stage"] == 1, context
+    assert context["boss_extinction_pct"] == 0.4, context
+    assert context["boss_shield_active"] is True, context
+    assert context["boss_shield_pct"] == 0.2, context
+    assert render_boss["active"] is True, render_boss
+    assert render_boss["current_hp"] == 750000, render_boss
+    assert render_boss["total_hp"] == 1000000, render_boss
+    assert render_boss["hp_pct"] == 0.75, render_boss
+    assert render_boss["hp_source"] == "packet", render_boss
+    assert render_boss["breaking_stage"] == 1, render_boss
+    assert render_boss["extinction_pct"] == 0.4, render_boss
+    assert render_boss["shield_active"] is True, render_boss
+    assert render_boss["shield_pct"] == 0.2, render_boss
+
+
+def _assert_act_ui_parity_contract() -> dict:
+    report = run_act_ui_parity_selftest()
+    summary = report.get("summary") or {}
+    assert report.get("ok") is True, report
+    assert summary.get("capability_count") == 15, report
+    assert summary.get("webview_capability_count") == summary.get("entity_capability_count"), report
+    assert summary.get("issue_count") == 0, report
+    adapters = report.get("adapters") or {}
+    assert "webview" in adapters, report
+    assert "entity" in adapters, report
+    return report
+
+
+def _assert_act_platform_contract() -> dict:
+    report = run_act_platform_selftest()
+    assert report.get("ok") is True, report
+    assert report.get("event_bus_contract") is True, report
+    assert report.get("plugin_manager_contract") is True, report
+    assert report.get("replay_event_bus_contract") is True, report
+    assert int(report.get("captured_events") or 0) >= 4, report
+    return report
+
+
+def main() -> int:
+    _assert_fixture_loader_contract()
+    _assert_game_state_contract()
+    _assert_parser_handler_contract()
+    _assert_entity_act_source_priority()
+    _assert_entity_render_rows_contract()
+    _assert_entity_trigger_summary_contract()
+    _assert_trigger_rule_normalize_contract()
+    _assert_live_name_table_contract()
+    _assert_entity_damage_callback_act_contract()
+    _assert_entity_monster_update_act_contract()
+    _assert_webview_damage_callback_act_contract()
+    _assert_webview_monster_update_act_contract()
+    _assert_encounter_finalize_contract()
+    _assert_monster_update_act_contract()
+    ui_parity_report = _assert_act_ui_parity_contract()
+    platform_report = _assert_act_platform_contract()
+    self_uid, events = build_demo_events()
+    target_uuid = int(next(
+        (e.get("target_uuid") for e in events if e.get("kind") == "damage"), 0) or 0)
+    trigger_engine = ActTriggerEngine([
+        {
+            "id": "demo_damage_alert",
+            "type": "damage_total",
+            "threshold": 100000,
+            "label": "Demo damage threshold",
+            "message": "Damage crossed 100k",
+        },
+        {
+            "id": "demo_skill_end",
+            "type": "skill_kind",
+            "match": "server_end",
+            "label": "Skill ended",
+            "message": "Server skill lifecycle ended",
+        },
+        {
+            "id": "demo_boss_hp_alert",
+            "type": "boss_hp_pct_below",
+            "threshold": 0.95,
+            "label": "Boss HP below 95%",
+            "message": "Boss HP crossed 95%",
+        },
+        {
+            "id": "demo_boss_event_alert",
+            "type": "boss_event_type",
+            "match": 101,
+            "label": "Boss event observed",
+            "message": "Boss buff event propagated into ACT",
+        },
+    ])
+    harness = ActReplayHarness(
+        trigger_engine=trigger_engine,
+        source_probe={"data_source": "replay", "running": True, "error_msg": ""},
+    )
+    harness.set_self_uid(self_uid)
+    snap = harness.replay(events)
+    snap = harness.assert_minimal_act_contract()
+    context = snap["context"]
+    live = snap["live"] or {}
+    state = harness.state_mgr.snapshot().to_dict()
+    assert context["dungeon_scene_id"] == 155001, context
+    assert context["dungeon_id"] == 42001, context
+    assert context["last_skill_event"].get("kind") == "server_end", context
+    assert context["boss_current_hp"] == 900000, context
+    assert context["boss_total_hp"] == 1000000, context
+    assert context["boss_hp_est_pct"] == 0.9, context
+    assert context["boss_hp_source"] == "tcp", context
+    assert context["last_boss_event"].get("event_type") == 101, context
+    assert context["last_boss_event"].get("host_uuid") == target_uuid, context
+    assert state["boss_current_hp"] == 900000, state
+    assert state["boss_total_hp"] == 1000000, state
+    assert state["boss_hp_est_pct"] == 0.9, state
+    assert state["boss_hp_source"] == "tcp", state
+    assert state["boss_raid_active"] is True, state
+    assert state["boss_breaking_stage"] == 0, state
+    assert state["boss_extinction_pct"] == 0.25, state
+    encounter = snap.get("encounter") or {}
+    render_spec = snap.get("render_spec") or {}
+    triggers = snap.get("triggers") or {}
+    sources = snap.get("sources") or {}
+    assert encounter.get("status") == "active", encounter
+    assert encounter.get("damage_events") == 1, encounter
+    assert encounter.get("boss_uuid") == target_uuid, encounter
+    assert encounter.get("dungeon_id") == 42001, encounter
+    assert encounter.get("dungeon_scene_id") == 155001, encounter
+    assert encounter.get("dungeon_difficulty") == 3, encounter
+    assert encounter.get("last_dungeon_event", {}).get("kind") == "start_dungeon", encounter
+    assert render_spec.get("mode") == "live", render_spec
+    assert render_spec.get("version") == 1, render_spec
+    assert render_spec.get("parity_targets") == ["webview", "entity"], render_spec
+    assert render_spec.get("context", {}).get("dungeon_id") == 42001, render_spec
+    assert render_spec.get("context", {}).get("dungeon_scene_id") == 155001, render_spec
+    assert render_spec.get("context", {}).get("last_skill_kind") == "server_end", render_spec
+    assert render_spec.get("context", {}).get("last_boss_event_type") == 101, render_spec
+    assert render_spec.get("context", {}).get("last_boss_host_uuid") == target_uuid, render_spec
+    assert render_spec.get("totals", {}).get("damage") == 123456, render_spec
+    rows = render_spec.get("rows") or []
+    assert len(rows) == 1, render_spec
+    assert rows[0].get("uid") == self_uid, rows
+    assert rows[0].get("rank") == 1, rows
+    assert rows[0].get("damage") == 123456, rows
+    assert rows[0].get("heal") == 0, rows
+    assert rows[0].get("is_self") is True, rows
+    assert render_spec.get("boss", {}).get("current_hp") == 900000, render_spec
+    assert render_spec.get("boss", {}).get("total_hp") == 1000000, render_spec
+    assert render_spec.get("boss", {}).get("hp_pct") == 0.9, render_spec
+    assert render_spec.get("boss", {}).get("hp_source") == "tcp", render_spec
+    assert render_spec.get("boss", {}).get("active") is True, render_spec
+    assert render_spec.get("boss", {}).get("breaking_stage") == 0, render_spec
+    assert render_spec.get("boss", {}).get("extinction_pct") == 0.25, render_spec
+    assert sources.get("packet", {}).get("data_source") == "replay", sources
+    assert render_spec.get("sources", {}).get("packet", {}).get("running") is True, render_spec
+    trigger_events = (triggers.get("emitted") or triggers.get("recent") or [])
+    trigger_rule_ids = {str(event.get("rule_id") or "") for event in trigger_events}
+    assert len(trigger_events) >= 4, triggers
+    assert "demo_damage_alert" in trigger_rule_ids, triggers
+    assert "demo_skill_end" in trigger_rule_ids, triggers
+    assert "demo_boss_hp_alert" in trigger_rule_ids, triggers
+    assert "demo_boss_event_alert" in trigger_rule_ids, triggers
+    assert live.get("total_damage", 0) == 123456, live
+    assert live.get("entities"), live
+    print(json.dumps({
+        "ok": True,
+        "fixture_loader_contract": True,
+        "game_state_contract": True,
+        "parser_handler_contract": True,
+        "entity_act_source_priority": True,
+        "entity_render_rows_contract": True,
+        "entity_trigger_summary_contract": True,
+        "trigger_rule_normalize_contract": True,
+        "live_name_table_contract": True,
+        "entity_damage_callback_act_contract": True,
+        "entity_monster_update_act_contract": True,
+        "webview_damage_callback_act_contract": True,
+        "webview_monster_update_act_contract": True,
+        "encounter_finalize_contract": True,
+        "monster_update_act_contract": True,
+        "boss_event_act_contract": True,
+        "dual_ui_act_meta_bridge": True,
+        "act_ui_parity_contract": True,
+        "act_ui_parity_capabilities": ui_parity_report.get("summary", {}).get("capability_count"),
+        "act_platform_contract": True,
+        "act_platform_captured_events": platform_report.get("captured_events"),
+        "act_platform_plugins": platform_report.get("plugin_count"),
+        "dungeon_id": context.get("dungeon_id"),
+        "dungeon_scene_id": context.get("dungeon_scene_id"),
+        "last_skill_kind": context.get("last_skill_event", {}).get("kind"),
+        "last_boss_event_type": context.get("last_boss_event", {}).get("event_type"),
+        "boss_hp_source": state.get("boss_hp_source"),
+        "boss_hp_est_pct": state.get("boss_hp_est_pct"),
+        "render_boss_hp_source": render_spec.get("boss", {}).get("hp_source"),
+        "total_damage": live.get("total_damage"),
+        "render_rows": len(render_spec.get("rows") or []),
+        "entities": len(live.get("entities") or []),
+        "encounter_status": encounter.get("status"),
+        "encounter_damage_events": encounter.get("damage_events"),
+        "render_mode": render_spec.get("mode"),
+        "trigger_events": len(trigger_events),
+        "trigger_rule_ids": sorted(trigger_rule_ids),
+        "data_source": sources.get("packet", {}).get("data_source"),
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

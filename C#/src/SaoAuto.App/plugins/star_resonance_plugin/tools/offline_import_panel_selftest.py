@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 import unittest
 from unittest import mock
 
-from gui_modules.sao_gui_offline_import import OfflineImportPanel
+from plugins.star_resonance_plugin.panels.sao_gui_offline_import import OfflineImportPanel
 
 
 def _status(**overrides):
@@ -85,7 +85,7 @@ class OfflineImportPanelSignatureTests(unittest.TestCase):
         panel._status_var = mock.Mock()
         panel.refresh = lambda: {"ok": True}  # type: ignore[method-assign]
 
-        with mock.patch("gui_modules.sao_gui_offline_import.act_history_load", return_value={"ok": True}) as load_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_offline_import.act_history_load", return_value={"ok": True}) as load_fn:
             panel.load_history("bad")  # type: ignore[arg-type]
 
         load_fn.assert_called_once_with(panel.owner, index=0, show=True)

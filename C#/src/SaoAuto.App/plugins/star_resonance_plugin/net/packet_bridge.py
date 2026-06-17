@@ -27,13 +27,10 @@ from typing import Any
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
 from plugins.star_resonance_plugin.engines.game_state import GameStateManager, compute_burst_ready
-from act_platform.adapters import (
-    StarResonanceParserAdapter,
-    create_plugin_parser_adapter,
-    plugin_parser_adapters,
-)
+from act_platform.adapters import create_plugin_parser_adapter, plugin_parser_adapters
 from act_platform.event_bus import EventBus
 from act_platform.events import is_event_envelope
+from plugins.star_resonance_plugin.net.parser_adapter import StarResonanceParserAdapter
 from packet_parser import (PlayerData, MonsterData,
                            BuffEventType, DamageType,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,

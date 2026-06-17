@@ -6,7 +6,89 @@ const path = require("path");
 const vm = require("vm");
 
 const root = path.resolve(__dirname, "..");
+const platformRoot = path.resolve(__dirname, "..", "..", "..");
 const calls = [];
+const domElements = new Map();
+const windowListeners = {};
+
+function read(rel) {
+  for (const base of [root, platformRoot]) {
+    const candidate = path.join(base, rel);
+    if (fs.existsSync(candidate)) return fs.readFileSync(candidate, "utf8");
+  }
+  return fs.readFileSync(path.join(root, rel), "utf8");
+}
+
+function fakeElement(id) {
+  if (domElements.has(id)) return domElements.get(id);
+  const el = {
+    id,
+    className: "",
+    checked: false,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+    offsetWidth: 0,
+    style: {
+      setProperty() {},
+      removeProperty() {},
+    },
+    classList: {
+      add() {},
+      remove() {},
+      toggle() { return false; },
+      contains() { return false; },
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return true; },
+    appendChild(child) { return child; },
+    removeChild(child) { return child; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getAttribute() { return ""; },
+    setAttribute() {},
+    remove() {},
+    focus() {},
+    select() {},
+  };
+  domElements.set(id, el);
+  return el;
+}
+
+function installDomStubs() {
+  const document = {
+    getElementById(id) { return fakeElement(String(id || "")); },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement(tagName) { return fakeElement(`created:${tagName}:${domElements.size}`); },
+    createDocumentFragment() { return fakeElement(`fragment:${domElements.size}`); },
+    documentElement: fakeElement("documentElement"),
+    body: fakeElement("body"),
+  };
+  global.document = document;
+  global.window.document = document;
+  global.window.addEventListener = function (type, listener) {
+    if (!windowListeners[type]) windowListeners[type] = [];
+    windowListeners[type].push(listener);
+  };
+  global.window.removeEventListener = function (type, listener) {
+    windowListeners[type] = (windowListeners[type] || []).filter((item) => item !== listener);
+  };
+  global.window.dispatchEvent = function (event) {
+    for (const listener of windowListeners[event && event.type] || []) listener.call(global.window, event);
+    return true;
+  };
+  global.window.Event = function Event(type) { this.type = type; };
+  global.window.requestAnimationFrame = function (callback) { return setTimeout(callback, 0); };
+  global.window.confirm = function () { return true; };
+  global.window.setTimeout = setTimeout;
+  global.window.clearTimeout = clearTimeout;
+}
 
 global.window = {
   bridge: {
@@ -27,9 +109,15 @@ global.window = {
   },
   console,
 };
+installDomStubs();
 
-const shim = fs.readFileSync(path.join(root, "web", "pywebview-shim.js"), "utf8");
+const shim = read("web/pywebview-shim.js");
 vm.runInThisContext(shim, { filename: "pywebview-shim.js" });
+
+const srMenu = read("web/sr_menu.js");
+vm.runInThisContext(srMenu, { filename: "sr_menu.js" });
+calls.length = 0;
+assert(window.__starResonancePluginApiRegistered, "Star Resonance plugin api was not registered");
 
 function assert(cond, message) {
   if (!cond) throw new Error(message);
@@ -83,11 +171,6 @@ function assert(cond, message) {
   await window.pywebview.api.exit_app();
   last = calls[calls.length - 1];
   assert(last.name === "ui.exit", "exit_app should map to ui.exit");
-
-  await window.pywebview.api.boss_hp_hit_regions([{ left: 1, top: 2, width: 3, height: 4 }]);
-  last = calls[calls.length - 1];
-  assert(last.name === "ui.boss_hp_hit_regions", "boss_hp_hit_regions command mismatch");
-  assert(last.payload.regions[0].width === 3, "boss_hp_hit_regions regions were not forwarded");
 
   await window.pywebview.api.context_action("exit");
   last = calls[calls.length - 1];
@@ -325,7 +408,7 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "file.select_file", "select_file command mismatch");
   assert(last.payload.path === "D:\\profiles\\ak.json", "select_file path was not forwarded");
-  assert(last.payload.consumer === "auto_key", "select_file consumer was not forwarded");
+  assert(last.payload.consumer === "", "select_file should not read plugin picker state implicitly");
 
   window._pickerConsumer = "";
   await window.pywebview.api.select_file("D:\\profiles\\raid.json", "boss_raid");
@@ -491,12 +574,12 @@ function assert(cond, message) {
   assert(last.payload.skill_id === "slash-7", "open_skill_drilldown skill_id was not forwarded");
 
   for (const rel of ["web/act_graph_timeseries.html", "web/act_combatant_drilldown.html", "web/act_skill_drilldown.html"]) {
-    const text = fs.readFileSync(path.join(root, rel), "utf8");
+    const text = read(rel);
     assert(!text.includes("bridge.cmd(fallbackAction, args)"), `${rel} still sends bare fallback args`);
     assert(text.includes("fallbackPayload(fallbackAction, args)"), `${rel} is missing fallbackPayload bridge mapping`);
   }
 
-  const pluginManager = fs.readFileSync(path.join(root, "web/plugin_manager.html"), "utf8");
+  const pluginManager = read("web/plugin_manager.html");
   assert(!pluginManager.includes("{ args: args || [] }"), "plugin manager still sends bare fallback args");
   assert(pluginManager.includes("pluginCommand(name, args || [])"), "plugin manager is missing fallback payload mapping");
   assert(pluginManager.includes("pluginPayloadArg(args, 2)"), "plugin manager should preserve object action payloads");
@@ -504,7 +587,7 @@ function assert(cond, message) {
   assert(!pluginManager.includes("grid.innerHTML = '';"), "plugin manager still clears all panel cards on each poll");
   assert(pluginManager.includes("entry.renderSig === renderSig"), "plugin manager should skip unchanged panel specs");
 
-  const pluginLayer = fs.readFileSync(path.join(root, "web/plugin_layer.js"), "utf8");
+  const pluginLayer = read("web/plugin_layer.js");
   assert(!pluginLayer.includes('window.bridge.cmd("act." + name, { args: args || [] })'), "plugin layer still sends bare bridge args");
   assert(pluginLayer.includes('name: "act.plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to act.plugins.invoke_ui_action");
   assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
@@ -602,7 +685,7 @@ function assert(cond, message) {
     assert(pluginLayer.includes(snippet), "plugin layer is missing guarded plugin spec handling: " + snippet);
   }
 
-  const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
+  const triggerManager = read("web/trigger_timer_manager.html");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
   assert(triggerManager.includes("toggle_trigger_timer_manager: 'ui.menu_action'"), "trigger manager close should map through ui.menu_action");
@@ -610,11 +693,11 @@ function assert(cond, message) {
   assert(triggerManager.includes("function displayRules(data)"), "trigger manager should merge trigger and timer rows for rendering");
   assert(triggerManager.includes("var rules = displayRules(data);"), "trigger manager render should use merged trigger/timer rows");
 
-  const combatantDrilldown = fs.readFileSync(path.join(root, "web/act_combatant_drilldown.html"), "utf8");
+  const combatantDrilldown = read("web/act_combatant_drilldown.html");
   assert(combatantDrilldown.includes("'act.skill.open'"), "combatant drilldown should use explicit act.skill.open fallback");
   assert(combatantDrilldown.includes("skill_id: String(args[1] || '')"), "combatant drilldown should forward skill_id when opening skill drilldown");
 
-  const dpsPanel = fs.readFileSync(path.join(root, "web/dps.html"), "utf8");
+  const dpsPanel = read("web/dps.html");
   assert(dpsPanel.includes("sk.skill_name || sk.name || sk.skill_id"), "DPS detail should render C# skill name fields");
   assert(!shim.includes("var numericUid = Number(uid || 0);"), "pywebview shim must not coerce DPS entity uid to Number");
   assert(shim.includes("var uidText = String(uid == null ? '' : uid).trim();"), "pywebview shim should preserve DPS entity uid as a string");
@@ -632,7 +715,7 @@ function assert(cond, message) {
   assert(!shim.includes("limit: limit || 80"), "pywebview shim must not pass raw 80-row limits");
   assert(!shim.includes("limit: limit || 120"), "pywebview shim must not pass raw graph limits");
 
-  const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
+  const timelineVcr = read("web/act_timeline_vcr.html");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
   assert(timelineVcr.includes("timelinePayload(name, args || [])"), "timeline VCR is missing fallback payload mapping");
   assert(timelineVcr.includes("delta_ms: safeDeltaMs(args[0])"), "timeline VCR should forward normalized step delta_ms");
@@ -640,39 +723,39 @@ function assert(cond, message) {
   assert(timelineVcr.includes("speed: safeSpeed(args[0])"), "timeline VCR should normalize fallback speed");
   assert(!timelineVcr.includes("Number(speed.value || 1)"), "timeline VCR should not pass raw speed input");
 
-  const actionLog = fs.readFileSync(path.join(root, "web/act_action_log.html"), "utf8");
+  const actionLog = read("web/act_action_log.html");
   assert(!actionLog.includes("{ args: args || [] }"), "action log still sends bare fallback args");
   assert(actionLog.includes("actionLogPayload(name, args || [])"), "action log is missing fallback payload mapping");
   assert(actionLog.includes("source: String(args[4] || 'live')"), "action log status should forward source");
   assert(actionLog.includes("encounter_id: String(args[5] || '')"), "action log status should forward encounter_id");
   assert(actionLog.includes("offset: safePageOffset(args[6])"), "action log status should forward normalized offset");
 
-  const deathRecap = fs.readFileSync(path.join(root, "web/act_death_recap.html"), "utf8");
+  const deathRecap = read("web/act_death_recap.html");
   assert(!deathRecap.includes("{ args: args || [] }"), "death recap still sends bare fallback args");
   assert(deathRecap.includes("deathRecapPayload(name, args || [])"), "death recap is missing fallback payload mapping");
   assert(deathRecap.includes("window_s: safeWindowSeconds(args[1])"), "death recap should forward normalized window_s");
   assert(deathRecap.includes("entity_id: args[2] == null || args[2] === '' ? null : args[2]"), "death recap should forward entity_id");
 
-  const dataSourceHealth = fs.readFileSync(path.join(root, "web/data_source_health.html"), "utf8");
+  const dataSourceHealth = read("web/data_source_health.html");
   assert(!dataSourceHealth.includes("{ args: args || [] }"), "data source health still sends bare fallback args");
   assert(dataSourceHealth.includes("sourcePayload(name, args || [])"), "data source health is missing fallback payload mapping");
   assert(dataSourceHealth.includes("name === 'get_data_source_health' || name === 'diagnose_data_source' || name === 'copy_data_source_health'"), "data source health should send empty payloads for data commands");
 
-  const reportExport = fs.readFileSync(path.join(root, "web/act_report_export.html"), "utf8");
+  const reportExport = read("web/act_report_export.html");
   assert(!reportExport.includes("{ args: args || [] }"), "report export still sends bare fallback args");
   assert(reportExport.includes("reportPayload(name, args || [])"), "report export is missing fallback payload mapping");
   assert(reportExport.includes("fmt: String(args[0] || 'json')"), "report export should forward fmt as a named payload field");
   assert(reportExport.includes("index: safeHistoryIndex(args[0], 0)"), "report export should forward normalized history index as a named payload field");
   assert(reportExport.includes("path: String(args[0] || '')"), "report export should forward import path as a named payload field");
 
-  const offlineImport = fs.readFileSync(path.join(root, "web/act_offline_import.html"), "utf8");
+  const offlineImport = read("web/act_offline_import.html");
   assert(!offlineImport.includes("{ args: args || [] }"), "offline import still sends bare fallback args");
   assert(offlineImport.includes("offlinePayload(name, args || [])"), "offline import is missing fallback payload mapping");
   assert(offlineImport.includes("history_limit: safeLimit(args[0], 20, 200)"), "offline import should forward normalized history_limit as a named payload field");
   assert(offlineImport.includes("path: String(args[0] || '')"), "offline import should forward import path as a named payload field");
   assert(offlineImport.includes("index: safeHistoryIndex(args[0], 0)"), "offline import should forward normalized history index as a named payload field");
 
-  const menu = fs.readFileSync(path.join(root, "web/menu.html"), "utf8");
+  const menu = read("web/menu.html");
   assert(menu.includes("_pdPanelCards"), "menu detached plugin panel should keep panel cards across polls");
   assert(!menu.includes("body.innerHTML = '';"), "menu detached plugin panel still clears all cards on each poll");
   assert(menu.includes("entry.renderSig === renderSig"), "menu detached plugin panel should skip unchanged specs");

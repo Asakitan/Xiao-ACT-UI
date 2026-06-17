@@ -18,7 +18,7 @@ from plugins.star_resonance_plugin.engines.act_aggregate import (
 )
 from act_platform.event_bus import EventBus
 from act_platform.runtime import act_aggregate_status
-from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
+from plugins.star_resonance_plugin.panels.sao_gui_act_aggregate import ActAggregatePanel
 
 
 class _FakeVar:
@@ -245,9 +245,9 @@ class ActAggregateTests(unittest.TestCase):
         panel._render_status = lambda _status: None
 
         with (
-            mock.patch("gui_modules.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status,
-            mock.patch("gui_modules.sao_gui_act_aggregate.act_graph_timeseries_status", return_value={"ok": True}),
-            mock.patch("gui_modules.sao_gui_act_aggregate.act_render_apply_hooks", return_value={"ok": False}),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status,
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_graph_timeseries_status", return_value={"ok": True}),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_render_apply_hooks", return_value={"ok": False}),
         ):
             aggregate_status.return_value = {"ok": True, "overview": {}, "raw_counts": {}, "groups": []}
             panel.refresh()
@@ -268,7 +268,7 @@ class ActAggregateTests(unittest.TestCase):
         rendered = []
         panel._render_status = lambda status: rendered.append(status)
 
-        with mock.patch("gui_modules.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status:
             self.assertEqual(panel.refresh(), {"ok": True, "cached": True})
 
         aggregate_status.assert_not_called()

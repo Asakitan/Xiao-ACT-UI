@@ -31,7 +31,7 @@ from plugins.star_resonance_plugin.engines.combat_analytics import build_act_ren
 from plugins.star_resonance_plugin.engines.dps_tracker import DpsTracker  # noqa: E402
 from plugins.star_resonance_plugin.engines.game_state import GameStateManager  # noqa: E402
 from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge  # noqa: E402
-from net import packet_bridge as packet_bridge_module  # noqa: E402
+from plugins.star_resonance_plugin.net import packet_bridge as packet_bridge_module  # noqa: E402
 
 
 class CombatPreparseTests(unittest.TestCase):

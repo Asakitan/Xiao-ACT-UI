@@ -1,8 +1,222 @@
 /* Star Resonance plugin — game-specific menu JS */
 /* Extracted from menu.html during 5.0.0 restructure */
 
+/* === Star Resonance WebView shim extensions === */
+(function () {
+    "use strict";
+
+    function srCall(name, payload) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.call === 'function') {
+            return shim.call(name, payload || {});
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            try {
+                return window.bridge.cmd(name, payload || {});
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        }
+        return Promise.reject(new Error('Bridge command unavailable: ' + name));
+    }
+
+    function srNormalizeOk(result) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.normalizeOk === 'function') return shim.normalizeOk(result);
+        if (result === true || result === null || result === undefined || result === '') return { ok: true };
+        if (result === false) return { ok: false };
+        if (!result || typeof result !== 'object') return { ok: true, value: result };
+        if (result.error && result.ok == null) {
+            result.ok = false;
+            result.message = result.message || String(result.error);
+        } else if (result.ok == null) {
+            result.ok = true;
+        }
+        return result;
+    }
+
+    function srOpenEmbeddedEditor(setterName) {
+        try {
+            if (typeof window[setterName] === 'function') {
+                window[setterName]('editor');
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    function srRegisterApi() {
+        if (window.__starResonancePluginApiRegistered) return true;
+        var methods = {
+            set_auto_key_server_url: function (url) {
+                return srCall('autokey.cloud.set_server_url', { url: String(url || '') }).then(srNormalizeOk);
+            },
+            get_auto_key_state: function () {
+                return srCall('autokey.state.get', {}).then(srNormalizeOk);
+            },
+            set_auto_key_enabled: function (enabled) {
+                return srCall('autokey.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            create_auto_key_profile: function () {
+                return srCall('autokey.profile.create', {}).then(srNormalizeOk);
+            },
+            copy_auto_key_profile: function (id) {
+                return srCall('autokey.profile.clone', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            save_auto_key_profile: function (profile) {
+                return srCall('autokey.profile.upsert', { profile: profile || {}, activate: false }).then(srNormalizeOk);
+            },
+            delete_auto_key_profile: function (id) {
+                return srCall('autokey.profile.delete', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            activate_auto_key_profile: function (id) {
+                return srCall('autokey.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            export_auto_key_profile: function (id) {
+                return srCall('autokey.profile.export', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            start_auto_key_import_picker: function (path) {
+                return srCall('autokey.import_picker.start', { path: String(path || '') }).then(srNormalizeOk);
+            },
+            refresh_auto_key_upload_auth: function (force) {
+                return srCall('autokey.cloud.refresh_upload_auth', { force: !!force }).then(srNormalizeOk);
+            },
+            search_remote_profiles: function (query) {
+                return srCall('autokey.cloud.search', { query: query || {} }).then(srNormalizeOk);
+            },
+            download_remote_profile: function (id) {
+                return srCall('autokey.cloud.download', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            upload_auto_key_profile: function (id) {
+                return srCall('autokey.cloud.upload', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            save_autokey_actions: function (actionsJson) {
+                return srCall('autokey.actions.save', {
+                    actions_json: String(actionsJson || '[]')
+                }).then(srNormalizeOk);
+            },
+            set_boss_raid_server_url: function (url) {
+                return srCall('bossraid.cloud.set_server_url', { url: String(url || '') }).then(srNormalizeOk);
+            },
+            get_boss_raid_state: function () {
+                return srCall('bossraid.state.get', {}).then(srNormalizeOk);
+            },
+            raid_next_phase: function () {
+                return srCall('bossraid.runtime.next_phase', {}).then(srNormalizeOk);
+            },
+            raid_reset: function () {
+                return srCall('bossraid.runtime.reset', {}).then(srNormalizeOk);
+            },
+            set_entity_role: function (uuid, role) {
+                return srCall('bossraid.runtime.set_entity_role', {
+                    uuid: uuid,
+                    role: String(role || '')
+                }).then(srNormalizeOk);
+            },
+            boss_raid_next_phase: function () {
+                return srCall('bossraid.runtime.next_phase', {}).then(srNormalizeOk);
+            },
+            boss_raid_reset: function () {
+                return srCall('bossraid.runtime.reset', {}).then(srNormalizeOk);
+            },
+            boss_raid_start: function () {
+                return srCall('bossraid.start', {}).then(srNormalizeOk);
+            },
+            boss_raid_stop: function () {
+                return srCall('bossraid.stop', {}).then(srNormalizeOk);
+            },
+            start_boss_raid_import_picker: function (path) {
+                try { window._pickerConsumer = 'boss_raid'; } catch (_) {}
+                return srCall('bossraid.import_picker.start', { path: String(path || '') }).then(srNormalizeOk);
+            },
+            set_boss_raid_enabled: function (enabled) {
+                return srCall('bossraid.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            set_buffmon_enabled: function (enabled) {
+                return srCall('buffmon.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            get_buffmon_enabled: function () {
+                return srCall('buffmon.get_enabled', {}).then(srNormalizeOk);
+            },
+            activate_boss_raid_profile: function (id) {
+                return srCall('bossraid.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            create_boss_raid_profile: function () {
+                return srCall('bossraid.profile.create', {}).then(srNormalizeOk);
+            },
+            save_boss_raid_profile: function (profile) {
+                return srCall('bossraid.profile.save', { profile: profile || {} }).then(srNormalizeOk);
+            },
+            delete_boss_raid_profile: function (id) {
+                return srCall('bossraid.profile.delete', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            export_boss_raid_profile: function (id) {
+                return srCall('bossraid.export', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            download_boss_raid_remote: function (id) {
+                return srCall('bossraid.cloud.download', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            search_boss_raid_remote: function (query) {
+                return srCall('bossraid.cloud.search', { query: query || {} }).then(srNormalizeOk);
+            },
+            refresh_boss_raid_upload_auth: function (force) {
+                return srCall('bossraid.cloud.refresh_upload_auth', { force: !!force }).then(srNormalizeOk);
+            },
+            upload_boss_raid_profile: function (id) {
+                return srCall('bossraid.cloud.upload', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            toggle_autokey_editor: function () {
+                var localHandled = srOpenEmbeddedEditor('_akSetTab');
+                return srCall('ui.menu_action', {
+                    action: 'toggle_autokey_editor',
+                    local_handled: localHandled
+                }).then(srNormalizeOk).catch(function (e) {
+                    if (localHandled) {
+                        return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                    }
+                    throw e;
+                });
+            },
+            toggle_raid_editor: function () {
+                var localHandled = srOpenEmbeddedEditor('_brSetTab');
+                return srCall('ui.menu_action', {
+                    action: 'toggle_raid_editor',
+                    local_handled: localHandled
+                }).then(srNormalizeOk).catch(function (e) {
+                    if (localHandled) {
+                        return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                    }
+                    throw e;
+                });
+            }
+        };
+        var shim = window.SAOPluginShim || {};
+        var register = typeof shim.register === 'function' ? shim.register : shim.extendApi;
+        if (typeof register === 'function') {
+            register.call(shim, methods);
+            window.__starResonancePluginApiRegistered = true;
+            return true;
+        }
+        if (window.pywebview && window.pywebview.api && window.bridge && typeof window.bridge.cmd === 'function') {
+            Object.assign(window.pywebview.api, methods);
+            window.__starResonancePluginApiRegistered = true;
+            return true;
+        }
+        return false;
+    }
+
+    if (!srRegisterApi() && typeof window.addEventListener === 'function') {
+        window.addEventListener('pywebviewready', srRegisterApi);
+    }
+})();
+
 /* === Burst Slot Handlers === */
 var _watchedSlotsRequestSeq = 0;
+var _watchedSlotsConfirmed = [];
+function _slotId(value) {
+    var n = parseInt(String(value == null ? '' : value), 10);
+    return isFinite(n) && n >= 1 && n <= 9 ? n : null;
+}
 function _watchedSlotsList() {
     var slots = [];
     document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
@@ -48,47 +262,443 @@ function _fmtSize(bytes) {
     return (bytes/1048576).toFixed(1) + 'M';
 }
 
-document.getElementById('picker-close').addEventListener('click', closeFilePicker);
-document.getElementById('picker-use-folder').addEventListener('click', function() {
-    var folderPath = _pickerCurrentDir;
-    closeFilePicker();
-    _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
-});
+var _memDataSource = 'hybrid';
+var _sourceComponents = ['hp', 'level', 'stamina', 'skills', 'identity'];
+var _sourceDefaults = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'packet',
+    identity: 'packet'
+};
+var _dataSourceMap = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'packet',
+    identity: 'packet'
+};
+function _sourceComponentName(value) {
+    var key = String(value || '').trim().toLowerCase();
+    return _sourceComponents.indexOf(key) >= 0 ? key : '';
+}
+function _sourceMode(value, fallback) {
+    var text = String(value || '').trim().toLowerCase();
+    if (text === 'ocr' || text === 'vision' || text === 'screen' || text === 'screen_vision') return 'vision';
+    if (text === 'packet' || text === 'network' || text === 'network_capture') return 'packet';
+    return fallback || 'packet';
+}
+function _componentDefault(component) {
+    var key = _sourceComponentName(component);
+    return key ? _sourceDefaults[key] : 'packet';
+}
+function _componentSourceValue(component, value) {
+    var key = _sourceComponentName(component);
+    if (!key) return '';
+    if (key === 'stamina') return 'vision';
+    if (key === 'skills') return 'packet';
+    return _sourceMode(value, _componentDefault(key));
+}
+function _syncDataSourceMap(map) {
+    var source = (map && typeof map === 'object') ? map : {};
+    _sourceComponents.forEach(function(key) {
+        _dataSourceMap[key] = _componentSourceValue(key, source[key]);
+    });
+}
+function _memSourceValue(value) {
+    var mode = String(value || '').trim().toLowerCase();
+    return ['tcp', 'memory', 'hybrid', 'auto'].indexOf(mode) >= 0 ? mode : 'hybrid';
+}
+function _sourceLabel(mode) {
+    return _sourceMode(mode, 'packet') === 'vision' ? 'VISION' : 'NETWORK';
+}
+function _memSourceLabel(mode) {
+    mode = _memSourceValue(mode);
+    if (mode === 'memory') return 'MEM';
+    if (mode === 'hybrid') return 'HYBRID';
+    if (mode === 'auto') return 'AUTO';
+    return 'TCP';
+}
+function _syncMemSourceButtons() {
+    _memDataSource = _memSourceValue(_memDataSource);
+    document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+        btn.classList.toggle('active', _memSourceValue(btn.getAttribute('data-mode')) === _memDataSource);
+    });
+}
+function _syncSourceButtons() {
+    document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+        var component = _sourceComponentName(btn.getAttribute('data-component'));
+        var mode = _sourceMode(btn.getAttribute('data-mode'), 'packet');
+        btn.classList.toggle('active', component && _componentSourceValue(component, _dataSourceMap[component]) === mode);
+    });
+}
+function _updateSourceSummary() {
+    _syncDataSourceMap(_dataSourceMap);
+    var el = document.getElementById('data-source-summary');
+    if (!el) return;
+    el.textContent = [
+        'DATA: ' + _memSourceLabel(_memDataSource),
+        'HP: ' + _sourceLabel(_dataSourceMap.hp),
+        'LV: ' + _sourceLabel(_dataSourceMap.level),
+        'STA: ' + _sourceLabel(_dataSourceMap.stamina),
+        'SKILL: ' + _sourceLabel(_dataSourceMap.skills)
+    ].join(' · ');
+}
+function openSourceDialog() {
+    playSound('snd-panel');
+    _syncSourceButtons();
+    document.getElementById('source-dialog').classList.add('show');
+}
+function closeSourceDialog() {
+    document.getElementById('source-dialog').classList.remove('show');
+}
 
-/* ═══ Circle click handlers ═══ */
-menuBar.querySelectorAll('.item').forEach(function(item) {
-    item.addEventListener('click', function(e) {
+function _srBridgeCheckbox(el, methodName, requested, label) {
+    if (typeof _setBridgeBackedCheckbox === 'function') {
+        _setBridgeBackedCheckbox(el, methodName, requested, label);
+        return;
+    }
+    var api = window.pywebview && window.pywebview.api;
+    var on = !!requested;
+    if (!api || !api[methodName]) {
+        el.checked = !on;
+        showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve(api[methodName](on)).then(function(result) {
+        var data = typeof _menuToggleResult === 'function' ? _menuToggleResult(result, on) : { ok: true, enabled: on };
+        if (!data || data.ok === false) {
+            el.checked = data && data.enabled !== undefined ? !!data.enabled : !on;
+            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
+            return;
+        }
+        el.checked = !!data.enabled;
+        showToast(label + ': ' + (el.checked ? 'ON' : 'OFF'));
+    }).catch(function(err) {
+        el.checked = !on;
+        showAlert(label, String(err || '设置失败 / Unable to update setting'), true);
+    });
+}
+
+var _pickerMode = 'file';
+var _pickerConsumer = '';
+var _pickerCurrentDir = '';
+function _pickerPayload(dataJson) {
+    if (typeof dataJson === 'string') {
+        try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }
+    }
+    return (dataJson && typeof dataJson === 'object') ? dataJson : {};
+}
+function _pickerModeValue(value) {
+    return value === 'folder' ? 'folder' : 'file';
+}
+function _pickerEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+function _pickerEntryText(value) {
+    if (value == null) return '';
+    var text = String(value);
+    return text ? text : '';
+}
+function _pickerConsumerLabel(consumer) {
+    return consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS';
+}
+function _pickerParseResult(consumer, result) {
+    var fn = window['_' + (consumer === 'boss_raid' ? 'br' : 'ak') + 'ParseApiResult'];
+    return typeof fn === 'function' ? fn(result) : result;
+}
+function showFilePicker(dataJson) {
+    var data = _pickerPayload(dataJson);
+    _pickerMode = _pickerModeValue(data.mode);
+    _pickerCurrentDir = _pickerEntryText(data.current);
+    var parentPath = _pickerEntryText(data.parent);
+    var dirs = Array.isArray(data.dirs) ? data.dirs : [];
+    var files = Array.isArray(data.files) ? data.files : [];
+    document.getElementById('picker-title').textContent = _pickerMode === 'folder' ? '选择文件夹' : '选择文件';
+    document.getElementById('picker-path').textContent = _pickerCurrentDir;
+    document.getElementById('filepicker-box').className =
+        'saoPickerBox' + (_pickerMode === 'folder' ? ' picker-mode-folder' : '');
+    var list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    if (parentPath) {
+        var upEl = document.createElement('div');
+        upEl.className = 'picker-item is-up';
+        upEl.innerHTML = '<i class="menu-glyph mi-back"></i><span class="item-name">..</span>';
+        upEl.addEventListener('click', function() { _pickerBrowse(parentPath); });
+        list.appendChild(upEl);
+    }
+    dirs.forEach(function(rawDir) {
+        var d = _pickerEntry(rawDir);
+        var el = document.createElement('div');
+        el.className = 'picker-item is-dir';
+        el.innerHTML = '<i class="menu-glyph mi-folder"></i><span class="item-name">' + _escHtml(_pickerEntryText(d.name)) + '</span>';
+        el.addEventListener('click', function() { _pickerBrowse(_pickerEntryText(d.path)); });
+        list.appendChild(el);
+    });
+    files.forEach(function(rawFile) {
+        var f = _pickerEntry(rawFile);
+        var el = document.createElement('div');
+        el.className = 'picker-item';
+        var sizeBytes = _clampNum(f.size, 0, 0, Number.MAX_SAFE_INTEGER);
+        var infoStr = sizeBytes > 0 ? '<span class="item-info">' + _fmtSize(sizeBytes) + '</span>' : '';
+        el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(_pickerEntryText(f.name)) + '</span>' + infoStr;
+        el.addEventListener('click', function() {
+            var consumer = _pickerConsumer || 'auto_key';
+            var filePath = _pickerEntryText(f.path);
+            playSound('snd-click');
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.select_file) {
+                var request = Promise.resolve().then(function() {
+                    return window.pywebview.api.select_file(filePath, consumer);
+                });
+                closeFilePicker();
+                request.then(function(result) {
+                    var parsed = _pickerParseResult(consumer, result);
+                    if (parsed && parsed.state) {
+                        if (consumer === 'boss_raid') _syncBossRaidState(parsed.state);
+                        else _syncAutoKeyState(parsed.state);
+                    }
+                    if (parsed && parsed.ok) showToast(consumer === 'boss_raid' ? 'BOSS RAID IMPORTED' : 'IMPORT COMPLETE');
+                    else if (parsed && parsed.message) showAlert(_pickerConsumerLabel(consumer), parsed.message, true);
+                }).catch(function(err) {
+                    showAlert(_pickerConsumerLabel(consumer), String(err || '无法导入文件 / Unable to import file'), true);
+                });
+            } else {
+                closeFilePicker();
+                showAlert(_pickerConsumerLabel(consumer), 'pywebview API 不可用 / pywebview API is not available', true);
+            }
+        });
+        list.appendChild(el);
+    });
+    if (!parentPath && !dirs.length && !files.length) {
+        list.innerHTML = '<div class="picker-empty">暂无 MIDI 文件</div>';
+    }
+    playSound('snd-alert');
+    document.getElementById('filepicker-dialog').classList.add('show');
+}
+function closeFilePicker() {
+    document.getElementById('filepicker-dialog').classList.remove('show');
+    _pickerConsumer = '';
+}
+function _pickerBrowse(path) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.browse_dir) {
+        showAlert('FILE PICKER', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve().then(function() {
+        return window.pywebview.api.browse_dir(path);
+    }).then(function(result) {
+        var d = _pickerPayload(result);
+        if (d.error) showAlert('FILE PICKER', _pickerEntryText(d.error), true);
+        d.mode = _pickerModeValue(_pickerMode);
+        showFilePicker(d);
+    }).catch(function(err) {
+        showAlert('FILE PICKER', String(err || '无法打开目录 / Unable to open folder'), true);
+    });
+}
+
+var sessionPlayersEl = document.getElementById('session-players');
+var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
+var _sessionPlayersVisible = false;
+var _sessionPlayersManualHidden = false;
+var _sessionPlayersAnimTimer = null;
+var _spRenderRows = [];
+var _spRenderedCount = 0;
+var _spRenderToken = 0;
+var _spRenderPending = false;
+var _SP_INITIAL_ROWS = 80;
+var _SP_BATCH_ROWS = 120;
+function _syncSessionPlayersAnchor(withChild) {
+    if (!sessionPlayersEl) return;
+    sessionPlayersEl.classList.toggle('with-child', !!withChild);
+}
+function _spText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+function _makeSessionPlayerRow(row, idx) {
+    row = (row && typeof row === 'object') ? row : {};
+    var el = document.createElement('div');
+    el.className = 'sp-row' + (row.is_self ? ' self' : '');
+    el.style.setProperty('--sp-delay', (Math.max(0, idx || 0) % 12) * 18 + 'ms');
+    var name = _spText(row.name, '--');
+    if (row.is_self && name !== '--') name = '* ' + name;
+    el.innerHTML =
+        '<div class="sp-name" title="' + _escHtml(_spText(row.name, '')) + '">' + _escHtml(name) + '</div>' +
+        '<div class="sp-uid">' + _escHtml(_spText(row.uid, '--')) + '</div>' +
+        '<div class="sp-power">' + _escHtml(_spText(row.fight_power, '--')) + '</div>';
+    return el;
+}
+function _syncSessionPlayersMore(list) {
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    if (_spRenderedCount >= _spRenderRows.length) return;
+    var more = document.createElement('div');
+    more.className = 'sp-more';
+    more.textContent = '继续滚动加载 · 已载入 ' + _spRenderedCount + '/' + _spRenderRows.length;
+    list.appendChild(more);
+}
+function _renderSessionPlayersBatch(token, batchSize) {
+    var list = document.getElementById('sp-list');
+    if (!list || token !== _spRenderToken) return;
+    _spRenderPending = false;
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    var start = _spRenderedCount;
+    var end = Math.min(_spRenderRows.length, start + Math.max(1, batchSize || _SP_BATCH_ROWS));
+    var frag = document.createDocumentFragment();
+    for (var i = start; i < end; i++) frag.appendChild(_makeSessionPlayerRow(_spRenderRows[i], i));
+    list.appendChild(frag);
+    _spRenderedCount = end;
+    _syncSessionPlayersMore(list);
+    if (_spRenderedCount < _spRenderRows.length && list.scrollHeight <= list.clientHeight + 8) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+function _scheduleSessionPlayersBatch(batchSize) {
+    if (_spRenderPending || _spRenderedCount >= _spRenderRows.length) return;
+    _spRenderPending = true;
+    var token = _spRenderToken;
+    window.requestAnimationFrame(function() {
+        _renderSessionPlayersBatch(token, batchSize || _SP_BATCH_ROWS);
+    });
+}
+function _maybeRenderMoreSessionPlayers() {
+    var list = document.getElementById('sp-list');
+    if (!list || _spRenderedCount >= _spRenderRows.length) return;
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 96) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+function _renderSessionPlayers(dataJson, reveal) {
+    var data = dataJson || _sessionPlayersPayload;
+    if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { data = {}; }
+    }
+    _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
+    var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
+    var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);
+    var summary = document.getElementById('sp-summary');
+    var list = document.getElementById('sp-list');
+    if (!summary || !list) return;
+    _spRenderToken += 1;
+    _spRenderPending = false;
+    _spRenderRows = rows;
+    _spRenderedCount = 0;
+    summary.textContent = '本次登录出现过 ' + total + ' 人' +
+        (_sessionPlayersPayload.self_uid ? ' · SELF ' + _sessionPlayersPayload.self_uid : '');
+    list.textContent = '';
+    list.scrollTop = 0;
+    if (!rows.length) list.innerHTML = '<div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>';
+    else _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
+    if (reveal && sessionPlayersEl && menuOpen) {
+        var wasVisible = _sessionPlayersVisible && sessionPlayersEl.classList.contains('show');
+        _sessionPlayersVisible = true;
+        sessionPlayersEl.classList.add('show');
+        if (!wasVisible) _playSessionPlayersOpenAnimation();
+    }
+}
+function _playSessionPlayersOpenAnimation() {
+    if (!sessionPlayersEl) return;
+    var box = sessionPlayersEl.querySelector('.sessionPlayersBox');
+    if (_sessionPlayersAnimTimer) clearTimeout(_sessionPlayersAnimTimer);
+    _sessionPlayersAnimTimer = null;
+    sessionPlayersEl.classList.remove('session-open-anim');
+    sessionPlayersEl.style.animation = 'none';
+    if (box) {
+        box.style.animation = 'none';
+        void sessionPlayersEl.offsetWidth;
+        void box.offsetWidth;
+        box.style.animation = '';
+    } else {
+        void sessionPlayersEl.offsetWidth;
+    }
+    sessionPlayersEl.style.animation = '';
+    sessionPlayersEl.classList.add('session-open-anim');
+    _sessionPlayersAnimTimer = setTimeout(function() {
+        if (sessionPlayersEl) sessionPlayersEl.classList.remove('session-open-anim');
+        _sessionPlayersAnimTimer = null;
+    }, 1040);
+}
+function setSessionPlayersPayload(dataJson) {
+    _renderSessionPlayers(dataJson, _sessionPlayersVisible || (menuOpen && !_sessionPlayersManualHidden));
+}
+function showSessionPlayers(dataJson) {
+    _sessionPlayersManualHidden = false;
+    _renderSessionPlayers(dataJson, true);
+}
+function toggleSessionPlayers(dataJson) {
+    showSessionPlayers(dataJson || _sessionPlayersPayload);
+}
+function closeSessionPlayers(manual) {
+    _sessionPlayersVisible = false;
+    _sessionPlayersManualHidden = !!manual;
+    if (sessionPlayersEl) {
+        sessionPlayersEl.classList.remove('show');
+        sessionPlayersEl.classList.remove('session-open-anim');
+    }
+}
+(function() {
+    var close = document.getElementById('picker-close');
+    if (close) close.addEventListener('click', closeFilePicker);
+    var useFolder = document.getElementById('picker-use-folder');
+    if (useFolder) useFolder.addEventListener('click', function() {
+        var folderPath = _pickerCurrentDir;
+        closeFilePicker();
+        _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
+    });
+    var sourceClose = document.getElementById('source-close');
+    if (sourceClose) sourceClose.addEventListener('click', closeSourceDialog);
+    var list = document.getElementById('sp-list');
+    if (list) list.addEventListener('scroll', _maybeRenderMoreSessionPlayers, { passive: true });
+})();
+
+document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var name = this.getAttribute('data-name');
-        activateCircle(name);
+        var component = _sourceComponentName(this.getAttribute('data-component'));
+        var mode = _componentSourceValue(component, this.getAttribute('data-mode'));
+        if (!component || !mode) return;
+        var previousMap = {};
+        _sourceComponents.forEach(function(key) { previousMap[key] = _dataSourceMap[key]; });
+        playSound('snd-click');
+        _dataSourceMap[component] = mode;
+        _syncSourceButtons();
+        _updateSourceSummary();
+        _callMenuSettingApi('set_component_source', [component, mode], 'DATA SOURCE', function(data) {
+            if (data && data.data_source_map && typeof data.data_source_map === 'object') {
+                _syncDataSourceMap(data.data_source_map);
+            } else if (data && data.component !== undefined && data.mode !== undefined) {
+                var returnedComponent = _sourceComponentName(data.component);
+                if (returnedComponent) _dataSourceMap[returnedComponent] = _componentSourceValue(returnedComponent, data.mode);
+            }
+            _syncSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _syncDataSourceMap(previousMap);
+            _syncSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
-
-/* ═══ Child menu item clicks ═══ */
-document.querySelectorAll('.child-menu li').forEach(function(li) {
-    li.addEventListener('click', function(e) {
+document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var action = this.getAttribute('data-action');
-        if (!action) return;
+        var mode = _memSourceValue(this.getAttribute('data-mode'));
+        var previousMode = _memDataSource;
         playSound('snd-click');
-        if (action === 'exit') {
-            exitApplication();
-            return;
-        }
-        if (action === 'show_plugins') {
-            showPluginPopup();
-            return;
-        }
-        if (action === 'reload_plugins_all') {
-            _callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {
-                if (window.renderPluginsCategory) window.renderPluginsCategory();
-                showToast('PLUGINS RELOADED');
-            });
-            return;
-        }
-        if (action) {
-            _callMenuSettingApi('menu_action', [action], 'MENU');
-        }
+        _memDataSource = mode;
+        _syncMemSourceButtons();
+        _updateSourceSummary();
+        _callMenuSettingApi('set_data_source', [mode], 'DATA SOURCE', function(data) {
+            _memDataSource = _memSourceValue(data && data.mode !== undefined ? data.mode : mode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _memDataSource = _memSourceValue(previousMode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
 
@@ -120,7 +730,7 @@ document.getElementById('burst-enabled').addEventListener('change', function(e) 
     e.stopPropagation();
     playSound('snd-click');
     var on = !!this.checked;
-    _setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
+    _srBridgeCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
 });
 
 /* ═══ Sound controls ═══ */
@@ -128,7 +738,7 @@ document.getElementById('sound-enabled').addEventListener('change', function(e) 
     e.stopPropagation();
     playSound('snd-click');
     var on = !!this.checked;
-    _setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');
+    _srBridgeCheckbox(this, 'set_sound_enabled', on, 'SOUND');
 });
 document.getElementById('sound-volume').addEventListener('input', function(e) {
     e.stopPropagation();
@@ -150,10 +760,11 @@ document.getElementById('open-data-source-panel').addEventListener('click', func
     openSourceDialog();
 });
 document.getElementById('source-close').addEventListener('click', function(e) {
+    e.stopPropagation();
+    closeSourceDialog();
+});
 
 /* === Auto-Key API & State === */
-    });
-}
 
 function _akParseApiResult(result) {
     if (!result) return {};
@@ -185,6 +796,71 @@ function _profileText(value, fallback) {
     if (value == null) return fallback;
     var text = String(value);
     return text ? text : fallback;
+}
+
+function _srUserInfoEl(id) {
+    return document.getElementById(id);
+}
+function _srSetUserInfoText(id, value, fallback) {
+    var el = _srUserInfoEl(id);
+    if (!el) return;
+    el.textContent = _profileText(value, fallback || '');
+}
+function updateStarResonanceInfo(data) {
+    data = _profileEntry(data);
+    if (data.username !== undefined) _srSetUserInfoText('info-username', data.username, '');
+    if (data.level !== undefined) _srSetUserInfoText('info-level', 'Lv.' + _profileText(data.level, ''), '');
+    if (data.xp_pct !== undefined) {
+        var xpFill = _srUserInfoEl('info-xp');
+        if (xpFill) xpFill.style.width = _clampNum(data.xp_pct, 0, 0, 100) + '%';
+    }
+    if (data.profession !== undefined) _srSetUserInfoText('info-profession', data.profession, '');
+    if (data.hp !== undefined) _srSetUserInfoText('info-hp', data.hp, '');
+    if (data.sta !== undefined) _srSetUserInfoText('info-sta', data.sta, '');
+    if (data.des !== undefined) _srSetUserInfoText('info-des', data.des, '');
+    var currentFile = document.getElementById('current-file');
+    if (currentFile && data.file !== undefined) {
+        currentFile.textContent = '♪ ' + _profileText(data.file, '');
+    }
+}
+function _srSetUserInfoVisible(visible) {
+    var infoBox = _srUserInfoEl('info-box');
+    if (!infoBox) return;
+    infoBox.classList.toggle('show', !!visible);
+    if (visible) playSound('snd-panel');
+}
+function _srHandleMenuActivate(detail) {
+    var name = _profileText(detail && detail.name, '');
+    _srSetUserInfoVisible(name === 'userInfo');
+}
+function _srMenuClock() {
+    var el = _srUserInfoEl('info-clock');
+    if (!el) return;
+    var now = new Date();
+    var h = String(now.getHours()).padStart(2,'0');
+    var m = String(now.getMinutes()).padStart(2,'0');
+    var s = String(now.getSeconds()).padStart(2,'0');
+    el.textContent = h + ':' + m + ':' + s;
+}
+function _srStartUserInfoClock() {
+    var clockEl = _srUserInfoEl('info-clock');
+    if (!clockEl || clockEl.isConnected !== true || window.__srUserInfoClockStarted) return;
+    window.__srUserInfoClockStarted = true;
+    _srMenuClock();
+    setInterval(_srMenuClock, 1000);
+}
+
+window.addEventListener('sao-menu-activate', function(event) {
+    _srHandleMenuActivate((event && event.detail) || {});
+});
+window.addEventListener('sao-menu-close', function() {
+    _srSetUserInfoVisible(false);
+});
+if (window.__saoMenuInfoPayload) {
+    updateStarResonanceInfo(window.__saoMenuInfoPayload);
+}
+if (window.currentActive === 'userInfo') {
+    _srSetUserInfoVisible(true);
 }
 
 function _akNewClientId(prefix) {
@@ -1136,6 +1812,10 @@ function _akDownloadRemote(remoteId) {
     _akCallApi('download_remote_profile', [remoteId], function() {
         showToast('PROFILE DOWNLOADED');
     });
+}
+
+function restoreMenuSettings(cfg) {
+    if (!cfg) return;
 
 /* === Game Config Init === */
     if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
@@ -1191,7 +1871,12 @@ function _akDownloadRemote(remoteId) {
     }
     /* DPS fade timeout */
     if (cfg.dps_fade_timeout_s !== undefined) {
-        var restoredFadeTimeout = _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
+        _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
+    }
+    if (cfg.boss_raid) {
+        _syncBossRaidState(cfg.boss_raid);
+    }
+}
 
 /* === Boss-Raid API & State === */
 var _brDraftDirty = false;
@@ -1963,7 +2648,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            _setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
+            _srBridgeCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
         });
     }
 })();
@@ -1976,7 +2661,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            _setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
+            _srBridgeCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
         });
     }
 })();
@@ -2029,10 +2714,11 @@ function _showLastDpsReport() {
         }
         showToast('DPS REPORT: LAST REPORT');
     }).catch(function(err) {
-
-/* === Linkage Management === */
+        showAlert('DPS METER', String(err || '无法打开上一场战斗报告 / Unable to open last combat report'), true);
     });
 }
+
+/* === Linkage Management === */
 
 /* ═══ Boss ↔ AutoKey Linkage ═══ */
 var _linkageMappings = [];
@@ -2173,70 +2859,50 @@ function _setLinkageGlobalCD(val) {
     }
 })();
 
-/* ═══ Python bridge: expose JS functions ═══ */
-window.SAO = {
-    openMenu: openMenu,
-    closeMenu: closeMenu,
-    exitApp: exitApplication,
-    updateInfo: updateInfo,
-    updateBadge: updateBadge,
-    showAlert: showAlert,
-    closeAlert: closeAlert,
-    showToast: showToast,
-    setFisheyeBg: setFisheyeBg,
-    stopFisheyeBg: stopFisheyeBg,
+/* ═══ Python bridge: expose Star Resonance JS functions ═══ */
+var __srBaseUpdateInfo = window.SAO && window.SAO.updateInfo;
+function _srUpdateInfo(data) {
+    if (typeof __srBaseUpdateInfo === 'function') {
+        __srBaseUpdateInfo(data);
+    }
+    updateStarResonanceInfo(data);
+}
+window.SAO = Object.assign(window.SAO || {}, {
+    updateInfo: _srUpdateInfo,
     showFilePicker: showFilePicker,
     closeFilePicker: closeFilePicker,
     setSessionPlayersPayload: setSessionPlayersPayload,
     showSessionPlayers: showSessionPlayers,
     toggleSessionPlayers: toggleSessionPlayers,
     closeSessionPlayers: closeSessionPlayers,
-    showLeaderboard: showLeaderboard,
-    closeLeaderboard: closeLeaderboard,
     syncAutoKeyState: _syncAutoKeyState,
     syncBossRaidState: _syncBossRaidState,
+    restoreStarResonanceMenuSettings: restoreMenuSettings
+});
+window.SRMenu = Object.assign(window.SRMenu || {}, {
+    updateInfo: updateStarResonanceInfo,
+    setUserInfoVisible: _srSetUserInfoVisible,
+    setAutoKeyState: _syncAutoKeyState,
+    setBossRaidState: _syncBossRaidState,
     restoreMenuSettings: restoreMenuSettings,
-    updateUpdaterState: updateUpdaterState,
-};
+    showFilePicker: showFilePicker,
+    showSessionPlayers: showSessionPlayers,
+    closeSessionPlayers: closeSessionPlayers
+});
+if (window.SAO && !window.SAO.__srRestoreWrapped) {
+    var __srBaseRestoreMenuSettings = window.SAO.restoreMenuSettings;
+    window.SAO.restoreMenuSettings = function(cfg) {
+        if (typeof __srBaseRestoreMenuSettings === 'function') {
+            __srBaseRestoreMenuSettings(cfg);
+        }
+        restoreMenuSettings(cfg);
+    };
+    window.SAO.__srRestoreWrapped = true;
+}
 
 setTimeout(function() {
-    _initPanelThemes();
+    if (typeof _initPanelThemes === 'function') _initPanelThemes();
     _loadInitialAutoKeyState();
     _loadInitialBossRaidState();
-    // System clock — SAO sci-fi style with seconds
-    function _menuClock() {
-        var el = document.getElementById('info-clock');
-        if (!el) return;
-        var now = new Date();
-        var h = String(now.getHours()).padStart(2,'0');
-        var m = String(now.getMinutes()).padStart(2,'0');
-        var s = String(now.getSeconds()).padStart(2,'0');
-        el.textContent = h + ':' + m + ':' + s;
-    }
-    _menuClock();
-    setInterval(_menuClock, 1000);
+    _srStartUserInfoClock();
 }, 250);
-</script>
-
-<!-- ═══ Plugin popup menu (插件 popup — manager + plugin list) ═══ -->
-<style>
-#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
-    background:rgba(4,8,14,.55); align-items:center; justify-content:center;
-    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
-#plugin-popup-card { width:340px; max-height:72vh; overflow:auto;
-    border:1px solid rgba(117,205,255,.5); border-radius:12px;
-    background:linear-gradient(180deg,rgba(18,31,47,.97),rgba(9,14,22,.97));
-    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; padding:0; }
-.ppm-head { display:flex; align-items:center; justify-content:space-between;
-    padding:12px 14px; border-bottom:1px solid rgba(117,205,255,.3);
-    font-weight:700; letter-spacing:.04em; color:#ffd46f; }
-#ppm-close { cursor:pointer; font-size:20px; line-height:1; color:#9fc0d8; padding:0 4px; }
-#ppm-list { padding:8px 10px 12px; }
-.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
-    padding:7px 8px; border-radius:8px; margin:3px 0; font-size:13px; }
-.ppm-row:hover { background:rgba(117,205,255,.08); }
-.ppm-manage { cursor:pointer; color:#73d7ff; font-weight:600; border:1px solid rgba(117,205,255,.3); }
-.ppm-name { cursor:pointer; flex:1; }
-.ppm-name small { color:#9fc0d8; margin-left:4px; }
-.ppm-btn { border:1px solid rgba(117,205,255,.5); background:rgba(19,48,74,.6); color:#e8f6ff;
-    border-radius:6px; padding:3px 9px; font-size:12px; cursor:pointer; }

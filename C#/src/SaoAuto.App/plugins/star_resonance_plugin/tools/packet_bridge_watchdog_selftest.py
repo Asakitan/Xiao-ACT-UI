@@ -11,8 +11,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from net import packet_bridge
-from packet_parser import PacketParser, PlayerData
+from plugins.star_resonance_plugin.net import packet_bridge
+from plugins.star_resonance_plugin.protocol.packet_parser import PacketParser, PlayerData
 
 
 class _FakeThread:

@@ -258,8 +258,6 @@ button.close {
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>
-<script>window.__SAO_SURFACE__ = 'plugin_ui';</script>
-<script src="plugin_layer.js"></script>
 <style>
 .pm-tabs { display: flex; gap: 8px; padding: 8px 12px 0; }
 .pm-tab {
@@ -286,7 +284,7 @@ button.close {
 /* Flat + token migration (ACT panel): drop the bespoke dark chrome so Plugin Manager reads
    flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
    resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
-   no bevels, no glow) and re-tokenise the custom tab / panel-card / card-more classes the
+    no bevels, no glow) and re-tokenise the custom tab / card-more classes the
    shared theme does not target, so light mode stays legible. Last style block in <head>
    so it wins source-order over the shared theme's !important chrome. */
 .shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
@@ -535,7 +533,6 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var stateBadges = [];
         stateBadges.push(badge(active ? 'ACTIVE' : (enabled ? 'LOADED OFF' : 'DISABLED'), active ? 'ok' : (enabled ? 'warn' : '')));
         if (plugin.pinned) stateBadges.push(badge('★ PINNED', 'warn'));
-        stateBadges.push(badge(plugin.declares_panel ? '▣ 面板' : '无面板', plugin.declares_panel ? 'ok' : ''));
         var hotkeyCount = countNumber(plugin.hotkey_count);
         var failureCount = countNumber(plugin.failures);
         var eventFailureCount = countNumber(plugin.event_failures);
@@ -549,7 +546,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var actions = '';
         actions += '<button type="button" class="primary" onclick="PluginManager.enable(' + idArg + ')"' + (canEnable ? '' : ' disabled') + '>启用 Enable</button>';
         actions += '<button type="button" class="danger" onclick="PluginManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
-        // 重载/置顶/卸载收进「更多 ▾」(select 即开即用, 与 raid_editor 试▾ 同款)
+        // 重载/置顶/卸载收进「更多 ▾」(select 即开即用)
         actions += '<select class="card-more" onchange="if(this.value){var k=this.value;this.selectedIndex=0;PluginManager.cardAction(' + idArg + ',k);}">';
         actions += '<option value="">更多 ▾</option>';
         actions += '<option value="reload"' + (enabled ? '' : ' disabled') + '>重载 Reload</option>';
