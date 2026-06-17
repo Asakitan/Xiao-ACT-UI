@@ -26,8 +26,10 @@ namespace SaoAuto.App.WebBridge;
 /// </summary>
 public sealed class WebBridgeLifecycle : IDisposable
 {
+    private readonly GameStateManager _states;
     private readonly GameStatePublisher _publisher;
     private readonly DpsTracker? _dpsTracker;
+    private readonly List<IDisposable> _contributorAttachments = [];
     private HideSeekStatusPublisher? _hideSeekPublisher;
     private AutoKeyProfileBridge? _autoKeyProfileBridge;
     private BuffMonBridge? _buffMonBridge;
@@ -66,6 +68,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         Func<TimeSpan>? dpsIdleTimeoutProvider = null)
     {
         if (states is null) throw new ArgumentNullException(nameof(states));
+        _states = states;
         Broadcaster = new BridgeEventBroadcaster();
         _dpsTracker = dpsTracker;
         // R8 / DPS-02/03: pass the live DpsTracker into the publisher so it
@@ -127,6 +130,21 @@ public sealed class WebBridgeLifecycle : IDisposable
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _buffMonBridge?.Dispose();
         _buffMonBridge = new BuffMonBridge(settings, Router);
+    }
+
+    /// <summary>
+    /// Attach a bounded WebView bridge contributor through the generic
+    /// contributor seam. Existing typed <c>Attach*</c> methods remain the
+    /// primary host path until plugin loading is introduced.
+    /// </summary>
+    public IDisposable AttachContributor(IBridgeContributor contributor, SettingsManager settings)
+    {
+        if (contributor is null) throw new ArgumentNullException(nameof(contributor));
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        var attachment = contributor.Attach(new BridgeContributorContext(Router, Broadcaster, settings, _states));
+        _contributorAttachments.Add(attachment);
+        return attachment;
     }
 
     /// <summary>
@@ -318,6 +336,11 @@ public sealed class WebBridgeLifecycle : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        foreach (var attachment in _contributorAttachments)
+        {
+            attachment.Dispose();
+        }
+        _contributorAttachments.Clear();
         _actBridge?.Dispose();
         _actRuntime = null;
         _filePickerBridge?.Dispose();
