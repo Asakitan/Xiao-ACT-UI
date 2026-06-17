@@ -21,7 +21,7 @@ from act_platform.runtime import (
     act_mem_narrow,
     act_mem_search_cancel,
     act_mem_attr_map,
-    act_render_apply_hooks,
+    render_apply_hooks,
 )
 from gui_modules.sao_panel_components import (
     keep_canvas_scroll,
@@ -144,7 +144,7 @@ class MemScopePanel:
             status = {"ok": False, "status": {"active": False, "hint": str(exc)},
                       "catalog": {"categories": []}, "errors": [str(exc)]}
         try:
-            hooked = act_render_apply_hooks(self.owner, 'mem_scope', status)
+            hooked = render_apply_hooks(self.owner, 'mem_scope', status)
             if hooked.get('ok') and isinstance(hooked.get('payload'), dict):
                 status = hooked['payload']
         except Exception:

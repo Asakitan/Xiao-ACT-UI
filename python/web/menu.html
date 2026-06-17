@@ -791,7 +791,7 @@ html, body {
     background: currentColor;
 }
 
-.sao-icon-act::before {
+.sao-icon-panel::before {
     left: 4px;
     top: 4px;
     width: 16px;
@@ -800,7 +800,7 @@ html, body {
     transform: rotate(45deg);
     border-radius: 2px;
 }
-.sao-icon-act::after {
+.sao-icon-panel::after {
     left: 50%;
     top: 50%;
     width: 4px;
@@ -1738,7 +1738,7 @@ html, body {
    Hidden scrollbar (keep scroll but no visual bar on right)
    ═══════════════════════════════════════ */
 .child-menu::-webkit-scrollbar,
-#sub-act::-webkit-scrollbar {
+#sub-panels::-webkit-scrollbar {
     display: none;
     width: 0;
     height: 0;
@@ -1773,16 +1773,13 @@ html, body {
 
         <!-- MenuBar Circles -->
         <ul class="item_box" id="menu-bar">
-            <li class="item active" data-name="act" data-idx="0">
-                <div class="in-circle"><span class="sao-icon sao-icon-act"></span></div>
-            </li>
-            <li class="item" data-name="plugins" data-idx="1">
+            <li class="item active" data-name="plugins" data-idx="0">
                 <div class="in-circle"><span style="font-size:17px;line-height:1;color:var(--menu-icon);">⬢</span></div>
             </li>
-            <li class="item" data-name="theme" data-idx="2">
+            <li class="item" data-name="theme" data-idx="1">
                 <div class="in-circle"><span class="sao-icon sao-icon-theme"></span></div>
             </li>
-            <li class="item" data-name="about" data-idx="3">
+            <li class="item" data-name="about" data-idx="2">
                 <div class="in-circle"><span class="sao-icon sao-icon-about"></span></div>
             </li>
         </ul>
@@ -1798,22 +1795,6 @@ html, body {
             <ul class="child-menu" id="sub-plugins" data-group="plugins">
                 <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>⚙ 插件管理面板 Manage</span></li>
                 <li data-action="reload_plugins_all"><i class="menu-glyph mi-mid"></i><span>↻ 重载全部插件 Reload</span></li>
-            </ul>
-
-            <!-- ACT sub-menu -->
-            <ul class="child-menu" id="sub-act" data-group="act">
-                <li data-action="toggle_trigger_timer_manager"><i class="menu-glyph mi-mid"></i><span>ACT 触发/计时 Trigger Timer</span></li>
-                <li data-action="toggle_data_source_health"><i class="menu-glyph mi-mid"></i><span>ACT 数据源健康 Data Source Health</span></li>
-                <li data-action="toggle_report_export"><i class="menu-glyph mi-mid"></i><span>ACT 报告/导出 Report Export</span></li>
-                <li data-action="toggle_offline_import"><i class="menu-glyph mi-mid"></i><span>ACT 离线导入 Offline Import</span></li>
-                <li data-action="toggle_timeline_vcr"><i class="menu-glyph mi-mid"></i><span>ACT 时间线/VCR Timeline</span></li>
-                <li data-action="toggle_act_aggregate"><i class="menu-glyph mi-mid"></i><span>ACT 聚合驾驶舱 Aggregate</span></li>
-                <li data-action="toggle_action_log"><i class="menu-glyph mi-mid"></i><span>ACT 行为日志 Action Log</span></li>
-                <li data-action="toggle_death_recap"><i class="menu-glyph mi-mid"></i><span>ACT 死亡回放 Death Recap</span></li>
-                <li data-action="toggle_graph_timeseries"><i class="menu-glyph mi-mid"></i><span>ACT 图表/曲线 Graph</span></li>
-                <li data-action="toggle_combatant_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 战斗成员 Drilldown</span></li>
-                <li data-action="toggle_skill_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 技能 Drilldown</span></li>
-                <li data-action="toggle_mem_scope"><i class="menu-glyph mi-mid"></i><span>内存浏览器 Mem Scope</span></li>
             </ul>
             <!-- About / System sub-menu -->
             <ul class="child-menu" id="sub-about" data-group="about">
@@ -1832,11 +1813,7 @@ html, body {
                         <button class="boss-bar-mode-btn" id="theme-all-light" type="button" onclick="_setAllThemes('light')">全部 Light</button>
                         <button class="boss-bar-mode-btn" id="theme-all-dark" type="button" onclick="_setAllThemes('dark')">全部 Dark</button>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;font-size:12px;">
-                        <div class="mode-btn" id="theme-hp" onclick="_toggleTheme('hp')" style="cursor:pointer;text-align:center;padding:3px 6px;">HP: Dark</div>
-                        <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Dark</div>
-                        <div class="mode-btn" id="theme-act" onclick="_toggleTheme('act')" style="cursor:pointer;text-align:center;padding:3px 6px;">ACT: Dark</div>
-                    </div>
+                    <div id="theme-panels-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;font-size:12px;"></div>
                 </li>
             </ul>
         </div>
@@ -2294,6 +2271,64 @@ function _callMenuBridgeQuiet(methodName, args, onFail) {
         return false;
     }
 }
+function _menuApiObject(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value));
+}
+function _menuParseApiResult(result) {
+    if (result === true || result === null || typeof result === 'undefined' || result === '') {
+        return { ok: true };
+    }
+    if (result === false) return { ok: false };
+    if (typeof result === 'string') {
+        try {
+            return _menuParseApiResult(JSON.parse(result));
+        } catch (e) {
+            return { ok: false, message: result };
+        }
+    }
+    if (_menuApiObject(result)) return result;
+    return { ok: false, message: String(result) };
+}
+function _menuApiMessage(data, fallback) {
+    if (_menuApiObject(data)) {
+        if (data.message != null) return String(data.message);
+        if (data.error != null) return String(data.error);
+        if (Array.isArray(data.errors) && data.errors.length) return String(data.errors[0]);
+    }
+    return String(fallback || '操作失败 / Operation failed');
+}
+function _callMenuSettingApi(methodName, args, label, onOk, onFail) {
+    var api = window.pywebview && window.pywebview.api;
+    var fallback = String(label || 'MENU') + ' FAILED';
+    if (!api || !api[methodName]) {
+        if (onFail) return onFail('pywebview API 不可用 / pywebview API is not available');
+        showToast(fallback, 2600);
+        return false;
+    }
+    try {
+        Promise.resolve(api[methodName].apply(api, args || [])).then(function(result) {
+            var data = _menuParseApiResult(result);
+            if (data && data.ok === false) {
+                var message = _menuApiMessage(data, fallback);
+                if (onFail) return onFail(message);
+                showToast(message, 2600);
+                return false;
+            }
+            if (onOk) onOk(data);
+            return true;
+        }).catch(function(err) {
+            var message = String(err || fallback);
+            if (onFail) return onFail(message);
+            showToast(message, 2600);
+        });
+        return true;
+    } catch (err) {
+        var message = String(err || fallback);
+        if (onFail) return onFail(message);
+        showToast(message, 2600);
+        return false;
+    }
+}
 function _requestExitApplication() {
     var fallbackStarted = false;
     var exitFailed = false;
@@ -2476,9 +2511,42 @@ function _clampInt(value, fallback, lo, hi) {
 }
 /* ═══ Panel Theme toggles ═══ */
 var _panelThemes = {};
-var _themePanels = ['hp', 'alert', 'act'];
-var _themeDefaultDark = { hp: true, alert: true, act: true };
+var _themePanels = [];
+var _themeDefaultDark = {};
 var _themeRequestSeq = 0;
+
+function _themeLabel(panel) {
+    var text = _profileText(panel, '').replace(/[_-]+/g, ' ').trim();
+    if (!text) return 'PANEL';
+    if (text.length <= 3) return text.toUpperCase();
+    return text.replace(/\b([a-z])/g, function(_, c) { return c.toUpperCase(); });
+}
+
+function _normalizeThemePanels(themes) {
+    var keys = [];
+    var next = {};
+    if (themes && typeof themes === 'object') {
+        Object.keys(themes).forEach(function(key) {
+            var panel = _profileText(key, '').toLowerCase();
+            if (!panel || keys.indexOf(panel) >= 0) return;
+            keys.push(panel);
+            next[panel] = _themeValue(themes[key], 'dark');
+        });
+    }
+    if (!keys.length) {
+        keys = _themePanels.slice();
+        keys.forEach(function(panel) {
+            next[panel] = _themeValue(_panelThemes[panel], _themeDefault(panel));
+        });
+    }
+    _themePanels = keys;
+    _themeDefaultDark = {};
+    _themePanels.forEach(function(panel) {
+        _themeDefaultDark[panel] = true;
+        if (!(panel in next)) next[panel] = _themeValue(_panelThemes[panel], 'dark');
+    });
+    return next;
+}
 
 function _themePanelName(panel) {
     var key = _profileText(panel, '');
@@ -2513,12 +2581,27 @@ function _applyPanelThemeAck(data, fallbackPanel, fallbackTheme) {
 }
 
 function _refreshThemeButtons() {
+    var grid = document.getElementById('theme-panels-grid');
+    if (grid) {
+        while (grid.firstChild) grid.removeChild(grid.firstChild);
+        _themePanels.forEach(function(panel) {
+            var button = document.createElement('div');
+            button.className = 'mode-btn';
+            button.id = 'theme-' + panel;
+            button.setAttribute('data-label', _themeLabel(panel));
+            button.style.cursor = 'pointer';
+            button.style.textAlign = 'center';
+            button.style.padding = '3px 6px';
+            button.onclick = function() { _toggleTheme(panel); };
+            grid.appendChild(button);
+        });
+    }
     var allLight = true, allDark = true;
     _themePanels.forEach(function(p) {
         var el = document.getElementById('theme-' + p);
         if (!el) return;
         var t = _themeValue(_panelThemes[p], _themeDefault(p));
-        el.textContent = el.textContent.split(':')[0] + ': ' + t.toUpperCase();
+        el.textContent = (el.getAttribute('data-label') || _themeLabel(p)) + ': ' + t.toUpperCase();
         el.classList.toggle('active', t === 'dark');
         if (t !== 'light') allLight = false;
         if (t !== 'dark') allDark = false;
@@ -2545,19 +2628,12 @@ function _applyMenuTheme(theme) {
     var root = document.documentElement;
     root.classList.toggle('theme-dark', themeName === 'dark');
     root.classList.toggle('theme-light', themeName === 'light');
-    root.dataset.actTheme = themeName;
+    root.dataset.panelTheme = themeName;
     root.style.colorScheme = themeName;
 }
 
 function _syncPanelThemes(themes) {
-    if (themes && typeof themes === 'object') {
-        var next = {};
-        _themePanels.forEach(function(p) {
-            var t = _themeValue(themes[p], _themeDefault(p));
-            next[p] = t;
-        });
-        _panelThemes = next;
-    }
+    _panelThemes = _normalizeThemePanels(themes);
     _applyMenuTheme(_menuThemeFromPanels());
     _refreshThemeButtons();
 }
@@ -2587,6 +2663,7 @@ function _setAllThemes(theme) {
     var requestSeq = ++_themeRequestSeq;
     var failed = false;
     var pending = _themePanels.length;
+    if (!pending) return;
     _themePanels.forEach(function(p) {
         _panelThemes[p] = themeName;
     });

@@ -1,8 +1,12 @@
 (function () {
     'use strict';
 
+    function normalizeTheme(theme) {
+        return String(theme || '').toLowerCase() === 'light' ? 'light' : 'dark';
+    }
+
     function applyPanelTheme(theme) {
-        var normalized = String(theme || '').toLowerCase() === 'light' ? 'light' : 'dark';
+        var normalized = normalizeTheme(theme);
         var root = document.documentElement;
         root.dataset.panelTheme = normalized;
         root.classList.toggle('theme-light', normalized === 'light');
@@ -17,7 +21,7 @@
         if (window.pywebview && window.pywebview.api && window.pywebview.api.get_panel_themes) {
             Promise.resolve(window.pywebview.api.get_panel_themes())
                 .then(function (themes) {
-                    applyPanelTheme(themes && (themes.panel || themes.plugin_manager || themes.default));
+                    applyPanelTheme((themes && (themes.plugin_manager || themes.panel || themes.default)) || 'dark');
                 })
                 .catch(function () {
                     applyPanelTheme(document.documentElement.dataset.panelTheme || 'dark');

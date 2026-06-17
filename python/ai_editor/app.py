@@ -91,6 +91,8 @@ class AIEditorAPI:
         self._controller.on_tool_start = self._on_tool_start
         self._controller.on_tool_end = self._on_tool_end
         self._controller.on_tool_confirm = self._on_tool_confirm
+        self._controller.on_tool_progress = self._on_tool_progress
+        self._controller.on_token_warning = self._on_token_warning
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
 
@@ -1346,8 +1348,15 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
         evt.wait(timeout=60.0)
         return self._confirm_results.pop(call_id, True)
 
-    def _on_tool_end(self, call_id: str, result: str) -> None:
-        self._emit("tool_end", {"id": call_id, "result": result})
+    def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
+        self._emit("tool_end", {"id": call_id, "result": result, "state": state})
+
+    def _on_tool_progress(self, call_id: str, name: str, progress: float) -> None:
+        self._emit("tool_progress", {"id": call_id, "name": name, "progress": progress})
+
+    def _on_token_warning(self, used: int, limit: int, ratio: float) -> None:
+        pct = int(ratio * 100)
+        self._emit("token_warning", {"used": used, "limit": limit, "percent": pct})
 
     def _on_error(self, error: str) -> None:
         self._emit("error", {"error": error})

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SAO ACT Plugin Manager</title>
+<title>SAO Plugin Manager</title>
 <style>
 :root {
     --bg: rgba(11, 18, 28, 0.72);
@@ -256,8 +256,8 @@ button.close {
 ::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
 ::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
 </style>
-<link rel="stylesheet" href="act_panel_theme.css" />
-<script src="act_panel_theme.js"></script>
+<link rel="stylesheet" href="panel_theme.css" />
+<script src="panel_theme.js"></script>
 <style>
 .pm-tabs { display: flex; gap: 8px; padding: 8px 12px 0; }
 .pm-tab {
@@ -281,33 +281,33 @@ button.close {
 .panel-card-head { color: var(--line2); font-size: 11px; letter-spacing: .12em; margin-bottom: 6px; }
 </style>
 <style>
-/* Flat + token migration (ACT panel): drop the bespoke dark chrome so Plugin Manager reads
+/* Flat + token migration: drop the bespoke dark chrome so Plugin Manager reads
    flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
-   resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
+    resolve to var(--panel-*) via the shared theme; here we flatten the chrome (no brackets,
     no bevels, no glow) and re-tokenise the custom tab / card-more classes the
    shared theme does not target, so light mode stays legible. Last style block in <head>
    so it wins source-order over the shared theme's !important chrome. */
-.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell,.panel,.plugin-shell{border:1px solid var(--panel-edge)!important;border-radius:4px!important;background:var(--panel-shell-bg)!important;box-shadow:none!important;}
 .shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
-.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+.header,.plugin-header,header{background:var(--panel-shell-bg-2)!important;border-bottom:1px solid var(--panel-edge-soft)!important;}
 .kicker{text-shadow:none!important;}
 button,input,select,.action-btn{clip-path:none!important;box-shadow:none!important;}
 button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;}
 .pill,.badge,.status-pill{background:transparent!important;}
-.plugin-actions select.card-more{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge)!important;border-radius:3px!important;color:var(--act-text)!important;}
-.plugin-actions select.card-more option{background:var(--act-shell-bg-2)!important;color:var(--act-text)!important;}
-.pm-tab{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge-soft)!important;border-bottom:none!important;color:var(--act-muted)!important;border-radius:4px 4px 0 0!important;}
-.pm-tab:hover{background:var(--act-card-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-text)!important;}
-.pm-tab.active{background:var(--act-shell-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-gold)!important;}
-.panel-card{border:1px solid var(--act-edge-soft)!important;border-left:3px solid var(--act-cyan)!important;border-radius:4px!important;background:var(--act-card-bg)!important;box-shadow:none!important;}
-.panel-card-head{color:var(--act-gold)!important;}
+.plugin-actions select.card-more{background:var(--panel-card-bg-2)!important;border:1px solid var(--panel-edge)!important;border-radius:3px!important;color:var(--panel-text)!important;}
+.plugin-actions select.card-more option{background:var(--panel-shell-bg-2)!important;color:var(--panel-text)!important;}
+.pm-tab{background:var(--panel-card-bg-2)!important;border:1px solid var(--panel-edge-soft)!important;border-bottom:none!important;color:var(--panel-muted)!important;border-radius:4px 4px 0 0!important;}
+.pm-tab:hover{background:var(--panel-card-bg)!important;border-color:var(--panel-cyan)!important;color:var(--panel-text)!important;}
+.pm-tab.active{background:var(--panel-shell-bg)!important;border-color:var(--panel-cyan)!important;color:var(--panel-gold)!important;}
+.panel-card{border:1px solid var(--panel-edge-soft)!important;border-left:3px solid var(--panel-cyan)!important;border-radius:4px!important;background:var(--panel-card-bg)!important;box-shadow:none!important;}
+.panel-card-head{color:var(--panel-gold)!important;}
 </style>
 </head>
 <body>
 <div class="plugin-shell" id="shell">
     <div class="plugin-header">
         <div class="title-block">
-            <div class="kicker">ACT EXTENSION PLATFORM</div>
+            <div class="kicker">EXTENSION PLATFORM</div>
             <div class="title">PLUGIN MANAGER</div>
         </div>
         <div class="header-actions">
@@ -422,22 +422,22 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
     function pluginCommand(name, args) {
         var maps = {
-            get_plugin_status: 'act.plugins.status',
-            list_plugins: 'act.plugins.list',
-            enable_plugin: 'act.plugins.enable',
-            disable_plugin: 'act.plugins.disable',
-            reload_plugins: 'act.plugins.reload',
-            pin_plugin: 'act.plugins.pin',
-            import_plugin_dialog: 'act.plugins.import_dialog',
-            import_plugin: 'act.plugins.import',
-            uninstall_plugin: 'act.plugins.uninstall',
-            get_plugin_hotkeys: 'act.plugins.hotkeys',
-            set_plugin_hotkey: 'act.plugins.set_hotkey',
-            get_plugin_ui_panels: 'act.plugins.ui_panels',
-            render_ui_panel: 'act.plugins.render_ui_panel',
-            invoke_ui_action: 'act.plugins.invoke_ui_action'
+            get_plugin_status: 'plugins.status',
+            list_plugins: 'plugins.list',
+            enable_plugin: 'plugins.enable',
+            disable_plugin: 'plugins.disable',
+            reload_plugins: 'plugins.reload',
+            pin_plugin: 'plugins.pin',
+            import_plugin_dialog: 'plugins.import_dialog',
+            import_plugin: 'plugins.import',
+            uninstall_plugin: 'plugins.uninstall',
+            get_plugin_hotkeys: 'plugins.hotkeys',
+            set_plugin_hotkey: 'plugins.set_hotkey',
+            get_plugin_ui_panels: 'plugins.ui_panels',
+            render_ui_panel: 'plugins.render_ui_panel',
+            invoke_ui_action: 'plugins.invoke_ui_action'
         };
-        var cmd = maps[name] || ('act.plugins.' + name);
+        var cmd = maps[name] || ('plugins.' + name);
         if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys' || name === 'get_plugin_ui_panels') return { name: cmd, payload: {} };
         if (name === 'enable_plugin' || name === 'disable_plugin' || name === 'uninstall_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || '') } };
         if (name === 'reload_plugins') return { name: cmd, payload: args[0] ? { plugin_id: String(args[0] || '') } : {} };

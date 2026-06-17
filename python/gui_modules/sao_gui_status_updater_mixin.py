@@ -102,15 +102,17 @@ class SAOPlayerGUIStatusUpdaterMixin:
     """Mixin bundling status panel + updater event chain + update panel."""
 
     def _toggle_status_panel(self):
-        """Plugin-owned status panel hook."""
-        handler = getattr(self, '_plugin_toggle_status_panel', None)
+        """Invoke a plugin-owned status panel callback, if one is registered."""
+        resolver = getattr(self, '_first_plugin_menu_surface_callable', None)
+        handler = resolver('status_toggle') if callable(resolver) else None
         if callable(handler):
             return handler()
         return None
 
     def _update_status_panel(self):
-        """Refresh the plugin-owned status panel, if present."""
-        handler = getattr(self, '_plugin_update_status_panel', None)
+        """Refresh a plugin-owned status panel, if one is registered."""
+        resolver = getattr(self, '_first_plugin_menu_surface_callable', None)
+        handler = resolver('status_update') if callable(resolver) else None
         if callable(handler):
             return handler()
         return None

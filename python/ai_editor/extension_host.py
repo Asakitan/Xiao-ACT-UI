@@ -97,6 +97,48 @@ def _parse_kind(raw: Any) -> str:
     return "workspace"
 
 
+class _LMAccessInfo:
+    """Stub for ExtensionContext.languageModelAccessInformation."""
+
+    def __init__(self) -> None:
+        self._change_emitter = _LazyEventEmitter()
+
+    @property
+    def on_did_change(self):
+        return self._change_emitter.event
+
+    def can_send_request(self, chat: Any = None) -> bool:
+        return True
+
+
+class _LazyEventEmitter:
+    """Deferred EventEmitter to avoid circular imports."""
+
+    def __init__(self) -> None:
+        self._listeners: List[Any] = []
+
+    @property
+    def event(self):
+        return self._subscribe
+
+    def _subscribe(self, listener) -> Any:
+        self._listeners.append(listener)
+        class _D:
+            def dispose(_self):
+                try:
+                    self._listeners.remove(listener)
+                except ValueError:
+                    pass
+        return _D()
+
+    def fire(self, data=None):
+        for fn in list(self._listeners):
+            try:
+                fn(data)
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # ExtensionRegistry — central index + activation event map
 # ---------------------------------------------------------------------------
@@ -131,6 +173,10 @@ class ExtensionRegistry:
                 self._rebuild_activation_map()
                 self._dirty = False
             ids = self._activation_map.get(event, [])
+            # Also check prefix-matched events (e.g., onLanguage:python matches onLanguage:*)
+            if ":" in event:
+                prefix = event.split(":")[0] + ":*"
+                ids = ids + self._activation_map.get(prefix, [])
             star_ids = self._activation_map.get("*", [])
             combined = list(dict.fromkeys(ids + star_ids))
             return [self._extensions[eid] for eid in combined
@@ -161,6 +207,23 @@ class ExtensionRegistry:
                 break
         if contribs.get("languageModelTools"):
             events.append("*")
+        if contribs.get("authentication"):
+            events.append("*")
+        for vl in contribs.get("views", {}).values():
+            if isinstance(vl, list):
+                for v in vl:
+                    vid = v.get("id", "") if isinstance(v, dict) else ""
+                    if vid:
+                        events.append(f"onView:{vid}")
+        for lang in contribs.get("languages", []):
+            if isinstance(lang, dict) and lang.get("id"):
+                events.append(f"onLanguage:{lang['id']}")
+        for tp in contribs.get("terminal", []):
+            if isinstance(tp, dict) and tp.get("id"):
+                events.append(f"onTerminalProfile:{tp['id']}")
+        for ce in contribs.get("customEditors", []):
+            if isinstance(ce, dict) and ce.get("viewType"):
+                events.append(f"onCustomEditor:{ce['viewType']}")
         return events
 
 
@@ -244,19 +307,25 @@ class CommandService:
 # ---------------------------------------------------------------------------
 
 class ExtensionContext:
-    """Minimal vscode.ExtensionContext compatible object."""
+    """VSCode-compatible ExtensionContext object."""
 
     def __init__(self, ext: ExtensionDescription,
                  global_storage_path: str = "") -> None:
         self.extension = ext
         self.extension_path = ext.extension_path
-        self.extension_uri = ext.extension_path
-        self.extension_mode = 1  # Production
+        self.extension_uri = Uri.file(ext.extension_path) if ext.extension_path else None
+        self.extension_mode = 1  # Production=1, Development=2, Test=3
         self.subscriptions: List[Any] = []
         self._storage_path = global_storage_path or os.path.join(
             ext.extension_path, ".storage")
         self.global_storage_path = self._storage_path
+        self.global_storage_uri = Uri.file(self._storage_path)
+        self.storage_path = os.path.join(self._storage_path, "workspace")
+        self.storage_uri = Uri.file(self.storage_path)
         self.log_path = os.path.join(self._storage_path, "logs")
+        self.log_uri = Uri.file(self.log_path)
+        self.environment_variable_collection: Dict[str, str] = {}
+        self.language_model_access_information = _LMAccessInfo()
         self._global_state: Dict[str, Any] = {}
         self._workspace_state: Dict[str, Any] = {}
         self._secrets: Dict[str, str] = {}
@@ -362,6 +431,16 @@ class ExtensionPoints:
         self._config_defaults: List[Dict[str, Any]] = []
         self._chat_welcome: List[Dict[str, Any]] = []
         self._interactive_sessions: List[Dict[str, Any]] = []
+        self._authentication: List[Dict[str, Any]] = []
+        self._languages: List[Dict[str, Any]] = []
+        self._grammars: List[Dict[str, Any]] = []
+        self._themes: List[Dict[str, Any]] = []
+        self._snippets: List[Dict[str, Any]] = []
+        self._custom_editors: List[Dict[str, Any]] = []
+        self._walkthroughs: List[Dict[str, Any]] = []
+        self._debuggers: List[Dict[str, Any]] = []
+        self._notebooks: List[Dict[str, Any]] = []
+        self._task_definitions: List[Dict[str, Any]] = []
 
     def process(self, ext: ExtensionDescription) -> None:
         c = ext.contributes
@@ -483,6 +562,71 @@ class ExtensionPoints:
                 isess["_extensionId"] = eid
                 self._interactive_sessions.append(isess)
 
+        for auth in c.get("authentication", []):
+            if isinstance(auth, dict):
+                auth = dict(auth)
+                auth["_extensionId"] = eid
+                self._authentication.append(auth)
+
+        for lang in c.get("languages", []):
+            if isinstance(lang, dict):
+                lang = dict(lang)
+                lang["_extensionId"] = eid
+                self._languages.append(lang)
+
+        for gram in c.get("grammars", []):
+            if isinstance(gram, dict):
+                gram = dict(gram)
+                gram["_extensionId"] = eid
+                self._grammars.append(gram)
+
+        for theme in c.get("themes", []):
+            if isinstance(theme, dict):
+                theme = dict(theme)
+                theme["_extensionId"] = eid
+                self._themes.append(theme)
+        for theme in c.get("iconThemes", []):
+            if isinstance(theme, dict):
+                theme = dict(theme)
+                theme["_extensionId"] = eid
+                self._themes.append(theme)
+
+        for snip in c.get("snippets", []):
+            if isinstance(snip, dict):
+                snip = dict(snip)
+                snip["_extensionId"] = eid
+                self._snippets.append(snip)
+
+        for ce in c.get("customEditors", []):
+            if isinstance(ce, dict):
+                ce = dict(ce)
+                ce["_extensionId"] = eid
+                self._custom_editors.append(ce)
+
+        for wt in c.get("walkthroughs", []):
+            if isinstance(wt, dict):
+                wt = dict(wt)
+                wt["_extensionId"] = eid
+                self._walkthroughs.append(wt)
+
+        for dbg in c.get("debuggers", []):
+            if isinstance(dbg, dict):
+                dbg = dict(dbg)
+                dbg["_extensionId"] = eid
+                self._debuggers.append(dbg)
+
+        for nb in c.get("notebooks", []):
+            if isinstance(nb, dict):
+                nb = dict(nb)
+                nb["_extensionId"] = eid
+                self._notebooks.append(nb)
+
+        for td in c.get("taskDefinitions", []):
+            if isinstance(td, dict):
+                td = dict(td)
+                td["_extensionId"] = eid
+                self._task_definitions.append(td)
+
         menus = c.get("menus", {})
         if isinstance(menus, dict):
             for ctx, items in menus.items():
@@ -521,6 +665,16 @@ class ExtensionPoints:
             "configurationDefaults": len(self._config_defaults),
             "chatViewsWelcome": len(self._chat_welcome),
             "interactiveSessions": len(self._interactive_sessions),
+            "authentication": len(self._authentication),
+            "languages": len(self._languages),
+            "grammars": len(self._grammars),
+            "themes": len(self._themes),
+            "snippets": len(self._snippets),
+            "customEditors": len(self._custom_editors),
+            "walkthroughs": len(self._walkthroughs),
+            "debuggers": len(self._debuggers),
+            "notebooks": len(self._notebooks),
+            "taskDefinitions": len(self._task_definitions),
         }
 
 

@@ -128,7 +128,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             except Exception:
                 pass
         _apply(force_focus=True)
-        # Many ACT/plugin panels briefly demote themselves at ~220ms after
+        # Many plugin panels briefly demote themselves at ~220ms after
         # show(). Re-assert topmost just after that so Entity panels do not
         # disappear behind the game when the user clicks elsewhere.
         for delay in (260, 520):

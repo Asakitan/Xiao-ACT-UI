@@ -408,12 +408,22 @@ class LLMEngine:
         body = self._build_body(cfg, messages, tools, stream=True)
         accumulated = LLMResponse(model=cfg.effective_model)
         tool_blocks: Dict[int, Dict[str, Any]] = {}  # index → {id, name, input_json}
+        last_exc: Optional[Exception] = None
 
-        try:
-            headers = self._build_headers(cfg)
-            url = f"{cfg.effective_base_url}/messages"
+        headers = self._build_headers(cfg)
+        url = f"{cfg.effective_base_url}/messages"
 
-            with self._client.stream("POST", url, json=body, headers=headers) as resp:
+        for _attempt in range(1 + self._MAX_RETRIES):
+            if _attempt > 0:
+                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                accumulated = LLMResponse(model=cfg.effective_model)
+                tool_blocks.clear()
+            last_exc = None
+            try:
+                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                    if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                        last_exc = Exception(f"HTTP {resp.status_code}")
+                        continue
                     resp.raise_for_status()
                     event_type = ""
                     for line in resp.iter_lines():
@@ -494,15 +504,26 @@ class LLMEngine:
                             err = data.get("error", {})
                             accumulated.error = err.get("message", str(data))
                             break
+                # Stream completed successfully
+                break
 
-        except Exception as exc:
-            accumulated.error = str(exc)
+            except Exception as exc:
+                last_exc = exc
+                status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                    continue
+                accumulated.error = str(exc)
+                break
+
+        if last_exc and not accumulated.error:
+            accumulated.error = str(last_exc)
 
         for _idx in sorted(tool_blocks):
             tb = tool_blocks[_idx]
-            accumulated.tool_calls.append(
-                ToolCall(id=tb["id"], name=tb["name"], arguments=tb["input_json"])
-            )
+            if not tb.get("_thinking"):
+                accumulated.tool_calls.append(
+                    ToolCall(id=tb["id"], name=tb["name"], arguments=tb["input_json"])
+                )
 
         return accumulated
 

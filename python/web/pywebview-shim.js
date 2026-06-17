@@ -1,20 +1,8 @@
-// S193 — Compatibility shim for pages written against pywebview's
-// `window.pywebview.api.X` style. Translates each call into a
-// `window.bridge.cmd('<name>', payload)` Promise so the existing
-// HUD HTML (hp.html, stamina.html, etc.) keeps working without
-// surgery.
+// Generic pywebview compatibility shim.
 //
-// Surface mirrors the Python panel modules:
-//   pywebview.api.play_sound(name)
-//   pywebview.api.set_hit_regions(rects)
-//   pywebview.api.notify_hp_hit_regions_ready()
-//   pywebview.api.exit_application()
-//   pywebview.api.set_panel_visible(panel, visible)
-//   pywebview.api.menu_action(action)
-//
-// Each method returns a Promise. Callers that ignore the return
-// value (the common case) see no change in behaviour; callers that
-// await get whatever C# replied.
+// This file only provides a transport adapter for pages that expect
+// `window.pywebview.api`. Feature-specific methods are registered by the
+// owning plugin through `window.SAOPluginShim.register(...)`.
 (function () {
     "use strict";
 
@@ -28,7 +16,7 @@
 
     function call(name, payload) {
         try {
-            return window.bridge.cmd(name, payload || {});
+            return window.bridge.cmd(String(name || ''), payload || {});
         } catch (e) {
             return Promise.reject(e);
         }
@@ -98,12 +86,6 @@
             var volume = clampInt(volumePct, 70, 0, 100);
             return call('sound.set_volume', { volume: volume }).then(normalizeOk);
         },
-        set_hit_regions: function (rects) {
-            return call('ui.set_hit_regions', { regions: rects });
-        },
-        notify_hp_hit_regions_ready: function () {
-            return call('ui.notify_hp_hit_regions_ready', {});
-        },
         exit_application: function () {
             return call('ui.exit', {});
         },
@@ -119,28 +101,6 @@
         set_panel_theme: function (panel, theme) {
             return call('ui.set_panel_theme', { panel: String(panel || ''), theme: String(theme || '') }).then(normalizeOk);
         },
-        set_watched_slots: function (slots) {
-            return call('settings.set_watched_slots', { slots: Array.isArray(slots) ? slots : [] }).then(normalizeOk);
-        },
-        set_burst_enabled: function (enabled) {
-            return call('settings.set_burst_enabled', { enabled: !!enabled }).then(normalizeOk);
-        },
-        set_boss_bar_mode: function (mode) {
-            return call('settings.set_boss_bar_mode', { mode: String(mode || '') }).then(normalizeOk);
-        },
-        set_dps_fade_timeout: function (seconds) {
-            var value = clampInt(seconds, 0, 0, 120);
-            return call('settings.set_dps_fade_timeout', { seconds: value }).then(normalizeOk);
-        },
-        set_data_source: function (mode) {
-            return call('settings.set_data_source', { mode: String(mode || '') }).then(normalizeOk);
-        },
-        set_component_source: function (component, mode) {
-            return call('settings.set_component_source', {
-                component: String(component || ''),
-                mode: String(mode || '')
-            }).then(normalizeOk);
-        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },
@@ -148,10 +108,9 @@
             return call('file.select_folder', { path: String(path || '') }).then(normalizeOk);
         },
         select_file: function (path, consumerName) {
-            var consumer = String(consumerName || '');
             return call('file.select_file', {
                 path: String(path || ''),
-                consumer: consumer
+                consumer: String(consumerName || '')
             }).then(normalizeOk);
         },
         toggle_menu: function () {
@@ -181,54 +140,6 @@
         panel_action: function (action) {
             return call('ui.panel_action', { action: String(action || '') });
         },
-        show_last_dps_report: function () {
-            return call('dps.show_last_report', {}).then(normalizeOk);
-        },
-        show_last_report: function () {
-            return call('dps.show_last_report', {}).then(normalizeOk);
-        },
-        reset_dps: function () {
-            return call('dps.reset_combat', {}).then(normalizeOk);
-        },
-        set_dps_enabled: function (enabled) {
-            return call('dps.toggle_enabled', { enabled: !!enabled }).then(normalizeOk);
-        },
-        get_dps_enabled: function () {
-            return call('dps.toggle_enabled', {}).then(normalizeOk);
-        },
-        get_entity_detail: function (uid) {
-            var uidText = String(uid == null ? '' : uid).trim();
-            return call('dps.entity_detail', { uid: uidText }).then(function (detail) {
-                detail = normalizeOk(detail);
-                try {
-                    if (detail && detail.ok !== false
-                            && window.DpsMeter
-                            && typeof window.DpsMeter.updateDetail === 'function') {
-                        window.DpsMeter.updateDetail(detail);
-                    }
-                } catch (_) {}
-                return detail;
-            });
-        },
-        request_live_snapshot: function () {
-            return call('state.snapshot', {}).then(function (snapshot) {
-                try {
-                    if (window.DpsMeter && typeof window.DpsMeter.showActSnapshot === 'function') {
-                        window.DpsMeter.showActSnapshot(snapshot || {});
-                    }
-                } catch (_) {}
-                return snapshot;
-            });
-        },
-        list_history: function (limit) {
-            return call('act.history.status', { limit: safeLimit(limit, 20, 200), query: '' }).then(function (data) {
-                if (data && data.items == null && data.encounters) data.items = data.encounters;
-                return normalizeOk(data);
-            });
-        },
-        export_last_report: function (fmt) {
-            return call('act.report.export', { fmt: String(fmt || 'json') }).then(normalizeOk);
-        },
         download_update: function () {
             return call('updater.download', {}).then(normalizeOk);
         },
@@ -238,308 +149,57 @@
         skip_update: function () {
             return call('updater.skip', {}).then(normalizeOk);
         },
-        fetch_leaderboard: function (sort) {
-            return call('ui.fetch_leaderboard', { sort: String(sort || 'xp') }).then(normalizeOk);
-        },
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });
         },
-        toggle_trigger_timer_manager: function () {
-            return call('ui.menu_action', { action: 'toggle_trigger_timer_manager' });
-        },
-        toggle_data_source_health: function () {
-            return call('ui.menu_action', { action: 'toggle_data_source_health' });
-        },
-        toggle_report_export: function () {
-            return call('ui.menu_action', { action: 'toggle_report_export' });
-        },
-        toggle_offline_import: function () {
-            return call('ui.menu_action', { action: 'toggle_offline_import' });
-        },
-        toggle_timeline_vcr: function () {
-            return call('ui.menu_action', { action: 'toggle_timeline_vcr' });
-        },
-        toggle_act_aggregate: function () {
-            return call('ui.menu_action', { action: 'toggle_act_aggregate' });
-        },
-        toggle_mem_scope: function () {
-            return call('ui.menu_action', { action: 'toggle_mem_scope' });
-        },
-        toggle_action_log: function () {
-            return call('ui.menu_action', { action: 'toggle_action_log' });
-        },
-        toggle_death_recap: function () {
-            return call('ui.menu_action', { action: 'toggle_death_recap' });
-        },
-        get_death_recap_status: function (limit, window_s, entity_id) {
-            return call('act.death_recap.status', {
-                limit: safeLimit(limit, 80, 500),
-                window_s: clampNumber(window_s, 8.0, 0, 120),
-                entity_id: entity_id || null
-            });
-        },
-        copy_death_recap: function (limit, window_s, entity_id) {
-            return call('act.death_recap.copy', {
-                limit: safeLimit(limit, 80, 500),
-                window_s: clampNumber(window_s, 8.0, 0, 120),
-                entity_id: entity_id || null
-            });
-        },
-        get_data_source_health: function () {
-            return call('act.sources.health', {});
-        },
-        diagnose_data_source: function () {
-            return call('act.sources.diagnose', {});
-        },
-        copy_data_source_health: function () {
-            return call('act.sources.copy', {});
-        },
-        get_report_export_status: function (limit, fmt) {
-            return call('act.report.status', { limit: safeLimit(limit, 20, 200), fmt: String(fmt || 'json') });
-        },
-        copy_report_export: function (fmt) {
-            return call('act.report.copy', { fmt: String(fmt || 'json') });
-        },
-        get_mini_parse_status: function (formatterId) {
-            return call('act.mini_parse.status', { formatter_id: String(formatterId || 'summary_table') });
-        },
-        preview_mini_parse: function (formatterId) {
-            return call('act.mini_parse.preview', { formatter_id: String(formatterId || 'summary_table') });
-        },
-        copy_mini_parse: function (formatterId) {
-            return call('act.mini_parse.copy', { formatter_id: String(formatterId || 'summary_table') });
-        },
-        get_selective_parsing_status: function () {
-            return call('act.selective_parsing.status', {});
-        },
-        update_selective_parsing: function (policy) {
-            return call('act.selective_parsing.update', { policy: policy || {} });
-        },
-        clear_selective_parsing: function () {
-            return call('act.selective_parsing.clear', {});
-        },
-        get_history_status: function (limit, query) {
-            return call('act.history.status', { limit: safeLimit(limit, 20, 200), query: String(query || '') });
-        },
-        load_history_report: function (index, show) {
-            return call('act.history.load', { index: safeOffset(index), show: show !== false });
-        },
-        delete_history_report: function (index) {
-            return call('act.history.delete', { index: safeOffset(index) });
-        },
-        clear_history_reports: function () {
-            return call('act.history.clear', {});
-        },
-        choose_offline_import_file: function () {
-            return call('act.offline_import.choose_file', {});
-        },
-        import_offline_report: function (path, persist, show) {
-            return call('act.offline_import.import', { path: String(path || ''), persist: persist !== false, show: show !== false });
-        },
-        get_offline_import_status: function (historyLimit) {
-            return call('act.offline_import.status', { history_limit: safeLimit(historyLimit, 20, 200) });
-        },
-        get_timeline_status: function (limit, query) {
-            return call('act.timeline.status', { limit: safeLimit(limit, 80, 500), query: String(query || '') });
-        },
-        get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId, groupBy, groupField) {
-            return call('act.aggregate.status', {
-                limit: safeLimit(limit, 1000, 5000),
-                query: String(query || ''),
-                source: String(source || 'live'),
-                window_ms: clampInt(windowMs, 1000, 0, 86400000),
-                top_n: safeLimit(topN, 20, 500),
-                encounter_id: String(encounterId || ''),
-                group_by: String(groupBy || 'skill'),
-                group_field: String(groupField || '')
-            });
-        },
-        get_mem_scope_status: function (query, dtype, jobId) {
-            return call('act.mem_scope.status', { query: String(query || ''), dtype: String(dtype || 'i32'), job_id: String(jobId || '') });
-        },
-        mem_search: function (value, dtype, align) {
-            return call('act.mem_scope.search', { value: value == null ? '' : String(value), dtype: String(dtype || 'i32'), align: clampInt(align, 0, 0, 64) });
-        },
-        mem_search_status: function (jobId) {
-            return call('act.mem_scope.search_status', { job_id: String(jobId || '') });
-        },
-        mem_narrow: function (jobId, value) {
-            return call('act.mem_scope.narrow', { job_id: String(jobId || ''), value: value == null ? '' : String(value) });
-        },
-        mem_search_cancel: function (jobId) {
-            return call('act.mem_scope.cancel', { job_id: String(jobId || '') });
-        },
-        mem_attr_map: function (entAddr) {
-            return call('act.mem_scope.attr_map', { ent_addr: String(entAddr || '') });
-        },
-        play_timeline: function (speed) {
-            return call('act.timeline.play', { speed: safeTimelineSpeed(speed) });
-        },
-        pause_timeline: function () {
-            return call('act.timeline.pause', {});
-        },
-        step_timeline: function (deltaMs) {
-            return call('act.timeline.step', { delta_ms: clampInt(deltaMs, 1000, -86400000, 86400000) });
-        },
-        seek_timeline: function (cursorMs) {
-            return call('act.timeline.seek', { cursor_ms: clampInt(cursorMs, 0, 0, 86400000) });
-        },
-        set_timeline_speed: function (speed) {
-            return call('act.timeline.speed', { speed: safeTimelineSpeed(speed) });
-        },
-        filter_timeline: function (query) {
-            return call('act.timeline.filter', { query: String(query || '') });
-        },
-        get_action_log_status: function (limit, query, topic, cursorMs, source, encounterId, offset) {
-            return call('act.action_log.status', {
-                limit: safeLimit(limit, 80, 500),
-                query: String(query || ''),
-                topic: String(topic || ''),
-                cursor_ms: clampInt(cursorMs, 0, 0, 86400000),
-                source: String(source || 'live'),
-                encounter_id: String(encounterId || ''),
-                offset: safeOffset(offset)
-            });
-        },
-        search_action_log: function (query, limit, source, encounterId, offset) {
-            return call('act.action_log.search', { query: String(query || ''), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
-        },
-        filter_action_log: function (topic, query, limit, source, encounterId, offset) {
-            return call('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
-        },
-        jump_action_log_time: function (cursorMs, limit, source, encounterId, offset, topic) {
-            var payload = { cursor_ms: clampInt(cursorMs, 0, 0, 86400000), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) };
-            if (arguments.length > 5) payload.topic = String(topic || '');
-            return call('act.action_log.jump_to_time', payload);
-        },
-        show_action_log_at: function (cursorMs, source, encounterId, topic) {
-            var payload = { cursor_ms: clampInt(cursorMs, 0, 0, 86400000), limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 };
-            if (arguments.length > 3) payload.topic = String(topic || '');
-            return call('act.action_log.jump_to_time', payload);
-        },
-        copy_action_log: function (limit, query, topic, source, encounterId, offset) {
-            return call('act.action_log.copy', { limit: safeLimit(limit, 80, 500), query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
-        },
-        get_graph_timeseries_status: function (metric, limit, query, topic, timeRangeMs) {
-            return call('act.graph.status', { metric: String(metric || ''), limit: safeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || ''), time_range_ms: clampInt(timeRangeMs, 0, 0, 86400000) });
-        },
-        select_graph_metric: function (metric, limit) {
-            return call('act.graph.select_metric', { metric: String(metric || 'damage'), limit: safeLimit(limit, 120, 1000) });
-        },
-        zoom_graph_timeseries: function (timeRangeMs, limit) {
-            return call('act.graph.zoom', { time_range_ms: clampInt(timeRangeMs, 0, 0, 86400000), limit: safeLimit(limit, 120, 1000) });
-        },
-        filter_graph_timeseries: function (query, topic, limit) {
-            return call('act.graph.filter', { query: String(query || ''), topic: String(topic || ''), limit: safeLimit(limit, 120, 1000) });
-        },
-        export_graph_timeseries: function (metric, limit, query, topic) {
-            return call('act.graph.export', { metric: String(metric || ''), limit: safeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || '') });
-        },
-        toggle_graph_timeseries: function () {
-            return call('ui.menu_action', { action: 'toggle_graph_timeseries' });
-        },
-        get_combatant_drilldown_status: function (combatantId, query, focusTarget) {
-            return call('act.combatant.status', { combatant_id: String(combatantId || ''), query: String(query || ''), focus_target: String(focusTarget || '') });
-        },
-        filter_combatant_drilldown: function (combatantId, query) {
-            return call('act.combatant.filter', { combatant_id: String(combatantId || ''), query: String(query || '') });
-        },
-        focus_combatant_target: function (combatantId, targetId) {
-            return call('act.combatant.focus_target', { combatant_id: String(combatantId || ''), target_id: String(targetId || '') });
-        },
-        back_combatant_drilldown: function () {
-            return call('act.combatant.back', {});
-        },
-        toggle_combatant_drilldown: function () {
-            return call('ui.menu_action', { action: 'toggle_combatant_drilldown' });
-        },
-        get_skill_drilldown_status: function (combatantId, skillId, query, limit) {
-            return call('act.skill.status', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
-        },
-        filter_skill_drilldown: function (combatantId, skillId, query, limit) {
-            return call('act.skill.filter', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
-        },
-        copy_skill_drilldown: function (combatantId, skillId, query, limit) {
-            return call('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
-        },
-        open_skill_drilldown: function (combatantId, skillId) {
-            return call('act.skill.open', { combatant_id: String(combatantId || ''), skill_id: String(skillId || '') });
-        },
-        back_skill_drilldown: function () {
-            return call('act.skill.back', {});
-        },
-        toggle_skill_drilldown: function () {
-            return call('ui.menu_action', { action: 'toggle_skill_drilldown' });
-        },
         get_plugin_status: function () {
-            return call('act.plugins.status', {});
+            return call('plugins.status', {});
         },
         list_plugins: function () {
-            return call('act.plugins.list', {});
+            return call('plugins.list', {});
         },
         enable_plugin: function (pluginId) {
-            return call('act.plugins.enable', { plugin_id: String(pluginId || '') });
+            return call('plugins.enable', { plugin_id: String(pluginId || '') });
         },
         disable_plugin: function (pluginId) {
-            return call('act.plugins.disable', { plugin_id: String(pluginId || '') });
+            return call('plugins.disable', { plugin_id: String(pluginId || '') });
         },
         reload_plugins: function (pluginId) {
             var payload = pluginId ? { plugin_id: String(pluginId || '') } : {};
-            return call('act.plugins.reload', payload);
+            return call('plugins.reload', payload);
         },
         pin_plugin: function (pluginId, pinned) {
-            return call('act.plugins.pin', { plugin_id: String(pluginId || ''), pinned: pinned !== false });
+            return call('plugins.pin', { plugin_id: String(pluginId || ''), pinned: pinned !== false });
         },
         import_plugin_dialog: function () {
-            return call('act.plugins.import_dialog', {});
+            return call('plugins.import_dialog', {});
         },
         import_plugin: function (archivePath) {
-            return call('act.plugins.import', { archive_path: String(archivePath || '') });
+            return call('plugins.import', { archive_path: String(archivePath || '') });
         },
         uninstall_plugin: function (pluginId) {
-            return call('act.plugins.uninstall', { plugin_id: String(pluginId || '') });
+            return call('plugins.uninstall', { plugin_id: String(pluginId || '') });
         },
         get_plugin_hotkeys: function () {
-            return call('act.plugins.hotkeys', {});
+            return call('plugins.hotkeys', {});
         },
         set_plugin_hotkey: function (action, key) {
-            return call('act.plugins.set_hotkey', { action: String(action || ''), key: String(key || '') });
+            return call('plugins.set_hotkey', { action: String(action || ''), key: String(key || '') });
         },
         render_ui_panel: function (panelId, payload) {
-            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: pluginPayload(payload) });
+            return call('plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: pluginPayload(payload) });
         },
         invoke_ui_action: function (panelId, actionId, payload) {
-            return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: pluginPayload(payload) });
+            return call('plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: pluginPayload(payload) });
         },
-        act_render_surfaces: function () {
-            return call('act.render.surfaces', {});
+        render_surfaces: function () {
+            return call('render.surfaces', {});
         },
-        act_render_overlays: function (surface) {
-            return call('act.render.overlays', { surface: String(surface || '') });
+        render_overlays: function (surface) {
+            return call('render.overlays', { surface: String(surface || '') });
         },
-        act_render_apply_hooks: function (surface, payload) {
-            return call('act.render.apply_hooks', { surface: String(surface || ''), payload: pluginPayload(payload) });
-        },
-        get_trigger_status: function () {
-            return call('act.triggers.status', {});
-        },
-        enable_trigger: function (ruleId) {
-            return call('act.triggers.enable', { rule_id: String(ruleId || '') });
-        },
-        disable_trigger: function (ruleId) {
-            return call('act.triggers.disable', { rule_id: String(ruleId || '') });
-        },
-        reload_triggers: function () {
-            return call('act.triggers.reload', {});
-        },
-        test_trigger: function (ruleId) {
-            return call('act.triggers.test', { rule_id: String(ruleId || '') });
-        },
-        trigger_export_presets: function (ruleIds) {
-            return call('act_trigger_export_presets', { rule_ids: Array.isArray(ruleIds) ? ruleIds : [] });
-        },
-        trigger_import_presets: function (payload, replace) {
-            return call('act_trigger_import_presets', { payload: payload || {}, replace: !!replace });
+        render_apply_hooks: function (surface, payload) {
+            return call('render.apply_hooks', { surface: String(surface || ''), payload: pluginPayload(payload) });
         },
         license_status: function () {
             return Promise.resolve(JSON.stringify({
@@ -550,9 +210,7 @@
                 source: 'standalone'
             }));
         },
-        // Generic escape hatch: any unhandled name routes through
-        // `ui.legacy_call` so the C# side can log + decide.
-        _call: call,
+        _call: call
     };
 
     function extendApi(methods) {
@@ -578,7 +236,7 @@
         safeOffset: safeOffset,
         safeTimelineSpeed: safeTimelineSpeed
     });
-    window.__pywebviewShim = { version: 's194' };
+    window.__pywebviewShim = { version: 'generic-1' };
     try {
         if (typeof window.dispatchEvent === 'function' && typeof window.Event === 'function') {
             window.dispatchEvent(new window.Event('pywebviewready'));

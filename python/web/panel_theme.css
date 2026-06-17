@@ -1,0 +1,221 @@
+/* Shared SAO light/dark chrome for platform WebView panels. */
+@font-face {
+    font-family: 'sao';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'SAOUI';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'saoLatin';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+}
+
+@font-face {
+    font-family: 'yuanJWD';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'yuanJWDCJK';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+@font-face {
+    font-family: 'ZHUZHIYUAN';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+:root {
+    color-scheme: light;
+    --font-sao: 'SAOUI', 'saoLatin', 'sao', 'Segoe UI', sans-serif;
+    --font-cjk: 'ZHUZHIYUAN', 'yuanJWDCJK', 'yuanJWD', 'Microsoft YaHei UI', sans-serif;
+    --font-ui: 'SAOUI', 'saoLatin', 'sao', 'ZHUZHIYUAN', 'yuanJWDCJK', 'yuanJWD', 'Microsoft YaHei UI', sans-serif;
+    --panel-viewport-bg: rgb(248, 248, 248);
+    --panel-shell-bg: rgba(248, 248, 248, 0.88);
+    --panel-shell-bg-2: rgba(236, 236, 235, 0.86);
+    --panel-card-bg: rgba(250, 250, 250, 0.58);
+    --panel-card-bg-2: rgba(255, 255, 255, 0.72);
+    --panel-edge: rgba(186, 190, 196, 0.58);
+    --panel-edge-soft: rgba(186, 190, 196, 0.34);
+    --panel-text: rgb(100, 99, 100);
+    --panel-muted: rgb(140, 135, 138);
+    --panel-dim: rgba(160, 158, 160, 0.82);
+    --panel-cyan: rgba(104, 228, 255, 0.86);
+    --panel-gold: rgb(222, 166, 32);
+    --panel-gold-soft: rgba(222, 166, 32, 0.18);
+    --panel-danger: rgb(239, 104, 78);
+    --panel-ok: rgb(92, 196, 106);
+    --panel-shadow: rgba(31, 34, 40, 0.18);
+    --bg: var(--panel-shell-bg);
+    --panel: var(--panel-card-bg);
+    --panel2: var(--panel-card-bg-2);
+    --line: var(--panel-edge);
+    --line2: var(--panel-gold);
+    --gold: var(--panel-gold);
+    --text: var(--panel-text);
+    --muted: var(--panel-muted);
+    --ok: var(--panel-ok);
+    --warn: var(--panel-gold);
+    --bad: var(--panel-danger);
+    --danger: var(--panel-danger);
+    --blue: var(--panel-cyan);
+}
+
+:root[data-panel-theme="dark"],
+:root.theme-dark {
+    color-scheme: dark;
+    --panel-viewport-bg: rgb(20, 32, 43);
+    --panel-shell-bg: rgba(16, 24, 35, 0.90);
+    --panel-shell-bg-2: rgba(10, 16, 25, 0.88);
+    --panel-card-bg: rgba(22, 34, 51, 0.70);
+    --panel-card-bg-2: rgba(26, 40, 59, 0.78);
+    --panel-edge: rgba(104, 228, 255, 0.34);
+    --panel-edge-soft: rgba(104, 228, 255, 0.18);
+    --panel-text: rgba(230, 244, 255, 0.96);
+    --panel-muted: rgba(159, 180, 196, 0.84);
+    --panel-dim: rgba(132, 151, 168, 0.82);
+    --panel-cyan: rgba(104, 228, 255, 0.84);
+    --panel-gold: rgb(240, 196, 86);
+    --panel-gold-soft: rgba(240, 196, 86, 0.14);
+    --panel-danger: rgb(255, 112, 122);
+    --panel-ok: rgb(125, 242, 191);
+    --panel-shadow: rgba(0, 0, 0, 0.42);
+}
+
+:root[data-panel-theme="light"],
+:root.theme-light {
+    color-scheme: light;
+}
+
+html,
+body {
+    background: var(--panel-viewport-bg) !important;
+    color: var(--panel-text) !important;
+    font-family: var(--font-ui) !important;
+}
+
+.shell,
+.panel,
+.plugin-shell {
+    position: relative;
+    border: 1px solid var(--panel-edge) !important;
+    border-radius: 10px !important;
+    background: linear-gradient(180deg, var(--panel-shell-bg) 0%, var(--panel-shell-bg-2) 100%) !important;
+    box-shadow: 0 8px 28px var(--panel-shadow) !important;
+    color: var(--panel-text) !important;
+}
+
+.header,
+.plugin-header,
+header {
+    background: var(--panel-shell-bg-2) !important;
+    border-bottom: 1px solid var(--panel-edge-soft) !important;
+    color: var(--panel-text) !important;
+}
+
+.kicker,
+.plugin-kicker,
+.panel-kicker {
+    color: var(--panel-gold) !important;
+}
+
+button,
+input,
+select,
+textarea,
+.action-btn {
+    border: 1px solid var(--panel-edge) !important;
+    background: var(--panel-card-bg-2) !important;
+    color: var(--panel-text) !important;
+    font-family: var(--font-ui) !important;
+}
+
+button:hover,
+.action-btn:hover {
+    border-color: var(--panel-cyan) !important;
+    background: var(--panel-card-bg) !important;
+}
+
+button.primary,
+.action-btn.accent,
+.primary {
+    background: var(--panel-gold) !important;
+    border-color: var(--panel-gold) !important;
+    color: rgba(28, 28, 24, 0.96) !important;
+}
+
+button.danger,
+.danger {
+    color: var(--panel-danger) !important;
+    border-color: var(--panel-danger) !important;
+}
+
+.pill,
+.badge,
+.status-pill {
+    border: 1px solid var(--panel-edge-soft) !important;
+    color: var(--panel-muted) !important;
+    background: var(--panel-card-bg) !important;
+}
+
+.pill.ok,
+.badge.ok,
+.status-pill.ok {
+    color: var(--panel-ok) !important;
+}
+
+.pill.warn,
+.badge.warn,
+.status-pill.warn {
+    color: var(--panel-gold) !important;
+}
+
+.pill.bad,
+.badge.bad,
+.status-pill.bad {
+    color: var(--panel-danger) !important;
+}
+
+.card,
+.plugin-card,
+.panel-card,
+.section,
+.summary,
+.preview,
+.toast {
+    background: var(--panel-card-bg) !important;
+    border-color: var(--panel-edge-soft) !important;
+    color: var(--panel-text) !important;
+}
+
+.empty,
+.muted,
+.small,
+.hint {
+    color: var(--panel-muted) !important;
+}

@@ -19,6 +19,18 @@ aggregate_damage_by_monster = _noop_agg
 aggregate_damage_by_skill = _noop_agg
 build_act_aggregate_summary = _noop_agg
 
+try:
+    from plugins.star_resonance_plugin.engines.act_aggregate import (
+        aggregate_by_actor,
+        aggregate_by_field,
+        aggregate_by_topic,
+        aggregate_damage_by_monster,
+        aggregate_damage_by_skill,
+        build_act_aggregate_summary,
+    )
+except Exception:
+    pass
+
 
 # 聚合工作台维度：插件开发者可在界面上切换"按什么聚合"（改聚合规则）。
 ACT_AGGREGATE_DIMENSIONS = [
@@ -650,6 +662,26 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
     }
 
 
+def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]:
+    """Return active plugin-owned descriptors for a generic menu surface."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return {"ok": True, "surfaces": manager.get_menu_surfaces(str(surface_id or ""))}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "surfaces": []}
+
+
+def act_plugin_action(owner: Any, action_id: str, payload: Any = None,
+                      plugin_id: str = "") -> dict[str, Any]:
+    """Dispatch an opaque plugin action without platform-side action knowledge."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return manager.dispatch_plugin_action(
+            str(action_id or ""), _coerce_payload(payload), str(plugin_id or ""))
+    except Exception as exc:
+        return {"ok": False, "action_id": str(action_id or ""), "message": str(exc), "errors": [str(exc)]}
+
+
 def act_plugin_pin(owner: Any, plugin_id: str, pinned: bool = True) -> dict[str, Any]:
     """Pin/unpin a plugin so it is promoted to the top of the plugin menu."""
     try:
@@ -736,7 +768,7 @@ def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any
 
 # ── Render hooks + overlays (intercept any UI surface, both renderers) ─────────
 
-def act_render_surfaces(owner: Any) -> dict[str, Any]:
+def render_surfaces(owner: Any) -> dict[str, Any]:
     """Report which surfaces have plugin hooks/overlays attached."""
     try:
         manager = ensure_act_plugin_manager(owner, load=True)
@@ -745,7 +777,7 @@ def act_render_surfaces(owner: Any) -> dict[str, Any]:
         return {"ok": False, "message": str(exc), "surfaces": {}}
 
 
-def act_render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
+def render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
     """Run the plugin render-hook chain for ``surface`` over ``payload``.
 
     Hosts call this just before rendering: the returned ``payload`` may have
@@ -771,7 +803,7 @@ def act_render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dic
             "override": override, "hooked": True}
 
 
-def act_render_overlays(owner: Any, surface: str) -> dict[str, Any]:
+def render_overlays(owner: Any, surface: str) -> dict[str, Any]:
     """Return plugin overlay specs for ``surface`` (drawn over native content)."""
     try:
         manager = ensure_act_plugin_manager(owner)
@@ -781,10 +813,10 @@ def act_render_overlays(owner: Any, surface: str) -> dict[str, Any]:
         return {"ok": False, "surface": str(surface or ""), "message": str(exc), "overlays": []}
 
 
-def act_render_surface(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
+def render_surface(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
     """One-shot helper: apply hooks *and* collect overlays for ``surface``."""
-    hooked = act_render_apply_hooks(owner, surface, payload)
-    overlays = act_render_overlays(owner, surface)
+    hooked = render_apply_hooks(owner, surface, payload)
+    overlays = render_overlays(owner, surface)
     return {
         "ok": bool(hooked.get("ok") and overlays.get("ok")),
         "surface": str(surface or ""),
@@ -793,10 +825,6 @@ def act_render_surface(owner: Any, surface: str, payload: Any = None) -> dict[st
         "overlays": overlays.get("overlays", []),
     }
 
-
-# Trigger engine rule-form building + testing lives entirely in the plugin
-# runtime provider. Platform callers reach it through the
-# ``act_trigger_*`` dispatch shims above (which call
 # ``_extension_runtime_handler`` registered via ``register_extension_runtime``).
 
 
@@ -4222,6 +4250,8 @@ __all__ = [
     "act_plugin_import_dialog",
     "act_plugin_uninstall",
     "act_plugin_menu",
+    "act_plugin_menu_surfaces",
+    "act_plugin_action",
     "act_plugin_pin",
     "act_plugin_hotkeys",
     "act_plugin_hotkey_dispatch",
@@ -4229,10 +4259,10 @@ __all__ = [
     "act_plugin_ui_panels",
     "act_plugin_ui_render",
     "act_plugin_ui_action",
-    "act_render_surfaces",
-    "act_render_apply_hooks",
-    "act_render_overlays",
-    "act_render_surface",
+    "render_surfaces",
+    "render_apply_hooks",
+    "render_overlays",
+    "render_surface",
     "act_selective_parsing_clear",
     "act_selective_parsing_status",
     "act_selective_parsing_update",

@@ -26,6 +26,11 @@ class ToolDescriptor:
     category: str = "general"
     requires_confirm: bool = False
     tags: Dict[str, Any] = field(default_factory=dict)
+    enabled: bool = True
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return self.parameters
 
     def to_openai_schema(self) -> Dict[str, Any]:
         return {
@@ -106,8 +111,11 @@ class ToolRegistry:
     def get(self, name: str) -> Optional[ToolDescriptor]:
         return self._tools.get(name)
 
-    def list_tools(self, category: Optional[str] = None) -> List[ToolDescriptor]:
+    def list_tools(self, category: Optional[str] = None,
+                    include_disabled: bool = False) -> List[ToolDescriptor]:
         tools = list(self._tools.values())
+        if not include_disabled:
+            tools = [t for t in tools if t.enabled]
         if category:
             tools = [t for t in tools if t.category == category]
         return sorted(tools, key=lambda t: (t.category, t.name))

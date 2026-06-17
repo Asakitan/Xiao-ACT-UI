@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+PLATFORM_ROOT = ROOT.parent.parent
 RAID_EDITOR = ROOT / "web" / "raid_editor.html"
 BUFF_COVERAGE = ROOT / "web" / "buff_coverage.html"
 HP = ROOT / "web" / "hp.html"
@@ -16,6 +17,8 @@ MECH_BANNER = ROOT / "web" / "mech_banner.html"
 SKILLFX = ROOT / "web" / "skillfx.html"
 MEM_SCOPE = ROOT / "web" / "mem_scope.html"
 PANEL = ROOT / "web" / "panel.html"
+if not PANEL.exists():
+    PANEL = PLATFORM_ROOT / "web" / "panel.html"
 
 
 def _check_absent(source: str, snippet: str, message: str) -> None:

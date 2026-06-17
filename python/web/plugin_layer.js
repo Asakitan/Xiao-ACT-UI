@@ -53,7 +53,7 @@
     function pluginBridgeCommand(name, args) {
         if (name === "invoke_ui_action") {
             return {
-                name: "act.plugins.invoke_ui_action",
+                name: "plugins.invoke_ui_action",
                 payload: {
                     panel_id: String(args[0] || ""),
                     action_id: String(args[1] || ""),
@@ -61,22 +61,22 @@
                 }
             };
         }
-        if (name === "act_render_overlays") {
-            return { name: "act.render.overlays", payload: { surface: String(args[0] || "") } };
+        if (name === "render_overlays") {
+            return { name: "render.overlays", payload: { surface: String(args[0] || "") } };
         }
-        if (name === "act_render_apply_hooks") {
+        if (name === "render_apply_hooks") {
             return {
-                name: "act.render.apply_hooks",
+                name: "render.apply_hooks",
                 payload: {
                     surface: String(args[0] || ""),
                     payload: pluginPayloadArg(args, 1)
                 }
             };
         }
-        if (name === "act_render_surfaces") {
-            return { name: "act.render.surfaces", payload: {} };
+        if (name === "render_surfaces") {
+            return { name: "render.surfaces", payload: {} };
         }
-        return { name: "act." + name, payload: { args: args || [] } };
+        return { name: "plugins." + name, payload: { args: args || [] } };
     }
 
     function esc(v) {
@@ -497,7 +497,7 @@
 
     function refreshOverlays() {
         if (!document.body) return;
-        return call("act_render_overlays", [SURFACE]).then(function (data) {
+        return call("render_overlays", [SURFACE]).then(function (data) {
             var mount = overlayMount();
             var overlays = objectItems(objectValue(data).overlays);
             var sig = specSignature(overlays);
@@ -545,7 +545,7 @@
 
         // Async: resolve {payload, override} after running Python render hooks.
         process: function (surface, payload) {
-            return call("act_render_apply_hooks", [surface || SURFACE, JSON.stringify(payload || {})])
+            return call("render_apply_hooks", [surface || SURFACE, JSON.stringify(payload || {})])
                 .then(function (data) {
                     data = objectValue(data);
                     if (!data || !data.ok) return { payload: payload, override: null };

@@ -93,7 +93,7 @@ class SAOPlayerGUIPanelsMixin:
                 pass
 
     def _toggle_act_plugin_manager_panel(self):
-        """打开/关闭 ACT 插件管理面板 (tkinter)."""
+        """打开/关闭插件管理面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
@@ -106,7 +106,7 @@ class SAOPlayerGUIPanelsMixin:
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
 
     def _open_act_plugin_manager(self, tab='manage'):
-        """打开 ACT 插件管理面板并切到指定页签 (manage / panels)."""
+        """打开插件管理面板并切到指定页签 (manage / panels)."""
         self._dismiss_sao_menu_for_panel()
         self._ensure_plugin_window_bridge()
         if not self._act_plugin_manager_panel:
@@ -242,7 +242,7 @@ class SAOPlayerGUIPanelsMixin:
                 pass
 
     def _push_commander_data(self):
-        """Commander data push — 游戏插件覆盖。"""
+        """Commander data push — 插件可覆盖。"""
         pass
 
     def _toggle_hide_all_panels(self):
@@ -294,12 +294,12 @@ class SAOPlayerGUIPanelsMixin:
         try:
             cfg = self._cfg_settings_ref or self.settings
             themes = dict(cfg.get('panel_themes', {}) or {})
-            return 'light' if themes.get('act') == 'light' else 'dark'
+            return 'light' if themes.get('plugin_manager') == 'light' else 'dark'
         except Exception:
             return 'dark'
 
     def _apply_act_panel_theme(self, theme: Optional[str] = None) -> None:
-        """Apply the grouped ACT panel theme to all registered Tk ACT panels."""
+        """Apply the grouped panel theme to all registered Tk plugin panels."""
         theme = 'light' if str(theme or self._act_panel_theme()).lower() == 'light' else 'dark'
         try:
             _set_sao_panel_theme(theme)

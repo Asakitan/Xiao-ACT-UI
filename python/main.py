@@ -27,8 +27,7 @@ import argparse
 # - 开发模式下 python.exe 自带 PerMonitorV2 manifest, 无须显式设置;
 # - PyInstaller bootloader (runw.exe) 默认 DPI-unaware → 高 DPI 屏上
 #   GetClientRect 返回逻辑像素 (e.g. 1280x720) 而 PrintWindow 抓到的是
-#   原生像素 (e.g. 1920x1080) → STA 条裁剪坐标错位 → 颜色匹配 0 信号
-#   → stamina_offline=True → HP 面板被 setSTAOffline(true) 隐藏。
+#   原生像素 (e.g. 1920x1080), 会让插件的屏幕坐标解析错位。
 # 这里在 main.py 模块级 (sys.path bootstrap 之前) 立即调用,
 # 同时 EXE manifest 也声明 PerMonitorV2 作为最早保险。
 def _early_dpi_aware():

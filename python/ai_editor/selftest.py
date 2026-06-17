@@ -546,6 +546,96 @@ def test_vscode_api() -> None:
     lm = LanguageModelChat(id="test-model", name="Test", vendor="test",
                             max_input_tokens=100000)
     _check("LM.countTokens", lm.count_tokens("Hello world") > 0)
+    _check("LM.capabilities", lm.capabilities.supports_tool_calling is True)
+
+    # New types from gap analysis
+    from ai_editor.vscode_api import (
+        LanguageModelTextPart, LanguageModelToolCallPart,
+        LanguageModelDataPart, LanguageModelThinkingPart,
+        LanguageModelChatMessage as LMChatMsg, LanguageModelError,
+        CancellationTokenSource, CancellationToken,
+    )
+
+    # Message types
+    user_msg = LMChatMsg.User("Hello")
+    _check("LMChatMsg.User", user_msg.role == 1)
+    asst_msg = LMChatMsg.Assistant([LanguageModelTextPart("reply")])
+    _check("LMChatMsg.Assistant parts", len(asst_msg.content) == 1)
+    sys_msg = LMChatMsg.System("system prompt")
+    _check("LMChatMsg.System", sys_msg.role == 0)
+    api_dict = user_msg.to_api_dict()
+    _check("LMChatMsg.to_api_dict", api_dict["role"] == "user")
+
+    # Part types
+    tp = LanguageModelTextPart(value="hello")
+    _check("TextPart", tp.value == "hello")
+    tcp = LanguageModelToolCallPart(call_id="c1", name="tool1")
+    _check("ToolCallPart", tcp.name == "tool1")
+    dp = LanguageModelDataPart.image(b"\x89PNG", "image/png")
+    _check("DataPart.image", dp.mime_type == "image/png")
+    thp = LanguageModelThinkingPart(value="thinking...")
+    _check("ThinkingPart", thp.value == "thinking...")
+
+    # Error types
+    err = LanguageModelError.NotFound("test")
+    _check("LMError.NotFound", err.code == "NotFound")
+    err2 = LanguageModelError.NoPermissions()
+    _check("LMError.NoPermissions", err2.code == "NoPermissions")
+    err3 = LanguageModelError.Blocked()
+    _check("LMError.Blocked", err3.code == "Blocked")
+
+    # CancellationToken
+    cts = CancellationTokenSource()
+    tok = cts.token
+    _check("CancellationToken.initial", not tok.is_cancellation_requested)
+    cancelled_flag = []
+    tok.on_cancellation_requested(lambda: cancelled_flag.append(True))
+    cts.cancel()
+    _check("CancellationToken.cancelled", tok.is_cancellation_requested)
+    _check("CancellationToken.listener", len(cancelled_flag) == 1)
+    _check("CancellationToken.NONE", not CancellationToken.NONE.is_cancellation_requested)
+
+    # ChatResponseStream extended methods
+    stream2 = ChatResponseStream()
+    stream2.anchor("http://example.com", "Example")
+    stream2.button({"command": "test"})
+    stream2.warning("Be careful")
+    stream2.info("FYI")
+    stream2.progress("Working...")
+    stream2.filetree({"items": []})
+    stream2.thinking_progress("hmm...")
+    _check("stream.anchor+warn+info", "Example" in stream2.get_content() and "careful" in stream2.get_content())
+
+    # ChatRequest extended fields
+    req2 = ChatRequest(prompt="test", tool_references=[{"name": "tool1"}],
+                        tool_invocation_token="tok123", attempt=2)
+    _check("ChatRequest.toolInvocationToken", req2.tool_invocation_token == "tok123")
+    _check("ChatRequest.attempt", req2.attempt == 2)
+
+    # API exports
+    _check("api.CancellationTokenSource", api["CancellationTokenSource"] is CancellationTokenSource)
+    _check("api.LanguageModelError", api["LanguageModelError"] is LanguageModelError)
+    _check("api.ChatLocation", api["ChatLocation"]["Panel"] == 1)
+    _check("api.ChatResultFeedbackKind", api["ChatResultFeedbackKind"]["Helpful"] == 1)
+    _check("api.ToolMode", api["LanguageModelChatToolMode"]["Auto"] == 1)
+    _check("api.ExtensionMode", api["ExtensionMode"]["Production"] == 1)
+
+    # lm.getTools returns list of dicts
+    api["lm"]["registerTool"]("test_tool2", {"description": "A test", "schema": {}})
+    tools_list = api["lm"]["getTools"]()
+    _check("lm.getTools returns dicts", len(tools_list) > 0 and isinstance(tools_list[0], dict))
+
+    # MCP and ignored file APIs exist
+    _check("lm.registerMcpServerDefinitionProvider", "registerMcpServerDefinitionProvider" in api["lm"])
+    _check("lm.fileIsIgnored", callable(api["lm"]["fileIsIgnored"]))
+
+    # chat context providers
+    _check("chat.registerChatWorkspaceContextProvider",
+           "registerChatWorkspaceContextProvider" in api["chat"])
+
+    # window.withProgress
+    _check("window.withProgress", callable(api["window"]["withProgress"]))
+    _check("window.createWebviewPanel", callable(api["window"]["createWebviewPanel"]))
 
 
 def test_auth() -> None:

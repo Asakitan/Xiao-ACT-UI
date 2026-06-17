@@ -48,9 +48,12 @@ class AIEditorBridge:
         self._controller = ChatController(self._engine, self._registry, conv)
 
         self._controller.on_stream_delta = self._on_stream_delta
+        self._controller.on_thinking_delta = self._on_thinking_delta
         self._controller.on_stream_end = self._on_stream_end
         self._controller.on_tool_start = self._on_tool_start
         self._controller.on_tool_end = self._on_tool_end
+        self._controller.on_tool_confirm = self._on_tool_confirm
+        self._controller.on_tool_progress = self._on_tool_progress
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
 
@@ -94,6 +97,10 @@ class AIEditorBridge:
             "ai_editor_list_workflows": self._cmd_list_workflows,
             "ai_editor_save_workflow": self._cmd_save_workflow,
             "ai_editor_delete_workflow": self._cmd_delete_workflow,
+            "ai_editor_count_tokens": self._cmd_count_tokens,
+            "ai_editor_get_model_info": self._cmd_get_model_info,
+            "ai_editor_get_mode": self._cmd_get_mode,
+            "ai_editor_set_mode": self._cmd_set_mode,
         }
         handler = handlers.get(name)
         if handler:
@@ -284,10 +291,37 @@ class AIEditorBridge:
             self._controller.conversation.system_prompt = self._default_system_prompt()
         return result
 
+    # ── Token / Model / Mode bridge commands ──
+
+    def _cmd_count_tokens(self, payload: Dict) -> Dict:
+        self._ensure_engine()
+        text = payload.get("text", "")
+        count = self._engine.estimate_tokens(text) if self._engine else len(text) // 4
+        return {"tokens": count}
+
+    def _cmd_get_model_info(self, payload: Dict) -> Dict:
+        self._ensure_engine()
+        from ai_editor.llm_engine import get_model_context, compaction_threshold
+        model = payload.get("model", "") or (self._engine.config.effective_model if self._engine else "")
+        ctx = get_model_context(model)
+        return {"model": model, "max_input": ctx["max_input"],
+                "max_output": ctx["max_output"],
+                "compact_at": compaction_threshold(model)}
+
+    def _cmd_get_mode(self, payload: Dict) -> Dict:
+        from ai_editor.scopes import MODES, effective_permissions
+        return {"mode": "edit", "modes": list(MODES)}
+
+    def _cmd_set_mode(self, payload: Dict) -> Dict:
+        return {"ok": True, "mode": payload.get("mode", "edit")}
+
     # ── Event emitters (called from background thread) ──
 
     def _on_stream_delta(self, msg: ChatMessage, text: str) -> None:
         self._emit("ai_editor_stream_delta", {"content": text})
+
+    def _on_thinking_delta(self, msg: ChatMessage, text: str) -> None:
+        self._emit("ai_editor_thinking_delta", {"content": text})
 
     def _on_stream_end(self, msg: ChatMessage) -> None:
         payload: Dict[str, Any] = {"content": msg.content}
@@ -305,8 +339,15 @@ class AIEditorBridge:
     def _on_tool_start(self, call_id: str, name: str, args: str) -> None:
         self._emit("ai_editor_tool_start", {"id": call_id, "name": name, "arguments": args})
 
-    def _on_tool_end(self, call_id: str, result: str) -> None:
-        self._emit("ai_editor_tool_end", {"id": call_id, "result": result})
+    def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
+        self._emit("ai_editor_tool_end", {"id": call_id, "result": result, "state": state})
+
+    def _on_tool_confirm(self, call_id: str, name: str, args: str) -> bool:
+        self._emit("ai_editor_tool_confirm", {"id": call_id, "name": name, "arguments": args})
+        return True
+
+    def _on_tool_progress(self, call_id: str, name: str, progress: float) -> None:
+        self._emit("ai_editor_tool_progress", {"id": call_id, "name": name, "progress": progress})
 
     def _on_error(self, error: str) -> None:
         self._emit("ai_editor_error", {"error": error})

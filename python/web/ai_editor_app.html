@@ -505,10 +505,6 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
           <input id="model-inp" placeholder="Model name" style="width:100%;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
         </div>
         <div class="sb-group" style="margin-top:8px">Quick Actions</div>
-        <div class="sb-item" onclick="execSlash('/state')">📊 Game State</div>
-        <div class="sb-item" onclick="execSlash('/dps')">⚔ DPS Summary</div>
-        <div class="sb-item" onclick="execSlash('/boss')">👹 Boss Status</div>
-        <div class="sb-item" onclick="execSlash('/entities')">👥 Entity List</div>
         <div class="sb-item" onclick="execSlash('/system')">ℹ System Info</div>
       </div>
     </div>
@@ -1397,13 +1393,12 @@ const SLASH_CMDS=[
   ['/clear','Clear chat'],['/new','New conversation'],['/export','Export to clipboard'],
   ['/settings','Open settings'],['/tools','Show tools sidebar'],['/history','Show history'],
   ['/instructions','Custom instructions'],['/agents','Agents & Workflows'],
-  ['/state','Game state'],['/dps','DPS summary'],['/boss','Boss status'],
-  ['/entities','Entity list'],['/system','System info'],['/eval','Eval Python (usage: /eval expr)'],
+  ['/system','System info'],['/eval','Eval Python (usage: /eval expr)'],
 ];
 
 async function execSlash(raw){
   const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),arg=parts.slice(1).join(' ');
-  const toolMap={'/state':'get_game_state','/dps':'get_dps_summary','/boss':'get_boss_status','/entities':'get_entity_list','/system':'get_system_info'};
+  const toolMap={'/system':'get_system_info'};
   if(cmd==='/clear')clearChat();
   else if(cmd==='/new')newChat();
   else if(cmd==='/export')exportChat();
@@ -2136,7 +2131,7 @@ $('term-input')&&$('term-input').addEventListener('keydown',function(e){
 
 // ── @-mention popup ──
 const AT_VARS=[['@file','Current file name'],['@selection','Selected text in editor'],
-  ['@editor','Full editor content'],['@state','Game state'],['@language','Editor language']];
+  ['@editor','Full editor content'],['@state','Runtime state'],['@language','Editor language']];
 
 let _atPopupTimer=null;
 chatInp.addEventListener('input',function(){
@@ -2242,9 +2237,6 @@ const COMMANDS=[
   {label:'Open Settings',shortcut:'',action:()=>openSettings()},
   {label:'New Tab',shortcut:'',action:()=>addTab()},
   {label:'Upload Image',shortcut:'',action:()=>uploadImage()},
-  {label:'Game State',shortcut:'',action:()=>execSlash('/state')},
-  {label:'DPS Summary',shortcut:'',action:()=>execSlash('/dps')},
-  {label:'Boss Status',shortcut:'',action:()=>execSlash('/boss')},
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
   {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
   {label:'Chat History',shortcut:'',action:()=>{switchSidebar('history');refreshHistory()}},

@@ -43,9 +43,11 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from act_platform.runtime import (
+    act_plugin_action,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_menu,
+    act_plugin_menu_surfaces,
     act_plugin_pin,
     act_plugin_reload,
     act_plugin_status,
@@ -243,7 +245,6 @@ class SAOPlayerGUIMenuMixin:
         ]
 
         tool_items = [
-            {'icon': '⌗', 'label': f'内存浏览器 Mem Scope: {mem_mode_disp}', 'command': self._toggle_mem_scope_panel},
             {'icon': '✦', 'label': 'AI Editor (LLM)', 'command': self._toggle_ai_editor_panel},
         ]
 
@@ -427,25 +428,54 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             return {}
 
+    def _collect_plugin_menu_surfaces(self):
+        data = act_plugin_menu_surfaces(self, 'entity_menu')
+        surfaces = data.get('surfaces') if isinstance(data, dict) else None
+        return surfaces if isinstance(surfaces, list) else []
+
+    def _first_plugin_menu_surface_callable(self, key: str):
+        for surface in self._collect_plugin_menu_surfaces():
+            if not isinstance(surface, Mapping):
+                continue
+            callback = surface.get(key)
+            if callable(callback):
+                return callback
+        return None
+
+    def _notify_plugin_menu_surfaces(self, key: str) -> None:
+        for surface in self._collect_plugin_menu_surfaces():
+            if not isinstance(surface, Mapping):
+                continue
+            callback = surface.get(key)
+            if not callable(callback):
+                continue
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def _dispatch_plugin_action(self, action_id: str, payload: Any = None):
+        return act_plugin_action(self, action_id, payload)
+
     def _get_menu_header(self) -> dict[str, str]:
-        provider = getattr(self, '_plugin_menu_header_provider', None)
+        provider = self._first_plugin_menu_surface_callable('header_provider')
         if callable(provider):
             try:
                 data = provider()
                 if isinstance(data, dict):
-                    username = str(data.get('username') or '').strip()
-                    description = str(data.get('description') or '').strip()
-                    if username or description:
+                    title = str(data.get('title') or '').strip()
+                    subtitle = str(data.get('subtitle') or '').strip()
+                    if title or subtitle:
                         return {
-                            'username': username or 'SAO Auto',
-                            'description': description or 'Platform',
+                            'title': title or 'SAO Auto',
+                            'subtitle': subtitle or 'Platform',
                         }
             except Exception:
                 pass
-        return {'username': 'SAO Auto', 'description': 'Platform'}
+        return {'title': 'SAO Auto', 'subtitle': 'Platform'}
 
     def _get_menu_left_widget_factory(self):
-        factory = getattr(self, '_plugin_menu_left_widget_factory', None)
+        factory = self._first_plugin_menu_surface_callable('left_widget_factory')
         return factory if callable(factory) else None
 
     def _setup_sao_menu(self):
@@ -459,8 +489,8 @@ class SAOPlayerGUIMenuMixin:
 
         self._sao_menu = SAOPopUpMenu(
             self.root, self._menu_icons, self._get_menu_children_cached(force=True),
-            username=header['username'],
-            description=header['description'],
+            username=header['title'],
+            description=header['subtitle'],
             on_close=self._on_sao_menu_close,
             on_open=self._on_sao_menu_open,
             key_code='a',
@@ -558,12 +588,7 @@ class SAOPlayerGUIMenuMixin:
         self._lift_loop_active = False
         # 延迟启动鱼眼叠加 (等菜单渲染完再截图), 带重试确保首次也能生效
         self._start_fisheye_with_retry(retries=5, delay=80)
-        plugin_hook = getattr(self, '_plugin_on_menu_open', None)
-        if callable(plugin_hook):
-            try:
-                plugin_hook()
-            except Exception:
-                pass
+        self._notify_plugin_menu_surfaces('on_open')
         try:
             self.root.after(90, self._restore_entity_menu_state)
         except Exception:
@@ -574,12 +599,7 @@ class SAOPlayerGUIMenuMixin:
         self._lift_loop_active = False
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
-        plugin_hook = getattr(self, '_plugin_on_menu_close', None)
-        if callable(plugin_hook):
-            try:
-                plugin_hook()
-            except Exception:
-                pass
+        self._notify_plugin_menu_surfaces('on_close')
         self._maybe_stop_fisheye()
         if not self._destroyed:
             pass  # 呼吸动画已禁用 (固定位置)

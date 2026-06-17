@@ -19,39 +19,7 @@ logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
 from act_platform.runtime import (
-    act_action_log_copy,
-    act_action_log_filter,
-    act_action_log_jump_to_time,
-    act_action_log_search,
-    act_action_log_status,
-    act_aggregate_status,
-    act_mem_scope_status,
-    act_mem_search,
-    act_mem_search_status,
-    act_mem_narrow,
-    act_mem_search_cancel,
-    act_mem_attr_map,
-    act_combatant_drilldown_back,
-    act_combatant_drilldown_filter,
-    act_combatant_drilldown_focus_target,
-    act_combatant_drilldown_status,
-    act_data_source_diagnose,
-    act_data_source_health,
-    act_death_recap_copy,
-    act_death_recap_status,
-    act_graph_timeseries_export,
-    act_graph_timeseries_filter,
-    act_graph_timeseries_select_metric,
-    act_graph_timeseries_status,
-    act_graph_timeseries_zoom,
-    act_history_delete,
-    act_history_load,
-    act_history_status,
-    act_mini_parse_copy,
-    act_mini_parse_preview,
-    act_mini_parse_status,
-    act_offline_import_file,
-    act_offline_import_status,
+    act_plugin_action,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_hotkeys,
@@ -64,31 +32,9 @@ from act_platform.runtime import (
     act_plugin_set_hotkey,
     act_plugin_status,
     act_plugin_uninstall,
-    act_render_apply_hooks,
-    act_render_overlays,
-    act_render_surfaces,
-    act_report_copy,
-    act_report_export,
-    act_report_status,
-    act_selective_parsing_clear,
-    act_selective_parsing_status,
-    act_selective_parsing_update,
-    act_skill_drilldown_back,
-    act_skill_drilldown_copy,
-    act_skill_drilldown_filter,
-    act_skill_drilldown_status,
-    act_timeline_filter,
-    act_timeline_pause,
-    act_timeline_play,
-    act_timeline_seek,
-    act_timeline_set_speed,
-    act_timeline_status,
-    act_timeline_step,
-    act_trigger_disable,
-    act_trigger_enable,
-    act_trigger_reload,
-    act_trigger_status,
-    act_trigger_test,
+    render_apply_hooks as platform_render_apply_hooks,
+    render_overlays as platform_render_overlays,
+    render_surfaces as platform_render_surfaces,
     ensure_act_event_bus,
     ensure_act_plugin_manager,
 )
@@ -393,16 +339,6 @@ class SettingsManager:
 # ════════════════════════════════════════════════
 #  JS API Bridge
 # ════════════════════════════════════════════════
-def _safe_timeline_speed(value: Any, fallback: float = 1.0) -> float:
-    try:
-        speed = float(value)
-    except (TypeError, ValueError):
-        speed = float(fallback)
-    if not math.isfinite(speed):
-        speed = float(fallback)
-    return max(0.1, min(speed, 8.0))
-
-
 class SAOWebAPI:
     """pywebview js_api — 暴露给 JavaScript 的 Python 接口."""
 
@@ -435,6 +371,76 @@ class SAOWebAPI:
 
     def menu_action(self, action: str):
         threading.Thread(target=self._g._menu_action, args=(action,), daemon=True).start()
+
+    def cmd(self, name: str, payload=None):
+        """Generic WebView command entrypoint for dynamically injected plugin UI.
+
+        Platform-owned commands are handled here. Feature/game commands are
+        forwarded to the registered WebView extension instead of being
+        declared as platform API names.
+        """
+        command = str(name or '').strip()
+        data = self._command_payload(payload)
+        try:
+            return self._dispatch_command(command, data)
+        except Exception as exc:
+            return {'ok': False, 'command': command, 'message': str(exc), 'errors': [str(exc)]}
+
+    def _command_payload(self, payload):
+        if payload is None:
+            return {}
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload or '{}')
+            except Exception:
+                parsed = {}
+            return parsed if isinstance(parsed, dict) else {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _dispatch_command(self, command: str, payload: dict):
+        platform_commands = {
+            'sound.play': lambda p: self.play_sound(p.get('name', '')),
+            'sound.set_enabled': lambda p: self.set_sound_enabled(p.get('enabled', False)),
+            'sound.set_volume': lambda p: self.set_sound_volume(p.get('volume', 70)),
+            'ui.exit': lambda p: self.exit_app(),
+            'ui.toggle_menu': lambda p: self.toggle_menu(),
+            'ui.context_action': lambda p: self.context_action(p.get('action', '')),
+            'ui.menu_action': lambda p: self.menu_action(p.get('action', '')),
+            'ui.window_drag': lambda p: self.window_drag(p.get('dx', 0), p.get('dy', 0)),
+            'ui.set_ctx_menu_active': lambda p: self.set_ctx_menu_active(p.get('active', False), p.get('bounds')),
+            'ui.get_panel_themes': lambda p: self.get_panel_themes(),
+            'ui.set_panel_theme': lambda p: self.set_panel_theme(p.get('panel', ''), p.get('theme', '')),
+            'file.browse_dir': lambda p: self.browse_dir(str(p.get('path', '') or '')),
+            'updater.download': lambda p: self.download_update(),
+            'updater.apply': lambda p: self.apply_update(),
+            'updater.skip': lambda p: self.skip_update(),
+            'plugins.status': lambda p: self.get_plugin_status(),
+            'plugins.list': lambda p: self.list_plugins(),
+            'plugins.enable': lambda p: self.enable_plugin(p.get('plugin_id', '')),
+            'plugins.disable': lambda p: self.disable_plugin(p.get('plugin_id', '')),
+            'plugins.reload': lambda p: self.reload_plugins(p.get('plugin_id', '')),
+            'plugins.pin': lambda p: self.pin_plugin(p.get('plugin_id', ''), p.get('pinned', True)),
+            'plugins.import_dialog': lambda p: self.import_plugin_dialog(),
+            'plugins.import': lambda p: self.import_plugin(p.get('archive_path', '')),
+            'plugins.uninstall': lambda p: self.uninstall_plugin(p.get('plugin_id', '')),
+            'plugins.hotkeys': lambda p: self.get_plugin_hotkeys(),
+            'plugins.set_hotkey': lambda p: self.set_plugin_hotkey(p.get('action', ''), p.get('key', '')),
+            'plugins.render_ui_panel': lambda p: self.render_ui_panel(p.get('panel_id', ''), p.get('payload', '')),
+            'plugins.invoke_ui_action': lambda p: self.invoke_ui_action(p.get('panel_id', ''), p.get('action_id', ''), p.get('payload', '')),
+            'render.surfaces': lambda p: self.render_surfaces(),
+            'render.overlays': lambda p: self.render_overlays(p.get('surface', '')),
+            'render.apply_hooks': lambda p: self.render_apply_hooks(p.get('surface', ''), p.get('payload', '')),
+        }
+        fn = platform_commands.get(command)
+        if callable(fn):
+            return fn(payload)
+
+        extension = getattr(self._g, '_webview_extension', None)
+        for handler_name in ('cmd', 'bridge_call', 'webview_command', 'handle_webview_command'):
+            handler = getattr(extension, handler_name, None)
+            if callable(handler):
+                return handler(command, payload)
+        return {'ok': False, 'command': command, 'message': 'Unknown WebView command'}
 
     def alert_ok(self):
         pass
@@ -470,357 +476,6 @@ class SAOWebAPI:
 
     def exit_app(self):
         threading.Thread(target=self._g._exit_with_animation, daemon=True).start()
-
-    def getDataSourceHealth(self):
-        """Phase 10: webview menu diagnostic — exposes mem_probe / TCP health."""
-        try:
-            return act_data_source_health(self._g)
-        except Exception as e:
-            return {"available": False, "error": str(e)}
-
-    def get_data_source_health(self):
-        return json.dumps(act_data_source_health(self._g), ensure_ascii=False)
-
-    def diagnose_data_source(self):
-        return json.dumps(act_data_source_diagnose(self._g), ensure_ascii=False)
-
-    def copy_data_source_health(self):
-        payload = act_data_source_diagnose(self._g)
-        return json.dumps({
-            'ok': True,
-            'text': json.dumps(payload, ensure_ascii=False, indent=2),
-            'status': payload,
-        }, ensure_ascii=False)
-
-    def get_report_export_status(self, limit=20, fmt='json'):
-        return json.dumps(act_report_status(self._g, limit=int(limit or 20), fmt=str(fmt or 'json')), ensure_ascii=False)
-
-    def export_last_report(self, fmt='json'):
-        return json.dumps(act_report_export(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
-
-    def copy_report_export(self, fmt='json'):
-        return json.dumps(act_report_copy(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
-
-    def get_mini_parse_status(self, formatter_id='summary_table'):
-        return json.dumps(act_mini_parse_status(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
-
-    def preview_mini_parse(self, formatter_id='summary_table'):
-        return json.dumps(act_mini_parse_preview(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
-
-    def copy_mini_parse(self, formatter_id='summary_table'):
-        return json.dumps(act_mini_parse_copy(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
-
-    def get_selective_parsing_status(self):
-        return json.dumps(act_selective_parsing_status(self._g), ensure_ascii=False)
-
-    def update_selective_parsing(self, policy=None):
-        if isinstance(policy, str):
-            try:
-                policy = json.loads(policy or '{}')
-            except Exception:
-                policy = {}
-        return json.dumps(act_selective_parsing_update(self._g, policy if isinstance(policy, dict) else {}), ensure_ascii=False)
-
-    def clear_selective_parsing(self):
-        return json.dumps(act_selective_parsing_clear(self._g), ensure_ascii=False)
-
-    def get_history_status(self, limit=20, query=''):
-        return json.dumps(act_history_status(self._g, limit=int(limit or 20), query=str(query or '')), ensure_ascii=False)
-
-    def load_history_report(self, index=0, show=True):
-        return json.dumps(act_history_load(self._g, index=int(index or 0), show=bool(show)), ensure_ascii=False)
-
-    def delete_history_report(self, index=0):
-        return json.dumps(act_history_delete(self._g, index=int(index or 0)), ensure_ascii=False)
-
-    def clear_history_reports(self):
-        return json.dumps(act_history_delete(self._g, clear=True), ensure_ascii=False)
-
-    def choose_offline_import_file(self):
-        try:
-            _ensure_webview()
-            win = getattr(self._g, 'offline_import_win', None) if getattr(self._g, '_offline_import_visible', False) else None
-            if win is None:
-                win = getattr(self._g, 'report_export_win', None)
-            if win is None:
-                windows = getattr(webview, 'windows', []) if webview is not None else []
-                win = windows[0] if windows else None
-            dialog = getattr(win, 'create_file_dialog', None)
-            if not callable(dialog):
-                raise RuntimeError('File dialog is unavailable')
-            file_types = (
-                'ACT replay/report (*.json;*.jsonl;*.ndjson;*.xml;*.xml.gz;*.xml.zip;*.zip)',
-                'SAO ACT XML report (*.xml;*.xml.gz;*.xml.zip;*.zip)',
-                'JSON (*.json)',
-                'JSONL/NDJSON (*.jsonl;*.ndjson)',
-                'All files (*.*)',
-            )
-            try:
-                paths = dialog(
-                    getattr(webview, 'OPEN_DIALOG', 10),
-                    allow_multiple=False,
-                    file_types=file_types,
-                )
-            except TypeError:
-                paths = dialog(getattr(webview, 'OPEN_DIALOG', 10), '', False, '', file_types)
-            if not paths:
-                return json.dumps({'ok': False, 'cancelled': True, 'path': '', 'message': 'No file selected'}, ensure_ascii=False)
-            path = paths if isinstance(paths, str) else list(paths)[0]
-            return json.dumps({'ok': True, 'path': str(path)}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'path': '', 'message': str(e), 'errors': [str(e)]}, ensure_ascii=False)
-
-    def import_offline_report(self, path, persist=True, show=True):
-        try:
-            result = act_offline_import_file(
-                self._g,
-                str(path or ''),
-                persist=bool(persist),
-                show=bool(show),
-            )
-            return json.dumps(result, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'errors': [str(e)]}, ensure_ascii=False)
-
-    def get_offline_import_status(self, history_limit=20):
-        try:
-            return json.dumps(act_offline_import_status(self._g, history_limit=int(history_limit or 20)), ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'accepted_formats': [], 'selected_file': '', 'progress': 0.0, 'status': 'error', 'last_result': {}, 'history': {}, 'errors': [str(e)]}, ensure_ascii=False)
-
-    def get_timeline_status(self, limit=80, query=''):
-        return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)
-
-    def get_aggregate_status(self, limit=1000, query='', source='live', window_ms=1000, top_n=20, encounter_id='', group_by='skill', group_field=''):
-        return json.dumps(
-            act_aggregate_status(
-                self._g,
-                limit=int(limit or 1000),
-                query=str(query or ''),
-                source=str(source or 'live'),
-                window_ms=int(window_ms or 1000),
-                top_n=int(top_n or 20),
-                encounter_id=str(encounter_id or ''),
-                group_by=str(group_by or 'skill'),
-                group_field=str(group_field or ''),
-            ),
-            ensure_ascii=False,
-        )
-
-    def get_mem_scope_status(self, query='', dtype='i32', job_id=''):
-        return json.dumps(
-            act_mem_scope_status(self._g, query=str(query or ''), dtype=str(dtype or 'i32'),
-                                 job_id=str(job_id or '')),
-            ensure_ascii=False,
-        )
-
-    def mem_search(self, value='', dtype='i32', align=0):
-        return json.dumps(act_mem_search(self._g, value=value, dtype=str(dtype or 'i32'),
-                                         align=int(align or 0)), ensure_ascii=False)
-
-    def mem_search_status(self, job_id=''):
-        return json.dumps(act_mem_search_status(self._g, job_id=str(job_id or '')), ensure_ascii=False)
-
-    def mem_narrow(self, job_id='', value=''):
-        return json.dumps(act_mem_narrow(self._g, job_id=str(job_id or ''), value=value), ensure_ascii=False)
-
-    def mem_search_cancel(self, job_id=''):
-        return json.dumps(act_mem_search_cancel(self._g, job_id=str(job_id or '')), ensure_ascii=False)
-
-    def mem_attr_map(self, ent_addr=''):
-        return json.dumps(act_mem_attr_map(self._g, ent_addr=ent_addr), ensure_ascii=False)
-
-    def play_timeline(self, speed=1.0):
-        return json.dumps(act_timeline_play(self._g, speed=_safe_timeline_speed(speed)), ensure_ascii=False)
-
-    def pause_timeline(self):
-        return json.dumps(act_timeline_pause(self._g), ensure_ascii=False)
-
-    def step_timeline(self, delta_ms=1000):
-        return json.dumps(act_timeline_step(self._g, delta_ms=int(delta_ms or 0)), ensure_ascii=False)
-
-    def seek_timeline(self, cursor_ms=0):
-        return json.dumps(act_timeline_seek(self._g, cursor_ms=int(cursor_ms or 0)), ensure_ascii=False)
-
-    def set_timeline_speed(self, speed=1.0):
-        return json.dumps(act_timeline_set_speed(self._g, speed=_safe_timeline_speed(speed)), ensure_ascii=False)
-
-    def filter_timeline(self, query=''):
-        return json.dumps(act_timeline_filter(self._g, query=str(query or '')), ensure_ascii=False)
-
-    def get_action_log_status(self, limit=80, query='', topic='', cursor_ms=None, source='live', encounter_id='', offset=0):
-        kwargs = {
-            'limit': int(limit or 80),
-            'query': str(query or ''),
-            'topic': str(topic or ''),
-            'source': str(source or 'live'),
-            'encounter_id': str(encounter_id or ''),
-            'offset': int(offset or 0),
-        }
-        if cursor_ms is not None:
-            kwargs['cursor_ms'] = int(cursor_ms or 0)
-        return json.dumps(act_action_log_status(self._g, **kwargs), ensure_ascii=False)
-
-    def search_action_log(self, query='', limit=80, source='live', encounter_id='', offset=0):
-        return json.dumps(act_action_log_search(
-            self._g,
-            query=str(query or ''),
-            limit=int(limit or 80),
-            source=str(source or 'live'),
-            encounter_id=str(encounter_id or ''),
-            offset=int(offset or 0),
-        ), ensure_ascii=False)
-
-    def filter_action_log(self, topic='', query=None, limit=80, source='live', encounter_id='', offset=0):
-        return json.dumps(act_action_log_filter(
-            self._g,
-            topic=str(topic or ''),
-            query=None if query is None else str(query or ''),
-            limit=int(limit or 80),
-            source=str(source or 'live'),
-            encounter_id=str(encounter_id or ''),
-            offset=int(offset or 0),
-        ), ensure_ascii=False)
-
-    def jump_action_log_time(self, cursor_ms=0, limit=80, source='live', encounter_id='', offset=0, topic=None):
-        return json.dumps(act_action_log_jump_to_time(
-            self._g,
-            cursor_ms=int(cursor_ms or 0),
-            limit=int(limit or 80),
-            source=str(source or 'live'),
-            encounter_id=str(encounter_id or ''),
-            offset=int(offset or 0),
-            topic=None if topic is None else str(topic or ''),
-        ), ensure_ascii=False)
-
-    def show_action_log_at(self, cursor_ms=0, source='live', encounter_id='', topic=None):
-        """Ensure the Action Log window is SHOWN (never toggled off) and focus its
-        cursor at cursor_ms — the drill target for graph-point / timeline clicks."""
-        try:
-            if not getattr(self._g, '_action_log_visible', False):
-                self._g._show_action_log()
-        except Exception:
-            pass
-        result = act_action_log_jump_to_time(
-            self._g,
-            cursor_ms=int(cursor_ms or 0),
-            limit=80,
-            source=str(source or 'live'),
-            encounter_id=str(encounter_id or ''),
-            offset=0,
-            topic=None if topic is None else str(topic or ''),
-        )
-        try:
-            self._g._eval_action_log('if(window.ActionLog&&ActionLog.refresh)ActionLog.refresh()')
-        except Exception:
-            pass
-        return json.dumps(result, ensure_ascii=False)
-
-    def copy_action_log(self, limit=80, query='', topic='', source='live', encounter_id='', offset=0):
-        return json.dumps(act_action_log_copy(
-            self._g,
-            limit=int(limit or 80),
-            query=str(query or ''),
-            topic=str(topic or ''),
-            source=str(source or 'live'),
-            encounter_id=str(encounter_id or ''),
-            offset=int(offset or 0),
-        ), ensure_ascii=False)
-
-    def get_death_recap_status(self, limit=80, window_s=8.0, entity_id=None):
-        return json.dumps(
-            act_death_recap_status(
-                self._g,
-                limit=int(limit or 80),
-                window_s=float(window_s or 8.0),
-                entity_id=entity_id,
-            ),
-            ensure_ascii=False,
-        )
-
-    def copy_death_recap(self, limit=80, window_s=8.0, entity_id=None):
-        return json.dumps(
-            act_death_recap_copy(
-                self._g,
-                limit=int(limit or 80),
-                window_s=float(window_s or 8.0),
-                entity_id=entity_id,
-            ),
-            ensure_ascii=False,
-        )
-
-    def get_graph_timeseries_status(self, metric=None, limit=120, query=None, topic=None, time_range_ms=None):
-        kwargs = {'limit': int(limit or 120)}
-        if metric is not None:
-            kwargs['metric'] = str(metric or '')
-        if query is not None:
-            kwargs['query'] = str(query or '')
-        if topic is not None:
-            kwargs['topic'] = str(topic or '')
-        if time_range_ms is not None:
-            kwargs['time_range_ms'] = int(time_range_ms or 0)
-        return json.dumps(act_graph_timeseries_status(self._g, **kwargs), ensure_ascii=False)
-
-    def select_graph_metric(self, metric='damage', limit=120):
-        return json.dumps(act_graph_timeseries_select_metric(self._g, metric=str(metric or 'damage'), limit=int(limit or 120)), ensure_ascii=False)
-
-    def zoom_graph_timeseries(self, time_range_ms=0, limit=120):
-        return json.dumps(act_graph_timeseries_zoom(self._g, time_range_ms=int(time_range_ms or 0), limit=int(limit or 120)), ensure_ascii=False)
-
-    def filter_graph_timeseries(self, query=None, topic=None, limit=120):
-        return json.dumps(act_graph_timeseries_filter(self._g, query=None if query is None else str(query or ''), topic=None if topic is None else str(topic or ''), limit=int(limit or 120)), ensure_ascii=False)
-
-    def export_graph_timeseries(self, metric=None, limit=120, query=None, topic=None):
-        return json.dumps(act_graph_timeseries_export(self._g, metric=None if metric is None else str(metric or ''), limit=int(limit or 120), query=None if query is None else str(query or ''), topic=None if topic is None else str(topic or '')), ensure_ascii=False)
-
-    def get_combatant_drilldown_status(self, combatant_id=None, query=None, focus_target=None):
-        return json.dumps(act_combatant_drilldown_status(self._g, combatant_id=combatant_id, query=query, focus_target=focus_target), ensure_ascii=False)
-
-    def filter_combatant_drilldown(self, combatant_id=None, query=''):
-        return json.dumps(act_combatant_drilldown_filter(self._g, combatant_id=combatant_id, query=str(query or '')), ensure_ascii=False)
-
-    def focus_combatant_target(self, combatant_id=None, target_id=''):
-        return json.dumps(act_combatant_drilldown_focus_target(self._g, combatant_id=combatant_id, target_id=str(target_id or '')), ensure_ascii=False)
-
-    def back_combatant_drilldown(self):
-        return json.dumps(act_combatant_drilldown_back(self._g), ensure_ascii=False)
-
-    def get_skill_drilldown_status(self, combatant_id=None, skill_id=None, query=None, limit=80):
-        return json.dumps(act_skill_drilldown_status(self._g, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=int(limit or 80)), ensure_ascii=False)
-
-    def filter_skill_drilldown(self, combatant_id=None, skill_id=None, query='', limit=80):
-        return json.dumps(act_skill_drilldown_filter(self._g, combatant_id=combatant_id, skill_id=skill_id, query=str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
-
-    def copy_skill_drilldown(self, combatant_id=None, skill_id=None, query=None, limit=80):
-        return json.dumps(act_skill_drilldown_copy(self._g, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=int(limit or 80)), ensure_ascii=False)
-
-    def back_skill_drilldown(self):
-        return json.dumps(act_skill_drilldown_back(self._g), ensure_ascii=False)
-
-    def open_skill_drilldown(self, combatant_id=None, skill_id=None):
-        """Open the Skill Drilldown window focused on (combatant_id, skill_id).
-
-        Webview parity for the entity combatant `_open_skill` -> SkillDrilldown
-        select path: clicking a combatant skill row must actually OPEN the skill
-        window and show that skill (the user's '点开进不去')."""
-        cid = str(combatant_id or '')
-        sid = str(skill_id or '')
-        try:
-            if not getattr(self._g, '_skill_drilldown_visible', False):
-                self._g._show_skill_drilldown()
-        except Exception:
-            pass
-        status = act_skill_drilldown_status(self._g, combatant_id=cid or None, skill_id=sid or None, query=None, limit=80)
-        try:
-            js = (
-                "(function(){var c=document.getElementById('combatantId'),s=document.getElementById('skillId');"
-                "if(c)c.value=" + json.dumps(cid) + ";if(s)s.value=" + json.dumps(sid) + ";"
-                "if(window.SkillDrilldown&&SkillDrilldown.refresh)SkillDrilldown.refresh();})()"
-            )
-            self._g._eval_skill_drilldown(js)
-        except Exception:
-            pass
-        return json.dumps(status, ensure_ascii=False)
 
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
@@ -858,145 +513,22 @@ class SAOWebAPI:
     def set_plugin_hotkey(self, action, key=''):
         return json.dumps(act_plugin_set_hotkey(self._g, str(action or ''), str(key or '')), ensure_ascii=False)
 
-    def act_render_overlays(self, surface):
-        return json.dumps(act_render_overlays(self._g, str(surface or '')), ensure_ascii=False)
+    def render_overlays(self, surface):
+        return json.dumps(platform_render_overlays(self._g, str(surface or '')), ensure_ascii=False)
 
-    def act_render_apply_hooks(self, surface, payload=''):
-        return json.dumps(act_render_apply_hooks(self._g, str(surface or ''), payload), ensure_ascii=False)
+    def render_apply_hooks(self, surface, payload=''):
+        return json.dumps(platform_render_apply_hooks(self._g, str(surface or ''), payload), ensure_ascii=False)
 
-    def act_render_surfaces(self):
-        return json.dumps(act_render_surfaces(self._g), ensure_ascii=False)
-
-    def get_trigger_status(self):
-        return json.dumps(act_trigger_status(self._g), ensure_ascii=False)
-
-    def enable_trigger(self, rule_id):
-        return json.dumps(act_trigger_enable(self._g, str(rule_id or '')), ensure_ascii=False)
-
-    def disable_trigger(self, rule_id):
-        return json.dumps(act_trigger_disable(self._g, str(rule_id or '')), ensure_ascii=False)
-
-    def reload_triggers(self):
-        return json.dumps(act_trigger_reload(self._g), ensure_ascii=False)
-
-    def test_trigger(self, rule_id):
-        return json.dumps(act_trigger_test(self._g, str(rule_id or '')), ensure_ascii=False)
+    def render_surfaces(self):
+        return json.dumps(platform_render_surfaces(self._g), ensure_ascii=False)
 
     def toggle_plugin_manager(self):
-        """Show/hide the ACT plugin manager overlay."""
+        """Show/hide the plugin manager overlay."""
         def _do():
             if self._g._plugin_manager_visible:
                 self._g._hide_plugin_manager()
             else:
                 self._g._show_plugin_manager()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_trigger_timer_manager(self):
-        """Show/hide the ACT trigger/timer manager overlay."""
-        def _do():
-            if self._g._trigger_timer_manager_visible:
-                self._g._hide_trigger_timer_manager()
-            else:
-                self._g._show_trigger_timer_manager()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_data_source_health(self):
-        """Show/hide the ACT data-source health overlay."""
-        def _do():
-            if self._g._data_source_health_visible:
-                self._g._hide_data_source_health()
-            else:
-                self._g._show_data_source_health()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_report_export(self):
-        """Show/hide the ACT report/export overlay."""
-        def _do():
-            if self._g._report_export_visible:
-                self._g._hide_report_export()
-            else:
-                self._g._show_report_export()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_offline_import(self):
-        """Show/hide the ACT offline import wizard overlay."""
-        def _do():
-            if self._g._offline_import_visible:
-                self._g._hide_offline_import()
-            else:
-                self._g._show_offline_import()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_timeline_vcr(self):
-        """Show/hide the ACT timeline/VCR overlay."""
-        def _do():
-            if self._g._timeline_vcr_visible:
-                self._g._hide_timeline_vcr()
-            else:
-                self._g._show_timeline_vcr()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_act_aggregate(self):
-        """Show/hide the ACT semantic aggregate cockpit overlay."""
-        def _do():
-            if self._g._act_aggregate_visible:
-                self._g._hide_act_aggregate()
-            else:
-                self._g._show_act_aggregate()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_mem_scope(self):
-        """Show/hide the memory-scan explorer (Mem Scope) overlay."""
-        def _do():
-            if self._g._mem_scope_visible:
-                self._g._hide_mem_scope()
-            else:
-                self._g._show_mem_scope()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_action_log(self):
-        """Show/hide the ACT action-log overlay."""
-        def _do():
-            if self._g._action_log_visible:
-                self._g._hide_action_log()
-            else:
-                self._g._show_action_log()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_death_recap(self):
-        """Show/hide the ACT death-recap overlay."""
-        def _do():
-            if self._g._death_recap_visible:
-                self._g._hide_death_recap()
-            else:
-                self._g._show_death_recap()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_graph_timeseries(self):
-        """Show/hide the ACT graph/timeseries overlay."""
-        def _do():
-            if self._g._graph_timeseries_visible:
-                self._g._hide_graph_timeseries()
-            else:
-                self._g._show_graph_timeseries()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_combatant_drilldown(self):
-        """Show/hide the ACT combatant drilldown overlay."""
-        def _do():
-            if self._g._combatant_drilldown_visible:
-                self._g._hide_combatant_drilldown()
-            else:
-                self._g._show_combatant_drilldown()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def toggle_skill_drilldown(self):
-        """Show/hide the ACT skill drilldown overlay."""
-        def _do():
-            if self._g._skill_drilldown_visible:
-                self._g._hide_skill_drilldown()
-            else:
-                self._g._show_skill_drilldown()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1056,11 +588,7 @@ class SAOWebAPI:
         """返回当前面板主题设置 (JS 调用获取初始主题)."""
         try:
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
-            defaults = {
-                'hp': 'dark',
-                'alert': 'dark',
-                'act': 'dark',
-            }
+            defaults = {}
             plugin_defaults = self._g._dispatch_webview_extension('panel_theme_defaults', default={}) or {}
             if isinstance(plugin_defaults, dict):
                 defaults.update({
@@ -1071,50 +599,28 @@ class SAOWebAPI:
             defaults.update({k: v for k, v in themes.items() if v in ('light', 'dark')})
             return defaults
         except Exception:
-            return {'hp': 'dark', 'alert': 'dark', 'act': 'dark'}
+            return {}
 
     def set_panel_theme(self, panel: str, theme: str):
         """从 JS 端设置面板主题并保存."""
         try:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
-            allowed = {'hp', 'alert', 'act'}
+            allowed = set()
             plugin_allowed = self._g._dispatch_webview_extension('panel_theme_keys', default=()) or ()
             allowed.update(str(item) for item in plugin_allowed)
+            cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
+            allowed.update(str(item) for item in (cfg.get('panel_themes', {}) or {}).keys())
             if panel not in allowed:
                 return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)
             if theme not in {'light', 'dark'}:
                 theme = 'dark'
-            cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
             themes = dict(cfg.get('panel_themes', {}))
             themes[panel] = theme
             cfg.set('panel_themes', themes)
             cfg.save()
             self._g._dispatch_webview_extension('on_panel_theme_changed', panel, theme)
-            # 即时推送到对应 webview 面板窗口
-            _win_map = {
-                'hp': getattr(self._g, 'hp_win', None),
-                'alert': getattr(self._g, 'alert_win', None),
-            }
-            _act_wins = (
-                getattr(self._g, 'plugin_manager_win', None),
-                getattr(self._g, 'trigger_timer_win', None),
-                getattr(self._g, 'data_source_health_win', None),
-                getattr(self._g, 'report_export_win', None),
-                getattr(self._g, 'offline_import_win', None),
-                getattr(self._g, 'timeline_vcr_win', None),
-                getattr(self._g, 'act_aggregate_win', None),
-                getattr(self._g, 'mem_scope_win', None),
-                getattr(self._g, 'action_log_win', None),
-                getattr(self._g, 'death_recap_win', None),
-                getattr(self._g, 'graph_timeseries_win', None),
-                getattr(self._g, 'combatant_drilldown_win', None),
-                getattr(self._g, 'skill_drilldown_win', None),
-            )
-            if panel == 'act':
-                targets = _act_wins
-            else:
-                targets = (_win_map.get(panel) or self._g._plugin_surface_win(panel),)
+            targets = self._g._plugin_surface_theme_targets(panel)
             for w in targets:
                 if w:
                     try:
@@ -1317,7 +823,6 @@ class SAOWebViewGUI:
         self._recog_lock = threading.Lock()  # 保护 _recognition_active 切换
 
         # 菜单
-        self._sta_detector_started = False
         self._menu_visible = False
 
         # 窗口
@@ -1330,57 +835,9 @@ class SAOWebViewGUI:
         self._plugin_surface_meta = {}
         self._plugin_surface_order = []
 
-        # ACT Plugin Manager panel
+        # Plugin manager panel
         self.plugin_manager_win = None
         self._plugin_manager_visible = False
-
-        # ACT Trigger/Timer Manager panel
-        self.trigger_timer_win = None
-        self._trigger_timer_manager_visible = False
-
-        # ACT Data Source Health panel
-        self.data_source_health_win = None
-        self._data_source_health_visible = False
-
-        # ACT Report/Export panel
-        self.report_export_win = None
-        self._report_export_visible = False
-
-        # ACT Offline Import panel
-        self.offline_import_win = None
-        self._offline_import_visible = False
-
-        # ACT Timeline/VCR panel
-        self.timeline_vcr_win = None
-        self._timeline_vcr_visible = False
-
-        # ACT Semantic Aggregate cockpit panel
-        self.act_aggregate_win = None
-        self._act_aggregate_visible = False
-
-        # Mem Scope — memory-scan explorer panel
-        self.mem_scope_win = None
-        self._mem_scope_visible = False
-
-        # ACT Action Log panel
-        self.action_log_win = None
-        self._action_log_visible = False
-
-        # ACT Death Recap panel
-        self.death_recap_win = None
-        self._death_recap_visible = False
-
-        # ACT Graph/Timeseries panel
-        self.graph_timeseries_win = None
-        self._graph_timeseries_visible = False
-
-        # ACT Combatant Drilldown panel
-        self.combatant_drilldown_win = None
-        self._combatant_drilldown_visible = False
-
-        # ACT Skill Drilldown panel
-        self.skill_drilldown_win = None
-        self._skill_drilldown_visible = False
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -1413,7 +870,6 @@ class SAOWebViewGUI:
         self._hp_mouse_passthrough_started = False
         self._hp_mouse_passthrough = None
         self._alert_hwnd = 0
-        self._sta_pixel_detector_enabled = False
         self._hp_viewport_offset_x = 0
         self._hp_viewport_offset_y = 0
         self._fisheye_active = False
@@ -1517,6 +973,8 @@ class SAOWebViewGUI:
         merged = dict(self._plugin_surface_meta.get(key, {}) or {})
         merged.update(meta)
         merged['title'] = title
+        merged.setdefault('theme_key', key)
+        merged.setdefault('plugin_layer', True)
         self._plugin_surface_meta[key] = merged
         if key not in self._plugin_surface_order:
             self._plugin_surface_order.append(key)
@@ -1555,6 +1013,24 @@ class SAOWebViewGUI:
             win = self._plugin_surfaces.get(surface)
             if win:
                 yield win, surface
+
+    def _plugin_surface_theme_targets(self, theme_key: str):
+        key = str(theme_key or '').strip().lower()
+        if not key:
+            return []
+        targets = []
+        seen = set()
+        for win, surface in self._plugin_surface_items():
+            meta = self._plugin_surface_meta.get(surface, {}) or {}
+            current = str(meta.get('theme_key') or surface or '').strip().lower()
+            if current != key:
+                continue
+            token = id(win)
+            if token in seen:
+                continue
+            seen.add(token)
+            targets.append(win)
+        return targets
 
     def _eval_plugin_surface(self, surface: str, js: str):
         try:
@@ -1759,7 +1235,7 @@ class SAOWebViewGUI:
         if not preserve_packet:
             self._packet_engine = None
         self._vision_engine = None
-        self._dispatch_webview_extension('_reset_sta_offline_state')
+        self._dispatch_webview_extension('on_recognition_changed', bool(self._recognition_active))
         self._vision_paused_for_death = False
         self._last_dead_state = False
         if not preserve_packet:
@@ -1805,13 +1281,22 @@ class SAOWebViewGUI:
         self._hp_target_x = tx0
         self._hp_target_y = ty0
 
-        self.menu_win = webview.create_window(
-            'SAO Menu', menu_url,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            js_api=self._api,
+        self.menu_win = self._register_plugin_surface(
+            'menu',
+            webview.create_window(
+                'SAO Menu', menu_url,
+                frameless=True,
+                easy_drag=False,
+                transparent=True,
+                hidden=True,
+                js_api=self._api,
+            ),
+            'SAO Menu',
+            dotnet_transparency=False,
+            click_through=False,
+            on_top=True,
+            surface_group='platform',
+            theme_key='menu',
         )
 
         self._dispatch_webview_extension(
@@ -1824,238 +1309,31 @@ class SAOWebViewGUI:
             _sh,
         )
 
-        # ACT Plugin Manager — center, shared API with Entity plugin panel
+        # Plugin manager — center, shared API with plugin-owned panels
         plugin_manager_url = _web_file_uri('plugin_manager.html')
         _pm_w = max(620, int(min(_sw, 1920) * 0.38))
         _pm_h = max(520, int(min(_sh, 1080) * 0.52))
         _pm_x = max(16, int(monitor_left + (_sw - _pm_w) / 2))
         _pm_y = max(24, int(monitor_top + (_sh - _pm_h) * 0.20))
-        self.plugin_manager_win = webview.create_window(
-            'SAO-PluginManager', plugin_manager_url,
-            width=_pm_w, height=_pm_h,
-            x=_pm_x, y=_pm_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
+        self.plugin_manager_win = self._register_plugin_surface(
+            'plugin_manager',
+            webview.create_window(
+                'SAO-PluginManager', plugin_manager_url,
+                width=_pm_w, height=_pm_h,
+                x=_pm_x, y=_pm_y,
+                frameless=True,
+                easy_drag=False,
+                transparent=True,
+                hidden=True,
+                on_top=True,
+                js_api=self._api,
+            ),
+            'SAO-PluginManager',
+            click_through=False,
             on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Trigger/Timer Manager — same API surface as Entity/Tk panel
-        trigger_timer_url = _webview_extension_or_web_file_uri(self, 'trigger_timer_manager.html')
-        _tt_w = max(640, int(min(_sw, 1920) * 0.40))
-        _tt_h = max(520, int(min(_sh, 1080) * 0.52))
-        _tt_x = max(16, int(monitor_left + (_sw - _tt_w) * 0.58))
-        _tt_y = max(24, int(monitor_top + (_sh - _tt_h) * 0.23))
-        self.trigger_timer_win = webview.create_window(
-            'SAO-TriggerTimerManager', trigger_timer_url,
-            width=_tt_w, height=_tt_h,
-            x=_tt_x, y=_tt_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Data Source Health — observability panel for PacketBridge + memory fallback
-        data_source_health_url = _webview_extension_or_web_file_uri(self, 'data_source_health.html')
-        _dh_w = max(640, int(min(_sw, 1920) * 0.40))
-        _dh_h = max(500, int(min(_sh, 1080) * 0.50))
-        _dh_x = max(16, int(monitor_left + (_sw - _dh_w) * 0.45))
-        _dh_y = max(24, int(monitor_top + (_sh - _dh_h) * 0.28))
-        self.data_source_health_win = webview.create_window(
-            'SAO-DataSourceHealth', data_source_health_url,
-            width=_dh_w, height=_dh_h,
-            x=_dh_x, y=_dh_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Report/Export — shared report exporter surface for WebView + Entity parity
-        report_export_url = _webview_extension_or_web_file_uri(self, 'act_report_export.html')
-        _re_w = max(680, int(min(_sw, 1920) * 0.42))
-        _re_h = max(520, int(min(_sh, 1080) * 0.52))
-        _re_x = max(16, int(monitor_left + (_sw - _re_w) * 0.40))
-        _re_y = max(24, int(monitor_top + (_sh - _re_h) * 0.24))
-        self.report_export_win = webview.create_window(
-            'SAO-ReportExport', report_export_url,
-            width=_re_w, height=_re_h,
-            x=_re_x, y=_re_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Offline Import — standalone import/history playback wizard
-        offline_import_url = _webview_extension_or_web_file_uri(self, 'act_offline_import.html')
-        _oi_w = max(700, int(min(_sw, 1920) * 0.44))
-        _oi_h = max(520, int(min(_sh, 1080) * 0.52))
-        _oi_x = max(16, int(monitor_left + (_sw - _oi_w) * 0.42))
-        _oi_y = max(24, int(monitor_top + (_sh - _oi_h) * 0.26))
-        self.offline_import_win = webview.create_window(
-            'SAO-OfflineImport', offline_import_url,
-            width=_oi_w, height=_oi_h,
-            x=_oi_x, y=_oi_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Timeline/VCR — shared event timeline controls for WebView parity
-        timeline_vcr_url = _webview_extension_or_web_file_uri(self, 'act_timeline_vcr.html')
-        _tl_w = max(700, int(min(_sw, 1920) * 0.43))
-        _tl_h = max(520, int(min(_sh, 1080) * 0.52))
-        _tl_x = max(16, int(monitor_left + (_sw - _tl_w) * 0.34))
-        _tl_y = max(24, int(monitor_top + (_sh - _tl_h) * 0.18))
-        self.timeline_vcr_win = webview.create_window(
-            'SAO-TimelineVCR', timeline_vcr_url,
-            width=_tl_w, height=_tl_h,
-            x=_tl_x, y=_tl_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Semantic Aggregate — cockpit parity with Entity/Tk aggregate panel
-        act_aggregate_url = _webview_extension_or_web_file_uri(self, 'act_aggregate.html')
-        _ag_w = max(820, int(min(_sw, 1920) * 0.54))
-        _ag_h = max(620, int(min(_sh, 1080) * 0.62))
-        _ag_x = max(16, int(monitor_left + (_sw - _ag_w) * 0.25))
-        _ag_y = max(22, int(monitor_top + (_sh - _ag_h) * 0.14))
-        self.act_aggregate_win = webview.create_window(
-            'SAO-ActAggregate', act_aggregate_url,
-            width=_ag_w, height=_ag_h,
-            x=_ag_x, y=_ag_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # Mem Scope — memory-scan explorer (CE-lite), parity with Entity panel
-        mem_scope_url = _web_file_uri('mem_scope.html')
-        _ms_w = max(780, int(min(_sw, 1920) * 0.52))
-        _ms_h = max(620, int(min(_sh, 1080) * 0.62))
-        _ms_x = max(16, int(monitor_left + (_sw - _ms_w) * 0.30))
-        _ms_y = max(22, int(monitor_top + (_sh - _ms_h) * 0.12))
-        self.mem_scope_win = webview.create_window(
-            'SAO-MemScope', mem_scope_url,
-            width=_ms_w, height=_ms_h,
-            x=_ms_x, y=_ms_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Action Log — searchable EventBus table for WebView parity
-        action_log_url = _webview_extension_or_web_file_uri(self, 'act_action_log.html')
-        _al_w = max(760, int(min(_sw, 1920) * 0.48))
-        _al_h = max(520, int(min(_sh, 1080) * 0.54))
-        _al_x = max(16, int(monitor_left + (_sw - _al_w) * 0.30))
-        _al_y = max(24, int(monitor_top + (_sh - _al_h) * 0.20))
-        self.action_log_win = webview.create_window(
-            'SAO-ActionLog', action_log_url,
-            width=_al_w, height=_al_h,
-            x=_al_x, y=_al_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Death Recap — death-window report surface for WebView parity
-        death_recap_url = _webview_extension_or_web_file_uri(self, 'act_death_recap.html')
-        _dr_w = max(720, int(min(_sw, 1920) * 0.44))
-        _dr_h = max(500, int(min(_sh, 1080) * 0.50))
-        _dr_x = max(18, int(monitor_left + (_sw - _dr_w) * 0.32))
-        _dr_y = max(26, int(monitor_top + (_sh - _dr_h) * 0.23))
-        self.death_recap_win = webview.create_window(
-            'SAO-DeathRecap', death_recap_url,
-            width=_dr_w, height=_dr_h,
-            x=_dr_x, y=_dr_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Graph/Timeseries — rich chart surface for WebView parity
-        graph_timeseries_url = _webview_extension_or_web_file_uri(self, 'act_graph_timeseries.html')
-        _gt_w = max(780, int(min(_sw, 1920) * 0.50))
-        _gt_h = max(540, int(min(_sh, 1080) * 0.55))
-        _gt_x = max(16, int(monitor_left + (_sw - _gt_w) * 0.27))
-        _gt_y = max(24, int(monitor_top + (_sh - _gt_h) * 0.22))
-        self.graph_timeseries_win = webview.create_window(
-            'SAO-GraphTimeseries', graph_timeseries_url,
-            width=_gt_w, height=_gt_h,
-            x=_gt_x, y=_gt_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Combatant Drilldown — per-combatant detail surface
-        combatant_drilldown_url = _webview_extension_or_web_file_uri(self, 'act_combatant_drilldown.html')
-        _cd_w = max(720, int(min(_sw, 1920) * 0.46))
-        _cd_h = max(520, int(min(_sh, 1080) * 0.54))
-        _cd_x = max(20, int(monitor_left + (_sw - _cd_w) * 0.31))
-        _cd_y = max(28, int(monitor_top + (_sh - _cd_h) * 0.25))
-        self.combatant_drilldown_win = webview.create_window(
-            'SAO-CombatantDrilldown', combatant_drilldown_url,
-            width=_cd_w, height=_cd_h,
-            x=_cd_x, y=_cd_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # ACT Skill Drilldown — per-skill detail and timeline refs
-        skill_drilldown_url = _webview_extension_or_web_file_uri(self, 'act_skill_drilldown.html')
-        _sd_w = max(720, int(min(_sw, 1920) * 0.45))
-        _sd_h = max(500, int(min(_sh, 1080) * 0.52))
-        _sd_x = max(24, int(monitor_left + (_sw - _sd_w) * 0.34))
-        _sd_y = max(32, int(monitor_top + (_sh - _sd_h) * 0.28))
-        self.skill_drilldown_win = webview.create_window(
-            'SAO-SkillDrilldown', skill_drilldown_url,
-            width=_sd_w, height=_sd_h,
-            x=_sd_x, y=_sd_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
+            surface_group='plugins',
+            theme_key='plugin_manager',
+            visible_attr='_plugin_manager_visible',
         )
 
         webview.start(self._on_webview_started, debug=False)
@@ -2318,14 +1596,6 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
-        # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
-        # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
-        try:
-            menu_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
-            if menu_hwnd:
-                _make_transparent_ctypes(menu_hwnd)
-        except Exception:
-            pass
         self._apply_plugin_surfaces_transparency()
 
     def _reassert_hp_transparency(self, alpha: float = 1.0, retries: int = 4, delay: float = 0.18):
@@ -2437,44 +1707,16 @@ class SAOWebViewGUI:
         threading.Thread(target=_loop, daemon=True).start()
 
     def _default_hp_display_regions(self):
-        """Fallback display regions when JS layout data is not ready yet."""
+        """Fallback display regions contributed by the active plugin."""
         try:
             win_w = int(getattr(self, '_win_w_phys', 0) or 0)
             win_h = int(getattr(self, '_win_h_phys', 0) or 0)
             if win_w <= 0 or win_h <= 0:
                 return []
             viewport_h = max(1, win_h - int(getattr(self, '_hp_viewport_offset_y', 0) or 0))
-            stage_width = int(win_w * 0.75)
-
-            def _rect(left, top, width, height):
-                return {
-                    'left': int(left),
-                    'top': int(top),
-                    'width': int(max(0, width)),
-                    'height': int(max(0, height)),
-                }
-
-            id_w = int(stage_width * 0.42)
-            id_h = 136
-            id_left = int(stage_width * 0.01)
-            id_top = viewport_h - 146
-
-            hp_w = int(stage_width * 0.34)
-            hp_h = 118
-            hp_left = int(stage_width * 0.48)
-            hp_top = viewport_h - 112
-
-            sta_w = int(stage_width * 0.30)
-            sta_h = 38
-            sta_left = int(stage_width * 0.53)
-            sta_top = viewport_h - 42
-
-            return [
-                _rect(id_left, id_top, id_w, id_h),
-                _rect(hp_left - 44, hp_top - 18, hp_w + 88, hp_h + 36),
-                _rect(hp_left, hp_top, hp_w, hp_h),
-                _rect(sta_left, sta_top, sta_w, sta_h),
-            ]
+            regions = self._dispatch_webview_extension(
+                'build_default_display_regions', win_w, win_h, viewport_h, default=None)
+            return regions if isinstance(regions, list) else []
         except Exception:
             return []
 
@@ -2581,31 +1823,17 @@ class SAOWebViewGUI:
 
         在 position guard 中周期性调用.
         """
-        _panels = [
-            ('SAO-PluginManager', '_plugin_manager_visible', None),
-            ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
-            ('SAO-DataSourceHealth', '_data_source_health_visible', None),
-            ('SAO-ReportExport', '_report_export_visible', None),
-            ('SAO-OfflineImport', '_offline_import_visible', None),
-            ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
-            ('SAO-ActionLog', '_action_log_visible', None),
-            ('SAO-DeathRecap', '_death_recap_visible', None),
-            ('SAO-GraphTimeseries', '_graph_timeseries_visible', None),
-            ('SAO-CombatantDrilldown', '_combatant_drilldown_visible', None),
-            ('SAO-SkillDrilldown', '_skill_drilldown_visible', None),
-        ]
-        user32 = ctypes.windll.user32
-        for title, vis_attr, hwnd_attr in _panels:
+        for win, surface in list(self._plugin_surface_items()):
             try:
-                if getattr(self, vis_attr, False):
-                    continue  # 面板已显示, 不干预
-                hwnd = getattr(self, hwnd_attr, 0) if hwnd_attr else 0
-                if not hwnd:
-                    hwnd = user32.FindWindowW(None, title)
-                    if hwnd and hwnd_attr:
-                        setattr(self, hwnd_attr, hwnd)
+                meta = self._plugin_surface_meta.get(surface, {}) or {}
+                vis_attr = str(meta.get('visible_attr') or '').strip()
+                if not vis_attr or getattr(self, vis_attr, False):
+                    continue
+                title = self._plugin_surface_title(surface)
+                hwnd = self._plugin_surface_hwnd(surface)
                 if not hwnd:
                     continue
+                user32 = ctypes.windll.user32
                 ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
                 if not (ex & _WS_EX_TRANSPARENT):
                     user32.SetWindowLongW(
@@ -3069,27 +2297,19 @@ class SAOWebViewGUI:
 
         Injecting ``plugin_layer.js`` into each window gives plugins a universal
         overlay layer (and, for opt-in pages, render-hook taps) on the main UI
-        and every floating window — not just the ACT panels.
+        and every floating window — not just plugin-owned panels.
         """
-        g = self
-        items = [
-            (getattr(g, 'hp_win', None), 'hp'),
-            (getattr(g, 'menu_win', None), 'menu'),
-            (getattr(g, 'alert_win', None), 'alert'),
-            (getattr(g, 'trigger_timer_win', None), 'trigger_timer'),
-            (getattr(g, 'data_source_health_win', None), 'data_source_health'),
-            (getattr(g, 'report_export_win', None), 'report_export'),
-            (getattr(g, 'offline_import_win', None), 'offline_import'),
-            (getattr(g, 'timeline_vcr_win', None), 'timeline_vcr'),
-            (getattr(g, 'act_aggregate_win', None), 'act_aggregate'),
-            (getattr(g, 'mem_scope_win', None), 'mem_scope'),
-            (getattr(g, 'action_log_win', None), 'action_log'),
-            (getattr(g, 'death_recap_win', None), 'death_recap'),
-            (getattr(g, 'graph_timeseries_win', None), 'graph_timeseries'),
-            (getattr(g, 'combatant_drilldown_win', None), 'combatant_drilldown'),
-            (getattr(g, 'skill_drilldown_win', None), 'skill_drilldown'),
-        ]
-        items.extend(list(self._plugin_surface_items()))
+        items = []
+        seen = set()
+        for win, surface in self._plugin_surface_items():
+            meta = self._plugin_surface_meta.get(surface, {}) or {}
+            if not bool(meta.get('plugin_layer', True)):
+                continue
+            token = id(win)
+            if token in seen:
+                continue
+            seen.add(token)
+            items.append((win, surface))
         return items
 
     def _plugin_layer_source(self):
@@ -3202,18 +2422,14 @@ class SAOWebViewGUI:
             self._set_plugin_surface_icon('hp')
             self._set_window_icon('SAO Menu')
             self._set_window_icon('SAO-PluginManager')
-            self._set_window_icon('SAO-TriggerTimerManager')
-            self._set_window_icon('SAO-DataSourceHealth')
-            self._set_window_icon('SAO-ReportExport')
-            self._set_window_icon('SAO-OfflineImport')
+            for _, surface in list(self._plugin_surface_items()):
+                meta = self._plugin_surface_meta.get(surface, {}) or {}
+                if meta.get('surface_group') == 'plugin':
+                    self._set_plugin_surface_icon(surface)
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             try:
                 self._wait_and_apply_click_through('SAO-PluginManager', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-DataSourceHealth', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-ReportExport', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-OfflineImport', timeout=0.5)
             except Exception:
                 pass
             try:
@@ -3225,99 +2441,15 @@ class SAOWebViewGUI:
             except Exception:
                 pass
             try:
-                self._trigger_timer_manager_visible = False
-                if self.trigger_timer_win:
-                    self._set_window_alpha('SAO-TriggerTimerManager', 0.0)
-                    self.trigger_timer_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._data_source_health_visible = False
-                if self.data_source_health_win:
-                    self._set_window_alpha('SAO-DataSourceHealth', 0.0)
-                    self.data_source_health_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._report_export_visible = False
-                if self.report_export_win:
-                    self._set_window_alpha('SAO-ReportExport', 0.0)
-                    self.report_export_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._offline_import_visible = False
-                if self.offline_import_win:
-                    self._set_window_alpha('SAO-OfflineImport', 0.0)
-                    self.offline_import_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._timeline_vcr_visible = False
-                if self.timeline_vcr_win:
-                    self._set_window_alpha('SAO-TimelineVCR', 0.0)
-                    self.timeline_vcr_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._act_aggregate_visible = False
-                if self.act_aggregate_win:
-                    self._set_window_alpha('SAO-ActAggregate', 0.0)
-                    self.act_aggregate_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._mem_scope_visible = False
-                if self.mem_scope_win:
-                    self._set_window_alpha('SAO-MemScope', 0.0)
-                    self.mem_scope_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._action_log_visible = False
-                if self.action_log_win:
-                    self._set_window_alpha('SAO-ActionLog', 0.0)
-                    self.action_log_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._death_recap_visible = False
-                if self.death_recap_win:
-                    self._set_window_alpha('SAO-DeathRecap', 0.0)
-                    self.death_recap_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._graph_timeseries_visible = False
-                if self.graph_timeseries_win:
-                    self._set_window_alpha('SAO-GraphTimeseries', 0.0)
-                    self.graph_timeseries_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._combatant_drilldown_visible = False
-                if self.combatant_drilldown_win:
-                    self._set_window_alpha('SAO-CombatantDrilldown', 0.0)
-                    self.combatant_drilldown_win.hide()
-                    self._ensure_hidden_panels_passthrough()
-            except Exception:
-                pass
-            try:
-                self._skill_drilldown_visible = False
-                if self.skill_drilldown_win:
-                    self._set_window_alpha('SAO-SkillDrilldown', 0.0)
-                    self.skill_drilldown_win.hide()
-                    self._ensure_hidden_panels_passthrough()
+                for win, surface in list(self._plugin_surface_items()):
+                    meta = self._plugin_surface_meta.get(surface, {}) or {}
+                    if meta.get('surface_group') != 'plugin' or not meta.get('visible_attr'):
+                        continue
+                    setattr(self, str(meta.get('visible_attr')), False)
+                    self._set_plugin_surface_alpha(surface, 0.0)
+                    if win:
+                        win.hide()
+                self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
@@ -3332,7 +2464,6 @@ class SAOWebViewGUI:
         threading.Thread(target=self._save_position_loop, daemon=True).start()
         self._setup_hotkeys()
 
-    # ─── 识别引擎 ───
     def _start_recognition(self):
         """启动游戏数据引擎 (抓包 + 纯识图)"""
         try:
@@ -3376,18 +2507,13 @@ class SAOWebViewGUI:
             import traceback; traceback.print_exc()
             self._recognition_active = False
 
-    def _start_sta_pixel_detector(self, cfg_settings):
-        """Removed: stamina now updates through the main vision engine only."""
-        self._sta_detector_started = False
-        return
-
     def _toggle_recognition(self):
         """切换识别开关 — 线程安全"""
         with self._recog_lock:
             self._recognition_active = not self._recognition_active
             state = "ON" if self._recognition_active else "OFF"
             if not self._recognition_active:
-                self._dispatch_webview_extension('_reset_sta_offline_state')
+                self._dispatch_webview_extension('on_recognition_changed', bool(self._recognition_active))
         self._eval_menu(f'SAO.showToast("识别: {state}")')
 
 
@@ -3664,690 +2790,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._plugin_manager_visible = False
-
-    # ── ACT Trigger/Timer Manager panel ──
-
-    def _eval_trigger_timer_manager(self, js):
-        try:
-            if self.trigger_timer_win:
-                self.trigger_timer_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_trigger_timer_manager_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the trigger/timer manager receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-TriggerTimerManager')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_trigger_timer_manager(self):
-        try:
-            if self.trigger_timer_win and not self._trigger_timer_manager_visible:
-                self._set_window_alpha('SAO-TriggerTimerManager', 0.0)
-                self.trigger_timer_win.show()
-                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.fadeIn)TriggerTimerManager.fadeIn()')
-                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.refresh)TriggerTimerManager.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-TriggerTimerManager', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._trigger_timer_manager_visible = True
-                self._ensure_trigger_timer_manager_clickable()
-                threading.Timer(0.5, self._ensure_trigger_timer_manager_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_trigger_timer_manager(self):
-        try:
-            if self.trigger_timer_win and self._trigger_timer_manager_visible:
-                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.fadeOut)TriggerTimerManager.fadeOut()')
-                def _finish():
-                    try:
-                        if self.trigger_timer_win:
-                            self.trigger_timer_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._trigger_timer_manager_visible = False
-
-    # ── ACT Data Source Health panel ──
-
-    def _eval_data_source_health(self, js):
-        try:
-            if self.data_source_health_win:
-                self.data_source_health_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_data_source_health_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the data-source health panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DataSourceHealth')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_data_source_health(self):
-        try:
-            if self.data_source_health_win and not self._data_source_health_visible:
-                self._set_window_alpha('SAO-DataSourceHealth', 0.0)
-                self.data_source_health_win.show()
-                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.fadeIn)DataSourceHealth.fadeIn()')
-                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.refresh)DataSourceHealth.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-DataSourceHealth', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._data_source_health_visible = True
-                self._ensure_data_source_health_clickable()
-                threading.Timer(0.5, self._ensure_data_source_health_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_data_source_health(self):
-        try:
-            if self.data_source_health_win and self._data_source_health_visible:
-                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.fadeOut)DataSourceHealth.fadeOut()')
-                def _finish():
-                    try:
-                        if self.data_source_health_win:
-                            self.data_source_health_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._data_source_health_visible = False
-
-    # ── ACT Report/Export panel ──
-
-    def _eval_report_export(self, js):
-        try:
-            if self.report_export_win:
-                self.report_export_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_report_export_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the report/export panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ReportExport')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_report_export(self):
-        try:
-            if self.report_export_win and not self._report_export_visible:
-                self._set_window_alpha('SAO-ReportExport', 0.0)
-                self.report_export_win.show()
-                self._eval_report_export('if(window.ReportExport&&ReportExport.fadeIn)ReportExport.fadeIn()')
-                self._eval_report_export('if(window.ReportExport&&ReportExport.refresh)ReportExport.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-ReportExport', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._report_export_visible = True
-                self._ensure_report_export_clickable()
-                threading.Timer(0.5, self._ensure_report_export_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_report_export(self):
-        try:
-            if self.report_export_win and self._report_export_visible:
-                self._eval_report_export('if(window.ReportExport&&ReportExport.fadeOut)ReportExport.fadeOut()')
-                def _finish():
-                    try:
-                        if self.report_export_win:
-                            self.report_export_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._report_export_visible = False
-
-    # ── ACT Offline Import panel ──
-
-    def _eval_offline_import(self, js):
-        try:
-            if self.offline_import_win:
-                self.offline_import_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_offline_import_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the offline-import panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-OfflineImport')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_offline_import(self):
-        try:
-            if self.offline_import_win and not self._offline_import_visible:
-                self._set_window_alpha('SAO-OfflineImport', 0.0)
-                self.offline_import_win.show()
-                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.fadeIn)OfflineImport.fadeIn()')
-                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.refresh)OfflineImport.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-OfflineImport', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._offline_import_visible = True
-                self._ensure_offline_import_clickable()
-                threading.Timer(0.5, self._ensure_offline_import_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_offline_import(self):
-        try:
-            if self.offline_import_win and self._offline_import_visible:
-                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.fadeOut)OfflineImport.fadeOut()')
-                def _finish():
-                    try:
-                        if self.offline_import_win:
-                            self.offline_import_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._offline_import_visible = False
-
-    # ── ACT Timeline/VCR panel ──
-
-    def _eval_timeline_vcr(self, js):
-        try:
-            if self.timeline_vcr_win:
-                self.timeline_vcr_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_timeline_vcr_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the timeline/VCR panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-TimelineVCR')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_timeline_vcr(self):
-        try:
-            if self.timeline_vcr_win and not self._timeline_vcr_visible:
-                self._set_window_alpha('SAO-TimelineVCR', 0.0)
-                self.timeline_vcr_win.show()
-                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.fadeIn)TimelineVcr.fadeIn()')
-                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.refresh)TimelineVcr.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-TimelineVCR', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._timeline_vcr_visible = True
-                self._ensure_timeline_vcr_clickable()
-                threading.Timer(0.5, self._ensure_timeline_vcr_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_timeline_vcr(self):
-        try:
-            if self.timeline_vcr_win and self._timeline_vcr_visible:
-                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.fadeOut)TimelineVcr.fadeOut()')
-                def _finish():
-                    try:
-                        if self.timeline_vcr_win:
-                            self.timeline_vcr_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._timeline_vcr_visible = False
-
-    # ── ACT Semantic Aggregate panel ──
-
-    def _eval_act_aggregate(self, js):
-        try:
-            if self.act_aggregate_win:
-                self.act_aggregate_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_act_aggregate_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the aggregate cockpit receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ActAggregate')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_act_aggregate(self):
-        try:
-            if self.act_aggregate_win and not self._act_aggregate_visible:
-                self._set_window_alpha('SAO-ActAggregate', 0.0)
-                self.act_aggregate_win.show()
-                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.fadeIn)ActAggregate.fadeIn()')
-                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.refresh)ActAggregate.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-ActAggregate', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._act_aggregate_visible = True
-                self._ensure_act_aggregate_clickable()
-                threading.Timer(0.5, self._ensure_act_aggregate_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_act_aggregate(self):
-        try:
-            if self.act_aggregate_win and self._act_aggregate_visible:
-                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.fadeOut)ActAggregate.fadeOut()')
-                def _finish():
-                    try:
-                        if self.act_aggregate_win:
-                            self.act_aggregate_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._act_aggregate_visible = False
-
-    # ── Mem Scope panel ──
-
-    def _eval_mem_scope(self, js):
-        try:
-            if self.mem_scope_win:
-                self.mem_scope_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_mem_scope_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the mem scope panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-MemScope')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_mem_scope(self):
-        try:
-            if self.mem_scope_win and not self._mem_scope_visible:
-                self._set_window_alpha('SAO-MemScope', 0.0)
-                self.mem_scope_win.show()
-                self._eval_mem_scope('if(window.MemScope&&MemScope.fadeIn)MemScope.fadeIn()')
-                self._eval_mem_scope('if(window.MemScope&&MemScope.refresh)MemScope.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-MemScope', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._mem_scope_visible = True
-                self._ensure_mem_scope_clickable()
-                threading.Timer(0.5, self._ensure_mem_scope_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_mem_scope(self):
-        try:
-            if self.mem_scope_win and self._mem_scope_visible:
-                self._eval_mem_scope('if(window.MemScope&&MemScope.fadeOut)MemScope.fadeOut()')
-                def _finish():
-                    try:
-                        if self.mem_scope_win:
-                            self.mem_scope_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._mem_scope_visible = False
-
-    # ── ACT Action Log panel ──
-
-    def _eval_action_log(self, js):
-        try:
-            if self.action_log_win:
-                self.action_log_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_action_log_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the action-log panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ActionLog')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_action_log(self):
-        try:
-            if self.action_log_win and not self._action_log_visible:
-                self._set_window_alpha('SAO-ActionLog', 0.0)
-                self.action_log_win.show()
-                self._eval_action_log('if(window.ActionLog&&ActionLog.fadeIn)ActionLog.fadeIn()')
-                self._eval_action_log('if(window.ActionLog&&ActionLog.refresh)ActionLog.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-ActionLog', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._action_log_visible = True
-                self._ensure_action_log_clickable()
-                threading.Timer(0.5, self._ensure_action_log_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_action_log(self):
-        try:
-            if self.action_log_win and self._action_log_visible:
-                self._eval_action_log('if(window.ActionLog&&ActionLog.fadeOut)ActionLog.fadeOut()')
-                def _finish():
-                    try:
-                        if self.action_log_win:
-                            self.action_log_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._action_log_visible = False
-
-    # ── ACT Death Recap panel ──
-
-    def _eval_death_recap(self, js):
-        try:
-            if self.death_recap_win:
-                self.death_recap_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_death_recap_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the death-recap panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DeathRecap')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_death_recap(self):
-        try:
-            if self.death_recap_win and not self._death_recap_visible:
-                self._set_window_alpha('SAO-DeathRecap', 0.0)
-                self.death_recap_win.show()
-                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.fadeIn)DeathRecap.fadeIn()')
-                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.refresh)DeathRecap.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-DeathRecap', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._death_recap_visible = True
-                self._ensure_death_recap_clickable()
-                threading.Timer(0.5, self._ensure_death_recap_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_death_recap(self):
-        try:
-            if self.death_recap_win and self._death_recap_visible:
-                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.fadeOut)DeathRecap.fadeOut()')
-                def _finish():
-                    try:
-                        if self.death_recap_win:
-                            self.death_recap_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._death_recap_visible = False
-
-    # ── ACT Graph/Timeseries panel ──
-
-    def _eval_graph_timeseries(self, js):
-        try:
-            if self.graph_timeseries_win:
-                self.graph_timeseries_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_graph_timeseries_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the graph/timeseries panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-GraphTimeseries')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_graph_timeseries(self):
-        try:
-            if self.graph_timeseries_win and not self._graph_timeseries_visible:
-                self._set_window_alpha('SAO-GraphTimeseries', 0.0)
-                self.graph_timeseries_win.show()
-                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.fadeIn)GraphTimeseries.fadeIn()')
-                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.refresh)GraphTimeseries.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-GraphTimeseries', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._graph_timeseries_visible = True
-                self._ensure_graph_timeseries_clickable()
-                threading.Timer(0.5, self._ensure_graph_timeseries_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_graph_timeseries(self):
-        try:
-            if self.graph_timeseries_win and self._graph_timeseries_visible:
-                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.fadeOut)GraphTimeseries.fadeOut()')
-                def _finish():
-                    try:
-                        if self.graph_timeseries_win:
-                            self.graph_timeseries_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._graph_timeseries_visible = False
-
-    # ── ACT Combatant Drilldown panel ──
-
-    def _eval_combatant_drilldown(self, js):
-        try:
-            if self.combatant_drilldown_win:
-                self.combatant_drilldown_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_combatant_drilldown_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the combatant drilldown panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-CombatantDrilldown')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_combatant_drilldown(self):
-        try:
-            if self.combatant_drilldown_win and not self._combatant_drilldown_visible:
-                self._set_window_alpha('SAO-CombatantDrilldown', 0.0)
-                self.combatant_drilldown_win.show()
-                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.fadeIn)CombatantDrilldown.fadeIn()')
-                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.refresh)CombatantDrilldown.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-CombatantDrilldown', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._combatant_drilldown_visible = True
-                self._ensure_combatant_drilldown_clickable()
-                threading.Timer(0.5, self._ensure_combatant_drilldown_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_combatant_drilldown(self):
-        try:
-            if self.combatant_drilldown_win and self._combatant_drilldown_visible:
-                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.fadeOut)CombatantDrilldown.fadeOut()')
-                def _finish():
-                    try:
-                        if self.combatant_drilldown_win:
-                            self.combatant_drilldown_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._combatant_drilldown_visible = False
-
-    # ── ACT Skill Drilldown panel ──
-
-    def _eval_skill_drilldown(self, js):
-        try:
-            if self.skill_drilldown_win:
-                self.skill_drilldown_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_skill_drilldown_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the skill drilldown panel receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-SkillDrilldown')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_skill_drilldown(self):
-        try:
-            if self.skill_drilldown_win and not self._skill_drilldown_visible:
-                self._set_window_alpha('SAO-SkillDrilldown', 0.0)
-                self.skill_drilldown_win.show()
-                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.fadeIn)SkillDrilldown.fadeIn()')
-                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.refresh)SkillDrilldown.refresh()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-SkillDrilldown', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._skill_drilldown_visible = True
-                self._ensure_skill_drilldown_clickable()
-                threading.Timer(0.5, self._ensure_skill_drilldown_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_skill_drilldown(self):
-        try:
-            if self.skill_drilldown_win and self._skill_drilldown_visible:
-                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.fadeOut)SkillDrilldown.fadeOut()')
-                def _finish():
-                    try:
-                        if self.skill_drilldown_win:
-                            self.skill_drilldown_win.hide()
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.25, _finish).start()
-        except Exception:
-            pass
-        self._skill_drilldown_visible = False
 
     def _get_window_monitor_work_area(self, title: str):
         try:
@@ -4642,22 +3084,13 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-PluginManager', duration_ms=140, steps=8)
         except Exception:
             pass
-        try:
-            self._native_fade_window('SAO-TriggerTimerManager', duration_ms=140, steps=8)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-DataSourceHealth', duration_ms=140, steps=8)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-ReportExport', duration_ms=140, steps=8)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-OfflineImport', duration_ms=140, steps=8)
-        except Exception:
-            pass
+        for _, surface in list(self._plugin_surface_items()):
+            try:
+                meta = self._plugin_surface_meta.get(surface, {}) or {}
+                if meta.get('surface_group') == 'plugin':
+                    self._native_fade_plugin_surface(surface, duration_ms=140, steps=8)
+            except Exception:
+                pass
 
         try:
             self._destroy_all_panels()
@@ -4685,71 +3118,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._destroy_plugin_surfaces()
-        try:
-            if self.plugin_manager_win:
-                self.plugin_manager_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.trigger_timer_win:
-                self.trigger_timer_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.data_source_health_win:
-                self.data_source_health_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.report_export_win:
-                self.report_export_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.offline_import_win:
-                self.offline_import_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.timeline_vcr_win:
-                self.timeline_vcr_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.act_aggregate_win:
-                self.act_aggregate_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.mem_scope_win:
-                self.mem_scope_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.action_log_win:
-                self.action_log_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.death_recap_win:
-                self.death_recap_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.graph_timeseries_win:
-                self.graph_timeseries_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.combatant_drilldown_win:
-                self.combatant_drilldown_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.skill_drilldown_win:
-                self.skill_drilldown_win.destroy()
-        except Exception:
-            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # UI 切换也走新进程: 动画结束后立即拉起 Entity, 不再等待 webview.start() 返回.
@@ -5008,8 +3376,7 @@ class SAOWebViewGUI:
     def _sync_menu_info(self):
         info = self._dispatch_webview_extension('build_menu_info', default=None)
         if not isinstance(info, dict):
-            info = {'username': '', 'level': '', 'profession': '',
-                    'hp': '--', 'sta': '--', 'des': '', 'file': ''}
+            info = {}
         self._eval_menu(f'SAO.updateInfo({json.dumps(info, ensure_ascii=False)})')
         # Sync menu settings (watched slots, sound, mode, etc.)
         self._sync_menu_settings()
@@ -5148,16 +3515,8 @@ class SAOWebViewGUI:
             try:
                 cfg['panel_themes'] = self._api.get_panel_themes()
             except Exception:
-                cfg['panel_themes'] = {
-                    'hp': 'dark',
-                    'alert': 'dark',
-                    'act': 'dark',
-                }
+                cfg['panel_themes'] = {}
             cfg['plugin_manager_visible'] = bool(self._plugin_manager_visible)
-            cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
-            cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
-            cfg['report_export_visible'] = bool(self._report_export_visible)
-            cfg['offline_import_visible'] = bool(self._offline_import_visible)
             plugin_cfg = self._dispatch_webview_extension('build_menu_settings', default={}) or {}
             if isinstance(plugin_cfg, dict):
                 cfg.update(plugin_cfg)
@@ -5184,23 +3543,17 @@ class SAOWebViewGUI:
             'toggle_recognition': self._toggle_recognition,
             'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
             'toggle_plugin_manager': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
-            'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
-            'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
-            'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
-            'toggle_offline_import': lambda: (self._show_offline_import() if not self._offline_import_visible else self._hide_offline_import()),
-            'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
-            'toggle_act_aggregate': lambda: (self._show_act_aggregate() if not self._act_aggregate_visible else self._hide_act_aggregate()),
-            'toggle_mem_scope': lambda: (self._show_mem_scope() if not self._mem_scope_visible else self._hide_mem_scope()),
-            'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
-            'toggle_death_recap': lambda: (self._show_death_recap() if not self._death_recap_visible else self._hide_death_recap()),
-            'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
-            'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
-            'toggle_skill_drilldown': lambda: (self._show_skill_drilldown() if not self._skill_drilldown_visible else self._hide_skill_drilldown()),
             'show_license_panel': self._show_license_panel_from_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
-        fn = _map.get(action) or (lambda: self._dispatch_webview_extension('menu_action', action))
+        def _plugin_action():
+            result = act_plugin_action(self, action)
+            if not isinstance(result, dict) or not result.get('ok'):
+                return self._dispatch_webview_extension('menu_action', action)
+            return result
+
+        fn = _map.get(action) or _plugin_action
         if fn:
             threading.Thread(target=fn, daemon=True).start()
 

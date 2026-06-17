@@ -82,9 +82,11 @@ _RUNTIME_ACTION_ALIASES: dict[str, str] = {
     "ui_panels": "act_plugin_ui_panels",
     "ui_render": "act_plugin_ui_render",
     "ui_action": "act_plugin_ui_action",
-    "render_surfaces": "act_render_surfaces",
-    "render_apply_hooks": "act_render_apply_hooks",
-    "render_overlays": "act_render_overlays",
+    "plugin_action": "act_plugin_action",
+    "menu_surfaces": "act_plugin_menu_surfaces",
+    "render_surfaces": "render_surfaces",
+    "render_apply_hooks": "render_apply_hooks",
+    "render_overlays": "render_overlays",
 }
 
 
@@ -743,6 +745,23 @@ class PluginContext:
         }
         return ext_id
 
+    def register_menu_surface(self, surface_id: str,
+                              descriptor: Mapping[str, Any],
+                              priority: float = 0.0) -> str:
+        """Register plugin-owned content for a generic host menu surface.
+
+        ``descriptor`` may contain callbacks such as ``header_provider``,
+        ``left_widget_factory``, ``on_open`` and ``on_close``. The platform
+        stores the descriptor opaquely and invokes callbacks without knowing
+        the plugin's domain schema.
+        """
+        return self._manager._register_menu_surface(
+            self._record.plugin_id, surface_id, descriptor, priority)
+
+    def register_action_handler(self, handler: Callable[[str, Mapping[str, Any]], Any]) -> str:
+        """Register an opaque action dispatcher for this plugin."""
+        return self._manager._register_action_handler(self._record.plugin_id, handler)
+
     def register_engine(self, name: str, engine: Any) -> None:
         """Register a named engine that the platform and other plugins can query.
 
@@ -1056,6 +1075,10 @@ class PluginManager:
         self._initial_loaded = False
         #: Plugin-contributed menu categories: ext_id -> {plugin_id, name, icon, builder, priority}.
         self._menu_categories: Dict[str, dict[str, Any]] = {}
+        #: Plugin-contributed generic menu surfaces.
+        self._menu_surfaces: Dict[str, dict[str, Any]] = {}
+        #: plugin_id -> opaque action handler.
+        self._action_handlers: Dict[str, Callable[[str, Mapping[str, Any]], Any]] = {}
         #: Plugin-contributed named engines: engine_name -> engine_instance.
         self._plugin_engines: Dict[str, Any] = {}
         #: Reverse map engine_name -> plugin_id for cleanup on unload.
@@ -1324,6 +1347,65 @@ class PluginManager:
             if rec and rec.loaded and rec.active and rec.enabled:
                 active[ext_id] = dict(cat)
         return dict(sorted(active.items(), key=lambda kv: float(kv[1].get("priority") or 0)))
+
+    def _register_menu_surface(self, plugin_id: str, surface_id: str,
+                               descriptor: Mapping[str, Any],
+                               priority: float = 0.0) -> str:
+        surface_key = _safe_id(surface_id) or _safe_id(f"{plugin_id}_surface")
+        if not surface_key:
+            raise ValueError(f"invalid menu surface id: {surface_id!r}")
+        item = dict(descriptor or {}) if isinstance(descriptor, Mapping) else {}
+        item["plugin_id"] = str(plugin_id or "")
+        item["surface_id"] = surface_key
+        item["priority"] = float(priority or item.get("priority") or 0.0)
+        self._menu_surfaces[f"{plugin_id}:{surface_key}"] = item
+        return surface_key
+
+    def get_menu_surfaces(self, surface_id: str = "") -> list[dict[str, Any]]:
+        surface_key = _safe_id(surface_id) if surface_id else ""
+        active: list[dict[str, Any]] = []
+        for item in self._menu_surfaces.values():
+            pid = str(item.get("plugin_id") or "")
+            rec = self._records.get(pid)
+            if rec is None or not rec.loaded or not rec.active or not rec.enabled:
+                continue
+            if surface_key and str(item.get("surface_id") or "") != surface_key:
+                continue
+            active.append(dict(item))
+        active.sort(key=lambda item: float(item.get("priority") or 0.0))
+        return active
+
+    def _register_action_handler(self, plugin_id: str,
+                                 handler: Callable[[str, Mapping[str, Any]], Any]) -> str:
+        if not callable(handler):
+            raise TypeError("action handler must be callable")
+        self._action_handlers[str(plugin_id or "")] = handler
+        return str(plugin_id or "")
+
+    def dispatch_plugin_action(self, action_id: str,
+                               payload: Optional[Mapping[str, Any]] = None,
+                               plugin_id: str = "") -> dict[str, Any]:
+        action = str(action_id or "")
+        if not action:
+            return {"ok": False, "message": "action id is required", "errors": ["action id is required"]}
+        candidates = [str(plugin_id or "")] if plugin_id else list(self._action_handlers)
+        errors: list[str] = []
+        for pid in candidates:
+            handler = self._action_handlers.get(pid)
+            rec = self._records.get(pid)
+            if not callable(handler) or rec is None or not rec.loaded or not rec.active or not rec.enabled:
+                continue
+            try:
+                result = handler(action, copy.deepcopy(dict(payload or {})))
+            except Exception as exc:
+                self._record_failure(pid, exc)
+                errors.append(str(exc))
+                continue
+            if result is None:
+                continue
+            return {"ok": True, "plugin_id": pid, "action_id": action,
+                    "result": _json_safe(result), "errors": []}
+        return {"ok": False, "action_id": action, "message": "no plugin handled action", "errors": errors}
 
     def list_data_sources(self) -> list[dict[str, Any]]:
         """Return all plugin-contributed data sources with their status."""
@@ -1926,6 +2008,11 @@ class PluginManager:
         stale_cats = [k for k, v in self._menu_categories.items() if str(v.get("plugin_id") or "") == str(plugin_id or "")]
         for k in stale_cats:
             self._menu_categories.pop(k, None)
+        # Drop plugin-contributed menu surfaces and action dispatchers.
+        stale_surfaces = [k for k, v in self._menu_surfaces.items() if str(v.get("plugin_id") or "") == str(plugin_id or "")]
+        for k in stale_surfaces:
+            self._menu_surfaces.pop(k, None)
+        self._action_handlers.pop(str(plugin_id or ""), None)
         # Drop plugin-contributed engines.
         stale_eng = [k for k, pid in self._plugin_engine_owners.items() if pid == str(plugin_id or "")]
         for k in stale_eng:

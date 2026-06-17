@@ -247,7 +247,7 @@ class ActAggregateTests(unittest.TestCase):
         with (
             mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status,
             mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_graph_timeseries_status", return_value={"ok": True}),
-            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.act_render_apply_hooks", return_value={"ok": False}),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_act_aggregate.render_apply_hooks", return_value={"ok": False}),
         ):
             aggregate_status.return_value = {"ok": True, "overview": {}, "raw_counts": {}, "groups": []}
             panel.refresh()

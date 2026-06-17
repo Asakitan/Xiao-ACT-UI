@@ -123,11 +123,59 @@ function assert(cond, message) {
   if (!cond) throw new Error(message);
 }
 
+function assertForbiddenPlatformTokens(source, tokens, label) {
+  for (const token of tokens) {
+    assert(!source.includes(token), `${label} still contains plugin-owned token: ${token}`);
+  }
+}
+
 (async function main() {
   assert(window.pywebview && window.pywebview.api, "pywebview api was not installed");
   const apiNames = Array.from(shim.matchAll(/^\s*([A-Za-z0-9_]+):\s*function\s*\(/gm), (match) => match[1]);
   const duplicateNames = Array.from(new Set(apiNames.filter((name, index) => apiNames.indexOf(name) !== index)));
   assert(duplicateNames.length === 0, "duplicate pywebview api methods: " + duplicateNames.join(", "));
+  assertForbiddenPlatformTokens(shim, [
+    "set_buffmon_enabled:",
+    "get_buffmon_enabled:",
+    "set_auto_key_server_url:",
+    "get_auto_key_state:",
+    "set_boss_raid_server_url:",
+    "get_boss_raid_state:",
+    "raid_next_phase:",
+    "raid_reset:",
+    "boss_raid_start:",
+    "boss_raid_stop:",
+    "toggle_autokey_editor:",
+    "toggle_raid_editor:",
+    "SAO-HP",
+    "SAO Alert",
+    "MapBanner",
+    "MechBanner",
+    "BossRaid",
+    "AutoKey",
+    "BuffMon",
+    "Star Resonance",
+    "星痕",
+  ], "platform shim");
+  for (const platformReservedName of [
+    "set_boss_bar_mode:",
+    "show_last_dps_report:",
+    "get_entity_detail:",
+    "request_live_snapshot:",
+    "toggle_trigger_timer_manager:",
+    "toggle_data_source_health:",
+    "get_death_recap_status:",
+    "get_aggregate_status:",
+    "get_mem_scope_status:",
+    "get_action_log_status:",
+    "get_graph_timeseries_status:",
+    "get_combatant_drilldown_status:",
+    "get_skill_drilldown_status:",
+    "get_trigger_status:",
+  ]) {
+    assert(!shim.includes(platformReservedName), "platform shim still reserves plugin API name: " + platformReservedName);
+    assert(srMenu.includes(platformReservedName), "Star Resonance plugin should own API name: " + platformReservedName);
+  }
 
   await window.pywebview.api.get_aggregate_status(1000, "hit", "history", 500, 7, "enc-1", "field", "skill_id");
   let last = calls[calls.length - 1];
@@ -531,41 +579,41 @@ function assert(cond, message) {
 
   await window.pywebview.api.enable_plugin("plugin-1");
   last = calls[calls.length - 1];
-  assert(last.name === "act.plugins.enable", "enable_plugin command mismatch");
+  assert(last.name === "plugins.enable", "enable_plugin command mismatch");
   assert(last.payload.plugin_id === "plugin-1", "enable_plugin plugin_id was not forwarded");
 
   await window.pywebview.api.pin_plugin("plugin-1", false);
   last = calls[calls.length - 1];
-  assert(last.name === "act.plugins.pin", "pin_plugin command mismatch");
+  assert(last.name === "plugins.pin", "pin_plugin command mismatch");
   assert(last.payload.plugin_id === "plugin-1", "pin_plugin plugin_id was not forwarded");
   assert(last.payload.pinned === false, "pin_plugin pinned flag was not forwarded");
 
   await window.pywebview.api.invoke_ui_action("panel-1", "open", "{\"ok\":true}");
   last = calls[calls.length - 1];
-  assert(last.name === "act.plugins.invoke_ui_action", "invoke_ui_action command mismatch");
+  assert(last.name === "plugins.invoke_ui_action", "invoke_ui_action command mismatch");
   assert(last.payload.panel_id === "panel-1", "invoke_ui_action panel_id was not forwarded");
   assert(last.payload.action_id === "open", "invoke_ui_action action_id was not forwarded");
 
   await window.pywebview.api.render_ui_panel("panel-2", { filter: "boss" });
   last = calls[calls.length - 1];
-  assert(last.name === "act.plugins.render_ui_panel", "render_ui_panel command mismatch");
+  assert(last.name === "plugins.render_ui_panel", "render_ui_panel command mismatch");
   assert(last.payload.payload.filter === "boss", "render_ui_panel object payload was not preserved");
 
   await window.pywebview.api.invoke_ui_action("panel-2", "apply", { threshold: 7 });
   last = calls[calls.length - 1];
-  assert(last.name === "act.plugins.invoke_ui_action", "invoke_ui_action object command mismatch");
+  assert(last.name === "plugins.invoke_ui_action", "invoke_ui_action object command mismatch");
   assert(last.payload.payload.threshold === 7, "invoke_ui_action object payload was not preserved");
 
-  await window.pywebview.api.act_render_overlays("dps");
+  await window.pywebview.api.render_overlays("dps");
   last = calls[calls.length - 1];
-  assert(last.name === "act.render.overlays", "act_render_overlays command mismatch");
-  assert(last.payload.surface === "dps", "act_render_overlays surface was not forwarded");
+  assert(last.name === "render.overlays", "render_overlays command mismatch");
+  assert(last.payload.surface === "dps", "render_overlays surface was not forwarded");
 
-  await window.pywebview.api.act_render_apply_hooks("dps", { total: 99 });
+  await window.pywebview.api.render_apply_hooks("dps", { total: 99 });
   last = calls[calls.length - 1];
-  assert(last.name === "act.render.apply_hooks", "act_render_apply_hooks command mismatch");
-  assert(last.payload.surface === "dps", "act_render_apply_hooks surface was not forwarded");
-  assert(last.payload.payload.total === 99, "act_render_apply_hooks object payload was not preserved");
+  assert(last.name === "render.apply_hooks", "render_apply_hooks command mismatch");
+  assert(last.payload.surface === "dps", "render_apply_hooks surface was not forwarded");
+  assert(last.payload.payload.total === 99, "render_apply_hooks object payload was not preserved");
 
   await window.pywebview.api.open_skill_drilldown("1001", "slash-7");
   last = calls[calls.length - 1];
@@ -589,8 +637,8 @@ function assert(cond, message) {
 
   const pluginLayer = read("web/plugin_layer.js");
   assert(!pluginLayer.includes('window.bridge.cmd("act." + name, { args: args || [] })'), "plugin layer still sends bare bridge args");
-  assert(pluginLayer.includes('name: "act.plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to act.plugins.invoke_ui_action");
-  assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
+  assert(pluginLayer.includes('name: "plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to plugins.invoke_ui_action");
+  assert(pluginLayer.includes('name: "render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
   assert(pluginLayer.includes(".splg-tablewrap{max-width:100%;overflow-x:auto;"), "plugin layer table wrapper should scroll wide plugin tables");
   for (const snippet of [
     "fill.style.width = (Math.max(0, Math.min(1, +node.pct || 0))",
@@ -700,7 +748,7 @@ function assert(cond, message) {
   const dpsPanel = read("web/dps.html");
   assert(dpsPanel.includes("sk.skill_name || sk.name || sk.skill_id"), "DPS detail should render C# skill name fields");
   assert(!shim.includes("var numericUid = Number(uid || 0);"), "pywebview shim must not coerce DPS entity uid to Number");
-  assert(shim.includes("var uidText = String(uid == null ? '' : uid).trim();"), "pywebview shim should preserve DPS entity uid as a string");
+  assert(srMenu.includes("var uidText = String(uid == null ? '' : uid).trim();"), "Star Resonance plugin shim extension should preserve DPS entity uid as a string");
   assert(!shim.includes("var volume = parseInt(volumePct, 10);"), "pywebview shim must not pass raw volume integers");
   assert(shim.includes("function clampNumber(value, fallback, lo, hi)"), "pywebview shim should provide a numeric clamp helper");
   assert(shim.includes("function clampInt(value, fallback, lo, hi)"), "pywebview shim should provide an integer clamp helper");

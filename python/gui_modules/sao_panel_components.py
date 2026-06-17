@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Reusable SAO-style Tk components for Entity panels.
 
-Centralized so every ACT floating panel (aggregate cockpit, action log, death
-recap, timeline VCR, graph timeseries) shares one visual language. All colors
+Centralized so every floating panel shares one visual language. All colors
 come from the live ``sao_panel_ui`` palette (light/dark) via ``_pc`` so a theme
 swap repaints every panel consistently — never hardcode hex here.
 """
@@ -58,9 +57,9 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None,
     return int(number)
 
 
-# ── 可读时间格式化（所有 ACT 面板共用，禁止再拿 epoch-ms 直接 print）──
+# ── 可读时间格式化（所有面板共用，禁止再拿 epoch-ms 直接 print）──
 # 三类时间分开处理：绝对 epoch 毫秒→墙钟 HH:MM:SS；带符号偏移→+2.6s；纯时长→2.6s/M:SS。
-# JS 侧的等价实现见 web/act_panel_util.js（window.ActTime），两边输出必须逐字一致。
+# JS 侧的等价实现见 web/panel utilities（window.PanelTime），两边输出必须逐字一致。
 def fmt_clock(time_ms: Any, *, with_seconds: bool = True) -> str:
     """ABSOLUTE epoch-ms → local wall clock 'HH:MM:SS'. '--' when <=0/None."""
     try:
@@ -115,13 +114,13 @@ def fmt_signed(delta_ms: Any) -> str:
     return f"{'+' if d > 0 else '-'}{fmt_dur(abs(d))}"
 
 
-# ── 技术术语 → 人话（所有 ACT 面板共用，JS 侧见 web/act_panel_util.js window.ActText）──
+# ── 技术术语 → 人话（所有面板共用，JS 侧见 window.PanelText）──
 # 目的：把 topic/kind/source 这些内部字段名，渲染成用户看得懂的中文，而不是
 # "scene / tcp / actor_skill / src" 这种黑话。两边映射必须一致。
 _TOPIC_CN = {
     "damage": "伤害", "heal": "治疗", "skill": "技能", "actor_skill": "技能",
-    "monster": "怪物", "monster_skill": "怪物技能", "boss": "Boss", "boss_state": "Boss状态",
-    "boss_mechanic": "Boss机制", "boss_mechanic_skill": "Boss机制", "dungeon": "地牢",
+    "monster": "怪物", "monster_skill": "怪物技能", "boss": "首领", "boss_state": "首领状态",
+    "boss_mechanic": "首领机制", "boss_mechanic_skill": "首领机制", "dungeon": "地牢",
     "scene": "场景", "death": "死亡", "buff": "增益", "player_buff": "玩家增益",
     "factor_buff": "因子增益", "trigger": "触发", "timer": "计时", "target": "目标",
     "log": "日志", "event": "事件", "shield": "护盾", "mitigation": "减伤",
@@ -158,7 +157,7 @@ def readable_event_line(row: Mapping[str, Any], *, value_fmt: Optional[Callable[
     """一条代表事件 → 人话行：时钟 · 类型 · 来源→目标 · 标签 · 值。
 
     topic 译成中文；把当 actor 用的来源标识(tcp/entity)译成中文；丢掉无意义的
-    0 值和与类型重复的标签。所有 ACT 面板共用，避免各自拼一套黑话。
+    0 值和与类型重复的标签。所有面板共用，避免各自拼一套黑话。
     """
     if not isinstance(row, Mapping):
         return ""
@@ -269,7 +268,7 @@ def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
 
 
 def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Canvas:
-    """Rounded pill badge (canvas) — matches the web .act-badge / .act-pill."""
+    """Rounded pill badge (canvas) — matches the web panel badge style."""
     fontspec = get_cjk_font(8)
     f = tkfont.Font(font=fontspec)
     txt = str(text or "-")
@@ -284,7 +283,7 @@ def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Canvas
 
 
 class _RoundedButton(tk.Canvas):
-    """Rounded flat button (canvas) — Tk has no rounded Button. Matches web .act-btn.
+    """Rounded flat button (canvas) — Tk has no rounded Button. Matches web panel buttons.
 
     Supports ``configure(command=…)`` / ``configure(text=…)`` so existing callers
     (e.g. dropdown_button) keep working.
@@ -556,7 +555,7 @@ def sao_scrollbar(parent, command, *, width=9):
 
 
 def sao_entry(parent, textvariable=None, *, width=14):
-    """Flat dark text input (cyan focus border), matching the web .act-input."""
+    """Flat dark text input (cyan focus border), matching the web panel input."""
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     e = tk.Entry(
         parent, textvariable=textvariable, width=width,
@@ -610,7 +609,7 @@ def section_card(parent: tk.Misc, title: str, *, subtitle: str = "", badge: str 
     header_bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
     border = _pc('border', ui._SAO_PANEL_BORDER)
     # Rounded section box (Tk canvas), auto-sized to content, raised card_bg fill to
-    # match the web .act-section. The returned `inner` frame is where the caller adds
+    # match the web panel section. The returned `inner` frame is where the caller adds
     # the section body; packing it actually packs the rounded canvas (proxy) so existing
     # callers (`box.pack(...)` + `tk.Frame(box)`) keep working.
     card, inner = rounded_panel(parent, bg=card_bg, border=border, radius=9, pad=SP_XS, height=None)

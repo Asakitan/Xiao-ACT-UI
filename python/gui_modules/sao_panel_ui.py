@@ -145,7 +145,7 @@ def _apply_panel_style(panel):
 # ── SAO HUD 面板样式常量 ──
 # Keep this palette aligned with ``sao_web_panel_common.py`` and the WebView
 # editor panels: light translucent shell, muted graphite text, cyan/gold
-# accents.  ACT floating panels use these helpers as their shared chrome.
+# accents.  Floating panels use these helpers as their shared chrome.
 _SAO_PANEL_BG = '#e8ebee'          # 面板外壳/透明边缘
 _SAO_PANEL_HEADER_BG = '#fcfcfc'   # 浅色标题栏
 _SAO_PANEL_HEADER_FG = '#646364'   # 标题文字
@@ -388,7 +388,7 @@ def _style_sao_panel_tree(root) -> None:
 
 
 def _set_sao_panel_theme(theme: str, root=None, repaint_registered: bool = False) -> str:
-    """Set ACT/Tk SAO panel theme and repaint registered panel roots."""
+    """Set Tk SAO panel theme and repaint registered panel roots."""
     _apply_sao_panel_palette(theme)
     targets = [root] if root is not None else (list(_SAO_PANEL_ROOTS) if repaint_registered else [])
     for target in targets:
@@ -429,7 +429,7 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG, *, flat=F
     size = 18
     scale = 4
     sw = size * scale
-    # flat ACT panels recolor the close-X via the danger token (light #ef684e /
+    # Flat panels recolor the close-X via the danger token (light #ef684e /
     # dark #ff707a); non-flat callers keep the legacy literal + old cache shape.
     danger = _theme_color('danger', '#ff707a') if flat else '#ff707a'
     cache_key = f'{size}_{bg}_{danger}' if flat else f'{size}_{bg}'
@@ -469,7 +469,7 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
     """创建 SAO 风格深色标题栏，返回 header。
 
     Legacy callers pass ``(parent, icon, title, close_cmd)`` and unpack
-    ``(header, close_label)``.  New ACT panels pass ``(parent, title,
+    ``(header, close_label)``.  New flat panels pass ``(parent, title,
     on_close=...)`` and use the returned object as a frame.  Return a small
     tuple-like proxy so both styles stay compatible without duplicating panel
     chrome code.
@@ -526,7 +526,7 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
              bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
              font=get_sao_font(9, True)).pack(side=tk.LEFT, padx=(7, 4))
     if not flat:
-        # 装饰金条 + 右侧 ◇ 系统标记（扁平 ACT 面板去掉，只留左侧 accent 条 + 标题）
+        # 装饰金条 + 右侧 ◇ 系统标记（扁平面板去掉，只留左侧 accent 条 + 标题）
         tk.Frame(hdr, bg=_SAO_PANEL_GOLD, width=24, height=2).pack(side=tk.LEFT, padx=(3, 0), pady=(18, 0))
         tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_SEP,
                  font=get_sao_font(7)).pack(side=tk.RIGHT, padx=(0, 2))
@@ -588,7 +588,7 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
 
 
 def _sao_panel_body(parent, *, flat=False):
-    """创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平 ACT 面板）。"""
+    """创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平面板）。"""
     if not flat:
         tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
     if not flat:
@@ -850,7 +850,7 @@ def _sao_pill(parent, text, active=None, command=None):
     """创建 SAO 风格切换按钮/徽章。
 
     Older callers used this as a clickable toggle and passed ``active`` plus
-    ``command``.  ACT panels also use it as a static badge, so both arguments
+    ``command``.  Panels also use it as a static badge, so both arguments
     are optional and the visual state is inferred from common status labels.
     """
     token = str(text or '').upper()

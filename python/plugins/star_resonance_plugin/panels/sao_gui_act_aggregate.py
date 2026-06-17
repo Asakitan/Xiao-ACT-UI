@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 from act_platform.runtime import (
     act_aggregate_status,
     act_graph_timeseries_status,
-    act_render_apply_hooks,
+    render_apply_hooks,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_components import (
@@ -165,7 +165,7 @@ class ActAggregatePanel:
         # Entity-side plugin render hook (parity with web act_aggregate tap):
         # plugins may transform the cockpit payload before it is rendered.
         try:
-            hooked = act_render_apply_hooks(self.owner, 'act_aggregate', status)
+            hooked = render_apply_hooks(self.owner, 'act_aggregate', status)
             if hooked.get('ok') and isinstance(hooked.get('payload'), dict):
                 status = hooked['payload']
         except Exception:

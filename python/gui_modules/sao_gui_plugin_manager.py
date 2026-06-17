@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT plugin manager panel.
+"""Entity-mode plugin manager panel.
 
 This panel mirrors the WebView plugin manager surface while calling the same
 ``act_platform.runtime`` helpers as the web API.  It is intentionally small and
@@ -59,9 +59,9 @@ from gui_modules.sao_panel_ui import (
 # ── Category derivation for plugin cards (webref shows short lowercase tags) ──
 _CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str, str]] = [
     # (id substrings, label, badge kind)
-    (('overlay', 'dps', 'reaction', 'boss', 'combat', 'battle', 'resolver'), 'core', 'cyan'),
+    (('overlay', 'reaction', 'combat', 'battle', 'resolver'), 'core', 'cyan'),
     (('mem', 'memory', 'bridge', 'lrp'), 'mem', 'gold'),
-    (('net', 'upload', 'log', 'damage_uploader', 'resonance'), 'net', 'cyan'),
+    (('net', 'upload', 'log', 'uploader'), 'net', 'cyan'),
     (('key', 'input', 'macro', 'hotkey'), 'input', 'gold'),
     (('vision', 'ocr', 'infer', 'beta'), 'beta', 'cyan'),
     (('midi', 'piano', 'music'), 'music', 'gold'),
@@ -93,7 +93,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class PluginManagerPanel:
-    """SAO-styled Toplevel for Python ACT plugin management."""
+    """SAO-styled Toplevel for Python plugin management."""
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -180,7 +180,7 @@ class PluginManagerPanel:
 
         win = tk.Toplevel(self.root)
         self._win = win
-        win.title('SAO ACT Plugin Manager')
+        win.title('SAO Plugin Manager')
         win.geometry('960x862+160+120')
         win.minsize(620, 420)
         win.configure(bg=_SAO_PANEL_BG)
@@ -193,7 +193,7 @@ class PluginManagerPanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT PLUGIN MANAGER', on_close=self.hide, flat=True)
+        header = _sao_panel_header(win, 'PLUGIN MANAGER', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
@@ -369,7 +369,7 @@ class PluginManagerPanel:
             return
         from gui_modules.sao_panel_components import empty_state
         box = empty_state(self._list,
-                          '未发现 ACT 插件',
+                          '未发现插件',
                           '将 plugin.json 与 plugin.py 放入 plugins/<plugin_id>/ 后刷新。')
         box.pack(fill='x', pady=8, padx=4)
 

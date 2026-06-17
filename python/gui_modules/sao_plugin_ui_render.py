@@ -967,8 +967,8 @@ class OverlayLayer:
 
     def _repaint(self) -> None:
         try:
-            from act_platform.runtime import act_render_overlays
-            overlays = (act_render_overlays(self.owner, self.surface) or {}).get("overlays") or []
+            from act_platform.runtime import render_overlays
+            overlays = (render_overlays(self.owner, self.surface) or {}).get("overlays") or []
         except Exception:
             overlays = []
         if not overlays:

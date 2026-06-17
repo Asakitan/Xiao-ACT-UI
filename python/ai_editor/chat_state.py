@@ -167,6 +167,7 @@ class ChatController:
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
         self.on_stream_delta: Optional[Callable[[ChatMessage, str], None]] = None
         self.on_thinking_delta: Optional[Callable[[ChatMessage, str], None]] = None
+        self.on_token_warning: Optional[Callable[[int, int, float], None]] = None  # used, limit, ratio
         self.on_stream_end: Optional[Callable[[ChatMessage], None]] = None
         self.on_tool_start: Optional[Callable[[str, str, str, str], None]] = None  # call_id, name, args, state
         self.on_tool_end: Optional[Callable[[str, str, str], None]] = None  # call_id, result, state
@@ -236,6 +237,8 @@ class ChatController:
     def cancel(self) -> None:
         self.engine.cancel()
         self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 
     MAX_AGENT_ROUNDS = 25
     KEEP_RECENT_MIN = 6
@@ -250,13 +253,23 @@ class ChatController:
 
         Uses weighted compaction: messages with lower role-based weights are
         trimmed first, keeping high-weight messages (system, assistant) longer.
+        Threshold is purely token-driven — no message count limit.
         """
         from ai_editor.llm_engine import compaction_threshold
         model = self.engine.config.effective_model
         threshold = compaction_threshold(model)
+        if threshold <= 0:
+            return
 
         api_msgs = self.conversation.to_api_messages()
         total_tokens = self.engine.count_message_tokens(api_msgs)
+        # Emit token usage warnings at 50/75/90/95% thresholds
+        if self.on_token_warning and threshold > 0:
+            ratio = total_tokens / threshold
+            for pct in (0.50, 0.75, 0.90, 0.95):
+                if ratio >= pct:
+                    self.on_token_warning(total_tokens, threshold, ratio)
+                    break
         if total_tokens < threshold:
             return
 
@@ -337,7 +350,12 @@ class ChatController:
                              not in self._disabled_tools]
                 tools = tools or None
 
+                _first_token_time = [None]
+                _request_start = time.monotonic()
+
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
+                    if (delta.content or delta.thinking) and _first_token_time[0] is None:
+                        _first_token_time[0] = time.monotonic()
                     if delta.content and self.on_stream_delta:
                         self.on_stream_delta(_msg, delta.content)
                     if delta.thinking and self.on_thinking_delta:
@@ -353,7 +371,12 @@ class ChatController:
                 assistant_msg.content = resp.content
                 assistant_msg.thinking = resp.thinking
                 assistant_msg.tool_calls = resp.tool_calls
-                assistant_msg.usage = resp.usage
+                assistant_msg.usage = resp.usage or {}
+                if _first_token_time[0] is not None:
+                    assistant_msg.usage["ttft_ms"] = round(
+                        (_first_token_time[0] - _request_start) * 1000, 1)
+                    assistant_msg.usage["total_ms"] = round(
+                        (time.monotonic() - _request_start) * 1000, 1)
                 assistant_msg.model = resp.model
                 assistant_msg.is_streaming = False
 

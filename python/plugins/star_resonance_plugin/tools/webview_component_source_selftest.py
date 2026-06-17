@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+SAO_WEBVIEW = Path(__file__).resolve().parents[3] / "sao_webview.py"
+
 from config import SettingsManager  # noqa: E402
 from act_platform.runtime import register_webview_extension  # noqa: E402
 from sao_webview import SAOWebAPI  # noqa: E402
@@ -71,6 +73,42 @@ def _source_map(settings: SettingsManager):
     return dict(settings.get("data_source_map", {}) or {})
 
 
+def _assert_window_ownership_contract() -> None:
+    source = SAO_WEBVIEW.read_text(encoding="utf-8")
+    required_snippets = [
+        "def _register_plugin_surface(self, surface: str, win, title: str = None, **meta):",
+        "def _plugin_surface_win(self, surface: str):",
+        "def _plugin_surface_title(self, surface: str) -> str:",
+        "def _plugin_surface_hwnd(self, surface: str) -> int:",
+        "def _plugin_surface_items(self):",
+        "def _set_plugin_surface_alpha(self, surface: str, alpha: float):",
+        "def _set_plugin_surface_icon(self, surface: str):",
+        "def _native_fade_plugin_surface(self, surface: str, duration_ms: int = 260, steps: int = 12):",
+        "def _show_plugin_surface(self, surface: str):",
+        "def _hide_plugin_surface(self, surface: str):",
+        "# Game/plugin-owned WebView surfaces are injected dynamically by plugins.",
+    ]
+    for snippet in required_snippets:
+        if snippet not in source:
+            raise AssertionError(f"missing plugin-surface ownership helper: {snippet}")
+
+    forbidden_tokens = [
+        "SAO-HP",
+        "SAO Alert",
+        "MapBanner",
+        "MechBanner",
+        "BossHP",
+        "BossRaid",
+        "AutoKey",
+        "BuffMon",
+        "Star Resonance",
+        "星痕",
+    ]
+    for token in forbidden_tokens:
+        if token in source:
+            raise AssertionError(f"platform WebView runtime still contains plugin-owned window token: {token}")
+
+
 class _Owner:
     def __init__(self, settings: SettingsManager) -> None:
         self._cfg_settings_ref = settings
@@ -125,6 +163,8 @@ def main() -> int:
     timeout = json.loads(api.set_dps_fade_timeout("not-a-number"))
     if timeout.get("timeout") != 0 or settings.get("dps_fade_timeout_s") != 0:
         raise AssertionError(f"DPS fade timeout should recover bad values: {timeout}")
+
+    _assert_window_ownership_contract()
 
     try:
         Path(settings._path).unlink(missing_ok=True)

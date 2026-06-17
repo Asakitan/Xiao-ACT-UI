@@ -35,6 +35,52 @@
         return result;
     }
 
+    function srFiniteNumber(value, fallback) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.finiteNumber === 'function') return shim.finiteNumber(value, fallback);
+        var number = Number(value);
+        if (!isFinite(number)) number = Number(fallback || 0);
+        return isFinite(number) ? number : 0;
+    }
+
+    function srClampNumber(value, fallback, lo, hi) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.clampNumber === 'function') return shim.clampNumber(value, fallback, lo, hi);
+        var number = srFiniteNumber(value, fallback);
+        if (lo != null) number = Math.max(lo, number);
+        if (hi != null) number = Math.min(hi, number);
+        return number;
+    }
+
+    function srClampInt(value, fallback, lo, hi) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.clampInt === 'function') return shim.clampInt(value, fallback, lo, hi);
+        return Math.round(srClampNumber(value, fallback, lo, hi));
+    }
+
+    function srSafeLimit(value, fallback, hi) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.safeLimit === 'function') return shim.safeLimit(value, fallback, hi);
+        return srClampInt(value, fallback, 1, hi || 1000);
+    }
+
+    function srSafeOffset(value) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.safeOffset === 'function') return shim.safeOffset(value);
+        return srClampInt(value, 0, 0, Number.MAX_SAFE_INTEGER);
+    }
+
+    function srSafeTimelineSpeed(value) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.safeTimelineSpeed === 'function') return shim.safeTimelineSpeed(value);
+        return srClampNumber(value, 1, 0.1, 8);
+    }
+
+    function srPluginPayload(value) {
+        if (value == null) return '';
+        return value;
+    }
+
     function srOpenEmbeddedEditor(setterName) {
         try {
             if (typeof window[setterName] === 'function') {
@@ -137,6 +183,340 @@
             },
             get_buffmon_enabled: function () {
                 return srCall('buffmon.get_enabled', {}).then(srNormalizeOk);
+            },
+            set_hit_regions: function (rects) {
+                return srCall('ui.set_hit_regions', { regions: rects });
+            },
+            notify_hp_hit_regions_ready: function () {
+                return srCall('ui.notify_hp_hit_regions_ready', {});
+            },
+            set_watched_slots: function (slots) {
+                return srCall('settings.set_watched_slots', { slots: Array.isArray(slots) ? slots : [] }).then(srNormalizeOk);
+            },
+            set_burst_enabled: function (enabled) {
+                return srCall('settings.set_burst_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            set_boss_bar_mode: function (mode) {
+                return srCall('settings.set_boss_bar_mode', { mode: String(mode || '') }).then(srNormalizeOk);
+            },
+            set_dps_fade_timeout: function (seconds) {
+                return srCall('settings.set_dps_fade_timeout', {
+                    seconds: srClampInt(seconds, 0, 0, 120)
+                }).then(srNormalizeOk);
+            },
+            set_data_source: function (mode) {
+                return srCall('settings.set_data_source', { mode: String(mode || '') }).then(srNormalizeOk);
+            },
+            set_component_source: function (component, mode) {
+                return srCall('settings.set_component_source', {
+                    component: String(component || ''),
+                    mode: String(mode || '')
+                }).then(srNormalizeOk);
+            },
+            show_last_dps_report: function () {
+                return srCall('dps.show_last_report', {}).then(srNormalizeOk);
+            },
+            show_last_report: function () {
+                return srCall('dps.show_last_report', {}).then(srNormalizeOk);
+            },
+            reset_dps: function () {
+                return srCall('dps.reset_combat', {}).then(srNormalizeOk);
+            },
+            set_dps_enabled: function (enabled) {
+                return srCall('dps.toggle_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            get_dps_enabled: function () {
+                return srCall('dps.toggle_enabled', {}).then(srNormalizeOk);
+            },
+            get_entity_detail: function (uid) {
+                var uidText = String(uid == null ? '' : uid).trim();
+                return srCall('dps.entity_detail', { uid: uidText }).then(function (detail) {
+                    detail = srNormalizeOk(detail);
+                    try {
+                        if (detail && detail.ok !== false
+                                && window.DpsMeter
+                                && typeof window.DpsMeter.updateDetail === 'function') {
+                            window.DpsMeter.updateDetail(detail);
+                        }
+                    } catch (_) {}
+                    return detail;
+                });
+            },
+            request_live_snapshot: function () {
+                return srCall('state.snapshot', {}).then(function (snapshot) {
+                    try {
+                        if (window.DpsMeter && typeof window.DpsMeter.showActSnapshot === 'function') {
+                            window.DpsMeter.showActSnapshot(snapshot || {});
+                        }
+                    } catch (_) {}
+                    return snapshot;
+                });
+            },
+            list_history: function (limit) {
+                return srCall('act.history.status', { limit: srSafeLimit(limit, 20, 200), query: '' }).then(function (data) {
+                    if (data && data.items == null && data.encounters) data.items = data.encounters;
+                    return srNormalizeOk(data);
+                });
+            },
+            export_last_report: function (fmt) {
+                return srCall('act.report.export', { fmt: String(fmt || 'json') }).then(srNormalizeOk);
+            },
+            fetch_leaderboard: function (sort) {
+                return srCall('ui.fetch_leaderboard', { sort: String(sort || 'xp') }).then(srNormalizeOk);
+            },
+            toggle_trigger_timer_manager: function () {
+                return srCall('ui.menu_action', { action: 'toggle_trigger_timer_manager' });
+            },
+            toggle_data_source_health: function () {
+                return srCall('ui.menu_action', { action: 'toggle_data_source_health' });
+            },
+            toggle_report_export: function () {
+                return srCall('ui.menu_action', { action: 'toggle_report_export' });
+            },
+            toggle_offline_import: function () {
+                return srCall('ui.menu_action', { action: 'toggle_offline_import' });
+            },
+            toggle_timeline_vcr: function () {
+                return srCall('ui.menu_action', { action: 'toggle_timeline_vcr' });
+            },
+            toggle_act_aggregate: function () {
+                return srCall('ui.menu_action', { action: 'toggle_act_aggregate' });
+            },
+            toggle_mem_scope: function () {
+                return srCall('ui.menu_action', { action: 'toggle_mem_scope' });
+            },
+            toggle_action_log: function () {
+                return srCall('ui.menu_action', { action: 'toggle_action_log' });
+            },
+            toggle_death_recap: function () {
+                return srCall('ui.menu_action', { action: 'toggle_death_recap' });
+            },
+            toggle_graph_timeseries: function () {
+                return srCall('ui.menu_action', { action: 'toggle_graph_timeseries' });
+            },
+            toggle_combatant_drilldown: function () {
+                return srCall('ui.menu_action', { action: 'toggle_combatant_drilldown' });
+            },
+            toggle_skill_drilldown: function () {
+                return srCall('ui.menu_action', { action: 'toggle_skill_drilldown' });
+            },
+            get_death_recap_status: function (limit, window_s, entity_id) {
+                return srCall('act.death_recap.status', {
+                    limit: srSafeLimit(limit, 80, 500),
+                    window_s: srClampNumber(window_s, 8.0, 0, 120),
+                    entity_id: entity_id || null
+                });
+            },
+            copy_death_recap: function (limit, window_s, entity_id) {
+                return srCall('act.death_recap.copy', {
+                    limit: srSafeLimit(limit, 80, 500),
+                    window_s: srClampNumber(window_s, 8.0, 0, 120),
+                    entity_id: entity_id || null
+                });
+            },
+            get_data_source_health: function () {
+                return srCall('act.sources.health', {});
+            },
+            diagnose_data_source: function () {
+                return srCall('act.sources.diagnose', {});
+            },
+            copy_data_source_health: function () {
+                return srCall('act.sources.copy', {});
+            },
+            get_report_export_status: function (limit, fmt) {
+                return srCall('act.report.status', { limit: srSafeLimit(limit, 20, 200), fmt: String(fmt || 'json') });
+            },
+            copy_report_export: function (fmt) {
+                return srCall('act.report.copy', { fmt: String(fmt || 'json') });
+            },
+            get_mini_parse_status: function (formatterId) {
+                return srCall('act.mini_parse.status', { formatter_id: String(formatterId || 'summary_table') });
+            },
+            preview_mini_parse: function (formatterId) {
+                return srCall('act.mini_parse.preview', { formatter_id: String(formatterId || 'summary_table') });
+            },
+            copy_mini_parse: function (formatterId) {
+                return srCall('act.mini_parse.copy', { formatter_id: String(formatterId || 'summary_table') });
+            },
+            get_selective_parsing_status: function () {
+                return srCall('act.selective_parsing.status', {});
+            },
+            update_selective_parsing: function (policy) {
+                return srCall('act.selective_parsing.update', { policy: policy || {} });
+            },
+            clear_selective_parsing: function () {
+                return srCall('act.selective_parsing.clear', {});
+            },
+            get_history_status: function (limit, query) {
+                return srCall('act.history.status', { limit: srSafeLimit(limit, 20, 200), query: String(query || '') });
+            },
+            load_history_report: function (index, show) {
+                return srCall('act.history.load', { index: srSafeOffset(index), show: show !== false });
+            },
+            delete_history_report: function (index) {
+                return srCall('act.history.delete', { index: srSafeOffset(index) });
+            },
+            clear_history_reports: function () {
+                return srCall('act.history.clear', {});
+            },
+            choose_offline_import_file: function () {
+                return srCall('act.offline_import.choose_file', {});
+            },
+            import_offline_report: function (path, persist, show) {
+                return srCall('act.offline_import.import', { path: String(path || ''), persist: persist !== false, show: show !== false });
+            },
+            get_offline_import_status: function (historyLimit) {
+                return srCall('act.offline_import.status', { history_limit: srSafeLimit(historyLimit, 20, 200) });
+            },
+            get_timeline_status: function (limit, query) {
+                return srCall('act.timeline.status', { limit: srSafeLimit(limit, 80, 500), query: String(query || '') });
+            },
+            get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId, groupBy, groupField) {
+                return srCall('act.aggregate.status', {
+                    limit: srSafeLimit(limit, 1000, 5000),
+                    query: String(query || ''),
+                    source: String(source || 'live'),
+                    window_ms: srClampInt(windowMs, 1000, 0, 86400000),
+                    top_n: srSafeLimit(topN, 20, 500),
+                    encounter_id: String(encounterId || ''),
+                    group_by: String(groupBy || 'skill'),
+                    group_field: String(groupField || '')
+                });
+            },
+            get_mem_scope_status: function (query, dtype, jobId) {
+                return srCall('act.mem_scope.status', { query: String(query || ''), dtype: String(dtype || 'i32'), job_id: String(jobId || '') });
+            },
+            mem_search: function (value, dtype, align) {
+                return srCall('act.mem_scope.search', { value: value == null ? '' : String(value), dtype: String(dtype || 'i32'), align: srClampInt(align, 0, 0, 64) });
+            },
+            mem_search_status: function (jobId) {
+                return srCall('act.mem_scope.search_status', { job_id: String(jobId || '') });
+            },
+            mem_narrow: function (jobId, value) {
+                return srCall('act.mem_scope.narrow', { job_id: String(jobId || ''), value: value == null ? '' : String(value) });
+            },
+            mem_search_cancel: function (jobId) {
+                return srCall('act.mem_scope.cancel', { job_id: String(jobId || '') });
+            },
+            mem_attr_map: function (entAddr) {
+                return srCall('act.mem_scope.attr_map', { ent_addr: String(entAddr || '') });
+            },
+            play_timeline: function (speed) {
+                return srCall('act.timeline.play', { speed: srSafeTimelineSpeed(speed) });
+            },
+            pause_timeline: function () {
+                return srCall('act.timeline.pause', {});
+            },
+            step_timeline: function (deltaMs) {
+                return srCall('act.timeline.step', { delta_ms: srClampInt(deltaMs, 1000, -86400000, 86400000) });
+            },
+            seek_timeline: function (cursorMs) {
+                return srCall('act.timeline.seek', { cursor_ms: srClampInt(cursorMs, 0, 0, 86400000) });
+            },
+            set_timeline_speed: function (speed) {
+                return srCall('act.timeline.speed', { speed: srSafeTimelineSpeed(speed) });
+            },
+            filter_timeline: function (query) {
+                return srCall('act.timeline.filter', { query: String(query || '') });
+            },
+            get_action_log_status: function (limit, query, topic, cursorMs, source, encounterId, offset) {
+                return srCall('act.action_log.status', {
+                    limit: srSafeLimit(limit, 80, 500),
+                    query: String(query || ''),
+                    topic: String(topic || ''),
+                    cursor_ms: srClampInt(cursorMs, 0, 0, 86400000),
+                    source: String(source || 'live'),
+                    encounter_id: String(encounterId || ''),
+                    offset: srSafeOffset(offset)
+                });
+            },
+            search_action_log: function (query, limit, source, encounterId, offset) {
+                return srCall('act.action_log.search', { query: String(query || ''), limit: srSafeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: srSafeOffset(offset) });
+            },
+            filter_action_log: function (topic, query, limit, source, encounterId, offset) {
+                return srCall('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: srSafeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: srSafeOffset(offset) });
+            },
+            jump_action_log_time: function (cursorMs, limit, source, encounterId, offset, topic) {
+                var payload = { cursor_ms: srClampInt(cursorMs, 0, 0, 86400000), limit: srSafeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: srSafeOffset(offset) };
+                if (arguments.length > 5) payload.topic = String(topic || '');
+                return srCall('act.action_log.jump_to_time', payload);
+            },
+            show_action_log_at: function (cursorMs, source, encounterId, topic) {
+                var payload = { cursor_ms: srClampInt(cursorMs, 0, 0, 86400000), limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 };
+                if (arguments.length > 3) payload.topic = String(topic || '');
+                return srCall('act.action_log.jump_to_time', payload);
+            },
+            copy_action_log: function (limit, query, topic, source, encounterId, offset) {
+                return srCall('act.action_log.copy', { limit: srSafeLimit(limit, 80, 500), query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: srSafeOffset(offset) });
+            },
+            get_graph_timeseries_status: function (metric, limit, query, topic, timeRangeMs) {
+                return srCall('act.graph.status', { metric: String(metric || ''), limit: srSafeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || ''), time_range_ms: srClampInt(timeRangeMs, 0, 0, 86400000) });
+            },
+            select_graph_metric: function (metric, limit) {
+                return srCall('act.graph.select_metric', { metric: String(metric || 'damage'), limit: srSafeLimit(limit, 120, 1000) });
+            },
+            zoom_graph_timeseries: function (timeRangeMs, limit) {
+                return srCall('act.graph.zoom', { time_range_ms: srClampInt(timeRangeMs, 0, 0, 86400000), limit: srSafeLimit(limit, 120, 1000) });
+            },
+            filter_graph_timeseries: function (query, topic, limit) {
+                return srCall('act.graph.filter', { query: String(query || ''), topic: String(topic || ''), limit: srSafeLimit(limit, 120, 1000) });
+            },
+            export_graph_timeseries: function (metric, limit, query, topic) {
+                return srCall('act.graph.export', { metric: String(metric || ''), limit: srSafeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || '') });
+            },
+            get_combatant_drilldown_status: function (combatantId, query, focusTarget) {
+                return srCall('act.combatant.status', { combatant_id: String(combatantId || ''), query: String(query || ''), focus_target: String(focusTarget || '') });
+            },
+            filter_combatant_drilldown: function (combatantId, query) {
+                return srCall('act.combatant.filter', { combatant_id: String(combatantId || ''), query: String(query || '') });
+            },
+            focus_combatant_target: function (combatantId, targetId) {
+                return srCall('act.combatant.focus_target', { combatant_id: String(combatantId || ''), target_id: String(targetId || '') });
+            },
+            back_combatant_drilldown: function () {
+                return srCall('act.combatant.back', {});
+            },
+            get_skill_drilldown_status: function (combatantId, skillId, query, limit) {
+                return srCall('act.skill.status', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: srSafeLimit(limit, 80, 500) });
+            },
+            filter_skill_drilldown: function (combatantId, skillId, query, limit) {
+                return srCall('act.skill.filter', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: srSafeLimit(limit, 80, 500) });
+            },
+            copy_skill_drilldown: function (combatantId, skillId, query, limit) {
+                return srCall('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: srSafeLimit(limit, 80, 500) });
+            },
+            open_skill_drilldown: function (combatantId, skillId) {
+                return srCall('act.skill.open', { combatant_id: String(combatantId || ''), skill_id: String(skillId || '') });
+            },
+            back_skill_drilldown: function () {
+                return srCall('act.skill.back', {});
+            },
+            get_trigger_status: function () {
+                return srCall('act.triggers.status', {});
+            },
+            enable_trigger: function (ruleId) {
+                return srCall('act.triggers.enable', { rule_id: String(ruleId || '') });
+            },
+            disable_trigger: function (ruleId) {
+                return srCall('act.triggers.disable', { rule_id: String(ruleId || '') });
+            },
+            reload_triggers: function () {
+                return srCall('act.triggers.reload', {});
+            },
+            test_trigger: function (ruleId) {
+                return srCall('act.triggers.test', { rule_id: String(ruleId || '') });
+            },
+            trigger_export_presets: function (ruleIds) {
+                return srCall('act_trigger_export_presets', { rule_ids: Array.isArray(ruleIds) ? ruleIds : [] });
+            },
+            trigger_import_presets: function (payload, replace) {
+                return srCall('act_trigger_import_presets', { payload: payload || {}, replace: !!replace });
+            },
+            render_overlays: function (surface) {
+                return srCall('render.overlays', { surface: String(surface || '') });
+            },
+            render_apply_hooks: function (surface, payload) {
+                return srCall('render.apply_hooks', { surface: String(surface || ''), payload: srPluginPayload(payload) });
             },
             activate_boss_raid_profile: function (id) {
                 return srCall('bossraid.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);

@@ -55,7 +55,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from act_platform.runtime import act_render_apply_hooks, publish_owner_event
+from act_platform.runtime import render_apply_hooks, publish_owner_event
 
 # Minimum interval between *per-combat-event* ACT snapshot pushes (the storm
 # fired from the pcap capture thread on every damage/monster event). Periodic
@@ -315,7 +315,7 @@ class SAOPlayerGUIDpsThemeMixin:
             # Entity-side plugin render hook (parity with the WebView dps push):
             # plugins may transform/replace the snapshot before the overlay draws.
             try:
-                hooked = act_render_apply_hooks(self, 'dps', snapshot)
+                hooked = render_apply_hooks(self, 'dps', snapshot)
                 if hooked.get('ok') and hooked.get('payload') is not None:
                     snapshot = hooked['payload']
             except Exception:

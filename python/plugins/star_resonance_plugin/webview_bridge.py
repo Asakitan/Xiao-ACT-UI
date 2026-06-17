@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import ctypes
 import logging
+import math
 import os
 import sys
 import threading
@@ -24,9 +25,62 @@ if _PLUGIN_ROOT not in sys.path:
     sys.path.insert(0, _PLUGIN_ROOT)
 
 from act_platform.runtime import (
+    act_action_log_copy,
+    act_action_log_filter,
+    act_action_log_jump_to_time,
+    act_action_log_search,
+    act_action_log_status,
+    act_aggregate_status,
+    act_combatant_drilldown_back,
+    act_combatant_drilldown_filter,
+    act_combatant_drilldown_focus_target,
+    act_combatant_drilldown_status,
+    act_data_source_diagnose,
+    act_data_source_health,
+    act_death_recap_copy,
+    act_death_recap_status,
+    act_graph_timeseries_export,
+    act_graph_timeseries_filter,
+    act_graph_timeseries_select_metric,
+    act_graph_timeseries_status,
+    act_graph_timeseries_zoom,
+    act_history_delete,
+    act_history_load,
     act_history_status,
+    act_mem_attr_map,
+    act_mem_narrow,
+    act_mem_scope_status,
+    act_mem_search,
+    act_mem_search_cancel,
+    act_mem_search_status,
+    act_mini_parse_copy,
+    act_mini_parse_preview,
+    act_mini_parse_status,
+    act_offline_import_file,
+    act_offline_import_status,
+    act_report_copy,
     act_report_export,
-    act_render_apply_hooks,
+    act_report_status,
+    render_apply_hooks as platform_render_apply_hooks,
+    act_selective_parsing_clear,
+    act_selective_parsing_status,
+    act_selective_parsing_update,
+    act_skill_drilldown_back,
+    act_skill_drilldown_copy,
+    act_skill_drilldown_filter,
+    act_skill_drilldown_status,
+    act_timeline_filter,
+    act_timeline_pause,
+    act_timeline_play,
+    act_timeline_seek,
+    act_timeline_set_speed,
+    act_timeline_status,
+    act_timeline_step,
+    act_trigger_disable,
+    act_trigger_enable,
+    act_trigger_reload,
+    act_trigger_status,
+    act_trigger_test,
     enrich_action_log_event,
     publish_owner_event,
     register_webview_extension,
@@ -181,6 +235,30 @@ _OWNER_METHODS = (
     '_start_recognition', '_presynthesize_active_profile_web', '_toggle_auto_dodge',
 )
 
+_ACT_API_METHODS = (
+    'getDataSourceHealth', 'get_data_source_health', 'diagnose_data_source',
+    'copy_data_source_health', 'get_report_export_status', 'export_last_report',
+    'copy_report_export', 'get_mini_parse_status', 'preview_mini_parse',
+    'copy_mini_parse', 'get_selective_parsing_status', 'update_selective_parsing',
+    'clear_selective_parsing', 'get_history_status', 'load_history_report',
+    'delete_history_report', 'clear_history_reports', 'choose_offline_import_file',
+    'import_offline_report', 'get_offline_import_status', 'get_timeline_status',
+    'get_aggregate_status', 'get_mem_scope_status', 'mem_search',
+    'mem_search_status', 'mem_narrow', 'mem_search_cancel', 'mem_attr_map',
+    'play_timeline', 'pause_timeline', 'step_timeline', 'seek_timeline',
+    'set_timeline_speed', 'filter_timeline', 'get_action_log_status',
+    'search_action_log', 'filter_action_log', 'jump_action_log_time',
+    'show_action_log_at', 'copy_action_log', 'get_death_recap_status',
+    'copy_death_recap', 'get_graph_timeseries_status', 'select_graph_metric',
+    'zoom_graph_timeseries', 'filter_graph_timeseries', 'export_graph_timeseries',
+    'get_combatant_drilldown_status', 'filter_combatant_drilldown',
+    'focus_combatant_target', 'back_combatant_drilldown',
+    'get_skill_drilldown_status', 'filter_skill_drilldown', 'copy_skill_drilldown',
+    'back_skill_drilldown', 'open_skill_drilldown', 'get_trigger_status',
+    'enable_trigger', 'disable_trigger', 'reload_triggers', 'test_trigger',
+)
+
+
 _API_METHODS = (
     'get_state', 'set_watched_slots', 'set_burst_enabled',
     'set_auto_key_enabled', 'get_auto_key_state', 'create_auto_key_profile',
@@ -205,7 +283,50 @@ _API_METHODS = (
     'boss_hp_hit_regions', 'toggle_raid_editor', 'get_raid_editor_visible',
     'toggle_autokey_editor', 'get_autokey_editor_visible', 'set_data_source',
     'set_component_source',
+    *_ACT_API_METHODS,
 )
+
+
+_PANEL_SURFACE_ACTIONS = {
+    'toggle_trigger_timer_manager': 'trigger_timer',
+    'toggle_data_source_health': 'data_source_health',
+    'toggle_report_export': 'report_export',
+    'toggle_offline_import': 'offline_import',
+    'toggle_timeline_vcr': 'timeline_vcr',
+    'toggle_act_aggregate': 'act_aggregate',
+    'toggle_mem_scope': 'mem_scope',
+    'toggle_action_log': 'action_log',
+    'toggle_death_recap': 'death_recap',
+    'toggle_graph_timeseries': 'graph_timeseries',
+    'toggle_combatant_drilldown': 'combatant_drilldown',
+    'toggle_skill_drilldown': 'skill_drilldown',
+}
+
+
+_PANEL_SURFACE_JS = {
+    'trigger_timer': 'TriggerTimerManager',
+    'data_source_health': 'DataSourceHealth',
+    'report_export': 'ReportExport',
+    'offline_import': 'OfflineImport',
+    'timeline_vcr': 'TimelineVcr',
+    'act_aggregate': 'ActAggregate',
+    'mem_scope': 'MemScope',
+    'action_log': 'ActionLog',
+    'death_recap': 'DeathRecap',
+    'graph_timeseries': 'GraphTimeseries',
+    'combatant_drilldown': 'CombatantDrilldown',
+    'skill_drilldown': 'SkillDrilldown',
+}
+
+
+def _safe_timeline_speed(value: Any, fallback: float = 1.0) -> float:
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        speed = float(fallback)
+    if not math.isfinite(speed):
+        speed = float(fallback)
+    return max(0.1, min(speed, 8.0))
 
 
 def _bind(target: Any, name: str, callback):
@@ -242,6 +363,313 @@ class StarResonanceWebViewBridge:
         self._session_players_version = 0
         self._session_players_last_sig = None
         self._session_players_last_push_ts = 0.0
+
+    def __getattr__(self, name: str):
+        if name in _ACT_API_METHODS:
+            def _api(*args, **kwargs):
+                return self._dispatch_act_api(name, *args, **kwargs)
+            _api.__name__ = name
+            return _api
+        if name in _PANEL_SURFACE_ACTIONS:
+            def _toggle(*args, **kwargs):
+                return self.menu_action(name)
+            _toggle.__name__ = name
+            return _toggle
+        raise AttributeError(name)
+
+    def _json(self, payload: Any) -> str:
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _arg(self, args, kwargs, index: int, key: str, default=None):
+        if len(args) > index:
+            return args[index]
+        return kwargs.get(key, default)
+
+    def _as_int(self, value, default: int = 0) -> int:
+        try:
+            return int(value if value is not None and value != '' else default)
+        except Exception:
+            return int(default)
+
+    def _as_float(self, value, default: float = 0.0) -> float:
+        try:
+            return float(value if value is not None and value != '' else default)
+        except Exception:
+            return float(default)
+
+    def _as_str(self, value, default: str = '') -> str:
+        return str(value if value is not None else default)
+
+    def _surface_meta(self, surface: str) -> dict:
+        return dict(getattr(self.owner, '_plugin_surface_meta', {}).get(str(surface or ''), {}) or {})
+
+    def _surface_win(self, surface: str):
+        getter = getattr(self.owner, '_plugin_surface_win', None)
+        return getter(surface) if callable(getter) else None
+
+    def _surface_visible(self, surface: str) -> bool:
+        meta = self._surface_meta(surface)
+        visible_attr = str(meta.get('visible_attr') or '')
+        return bool(visible_attr and getattr(self.owner, visible_attr, False))
+
+    def _set_surface_visible(self, surface: str, visible: bool):
+        visible_attr = str(self._surface_meta(surface).get('visible_attr') or '')
+        if visible_attr:
+            setattr(self.owner, visible_attr, bool(visible))
+
+    def _eval_surface(self, surface: str, js: str):
+        evaluator = getattr(self.owner, '_eval_plugin_surface', None)
+        if callable(evaluator):
+            evaluator(surface, js)
+
+    def _show_panel_surface(self, surface: str):
+        o = self.owner
+        if self._surface_visible(surface):
+            return
+        alpha = getattr(o, '_set_plugin_surface_alpha', None)
+        show = getattr(o, '_show_plugin_surface', None)
+        title_of = getattr(o, '_plugin_surface_title', None)
+        animate = getattr(o, '_animate_window_alpha', None)
+        click = getattr(o, '_set_plugin_surface_click_through', None)
+        if callable(alpha):
+            alpha(surface, 0.0)
+        if callable(show):
+            show(surface)
+        js_obj = _PANEL_SURFACE_JS.get(surface)
+        if js_obj:
+            self._eval_surface(surface, f'if(window.{js_obj}&&{js_obj}.fadeIn){js_obj}.fadeIn()')
+            self._eval_surface(surface, f'if(window.{js_obj}&&{js_obj}.refresh){js_obj}.refresh()')
+        title = title_of(surface) if callable(title_of) else ''
+        if title and callable(animate):
+            threading.Timer(
+                0.03,
+                lambda: animate(title, 0.0, 1.0, duration_ms=220, steps=8),
+            ).start()
+        self._set_surface_visible(surface, True)
+        if callable(click):
+            click(surface, enabled=False, wait_retries=5, ensure_on_top=True)
+            threading.Timer(0.5, lambda: click(surface, enabled=False, ensure_on_top=True)).start()
+
+    def _hide_panel_surface(self, surface: str):
+        o = self.owner
+        if self._surface_visible(surface):
+            js_obj = _PANEL_SURFACE_JS.get(surface)
+            if js_obj:
+                self._eval_surface(surface, f'if(window.{js_obj}&&{js_obj}.fadeOut){js_obj}.fadeOut()')
+            hide = getattr(o, '_hide_plugin_surface', None)
+            ensure = getattr(o, '_ensure_hidden_panels_passthrough', None)
+            def _finish():
+                try:
+                    if callable(hide):
+                        hide(surface)
+                    if callable(ensure):
+                        ensure()
+                except Exception:
+                    pass
+            threading.Timer(0.25, _finish).start()
+        self._set_surface_visible(surface, False)
+
+    def _toggle_panel_surface(self, surface: str):
+        if self._surface_visible(surface):
+            return self._hide_panel_surface(surface)
+        return self._show_panel_surface(surface)
+
+    def _dispatch_act_api(self, name: str, *args, **kwargs):
+        o = self.owner
+        if name == 'getDataSourceHealth':
+            try:
+                return act_data_source_health(o)
+            except Exception as exc:
+                return {'available': False, 'error': str(exc)}
+        if name == 'get_data_source_health':
+            return self._json(act_data_source_health(o))
+        if name == 'diagnose_data_source':
+            return self._json(act_data_source_diagnose(o))
+        if name == 'copy_data_source_health':
+            payload = act_data_source_diagnose(o)
+            return self._json({'ok': True, 'text': json.dumps(payload, ensure_ascii=False, indent=2), 'status': payload})
+        if name == 'get_report_export_status':
+            return self._json(act_report_status(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 20), 20), fmt=self._as_str(self._arg(args, kwargs, 1, 'fmt', 'json'), 'json')))
+        if name == 'export_last_report':
+            return self._json(act_report_export(o, fmt=self._as_str(self._arg(args, kwargs, 0, 'fmt', 'json'), 'json')))
+        if name == 'copy_report_export':
+            return self._json(act_report_copy(o, fmt=self._as_str(self._arg(args, kwargs, 0, 'fmt', 'json'), 'json')))
+        if name == 'get_mini_parse_status':
+            return self._json(act_mini_parse_status(o, formatter_id=self._as_str(self._arg(args, kwargs, 0, 'formatter_id', 'summary_table'), 'summary_table')))
+        if name == 'preview_mini_parse':
+            return self._json(act_mini_parse_preview(o, formatter_id=self._as_str(self._arg(args, kwargs, 0, 'formatter_id', 'summary_table'), 'summary_table')))
+        if name == 'copy_mini_parse':
+            return self._json(act_mini_parse_copy(o, formatter_id=self._as_str(self._arg(args, kwargs, 0, 'formatter_id', 'summary_table'), 'summary_table')))
+        if name == 'get_selective_parsing_status':
+            return self._json(act_selective_parsing_status(o))
+        if name == 'update_selective_parsing':
+            policy = self._arg(args, kwargs, 0, 'policy', None)
+            if isinstance(policy, str):
+                try:
+                    policy = json.loads(policy or '{}')
+                except Exception:
+                    policy = {}
+            return self._json(act_selective_parsing_update(o, policy if isinstance(policy, dict) else {}))
+        if name == 'clear_selective_parsing':
+            return self._json(act_selective_parsing_clear(o))
+        if name == 'get_history_status':
+            return self._json(act_history_status(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 20), 20), query=self._as_str(self._arg(args, kwargs, 1, 'query', ''), '')))
+        if name == 'load_history_report':
+            return self._json(act_history_load(o, index=self._as_int(self._arg(args, kwargs, 0, 'index', 0), 0), show=bool(self._arg(args, kwargs, 1, 'show', True))))
+        if name == 'delete_history_report':
+            return self._json(act_history_delete(o, index=self._as_int(self._arg(args, kwargs, 0, 'index', 0), 0)))
+        if name == 'clear_history_reports':
+            return self._json(act_history_delete(o, clear=True))
+        if name == 'choose_offline_import_file':
+            try:
+                import webview as webview_module
+                win = self._surface_win('offline_import') if self._surface_visible('offline_import') else None
+                win = win or self._surface_win('report_export')
+                if win is None:
+                    windows = getattr(webview_module, 'windows', [])
+                    win = windows[0] if windows else None
+                dialog = getattr(win, 'create_file_dialog', None)
+                if not callable(dialog):
+                    raise RuntimeError('File dialog is unavailable')
+                file_types = (
+                    'ACT replay/report (*.json;*.jsonl;*.ndjson;*.xml;*.xml.gz;*.xml.zip;*.zip)',
+                    'SAO ACT XML report (*.xml;*.xml.gz;*.xml.zip;*.zip)',
+                    'JSON (*.json)',
+                    'JSONL/NDJSON (*.jsonl;*.ndjson)',
+                    'All files (*.*)',
+                )
+                try:
+                    paths = dialog(getattr(webview_module, 'OPEN_DIALOG', 10), allow_multiple=False, file_types=file_types)
+                except TypeError:
+                    paths = dialog(getattr(webview_module, 'OPEN_DIALOG', 10), '', False, '', file_types)
+                if not paths:
+                    return self._json({'ok': False, 'cancelled': True, 'path': '', 'message': 'No file selected'})
+                path = paths if isinstance(paths, str) else list(paths)[0]
+                return self._json({'ok': True, 'path': str(path)})
+            except Exception as exc:
+                return self._json({'ok': False, 'path': '', 'message': str(exc), 'errors': [str(exc)]})
+        if name == 'import_offline_report':
+            try:
+                return self._json(act_offline_import_file(o, self._as_str(self._arg(args, kwargs, 0, 'path', ''), ''), persist=bool(self._arg(args, kwargs, 1, 'persist', True)), show=bool(self._arg(args, kwargs, 2, 'show', True))))
+            except Exception as exc:
+                return self._json({'ok': False, 'message': str(exc), 'errors': [str(exc)]})
+        if name == 'get_offline_import_status':
+            try:
+                return self._json(act_offline_import_status(o, history_limit=self._as_int(self._arg(args, kwargs, 0, 'history_limit', 20), 20)))
+            except Exception as exc:
+                return self._json({'ok': False, 'message': str(exc), 'accepted_formats': [], 'selected_file': '', 'progress': 0.0, 'status': 'error', 'last_result': {}, 'history': {}, 'errors': [str(exc)]})
+        if name == 'get_timeline_status':
+            return self._json(act_timeline_status(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 80), 80), query=self._as_str(self._arg(args, kwargs, 1, 'query', ''), '')))
+        if name == 'get_aggregate_status':
+            return self._json(act_aggregate_status(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 1000), 1000), query=self._as_str(self._arg(args, kwargs, 1, 'query', ''), ''), source=self._as_str(self._arg(args, kwargs, 2, 'source', 'live'), 'live'), window_ms=self._as_int(self._arg(args, kwargs, 3, 'window_ms', 1000), 1000), top_n=self._as_int(self._arg(args, kwargs, 4, 'top_n', 20), 20), encounter_id=self._as_str(self._arg(args, kwargs, 5, 'encounter_id', ''), ''), group_by=self._as_str(self._arg(args, kwargs, 6, 'group_by', 'skill'), 'skill'), group_field=self._as_str(self._arg(args, kwargs, 7, 'group_field', ''), '')))
+        if name == 'get_mem_scope_status':
+            return self._json(act_mem_scope_status(o, query=self._as_str(self._arg(args, kwargs, 0, 'query', ''), ''), dtype=self._as_str(self._arg(args, kwargs, 1, 'dtype', 'i32'), 'i32'), job_id=self._as_str(self._arg(args, kwargs, 2, 'job_id', ''), '')))
+        if name == 'mem_search':
+            return self._json(act_mem_search(o, value=self._arg(args, kwargs, 0, 'value', ''), dtype=self._as_str(self._arg(args, kwargs, 1, 'dtype', 'i32'), 'i32'), align=self._as_int(self._arg(args, kwargs, 2, 'align', 0), 0)))
+        if name == 'mem_search_status':
+            return self._json(act_mem_search_status(o, job_id=self._as_str(self._arg(args, kwargs, 0, 'job_id', ''), '')))
+        if name == 'mem_narrow':
+            return self._json(act_mem_narrow(o, job_id=self._as_str(self._arg(args, kwargs, 0, 'job_id', ''), ''), value=self._arg(args, kwargs, 1, 'value', '')))
+        if name == 'mem_search_cancel':
+            return self._json(act_mem_search_cancel(o, job_id=self._as_str(self._arg(args, kwargs, 0, 'job_id', ''), '')))
+        if name == 'mem_attr_map':
+            return self._json(act_mem_attr_map(o, ent_addr=self._arg(args, kwargs, 0, 'ent_addr', '')))
+        if name == 'play_timeline':
+            return self._json(act_timeline_play(o, speed=_safe_timeline_speed(self._arg(args, kwargs, 0, 'speed', 1.0))))
+        if name == 'pause_timeline':
+            return self._json(act_timeline_pause(o))
+        if name == 'step_timeline':
+            return self._json(act_timeline_step(o, delta_ms=self._as_int(self._arg(args, kwargs, 0, 'delta_ms', 1000), 1000)))
+        if name == 'seek_timeline':
+            return self._json(act_timeline_seek(o, cursor_ms=self._as_int(self._arg(args, kwargs, 0, 'cursor_ms', 0), 0)))
+        if name == 'set_timeline_speed':
+            return self._json(act_timeline_set_speed(o, speed=_safe_timeline_speed(self._arg(args, kwargs, 0, 'speed', 1.0))))
+        if name == 'filter_timeline':
+            return self._json(act_timeline_filter(o, query=self._as_str(self._arg(args, kwargs, 0, 'query', ''), '')))
+        if name == 'get_action_log_status':
+            params = {'limit': self._as_int(self._arg(args, kwargs, 0, 'limit', 80), 80), 'query': self._as_str(self._arg(args, kwargs, 1, 'query', ''), ''), 'topic': self._as_str(self._arg(args, kwargs, 2, 'topic', ''), ''), 'source': self._as_str(self._arg(args, kwargs, 4, 'source', 'live'), 'live'), 'encounter_id': self._as_str(self._arg(args, kwargs, 5, 'encounter_id', ''), ''), 'offset': self._as_int(self._arg(args, kwargs, 6, 'offset', 0), 0)}
+            cursor_ms = self._arg(args, kwargs, 3, 'cursor_ms', None)
+            if cursor_ms is not None:
+                params['cursor_ms'] = self._as_int(cursor_ms, 0)
+            return self._json(act_action_log_status(o, **params))
+        if name == 'search_action_log':
+            return self._json(act_action_log_search(o, query=self._as_str(self._arg(args, kwargs, 0, 'query', ''), ''), limit=self._as_int(self._arg(args, kwargs, 1, 'limit', 80), 80), source=self._as_str(self._arg(args, kwargs, 2, 'source', 'live'), 'live'), encounter_id=self._as_str(self._arg(args, kwargs, 3, 'encounter_id', ''), ''), offset=self._as_int(self._arg(args, kwargs, 4, 'offset', 0), 0)))
+        if name == 'filter_action_log':
+            query = self._arg(args, kwargs, 1, 'query', None)
+            return self._json(act_action_log_filter(o, topic=self._as_str(self._arg(args, kwargs, 0, 'topic', ''), ''), query=None if query is None else self._as_str(query, ''), limit=self._as_int(self._arg(args, kwargs, 2, 'limit', 80), 80), source=self._as_str(self._arg(args, kwargs, 3, 'source', 'live'), 'live'), encounter_id=self._as_str(self._arg(args, kwargs, 4, 'encounter_id', ''), ''), offset=self._as_int(self._arg(args, kwargs, 5, 'offset', 0), 0)))
+        if name == 'jump_action_log_time':
+            topic = self._arg(args, kwargs, 5, 'topic', None)
+            return self._json(act_action_log_jump_to_time(o, cursor_ms=self._as_int(self._arg(args, kwargs, 0, 'cursor_ms', 0), 0), limit=self._as_int(self._arg(args, kwargs, 1, 'limit', 80), 80), source=self._as_str(self._arg(args, kwargs, 2, 'source', 'live'), 'live'), encounter_id=self._as_str(self._arg(args, kwargs, 3, 'encounter_id', ''), ''), offset=self._as_int(self._arg(args, kwargs, 4, 'offset', 0), 0), topic=None if topic is None else self._as_str(topic, '')))
+        if name == 'show_action_log_at':
+            self._show_panel_surface('action_log')
+            topic = self._arg(args, kwargs, 3, 'topic', None)
+            result = act_action_log_jump_to_time(o, cursor_ms=self._as_int(self._arg(args, kwargs, 0, 'cursor_ms', 0), 0), limit=80, source=self._as_str(self._arg(args, kwargs, 1, 'source', 'live'), 'live'), encounter_id=self._as_str(self._arg(args, kwargs, 2, 'encounter_id', ''), ''), offset=0, topic=None if topic is None else self._as_str(topic, ''))
+            self._eval_surface('action_log', 'if(window.ActionLog&&ActionLog.refresh)ActionLog.refresh()')
+            return self._json(result)
+        if name == 'copy_action_log':
+            return self._json(act_action_log_copy(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 80), 80), query=self._as_str(self._arg(args, kwargs, 1, 'query', ''), ''), topic=self._as_str(self._arg(args, kwargs, 2, 'topic', ''), ''), source=self._as_str(self._arg(args, kwargs, 3, 'source', 'live'), 'live'), encounter_id=self._as_str(self._arg(args, kwargs, 4, 'encounter_id', ''), ''), offset=self._as_int(self._arg(args, kwargs, 5, 'offset', 0), 0)))
+        if name == 'get_death_recap_status':
+            return self._json(act_death_recap_status(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 80), 80), window_s=self._as_float(self._arg(args, kwargs, 1, 'window_s', 8.0), 8.0), entity_id=self._arg(args, kwargs, 2, 'entity_id', None)))
+        if name == 'copy_death_recap':
+            return self._json(act_death_recap_copy(o, limit=self._as_int(self._arg(args, kwargs, 0, 'limit', 80), 80), window_s=self._as_float(self._arg(args, kwargs, 1, 'window_s', 8.0), 8.0), entity_id=self._arg(args, kwargs, 2, 'entity_id', None)))
+        if name == 'get_graph_timeseries_status':
+            params = {'limit': self._as_int(self._arg(args, kwargs, 1, 'limit', 120), 120)}
+            for idx, key in ((0, 'metric'), (2, 'query'), (3, 'topic')):
+                value = self._arg(args, kwargs, idx, key, None)
+                if value is not None:
+                    params[key] = self._as_str(value, '')
+            time_range_ms = self._arg(args, kwargs, 4, 'time_range_ms', None)
+            if time_range_ms is not None:
+                params['time_range_ms'] = self._as_int(time_range_ms, 0)
+            return self._json(act_graph_timeseries_status(o, **params))
+        if name == 'select_graph_metric':
+            return self._json(act_graph_timeseries_select_metric(o, metric=self._as_str(self._arg(args, kwargs, 0, 'metric', 'damage'), 'damage'), limit=self._as_int(self._arg(args, kwargs, 1, 'limit', 120), 120)))
+        if name == 'zoom_graph_timeseries':
+            return self._json(act_graph_timeseries_zoom(o, time_range_ms=self._as_int(self._arg(args, kwargs, 0, 'time_range_ms', 0), 0), limit=self._as_int(self._arg(args, kwargs, 1, 'limit', 120), 120)))
+        if name == 'filter_graph_timeseries':
+            query = self._arg(args, kwargs, 0, 'query', None)
+            topic = self._arg(args, kwargs, 1, 'topic', None)
+            return self._json(act_graph_timeseries_filter(o, query=None if query is None else self._as_str(query, ''), topic=None if topic is None else self._as_str(topic, ''), limit=self._as_int(self._arg(args, kwargs, 2, 'limit', 120), 120)))
+        if name == 'export_graph_timeseries':
+            metric = self._arg(args, kwargs, 0, 'metric', None)
+            query = self._arg(args, kwargs, 2, 'query', None)
+            topic = self._arg(args, kwargs, 3, 'topic', None)
+            return self._json(act_graph_timeseries_export(o, metric=None if metric is None else self._as_str(metric, ''), limit=self._as_int(self._arg(args, kwargs, 1, 'limit', 120), 120), query=None if query is None else self._as_str(query, ''), topic=None if topic is None else self._as_str(topic, '')))
+        if name == 'get_combatant_drilldown_status':
+            return self._json(act_combatant_drilldown_status(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), query=self._arg(args, kwargs, 1, 'query', None), focus_target=self._arg(args, kwargs, 2, 'focus_target', None)))
+        if name == 'filter_combatant_drilldown':
+            return self._json(act_combatant_drilldown_filter(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), query=self._as_str(self._arg(args, kwargs, 1, 'query', ''), '')))
+        if name == 'focus_combatant_target':
+            return self._json(act_combatant_drilldown_focus_target(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), target_id=self._as_str(self._arg(args, kwargs, 1, 'target_id', ''), '')))
+        if name == 'back_combatant_drilldown':
+            return self._json(act_combatant_drilldown_back(o))
+        if name == 'get_skill_drilldown_status':
+            return self._json(act_skill_drilldown_status(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), skill_id=self._arg(args, kwargs, 1, 'skill_id', None), query=self._arg(args, kwargs, 2, 'query', None), limit=self._as_int(self._arg(args, kwargs, 3, 'limit', 80), 80)))
+        if name == 'filter_skill_drilldown':
+            return self._json(act_skill_drilldown_filter(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), skill_id=self._arg(args, kwargs, 1, 'skill_id', None), query=self._as_str(self._arg(args, kwargs, 2, 'query', ''), ''), limit=self._as_int(self._arg(args, kwargs, 3, 'limit', 80), 80)))
+        if name == 'copy_skill_drilldown':
+            return self._json(act_skill_drilldown_copy(o, combatant_id=self._arg(args, kwargs, 0, 'combatant_id', None), skill_id=self._arg(args, kwargs, 1, 'skill_id', None), query=self._arg(args, kwargs, 2, 'query', None), limit=self._as_int(self._arg(args, kwargs, 3, 'limit', 80), 80)))
+        if name == 'back_skill_drilldown':
+            return self._json(act_skill_drilldown_back(o))
+        if name == 'open_skill_drilldown':
+            cid = self._as_str(self._arg(args, kwargs, 0, 'combatant_id', ''), '')
+            sid = self._as_str(self._arg(args, kwargs, 1, 'skill_id', ''), '')
+            self._show_panel_surface('skill_drilldown')
+            status = act_skill_drilldown_status(o, combatant_id=cid or None, skill_id=sid or None, query=None, limit=80)
+            js = "(function(){var c=document.getElementById('combatantId'),s=document.getElementById('skillId');" + "if(c)c.value=" + json.dumps(cid) + ";if(s)s.value=" + json.dumps(sid) + ";" + "if(window.SkillDrilldown&&SkillDrilldown.refresh)SkillDrilldown.refresh();})()"
+            self._eval_surface('skill_drilldown', js)
+            return self._json(status)
+        if name == 'get_trigger_status':
+            return self._json(act_trigger_status(o))
+        if name == 'enable_trigger':
+            return self._json(act_trigger_enable(o, self._as_str(self._arg(args, kwargs, 0, 'rule_id', ''), '')))
+        if name == 'disable_trigger':
+            return self._json(act_trigger_disable(o, self._as_str(self._arg(args, kwargs, 0, 'rule_id', ''), '')))
+        if name == 'reload_triggers':
+            return self._json(act_trigger_reload(o))
+        if name == 'test_trigger':
+            return self._json(act_trigger_test(o, self._as_str(self._arg(args, kwargs, 0, 'rule_id', ''), '')))
+        raise AttributeError(name)
 
     # ── common helpers ──
     def _json_error(self, exc: Exception, **extra):
@@ -313,11 +741,11 @@ class StarResonanceWebViewBridge:
         var before = beforeName ? menuBar.querySelector('[data-name="' + beforeName + '"]') : null;
         menuBar.insertBefore(li, before || null);
     }
-    addMenuItem('userInfo', '<span class="sao-icon sao-icon-user"></span>', 'act', { persistent: true });
-    addMenuItem('panels', '<span class="sao-icon sao-icon-settings"></span>', 'act');
-    addMenuItem('skillEffects', '<span style="font-size:15px;line-height:1;color:var(--menu-icon);">9</span>', 'act');
-    addMenuItem('autoKeys', '<span class="sao-icon sao-icon-settings"></span>', 'act');
-    addMenuItem('bossRaid', '<span class="sao-icon sao-icon-act"></span>', 'act');
+    addMenuItem('userInfo', '<span class="sao-icon sao-icon-user"></span>', 'theme', { persistent: true });
+    addMenuItem('panels', '<span class="sao-icon sao-icon-settings"></span>', 'theme');
+    addMenuItem('skillEffects', '<span style="font-size:15px;line-height:1;color:var(--menu-icon);">9</span>', 'theme');
+    addMenuItem('autoKeys', '<span class="sao-icon sao-icon-settings"></span>', 'theme');
+    addMenuItem('bossRaid', '<span class="sao-icon sao-icon-panel"></span>', 'theme');
 
     var childBar = document.getElementById('child-bar');
     if (childBar) {
@@ -373,6 +801,17 @@ class StarResonanceWebViewBridge:
             if callable(reg):
                 reg(surface, win, title=title, **meta)
             return win
+
+        def _toggle_meta(visible_attr: str, theme_key: str, **extra):
+            meta = {
+                'click_through': False,
+                'on_top': True,
+                'surface_group': 'plugin',
+                'visible_attr': visible_attr,
+                'theme_key': theme_key,
+            }
+            meta.update(extra)
+            return meta
 
         hp_url = _plugin_web_uri('hp.html')
         hud_w = int(_sw * 0.75)
@@ -577,6 +1016,210 @@ class StarResonanceWebViewBridge:
             on_top=True,
             js_api=o._commander_api,
         ), 'SAO-Commander', click_through=False, dotnet_transparency=False, on_top=True)
+
+        trigger_timer_url = _plugin_web_uri('trigger_timer_manager.html')
+        trigger_timer_w = max(640, int(min(_sw, 1920) * 0.40))
+        trigger_timer_h = max(520, int(min(_sh, 1080) * 0.52))
+        trigger_timer_x = max(16, int(monitor_left + (_sw - trigger_timer_w) * 0.58))
+        trigger_timer_y = max(24, int(monitor_top + (_sh - trigger_timer_h) * 0.23))
+        o.trigger_timer_win = _register('trigger_timer', webview_module.create_window(
+            'SAO-TriggerTimerManager', trigger_timer_url,
+            width=trigger_timer_w, height=trigger_timer_h,
+            x=trigger_timer_x, y=trigger_timer_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-TriggerTimerManager', **_toggle_meta('_trigger_timer_manager_visible', 'trigger_timer'))
+
+        data_source_health_url = _plugin_web_uri('data_source_health.html')
+        data_source_health_w = max(640, int(min(_sw, 1920) * 0.40))
+        data_source_health_h = max(500, int(min(_sh, 1080) * 0.50))
+        data_source_health_x = max(16, int(monitor_left + (_sw - data_source_health_w) * 0.45))
+        data_source_health_y = max(24, int(monitor_top + (_sh - data_source_health_h) * 0.28))
+        o.data_source_health_win = _register('data_source_health', webview_module.create_window(
+            'SAO-DataSourceHealth', data_source_health_url,
+            width=data_source_health_w, height=data_source_health_h,
+            x=data_source_health_x, y=data_source_health_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-DataSourceHealth', **_toggle_meta('_data_source_health_visible', 'data_source_health'))
+
+        report_export_url = _plugin_web_uri('act_report_export.html')
+        report_export_w = max(680, int(min(_sw, 1920) * 0.42))
+        report_export_h = max(520, int(min(_sh, 1080) * 0.52))
+        report_export_x = max(16, int(monitor_left + (_sw - report_export_w) * 0.40))
+        report_export_y = max(24, int(monitor_top + (_sh - report_export_h) * 0.24))
+        o.report_export_win = _register('report_export', webview_module.create_window(
+            'SAO-ReportExport', report_export_url,
+            width=report_export_w, height=report_export_h,
+            x=report_export_x, y=report_export_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-ReportExport', **_toggle_meta('_report_export_visible', 'report_export'))
+
+        offline_import_url = _plugin_web_uri('act_offline_import.html')
+        offline_import_w = max(700, int(min(_sw, 1920) * 0.44))
+        offline_import_h = max(520, int(min(_sh, 1080) * 0.52))
+        offline_import_x = max(16, int(monitor_left + (_sw - offline_import_w) * 0.42))
+        offline_import_y = max(24, int(monitor_top + (_sh - offline_import_h) * 0.26))
+        o.offline_import_win = _register('offline_import', webview_module.create_window(
+            'SAO-OfflineImport', offline_import_url,
+            width=offline_import_w, height=offline_import_h,
+            x=offline_import_x, y=offline_import_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-OfflineImport', **_toggle_meta('_offline_import_visible', 'offline_import'))
+
+        timeline_vcr_url = _plugin_web_uri('act_timeline_vcr.html')
+        timeline_vcr_w = max(700, int(min(_sw, 1920) * 0.43))
+        timeline_vcr_h = max(520, int(min(_sh, 1080) * 0.52))
+        timeline_vcr_x = max(16, int(monitor_left + (_sw - timeline_vcr_w) * 0.34))
+        timeline_vcr_y = max(24, int(monitor_top + (_sh - timeline_vcr_h) * 0.18))
+        o.timeline_vcr_win = _register('timeline_vcr', webview_module.create_window(
+            'SAO-TimelineVCR', timeline_vcr_url,
+            width=timeline_vcr_w, height=timeline_vcr_h,
+            x=timeline_vcr_x, y=timeline_vcr_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-TimelineVCR', **_toggle_meta('_timeline_vcr_visible', 'timeline_vcr'))
+
+        act_aggregate_url = _plugin_web_uri('act_aggregate.html')
+        act_aggregate_w = max(820, int(min(_sw, 1920) * 0.54))
+        act_aggregate_h = max(620, int(min(_sh, 1080) * 0.62))
+        act_aggregate_x = max(16, int(monitor_left + (_sw - act_aggregate_w) * 0.25))
+        act_aggregate_y = max(22, int(monitor_top + (_sh - act_aggregate_h) * 0.14))
+        o.act_aggregate_win = _register('act_aggregate', webview_module.create_window(
+            'SAO-ActAggregate', act_aggregate_url,
+            width=act_aggregate_w, height=act_aggregate_h,
+            x=act_aggregate_x, y=act_aggregate_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-ActAggregate', **_toggle_meta('_act_aggregate_visible', 'act_aggregate'))
+
+        mem_scope_url = _plugin_web_uri('mem_scope.html')
+        mem_scope_w = max(780, int(min(_sw, 1920) * 0.52))
+        mem_scope_h = max(620, int(min(_sh, 1080) * 0.62))
+        mem_scope_x = max(16, int(monitor_left + (_sw - mem_scope_w) * 0.30))
+        mem_scope_y = max(22, int(monitor_top + (_sh - mem_scope_h) * 0.12))
+        o.mem_scope_win = _register('mem_scope', webview_module.create_window(
+            'SAO-MemScope', mem_scope_url,
+            width=mem_scope_w, height=mem_scope_h,
+            x=mem_scope_x, y=mem_scope_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-MemScope', **_toggle_meta('_mem_scope_visible', 'mem_scope'))
+
+        action_log_url = _plugin_web_uri('act_action_log.html')
+        action_log_w = max(760, int(min(_sw, 1920) * 0.48))
+        action_log_h = max(520, int(min(_sh, 1080) * 0.54))
+        action_log_x = max(16, int(monitor_left + (_sw - action_log_w) * 0.30))
+        action_log_y = max(24, int(monitor_top + (_sh - action_log_h) * 0.20))
+        o.action_log_win = _register('action_log', webview_module.create_window(
+            'SAO-ActionLog', action_log_url,
+            width=action_log_w, height=action_log_h,
+            x=action_log_x, y=action_log_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-ActionLog', **_toggle_meta('_action_log_visible', 'action_log'))
+
+        death_recap_url = _plugin_web_uri('act_death_recap.html')
+        death_recap_w = max(720, int(min(_sw, 1920) * 0.44))
+        death_recap_h = max(500, int(min(_sh, 1080) * 0.50))
+        death_recap_x = max(18, int(monitor_left + (_sw - death_recap_w) * 0.32))
+        death_recap_y = max(26, int(monitor_top + (_sh - death_recap_h) * 0.23))
+        o.death_recap_win = _register('death_recap', webview_module.create_window(
+            'SAO-DeathRecap', death_recap_url,
+            width=death_recap_w, height=death_recap_h,
+            x=death_recap_x, y=death_recap_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-DeathRecap', **_toggle_meta('_death_recap_visible', 'death_recap'))
+
+        graph_timeseries_url = _plugin_web_uri('act_graph_timeseries.html')
+        graph_timeseries_w = max(780, int(min(_sw, 1920) * 0.50))
+        graph_timeseries_h = max(540, int(min(_sh, 1080) * 0.55))
+        graph_timeseries_x = max(16, int(monitor_left + (_sw - graph_timeseries_w) * 0.27))
+        graph_timeseries_y = max(24, int(monitor_top + (_sh - graph_timeseries_h) * 0.22))
+        o.graph_timeseries_win = _register('graph_timeseries', webview_module.create_window(
+            'SAO-GraphTimeseries', graph_timeseries_url,
+            width=graph_timeseries_w, height=graph_timeseries_h,
+            x=graph_timeseries_x, y=graph_timeseries_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-GraphTimeseries', **_toggle_meta('_graph_timeseries_visible', 'graph_timeseries'))
+
+        combatant_drilldown_url = _plugin_web_uri('act_combatant_drilldown.html')
+        combatant_drilldown_w = max(720, int(min(_sw, 1920) * 0.46))
+        combatant_drilldown_h = max(520, int(min(_sh, 1080) * 0.54))
+        combatant_drilldown_x = max(20, int(monitor_left + (_sw - combatant_drilldown_w) * 0.31))
+        combatant_drilldown_y = max(28, int(monitor_top + (_sh - combatant_drilldown_h) * 0.25))
+        o.combatant_drilldown_win = _register('combatant_drilldown', webview_module.create_window(
+            'SAO-CombatantDrilldown', combatant_drilldown_url,
+            width=combatant_drilldown_w, height=combatant_drilldown_h,
+            x=combatant_drilldown_x, y=combatant_drilldown_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-CombatantDrilldown', **_toggle_meta('_combatant_drilldown_visible', 'combatant_drilldown'))
+
+        skill_drilldown_url = _plugin_web_uri('act_skill_drilldown.html')
+        skill_drilldown_w = max(720, int(min(_sw, 1920) * 0.45))
+        skill_drilldown_h = max(500, int(min(_sh, 1080) * 0.52))
+        skill_drilldown_x = max(24, int(monitor_left + (_sw - skill_drilldown_w) * 0.34))
+        skill_drilldown_y = max(32, int(monitor_top + (_sh - skill_drilldown_h) * 0.28))
+        o.skill_drilldown_win = _register('skill_drilldown', webview_module.create_window(
+            'SAO-SkillDrilldown', skill_drilldown_url,
+            width=skill_drilldown_w, height=skill_drilldown_h,
+            x=skill_drilldown_x, y=skill_drilldown_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-SkillDrilldown', **_toggle_meta('_skill_drilldown_visible', 'skill_drilldown'))
         return True
 
     def initialize_owner_state(self) -> None:
@@ -1320,6 +1963,43 @@ class StarResonanceWebViewBridge:
             o._eval_hp('setSTAOffline(false)')
         except Exception:
             pass
+
+    def on_recognition_changed(self, active: bool = False):
+        if not bool(active):
+            self._reset_sta_offline_state()
+
+    def build_default_display_regions(self, win_w: int, win_h: int, viewport_h: int):
+        stage_width = int(win_w * 0.75)
+
+        def _rect(left, top, width, height):
+            return {
+                'left': int(left),
+                'top': int(top),
+                'width': int(max(0, width)),
+                'height': int(max(0, height)),
+            }
+
+        id_w = int(stage_width * 0.42)
+        id_h = 136
+        id_left = int(stage_width * 0.01)
+        id_top = int(viewport_h) - 146
+
+        hp_w = int(stage_width * 0.34)
+        hp_h = 118
+        hp_left = int(stage_width * 0.48)
+        hp_top = int(viewport_h) - 112
+
+        stamina_w = int(stage_width * 0.30)
+        stamina_h = 38
+        stamina_left = int(stage_width * 0.53)
+        stamina_top = int(viewport_h) - 42
+
+        return [
+            _rect(id_left, id_top, id_w, id_h),
+            _rect(hp_left - 44, hp_top - 18, hp_w + 88, hp_h + 36),
+            _rect(hp_left, hp_top, hp_w, hp_h),
+            _rect(stamina_left, stamina_top, stamina_w, stamina_h),
+        ]
 
     def _should_show_sta_offline(self, gs) -> bool:
         if gs is None:
@@ -2081,14 +2761,38 @@ class StarResonanceWebViewBridge:
 
     def panel_theme_defaults(self):
         return {
+            'hp': 'dark',
+            'alert': 'dark',
             'dps': 'dark',
-            'bosshp': 'dark',
+            'boss_hp': 'dark',
             'skillfx': 'dark',
             'buffmon': 'dark',
+            'trigger_timer': 'dark',
+            'data_source_health': 'dark',
+            'report_export': 'dark',
+            'offline_import': 'dark',
+            'timeline_vcr': 'dark',
+            'act_aggregate': 'dark',
+            'mem_scope': 'dark',
+            'action_log': 'dark',
+            'death_recap': 'dark',
+            'graph_timeseries': 'dark',
+            'combatant_drilldown': 'dark',
+            'skill_drilldown': 'dark',
+            'raid_editor': 'dark',
+            'autokey_editor': 'dark',
+            'commander': 'dark',
         }
 
     def panel_theme_keys(self):
-        return ('dps', 'bosshp', 'boss_hp', 'skillfx', 'buffmon')
+        return (
+            'hp', 'alert', 'dps', 'boss_hp', 'bosshp', 'skillfx', 'buffmon',
+            'trigger_timer', 'data_source_health', 'report_export',
+            'offline_import', 'timeline_vcr', 'act_aggregate', 'mem_scope',
+            'action_log', 'death_recap', 'graph_timeseries',
+            'combatant_drilldown', 'skill_drilldown', 'raid_editor',
+            'autokey_editor', 'commander',
+        )
 
     def on_panel_theme_changed(self, panel: str, theme: str):
         if str(panel or '').lower() != 'buffmon':
@@ -2138,8 +2842,21 @@ class StarResonanceWebViewBridge:
         }
 
     def menu_action(self, action: str):
+        o = self.owner
         mapping = {
             'toggle_auto_script': self._toggle_auto_script,
+            'toggle_trigger_timer_manager': lambda: self._toggle_panel_surface('trigger_timer'),
+            'toggle_data_source_health': lambda: self._toggle_panel_surface('data_source_health'),
+            'toggle_report_export': lambda: self._toggle_panel_surface('report_export'),
+            'toggle_offline_import': lambda: self._toggle_panel_surface('offline_import'),
+            'toggle_timeline_vcr': lambda: self._toggle_panel_surface('timeline_vcr'),
+            'toggle_act_aggregate': lambda: self._toggle_panel_surface('act_aggregate'),
+            'toggle_mem_scope': lambda: self._toggle_panel_surface('mem_scope'),
+            'toggle_action_log': lambda: self._toggle_panel_surface('action_log'),
+            'toggle_death_recap': lambda: self._toggle_panel_surface('death_recap'),
+            'toggle_graph_timeseries': lambda: self._toggle_panel_surface('graph_timeseries'),
+            'toggle_combatant_drilldown': lambda: self._toggle_panel_surface('combatant_drilldown'),
+            'toggle_skill_drilldown': lambda: self._toggle_panel_surface('skill_drilldown'),
             'toggle_raid_editor': lambda: self._hide_raid_editor()
             if getattr(self.owner, '_raid_editor_visible', False) else self._show_raid_editor(),
             'toggle_autokey_editor': lambda: self._hide_autokey_editor()
@@ -3143,7 +3860,7 @@ class StarResonanceWebViewBridge:
                 return
             publish_owner_event(o, 'act_snapshot', snapshot, source_name='webview', source_kind='ui')
             try:
-                hooked = act_render_apply_hooks(o, 'dps', snapshot)
+                hooked = platform_render_apply_hooks(o, 'dps', snapshot)
                 if hooked.get('ok') and hooked.get('payload') is not None:
                     snapshot = hooked['payload']
             except Exception:

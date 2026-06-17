@@ -8,13 +8,61 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 MENU_HTML = ROOT / "web" / "menu.html"
 SAO_WEBVIEW = ROOT / "sao_webview.py"
 HUD_SETTINGS_BRIDGE = ROOT / "C#" / "src" / "SaoAuto.App" / "WebBridge" / "HudSettingsBridge.cs"
 ITEM_SIZE_PX = 54
 ITEM_GAP_PX = 15
 FRAME_MARGIN_PX = 6
+
+PLATFORM_MENU_REQUIRED_SNIPPETS = [
+    "function _jsAttrArg(value)",
+    "function _callMenuSettingApi(methodName, args, label, onOk, onFail)",
+    "function _menuApiObject(value)",
+    "function _menuParseApiResult(result)",
+    "function _profileText(value, fallback)",
+    "function _saoUpdaterBadgeClass(variant)",
+    "function _lbPayload(dataJson)",
+    "function _lbText(value, fallback)",
+    "function _lbFirstText(values, fallback)",
+    "function _lbSortKey(value, fallback)",
+    "function _lbSyncTabs()",
+    "function _pluginCountNumber(value)",
+    "entry.renderSig === renderSig",
+]
+
+PLATFORM_MENU_FORBIDDEN_RAW_SNIPPETS = [
+    "var data = (typeof dataJson === 'string') ? JSON.parse(dataJson) : dataJson;",
+    "body.innerHTML = '';",
+    "grid.innerHTML = '';",
+    "ui.badge.className = 'saoUpdaterBadge' + (variant ? ' ' + variant : '');",
+]
+
+PLATFORM_MENU_FORBIDDEN_TOKENS = [
+    "set_buffmon_enabled",
+    "get_buffmon_enabled",
+    "set_auto_key_server_url",
+    "get_auto_key_state",
+    "set_boss_raid_server_url",
+    "get_boss_raid_state",
+    "raid_next_phase",
+    "raid_reset",
+    "boss_raid_start",
+    "boss_raid_stop",
+    "toggle_autokey_editor",
+    "toggle_raid_editor",
+    "SAO-HP",
+    "SAO Alert",
+    "MapBanner",
+    "MechBanner",
+    "BossHP",
+    "BossRaid",
+    "AutoKey",
+    "BuffMon",
+    "Star Resonance",
+    "星痕",
+]
 
 
 def _read_menu() -> str:
@@ -33,6 +81,18 @@ def _px_property(block: str, prop: str) -> int:
     if not match:
         raise AssertionError(f"missing px property: {prop}")
     return int(match.group(1))
+
+
+def _assert_contains_all(source: str, snippets: list[str], label: str) -> None:
+    for snippet in snippets:
+        if snippet not in source:
+            raise AssertionError(f"missing {label} snippet: {snippet}")
+
+
+def _assert_contains_none(source: str, snippets: list[str], label: str) -> None:
+    for snippet in snippets:
+        if snippet in source:
+            raise AssertionError(f"unexpected {label} snippet: {snippet}")
 
 
 def main() -> int:
@@ -66,6 +126,54 @@ def main() -> int:
         raise AssertionError("menu frame scan line does not sweep through the full item column")
     if js_frame_height != frame_height:
         raise AssertionError("openMenu() viewport clamp must match .menu-frame height")
+
+    if html.count("function _escAttr") != 1:
+        raise AssertionError("menu.html must define exactly one robust _escAttr helper")
+
+    _assert_contains_all(html, PLATFORM_MENU_REQUIRED_SNIPPETS, "platform menu")
+    _assert_contains_none(html, PLATFORM_MENU_FORBIDDEN_RAW_SNIPPETS, "stale platform menu")
+    _assert_contains_none(html, PLATFORM_MENU_FORBIDDEN_TOKENS, "plugin-owned platform token")
+
+    leaderboard_payload_raw_patterns = [
+        "_lbEntries = (data && data.entries) ? data.entries.slice() : [];",
+        "_lbSelfDevice = data.self_device || '';",
+        "_lbSelfDeviceName = data.self_player_id || data.self_device_name || '';",
+        "document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + (_lbSelfDeviceName || '--');",
+    ]
+    _assert_contains_none(html, leaderboard_payload_raw_patterns, "unsafe leaderboard payload")
+
+    leaderboard_payload_safe_required = [
+        "function _lbPayload(dataJson)",
+        "try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }",
+        "_lbEntries = Array.isArray(data.entries) ? data.entries.map(function(e) { return (e && typeof e === 'object') ? e : {}; }) : [];",
+        "_lbSelfDevice = _lbText(data.self_device, '');",
+        "_lbSelfDeviceName = _lbFirstText([data.self_player_id, data.self_device_name], '');",
+        "document.getElementById('lb-self-id').textContent = 'PLAYER ID: ' + _lbText(_lbSelfDeviceName, '--');",
+    ]
+    _assert_contains_all(html, leaderboard_payload_safe_required, "safe leaderboard payload")
+
+    leaderboard_sort_raw_patterns = [
+        "_lbCurrentSort = data.sort || _lbCurrentSort;",
+        "_lbCurrentSort = tab.getAttribute('data-sort');",
+        "window.pywebview.api.fetch_leaderboard(_lbCurrentSort);",
+    ]
+    _assert_contains_none(html, leaderboard_sort_raw_patterns, "unsafe leaderboard sort")
+
+    leaderboard_sort_safe_required = [
+        "function _lbSortKey(value, fallback)",
+        "var allowed = { xp: true, level: true, songs_played: true, play_time: true };",
+        "var activeTab = document.querySelector('.lb-tab[data-sort=\"' + _lbSortKey(_lbCurrentSort, 'xp') + '\"]');",
+        "_lbCurrentSort = _lbSortKey(data.sort, _lbCurrentSort);",
+        "_lbCurrentSort = _lbSortKey(tab.getAttribute('data-sort'), _lbCurrentSort);",
+        "_lbRestoreAfterFetchFailure(previousSort, _menuApiMessage(data, '无法刷新排行榜 / Unable to refresh leaderboard'));",
+    ]
+    _assert_contains_all(html, leaderboard_sort_safe_required, "safe leaderboard sort")
+
+    print(
+        f"OK web menu layout: {item_count} items, "
+        f"item_box={item_box_height}px, frame={frame_height}px"
+    )
+    return 0
 
     if "onclick=\"_akActivateProfile(' + JSON.stringify(id) + ')" in html:
         raise AssertionError("AutoKey profile onclick must HTML-escape JSON string args")
@@ -998,7 +1106,7 @@ def main() -> int:
         "var root = document.documentElement;",
         "root.classList.toggle('theme-dark', themeName === 'dark');",
         "root.classList.toggle('theme-light', themeName === 'light');",
-        "root.dataset.actTheme = themeName;",
+        "root.dataset.panelTheme = themeName;",
         "root.style.colorScheme = themeName;",
         "var panelName = _themePanelName(panel);",
         "if (!panelName) return;",
