@@ -24,7 +24,6 @@ Methods:
 
 Required SAOPlayerGUI attrs:
   * self._sao_menu
-  * self._sta_hp, self._sta_sta
   * self._alert_overlay, self._hp_overlay, self._recognition_active
   * self._float, self.root, self.settings, self._cfg_settings_ref
   * self._profile_dialog_ref, self._profile_dialog_pending

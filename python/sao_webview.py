@@ -18,7 +18,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
-from utils import sao_tts
 from act_platform.runtime import (
     act_action_log_copy,
     act_action_log_filter,
@@ -153,26 +152,6 @@ def _sound_volume_value(volume_pct: Any) -> int:
         value = 70.0
     return max(0, min(100, int(value)))
 
-
-def _watched_slot_ids(slots: Any) -> List[int]:
-    if isinstance(slots, str):
-        try:
-            slots = json.loads(slots)
-        except Exception:
-            slots = []
-    if not isinstance(slots, (list, tuple, set)):
-        slots = []
-    normalized: List[int] = []
-    seen = set()
-    for raw in slots:
-        try:
-            slot = int(float(raw))
-        except (TypeError, ValueError):
-            continue
-        if 1 <= slot <= 9 and slot not in seen:
-            seen.add(slot)
-            normalized.append(slot)
-    return normalized
 
 
 def _web_file_uri(filename: str) -> str:
@@ -1289,16 +1268,12 @@ class SAOWebViewGUI:
         except Exception:
             self._sao_sound = None
 
-        # 角色展示由游戏插件 on_load 注入；平台不提供游戏身份默认值
-        self._username = ''
-        self._profession = ''
-        self._level = 0
-        self._last_displayed_level_base = 0
-        self._sta_offline_armed = False
+        # 角色身份/进度/STA 状态由游戏插件 on_load 通过 webview_bridge 注入；
+        # 平台不持有任何游戏字段定义。
 
-        # 识别状态
+        # 识别状态 (识别引擎本身由插件提供, 平台只保留通用开关引用)
         self._recognition_active = False
-        self._game_state = None  # GameState dataclass
+        self._game_state = None  # 由插件填充的最近一帧游戏状态快照
         self._state_mgr = None
         self._recognition_engine = None
         self._recognition_engines = []
@@ -1450,14 +1425,6 @@ class SAOWebViewGUI:
                 self._sao_sound.play_sound(name)
             except Exception:
                 pass
-
-    def _send_linked_key(self, key: str, press_mode: str = "tap",
-                         hold_ms: int = 80, press_count: int = 1):
-        """Delegate game-specific key dispatch to the loaded game plugin."""
-        try:
-            return self._game_plugin_call('_send_linked_key', key, press_mode, hold_ms, press_count)
-        except Exception as e:
-            print(f"[Linkage] send_key error: {e}")
 
     def _set_setting(self, key: str, value):
         """Persist a setting to cfg_settings and save."""
@@ -5395,7 +5362,6 @@ class SAOWebViewGUI:
         threading.Thread(target=_init, daemon=True).start()
 
     def _get_panel_state(self):
-        gs = self._game_state
         return {
             'speed': 1.0,
             'transpose': 0,

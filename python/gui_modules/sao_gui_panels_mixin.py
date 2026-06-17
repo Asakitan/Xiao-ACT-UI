@@ -56,7 +56,9 @@ from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManage
 from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
-# Game panels (Commander/CombatantDrilldown/DeathRecap/TriggerTimer) loaded lazily
+# Plugin-owned panels (Commander/DeathRecap/TriggerTimer) are loaded
+# lazily through ACT plugin manager hooks; the toggles below are
+# generic stubs and plugin classes register their real implementations.
 from gui_modules.sao_panel_ui import _set_sao_panel_theme
 
 

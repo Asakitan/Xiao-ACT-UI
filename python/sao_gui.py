@@ -211,13 +211,8 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self.settings.set('ui_mode', 'entity')
         self.settings.save()
 
-        # Plugin-populated display identity. The platform keeps no game defaults.
-        self._username = ''
-        self._profession = ''
-        self._level = 0
-        self._level_extra = 0
-        self._season_exp = 0
-        self._sta_offline_armed = False
+        # 角色身份/赛季进度/体力字段由游戏插件 on_load 注入；平台不持有任何
+        # 游戏字段定义 (插件通过 entity_menu_bridge.initialize_owner_state 设置)。
 
         self._current_file = None
         self._panels_hidden = False  # 一键隐藏所有面板
@@ -260,14 +255,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._breath_base_x = 0
         self._breath_base_y = 0
         self._breath_t0 = 0.0
-
-        # ── 体力覆盖板 (stamina overlay) ──
-        self._stamina_win = None
-        self._stamina_hwnd = 0
-        self._sta_w = 0
-        self._sta_h = 0
-        self._sta_hp = (0, 1)
-        self._sta_sta = (0, 1)
 
         # ── 识别引擎 ──
         self._recognition_active = False

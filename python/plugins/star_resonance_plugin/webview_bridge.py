@@ -520,6 +520,18 @@ class StarResonanceWebViewBridge:
         o._last_boss_timer_text = ''
         o._last_boss_timer_urgency = ''
         o._last_boss_event = {}
+        # Game identity / progression / vitals — owned by the plugin so the
+        # platform stays free of game-specific defaults.
+        if not hasattr(o, '_username'):
+            o._username = ''
+        if not hasattr(o, '_profession'):
+            o._profession = ''
+        if not hasattr(o, '_level'):
+            o._level = 0
+        if not hasattr(o, '_last_displayed_level_base'):
+            o._last_displayed_level_base = 0
+        if not hasattr(o, '_sta_offline_armed'):
+            o._sta_offline_armed = False
         if not getattr(o, '_auto_key_upload_auth', None):
             o._auto_key_upload_auth = default_upload_auth_state()
         if not getattr(o, '_boss_raid_upload_auth', None):

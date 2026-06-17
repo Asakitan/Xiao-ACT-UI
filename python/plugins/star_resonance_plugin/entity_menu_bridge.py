@@ -97,6 +97,16 @@ class StarResonanceEntityMenuBridge:
     def initialize_owner_state(self) -> None:
         owner = self.owner
         defaults = {
+            # Game identity / progression / vitals — owned by the plugin so
+            # the platform stays free of game-specific defaults.
+            '_username': '',
+            '_profession': '',
+            '_level': 0,
+            '_level_extra': 0,
+            '_season_exp': 0,
+            '_sta_offline_armed': False,
+            '_sta_hp': (0, 1),
+            '_sta_sta': (0, 1),
             '_player_panel': None,
             '_menu_left_stack': None,
             '_session_players_panel': None,
