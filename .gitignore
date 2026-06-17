@@ -89,6 +89,11 @@ license.db
 # ── AI Editor (user conversation history, local only) ──
 python/ai_editor_history/
 
+# ── Cython build intermediates ────────────────────
+*.c
+!python/plugins/star_resonance_plugin/protocol/**/*.c
+python/plugins/star_resonance_plugin/tools/out/
+
 # ── Misc ───────────────────────────────────────────
 .github/
 out/
