@@ -83,7 +83,7 @@ def cpu_features() -> dict:
 
 def _driver_status() -> dict:
     try:
-        from mem_probe import driver_backend as _drv
+        from mem_probe import rt_io as _drv
         return _drv.status()
     except Exception:
         return {"driver_available": False}

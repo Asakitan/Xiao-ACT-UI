@@ -79,7 +79,7 @@ except Exception:
 
 # optional backend
 try:
-    from mem_probe import driver_backend as _drv
+    from mem_probe import rt_io as _drv
 except Exception:
     _drv = None
 _DRIVER_OK = False
@@ -113,7 +113,7 @@ def _mem_read(handle, addr, buf, size, p_got):
     global _DRIVER_OK, _DRIVER_TRIED
     if _drv is not None:
         if _DRIVER_OK:
-            if _drv.driver_mem_read(handle, addr, buf, size, p_got):
+            if _drv._rpm(handle, addr, buf, size, p_got):
                 return True
         elif not _DRIVER_TRIED:
             _DRIVER_TRIED = True
@@ -122,7 +122,7 @@ def _mem_read(handle, addr, buf, size, p_got):
             except Exception:
                 _DRIVER_OK = False
             if _DRIVER_OK:
-                if _drv.driver_mem_read(handle, addr, buf, size, p_got):
+                if _drv._rpm(handle, addr, buf, size, p_got):
                     return True
     if _NTRVM is not None:
         return _NTRVM(

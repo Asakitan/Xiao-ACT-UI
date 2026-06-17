@@ -46,8 +46,8 @@ def collect_plugins():
             result.append((src, rel_root))
     return result
 
-# 5.0.0: 平台 hiddenimports — 游戏模块已搬到 plugins/star_resonance_plugin/,
-# 作为 DATA (.py) 打进包, 由插件加载器运行时 importlib 加载, 不需要 hiddenimports。
+# 5.0.0: 平台 hiddenimports — 插件模块作为 DATA (.py) 打进包，由插件加载器
+# 运行时 importlib 加载；平台 spec 不枚举具体游戏插件。
 LOCAL_HIDDENIMPORTS = [
     'sao_gui',
     'sao_webview',
@@ -63,11 +63,9 @@ GUI_MODULES_HIDDENIMPORTS = collect_submodules('gui_modules')
 REORG_PKG_HIDDENIMPORTS = (
     collect_submodules('utils')
     + collect_submodules('render')
-    + collect_submodules('engines')
     + collect_submodules('updater')
     + collect_submodules('sao_theme')
     + collect_submodules('act_platform')
-    + collect_submodules('act_replay')
     + collect_submodules('ui_gpu')
     + collect_submodules('ai_editor')
     + collect_submodules('license')
@@ -80,7 +78,7 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.mem_access',
     'mem_probe.pointer_chain',
     'mem_probe.scanner',
-    'mem_probe.driver_backend',
+    'mem_probe.rt_io',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
@@ -92,11 +90,11 @@ CYTHON_ACCEL_BINARIES = [
     (path, '.')
     for path in glob(os.path.join(HERE, '_sao_cy*.pyd'))
 ] + [
-    (path, 'plugins/star_resonance_plugin/cython')
-    for path in glob(os.path.join(HERE, 'plugins', 'star_resonance_plugin', 'cython', '_sao_cy*.pyd'))
+    (path, os.path.relpath(os.path.dirname(path), HERE))
+    for path in glob(os.path.join(HERE, 'plugins', '*', 'cython', '_sao_cy*.pyd'))
 ] + [
     (path, 'mem_probe')
-    for path in glob(os.path.join(HERE, 'mem_probe', 'driver_backend*.pyd'))
+    for path in glob(os.path.join(HERE, 'mem_probe', 'rt_io*.pyd'))
 ]
 GPU_RENDER_DATAS = (
     collect_data_files('skia')
@@ -111,7 +109,7 @@ a = Analysis(
     datas=[
         # Web UI (平台 HTML + 字体)
         ('web', 'web'),
-        # GPU SkillFX SDF 片段着色器
+        # GPU fragment shaders used by plugin-rendered overlays
         ('shaders', 'shaders'),
         # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
         *collect_plugins(),
@@ -203,7 +201,7 @@ a = Analysis(
 
 # compiled-only modules: strip .py/.pyc, ship .pyd only
 a.pure = [(n, s, p) for (n, s, p) in a.pure
-          if n not in ('mem_probe.driver_backend',)]
+          if n not in ('mem_probe.rt_io',)]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

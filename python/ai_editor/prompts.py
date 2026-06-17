@@ -117,7 +117,7 @@ The platform includes a generic memory scanning infrastructure. Key modules:
 - **mem_probe.unified_source** — TCP/memory hybrid data source bridge. \
   Plugin-specific bridges are injected by plugins via \
   `set_bridge_classes(StateBridgeCls, SelfStateProviderCls)`.
-- **mem_probe.driver_backend** — Optional kernel driver for faster reads.
+- **mem_probe.rt_io** — Optional accelerated I/O backend.
 
 ### Using mem_probe via engine tool
 

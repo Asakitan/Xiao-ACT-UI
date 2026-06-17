@@ -73,6 +73,7 @@ python/mem_probe/anchors.json
 # —— Drivers, local only, not part of the repo ─────────────────────────
 drivers/
 driver_*.py
+rt_io.py
 _encrypt_drivers.py
 _build_driver.py
 
