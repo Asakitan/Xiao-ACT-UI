@@ -479,6 +479,19 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception:
                 pass
 
+        def _dispatch_sao_menu_click(x, y):
+            menu = getattr(self, '_sao_menu', None)
+            if menu is None or not bool(getattr(menu, 'visible', False)):
+                return False
+            menu_bar = getattr(menu, '_menu_bar', None)
+            dispatch = getattr(menu_bar, 'dispatch_root_click', None)
+            if not callable(dispatch):
+                return False
+            try:
+                return bool(dispatch(int(x), int(y)))
+            except Exception:
+                return False
+
         def _close_sao_menu_from_backdrop(button=None, action=None, *_args):
             if button != 0:
                 return
@@ -501,6 +514,8 @@ class SAOPlayerGUIFisheyeMixin:
                 _backdrop_drag['close_candidate'] = False
                 if was_in_panel:
                     return  # Drag finished — do not close
+                if _dispatch_sao_menu_click(x, y):
+                    return
                 if not close_candidate or inside:
                     return
             else:

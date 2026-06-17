@@ -227,6 +227,24 @@ class SAOPopUpMenu:
         self._menu_open_grace_until = 0.0
         self._fade_out_and_destroy()
 
+    def _raise_to_top(self):
+        overlay = self._overlay
+        if overlay is None:
+            return
+        try:
+            if not overlay.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            overlay.attributes('-topmost', True)
+        except Exception:
+            pass
+        try:
+            overlay.lift()
+        except Exception:
+            pass
+
     def toggle(self):
         if self._visible:
             self.close()

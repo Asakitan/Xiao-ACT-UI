@@ -2770,11 +2770,29 @@ void main() {
         if key in self._ls_font_cache:
             return self._ls_font_cache[key]
 
-        font_file = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
-        font_path = os.path.join(FONTS_DIR, font_file)
-        try:
-            font = ImageFont.truetype(font_path, size=size)
-        except Exception:
+        filenames = (
+            ('SAOUI.ttf', 'ZhuZiAYuanJWD.ttf')
+            if family == 'sao'
+            else ('ZhuZiAYuanJWD.ttf', 'SAOUI.ttf')
+        )
+        font = None
+        for font_file in filenames:
+            font_path = os.path.join(FONTS_DIR, font_file)
+            if not os.path.isfile(font_path):
+                continue
+            try:
+                font = ImageFont.truetype(font_path, size=size)
+                break
+            except Exception:
+                continue
+        if font is None:
+            for font_name in ('msyh.ttc', 'segoeui.ttf', 'arial.ttf'):
+                try:
+                    font = ImageFont.truetype(font_name, size=size)
+                    break
+                except Exception:
+                    continue
+        if font is None:
             font = ImageFont.load_default()
         self._ls_font_cache[key] = font
         return font

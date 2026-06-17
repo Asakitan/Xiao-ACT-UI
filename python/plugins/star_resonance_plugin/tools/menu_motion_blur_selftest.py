@@ -8,11 +8,12 @@ import sys
 import time
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin
+from sao_theme.popup_menu import SAOPopUpMenu
 
 
 class _Menu:
@@ -32,6 +33,22 @@ class _Owner(SAOPlayerGUIFloatHpMixin):
 class _Panel:
     def __init__(self, visible: bool = True) -> None:
         self.visible = visible
+
+
+class _Overlay:
+    def __init__(self) -> None:
+        self.topmost_values = []
+        self.lift_count = 0
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def attributes(self, key, value=None):
+        if key == '-topmost' and value is not None:
+            self.topmost_values.append(value)
+
+    def lift(self) -> None:
+        self.lift_count += 1
 
 
 class _PanelOwner(SAOPlayerGUIFloatHpMixin):
@@ -83,6 +100,16 @@ class MenuMotionBlurTests(unittest.TestCase):
         owner._clear_motion_blur_active(settle=0.05)
         self.assertEqual(owner._motion_blur_active_count, 0)
         self.assertGreater(owner._motion_blur_active_until, time.time())
+
+    def test_popup_menu_raise_to_top_lifts_overlay(self) -> None:
+        menu = object.__new__(SAOPopUpMenu)
+        overlay = _Overlay()
+        menu._overlay = overlay
+
+        menu._raise_to_top()
+
+        self.assertEqual(overlay.topmost_values, [True])
+        self.assertEqual(overlay.lift_count, 1)
 
 
 if __name__ == "__main__":

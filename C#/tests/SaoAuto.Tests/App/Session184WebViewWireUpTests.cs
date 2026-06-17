@@ -115,6 +115,8 @@ public class Session184WebViewWireUpTests : IDisposable
 
         Assert.True(File.Exists(Path.Combine(appDir, "web", "fonts", "SAOUI.ttf")));
         Assert.True(File.Exists(Path.Combine(appDir, "web", "fonts", "ZhuZiAYuanJWD.ttf")));
+        Assert.True(File.Exists(Path.Combine(appDir, "web", "linkstart.html")));
+        Assert.True(File.Exists(Path.Combine(appDir, "web", "menu.html")));
         Assert.True(File.Exists(Path.Combine(appDir, "shaders", "skillfx.frag")));
         Assert.True(File.Exists(Path.Combine(appDir, "plugins", "star_resonance_plugin", "plugin.json")));
     }

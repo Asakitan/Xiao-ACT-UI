@@ -107,8 +107,9 @@ a = Analysis(
     pathex=[HERE],
     binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES,
     datas=[
-        # Web UI (平台 HTML + 字体)
+        # Modular runtime data lifted to exe top level by build_release/dev_publish.
         ('web', 'web'),
+        ('assets', 'assets'),
         # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
         *collect_plugins(),
         # 图标
