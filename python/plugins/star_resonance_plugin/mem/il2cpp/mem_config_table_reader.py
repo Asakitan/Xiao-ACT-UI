@@ -304,8 +304,12 @@ class MemConfigTableReader:
     def _loader_blob(self, zloader: int, base_off: int) -> int:
         """ZLoader + blob offset -> absolute blob address (0 on failure)."""
         off = self._offsets()
-        mem = self.pm.read_u64(zloader + off["zloader_mem"] + POOL_MEM_OBJ_OFF)
-        midx = self.pm.read_i32(zloader + off["zloader_mem"] + POOL_MEM_IDX_OFF) or 0
+        mbase = zloader + off["zloader_mem"]
+        mhdr = self.pm.read_bytes(mbase, POOL_MEM_IDX_OFF + 4)
+        if not mhdr or len(mhdr) < POOL_MEM_IDX_OFF + 4:
+            return 0
+        mem = struct.unpack_from("<Q", mhdr, POOL_MEM_OBJ_OFF)[0]
+        midx = struct.unpack_from("<i", mhdr, POOL_MEM_IDX_OFF)[0]
         if not _plaus(mem) or base_off is None or base_off < 0:
             return 0
         return mem + ARRAY_ELEMS_OFF + midx + base_off
@@ -357,10 +361,13 @@ class MemConfigTableReader:
             return []
         off = self._offsets()
         pool = zloader + off["zloader_int_pool"]
-        pobj = self.pm.read_u64(pool + POOL_MEM_OBJ_OFF)
-        pidx = self.pm.read_i32(pool + POOL_MEM_IDX_OFF) or 0
-        plen = (self.pm.read_i32(pool + POOL_MEM_LEN_OFF) or 0) & 0x7FFFFFFF
-        dsize = self.pm.read_i32(pool + POOL_DATASIZE_OFF) or 0
+        phdr = self.pm.read_bytes(pool, POOL_DATASIZE_OFF + 4)
+        if not phdr or len(phdr) < POOL_DATASIZE_OFF + 4:
+            return []
+        pobj = struct.unpack_from("<Q", phdr, POOL_MEM_OBJ_OFF)[0]
+        pidx = struct.unpack_from("<i", phdr, POOL_MEM_IDX_OFF)[0]
+        plen = struct.unpack_from("<i", phdr, POOL_MEM_LEN_OFF)[0] & 0x7FFFFFFF
+        dsize = struct.unpack_from("<i", phdr, POOL_DATASIZE_OFF)[0]
         if not _plaus(pobj) or dsize != 4 or pool_off + 2 > plen:
             return []
         base = pobj + ARRAY_ELEMS_OFF + pidx + pool_off
@@ -383,10 +390,13 @@ class MemConfigTableReader:
             return []
         off = self._offsets()
         pool = zloader + off["zloader_num_pool"]
-        pobj = self.pm.read_u64(pool + POOL_MEM_OBJ_OFF)
-        pidx = self.pm.read_i32(pool + POOL_MEM_IDX_OFF) or 0
-        plen = (self.pm.read_i32(pool + POOL_MEM_LEN_OFF) or 0) & 0x7FFFFFFF
-        dsize = self.pm.read_i32(pool + POOL_DATASIZE_OFF) or 0
+        phdr = self.pm.read_bytes(pool, POOL_DATASIZE_OFF + 4)
+        if not phdr or len(phdr) < POOL_DATASIZE_OFF + 4:
+            return []
+        pobj = struct.unpack_from("<Q", phdr, POOL_MEM_OBJ_OFF)[0]
+        pidx = struct.unpack_from("<i", phdr, POOL_MEM_IDX_OFF)[0]
+        plen = struct.unpack_from("<i", phdr, POOL_MEM_LEN_OFF)[0] & 0x7FFFFFFF
+        dsize = struct.unpack_from("<i", phdr, POOL_DATASIZE_OFF)[0]
         if not _plaus(pobj) or dsize != 4 or pool_off + 2 > plen:
             return []
         base = pobj + ARRAY_ELEMS_OFF + pidx + pool_off
@@ -410,9 +420,12 @@ class MemConfigTableReader:
             return ""
         off = self._offsets()
         pool = zloader + off["zloader_str_pool"]
-        pobj = self.pm.read_u64(pool + POOL_MEM_OBJ_OFF)
-        pidx = self.pm.read_i32(pool + POOL_MEM_IDX_OFF) or 0
-        plen = (self.pm.read_i32(pool + POOL_MEM_LEN_OFF) or 0) & 0x7FFFFFFF
+        phdr = self.pm.read_bytes(pool, POOL_MEM_LEN_OFF + 4)
+        if not phdr or len(phdr) < POOL_MEM_LEN_OFF + 4:
+            return ""
+        pobj = struct.unpack_from("<Q", phdr, POOL_MEM_OBJ_OFF)[0]
+        pidx = struct.unpack_from("<i", phdr, POOL_MEM_IDX_OFF)[0]
+        plen = struct.unpack_from("<i", phdr, POOL_MEM_LEN_OFF)[0] & 0x7FFFFFFF
         if not _plaus(pobj) or pool_off + 2 > plen:
             return ""
         base = pobj + ARRAY_ELEMS_OFF + pidx + pool_off

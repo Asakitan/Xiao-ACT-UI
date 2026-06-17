@@ -474,13 +474,17 @@ class EntityMgrReader:
         if not dict_addr:
             return []
         pm = self._src.sr.pm
+        import struct as _st
+        hdr = pm.read_bytes(dict_addr, max(DICT_COUNT_OFF, DICT_ENTRIES_OFF) + 8)
+        if not hdr or len(hdr) < DICT_ENTRIES_OFF + 8:
+            return []
         try:
-            count = pm.read_i32(dict_addr + DICT_COUNT_OFF) or 0
+            count = _st.unpack_from("<i", hdr, DICT_COUNT_OFF)[0]
         except Exception:
             return []
         if count <= 0 or count > 4096:
             return []
-        entries_arr = pm.read_u64(dict_addr + DICT_ENTRIES_OFF)
+        entries_arr = _st.unpack_from("<Q", hdr, DICT_ENTRIES_OFF)[0]
         if not entries_arr:
             return []
         max_len = pm.read_u32(entries_arr + ARRAY_LENGTH_OFF) or 0
@@ -528,10 +532,16 @@ class EntityMgrReader:
             return None
         pm = self._src.sr.pm
         try:
-            uuid = pm.read_i64(ent_addr + self.off_ent_uuid) or 0
-            cfg = pm.read_i64(ent_addr + self.off_ent_config) or 0
-            cid = pm.read_i64(ent_addr + self.off_ent_charid) or 0
-            st = pm.read_i32(ent_addr + self.off_ent_state) or 0
+            blob = pm.read_bytes(ent_addr, max(
+                self.off_ent_uuid, self.off_ent_config,
+                self.off_ent_charid, self.off_ent_state) + 8)
+            if not blob:
+                return None
+            import struct
+            uuid = struct.unpack_from("<q", blob, self.off_ent_uuid)[0]
+            cfg = struct.unpack_from("<q", blob, self.off_ent_config)[0]
+            cid = struct.unpack_from("<q", blob, self.off_ent_charid)[0]
+            st = struct.unpack_from("<i", blob, self.off_ent_state)[0]
         except Exception:
             return None
         if uuid <= 0:

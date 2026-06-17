@@ -195,28 +195,50 @@ class EntityCombatReader:
         int*[32] valueIndices, then resolves each value index into the paged _values.
         Deterministic (attr_id-keyed) -- the structural decode of ZAttrCacheSlim.
         """
-        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
+        import struct as _st
+        ahdr = self.pm.read_bytes(ent_addr + self.off_ent_attrs, 8)
+        if not ahdr or len(ahdr) < 8:
+            return {}
+        attrs = _st.unpack_from("<Q", ahdr, 0)[0]
         if not _plaus(attrs):
             return {}
-        ip = self.pm.read_u64(attrs + self.off_coll_indexpart)
-        vals = self.pm.read_u64(attrs + self.off_coll_values)
+        chdr = self.pm.read_bytes(attrs, max(self.off_coll_indexpart, self.off_coll_values) + 8)
+        if not chdr or len(chdr) < max(self.off_coll_indexpart, self.off_coll_values) + 8:
+            return {}
+        ip = _st.unpack_from("<Q", chdr, self.off_coll_indexpart)[0]
+        vals = _st.unpack_from("<Q", chdr, self.off_coll_values)[0]
         if not (_plaus(ip) and _plaus(vals)):
+            return {}
+        idx_blob = self.pm.read_bytes(ip + INDEX_KEYSEG_OFF,
+                                       INDEX_VALIDX_OFF - INDEX_KEYSEG_OFF + INDEX_SEG_COUNT * 8)
+        if not idx_blob or len(idx_blob) < INDEX_VALIDX_OFF - INDEX_KEYSEG_OFF + INDEX_SEG_COUNT * 8:
             return {}
         out: Dict[int, object] = {}
         for k in range(INDEX_SEG_COUNT):
-            segp = self.pm.read_u64(ip + INDEX_KEYSEG_OFF + k * 8)
+            segp = _st.unpack_from("<Q", idx_blob, k * 8)[0]
             if not _plaus(segp):
                 continue
-            cnt = self.pm.read_u32(segp + KEYSEG_COUNT_OFF) or 0
-            if cnt <= 0 or cnt > INDEX_SEG_SIZE:
-                continue
-            vip = self.pm.read_u64(ip + INDEX_VALIDX_OFF + k * 8)
+            vip = _st.unpack_from("<Q", idx_blob, INDEX_VALIDX_OFF - INDEX_KEYSEG_OFF + k * 8)[0]
             if not _plaus(vip):
                 continue
+            seg_data = self.pm.read_bytes(segp, KEYSEG_COUNT_OFF + 4)
+            if not seg_data or len(seg_data) < KEYSEG_COUNT_OFF + 4:
+                continue
+            cnt = _st.unpack_from("<I", seg_data, KEYSEG_COUNT_OFF)[0]
+            if cnt <= 0 or cnt > INDEX_SEG_SIZE:
+                continue
+            kv_batch = self.pm.read_batch([(segp + pos * 4, 4) for pos in range(cnt)]
+                                          + [(vip + pos * 4, 4) for pos in range(cnt)])
+            if not kv_batch:
+                continue
             for pos in range(cnt):
-                key = self.pm.read_u32(segp + pos * 4)
-                vidx = self.pm.read_i32(vip + pos * 4)
-                if vidx is not None and vidx >= 0:
+                kb = kv_batch[pos]
+                vb = kv_batch[cnt + pos]
+                if not kb or not vb:
+                    continue
+                key = _st.unpack("<I", kb)[0]
+                vidx = _st.unpack("<i", vb)[0]
+                if vidx >= 0:
                     out[int(key)] = self._value_at(vals, vidx)
         return out
 

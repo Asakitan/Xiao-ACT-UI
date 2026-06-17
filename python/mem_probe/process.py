@@ -556,6 +556,16 @@ class GameProcess:
             return None
         return int.from_bytes(b, "little", signed=False)
 
+    def read_batch(self, requests) -> list:
+        if not requests:
+            return []
+        if _drv is not None and _DRIVER_OK and hasattr(_drv, 'read_batch'):
+            try:
+                return _drv.read_batch([(int(a), int(s)) for a, s in requests])
+            except Exception:
+                pass
+        return [self.read_bytes(a, s) for a, s in requests]
+
     # ───── 批量读 (跨进程 0 延迟优化) ─────
     def read_u64_many(self, addrs) -> list:
         """Batch-read 8-byte words at each address -> list (None on fail).
