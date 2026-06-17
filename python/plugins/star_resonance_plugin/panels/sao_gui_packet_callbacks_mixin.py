@@ -56,7 +56,7 @@ import threading
 import time
 from typing import Any, Optional
 
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 from act_platform.runtime import enrich_action_log_event, publish_owner_event, should_record_owner_combat_event
 from tools.tablekit.combat_preparse import enrich_boss_event, enrich_dungeon_event, enrich_monster_event, enrich_skill_event
@@ -225,7 +225,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         """发送联动按键 (Boss→AutoKey linkage)。用 scancode (移动/Shift冲刺/E走等
         躲避键游戏只认扫描码, wVk 不响应)。"""
         try:
-            from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
+            from plugins.star_resonance_plugin.engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes as _ct
             KEYEVENTF_SCANCODE = 0x0008
             key = (key or "").strip().upper()
@@ -262,7 +262,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         游戏完全不响应(实测)。这里用 MapVirtualKey 把 vk 转成 scancode, 加
         KEYEVENTF_SCANCODE 标志发送, WASD 才会真正驱动人物移动。"""
         try:
-            from engines.auto_key_engine import (
+            from plugins.star_resonance_plugin.engines.auto_key_engine import (
                 VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP)
             import ctypes as _ct
             KEYEVENTF_SCANCODE = 0x0008

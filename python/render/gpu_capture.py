@@ -4,9 +4,8 @@ The original recognition path uses ``PrintWindow`` which synchronously asks the
 target window's WndProc to render to a DC.  For our game window that costs
 30–100 ms per call and **blocks the calling thread** the whole time.  Worse,
 ``recognition.py`` wraps it in ``capture_section()`` so all overlay ULW commits
-also have to wait for the capture lock — which is exactly why the menu HUD,
-HP / DPS / BOSSHP panels feel "1–2 FPS" during combat even though their tick
-loops keep firing at 30 Hz.
+also have to wait for the capture lock — which is exactly why overlay panels
+can feel "1–2 FPS" under load even though their tick loops keep firing at 30 Hz.
 
 Switching to Windows.Graphics.Capture (WGC, available since Windows 10 1903)
 fixes both problems at once:

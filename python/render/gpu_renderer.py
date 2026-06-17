@@ -43,7 +43,7 @@ _global_lock = threading.Lock()
 # WGL standalone contexts are per-thread, but they all share one underlying
 # GPU device. When 3-4 worker threads concurrently issue
 # render+glReadPixels() the driver serializes them with poor scheduling and
-# tail-latency cascades (skillfx compose wall: 80-180 ms with cpu_p95
+# tail-latency cascades (heavy effect compose wall: 80-180 ms with cpu_p95
 # 15-30 ms — almost all in GPU readback contention). Serialize at the
 # Python level so each readback finishes cleanly before the next starts;
 # total wall stays the same in the steady state but the worst-case
@@ -366,8 +366,8 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
         h, w, _ = arr.shape
         radius = min(64, max(1, int(round(sigma * 3.0))))
 
-        # Re-bind our context in case another standalone GL context (e.g.
-        # skillfx Burst overlay) was made current on this thread.
+        # Re-bind our context in case another standalone GL context was made
+        # current on this thread.
         with _get_wgl_serialize_lock(), _render_lock, ctx:
             src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
             src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
@@ -494,8 +494,8 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
     try:
         ctx = _tls.ctx
         # Re-bind this context current for the calling thread. If another
-        # standalone ModernGL context lives on the same thread (e.g. skillfx
-        # Burst overlay), the most recently created one is current on Windows
+        # standalone ModernGL context lives on the same thread, the most
+        # recently created one is current on Windows
         # WGL; without this guard its FBO operations would silently clobber
         # ours (and vice-versa), producing garbage or flipped output.
         arr = _to_rgba_np(rgba)

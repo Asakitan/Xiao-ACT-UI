@@ -15,7 +15,7 @@ from xml.etree import ElementTree as ET
 from unittest import mock
 
 from act_platform import runtime
-from engines import dps_history
+from plugins.star_resonance_plugin.engines import dps_history
 
 
 class FakeHistoryStore:

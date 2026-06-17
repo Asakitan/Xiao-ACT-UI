@@ -1,6 +1,209 @@
 /* Star Resonance plugin — game-specific menu JS */
 /* Extracted from menu.html during 5.0.0 restructure */
 
+/* === Star Resonance WebView shim extensions === */
+(function () {
+    "use strict";
+
+    function srCall(name, payload) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.call === 'function') {
+            return shim.call(name, payload || {});
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            try {
+                return window.bridge.cmd(name, payload || {});
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        }
+        return Promise.reject(new Error('Bridge command unavailable: ' + name));
+    }
+
+    function srNormalizeOk(result) {
+        var shim = window.SAOPluginShim || {};
+        if (typeof shim.normalizeOk === 'function') return shim.normalizeOk(result);
+        if (result === true || result === null || result === undefined || result === '') return { ok: true };
+        if (result === false) return { ok: false };
+        if (!result || typeof result !== 'object') return { ok: true, value: result };
+        if (result.error && result.ok == null) {
+            result.ok = false;
+            result.message = result.message || String(result.error);
+        } else if (result.ok == null) {
+            result.ok = true;
+        }
+        return result;
+    }
+
+    function srOpenEmbeddedEditor(setterName) {
+        try {
+            if (typeof window[setterName] === 'function') {
+                window[setterName]('editor');
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    function srRegisterApi() {
+        if (window.__starResonancePluginApiRegistered) return true;
+        var methods = {
+            set_auto_key_server_url: function (url) {
+                return srCall('autokey.cloud.set_server_url', { url: String(url || '') }).then(srNormalizeOk);
+            },
+            get_auto_key_state: function () {
+                return srCall('autokey.state.get', {}).then(srNormalizeOk);
+            },
+            set_auto_key_enabled: function (enabled) {
+                return srCall('autokey.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            create_auto_key_profile: function () {
+                return srCall('autokey.profile.create', {}).then(srNormalizeOk);
+            },
+            copy_auto_key_profile: function (id) {
+                return srCall('autokey.profile.clone', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            save_auto_key_profile: function (profile) {
+                return srCall('autokey.profile.upsert', { profile: profile || {}, activate: false }).then(srNormalizeOk);
+            },
+            delete_auto_key_profile: function (id) {
+                return srCall('autokey.profile.delete', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            activate_auto_key_profile: function (id) {
+                return srCall('autokey.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            export_auto_key_profile: function (id) {
+                return srCall('autokey.profile.export', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            start_auto_key_import_picker: function (path) {
+                return srCall('autokey.import_picker.start', { path: String(path || '') }).then(srNormalizeOk);
+            },
+            refresh_auto_key_upload_auth: function (force) {
+                return srCall('autokey.cloud.refresh_upload_auth', { force: !!force }).then(srNormalizeOk);
+            },
+            search_remote_profiles: function (query) {
+                return srCall('autokey.cloud.search', { query: query || {} }).then(srNormalizeOk);
+            },
+            download_remote_profile: function (id) {
+                return srCall('autokey.cloud.download', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            upload_auto_key_profile: function (id) {
+                return srCall('autokey.cloud.upload', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            save_autokey_actions: function (actionsJson) {
+                return srCall('autokey.actions.save', {
+                    actions_json: String(actionsJson || '[]')
+                }).then(srNormalizeOk);
+            },
+            set_boss_raid_server_url: function (url) {
+                return srCall('bossraid.cloud.set_server_url', { url: String(url || '') }).then(srNormalizeOk);
+            },
+            get_boss_raid_state: function () {
+                return srCall('bossraid.state.get', {}).then(srNormalizeOk);
+            },
+            raid_next_phase: function () {
+                return srCall('bossraid.runtime.next_phase', {}).then(srNormalizeOk);
+            },
+            raid_reset: function () {
+                return srCall('bossraid.runtime.reset', {}).then(srNormalizeOk);
+            },
+            set_entity_role: function (uuid, role) {
+                return srCall('bossraid.runtime.set_entity_role', {
+                    uuid: uuid,
+                    role: String(role || '')
+                }).then(srNormalizeOk);
+            },
+            boss_raid_next_phase: function () {
+                return srCall('bossraid.runtime.next_phase', {}).then(srNormalizeOk);
+            },
+            boss_raid_reset: function () {
+                return srCall('bossraid.runtime.reset', {}).then(srNormalizeOk);
+            },
+            boss_raid_start: function () {
+                return srCall('bossraid.start', {}).then(srNormalizeOk);
+            },
+            boss_raid_stop: function () {
+                return srCall('bossraid.stop', {}).then(srNormalizeOk);
+            },
+            start_boss_raid_import_picker: function (path) {
+                try { window._pickerConsumer = 'boss_raid'; } catch (_) {}
+                return srCall('bossraid.import_picker.start', { path: String(path || '') }).then(srNormalizeOk);
+            },
+            set_boss_raid_enabled: function (enabled) {
+                return srCall('bossraid.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            activate_boss_raid_profile: function (id) {
+                return srCall('bossraid.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            create_boss_raid_profile: function () {
+                return srCall('bossraid.profile.create', {}).then(srNormalizeOk);
+            },
+            save_boss_raid_profile: function (profile) {
+                return srCall('bossraid.profile.save', { profile: profile || {} }).then(srNormalizeOk);
+            },
+            delete_boss_raid_profile: function (id) {
+                return srCall('bossraid.profile.delete', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            export_boss_raid_profile: function (id) {
+                return srCall('bossraid.export', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            download_boss_raid_remote: function (id) {
+                return srCall('bossraid.cloud.download', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            search_boss_raid_remote: function (query) {
+                return srCall('bossraid.cloud.search', { query: query || {} }).then(srNormalizeOk);
+            },
+            refresh_boss_raid_upload_auth: function (force) {
+                return srCall('bossraid.cloud.refresh_upload_auth', { force: !!force }).then(srNormalizeOk);
+            },
+            upload_boss_raid_profile: function (id) {
+                return srCall('bossraid.cloud.upload', { id: String(id || '') }).then(srNormalizeOk);
+            },
+            toggle_autokey_editor: function () {
+                var localHandled = srOpenEmbeddedEditor('_akSetTab');
+                return srCall('ui.menu_action', {
+                    action: 'toggle_autokey_editor',
+                    local_handled: localHandled
+                }).then(srNormalizeOk).catch(function (e) {
+                    if (localHandled) {
+                        return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                    }
+                    throw e;
+                });
+            },
+            toggle_raid_editor: function () {
+                var localHandled = srOpenEmbeddedEditor('_brSetTab');
+                return srCall('ui.menu_action', {
+                    action: 'toggle_raid_editor',
+                    local_handled: localHandled
+                }).then(srNormalizeOk).catch(function (e) {
+                    if (localHandled) {
+                        return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                    }
+                    throw e;
+                });
+            }
+        };
+        var shim = window.SAOPluginShim || {};
+        var register = typeof shim.register === 'function' ? shim.register : shim.extendApi;
+        if (typeof register === 'function') {
+            register.call(shim, methods);
+            window.__starResonancePluginApiRegistered = true;
+            return true;
+        }
+        if (window.pywebview && window.pywebview.api && window.bridge && typeof window.bridge.cmd === 'function') {
+            Object.assign(window.pywebview.api, methods);
+            window.__starResonancePluginApiRegistered = true;
+            return true;
+        }
+        return false;
+    }
+
+    if (!srRegisterApi() && typeof window.addEventListener === 'function') {
+        window.addEventListener('pywebviewready', srRegisterApi);
+    }
+})();
+
 /* === Burst Slot Handlers === */
 var _watchedSlotsRequestSeq = 0;
 var _watchedSlotsConfirmed = [];
@@ -551,10 +754,11 @@ document.getElementById('open-data-source-panel').addEventListener('click', func
     openSourceDialog();
 });
 document.getElementById('source-close').addEventListener('click', function(e) {
+    e.stopPropagation();
+    closeSourceDialog();
+});
 
 /* === Auto-Key API & State === */
-    });
-}
 
 function _akParseApiResult(result) {
     if (!result) return {};
@@ -1537,6 +1741,10 @@ function _akDownloadRemote(remoteId) {
     _akCallApi('download_remote_profile', [remoteId], function() {
         showToast('PROFILE DOWNLOADED');
     });
+}
+
+function restoreMenuSettings(cfg) {
+    if (!cfg) return;
 
 /* === Game Config Init === */
     if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
@@ -1592,7 +1800,12 @@ function _akDownloadRemote(remoteId) {
     }
     /* DPS fade timeout */
     if (cfg.dps_fade_timeout_s !== undefined) {
-        var restoredFadeTimeout = _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
+        _setDpsFadeTimeoutUI(cfg.dps_fade_timeout_s);
+    }
+    if (cfg.boss_raid) {
+        _syncBossRaidState(cfg.boss_raid);
+    }
+}
 
 /* === Boss-Raid API & State === */
 var _brDraftDirty = false;
@@ -2430,10 +2643,11 @@ function _showLastDpsReport() {
         }
         showToast('DPS REPORT: LAST REPORT');
     }).catch(function(err) {
-
-/* === Linkage Management === */
+        showAlert('DPS METER', String(err || '无法打开上一场战斗报告 / Unable to open last combat report'), true);
     });
 }
+
+/* === Linkage Management === */
 
 /* ═══ Boss ↔ AutoKey Linkage ═══ */
 var _linkageMappings = [];
@@ -2606,7 +2820,7 @@ if (window.SAO && !window.SAO.__srRestoreWrapped) {
 }
 
 setTimeout(function() {
-    _initPanelThemes();
+    if (typeof _initPanelThemes === 'function') _initPanelThemes();
     _loadInitialAutoKeyState();
     _loadInitialBossRaidState();
     // System clock — SAO sci-fi style with seconds
@@ -2619,30 +2833,9 @@ setTimeout(function() {
         var s = String(now.getSeconds()).padStart(2,'0');
         el.textContent = h + ':' + m + ':' + s;
     }
-    _menuClock();
-    setInterval(_menuClock, 1000);
+    var clockEl = document.getElementById('info-clock');
+    if (clockEl && clockEl.isConnected === true) {
+        _menuClock();
+        setInterval(_menuClock, 1000);
+    }
 }, 250);
-</script>
-
-<!-- ═══ Plugin popup menu (插件 popup — manager + plugin list) ═══ -->
-<style>
-#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
-    background:rgba(4,8,14,.55); align-items:center; justify-content:center;
-    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
-#plugin-popup-card { width:340px; max-height:72vh; overflow:auto;
-    border:1px solid rgba(117,205,255,.5); border-radius:12px;
-    background:linear-gradient(180deg,rgba(18,31,47,.97),rgba(9,14,22,.97));
-    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; padding:0; }
-.ppm-head { display:flex; align-items:center; justify-content:space-between;
-    padding:12px 14px; border-bottom:1px solid rgba(117,205,255,.3);
-    font-weight:700; letter-spacing:.04em; color:#ffd46f; }
-#ppm-close { cursor:pointer; font-size:20px; line-height:1; color:#9fc0d8; padding:0 4px; }
-#ppm-list { padding:8px 10px 12px; }
-.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
-    padding:7px 8px; border-radius:8px; margin:3px 0; font-size:13px; }
-.ppm-row:hover { background:rgba(117,205,255,.08); }
-.ppm-manage { cursor:pointer; color:#73d7ff; font-weight:600; border:1px solid rgba(117,205,255,.3); }
-.ppm-name { cursor:pointer; flex:1; }
-.ppm-name small { color:#9fc0d8; margin-left:4px; }
-.ppm-btn { border:1px solid rgba(117,205,255,.5); background:rgba(19,48,74,.6); color:#e8f6ff;
-    border-radius:6px; padding:3px 9px; font-size:12px; cursor:pointer; }

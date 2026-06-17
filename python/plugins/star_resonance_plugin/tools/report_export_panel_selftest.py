@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest import mock
 
-from gui_modules.sao_gui_report_export import ReportExportPanel
+from plugins.star_resonance_plugin.panels.sao_gui_report_export import ReportExportPanel
 
 
 class FakeVar:
@@ -57,7 +57,7 @@ class ReportExportPanelCacheTests(unittest.TestCase):
         rendered: list[dict] = []
         panel._render_status = lambda status: rendered.append(dict(status))
 
-        with mock.patch("gui_modules.sao_gui_report_export.act_report_status") as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_report_export.act_report_status") as status_fn:
             cached = panel.refresh()
 
         self.assertEqual(cached["preview"]["format"], "cached")
@@ -66,7 +66,7 @@ class ReportExportPanelCacheTests(unittest.TestCase):
 
         panel._format_var.set("csv")
         status_payload = {"ok": True, "preview": {"format": "fresh"}, "history": []}
-        with mock.patch("gui_modules.sao_gui_report_export.act_report_status", return_value=status_payload) as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_report_export.act_report_status", return_value=status_payload) as status_fn:
             refreshed = panel.refresh()
 
         self.assertEqual(refreshed["preview"]["format"], "fresh")
@@ -97,9 +97,9 @@ class ReportExportPanelCacheTests(unittest.TestCase):
         panel._last_history_sig = "history"
         panel.refresh = lambda: {"ok": True}  # type: ignore[method-assign]
 
-        with mock.patch("gui_modules.sao_gui_report_export.act_history_load", return_value={"ok": True}) as load_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_report_export.act_history_load", return_value={"ok": True}) as load_fn:
             panel.load_history("bad")  # type: ignore[arg-type]
-        with mock.patch("gui_modules.sao_gui_report_export.act_history_delete", return_value={"ok": True}) as delete_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_report_export.act_history_delete", return_value={"ok": True}) as delete_fn:
             panel.delete_history("bad")  # type: ignore[arg-type]
 
         load_fn.assert_called_once_with(panel.owner, index=0, show=True)

@@ -252,18 +252,6 @@ class SAOPlayerGUILifecycleMixin:
                         setattr(self, attr_name, None)
                     except Exception:
                         pass
-        self._act_plugin_manager_panel = None
-        self._act_trigger_timer_panel = None
-        self._act_data_source_health_panel = None
-        self._act_report_export_panel = None
-        self._act_offline_import_panel = None
-        self._act_timeline_vcr_panel = None
-        self._act_aggregate_panel = None
-        self._act_action_log_panel = None
-        self._act_death_recap_panel = None
-        self._act_graph_timeseries_panel = None
-        self._act_combatant_drilldown_panel = None
-        self._act_skill_drilldown_panel = None
         self._mem_scope_panel = None
         if getattr(self, '_ai_editor_panel', None):
             try:

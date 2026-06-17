@@ -13,7 +13,7 @@ from unittest import mock
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
-from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel, _finite_int
+from plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown import SkillDrilldownPanel, _finite_int
 
 
 class FakeTracker:
@@ -164,7 +164,7 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertNotEqual(sig, panel._signature(facts_changed))
 
     def test_tk_numeric_rendering_uses_finite_helpers(self) -> None:
-        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_skill_drilldown.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "panels" / "sao_gui_skill_drilldown.py").read_text(encoding="utf-8")
 
         self.assertNotIn("int(status.get('casts') or 0)", source)
         self.assertNotIn("float(value or 0)", source)
@@ -215,7 +215,7 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         panel._render_status = lambda status: None
         panel.root = _BadClipboardRoot()
 
-        with mock.patch("gui_modules.sao_gui_skill_drilldown.act_skill_drilldown_copy", return_value={"ok": True, "text": "payload"}):
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown.act_skill_drilldown_copy", return_value={"ok": True, "text": "payload"}):
             result = panel.copy()
 
         self.assertEqual(result["text"], "payload")
@@ -233,7 +233,7 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         rendered: list[dict] = []
         panel._render_status = lambda status: rendered.append(dict(status))
 
-        with mock.patch("gui_modules.sao_gui_skill_drilldown.act_skill_drilldown_status") as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown.act_skill_drilldown_status") as status_fn:
             cached = panel.refresh()
 
         self.assertEqual(cached["summary"]["name"], "cached")
@@ -242,7 +242,7 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
 
         panel._skill_var.set("12")
         status_payload = {"ok": True, "summary": {"name": "fresh"}, "timeline_refs": [], "casts": 1, "hits": 1, "crit_rate": 0.0, "filters": {"query": "damage"}}
-        with mock.patch("gui_modules.sao_gui_skill_drilldown.act_skill_drilldown_status", return_value=status_payload) as status_fn:
+        with mock.patch("plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown.act_skill_drilldown_status", return_value=status_payload) as status_fn:
             refreshed = panel.refresh()
 
         self.assertEqual(refreshed["summary"]["name"], "fresh")

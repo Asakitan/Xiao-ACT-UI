@@ -206,7 +206,7 @@ class PluginManagerPanel:
 
         title_box = tk.Frame(toolbar, bg=body_bg)
         title_box.pack(side='left', anchor='n')
-        tk.Label(title_box, text='ACT PLUGINS', bg=body_bg,
+        tk.Label(title_box, text='PLUGINS', bg=body_bg,
                  fg=gold, font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='PLUGIN MANAGER 插件管理', bg=body_bg,
                  fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))

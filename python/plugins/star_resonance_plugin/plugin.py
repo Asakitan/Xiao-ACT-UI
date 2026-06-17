@@ -417,6 +417,73 @@ def _build_burst_items():
     ]
 
 
+def _safe_count(value) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def _safe_mapping(value) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _build_act_items():
+    owner = _ctx.engine.owner if _ctx else None
+    if owner is None:
+        return []
+    from act_platform.runtime import (
+        act_action_log_status,
+        act_aggregate_status,
+        act_combatant_drilldown_status,
+        act_data_source_health,
+        act_death_recap_status,
+        act_graph_timeseries_status,
+        act_report_status,
+        act_skill_drilldown_status,
+        act_timeline_status,
+        act_trigger_status,
+    )
+
+    def _call(fn, fallback, **kwargs):
+        try:
+            return fn(owner, **kwargs)
+        except Exception:
+            return fallback
+
+    trigger = _call(act_trigger_status, {})
+    source = _call(act_data_source_health, {})
+    source_summary = _safe_mapping(_safe_mapping(source.get('sources')).get('summary'))
+    report = _call(act_report_status, {}, limit=12)
+    report_preview = _safe_mapping(report.get('preview'))
+    timeline = _call(act_timeline_status, {}, limit=24)
+    action_log = _call(act_action_log_status, {}, limit=24)
+    aggregate = _call(act_aggregate_status, {}, limit=240, top_n=12)
+    aggregate_counts = _safe_mapping(aggregate.get('raw_counts'))
+    death = _call(act_death_recap_status, {}, limit=24)
+    death_summary = _safe_mapping(death.get('summary'))
+    graph = _call(act_graph_timeseries_status, {}, limit=24)
+    combatant = _call(act_combatant_drilldown_status, {})
+    skill = _call(act_skill_drilldown_status, {}, limit=24)
+    rows = _safe_count(aggregate_counts.get('rows'))
+    aggregate_label = f"{rows}/{_safe_count(aggregate_counts.get('skills'))}/{_safe_count(aggregate_counts.get('monsters'))}"
+    source_label = str(source_summary.get('data_source') or source.get('requested_mode') or 'ACT').upper()
+    source_state = str(source.get('status') or 'missing').upper()
+    return [
+        {'icon': '⏱', 'label': f"ACT触发/计时: {_safe_count(trigger.get('rule_count'))}/{_safe_count(trigger.get('timer_count'))}", 'command': getattr(owner, '_toggle_act_trigger_timer_panel', lambda: None)},
+        {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_state}', 'command': getattr(owner, '_toggle_act_data_source_health_panel', lambda: None)},
+        {'icon': '⬇', 'label': f"ACT报告/导出: {'READY' if report.get('ok') else 'EMPTY'}/{_safe_count(report_preview.get('total_damage'))}", 'command': getattr(owner, '_toggle_act_report_export_panel', lambda: None)},
+        {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': getattr(owner, '_toggle_act_offline_import_panel', lambda: None)},
+        {'icon': '▶', 'label': f"ACT时间线/VCR: {'PLAY' if timeline.get('playing') else 'READY'}/{len(timeline.get('events') or [])}", 'command': getattr(owner, '_toggle_act_timeline_vcr_panel', lambda: None)},
+        {'icon': '▣', 'label': f"ACT聚合驾驶舱: {'READY' if aggregate.get('ok') and rows else 'EMPTY'}/{aggregate_label}", 'command': getattr(owner, '_toggle_act_aggregate_panel', lambda: None)},
+        {'icon': '▤', 'label': f"ACT行为日志: {'READY' if action_log.get('ok') else 'EMPTY'}/{len(action_log.get('rows') or [])}", 'command': getattr(owner, '_toggle_act_action_log_panel', lambda: None)},
+        {'icon': '✚', 'label': f"ACT死亡回放: {'READY' if _safe_count(death_summary.get('death_events')) else 'EMPTY'}/{_safe_count(death_summary.get('incoming_damage'))}", 'command': getattr(owner, '_toggle_act_death_recap_panel', lambda: None)},
+        {'icon': '⌁', 'label': f"ACT图表/曲线: {'READY' if graph.get('ok') else 'EMPTY'}/{graph.get('selected_metric') or 'damage'}/{_safe_count(graph.get('row_count'))}", 'command': getattr(owner, '_toggle_act_graph_timeseries_panel', lambda: None)},
+        {'icon': '◎', 'label': f"ACT成员钻取: {'READY' if combatant.get('ok') else 'EMPTY'}/{combatant.get('combatant_id') or 'NONE'}/{len(combatant.get('skills') or [])}", 'command': getattr(owner, '_toggle_act_combatant_drilldown_panel', lambda: None)},
+        {'icon': '✦', 'label': f"ACT技能钻取: {'READY' if skill.get('ok') else 'EMPTY'}/{skill.get('skill_id') or 'NONE'}/{len(skill.get('timeline_refs') or [])}", 'command': getattr(owner, '_toggle_act_skill_drilldown_panel', lambda: None)},
+    ]
+
+
 def _build_panel_items():
     owner = _ctx.engine.owner if _ctx else None
     if owner is None:
@@ -508,6 +575,17 @@ def on_load(ctx):
 
     _ensure_toplevel_defaults(ctx)
 
+    # Register the plugin's ACT trigger / DPS-history / name-resolver runtime
+    # handlers with the platform so the platform no longer needs to import
+    # plugin code or hard-code owner attributes to reach trigger/dps logic.
+    # See ``act_runtime_bridge`` for the dispatch contract.
+    try:
+        from act_platform.runtime import register_extension_runtime
+        from plugins.star_resonance_plugin.act_runtime_bridge import extension_runtime_provider
+        register_extension_runtime(extension_runtime_provider)
+    except Exception as exc:
+        ctx.log(f'[SR] act_runtime_bridge register FAILED: {exc}')
+
     from plugins.star_resonance_plugin.webview_bridge import install_webview_bridge
     install_webview_bridge(ctx)
     from plugins.star_resonance_plugin.entity_menu_bridge import install_entity_menu_bridge
@@ -518,6 +596,7 @@ def on_load(ctx):
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
     ctx.register_menu_category('Boss', '⚔', _build_boss_items, priority=20)
     ctx.register_menu_category('Burst', 'B', _build_burst_items, priority=30)
+    ctx.register_menu_category('ACT', 'A', _build_act_items, priority=35)
     ctx.register_menu_category('面板', '◈', _build_panel_items, priority=40)
 
     _init_game_engines(ctx)

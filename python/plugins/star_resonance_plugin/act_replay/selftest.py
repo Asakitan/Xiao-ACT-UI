@@ -16,18 +16,18 @@ import json
 from types import SimpleNamespace
 
 from act_platform.selftest import run_selftest as run_act_platform_selftest
-from engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
-from engines.dps_tracker import DpsTracker
-from engines.encounter_manager import EncounterManager
-from engines.game_state import GameStateManager
+from plugins.star_resonance_plugin.engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
+from plugins.star_resonance_plugin.engines.dps_tracker import DpsTracker
+from plugins.star_resonance_plugin.engines.encounter_manager import EncounterManager
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager
 from plugins.star_resonance_plugin.panels.sao_gui_dps import DpsOverlay
 from plugins.star_resonance_plugin.panels.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
 from plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
-from packet_parser.enums import NotifyMethod
-from packet_parser.parser import PacketParser
+from plugins.star_resonance_plugin.protocol.packet_parser.enums import NotifyMethod
+from plugins.star_resonance_plugin.protocol.packet_parser.parser import PacketParser
 from sao_webview import SAOWebViewGUI
-from tools.act_ui_parity import run_selftest as run_act_ui_parity_selftest
-import packet_parser.parser as parser_mod
+from plugins.star_resonance_plugin.tools.act_ui_parity import run_selftest as run_act_ui_parity_selftest
+import plugins.star_resonance_plugin.protocol.packet_parser.parser as parser_mod
 
 from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
 from .fixture_io import load_fixture_events

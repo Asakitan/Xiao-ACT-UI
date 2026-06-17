@@ -46,20 +46,6 @@
         } catch (e) { /* swallow */ }
     });
 
-    // state.dps → updateDps(payload)
-    window.bridge.on('state.dps', function (p) {
-        var fn = safe('updateDps');
-        if (!fn || !p) return;
-        try { fn(p); } catch (e) { /* swallow */ }
-    });
-
-    // state.bosshp → updateBossHP(payload)
-    window.bridge.on('state.bosshp', function (p) {
-        var fn = safe('updateBossHP');
-        if (!fn || !p) return;
-        try { fn(p); } catch (e) { /* swallow */ }
-    });
-
     // state.changed → updateState(full snapshot)
     window.bridge.on('state.changed', function (p) {
         var fn = safe('updateState');

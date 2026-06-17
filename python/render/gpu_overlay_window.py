@@ -3,12 +3,12 @@
 Provides a borderless transparent always-on-top click-through GLFW window
 that hosts a moderngl context. Designed as a drop-in alternative to the
 ``tk.Toplevel`` + ``UpdateLayeredWindow`` (ULW) presentation path used by
-SkillFX / HP / BossHP today.
+plugin-rendered overlay panels today.
 
 Why bother:
 - ULW costs ~1-2 ms per commit (BGRA premultiply roundtrip + Win32 GDI
-  copy of the entire bitmap). For a panel that's already on the GPU
-  (SkillFX SDF, BossHP burst), that's a wasted GPU→CPU→GPU bounce; a
+    copy of the entire bitmap). For a panel that's already on the GPU,
+    that's a wasted GPU→CPU→GPU bounce; a
   GLFW window with ``TRANSPARENT_FRAMEBUFFER`` lets the DWM compositor
   pull the framebuffer directly.
 - Cleanly separates "compose" (worker thread) from "present" (Tk main
@@ -335,7 +335,7 @@ class GlfwPump:
     Previously the pump was driven by ``root.after`` on the Tk main
     thread, which meant every GL upload + render + swap_buffers for N
     visible overlay windows was serialized on the same thread that
-    runs the SAO scheduler, HP STA tween, SkillFX scheduler tick, etc.
+    runs the platform scheduler and plugin overlay ticks.
     Heavy multi-panel combat scenes blocked Tk for tens of milliseconds
     per frame.
     

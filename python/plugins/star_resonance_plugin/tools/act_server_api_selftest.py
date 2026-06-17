@@ -13,8 +13,8 @@ from unittest import mock
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from engines import dps_history
-from server import app as server_app
+from plugins.star_resonance_plugin.engines import dps_history
+from plugins.star_resonance_plugin.server import app as server_app
 
 
 class ActServerApiTests(unittest.TestCase):

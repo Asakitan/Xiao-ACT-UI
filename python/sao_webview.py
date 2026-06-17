@@ -158,6 +158,19 @@ def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
 
+def _game_or_web_file_uri(owner: Any, filename: str) -> str:
+    try:
+        bridge = getattr(owner, '_game_webview_bridge', None)
+        resolve = getattr(bridge, 'resolve_web_uri', None)
+        if callable(resolve):
+            uri = resolve(filename)
+            if uri:
+                return str(uri)
+    except Exception:
+        pass
+    return _web_file_uri(filename)
+
+
 # Round 71 of sao_gui split refactor: _set_process_app_id deduplicated —
 # moved into gui_modules.sao_panel_ui alongside the other Win32 helpers.
 from gui_modules.sao_panel_ui import _set_process_app_id  # noqa: E402
@@ -1834,7 +1847,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Trigger/Timer Manager — same API surface as Entity/Tk panel
-        trigger_timer_url = _web_file_uri('trigger_timer_manager.html')
+        trigger_timer_url = _game_or_web_file_uri(self, 'trigger_timer_manager.html')
         _tt_w = max(640, int(min(_sw, 1920) * 0.40))
         _tt_h = max(520, int(min(_sh, 1080) * 0.52))
         _tt_x = max(16, int(monitor_left + (_sw - _tt_w) * 0.58))
@@ -1852,7 +1865,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Data Source Health — observability panel for PacketBridge + memory fallback
-        data_source_health_url = _web_file_uri('data_source_health.html')
+        data_source_health_url = _game_or_web_file_uri(self, 'data_source_health.html')
         _dh_w = max(640, int(min(_sw, 1920) * 0.40))
         _dh_h = max(500, int(min(_sh, 1080) * 0.50))
         _dh_x = max(16, int(monitor_left + (_sw - _dh_w) * 0.45))
@@ -1870,7 +1883,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Report/Export — shared report exporter surface for WebView + Entity parity
-        report_export_url = _web_file_uri('act_report_export.html')
+        report_export_url = _game_or_web_file_uri(self, 'act_report_export.html')
         _re_w = max(680, int(min(_sw, 1920) * 0.42))
         _re_h = max(520, int(min(_sh, 1080) * 0.52))
         _re_x = max(16, int(monitor_left + (_sw - _re_w) * 0.40))
@@ -1888,7 +1901,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Offline Import — standalone import/history playback wizard
-        offline_import_url = _web_file_uri('act_offline_import.html')
+        offline_import_url = _game_or_web_file_uri(self, 'act_offline_import.html')
         _oi_w = max(700, int(min(_sw, 1920) * 0.44))
         _oi_h = max(520, int(min(_sh, 1080) * 0.52))
         _oi_x = max(16, int(monitor_left + (_sw - _oi_w) * 0.42))
@@ -1906,7 +1919,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Timeline/VCR — shared event timeline controls for WebView parity
-        timeline_vcr_url = _web_file_uri('act_timeline_vcr.html')
+        timeline_vcr_url = _game_or_web_file_uri(self, 'act_timeline_vcr.html')
         _tl_w = max(700, int(min(_sw, 1920) * 0.43))
         _tl_h = max(520, int(min(_sh, 1080) * 0.52))
         _tl_x = max(16, int(monitor_left + (_sw - _tl_w) * 0.34))
@@ -1924,7 +1937,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Semantic Aggregate — cockpit parity with Entity/Tk aggregate panel
-        act_aggregate_url = _web_file_uri('act_aggregate.html')
+        act_aggregate_url = _game_or_web_file_uri(self, 'act_aggregate.html')
         _ag_w = max(820, int(min(_sw, 1920) * 0.54))
         _ag_h = max(620, int(min(_sh, 1080) * 0.62))
         _ag_x = max(16, int(monitor_left + (_sw - _ag_w) * 0.25))
@@ -1960,7 +1973,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Action Log — searchable EventBus table for WebView parity
-        action_log_url = _web_file_uri('act_action_log.html')
+        action_log_url = _game_or_web_file_uri(self, 'act_action_log.html')
         _al_w = max(760, int(min(_sw, 1920) * 0.48))
         _al_h = max(520, int(min(_sh, 1080) * 0.54))
         _al_x = max(16, int(monitor_left + (_sw - _al_w) * 0.30))
@@ -1978,7 +1991,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Death Recap — death-window report surface for WebView parity
-        death_recap_url = _web_file_uri('act_death_recap.html')
+        death_recap_url = _game_or_web_file_uri(self, 'act_death_recap.html')
         _dr_w = max(720, int(min(_sw, 1920) * 0.44))
         _dr_h = max(500, int(min(_sh, 1080) * 0.50))
         _dr_x = max(18, int(monitor_left + (_sw - _dr_w) * 0.32))
@@ -1996,7 +2009,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Graph/Timeseries — rich chart surface for WebView parity
-        graph_timeseries_url = _web_file_uri('act_graph_timeseries.html')
+        graph_timeseries_url = _game_or_web_file_uri(self, 'act_graph_timeseries.html')
         _gt_w = max(780, int(min(_sw, 1920) * 0.50))
         _gt_h = max(540, int(min(_sh, 1080) * 0.55))
         _gt_x = max(16, int(monitor_left + (_sw - _gt_w) * 0.27))
@@ -2014,7 +2027,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Combatant Drilldown — per-combatant detail surface
-        combatant_drilldown_url = _web_file_uri('act_combatant_drilldown.html')
+        combatant_drilldown_url = _game_or_web_file_uri(self, 'act_combatant_drilldown.html')
         _cd_w = max(720, int(min(_sw, 1920) * 0.46))
         _cd_h = max(520, int(min(_sh, 1080) * 0.54))
         _cd_x = max(20, int(monitor_left + (_sw - _cd_w) * 0.31))
@@ -2032,7 +2045,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Skill Drilldown — per-skill detail and timeline refs
-        skill_drilldown_url = _web_file_uri('act_skill_drilldown.html')
+        skill_drilldown_url = _game_or_web_file_uri(self, 'act_skill_drilldown.html')
         _sd_w = max(720, int(min(_sw, 1920) * 0.45))
         _sd_h = max(500, int(min(_sh, 1080) * 0.52))
         _sd_x = max(24, int(monitor_left + (_sw - _sd_w) * 0.34))

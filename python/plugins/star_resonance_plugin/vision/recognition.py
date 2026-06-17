@@ -15,10 +15,10 @@ from typing import Callable, Optional, Tuple
 import cv2
 import numpy as np
 
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
-from config import (
+from plugins.star_resonance_plugin.sr_config import (
     BAR_COLORS,
     CAPTURE_FPS_FAST,
     get_visual_rect_bbox,

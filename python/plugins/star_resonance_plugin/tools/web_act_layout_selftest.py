@@ -10,9 +10,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
+PLATFORM_WEB_DIR = ROOT.parents[1] / "web"
 
 
 def _read_web(name: str) -> str:
+    for base in (WEB_DIR, PLATFORM_WEB_DIR):
+        candidate = base / name
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
     return (WEB_DIR / name).read_text(encoding="utf-8")
 
 

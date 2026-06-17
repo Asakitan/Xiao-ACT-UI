@@ -282,7 +282,7 @@ class SAOPlayerGUIFisheyeMixin:
 
     def _iter_fisheye_panels(self):
         seen = set()
-        attrs = tuple(getattr(self, '_ACT_PANEL_ATTRS', ()) or ())
+        attrs = tuple(getattr(self, '_PLATFORM_PANEL_ATTRS', ()) or ())
         for attr in self._detect_panel_attrs(self) + tuple(attrs):
             if attr in seen:
                 continue

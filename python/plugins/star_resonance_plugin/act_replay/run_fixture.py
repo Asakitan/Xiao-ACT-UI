@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from engines.act_trigger_engine import ActTriggerEngine
+from plugins.star_resonance_plugin.engines.act_trigger_engine import ActTriggerEngine
 
 from .fixture_io import load_fixture_events
 from .harness import ActReplayHarness

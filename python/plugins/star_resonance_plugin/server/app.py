@@ -17,7 +17,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, W
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from engines.dps_history import DpsHistoryStore
+from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)

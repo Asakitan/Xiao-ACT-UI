@@ -46,19 +46,8 @@ import time
 from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
-from gui_modules.sao_gui_action_log import ActionLogPanel
-from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
 from gui_modules.sao_gui_mem_scope import MemScopePanel
-from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
-from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
-from gui_modules.sao_gui_offline_import import OfflineImportPanel
 from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManagerPanel
-from gui_modules.sao_gui_report_export import ReportExportPanel
-from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
-from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
-# Plugin-owned panels (Commander/DeathRecap/TriggerTimer) are loaded
-# lazily through ACT plugin manager hooks; the toggles below are
-# generic stubs and plugin classes register their real implementations.
 from gui_modules.sao_panel_ui import _set_sao_panel_theme
 
 
@@ -253,97 +242,6 @@ class SAOPlayerGUIPanelsMixin:
             except Exception:
                 pass
 
-    def _toggle_act_trigger_timer_panel(self):
-        """打开/关闭 ACT 触发/计时管理面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_trigger_timer_panel:
-            self._act_trigger_timer_panel = TriggerTimerManagerPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_trigger_timer_panel.is_visible():
-            self._act_trigger_timer_panel.hide()
-        else:
-            self._act_trigger_timer_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_trigger_timer_panel))
-
-    def _toggle_act_data_source_health_panel(self):
-        """打开/关闭 ACT 数据源健康面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_data_source_health_panel:
-            self._act_data_source_health_panel = DataSourceHealthPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_data_source_health_panel.is_visible():
-            self._act_data_source_health_panel.hide()
-        else:
-            self._act_data_source_health_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_data_source_health_panel))
-
-    def _toggle_act_report_export_panel(self):
-        """打开/关闭 ACT 报告/导出面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_report_export_panel:
-            self._act_report_export_panel = ReportExportPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_report_export_panel.is_visible():
-            self._act_report_export_panel.hide()
-        else:
-            self._act_report_export_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_report_export_panel))
-
-    def _toggle_act_offline_import_panel(self):
-        """打开/关闭 ACT 离线导入面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_offline_import_panel:
-            self._act_offline_import_panel = OfflineImportPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_offline_import_panel.is_visible():
-            self._act_offline_import_panel.hide()
-        else:
-            self._act_offline_import_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_offline_import_panel))
-
-    def _toggle_act_timeline_vcr_panel(self):
-        """打开/关闭 ACT 时间线/VCR 面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_timeline_vcr_panel:
-            self._act_timeline_vcr_panel = TimelineVcrPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_timeline_vcr_panel.is_visible():
-            self._act_timeline_vcr_panel.hide()
-        else:
-            self._act_timeline_vcr_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_timeline_vcr_panel))
-
-    def _toggle_act_action_log_panel(self):
-        """打开/关闭 ACT 行为日志面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_action_log_panel:
-            self._act_action_log_panel = ActionLogPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_action_log_panel.is_visible():
-            self._act_action_log_panel.hide()
-        else:
-            self._act_action_log_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_action_log_panel))
-
-    def _toggle_act_aggregate_panel(self):
-        """打开/关闭 ACT 聚合总览面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_aggregate_panel:
-            self._act_aggregate_panel = ActAggregatePanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_aggregate_panel.is_visible():
-            self._act_aggregate_panel.hide()
-        else:
-            self._act_aggregate_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_aggregate_panel))
-
     def _toggle_mem_scope_panel(self):
         """打开/关闭 内存浏览器 Mem Scope 面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()
@@ -356,58 +254,6 @@ class SAOPlayerGUIPanelsMixin:
             self._mem_scope_panel.show()
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._mem_scope_panel))
-
-    def _toggle_act_death_recap_panel(self):
-        """打开/关闭 ACT 死亡回放面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_death_recap_panel:
-            self._act_death_recap_panel = DeathRecapPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_death_recap_panel.is_visible():
-            self._act_death_recap_panel.hide()
-        else:
-            self._act_death_recap_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_death_recap_panel))
-
-    def _toggle_act_graph_timeseries_panel(self):
-        """打开/关闭 ACT 图表/曲线面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_graph_timeseries_panel:
-            self._act_graph_timeseries_panel = GraphTimeseriesPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_graph_timeseries_panel.is_visible():
-            self._act_graph_timeseries_panel.hide()
-        else:
-            self._act_graph_timeseries_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_graph_timeseries_panel))
-
-    def _toggle_act_combatant_drilldown_panel(self):
-        """打开/关闭 ACT 战斗成员钻取面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_combatant_drilldown_panel:
-            self._act_combatant_drilldown_panel = CombatantDrilldownPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_combatant_drilldown_panel.is_visible():
-            self._act_combatant_drilldown_panel.hide()
-        else:
-            self._act_combatant_drilldown_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_combatant_drilldown_panel))
-
-    def _toggle_act_skill_drilldown_panel(self):
-        """打开/关闭 ACT 技能钻取面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._act_skill_drilldown_panel:
-            self._act_skill_drilldown_panel = SkillDrilldownPanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._act_skill_drilldown_panel.is_visible():
-            self._act_skill_drilldown_panel.hide()
-        else:
-            self._act_skill_drilldown_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._act_skill_drilldown_panel))
 
     def _push_commander_data(self):
         """Commander data push — 游戏插件覆盖。"""
@@ -454,19 +300,8 @@ class SAOPlayerGUIPanelsMixin:
 
     # ── Panel Theme ──
 
-    _ACT_PANEL_ATTRS = (
+    _PLATFORM_PANEL_ATTRS = (
         '_act_plugin_manager_panel',
-        '_act_trigger_timer_panel',
-        '_act_data_source_health_panel',
-        '_act_report_export_panel',
-        '_act_offline_import_panel',
-        '_act_timeline_vcr_panel',
-        '_act_aggregate_panel',
-        '_act_action_log_panel',
-        '_act_death_recap_panel',
-        '_act_graph_timeseries_panel',
-        '_act_combatant_drilldown_panel',
-        '_act_skill_drilldown_panel',
         '_mem_scope_panel',
     )
 
@@ -485,7 +320,7 @@ class SAOPlayerGUIPanelsMixin:
             _set_sao_panel_theme(theme)
         except Exception:
             pass
-        for attr in self._ACT_PANEL_ATTRS:
+        for attr in self._PLATFORM_PANEL_ATTRS:
             panel = getattr(self, attr, None)
             win = getattr(panel, '_win', None)
             try:

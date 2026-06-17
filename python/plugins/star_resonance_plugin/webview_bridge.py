@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ from act_platform.runtime import (
     publish_owner_event,
     should_record_owner_combat_event,
 )
-from config import get_skill_slot_rects
+from plugins.star_resonance_plugin.sr_config import get_skill_slot_rects
 
 from plugins.star_resonance_plugin.engines.auto_key_engine import (
     DEFAULT_AUTO_KEY_SERVER_URL,
@@ -125,7 +126,7 @@ from plugins.star_resonance_plugin.engines.combat_analytics import (
 )
 
 try:
-    import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+    import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 except ImportError:
     _CY_UI = None  # type: ignore[assignment]
 
@@ -240,6 +241,27 @@ class StarResonanceWebViewBridge:
         payload.update(extra)
         return json.dumps(payload, ensure_ascii=False)
 
+    def resolve_web_uri(self, filename: str) -> Optional[str]:
+        name = str(filename or '')
+        target = None
+        try:
+            resolve = getattr(self.ctx, 'resolve_web', None)
+            if callable(resolve):
+                target = resolve(name)
+        except Exception:
+            target = None
+        if not target:
+            base = os.path.abspath(os.path.join(_PLUGIN_ROOT, 'web'))
+            candidate = os.path.abspath(os.path.join(base, name))
+            try:
+                if os.path.commonpath([base, candidate]) == base and os.path.isfile(candidate):
+                    target = candidate
+            except Exception:
+                target = None
+        if not target:
+            return None
+        return Path(str(target)).resolve().as_uri()
+
     def _browse(self, root: str, mode: str = 'file') -> dict:
         data = json.loads(self.owner._api.browse_dir(root))
         data['mode'] = mode
@@ -326,13 +348,16 @@ class StarResonanceWebViewBridge:
         _sw = max(1, int(screen_w or 1))
         _sh = max(1, int(screen_h or 1))
 
+        def _plugin_web_uri(filename: str) -> str:
+            return self.resolve_web_uri(filename) or web_file_uri(filename)
+
         def _register(surface: str, win, title: str, **meta):
             reg = getattr(o, '_register_plugin_surface', None)
             if callable(reg):
                 reg(surface, win, title=title, **meta)
             return win
 
-        skillfx_url = web_file_uri('skillfx.html')
+        skillfx_url = _plugin_web_uri('skillfx.html')
         o.skillfx_win = _register('skillfx', webview_module.create_window(
             'SAO SkillFX', skillfx_url,
             width=o._to_webview_px(max(320, int(_sw * 0.42))),
@@ -347,7 +372,7 @@ class StarResonanceWebViewBridge:
             js_api=o._api,
         ), 'SAO SkillFX', click_through=True, dotnet_transparency=True, on_top=True)
 
-        boss_hp_url = web_file_uri('boss_hp.html')
+        boss_hp_url = _plugin_web_uri('boss_hp.html')
         boss_hp_geom = o._calc_boss_hp_geometry()
         o._boss_hp_geometry = dict(boss_hp_geom)
         o.boss_hp_win = _register('boss_hp', webview_module.create_window(
@@ -364,7 +389,7 @@ class StarResonanceWebViewBridge:
         _register('bosshp', o.boss_hp_win, 'SAO-BossHP',
                   click_through=True, dotnet_transparency=True, on_top=True)
 
-        dps_url = web_file_uri('dps.html')
+        dps_url = _plugin_web_uri('dps.html')
         dps_w = max(320, int(min(_sw, 1920) * 0.19))
         dps_h = max(420, int(min(_sh, 1080) * 0.48))
         o._dps_base_w = int(dps_w)
@@ -394,7 +419,7 @@ class StarResonanceWebViewBridge:
             js_api=o._dps_api,
         ), 'SAO-DPS', click_through=False, dotnet_transparency=False, on_top=True)
 
-        buff_cov_url = web_file_uri('buff_coverage.html')
+        buff_cov_url = _plugin_web_uri('buff_coverage.html')
         buff_w = int(getattr(o, '_dps_base_w', 0)) or max(300, int(min(_sw, 1920) * 0.18))
         buff_h = max(220, int(min(_sh, 1080) * 0.24))
         buff_x = dps_x
@@ -411,7 +436,7 @@ class StarResonanceWebViewBridge:
             js_api=o._api,
         ), 'SAO-BuffCoverage', click_through=True, dotnet_transparency=False, on_top=True)
 
-        raid_editor_url = web_file_uri('raid_editor.html')
+        raid_editor_url = _plugin_web_uri('raid_editor.html')
         raid_w = max(360, int(min(_sw, 1920) * 0.22))
         raid_h = max(460, int(min(_sh, 1080) * 0.52))
         raid_x = max(16, int(_sw * 0.012))
@@ -429,7 +454,7 @@ class StarResonanceWebViewBridge:
             js_api=o._raid_editor_api,
         ), 'SAO-RaidEditor', click_through=False, dotnet_transparency=False, on_top=True)
 
-        autokey_editor_url = web_file_uri('autokey_editor.html')
+        autokey_editor_url = _plugin_web_uri('autokey_editor.html')
         autokey_w = max(340, int(min(_sw, 1920) * 0.20))
         autokey_h = max(400, int(min(_sh, 1080) * 0.44))
         autokey_x = max(16, int(_sw * 0.012))
@@ -447,7 +472,7 @@ class StarResonanceWebViewBridge:
             js_api=o._autokey_editor_api,
         ), 'SAO-AutoKeyEditor', click_through=False, dotnet_transparency=False, on_top=True)
 
-        commander_url = web_file_uri('commander.html')
+        commander_url = _plugin_web_uri('commander.html')
         commander_w = max(300, int(min(_sw, 1920) * 0.18))
         commander_h = max(380, int(min(_sh, 1080) * 0.42))
         commander_x = max(16, int(_sw * 0.25))

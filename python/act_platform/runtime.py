@@ -143,112 +143,106 @@ def _settings_set(owner: Any, key: str, value: Any) -> None:
         pass
 
 
-def _read_trigger_rules(owner: Any) -> list[dict[str, Any]]:
-    settings = _owner_settings(owner)
-    try:
-        raw = settings.get("act_trigger_rules", []) if settings is not None else []
-    except Exception:
-        raw = []
-    if isinstance(raw, Mapping):
-        raw = raw.get("act_trigger_rules") or raw.get("rules") or []
-    if not isinstance(raw, list):
-        return []
-    return [dict(rule) for rule in raw if isinstance(rule, Mapping)]
+def _dispatch_trigger_action(owner: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+    """Forward a game-specific trigger action to the plugin's runtime bridge.
 
-
-def _write_trigger_rules(owner: Any, rules: list[dict[str, Any]]) -> None:
-    _settings_set(owner, "act_trigger_rules", rules)
-    try:
-        setattr(owner, "_act_trigger_last_reload_ms", int(time.time() * 1000))
-    except Exception:
-        pass
-    try:
-        engine = ensure_act_trigger_engine(owner)
-        engine.set_rules(rules)
-    except Exception:
-        pass
-
-
-def _normalize_trigger_rules(rules: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    from engines.act_trigger_engine import normalize_trigger_rule
-
-    return [normalize_trigger_rule(rule, idx) for idx, rule in enumerate(rules or [], 1)]
-
-
-def _plugin_trigger_result(invoked: Mapping[str, Any]) -> dict[str, Any]:
-    out = dict(invoked or {})
-    result = out.get("result")
-    if isinstance(result, Mapping):
-        for key in ("message", "severity", "label"):
-            if result.get(key) is not None:
-                out[key] = result.get(key)
-        if "matched" in result:
-            out["matched"] = bool(result.get("matched"))
-        elif "match" in result:
-            out["matched"] = bool(result.get("match"))
-        elif "result" in result:
-            out["matched"] = bool(result.get("result"))
-        else:
-            out.setdefault("matched", False)
-    else:
-        out["matched"] = bool(result)
-    return out
-
-
-def _plugin_trigger_evaluator(owner: Any):
-    def _evaluate(trigger_type: str, payload: Mapping[str, Any], time_budget_ms: float = 25.0) -> dict[str, Any]:
-        manager = ensure_act_plugin_manager(owner)
-        invoke = getattr(manager, "invoke_extension", None)
-        if not callable(invoke):
-            return {"ok": False, "matched": False, "message": "plugin extension invocation is unavailable"}
-        invoked = invoke(
-            "trigger_types",
-            str(trigger_type or ""),
-            payload,
-            time_budget_ms=float(time_budget_ms or 25.0),
-        )
-        return _plugin_trigger_result(invoked if isinstance(invoked, Mapping) else {})
-
-    return _evaluate
-
-
-def _configure_trigger_engine_plugins(owner: Any, engine: Any) -> None:
-    setter = getattr(engine, "set_plugin_trigger_evaluator", None)
-    if callable(setter):
+    The platform deliberately owns no trigger engine logic — every
+    ``act_trigger_*`` function is a thin shim that dispatches to the
+    plugin-contributed handler registered via ``register_extension_runtime``.
+    If no game plugin is loaded, returns a generic "unavailable" payload so
+    upstream UIs degrade gracefully.
+    """
+    handler = _extension_runtime_handler(name)
+    if callable(handler):
         try:
-            setter(_plugin_trigger_evaluator(owner))
-        except Exception:
-            pass
+            return handler(owner, *args, **kwargs)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc), "errors": [str(exc)]}
+    return {"ok": False,
+            "message": f"trigger action is unavailable: no game plugin loaded (action={name})",
+            "errors": [f"trigger action unavailable: {name}"]}
 
 
-def ensure_act_trigger_engine(owner: Any):
-    from engines.act_trigger_engine import ActTriggerEngine
+def act_trigger_status(owner: Any, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_status", **kwargs)
 
-    engine = getattr(owner, "_act_trigger_engine", None)
-    if isinstance(engine, ActTriggerEngine):
-        _configure_trigger_engine_plugins(owner, engine)
-        return engine
-    engine = ActTriggerEngine(
-        _read_trigger_rules(owner),
-        plugin_trigger_evaluator=_plugin_trigger_evaluator(owner),
-    )
+
+def act_trigger_enable(owner: Any, rule_id: str, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_enable", rule_id, **kwargs)
+
+
+def act_trigger_disable(owner: Any, rule_id: str, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_disable", rule_id, **kwargs)
+
+
+def act_trigger_reload(owner: Any, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_reload", **kwargs)
+
+
+def act_trigger_export_presets(owner: Any, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_export_presets", **kwargs)
+
+
+def act_trigger_import_presets(owner: Any, payload: Any, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_import_presets", payload, **kwargs)
+
+
+def act_trigger_test(owner: Any, rule_id: str, **kwargs: Any) -> dict[str, Any]:
+    return _dispatch_trigger_action(owner, "act_trigger_test", rule_id, **kwargs)
+
+
+_EXTENSION_RUNTIME_PROVIDER: Callable[[str], Callable[..., Any] | None] | None = None
+
+
+def register_extension_runtime(provider: Callable[[str], Callable[..., Any] | None]) -> None:
+    """Inject an extension-runtime dispatch provider contributed by a plugin.
+
+    Plugins call this from ``on_load`` to expose
+    their trigger-engine / DPS-history / name-resolver handlers to the platform.
+
+    The platform never imports plugin code; it only invokes the provider to
+    look up a named handler and then calls it with ``(owner, ...)``.
+    """
+    global _EXTENSION_RUNTIME_PROVIDER
+    if callable(provider):
+        _EXTENSION_RUNTIME_PROVIDER = provider
+
+
+def _extension_runtime_handler(name: str) -> Callable[..., Any] | None:
+    """Return the plugin-contributed handler for ``name`` or ``None``."""
+    provider = _EXTENSION_RUNTIME_PROVIDER
+    if not callable(provider):
+        return None
     try:
-        setattr(owner, "_act_trigger_engine", engine)
+        handler = provider(str(name or ""))
     except Exception:
-        pass
-    _configure_trigger_engine_plugins(owner, engine)
-    return engine
+        return None
+    return handler if callable(handler) else None
+
+
+def _extension_runtime_value(owner: Any, name: str, default: Any = None,
+                             *args: Any, **kwargs: Any) -> Any:
+    """Call a plugin-contributed value provider without importing plugin code."""
+    handler = _extension_runtime_handler(name)
+    if not callable(handler):
+        return default
+    try:
+        value = handler(owner, *args, **kwargs)
+    except Exception:
+        return default
+    return default if value is None else value
+
+
+# Note: plugins own their runtime engine creation and expose it via the
+# extension runtime provider. Platform code that needs an engine goes
+# through ``act_trigger_*`` dispatch shims only.
 
 
 def _owner_snapshot_provider(owner: Any) -> Callable[[], Mapping[str, Any]]:
     def _snapshot() -> Mapping[str, Any]:
-        for name in ("_build_dps_act_snapshot", "_get_dps_act_snapshot"):
-            fn = getattr(owner, name, None)
-            if callable(fn):
-                try:
-                    return fn() or {}
-                except Exception:
-                    return {}
+        snap = _extension_runtime_value(owner, "owner_act_snapshot", {})
+        if isinstance(snap, Mapping):
+            return snap
         return {}
 
     return _snapshot
@@ -338,61 +332,23 @@ def publish_owner_event(owner: Any, topic: str, payload: Optional[Mapping[str, A
 
 
 def _self_uid(owner: Any) -> int:
-    tracker = getattr(owner, "_dps_tracker", None) or getattr(owner, "dps_tracker", None)
-    for attr in ("_self_uid", "self_uid"):
-        try:
-            value = int(getattr(tracker, attr) or 0)
-            if value > 0:
-                return value
-        except Exception:
-            pass
-    state = getattr(owner, "_state_mgr", None) or getattr(owner, "state_mgr", None)
-    gs = None
-    getter = getattr(state, "get", None)
-    if callable(getter):
-        try:
-            gs = getter()
-        except Exception:
-            gs = None
-    if gs is None:
-        gs = getattr(state, "state", None)
-    for attr in ("player_id", "uid", "self_uid"):
-        try:
-            value = int(getattr(gs, attr) or 0)
-            if value > 0:
-                return value
-        except Exception:
-            pass
+    try:
+        value = int(_extension_runtime_value(owner, "self_uid", 0) or 0)
+        if value > 0:
+            return value
+    except Exception:
+        pass
     return 0
 
 
 def _party_ids(owner: Any) -> set[int]:
+    raw = _extension_runtime_value(owner, "party_ids", ())
     ids: set[int] = set()
-    bridge = getattr(owner, "_packet_engine", None) or getattr(owner, "_packet_bridge", None)
-    get_players = getattr(bridge, "get_players", None)
-    if callable(get_players):
+    for item in (raw or ()):
         try:
-            players = get_players() or {}
+            ids.add(int(item))
         except Exception:
-            players = {}
-        if isinstance(players, Mapping):
-            for key, value in players.items():
-                try:
-                    ids.add(int(key))
-                except Exception:
-                    pass
-                if isinstance(value, Mapping):
-                    for field in ("uid", "id", "player_id"):
-                        try:
-                            ids.add(int(value.get(field) or 0))
-                        except Exception:
-                            pass
-                    continue
-                for attr in ("uid", "id", "player_id"):
-                    try:
-                        ids.add(int(getattr(value, attr) or 0))
-                    except Exception:
-                        pass
+            pass
     self_uid = _self_uid(owner)
     if self_uid > 0:
         ids.add(self_uid)
@@ -824,243 +780,10 @@ def act_render_surface(owner: Any, surface: str, payload: Any = None) -> dict[st
     }
 
 
-def _trigger_status_from_rules(owner: Any, rules: list[dict[str, Any]], *,
-                               ok: bool = True, message: str = "") -> dict[str, Any]:
-    normalized = _normalize_trigger_rules(rules)
-    timers = [rule for rule in normalized if rule.get("type") in ("elapsed_s", "timer_preset")]
-    errors: list[str] = []
-    engine_snapshot: dict[str, Any] = {}
-    try:
-        engine_snapshot = ensure_act_trigger_engine(owner).snapshot(limit=12)
-    except Exception as exc:
-        errors.append(str(exc))
-    return {
-        "ok": bool(ok) and not errors,
-        "message": message,
-        "enabled": bool(normalized),
-        "rule_count": len(normalized),
-        "trigger_count": len(normalized),
-        "timer_count": len(timers),
-        "triggers": normalized,
-        "timers": timers,
-        "recent": list(engine_snapshot.get("recent") or []),
-        "last_reload_ms": int(getattr(owner, "_act_trigger_last_reload_ms", 0) or 0),
-        "errors": errors,
-    }
-
-
-def act_trigger_status(owner: Any) -> dict[str, Any]:
-    try:
-        return _trigger_status_from_rules(owner, _read_trigger_rules(owner), message="OK")
-    except Exception as exc:
-        return {
-            "ok": False,
-            "message": str(exc),
-            "enabled": False,
-            "rule_count": 0,
-            "trigger_count": 0,
-            "timer_count": 0,
-            "triggers": [],
-            "timers": [],
-            "recent": [],
-            "last_reload_ms": 0,
-            "errors": [str(exc)],
-        }
-
-
-def _set_trigger_rule_enabled(owner: Any, rule_id: str, enabled: bool) -> dict[str, Any]:
-    target = str(rule_id or "").strip()
-    if not target:
-        return {"ok": False, "message": "rule id is required"}
-    rules = _read_trigger_rules(owner)
-    found = False
-    normalized = _normalize_trigger_rules(rules)
-    for index, rule in enumerate(rules):
-        current_id = str((normalized[index] if index < len(normalized) else rule).get("id") or "")
-        if current_id == target:
-            rule["enabled"] = bool(enabled)
-            found = True
-            break
-    if not found:
-        return {"ok": False, "message": f"trigger rule not found: {target}"}
-    _write_trigger_rules(owner, rules)
-    action = "enabled" if enabled else "disabled"
-    status = _trigger_status_from_rules(owner, rules, message=f"{target} {action}")
-    status["ok"] = True
-    return status
-
-
-def act_trigger_enable(owner: Any, rule_id: str) -> dict[str, Any]:
-    return _set_trigger_rule_enabled(owner, rule_id, True)
-
-
-def act_trigger_disable(owner: Any, rule_id: str) -> dict[str, Any]:
-    return _set_trigger_rule_enabled(owner, rule_id, False)
-
-
-def act_trigger_reload(owner: Any) -> dict[str, Any]:
-    try:
-        rules = _read_trigger_rules(owner)
-        try:
-            ensure_act_trigger_engine(owner).set_rules(rules)
-        except Exception:
-            pass
-        try:
-            setattr(owner, "_act_trigger_last_reload_ms", int(time.time() * 1000))
-        except Exception:
-            pass
-        return _trigger_status_from_rules(owner, rules, message="Reloaded")
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), "errors": [str(exc)], "triggers": [], "timers": []}
-
-
-def _rules_from_preset_payload(payload: Any) -> list[dict[str, Any]]:
-    raw = payload
-    if isinstance(raw, Mapping):
-        raw = raw.get("act_trigger_rules") or raw.get("rules") or raw.get("presets") or []
-    if not isinstance(raw, list):
-        return []
-    return [dict(rule) for rule in raw if isinstance(rule, Mapping)]
-
-
-def act_trigger_export_presets(owner: Any,
-                               rule_ids: Optional[Iterable[str]] = None) -> dict[str, Any]:
-    try:
-        wanted = {str(item or "").strip() for item in (rule_ids or []) if str(item or "").strip()}
-        rules = _normalize_trigger_rules(_read_trigger_rules(owner))
-        if wanted:
-            rules = [rule for rule in rules if str(rule.get("id") or "") in wanted]
-        return {
-            "ok": True,
-            "kind": "act_trigger_presets",
-            "schema_version": 1,
-            "count": len(rules),
-            "rules": rules,
-        }
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), "rules": [], "errors": [str(exc)]}
-
-
-def act_trigger_import_presets(owner: Any, payload: Any, *,
-                               replace: bool = False) -> dict[str, Any]:
-    try:
-        incoming = _normalize_trigger_rules(_rules_from_preset_payload(payload))
-        if not incoming:
-            return {"ok": False, "message": "no trigger presets found", "imported_count": 0}
-        existing = _normalize_trigger_rules(_read_trigger_rules(owner))
-        if replace:
-            combined = incoming
-        else:
-            by_id = {str(rule.get("id") or ""): dict(rule) for rule in existing}
-            order = [str(rule.get("id") or "") for rule in existing if str(rule.get("id") or "")]
-            for rule in incoming:
-                rule_id = str(rule.get("id") or "")
-                if rule_id and rule_id not in by_id:
-                    order.append(rule_id)
-                by_id[rule_id] = dict(rule)
-            combined = [by_id[rule_id] for rule_id in order if rule_id in by_id]
-        _write_trigger_rules(owner, combined)
-        status = _trigger_status_from_rules(owner, combined, message="Imported trigger presets")
-        status["ok"] = True
-        status["imported_count"] = len(incoming)
-        status["replace"] = bool(replace)
-        return status
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), "imported_count": 0, "errors": [str(exc)]}
-
-
-def _assign_path(src: dict[str, Any], path: str, value: Any) -> None:
-    parts = [part for part in str(path or "").split(".") if part]
-    if not parts:
-        return
-    cur = src
-    for part in parts[:-1]:
-        nxt = cur.get(part)
-        if not isinstance(nxt, dict):
-            nxt = {}
-            cur[part] = nxt
-        cur = nxt
-    cur[parts[-1]] = value
-
-
-def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
-    rule_type = str(rule.get("type") or "")
-    threshold = float(rule.get("threshold") or 0.0)
-    match = str(rule.get("match") or "")
-    render_spec: dict[str, Any] = {
-        "mode": "synthetic",
-        "encounter": {"id": "act-trigger-test", "status": "active", "duration_s": max(1.0, threshold + 1.0)},
-        "totals": {"damage": 0.0, "heal": 0.0, "elapsed_s": max(1.0, threshold + 1.0)},
-        "context": {},
-        "target": {},
-    }
-    if rule_type == "damage_total":
-        render_spec["totals"]["damage"] = max(1.0, threshold + 1.0)
-    elif rule_type == "heal_total":
-        render_spec["totals"]["heal"] = max(1.0, threshold + 1.0)
-    elif rule_type == "target_hp_pct_below":
-        render_spec["target"]["hp_pct"] = min(max(threshold, 0.0), 1.0)
-    elif rule_type == "skill_kind":
-        render_spec["context"]["last_skill_kind"] = match or "server_end"
-    elif rule_type == "boss_event_type":
-        try:
-            event_type = int(match or threshold or 1)
-        except Exception:
-            event_type = 1
-        render_spec["context"]["last_boss_event_type"] = event_type
-    elif rule_type == "timer_preset":
-        duration_s = float(rule.get("duration_s") or threshold or 1.0)
-        render_spec["totals"]["elapsed_s"] = max(1.0, duration_s + 1.0)
-        render_spec["encounter"]["duration_s"] = max(1.0, duration_s + 1.0)
-    elif rule_type == "plugin_trigger":
-        render_spec["totals"]["damage"] = max(1.0, threshold + 1.0)
-    snapshot = {"render_spec": render_spec}
-    if rule_type == "field_match":
-        field = str(rule.get("field") or "context.last_skill_kind")
-        value: Any = match or "server_end"
-        operator = str(rule.get("operator") or "")
-        if operator in ("lt", "lte", "<", "<="):
-            value = float(rule.get("threshold") or 0.0) - 1.0
-        elif operator in ("gt", "gte", ">", ">="):
-            value = float(rule.get("threshold") or 0.0) + 1.0
-        if field.startswith("render_spec."):
-            _assign_path(snapshot, field, value)
-        elif field.startswith("source."):
-            _assign_path(snapshot, field, value)
-        else:
-            _assign_path(render_spec, field, value)
-    return snapshot
-
-
-
-def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
-    target = str(rule_id or "").strip()
-    if not target:
-        return {"ok": False, "message": "rule id is required", "events": []}
-    try:
-        from engines.act_trigger_engine import ActTriggerEngine
-
-        rules = _normalize_trigger_rules(_read_trigger_rules(owner))
-        rule = next((item for item in rules if str(item.get("id") or "") == target), None)
-        if rule is None:
-            return {"ok": False, "message": f"trigger rule not found: {target}", "events": []}
-        enabled_rule = dict(rule)
-        enabled_rule["enabled"] = True
-        enabled_rule["cooldown_s"] = 0.0
-        enabled_rule["once_per_encounter"] = False
-        engine = ActTriggerEngine(
-            [enabled_rule],
-            plugin_trigger_evaluator=_plugin_trigger_evaluator(owner),
-        )
-        events = engine.evaluate(_synthetic_snapshot_for_rule(enabled_rule), now=time.time())
-        return {
-            "ok": bool(events),
-            "message": "Test event emitted" if events else "Rule did not match synthetic snapshot",
-            "events": events,
-            "status": act_trigger_status(owner),
-        }
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), "events": [], "errors": [str(exc)]}
+# Trigger engine rule-form building + testing lives entirely in the plugin
+# runtime provider. Platform callers reach it through the
+# ``act_trigger_*`` dispatch shims above (which call
+# ``_extension_runtime_handler`` registered via ``register_extension_runtime``).
 
 
 def _json_safe(value: Any) -> Any:
@@ -1088,48 +811,21 @@ def _coerce_int(value: Any, default: int = 0) -> int:
 
 
 def _owner_act_snapshot(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
-    for name in ("_build_dps_act_snapshot", "_get_dps_act_snapshot"):
-        fn = getattr(owner, name, None)
-        if callable(fn):
-            try:
-                snap = fn(history_limit=history_limit)
-            except TypeError:
-                try:
-                    snap = fn()
-                except Exception:
-                    snap = {}
-            except Exception:
-                snap = {}
-            if isinstance(snap, Mapping):
-                return dict(_json_safe(snap))
+    snap = _extension_runtime_value(owner, "owner_act_snapshot", {}, history_limit=history_limit)
+    if isinstance(snap, Mapping):
+        return dict(_json_safe(snap))
     return {}
 
 
 def _owner_dps_report(owner: Any) -> dict[str, Any] | None:
-    tracker = getattr(owner, "_dps_tracker", None)
-    if tracker is not None:
-        get_last = getattr(tracker, "get_last_report", None)
-        if callable(get_last):
-            try:
-                report = get_last()
-                if isinstance(report, Mapping):
-                    return dict(_json_safe(report))
-            except Exception:
-                pass
-    store = getattr(owner, "_dps_history_store", None)
-    latest = getattr(store, "latest_report", None)
-    if callable(latest):
-        try:
-            report = latest()
-            if isinstance(report, Mapping):
-                return dict(_json_safe(report))
-        except Exception:
-            pass
+    report = _extension_runtime_value(owner, "owner_dps_report", None)
+    if isinstance(report, Mapping):
+        return dict(_json_safe(report))
     return None
 
 
 def _owner_history_store(owner: Any) -> tuple[Any, list[str]]:
-    store = getattr(owner, "_dps_history_store", None)
+    store = _extension_runtime_value(owner, "owner_history_store", None)
     if store is None:
         return None, ["DPS history is not initialized"]
     return store, []
@@ -1171,6 +867,11 @@ def _history_load_report(store: Any, index: int = 0) -> dict[str, Any] | None:
         if 0 <= int(index or 0) < len(items) and isinstance(items[int(index or 0)], Mapping):
             return dict(_json_safe(items[int(index or 0)]))
     return None
+
+
+def _show_plugin_report(owner: Any, report: Mapping[str, Any]) -> bool:
+    shown = _extension_runtime_value(owner, "show_dps_last_report", False, report)
+    return bool(shown)
 
 
 def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[str, Any]:
@@ -1231,12 +932,10 @@ def act_history_load(owner: Any, *, index: int = 0, show: bool = True) -> dict[s
         return {"ok": False, "message": "History report not found", "report": None, "preview": {}, "errors": ["History report not found"]}
     shown = False
     if show:
-        show_report = getattr(owner, "_show_dps_last_report", None)
-        if callable(show_report):
-            try:
-                shown = bool(show_report(report))
-            except Exception as exc:
-                errors.append(str(exc))
+        try:
+            shown = _show_plugin_report(owner, report)
+        except Exception as exc:
+            errors.append(str(exc))
     preview = _report_preview({}, report)
     return {
         "ok": not errors,
@@ -1520,70 +1219,20 @@ def _persist_offline_import_report(store: Any, report: Mapping[str, Any]) -> tup
 def _import_exported_report_file(owner: Any, path: str, *, persist: bool,
                                  show: bool, history_limit: int,
                                  initial_errors: Iterable[Any] = ()) -> dict[str, Any] | None:
-    try:
-        from engines.dps_history import load_exported_report_file
-    except Exception:
+    """Dispatch shipped-report import to the active game plugin's runtime bridge.
+
+    The platform deliberately owns no game-specific report loader. The plugin
+    that owns ``DpsHistoryStore.load_exported_report_file`` registers its importer
+    here via ``register_extension_runtime('_import_exported_report_file', ...)``.
+    """
+    handler = _extension_runtime_handler("_import_exported_report_file")
+    if not callable(handler):
         return None
     try:
-        report = load_exported_report_file(path)
+        return handler(owner, path, persist=persist, show=show,
+                       history_limit=history_limit, initial_errors=initial_errors)
     except Exception:
         return None
-    if not isinstance(report, Mapping):
-        return None
-    source_path = str(path or "")
-    lower_path = source_path.lower()
-    if lower_path.endswith(".xml.gz"):
-        fmt = "xml.gz"
-    elif lower_path.endswith(".xml.zip") or lower_path.endswith(".zip"):
-        fmt = "xml.zip"
-    else:
-        fmt = os.path.splitext(source_path)[1].lower().lstrip(".") or "report"
-    imported_report = dict(_json_safe(report))
-    imported_report["report_reason"] = str(imported_report.get("report_reason") or "offline_report_import")
-    imported_report["source_kind"] = "offline_report_import"
-    imported_report["source_path"] = source_path
-    imported_report["import_format"] = fmt
-    imported_report["import_event_count"] = 0
-    errors = [str(item) for item in (initial_errors or []) if str(item or "")]
-    store = getattr(owner, "_dps_history_store", None) if persist else None
-    if persist and store is None:
-        errors.append("DPS history is not initialized")
-    history_item: dict[str, Any] | None = None
-    if persist and store is not None:
-        history_item, persist_errors = _persist_offline_import_report(store, imported_report)
-        errors.extend(persist_errors)
-    shown = False
-    if show:
-        show_report = getattr(owner, "_show_dps_last_report", None)
-        if callable(show_report):
-            try:
-                shown = bool(show_report(imported_report))
-            except Exception as exc:
-                errors.append(str(exc))
-    preview = _report_preview({}, imported_report)
-    persisted = bool(history_item)
-    status = act_history_status(owner, limit=history_limit) if persist else {}
-    ok = bool((not persist or persisted) and not errors)
-    return {
-        "ok": ok,
-        "message": "Imported" if ok else "; ".join(errors) or "Offline report import failed",
-        "format": fmt,
-        "source_path": source_path,
-        "self_uid": 0,
-        "event_count": 0,
-        "importer": "exported_report",
-        "parser_adapter_id": "",
-        "plugin_id": "",
-        "persist_requested": bool(persist),
-        "persisted": persisted,
-        "shown": shown,
-        "history_item": history_item,
-        "report": imported_report,
-        "preview": preview,
-        "snapshot": {},
-        "errors": errors,
-        "status": status,
-    }
 
 
 def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterable[Any] = ()) -> tuple[dict[str, Any] | None, list[str]]:
@@ -1775,7 +1424,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
     parser_adapter_id = str(summary.get("parser_adapter_id") or "")
     plugin_id = str(summary.get("plugin_id") or "")
     events = [dict(event) for event in events if isinstance(event, Mapping)]
-    store = getattr(owner, "_dps_history_store", None) if persist else None
+    store = _extension_runtime_value(owner, "owner_history_store", None) if persist else None
     errors: list[str] = []
     errors.extend(_publish_import_events(owner, events))
 
@@ -1807,12 +1456,10 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
 
     shown = False
     if show and report is not None:
-        show_report = getattr(owner, "_show_dps_last_report", None)
-        if callable(show_report):
-            try:
-                shown = bool(show_report(report))
-            except Exception as exc:
-                errors.append(str(exc))
+        try:
+            shown = _show_plugin_report(owner, report)
+        except Exception as exc:
+            errors.append(str(exc))
 
     preview = _report_preview(snapshot_payload, report)
     persisted = bool(history_item)
@@ -1892,15 +1539,9 @@ def _compact_timeline_event(event: Mapping[str, Any], index: int = 0) -> dict[st
 
 
 def _timeline_encounter_id(owner: Any, state: Mapping[str, Any]) -> str:
-    for attr in ("_encounter_id", "encounter_id"):
-        value = getattr(owner, attr, "")
-        if value:
-            return str(value)
-    mgr = getattr(owner, "_encounter_mgr", None)
-    for attr in ("encounter_id", "current_encounter_id", "id"):
-        value = getattr(mgr, attr, "") if mgr is not None else ""
-        if value:
-            return str(value)
+    value = _extension_runtime_value(owner, "encounter_id", "")
+    if value:
+        return str(value)
     return str(state.get("encounter_id") or "live")
 
 
@@ -2367,12 +2008,25 @@ def _payload_first_name_text(payload: Mapping[str, Any], keys: Iterable[str]) ->
     return ""
 
 
+# Game name resolver is contributed by the active game plugin through
+# ``register_extension_runtime('resolve_name')``. Callers go via
+# ``_resolve_name`` below. Platform code never imports the plugin's name tables.
+
+
 def _resolve_name(kind: str, value: Any) -> str:
+    """Resolve a game entity name (skill/monster/dungeon) through the plugin.
+
+    Returns "" when no game plugin is loaded (callers fall back to bare ids).
+    The plugin runtime provider's name resolver is the registered
+    handler; it is a thin shim over its own tablekit/tables.
+    """
     if value is None or not str(value or "").strip():
         return ""
+    handler = _extension_runtime_handler("resolve_name")
+    if not callable(handler):
+        return ""
     try:
-        from tools.tablekit.name_tables import names
-        return _truthy_text(names.resolve(kind, value, default=""))
+        return _truthy_text(handler(kind=kind, id=value, default=""))
     except Exception:
         return ""
 
@@ -2402,7 +2056,7 @@ def _resolve_skill_name_from_detail(skill: Mapping[str, Any]) -> str:
 
 
 def _owner_packet_bridge(owner: Any) -> Any:
-    return getattr(owner, "_packet_engine", None) or getattr(owner, "packet_bridge", None) or getattr(owner, "_bridge", None)
+    return _extension_runtime_value(owner, "owner_packet_bridge", None)
 
 
 def _monster_snapshot_from_owner(owner: Any, uid: int) -> Mapping[str, Any]:
@@ -2938,20 +2592,9 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
 
 
 def _act_aggregate_snapshot(owner: Any) -> dict[str, Any]:
-    for name in ("_get_dps_act_snapshot", "_build_dps_act_snapshot"):
-        fn = getattr(owner, name, None)
-        if callable(fn):
-            try:
-                snap = fn(history_limit=20)
-            except TypeError:
-                try:
-                    snap = fn()
-                except Exception:
-                    snap = {}
-            except Exception:
-                snap = {}
-            if isinstance(snap, Mapping):
-                return dict(_json_safe(snap))
+    snap = _extension_runtime_value(owner, "owner_act_snapshot", {}, history_limit=20)
+    if isinstance(snap, Mapping):
+        return dict(_json_safe(snap))
     return {}
 
 
@@ -3615,15 +3258,10 @@ def _find_combatant_detail(owner: Any, combatant_id: str) -> tuple[dict[str, Any
         uid = int(str(combatant_id or "0"), 0)
     except Exception:
         uid = 0
-    tracker = getattr(owner, "_dps_tracker", None)
-    get_detail = getattr(tracker, "get_entity_detail", None)
-    if uid and callable(get_detail):
-        try:
-            detail = get_detail(uid)
-            if isinstance(detail, Mapping):
-                return dict(_json_safe(detail)), errors
-        except Exception as exc:
-            errors.append(str(exc))
+    if uid:
+        detail = _extension_runtime_value(owner, "combatant_detail", None, uid)
+        if isinstance(detail, Mapping):
+            return dict(_json_safe(detail)), errors
     report = _owner_dps_report(owner)
     for row in list((report or {}).get("entities") or []):
         if isinstance(row, Mapping) and str(row.get("uid") or row.get("id") or "") == str(combatant_id):
@@ -4060,7 +3698,7 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
     """Return export-ready report status and preview for both ACT UIs."""
     selected = _normalize_export_format(fmt)
     errors: list[str] = []
-    store = getattr(owner, "_dps_history_store", None)
+    store = _extension_runtime_value(owner, "owner_history_store", None)
     if store is None:
         errors.append("DPS history is not initialized")
     snapshot = _owner_act_snapshot(owner, history_limit=limit)
@@ -4100,7 +3738,7 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
 def act_report_export(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
     """Save the latest ACT/DPS report using the existing DpsHistoryStore exporter."""
     selected = _normalize_export_format(fmt)
-    store = getattr(owner, "_dps_history_store", None)
+    store = _extension_runtime_value(owner, "owner_history_store", None)
     if store is None:
         return {"ok": False, "message": "DPS history is not initialized.", "errors": ["DPS history is not initialized"], "selected_format": selected}
     export = getattr(store, "export_report", None)
@@ -4294,7 +3932,7 @@ def _owner_data_source(owner: Any) -> str:
 def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str, Any]:
     """Return a parity-friendly data source health payload for both UIs."""
     now_ts = float(now if now is not None else time.time())
-    engine = getattr(owner, "_packet_engine", None)
+    engine = _extension_runtime_value(owner, "owner_packet_bridge", None)
     errors: list[str] = []
     raw: dict[str, Any] = {}
     if engine is None:
@@ -4597,9 +4235,9 @@ __all__ = [
     "default_plugin_dirs",
     "ensure_act_event_bus",
     "ensure_act_plugin_manager",
-    "ensure_act_trigger_engine",
     "project_base_dir",
     "publish_owner_event",
+    "register_extension_runtime",
     "should_record_owner_combat_event",
     "shutdown_act_plugin_manager",
 ]

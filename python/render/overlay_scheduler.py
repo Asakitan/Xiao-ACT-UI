@@ -146,9 +146,9 @@ class OverlayScheduler:
         self.last_frame_ms = 0.0
         self.avg_frame_ms = 0.0
         self.frame_count = 0
-        # v2.2.16: combat-load signal. SkillFX (or any heavy short-lived
+        # v2.2.16: load signal. Any heavy short-lived
         # panel) flips this on while it's actively composing so idle
-        # entity panels (HP/DPS) throttle even more aggressively, freeing
+        # lightweight panels throttle even more aggressively, freeing
         # render-lane and CPU cycles for the burst animation that the
         # player is actually looking at.
         self._combat_load = False
@@ -206,7 +206,7 @@ class OverlayScheduler:
             self.stop()
 
     def set_combat_load(self, active: bool) -> None:
-        """Hint that a heavy short-lived panel (e.g. SkillFX burst) is
+        """Hint that a heavy short-lived panel is
         currently composing. v2.3.10+: now uses milder idle_skip_n=3~4
         (instead of 10/14) so main thread stays responsive while still
         prioritizing burst/menu."""
@@ -232,7 +232,7 @@ class OverlayScheduler:
           peak <= 12 ms    → floor 0  (everything fits)
           peak <= 25 ms    → floor 1  (one panel pushed past budget)
           peak <= 50 ms    → floor 2  (sustained 30 fps composes)
-          peak  > 50 ms    → floor 3  (SkillFX burst + boss combo)
+          peak  > 50 ms    → floor 3  (heavy burst + combined load)
 
         We only POLL once every 6 frames (~100 ms at 60 Hz) so the poll
         itself stays cheap, and we use a slow decay (max-of(prev, new)

@@ -95,7 +95,7 @@ class MemScopePanel:
         self._last_status: Dict[str, Any] = {}
         self._last_sig = ""
 
-    # ── window lifecycle (mirrors ActAggregatePanel) ──────────────────────────
+    # ── window lifecycle ──────────────────────────────────────────────────────
     def show(self) -> None:
         if self._win is None or not self._exists():
             self._build()

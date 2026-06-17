@@ -74,6 +74,12 @@ def install_entity_menu_bridge(ctx) -> None:
         '_toggle_session_players_panel', '_get_skillfx_layout',
         '_get_game_window_rect', '_get_game_window_context',
         '_format_level_text', '_get_mem_data_source',
+        '_toggle_act_trigger_timer_panel', '_toggle_act_data_source_health_panel',
+        '_toggle_act_report_export_panel', '_toggle_act_offline_import_panel',
+        '_toggle_act_timeline_vcr_panel', '_toggle_act_aggregate_panel',
+        '_toggle_act_action_log_panel', '_toggle_act_death_recap_panel',
+        '_toggle_act_graph_timeseries_panel', '_toggle_act_combatant_drilldown_panel',
+        '_toggle_act_skill_drilldown_panel', '_plugin_open_action_log_at',
     ):
         _bind(owner, name, getattr(bridge, name))
     _bind_mixin_methods(owner)
@@ -196,6 +202,142 @@ class StarResonanceEntityMenuBridge:
             if hasattr(owner, name):
                 continue
             setattr(owner, name, value.copy() if isinstance(value, dict) else value)
+
+    def _toggle_plugin_panel(self, attr_name: str, module_name: str, class_name: str) -> None:
+        owner = self.owner
+        dismiss = getattr(owner, '_dismiss_sao_menu_for_panel', None)
+        if callable(dismiss):
+            dismiss()
+        panel = getattr(owner, attr_name, None)
+        if panel is None:
+            module = __import__(module_name, fromlist=[class_name])
+            panel_cls = getattr(module, class_name)
+            panel = panel_cls(owner.root, owner)
+            setattr(owner, attr_name, panel)
+        apply_theme = getattr(owner, '_apply_act_panel_theme', None)
+        if callable(apply_theme):
+            apply_theme()
+        try:
+            visible = bool(panel.is_visible())
+        except Exception:
+            visible = False
+        if visible:
+            try:
+                panel.hide()
+            except Exception:
+                pass
+            return
+        try:
+            panel.show()
+        except Exception:
+            return
+        if callable(apply_theme):
+            apply_theme()
+        raise_window = getattr(owner, '_raise_panel_window', None)
+        if callable(raise_window):
+            try:
+                owner.root.after(120, lambda: raise_window(panel))
+            except Exception:
+                pass
+
+    def _toggle_act_trigger_timer_panel(self):
+        self._toggle_plugin_panel(
+            '_act_trigger_timer_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_trigger_timer_manager',
+            'TriggerTimerManagerPanel',
+        )
+
+    def _toggle_act_data_source_health_panel(self):
+        self._toggle_plugin_panel(
+            '_act_data_source_health_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_data_source_health',
+            'DataSourceHealthPanel',
+        )
+
+    def _toggle_act_report_export_panel(self):
+        self._toggle_plugin_panel(
+            '_act_report_export_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_report_export',
+            'ReportExportPanel',
+        )
+
+    def _toggle_act_offline_import_panel(self):
+        self._toggle_plugin_panel(
+            '_act_offline_import_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_offline_import',
+            'OfflineImportPanel',
+        )
+
+    def _toggle_act_timeline_vcr_panel(self):
+        self._toggle_plugin_panel(
+            '_act_timeline_vcr_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_timeline_vcr',
+            'TimelineVcrPanel',
+        )
+
+    def _toggle_act_aggregate_panel(self):
+        self._toggle_plugin_panel(
+            '_act_aggregate_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_act_aggregate',
+            'ActAggregatePanel',
+        )
+
+    def _toggle_act_action_log_panel(self):
+        self._toggle_plugin_panel(
+            '_act_action_log_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_action_log',
+            'ActionLogPanel',
+        )
+
+    def _plugin_open_action_log_at(self, time_ms: int, topic: str = '') -> None:
+        owner = self.owner
+        panel = getattr(owner, '_act_action_log_panel', None)
+        try:
+            visible = bool(panel and getattr(panel, 'is_visible', lambda: False)())
+        except Exception:
+            visible = False
+        if not visible:
+            self._toggle_act_action_log_panel()
+            panel = getattr(owner, '_act_action_log_panel', None)
+        if panel is None:
+            return
+        try:
+            panel._cursor_var.set(str(int(time_ms or 0)))
+            if topic:
+                panel._topic_var.set(str(topic))
+            jump = getattr(panel, 'jump_to_time', None) or getattr(panel, 'refresh', None)
+            if callable(jump):
+                jump()
+        except Exception:
+            pass
+
+    def _toggle_act_death_recap_panel(self):
+        self._toggle_plugin_panel(
+            '_act_death_recap_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_death_recap',
+            'DeathRecapPanel',
+        )
+
+    def _toggle_act_graph_timeseries_panel(self):
+        self._toggle_plugin_panel(
+            '_act_graph_timeseries_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_graph_timeseries',
+            'GraphTimeseriesPanel',
+        )
+
+    def _toggle_act_combatant_drilldown_panel(self):
+        self._toggle_plugin_panel(
+            '_act_combatant_drilldown_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_combatant_drilldown',
+            'CombatantDrilldownPanel',
+        )
+
+    def _toggle_act_skill_drilldown_panel(self):
+        self._toggle_plugin_panel(
+            '_act_skill_drilldown_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_skill_drilldown',
+            'SkillDrilldownPanel',
+        )
 
     def build_menu_header(self) -> dict[str, str]:
         owner = self.owner
@@ -523,7 +665,7 @@ class StarResonanceEntityMenuBridge:
         return int(hwnd or 0), rect
 
     def _format_level_text(self, level_base: int, level_extra: int) -> str:
-        import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+        import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
         return _CY_UI.format_level_text(level_base, level_extra, getattr(self.owner, '_level', 0) or 1)
 
     def _get_mem_data_source(self) -> str:

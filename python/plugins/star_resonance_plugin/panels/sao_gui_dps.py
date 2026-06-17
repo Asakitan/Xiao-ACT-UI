@@ -34,7 +34,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from render.overlay_scheduler import get_scheduler as _get_scheduler
 from render.overlay_render_worker import (

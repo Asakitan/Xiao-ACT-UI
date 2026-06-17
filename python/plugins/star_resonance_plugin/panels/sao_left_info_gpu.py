@@ -22,7 +22,7 @@ from typing import Any, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.overlay_render_worker import AsyncFrameWorker
 from utils.perf_probe import probe as _probe
 from gui_modules.entity_gpu_policy import require_entity_gpu

@@ -2056,6 +2056,58 @@ html, body {
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<style>
+/* Generic plugin popup and detached plugin panel. Plugin/game-specific menu rows are injected at runtime. */
+#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
+    background:rgba(4,8,14,.56); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#plugin-popup-card { width:360px; max-height:76vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
+.ppm-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; border-bottom:1px solid rgba(117,205,255,.24); color:#ffd46f; font-weight:700; }
+#ppm-close, #pd-close { cursor:pointer; font-size:18px; color:#e8f6ff; }
+#ppm-list { padding:10px 12px; }
+.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 8px; border:1px solid rgba(117,205,255,.20); border-radius:8px;
+    background:rgba(8,14,22,.36); margin-bottom:6px; font-size:12px; }
+.ppm-row small { color:rgba(232,246,255,.66); }
+.ppm-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ppm-btn { border:1px solid rgba(117,205,255,.42); border-radius:6px; background:rgba(19,48,74,.6);
+    color:#e8f6ff; padding:3px 7px; font-size:12px; cursor:pointer; }
+.ppm-sep { height:1px; background:rgba(117,205,255,.18); margin:7px 0; }
+.ppm-empty { color:rgba(232,246,255,.72); font-size:12px; text-align:center; padding:12px; line-height:1.5; }
+.ppm-open:hover { background:rgba(117,205,255,.10); border-radius:8px; }
+#plugin-detached-overlay { display:none; position:fixed; inset:0; z-index:100000;
+    background:rgba(4,8,14,.6); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#pd-card { width:380px; max-height:80vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
+#pd-body, #pd-hotkeys { padding:10px 12px; }
+#pd-hotkeys { border-top:1px solid rgba(117,205,255,.2); }
+.pd-hk-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:5px 2px; font-size:12px; }
+.pd-hk-row select { background:rgba(19,48,74,.6); color:#e8f6ff;
+    border:1px solid rgba(117,205,255,.5); border-radius:6px; padding:2px 6px; font-size:12px; }
+.pd-hk-title { color:#ffd46f; font-weight:700; font-size:12px; letter-spacing:.06em; margin-bottom:4px; }
+</style>
+<div id="plugin-popup-overlay">
+    <div id="plugin-popup-card">
+        <div class="ppm-head"><span>🧩 插件菜单 Plugins</span><span id="ppm-close">×</span></div>
+        <div id="ppm-list"><div class="ppm-empty">加载中…</div></div>
+    </div>
+</div>
+<div id="plugin-detached-overlay">
+    <div id="pd-card">
+        <div class="ppm-head"><span id="pd-title">Plugin</span><span id="pd-close">×</span></div>
+        <div id="pd-body"><div class="ppm-empty">加载中…</div></div>
+        <div id="pd-hotkeys"></div>
+    </div>
+</div>
+
 <!-- Leaderboard Dialog -->
 <div class="leaderboard-dialog" id="lb-dialog">
     <div class="lb-box">
@@ -3388,6 +3440,341 @@ document.getElementById('lb-tabs').querySelectorAll('.lb-tab').forEach(function(
         _lbRequestSort(_lbCurrentSort, previousSort);
     });
 });
+
+(function () {
+    function api() { return window.pywebview && window.pywebview.api; }
+    function parse(r) { try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }
+    function esc(v) { return typeof _escHtml === 'function' ? _escHtml(v) : String(v == null ? '' : v); }
+    window.showPluginPopup = function () {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (ov) { ov.style.display = 'flex'; window.renderPluginPopup(); }
+    };
+    window.hidePluginPopup = function () {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (ov) ov.style.display = 'none';
+    };
+
+    var _pdPlugin = '';
+    var _pdTimer = null;
+    var _pdPanelCards = Object.create(null);
+    function _pluginIsObjectValue(value) {
+        return value && typeof value === 'object' && !Array.isArray(value);
+    }
+    function _pluginObjectValue(value) {
+        return _pluginIsObjectValue(value) ? value : {};
+    }
+    function _pluginListItems(value) {
+        return Array.isArray(value) ? value : [];
+    }
+    function _pluginObjectItems(value) {
+        return _pluginListItems(value).filter(function (item) {
+            return _pluginIsObjectValue(item);
+        });
+    }
+    var _pluginOwn = Object.prototype.hasOwnProperty;
+    function _pluginText(value, fallback) {
+        if (value == null || value === '') return fallback == null ? '' : String(fallback);
+        return String(value);
+    }
+    function _pluginFirstText(values, fallback) {
+        values = Array.isArray(values) ? values : [];
+        for (var i = 0; i < values.length; i++) {
+            if (values[i] != null && values[i] !== '') return String(values[i]);
+        }
+        return _pluginText(fallback, '');
+    }
+    function _pluginId(value) {
+        return _pluginText(value, '');
+    }
+    function _pluginCountNumber(value) {
+        return Math.max(0, Math.floor(_finiteNum(value, 0)));
+    }
+    function _pluginCountText(value) {
+        return String(_pluginCountNumber(value));
+    }
+    window.showPluginDetached = function (pluginId) {
+        var nextPlugin = _pluginId(pluginId);
+        if (_pdPlugin !== nextPlugin) {
+            _pdPlugin = nextPlugin;
+            resetDetachedPanelCards();
+        }
+        var ov = document.getElementById('plugin-detached-overlay');
+        if (ov) ov.style.display = 'flex';
+        renderPluginDetachedPanels();
+        buildPluginDetachedHotkeys();
+        if (_pdTimer) clearInterval(_pdTimer);
+        _pdTimer = setInterval(function () {
+            var o = document.getElementById('plugin-detached-overlay');
+            if (!o || o.style.display === 'none') { clearInterval(_pdTimer); _pdTimer = null; return; }
+            if (document.hidden) return;
+            renderPluginDetachedPanels();
+        }, 800);
+    };
+    window.hidePluginDetached = function () {
+        var ov = document.getElementById('plugin-detached-overlay');
+        if (ov) ov.style.display = 'none';
+        if (_pdTimer) { clearInterval(_pdTimer); _pdTimer = null; }
+    };
+    function pdAction(panelId) {
+        return function (action, payload) {
+            _callMenuSettingApi('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})], 'PLUGIN PANEL', function() {
+                renderPluginDetachedPanels();
+            });
+        };
+    }
+    var _pdSeq = 0;
+    function pdSig(value) {
+        try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
+    }
+    function pdPanelKey(panel) {
+        panel = _pluginObjectValue(panel);
+        return _pluginFirstText([panel.id, panel.panel_id], '');
+    }
+    function resetDetachedPanelCards(emptyHtml) {
+        var body = document.getElementById('pd-body');
+        Object.keys(_pdPanelCards).forEach(function (key) {
+            var entry = _pdPanelCards[key];
+            if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+        });
+        _pdPanelCards = Object.create(null);
+        if (!body) return;
+        if (emptyHtml) {
+            if (body.__pdEmptyHtml !== emptyHtml) {
+                body.innerHTML = emptyHtml;
+                body.__pdEmptyHtml = emptyHtml;
+            }
+        } else if (body.__pdEmptyHtml) {
+            body.textContent = '';
+            body.__pdEmptyHtml = '';
+        }
+    }
+    function detachedPanelEntry(body, panel) {
+        var key = pdPanelKey(panel);
+        if (!key) return null;
+        var entry = _pdPanelCards[key];
+        if (!entry || !entry.card || !entry.card.isConnected) {
+            var card = document.createElement('div');
+            card.style.marginBottom = '8px';
+            entry = _pdPanelCards[key] = {
+                card: card,
+                action: pdAction(key),
+                renderSig: ''
+            };
+        }
+        body.appendChild(entry.card);
+        return entry;
+    }
+    function renderPluginDetachedPanels() {
+        var a = api();
+        var body = document.getElementById('pd-body');
+        var title = document.getElementById('pd-title');
+        var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
+        if (!a || !body || !a.get_plugin_ui_panels) return;
+        var mySeq = ++_pdSeq;
+        Promise.resolve(a.get_plugin_ui_panels()).then(parse).then(function (data) {
+            if (mySeq !== _pdSeq) return;
+            var panels = _pluginObjectItems(_pluginObjectValue(data).panels).filter(function (p) {
+                return _pluginId(p.plugin_id) === _pdPlugin && p.available;
+            });
+            if (title) title.textContent = _pluginFirstText([panels[0] && panels[0].title, _pdPlugin], 'Plugin');
+            if (!panels.length) { resetDetachedPanelCards('<div class="ppm-empty">插件未提供面板或未激活</div>'); return; }
+            if (body.__pdEmptyHtml) {
+                body.textContent = '';
+                body.__pdEmptyHtml = '';
+            }
+            var seen = Object.create(null);
+            panels.forEach(function (p) {
+                var key = pdPanelKey(p);
+                var entry = detachedPanelEntry(body, p);
+                if (!entry) return;
+                seen[key] = true;
+                Promise.resolve(a.render_ui_panel(key, '')).then(parse).then(function (r) {
+                    if (mySeq !== _pdSeq || !entry.card.isConnected) return;
+                    var spec = _pluginObjectValue(_pluginObjectValue(r).spec);
+                    var renderSig = (renderSpec ? 'hook:' : 'text:') + pdSig(spec);
+                    if (entry.renderSig === renderSig) return;
+                    entry.renderSig = renderSig;
+                    if (renderSpec) renderSpec(spec, entry.card, entry.action);
+                    else entry.card.textContent = JSON.stringify(spec);
+                });
+            });
+            Object.keys(_pdPanelCards).forEach(function (key) {
+                if (seen[key]) return;
+                var entry = _pdPanelCards[key];
+                if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+                delete _pdPanelCards[key];
+            });
+        });
+    }
+    function buildPluginDetachedHotkeys() {
+        var a = api();
+        var hkBox = document.getElementById('pd-hotkeys');
+        if (!a || !hkBox || !a.get_plugin_hotkeys) { if (hkBox) hkBox.innerHTML = ''; return; }
+        Promise.resolve(a.get_plugin_hotkeys()).then(parse).then(function (data) {
+            var hks = _pluginObjectItems(_pluginObjectValue(data).hotkeys).filter(function (h) { return _pluginId(h.plugin_id) === _pdPlugin; });
+            if (!hks.length) { hkBox.innerHTML = ''; return; }
+            var occupied = _pluginObjectValue(_pluginObjectValue(data).occupied);
+            var groups = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
+            var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
+            hks.forEach(function (h) {
+                var cur = _pluginText(h.current_key, '').toUpperCase();
+                var dk = _pluginText(h.default_key, '').toUpperCase();
+                var dTaken = dk && _pluginOwn.call(occupied, dk) && dk !== cur;
+                var opts = '<option value=""' + (dTaken ? ' disabled' : '') + '>默认 Default'
+                    + (dTaken ? ' (' + dk + ' · ' + esc(_pluginText(occupied[dk], '')) + ')' : '') + '</option>';
+                groups.forEach(function (g) {
+                    opts += '<optgroup label="' + g[1] + '">';
+                    for (var i = 1; i <= 12; i++) {
+                        var k = g[0] + 'F' + i;
+                        var taken = _pluginOwn.call(occupied, k) && k !== cur;
+                        opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '')
+                            + (taken ? ' disabled' : '') + '>' + k
+                            + (taken ? ' · ' + esc(_pluginText(occupied[k], '')) : '') + '</option>';
+                    }
+                    opts += '</optgroup>';
+                });
+                html += '<div class="pd-hk-row"><span>' + esc(_pluginFirstText([h.label, h.hotkey_id, h.action], 'Hotkey')) + '</span>'
+                    + '<select data-action="' + esc(_pluginText(h.action, '')) + '">' + opts + '</select></div>';
+            });
+            hkBox.innerHTML = html;
+        });
+    }
+    document.addEventListener('change', function (e) {
+        var sel = e.target;
+        if (!sel || sel.tagName !== 'SELECT' || !sel.getAttribute('data-action')) return;
+        if (!sel.closest || !sel.closest('#pd-hotkeys')) return;
+        _callMenuSettingApi('set_plugin_hotkey', [sel.getAttribute('data-action'), sel.value], 'PLUGIN HOTKEYS', function() {
+            buildPluginDetachedHotkeys();
+            showToast('HOTKEY UPDATED');
+        }, function() {
+            buildPluginDetachedHotkeys();
+        });
+    });
+    document.addEventListener('click', function (e) {
+        if (e.target.id === 'plugin-detached-overlay' || e.target.id === 'pd-close') window.hidePluginDetached();
+    });
+    function buildPluginRows(plugins) {
+        plugins = _pluginObjectItems(plugins);
+        var html = '';
+        plugins.forEach(function (it) {
+            var id = _pluginId(it.id);
+            var label = _pluginFirstText([it.label, it.name, id], 'Plugin');
+            var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
+            var hkCount = _pluginCountNumber(it.hotkey_count);
+            var flags = (it.pinned ? '★' : '') + (it.declares_panel ? ' ▣' : '')
+                + (hkCount ? ' ⌨' + _pluginCountText(hkCount) : '');
+            html += '<div class="ppm-row">'
+                + '<span class="ppm-name">' + esc(label) + ' <small>' + st + ' ' + flags + '</small></span>'
+                + '<button class="ppm-btn" data-pin="' + esc(id) + '" data-pinned="' + (it.pinned ? 1 : 0) + '">'
+                + (it.pinned ? '取消置顶' : '置顶') + '</button>'
+                + '<button class="ppm-btn" data-id="' + esc(id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
+                + (it.enabled ? '禁用' : '启用') + '</button></div>';
+        });
+        return html;
+    }
+    function fetchPluginMenu() {
+        var a = api();
+        if (!a || !a.get_plugin_menu) return Promise.resolve(null);
+        return Promise.resolve(a.get_plugin_menu()).then(parse).catch(function () { return null; });
+    }
+    window.renderPluginPopup = function () {
+        var list = document.getElementById('ppm-list');
+        if (!list) return;
+        var a = api();
+        if (!a || !a.get_plugin_menu) { list.innerHTML = '<div class="ppm-empty">插件接口不可用</div>'; return; }
+        fetchPluginMenu().then(function (data) {
+            var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins);
+            var html = '<div class="ppm-row ppm-manage" data-manage="1">⚙ 插件管理面板 Manage</div><div class="ppm-sep"></div>';
+            list.innerHTML = plugins.length ? (html + buildPluginRows(plugins))
+                : (html + '<div class="ppm-empty">未发现插件 No plugins</div>');
+        });
+    };
+    window.renderPluginsCategory = function () {
+        var list = document.getElementById('plugins-cat-list');
+        if (!list) return;
+        fetchPluginMenu().then(function (data) {
+            var plugins = _pluginObjectItems(_pluginObjectValue(data).plugins).filter(function (p) {
+                return p.active && p.declares_panel;
+            });
+            if (!plugins.length) {
+                list.innerHTML = '<div class="ppm-empty">无已启用面板插件<br/>去 Manage 启用</div>';
+                return;
+            }
+            var html = '';
+            plugins.forEach(function (it) {
+                var id = _pluginId(it.id);
+                var label = _pluginFirstText([it.label, it.name, id], 'Plugin');
+                var hkCount = _pluginCountNumber(it.hotkey_count);
+                var hk = hkCount ? ' ⌨' + _pluginCountText(hkCount) : '';
+                html += '<div class="ppm-row ppm-open" data-open="' + esc(id) + '" style="cursor:pointer;">'
+                    + '<span class="ppm-name">' + (it.pinned ? '★ ' : '') + esc(label) + hk + '</span>'
+                    + '<span class="ppm-arrow" style="opacity:.6;">▸</span></div>';
+            });
+            list.innerHTML = html;
+        });
+    };
+    var _catList = document.getElementById('plugins-cat-list');
+    if (_catList) _catList.addEventListener('click', function (e) {
+        var row = e.target.closest && e.target.closest('.ppm-open');
+        if (!row || !row.getAttribute('data-open')) return;
+        window.showPluginDetached(row.getAttribute('data-open'));
+    });
+    document.addEventListener('click', function (e) {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (!ov || ov.style.display === 'none') return;
+        var t = e.target;
+        if (t.id === 'plugin-popup-overlay' || t.id === 'ppm-close') { window.hidePluginPopup(); return; }
+        if (t.getAttribute && t.getAttribute('data-manage')) {
+            _callMenuSettingApi('menu_action', ['toggle_plugin_manager'], 'PLUGINS', function() {
+                window.hidePluginPopup();
+            });
+            return;
+        }
+        if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-pin')) {
+            var pid = t.getAttribute('data-pin');
+            var pinned = t.getAttribute('data-pinned') === '1';
+            _callMenuSettingApi('pin_plugin', [pid, !pinned], 'PLUGINS', function() {
+                window.renderPluginPopup();
+                showToast(pinned ? 'PLUGIN UNPINNED' : 'PLUGIN PINNED');
+            });
+            return;
+        }
+        if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-id')) {
+            var id = t.getAttribute('data-id');
+            var en = t.getAttribute('data-en') === '1';
+            _callMenuSettingApi(en ? 'disable_plugin' : 'enable_plugin', [id], 'PLUGINS', function() {
+                window.renderPluginPopup();
+                showToast(en ? 'PLUGIN DISABLED' : 'PLUGIN ENABLED');
+            });
+        }
+    });
+})();
+
+window._pluginMenuApi = {
+    ready: function() { return true; },
+    addCss: function(css) {
+        var s = document.createElement('style');
+        s.textContent = css;
+        document.head.appendChild(s);
+    },
+    addSlot: function(groupId, html) {
+        var target = document.getElementById('child-bar');
+        if (!target) return;
+        var div = document.createElement('div');
+        div.setAttribute('data-plugin-group', groupId);
+        div.innerHTML = html;
+        target.appendChild(div);
+    },
+    addScript: function(src) {
+        if (src.indexOf('<') === -1 && (src.indexOf('/') !== -1 || src.indexOf('.js') !== -1)) {
+            var s = document.createElement('script');
+            s.src = src;
+            document.body.appendChild(s);
+        } else {
+            try { (0, eval)(src); } catch(e) { console.error('[pluginMenuApi] script error', e); }
+        }
+    }
+};
 
 window.SAO = Object.assign(window.SAO || {}, {
     openMenu: openMenu,

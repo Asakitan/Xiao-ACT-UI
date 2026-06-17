@@ -14,11 +14,11 @@ import time
 from typing import Any, Dict, Iterable, Optional
 
 from act_platform.event_bus import EventBus
-from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
-from engines.act_trigger_engine import ActTriggerEngine
-from engines.dps_tracker import DpsTracker
-from engines.encounter_manager import EncounterManager
-from engines.game_state import GameStateManager
+from plugins.star_resonance_plugin.engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
+from plugins.star_resonance_plugin.engines.act_trigger_engine import ActTriggerEngine
+from plugins.star_resonance_plugin.engines.dps_tracker import DpsTracker
+from plugins.star_resonance_plugin.engines.encounter_manager import EncounterManager
+from plugins.star_resonance_plugin.engines.game_state import GameStateManager
 
 
 _BOSS_UPDATE_KEYS = {

@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 try:
-    import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+    import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 except ImportError:
     _CY_UI = None  # type: ignore[assignment]
 

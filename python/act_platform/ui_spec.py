@@ -8,11 +8,11 @@ plugin draws identically on both surfaces.
 
 Plugins build specs with the :class:`UI` helper (exposed as ``ctx.ui``)::
 
-    return ctx.ui.panel("Live DPS", [
-        ctx.ui.bar("Boss HP", pct=0.62, color="bad", caption="3.1M / 5.0M"),
+    return ctx.ui.panel("Live Metrics", [
+        ctx.ui.bar("Primary Meter", pct=0.62, color="bad", caption="3.1 / 5.0"),
         ctx.ui.table(
-            columns=[{"key": "name", "title": "Player"}, {"key": "dps", "title": "DPS", "align": "right"}],
-            rows=[{"name": "Kirito", "dps": "1.2M"}],
+            columns=[{"key": "name", "title": "Name"}, {"key": "value", "title": "Value", "align": "right"}],
+            rows=[{"name": "Sample", "value": "1.2M"}],
             highlight_key="is_self",
         ),
         ctx.ui.button("Reset", action="reset", style="danger"),

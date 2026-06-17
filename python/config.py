@@ -333,7 +333,6 @@ FONTS_DIR = _runtime_first("assets", "fonts")
 WEB_DIR = _runtime_first("web")
 # 可写数据 (exe 旁边)
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
-SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://doi.sakisense.top:15018"

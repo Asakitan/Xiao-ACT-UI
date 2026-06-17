@@ -185,7 +185,7 @@ def _recommended_cpu_task_workers() -> int:
 # v2.1.16 / v2.2.16: pin background render threads to specific CPU cores on
 # Windows. Originally always-on for cache locality, but on hybrid CPUs
 # (Intel 12th-gen+ P-core/E-core, 14900HX etc.) pinning a lane to a fixed
-# core often parks SkillFX on a 2.5 GHz E-core instead of letting the
+# core often parks a heavy overlay on a 2.5 GHz E-core instead of letting the
 # Windows scheduler migrate it to a 5 GHz P-core under turbo. v2.2.16
 # makes pinning opt-in via ``SAO_RENDER_AFFINITY=1``; default OFF.
 _RENDER_AFFINITY_ENABLED = (os.environ.get('SAO_RENDER_AFFINITY', '0') == '1')
@@ -525,7 +525,7 @@ class _RenderLane:
                         f'worker={worker_id} hwnd={hwnd} fn={getattr(compose_fn, "__name__", compose_fn.__class__.__name__)}',
                     )
                     # v2.2.21: wall-time tracking feeds scheduler.set_wall_pressure
-                    # so HP/DPS idle ticks back off when SkillFX/BOSSHP composes
+                    # so lightweight idle ticks back off when heavy panels compose
                     # blow past the frame budget without any FX reduction.
                     _t0 = time.perf_counter()
                     result = compose_fn(now)
@@ -570,9 +570,9 @@ class _SharedRenderBackend:
         self._lanes = [_RenderLane(index) for index in range(lane_count)]
         self._worker_lanes: Dict[int, int] = {}
         # v2.2.10: track lanes that have been claimed by a heavy panel
-        # (e.g. SkillFX). Other workers avoid those lanes when there is
-        # an empty lane available, so the menu/HP/DPS workers stop
-        # serialising behind a 33 ms SkillFX compose during combat.
+        # (e.g. plugin bursts). Other workers avoid those lanes when there is
+        # an empty lane available, so lightweight workers stop
+        # serialising behind expensive compose passes.
         self._heavy_lanes: set[int] = set()
 
     def _pick_lane_locked(self, prefer_isolation: bool = False) -> int:
@@ -592,7 +592,7 @@ class _SharedRenderBackend:
             if empty_any:
                 return empty_any[0]
         # Default: lane with the fewest workers, but penalize heavy lanes
-        # so light panels avoid sharing with SkillFX whenever possible.
+        # so light panels avoid sharing with heavy panels whenever possible.
         lane_loads = [
             (lane.worker_count() + (4 if index in self._heavy_lanes else 0), index)
             for index, lane in enumerate(self._lanes)
@@ -666,9 +666,9 @@ def _record_worker_wall(worker_id: int, wall_ms: float) -> None:
     now = time.perf_counter()
     with _worker_walls_lock:
         prev = _worker_walls.get(worker_id, 0.0)
-        # EWMA α=0.4 — fast enough to react to a SkillFX burst within
+        # EWMA α=0.4 — fast enough to react to a heavy burst within
         # ~3 frames, slow enough that a single 80 ms outlier doesn't
-        # immediately collapse HP/DPS to 4 Hz.
+        # immediately collapse lightweight overlays to 4 Hz.
         _worker_walls[worker_id] = prev * 0.6 + wall_ms * 0.4
         _worker_walls_last_t[worker_id] = now
 

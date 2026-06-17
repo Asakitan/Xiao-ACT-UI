@@ -43,23 +43,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from act_platform.runtime import (
-    act_aggregate_status,
-    act_action_log_status,
-    act_combatant_drilldown_status,
-    act_data_source_health,
-    ensure_act_event_bus,
-    act_death_recap_status,
-    act_graph_timeseries_status,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_menu,
     act_plugin_pin,
     act_plugin_reload,
     act_plugin_status,
-    act_report_status,
-    act_skill_drilldown_status,
-    act_timeline_status,
-    act_trigger_status,
     ensure_act_plugin_manager,
 )
 from config import DEFAULT_HOTKEYS
@@ -185,109 +174,6 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             plugin_sig = (0, 0, (), ())
-        try:
-            trigger_status = self._get_act_trigger_menu_status()
-            trigger_sig = (
-                _finite_int(trigger_status.get('rule_count'), 0, lo=0),
-                _finite_int(trigger_status.get('timer_count'), 0, lo=0),
-            )
-        except Exception:
-            trigger_sig = (0, 0)
-        try:
-            source_status = self._get_act_data_source_menu_status()
-            source_summary = _mapping(_mapping(source_status.get('sources')).get('summary'))
-            source_sig = (
-                str(source_status.get('status') or ''),
-                str(source_summary.get('data_source') or ''),
-                bool(source_summary.get('packet_active')),
-                bool(source_summary.get('memory_active')),
-            )
-        except Exception:
-            source_sig = ('missing', '', False, False)
-        try:
-            report_status = self._get_act_report_menu_status()
-            report_preview = _mapping(report_status.get('preview'))
-            report_sig = (
-                bool(report_status.get('ok')),
-                str(report_status.get('encounter_id') or ''),
-                _finite_int(report_preview.get('total_damage'), 0, lo=0),
-                _finite_int(_mapping(report_status.get('storage_status')).get('count'), 0, lo=0),
-            )
-        except Exception:
-            report_sig = (False, '', 0, 0)
-        try:
-            timeline_status = self._get_act_timeline_menu_status()
-            timeline_sig = (
-                bool(timeline_status.get('ok')),
-                _list_count(timeline_status.get('events')),
-                _finite_int(timeline_status.get('cursor_ms'), 0, lo=0),
-                bool(timeline_status.get('playing')),
-            )
-        except Exception:
-            timeline_sig = (False, 0, 0, False)
-        try:
-            action_log_status = self._get_act_action_log_menu_status()
-            action_log_sig = (
-                bool(action_log_status.get('ok')),
-                _list_count(action_log_status.get('rows')),
-                _list_count(action_log_status.get('grouped_rows')),
-                _finite_int(_mapping(action_log_status.get('cursor')).get('time_ms'), 0, lo=0),
-                str(_mapping(action_log_status.get('filters')).get('topic') or ''),
-            )
-        except Exception:
-            action_log_sig = (False, 0, 0, 0, '')
-        try:
-            # CHEAP signature: the aggregate is a pure function of the retained
-            # event slice, so the bus `retained` counter fully captures whether
-            # it changed. Folding the full aggregate here (the old behaviour) ran
-            # a ~36ms O(rows) pass on the Tk thread on EVERY signature check —
-            # the cause of the "menu lags after combat" stall. The actual fold
-            # now happens at most once per data change in _build_menu_children
-            # (and is itself cached in act_aggregate_status).
-            aggregate_sig = (int(ensure_act_event_bus(self).retained),)
-        except Exception:
-            aggregate_sig = (0,)
-        try:
-            death_status = self._get_act_death_recap_menu_status()
-            death_summary = _mapping(death_status.get('summary'))
-            death = _mapping(death_status.get('death'))
-            death_sig = (
-                bool(death_status.get('ok')),
-                str(death.get('entity_id') or ''),
-                _finite_int(death_summary.get('incoming_damage'), 0, lo=0),
-                _finite_int(death_summary.get('death_events'), 0, lo=0),
-            )
-        except Exception:
-            death_sig = (False, '', 0, 0)
-        try:
-            graph_status = self._get_act_graph_timeseries_menu_status()
-            graph_sig = (
-                bool(graph_status.get('ok')),
-                str(graph_status.get('selected_metric') or ''),
-                _finite_int(graph_status.get('row_count'), 0, lo=0),
-                _finite_int(graph_status.get('time_range_ms'), 0, lo=0),
-            )
-        except Exception:
-            graph_sig = (False, '', 0, 0)
-        try:
-            combatant_status = self._get_act_combatant_menu_status()
-            combatant_sig = (
-                bool(combatant_status.get('ok')),
-                str(combatant_status.get('combatant_id') or ''),
-                _list_count(combatant_status.get('skills')),
-            )
-        except Exception:
-            combatant_sig = (False, '', 0)
-        try:
-            skill_status = self._get_act_skill_menu_status()
-            skill_sig = (
-                bool(skill_status.get('ok')),
-                str(skill_status.get('combatant_id') or ''),
-                str(skill_status.get('skill_id') or ''),
-                _list_count(skill_status.get('timeline_refs')),
-            )
-        except Exception:
-            skill_sig = (False, '', '', 0)
         plugin_menu_cat_count = len(self._collect_plugin_menu_categories())
 
         sig = (
@@ -297,16 +183,6 @@ class SAOPlayerGUIMenuMixin:
             bool(self._panels_hidden),
             update_label,
             plugin_sig,
-            trigger_sig,
-            source_sig,
-            report_sig,
-            timeline_sig,
-            action_log_sig,
-            aggregate_sig,
-            death_sig,
-            graph_sig,
-            combatant_sig,
-            skill_sig,
             plugin_menu_cat_count,
         )
         self._last_menu_refresh_sig = sig
@@ -361,69 +237,13 @@ class SAOPlayerGUIMenuMixin:
 
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
 
-        # 游戏菜单分类由插件通过 register_menu_category 动态注入
-        plugin_status = self._get_act_plugin_menu_status()
-        plugin_total = _finite_int(plugin_status.get('plugin_count'), 0, lo=0)
-        plugin_active = _finite_int(plugin_status.get('active_count'), 0, lo=0)
-        trigger_status = self._get_act_trigger_menu_status()
-        trigger_total = _finite_int(trigger_status.get('rule_count'), 0, lo=0)
-        trigger_timers = _finite_int(trigger_status.get('timer_count'), 0, lo=0)
-        source_status = self._get_act_data_source_menu_status()
-        source_summary = _mapping(_mapping(source_status.get('sources')).get('summary'))
-        source_label = str(source_summary.get('data_source') or source_status.get('requested_mode') or 'ACT').upper()
-        source_health_state = str(source_status.get('status') or 'missing').upper()
-        report_status = self._get_act_report_menu_status()
-        report_preview = _mapping(report_status.get('preview'))
-        report_total_damage = _finite_int(report_preview.get('total_damage'), 0, lo=0)
-        report_state = 'READY' if report_status.get('ok') else 'EMPTY'
-        timeline_status = self._get_act_timeline_menu_status()
-        timeline_count = _list_count(timeline_status.get('events'))
-        timeline_state = 'PLAY' if timeline_status.get('playing') else 'READY'
-        action_log_status = self._get_act_action_log_menu_status()
-        action_log_count = _list_count(action_log_status.get('rows'))
-        action_group_count = _list_count(action_log_status.get('grouped_rows'))
-        action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
-        aggregate_status = self._get_act_aggregate_menu_status()
-        aggregate_counts = _mapping(aggregate_status.get('raw_counts'))
-        aggregate_rows = _finite_int(aggregate_counts.get('rows'), 0, lo=0)
-        aggregate_state = 'READY' if aggregate_status.get('ok') and aggregate_rows else 'EMPTY'
-        aggregate_label = f"{aggregate_rows}/{_finite_int(aggregate_counts.get('skills'), 0, lo=0)}/{_finite_int(aggregate_counts.get('monsters'), 0, lo=0)}"
-        death_status = self._get_act_death_recap_menu_status()
-        death_summary = _mapping(death_status.get('summary'))
-        death_damage = _finite_int(death_summary.get('incoming_damage'), 0, lo=0)
-        death_events = _finite_int(death_summary.get('death_events'), 0, lo=0)
-        death_state = 'READY' if death_events else 'EMPTY'
-        graph_status = self._get_act_graph_timeseries_menu_status()
-        graph_metric = str(graph_status.get('selected_metric') or 'damage')
-        graph_count = _finite_int(graph_status.get('row_count'), 0, lo=0)
-        graph_state = 'READY' if graph_status.get('ok') else 'EMPTY'
-        combatant_status = self._get_act_combatant_menu_status()
-        combatant_id = str(combatant_status.get('combatant_id') or 'NONE')
-        combatant_count = _list_count(combatant_status.get('skills'))
-        combatant_state = 'READY' if combatant_status.get('ok') else 'EMPTY'
-        skill_status = self._get_act_skill_menu_status()
-        skill_id = str(skill_status.get('skill_id') or 'NONE')
-        skill_ref_count = _list_count(skill_status.get('timeline_refs'))
-        skill_state = 'READY' if skill_status.get('ok') else 'EMPTY'
         skin_items = [
             {'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')},
             {'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')},
         ]
 
-        act_items = [
-            {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
-            {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_health_state}', 'command': self._toggle_act_data_source_health_panel},
-            {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
-            {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': self._toggle_act_offline_import_panel},
-            {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
-            {'icon': '▣', 'label': f'ACT聚合驾驶舱: {aggregate_state}/{aggregate_label}', 'command': self._toggle_act_aggregate_panel},
-            {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
-            {'icon': '✚', 'label': f'ACT死亡回放: {death_state}/{death_damage}', 'command': self._toggle_act_death_recap_panel},
-            {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
-            {'icon': '◎', 'label': f'ACT成员钻取: {combatant_state}/{combatant_id}/{combatant_count}', 'command': self._toggle_act_combatant_drilldown_panel},
-            {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
+        tool_items = [
             {'icon': '⌗', 'label': f'内存浏览器 Mem Scope: {mem_mode_disp}', 'command': self._toggle_mem_scope_panel},
-            {'icon': '─', 'label': '──────────'},
             {'icon': '✦', 'label': 'AI Editor (LLM)', 'command': self._toggle_ai_editor_panel},
         ]
 
@@ -435,7 +255,7 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
-            'ACT': act_items,
+            '工具': tool_items,
             '插件': plugin_items,
             '皮肤': skin_items,
             '关于': [
@@ -520,95 +340,35 @@ class SAOPlayerGUIMenuMixin:
                 pass
         self._refresh_menu_if_open()
 
-    def _get_act_trigger_menu_status(self):
-        try:
-            return act_trigger_status(self)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'rule_count': 0, 'timer_count': 0, 'triggers': [], 'timers': []}
-
-    def _get_act_data_source_menu_status(self):
-        try:
-            return act_data_source_health(self)
-        except Exception as exc:
-            return {'ok': False, 'status': 'error', 'message': str(exc), 'sources': {'summary': {}}, 'latency_ms': 0, 'last_event_ms': 0, 'errors': [str(exc)]}
-
-    def _get_act_report_menu_status(self):
-        try:
-            return act_report_status(self, limit=12)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'preview': {}, 'history': [], 'errors': [str(exc)], 'storage_status': {'count': 0}}
-
-    def _get_act_timeline_menu_status(self):
-        try:
-            return act_timeline_status(self, limit=24)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'events': [], 'cursor_ms': 0, 'speed': 1.0, 'playing': False, 'filters': {'query': ''}, 'errors': [str(exc)]}
-
-    def _get_act_action_log_menu_status(self):
-        try:
-            return act_action_log_status(self, limit=24)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'rows': [], 'columns': [], 'filters': {'query': '', 'topic': ''}, 'cursor': {'time_ms': 0, 'row_count': 0}, 'errors': [str(exc)]}
-
-    def _get_act_aggregate_menu_status(self):
-        try:
-            return act_aggregate_status(self, limit=240, top_n=12)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'overview': {}, 'raw_counts': {'rows': 0, 'skills': 0, 'monsters': 0, 'dungeons': 0}, 'errors': [str(exc)]}
-
-    def _get_act_death_recap_menu_status(self):
-        try:
-            return act_death_recap_status(self, limit=24)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'death': None, 'rows': [], 'summary': {'incoming_damage': 0, 'death_events': 0}, 'errors': [str(exc)]}
-
-    def _get_act_graph_timeseries_menu_status(self):
-        try:
-            return act_graph_timeseries_status(self, limit=24)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'selected_metric': 'damage', 'series': {}, 'metrics': [], 'time_range_ms': 0, 'row_count': 0, 'filters': {'query': '', 'topic': ''}, 'errors': [str(exc)]}
-
-    def _get_act_combatant_menu_status(self):
-        try:
-            return act_combatant_drilldown_status(self)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'combatant_id': '', 'summary': {}, 'skills': [], 'incoming': [], 'outgoing': [], 'filters': {'query': '', 'focus_target': ''}, 'errors': [str(exc)]}
-
-    def _get_act_skill_menu_status(self):
-        try:
-            return act_skill_drilldown_status(self, limit=24)
-        except Exception as exc:
-            return {'ok': False, 'message': str(exc), 'combatant_id': '', 'skill_id': '', 'summary': {}, 'casts': 0, 'hits': 0, 'crit_rate': 0.0, 'timeline_refs': [], 'filters': {'query': ''}, 'errors': [str(exc)]}
-
-    def _show_act_plugin_status_menu(self):
+    def _show_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()
         plugins = _mapping_items(status.get('plugins'))
         if not plugins:
-            self._show_entity_alert('ACT PLUGINS', '未发现插件；可放入 plugins/<id>/plugin.json', display_time=4.0)
+            self._show_entity_alert('PLUGINS', '未发现插件；可放入 plugins/<id>/plugin.json', display_time=4.0)
             return status
         lines = []
         for plug in plugins[:8]:
             state = 'ON' if plug.get('active') else ('OFF' if plug.get('enabled') else 'DISABLED')
             lines.append(f"{plug.get('id')}: {state} v{plug.get('version')}")
-        self._show_entity_alert('ACT PLUGINS', '\n'.join(lines), display_time=5.0)
+        self._show_entity_alert('PLUGINS', '\n'.join(lines), display_time=5.0)
         return status
 
     def _reload_act_plugins_menu(self):
         result = act_plugin_reload(self)
         status = result if isinstance(result, dict) else self._get_act_plugin_menu_status()
         self._show_entity_alert(
-            'ACT PLUGINS',
+            'PLUGINS',
             f"重载完成: {_finite_int(status.get('active_count'), 0, lo=0)}/{_finite_int(status.get('plugin_count'), 0, lo=0)} active",
             display_time=3.2,
         )
         self._refresh_menu_if_open(force=True)
         return status
 
-    def _toggle_first_act_plugin_menu(self):
+    def _toggle_first_plugin_menu(self):
         status = self._get_act_plugin_menu_status()
         plugins = _mapping_items(status.get('plugins'))
         if not plugins:
-            self._show_entity_alert('ACT PLUGINS', '未发现可切换插件', display_time=3.0)
+            self._show_entity_alert('PLUGINS', '未发现可切换插件', display_time=3.0)
             return status
         plugin_id = str(plugins[0].get('id') or '')
         if not plugin_id:
@@ -619,7 +379,7 @@ class SAOPlayerGUIMenuMixin:
         else:
             result = act_plugin_enable(self, plugin_id)
             action = 'ENABLED'
-        self._show_entity_alert('ACT PLUGINS', f'{plugin_id}: {action}', display_time=3.0)
+        self._show_entity_alert('PLUGINS', f'{plugin_id}: {action}', display_time=3.0)
         self._refresh_menu_if_open(force=True)
         return result
 
@@ -640,7 +400,7 @@ class SAOPlayerGUIMenuMixin:
 
     _PLATFORM_MENU_ICONS = [
         {'name': '控制', 'icon': '⚙', 'can_active': True},
-        {'name': 'ACT', 'icon': 'A', 'can_active': True},
+        {'name': '工具', 'icon': '⌗', 'can_active': True},
         {'name': '插件', 'icon': '⬢', 'can_active': True},
         {'name': '皮肤', 'icon': 'P', 'can_active': True},
         {'name': '关于', 'icon': 'ℹ', 'can_active': True},

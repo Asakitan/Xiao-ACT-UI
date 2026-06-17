@@ -87,16 +87,6 @@
         return result;
     }
 
-    function openEmbeddedEditor(setterName) {
-        try {
-            if (typeof window[setterName] === 'function') {
-                window[setterName]('editor');
-                return true;
-            }
-        } catch (_) {}
-        return false;
-    }
-
     var api = {
         play_sound: function (name) {
             return call('sound.play', { name: String(name || '') });
@@ -139,7 +129,7 @@
             return call('settings.set_burst_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
         set_boss_bar_mode: function (mode) {
-            return call('settings.set_boss_bar_mode', { mode: String(mode || 'boss_raid') }).then(normalizeOk);
+            return call('settings.set_boss_bar_mode', { mode: String(mode || '') }).then(normalizeOk);
         },
         set_dps_fade_timeout: function (seconds) {
             var value = clampInt(seconds, 0, 0, 120);
@@ -154,123 +144,18 @@
                 mode: String(mode || '')
             }).then(normalizeOk);
         },
-        set_auto_key_server_url: function (url) {
-            return call('autokey.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
-        },
-        set_boss_raid_server_url: function (url) {
-            return call('bossraid.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
-        },
-        get_auto_key_state: function () {
-            return call('autokey.state.get', {}).then(normalizeOk);
-        },
-        get_boss_raid_state: function () {
-            return call('bossraid.state.get', {}).then(normalizeOk);
-        },
-        raid_next_phase: function () {
-            return call('bossraid.runtime.next_phase', {}).then(normalizeOk);
-        },
-        raid_reset: function () {
-            return call('bossraid.runtime.reset', {}).then(normalizeOk);
-        },
-        set_entity_role: function (uuid, role) {
-            return call('bossraid.runtime.set_entity_role', {
-                uuid: uuid,
-                role: String(role || '')
-            }).then(normalizeOk);
-        },
-        boss_raid_next_phase: function () {
-            return call('bossraid.runtime.next_phase', {}).then(normalizeOk);
-        },
-        boss_raid_reset: function () {
-            return call('bossraid.runtime.reset', {}).then(normalizeOk);
-        },
-        boss_raid_start: function () {
-            return call('bossraid.start', {}).then(normalizeOk);
-        },
-        boss_raid_stop: function () {
-            return call('bossraid.stop', {}).then(normalizeOk);
-        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },
         select_folder: function (path) {
             return call('file.select_folder', { path: String(path || '') }).then(normalizeOk);
         },
-        start_auto_key_import_picker: function (path) {
-            return call('autokey.import_picker.start', { path: String(path || '') }).then(normalizeOk);
-        },
-        start_boss_raid_import_picker: function (path) {
-            try { window._pickerConsumer = 'boss_raid'; } catch (_) {}
-            return call('bossraid.import_picker.start', { path: String(path || '') }).then(normalizeOk);
-        },
         select_file: function (path, consumerName) {
             var consumer = String(consumerName || '');
-            if (!consumer) {
-                try { consumer = String(window._pickerConsumer || ''); } catch (_) {}
-            }
             return call('file.select_file', {
                 path: String(path || ''),
                 consumer: consumer
             }).then(normalizeOk);
-        },
-        set_boss_raid_enabled: function (enabled) {
-            return call('bossraid.set_enabled', { enabled: !!enabled }).then(normalizeOk);
-        },
-        activate_boss_raid_profile: function (id) {
-            return call('bossraid.profile.set_active', { id: String(id || '') }).then(normalizeOk);
-        },
-        create_boss_raid_profile: function () {
-            return call('bossraid.profile.create', {}).then(normalizeOk);
-        },
-        save_boss_raid_profile: function (profile) {
-            return call('bossraid.profile.save', { profile: profile || {} }).then(normalizeOk);
-        },
-        delete_boss_raid_profile: function (id) {
-            return call('bossraid.profile.delete', { id: String(id || '') }).then(normalizeOk);
-        },
-        export_boss_raid_profile: function (id) {
-            return call('bossraid.export', { id: String(id || '') }).then(normalizeOk);
-        },
-        download_boss_raid_remote: function (id) {
-            return call('bossraid.cloud.download', { id: String(id || '') }).then(normalizeOk);
-        },
-        search_boss_raid_remote: function (query) {
-            return call('bossraid.cloud.search', { query: query || {} }).then(normalizeOk);
-        },
-        refresh_boss_raid_upload_auth: function (force) {
-            return call('bossraid.cloud.refresh_upload_auth', { force: !!force }).then(normalizeOk);
-        },
-        upload_boss_raid_profile: function (id) {
-            return call('bossraid.cloud.upload', { id: String(id || '') }).then(normalizeOk);
-        },
-        save_autokey_actions: function (actionsJson) {
-            return call('autokey.actions.save', {
-                actions_json: String(actionsJson || '[]')
-            }).then(normalizeOk);
-        },
-        toggle_autokey_editor: function () {
-            var localHandled = openEmbeddedEditor('_akSetTab');
-            return call('ui.menu_action', {
-                action: 'toggle_autokey_editor',
-                local_handled: localHandled
-            }).then(normalizeOk).catch(function (e) {
-                if (localHandled) {
-                    return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
-                }
-                throw e;
-            });
-        },
-        toggle_raid_editor: function () {
-            var localHandled = openEmbeddedEditor('_brSetTab');
-            return call('ui.menu_action', {
-                action: 'toggle_raid_editor',
-                local_handled: localHandled
-            }).then(normalizeOk).catch(function (e) {
-                if (localHandled) {
-                    return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
-                }
-                throw e;
-            });
         },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
@@ -629,6 +514,9 @@
         set_plugin_hotkey: function (action, key) {
             return call('act.plugins.set_hotkey', { action: String(action || ''), key: String(key || '') });
         },
+        render_ui_panel: function (panelId, payload) {
+            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: pluginPayload(payload) });
+        },
         invoke_ui_action: function (panelId, actionId, payload) {
             return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: pluginPayload(payload) });
         },
@@ -661,7 +549,33 @@
         _call: call,
     };
 
+    function extendApi(methods) {
+        var target = window.pywebview && window.pywebview.api ? window.pywebview.api : api;
+        if (!methods || typeof methods !== 'object') return target;
+        Object.keys(methods).forEach(function (name) {
+            if (typeof methods[name] === 'function') target[name] = methods[name];
+        });
+        return target;
+    }
+
     window.pywebview = window.pywebview || {};
     window.pywebview.api = api;
+    window.SAOPluginShim = Object.assign(window.SAOPluginShim || {}, {
+        register: extendApi,
+        extendApi: extendApi,
+        call: call,
+        normalizeOk: normalizeOk,
+        finiteNumber: finiteNumber,
+        clampNumber: clampNumber,
+        clampInt: clampInt,
+        safeLimit: safeLimit,
+        safeOffset: safeOffset,
+        safeTimelineSpeed: safeTimelineSpeed
+    });
     window.__pywebviewShim = { version: 's194' };
+    try {
+        if (typeof window.dispatchEvent === 'function' && typeof window.Event === 'function') {
+            window.dispatchEvent(new window.Event('pywebviewready'));
+        }
+    } catch (_) {}
 })();

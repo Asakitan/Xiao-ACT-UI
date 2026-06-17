@@ -1,21 +1,13 @@
-"""skillfx_pipeline.py — v2.3.0 GUI 渲染链路重置 Phase 1
+"""Star Resonance skillfx_pipeline — GPU SDF shader pipeline (plugin-local).
 
-GPU shader pipeline replacing the PIL/numpy ring + beam + tail + glow CPU
-path inside sao_gui_skillfx.compose_frame.
+Moved from platform ``render/skillfx_pipeline.py`` in the 5.0.0 platform/plugin
+separation pass.  The shader file ``shaders/skillfx.frag`` remains at the platform
+level because it is a pure GPU effect (no game naming); the path resolver below
+finds it relative to the project root from the plugin's resident path.
 
-Per-thread (TLS) lazy-init: each render-lane thread gets its own moderngl
-standalone context (sharing the same TLS slot used by gpu_renderer's blur /
-shell pipelines), so we coexist cleanly with gaussian_blur_rgba and
-premultiply_bgra_bytes already on the same worker thread.
-
-Public API:
+Public API (preserved):
     pipe = get_skillfx_pipeline()           # None if GPU unavailable
     rgba = pipe.render(width, height, params_dict)   # PIL.Image RGBA or None
-
-Returns straight (non-premultiplied) RGBA so the caller can keep the
-existing PIL `.alpha_composite()` path while we A/B test. Once visually
-validated, the consumer can switch to direct moderngl-window blit
-(Phase 2) and we can output premultiplied + skip the un-premultiply step.
 """
 from __future__ import annotations
 
@@ -28,33 +20,28 @@ import numpy as np
 from PIL import Image
 
 from render import gpu_renderer as _gr
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-# C3 fix: do NOT wrap in try/except. _CY_UI is mandatory at runtime — a
-# missing/stale .pyd would silently disable the GPU FX pipeline with a noisy
-# per-frame log instead of failing loudly. If unpack_skillfx_params isn't yet
-# in the compiled .pyd, this assertion fires once at import.
 assert hasattr(_CY_UI, 'unpack_skillfx_params'), (
-    'skillfx_pipeline requires _sao_cy_uihelpers.unpack_skillfx_params; '
+    'skillfx_pipeline requires _sao_cy_sr_uihelpers.unpack_skillfx_params; '
     'rebuild via `python build_cython_ext.py build_ext --inplace`.'
 )
 
 
-# reorg 2026-06-02: 本模块从根目录下沉到 render/, __file__ 深一层,
-# 故取上一级目录作为项目根 (dev: sao_auto/; frozen: runtime/), shaders/ 均在该层下.
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 def _resolve_shader_path() -> str:
-    """v2.3.8: PyInstaller 下 __file__ 位于 _internal/, 但 ('shaders','shaders')
-    打包后一般也落在 _internal/shaders/, 所以 HERE 依然能匹配. 但为防
-    某些 PyInstaller 版本 / onefile 下 __file__ 被重定向到临时目录, 额外
-    检查 sys._MEIPASS 和 可执行文件同级目录. 首个存在的路径作为返回值.
+    """Find ``shaders/skillfx.frag`` relative to the project root.
+
+    Dev mode:   sao_auto/python/plugins/star_resonance_plugin/render/  → 4 up → python/
+    Frozen:     runtime/plugins/star_resonance_plugin/render/          → 4 up → runtime/
+    Also checks sys._MEIPASS and exe dir for fallback compatibility.
     """
-    candidates = [os.path.join(HERE, 'shaders', 'skillfx.frag')]
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
+    candidates = [os.path.join(project_root, 'shaders', 'skillfx.frag')]
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
         candidates.append(os.path.join(meipass, 'shaders', 'skillfx.frag'))
+        candidates.append(os.path.join(meipass, '_internal', 'shaders', 'skillfx.frag'))
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         candidates.append(os.path.join(exe_dir, 'shaders', 'skillfx.frag'))
@@ -62,7 +49,6 @@ def _resolve_shader_path() -> str:
     for p in candidates:
         if os.path.isfile(p):
             return p
-    # 返回默认 (让 _load_fragment 报 FileNotFoundError 以暴露问题)
     return candidates[0]
 
 
@@ -92,16 +78,14 @@ class SkillFXShaderPipeline:
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
         self._fbo_cache: Dict[Tuple[int, int], Any] = {}
-        # Compile shader
         frag = _load_fragment()
         self._prog = ctx.program(vertex_shader=_VS, fragment_shader=frag)
-        # Fullscreen quad
         quad = np.array([-1, -1,  1, -1, -1,  1,
                           1, -1,  1,  1, -1,  1], dtype='f4')
         self._vbo = ctx.buffer(quad.tobytes())
         self._vao = ctx.vertex_array(self._prog, [(self._vbo, '2f', 'in_pos')])
 
-    _FBO_CAP = 16  # 尺寸键上限 — 反复 resize 时防 FBO/纹理显存无界累积
+    _FBO_CAP = 16
 
     def _get_fbo(self, w: int, h: int):
         key = (int(w), int(h))
@@ -110,7 +94,7 @@ class SkillFXShaderPipeline:
             return fbo
         ctx = self._ctx
         tex = ctx.texture((w, h), 4, dtype='f1')
-        tex.filter = (0x2600, 0x2600)  # GL_NEAREST
+        tex.filter = (0x2600, 0x2600)
         fbo = ctx.framebuffer(color_attachments=[tex])
         self._fbo_cache[key] = fbo
         while len(self._fbo_cache) > self._FBO_CAP:
@@ -138,9 +122,6 @@ class SkillFXShaderPipeline:
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)
                 p = self._prog
-                # D5: typed cython unpack of the 21 params.get + float/tuple
-                # boxings. The GL uniform .value sets still happen in Python
-                # (moderngl driver call), but the per-field coerce is in cython.
                 (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
                  u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
                  u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label,
@@ -163,29 +144,20 @@ class SkillFXShaderPipeline:
                 p['u_gl_anchor'].value = u_gl_anchor
                 p['u_gl_label'].value = u_gl_label
                 p['u_gl_panel_size'].value = u_gl_panel_size
-
                 self._vao.render()
                 data = fbo.read(components=4, alignment=1)
-
-            # Shader emits STRAIGHT-alpha RGBA (top-down via shader's flip);
-            # build PIL image directly via Image.frombuffer with the GL
-            # 'raw' decoder + negative stride to flip the bottom-up GL
-            # output into top-down orientation. Zero numpy postprocessing.
             return Image.frombuffer(
                 'RGBA', (width, height), data, 'raw', 'RGBA', 0, -1,
             ).copy()
         except Exception as exc:
             try:
-                print(f'[GPU] skillfx pipeline render failed, fallback: {exc}')
+                print(f'[GPU-SR] skillfx pipeline render failed, fallback: {exc}')
             except Exception:
                 pass
             return None
 
     def render_premultiplied_bytes(self, width: int, height: int,
                                    params: Dict[str, Any]) -> Optional[bytes]:
-        """Phase 2 entry: returns raw premultiplied RGBA bytes (top-down)
-        suitable for direct upload into a moderngl-window framebuffer or
-        UpdateLayeredWindow (after BGRA swizzle)."""
         if width <= 0 or height <= 0:
             return None
         try:
@@ -196,7 +168,6 @@ class SkillFXShaderPipeline:
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)
                 p = self._prog
-                # D5: typed cython unpack — same as render() above.
                 (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
                  u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
                  u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label,
@@ -220,7 +191,6 @@ class SkillFXShaderPipeline:
                 p['u_gl_label'].value = u_gl_label
                 p['u_gl_panel_size'].value = u_gl_panel_size
                 self._vao.render()
-                # GL bottom-up; for ULW (top-down) need flip.
                 data = fbo.read(components=4, alignment=1)
             arr = np.frombuffer(data, dtype=np.uint8).reshape(height, width, 4)
             return np.flipud(arr).copy().tobytes()
@@ -245,10 +215,7 @@ class SkillFXShaderPipeline:
 
 
 def get_skillfx_pipeline() -> Optional[SkillFXShaderPipeline]:
-    """Get-or-create the calling thread's SkillFXShaderPipeline.
-
-    Returns None if the per-thread GL context cannot be established (caller
-    must fall back to PIL path)."""
+    """Get-or-create the calling thread's SkillFXShaderPipeline."""
     pipe = getattr(_tls, 'pipe', None)
     if pipe is not None:
         return pipe
@@ -263,10 +230,9 @@ def get_skillfx_pipeline() -> Optional[SkillFXShaderPipeline]:
         _tls.pipe = pipe
         return pipe
     except FileNotFoundError as exc:
-        # v2.3.8: 区分资源缺失 (打包问题) 与 GL 初始化失败.
         try:
             print(
-                f'[GPU] skillfx pipeline init failed: shader missing ({exc}); '
+                f'[GPU-SR] skillfx pipeline init failed: shader missing ({exc}); '
                 f'expected at {_SHADER_PATH}',
                 flush=True,
             )
@@ -276,7 +242,7 @@ def get_skillfx_pipeline() -> Optional[SkillFXShaderPipeline]:
         return None
     except Exception as exc:
         try:
-            print(f'[GPU] skillfx pipeline init failed: {exc}')
+            print(f'[GPU-SR] skillfx pipeline init failed: {exc}')
         except Exception:
             pass
         _tls.failed = True

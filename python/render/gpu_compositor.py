@@ -1,9 +1,9 @@
 """gpu_compositor.py — GPU layer compositor for overlay panels (v2.2.11).
 
-Phase 1 of the SAO overlay GPU acceleration plan. Provides a per-panel,
+Phase 1 of the overlay GPU acceleration plan. Provides a per-panel,
 per-thread `LayerCompositor` that owns persistent FBO textures plus a
-small registry of fragment shaders used by SkillFX, BossHP, and the SAO
-menu reveal animation.
+small registry of fragment shaders used by plugin-rendered effects and
+the platform menu reveal animation.
 
 Design notes
 ------------
@@ -15,7 +15,7 @@ Design notes
 - Shader programs are lazy-compiled per-thread on first use and shared
   via the same `_tls` storage as `gpu_renderer.py`.
 - Public API (all calls must be made from the owning render-lane thread):
-    cmp = LayerCompositor(name="skillfx")
+    cmp = LayerCompositor(name="plugin_effect")
     if cmp.available:
         tex = cmp.tex('main', w, h, clear=True)
         cmp.render('halo_field', tex, uniforms={...})
@@ -28,12 +28,12 @@ Shaders provided
 ----------------
 - ``over``           — straight-alpha "src over dst" composite of two textures.
 - ``gradient_bar``   — 2/3-stop horizontal gradient + vertical shading.
-- ``halo_field``     — exponential ring halo + core fill (SkillFX).
-- ``sweep_arc``      — radial sweep band (SkillFX).
-- ``light_sweep``    — angled highlight band (BossHP shield bar).
-- ``shimmer_scan``   — moving brightness band (BossHP break shimmer).
-- ``inset_shadow``   — invert + blur + clip to alpha (BossHP shell).
-- ``beam``           — procedural beam sprite with rotation (SkillFX).
+- ``halo_field``     — exponential ring halo + core fill.
+- ``sweep_arc``      — radial sweep band.
+- ``light_sweep``    — angled highlight band.
+- ``shimmer_scan``   — moving brightness band.
+- ``inset_shadow``   — invert + blur + clip to alpha.
+- ``beam``           — procedural beam sprite with rotation.
 
 When `gpu_available()` is False the constructor returns an instance with
 ``.available == False`` and all render calls become no-ops; callers are
@@ -115,7 +115,7 @@ void main() {
 _FS_HALO_FIELD = """
 #version 330
 // Ring halo with exponential falloff around an outer radius + core fill.
-// Replaces SkillFX _get_ring_layer numpy build.
+// Replaces a CPU-side ring-layer numpy build.
 uniform vec2  u_size;       // (w, h) px
 uniform vec2  u_center;     // ring center px
 uniform float u_r_out;      // outer radius (where halo peaks)
@@ -144,7 +144,7 @@ void main() {
 _FS_SWEEP_ARC = """
 #version 330
 // Per-frame rotating sweep band on a thin ring.
-// Replaces SkillFX _draw_ring's per-frame numpy exp(-((xs-band_x)/8.5)^2).
+// Replaces a per-frame CPU-side ring sweep calculation.
 uniform vec2  u_size;         // (w, h) px
 uniform vec2  u_center;       // ring center
 uniform float u_radius;       // ring radius (px)
@@ -173,7 +173,7 @@ void main() {
 
 _FS_LIGHT_SWEEP = """
 #version 330
-// Angled highlight band for BossHP shield bar.
+// Angled highlight band for plugin-rendered bars.
 // Replaces _make_light_sweep numpy build.
 uniform vec2  u_size;
 uniform float u_band_x;     // band center x in px
@@ -193,7 +193,7 @@ void main() {
 
 _FS_SHIMMER_SCAN = """
 #version 330
-// Moving brightness band on a horizontal bar (BossHP break recover).
+// Moving brightness band on a horizontal bar.
 uniform vec2  u_size;
 uniform float u_phase_x;    // band center x in px
 uniform float u_band_w;     // half-width in px
@@ -213,7 +213,7 @@ void main() {
 _FS_INSET_SHADOW = """
 #version 330
 // Inset shadow: sample blurred *inverse-alpha* texture, then clip to the
-// host shape's alpha.  Used to draw a soft inner darkening on the BossHP
+// host shape's alpha.  Used to draw a soft inner darkening on a plugin
 // shell without the CPU↔GPU bounce that _apply_inset_shadow does today.
 uniform sampler2D u_blurred_inv;  // pre-blurred inverse-alpha mask
 uniform sampler2D u_shape;        // original shape alpha
@@ -231,7 +231,7 @@ void main() {
 
 _FS_BEAM = """
 #version 330
-// Procedural beam sprite (replaces SkillFX _fast_beam numpy + PIL rotate).
+// Procedural beam sprite (replaces a CPU-side numpy + PIL rotate path).
 // Beam is rendered axis-aligned along +X starting at (0, h/2); the caller
 // pre-rotates by drawing into a container texture using a rotated quad,
 // or by sampling u_dir for the orientation.

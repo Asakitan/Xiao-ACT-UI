@@ -197,7 +197,7 @@ def _mem_supplement_additional(bridge, existing, main_uuid, tracker, max_total=4
 
 
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from utils.perf_probe import probe as _probe
 
 
@@ -1169,7 +1169,7 @@ class SAOPlayerGUIStateMixin:
                                 name=_snap_name, prof=_snap_prof,
                                 lv=_snap_lv, uid=_snap_uid):
                             try:
-                                from engines.character_profile import save_profile
+                                from plugins.star_resonance_plugin.engines.character_profile import save_profile
                                 save_profile(
                                     username=name,
                                     profession=prof,

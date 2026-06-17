@@ -173,7 +173,7 @@ from gui_modules.sao_hotkey_manager import SAOHotkeyManager  # noqa: E402
 #     _push_packet_overlays + _apply_fast_state_update +
 #     _on_game_state_update (730 lines). Heart of the combat-lag work.
 # More platform mixins can be extracted in later rounds.
-# Game mixins (State/Actions/EngineToggles/DpsTheme) moved to plugin
+# Plugin-owned mixins are injected at runtime.
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin  # noqa: E402
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin  # noqa: E402
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin  # noqa: E402
@@ -276,17 +276,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
 
         # ── 配置面板实例 ──
         self._act_plugin_manager_panel = None  # PluginManagerPanel
-        self._act_trigger_timer_panel = None  # TriggerTimerManagerPanel
-        self._act_data_source_health_panel = None  # DataSourceHealthPanel
-        self._act_report_export_panel = None  # ReportExportPanel
-        self._act_offline_import_panel = None  # OfflineImportPanel
-        self._act_timeline_vcr_panel = None  # TimelineVcrPanel
-        self._act_aggregate_panel = None  # ActAggregatePanel
-        self._act_action_log_panel = None  # ActionLogPanel
-        self._act_death_recap_panel = None  # DeathRecapPanel
-        self._act_graph_timeseries_panel = None  # GraphTimeseriesPanel
-        self._act_combatant_drilldown_panel = None  # CombatantDrilldownPanel
-        self._act_skill_drilldown_panel = None  # SkillDrilldownPanel
         self._mem_scope_panel = None  # MemScopePanel
         self._ai_editor_panel = None  # AIEditorPanel
 

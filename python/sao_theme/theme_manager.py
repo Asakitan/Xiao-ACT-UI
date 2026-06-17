@@ -13,8 +13,8 @@ def register_panel_theme(panel_key: str, theme_name: str, colors: dict[str, tupl
 
     面板模块在 import 时调用此函数自注册，例如::
 
-        register_panel_theme('dps', 'light', DPS_THEME_LIGHT)
-        register_panel_theme('dps', 'dark', DPS_THEME_DARK)
+        register_panel_theme('metrics', 'light', METRICS_THEME_LIGHT)
+        register_panel_theme('metrics', 'dark', METRICS_THEME_DARK)
     """
     bucket = _PANEL_THEME_REGISTRY.setdefault(panel_key, {})
     bucket[theme_name] = colors

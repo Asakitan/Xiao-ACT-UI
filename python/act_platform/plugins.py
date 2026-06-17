@@ -37,23 +37,6 @@ EXTENSION_KINDS = (
 # ``PluginManager.render_registry`` and surface via ``render_status()``.
 
 
-_ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
-    "owner": (),
-    "event_bus": (),
-    "plugin_manager": (),
-    "settings": (),
-    "game_state": ("_game_state", "game_state"),
-    "state_manager": ("_state_mgr", "state_mgr", "state_manager"),
-    "dps_tracker": ("_dps_tracker", "dps_tracker", "tracker", "dps"),
-    "history_store": ("_dps_history_store", "dps_history_store", "history", "store"),
-    "encounter_manager": ("_encounter_mgr", "encounter_mgr", "encounter_manager"),
-    "trigger_engine": ("_act_trigger_engine", "act_trigger_engine", "trigger_engine"),
-    "packet_bridge": ("_packet_engine", "_packet_bridge", "packet_engine", "packet_bridge"),
-    "memory_bridge": ("_mem_bridge", "mem_bridge", "memory_bridge"),
-    "window_locator": ("_locator", "locator", "window_locator"),
-}
-
-
 _RUNTIME_ACTION_ALIASES: dict[str, str] = {
     "plugin_status": "act_plugin_status",
     "plugin_list": "act_plugin_list",
@@ -353,12 +336,13 @@ class EngineAccess:
 
     def handles(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
-        for name in _ENGINE_HANDLE_ALIASES:
-            handle = self.get(name, None)
-            out[name] = {
-                "available": handle is not None,
-                "type": _type_name(handle),
-            }
+        for name, handle in (
+            ("owner", self.owner),
+            ("event_bus", self.event_bus),
+            ("plugin_manager", self.plugin_manager),
+            ("settings", self.settings),
+        ):
+            out[name] = {"available": handle is not None, "type": _type_name(handle)}
         for name, engine in self._manager._plugin_engines.items():
             if name not in out:
                 out[name] = {
@@ -390,8 +374,8 @@ class EngineAccess:
         if owner is None:
             return default
         if key == "memory_bridge":
-            # The live bridge is nested under _packet_engine._mem_source._bridge in
-            # hybrid/auto/memory mode — a path the flat alias table cannot express.
+            # Memory access remains a platform facade; plugin-specific bridge
+            # discovery is delegated to mem_probe without hard-coded engine attrs.
             try:
                 from mem_probe.mem_access import resolve_bridge
                 bridge = resolve_bridge(owner)
@@ -400,18 +384,6 @@ class EngineAccess:
             if bridge is not None:
                 return bridge
             # else fall through to the flat alias lookup (covers memory-only / stubs)
-        for canonical, aliases in _ENGINE_HANDLE_ALIASES.items():
-            alias_keys = {_normalize_engine_name(alias) for alias in aliases}
-            if key != canonical and key not in alias_keys:
-                continue
-            for attr in aliases:
-                try:
-                    value = getattr(owner, attr)
-                except Exception:
-                    continue
-                if value is not None:
-                    return value
-            return default
         try:
             value = getattr(owner, str(name))
         except Exception:
@@ -428,10 +400,7 @@ class EngineAccess:
         owner = self.owner
         if owner is None:
             return default
-        try:
-            return getattr(owner, str(name))
-        except Exception:
-            return default
+        return default
 
     def set_owner_attr(self, name: str, value: Any) -> None:
         owner = self.require("owner")
@@ -779,19 +748,12 @@ class PluginContext:
 
         The engine becomes available via ``ctx.get_engine(name)`` for all
         plugins and via ``EngineAccess.get(name)`` for the platform.
-        Also sets the corresponding owner attribute for backward compatibility.
         """
         key = _normalize_engine_name(name)
         if not key:
             raise ValueError(f"invalid engine name: {name!r}")
         self._manager._plugin_engines[key] = engine
         self._manager._plugin_engine_owners[key] = self._record.plugin_id
-        aliases = _ENGINE_HANDLE_ALIASES.get(key)
-        if aliases:
-            try:
-                self.engine.set_owner_attr(aliases[0], engine)
-            except Exception:
-                pass
 
     def register_data_source(self, source_id: str,
                              metadata: Optional[Mapping[str, Any]] = None,
@@ -1043,7 +1005,7 @@ class _PluginTimer:
 
 
 class PluginManager:
-    """Discover and manage in-process Python ACT plugins."""
+    """Discover and manage in-process Python plugins."""
 
     def __init__(self, plugin_dirs: Optional[Iterable[str]] = None,
                  event_bus: Optional[EventBus] = None,

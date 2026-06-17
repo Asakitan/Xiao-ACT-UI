@@ -408,25 +408,11 @@ class GraphTimeseriesPanel:
         """Drill a graph point into the Action Log focused at that point's time."""
         owner = self.owner
         try:
-            panel = getattr(owner, '_act_action_log_panel', None)
-            visible = bool(panel and getattr(panel, 'is_visible', lambda: False)())
-            if not visible:
-                toggle = getattr(owner, '_toggle_act_action_log_panel', None)
-                if callable(toggle):
-                    toggle()
-                panel = getattr(owner, '_act_action_log_panel', None)
-            if panel is None:
+            opener = getattr(owner, '_plugin_open_action_log_at', None)
+            if not callable(opener):
                 self._status_var.set('Action Log panel unavailable')
                 return
-            try:
-                panel._cursor_var.set(str(_finite_int(time_ms, 0, lo=0)))
-                if topic:
-                    panel._topic_var.set(str(topic))
-                jump = getattr(panel, 'jump_to_time', None) or getattr(panel, 'refresh', None)
-                if callable(jump):
-                    jump()
-            except Exception:
-                pass
+            opener(_finite_int(time_ms, 0, lo=0), str(topic or ''))
             self._status_var.set(f'Action Log @ {fmt_clock(time_ms)}')
         except Exception as exc:
             try:

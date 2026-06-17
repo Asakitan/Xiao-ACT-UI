@@ -55,7 +55,7 @@ def _seed_settings():
 
 
 def _mech_api(settings):
-    from engines import boss_mechanics_state as bms
+    from plugins.star_resonance_plugin.engines import boss_mechanics_state as bms
 
     def _load(scene_key=None, boss_base_id=None):
         return bms.build_mechanics_state(settings, None, None,
@@ -100,7 +100,7 @@ def _grab(win, path):
 
 def _audit_mechanics_state(settings):
     """Headless contract audit (no Tk): every card renders notes + chips?"""
-    from engines import boss_mechanics_state as bms
+    from plugins.star_resonance_plugin.engines import boss_mechanics_state as bms
     st = bms.build_mechanics_state(settings, None, None)
     problems = []
     mechs = st.get("mechanics") or []

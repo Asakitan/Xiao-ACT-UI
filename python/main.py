@@ -11,10 +11,9 @@ UI 模式:
 
 架构:
   sao_webview.py  — WebView 透明 HUD (pywebview + EdgeChromium)
-  config.py       — 配置、ROI
-  recognition.py  — 截图 + OCR + 像素条识别
-  game_state.py   — 统一状态模型
-  automation.py   — 自动化核心
+    config.py       — 平台配置
+    act_platform/   — 插件 SDK、运行时分发、渲染钩子
+    plugins/        — 游戏适配器动态注入游戏逻辑
 """
 
 import os
@@ -69,7 +68,7 @@ def _bootstrap_runtime_overrides():
     在 PyInstaller onedir + noarchive=True + contents_directory='runtime' 下,
     sys.path 只包含 runtime/。但 build_release.bat 会把 proto/ assets/ web/
     icon.ico 提升到 EXE 顶层 (便于增量更新), 导致:
-      - `from proto import star_resonance_pb2` 失败 → packet_parser 报错
+    - 插件运行时的协议/资源目录不在 sys.path → 插件导入失败
       - 开发时 sys.path 包含项目根, onefile 时 _MEIPASS 包含 proto/, 都正常
       - **只有 onedir 打包后会 ImportError**
     解决: 把 EXE 所在目录 (frozen) / 当前文件目录 (dev) 加入 sys.path 头部。
@@ -111,75 +110,64 @@ def _set_dpi_aware():
     _early_dpi_aware()
 
 
-def run_test():
-    """单次截图测试: 截取游戏窗口，执行一次识别，打印结果"""
-    from config import SettingsManager
-    from engines.game_state import GameStateManager
-    from vision.recognition import RecognitionEngine
+def _dispatch_cli_runtime(action: str, missing_msg: str) -> None:
+    """Dispatch a ``--test`` / ``--headless`` CLI action through the plugin runtime.
 
-    print('=' * 50)
-    print('  SAO Auto — 识别测试')
-    print('=' * 50)
-
-    settings = SettingsManager()
-    state_mgr = GameStateManager()
-    engine = RecognitionEngine(state_mgr, settings)
-
-    print('\nScanning game window...')
-    result = engine._locator.find_target_window()
-    if result is None:
-        print('Game window not found')
-        print(f'   keywords: {engine._locator._keywords}')
+    The platform bootstraps the plugin manager (which triggers each plugin's
+    ``on_load`` and therefore ``register_extension_runtime``) and then looks up
+    the requested handler. The platform code never imports plugin modules.
+    """
+    try:
+        from act_platform.runtime import (
+            ensure_act_plugin_manager,
+            _extension_runtime_handler,
+        )
+        owner = _OwnerStub()
+        ensure_act_plugin_manager(owner, load=True)
+    except Exception as exc:
+        print(f'[SAO Auto] plugin manager bootstrap failed: {exc}')
         return
+    handler = _extension_runtime_handler(action)
+    if not callable(handler):
+        print(missing_msg)
+        return
+    try:
+        handler()
+    except Exception as exc:
+        print(f'[SAO Auto] {action} failed: {exc}')
 
-    hwnd, title, rect = result
-    print(f'Window: {title}')
-    print(f'  rect: {rect}')
-    print(f'  size: {rect[2]-rect[0]}x{rect[3]-rect[1]}')
 
-    print('\nRunning single capture...')
-    data = engine.single_capture()
-    if data:
-        print('\nCapture result:')
-        for k, v in data.items():
-            print(f'  {k}: {v}')
-    else:
-        print('Capture failed')
+class _OwnerStub:
+    """Minimal owner for plugin-manager-driven CLI dispatch.
+
+    ``main.py --test`` / ``--headless`` run before the full UI is online. We
+    bootstrap only the pieces the plugin manager needs (settings + an attrs
+    sink); the plugin's ``on_load`` then registers its runtime handlers via
+    ``register_extension_runtime``.
+    """
+
+    def __init__(self) -> None:
+        try:
+            from config import SettingsManager
+            self._cfg_settings_ref = SettingsManager()
+        except Exception:
+            self._cfg_settings_ref = None
+
+
+def run_test():
+    """Run the active plugin's one-shot CLI test handler."""
+    _dispatch_cli_runtime(
+        "cli_test",
+        "[SAO Auto] --test requires an active plugin runtime handler.",
+    )
 
 
 def run_headless():
-    """无 HUD 模式: 仅终端输出识别结果"""
-    from config import SettingsManager
-    from engines.game_state import GameState, GameStateManager
-    from engines.automation import AutomationCore
-
-    print('=' * 50)
-    print('  SAO Auto — Headless 模式')
-    print('  按 Ctrl+C 退出')
-    print('=' * 50)
-
-    settings = SettingsManager()
-    state_mgr = GameStateManager()
-    auto = AutomationCore(state_mgr, settings)
-
-    def _on_state(state: GameState):
-        if state.recognition_ok:
-            print(f'\r[{state.level_text}] {state.player_name}  '
-                  f'HP:{state.hp_text}({state.hp_pct:.0%})  '
-                  f'体力:{state.stamina_text}({state.stamina_pct:.0%})  '
-                  f'ID:{state.player_id}', end='', flush=True)
-        else:
-            print(f'\r⚠ {state.error_msg}', end='', flush=True)
-
-    state_mgr.subscribe(_on_state)
-    auto.start()
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        auto.stop()
-        print('\n\n已退出')
+    """Run the active plugin's headless CLI handler."""
+    _dispatch_cli_runtime(
+        "cli_headless",
+        "[SAO Auto] --headless requires an active plugin runtime handler.",
+    )
 
 
 def _start_update_check():

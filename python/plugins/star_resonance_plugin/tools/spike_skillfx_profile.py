@@ -8,7 +8,7 @@ if PARENT not in sys.path:
 
 import numpy as np
 from render import gpu_renderer as gr
-from render import skillfx_pipeline as sp
+from plugins.star_resonance_plugin.render import skillfx_pipeline as sp
 
 # Init context + pipeline once
 pipe = sp.get_skillfx_pipeline()

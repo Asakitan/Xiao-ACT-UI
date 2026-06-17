@@ -420,12 +420,12 @@ void main() {
     #  Link Start 音效播放 (3阶段)
     # ════════════════════════════════════════════════════════
     def _play_sound(self):
-        """3阶段音效: LinkStart.SAO.Kirito → Startup.SAO.NerveGear → Popup.ALO.Welcome
+        """3阶段音效: LinkStart → Startup → Welcome
 
         对应动画时间线:
-          Phase 1 (t=0.0s):  "LINK START!" 桐人喊声 — 彩色隧道开始
-          Phase 1 (t=1.5s):  NerveGear 启动音 — 隧道飞向中, 持续到 P2 结束
-          Phase 3 (t=5.2s):  ALO 欢迎音 — 蓝色隧道开始, 持续到 P4 结束
+          Phase 1 (t=0.0s):  启动提示音 — 彩色隧道开始
+          Phase 1 (t=1.5s):  启动推进音 — 隧道飞向中, 持续到 P2 结束
+          Phase 3 (t=5.2s):  欢迎音 — 蓝色隧道开始, 持续到 P4 结束
         """
         import threading
 

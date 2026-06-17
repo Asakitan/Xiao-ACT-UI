@@ -43,7 +43,7 @@ def subpixel_alpha_composite(dst: Image.Image, src: Image.Image,
     Falls back to a plain integer composite when the fractional part is
     smaller than ``eps`` (default 1/512 px) so cached layouts that happen
     to land on an integer don't pay the transform cost. v2.2.27: callers
-    rendering large sprites (e.g. SkillFX 700+ px beam) can pass a larger
+    rendering large sprites can pass a larger
     threshold like 0.15 px since the perceptual cost of snapping a sub-
     pixel shift on a big sprite is below the eye's discrimination limit
     while the AFFINE BILINEAR transform on the same sprite costs ~30 ms.

@@ -1,6 +1,9 @@
 # Star Resonance game-specific configuration constants
 # Extracted from platform config.py during 5.0.0 restructure.
-from typing import Any, Dict, List, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+from config import TEMP_DIR
 
 GAME_PROCESS_NAMES: list = ["star.exe"]
 GAME_WINDOW_KEYWORDS: list = ["Star", "星痕共鸣"]
@@ -23,6 +26,7 @@ BUFFMON_SELF_FILTER = 'ultimate'
 # 自动 fallback: 当 GLFW 不可用或 GPU 窗口创建失败时, 自动切到 ULW。
 USE_GPU_BUFFMON = True
 USE_GPU_SKILLFX = True
+SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 BASE_CLIENT_WIDTH = 1920.0
 BASE_CLIENT_HEIGHT = 1080.0
@@ -117,6 +121,11 @@ BAR_COLORS = {
     "stamina": {"h_min": 8, "h_max": 50, "s_min": 50, "s_max": 255, "v_min": 80, "v_max": 255},
     "skill_cooldown": {"v_max_dark": 80, "s_max_gray": 40},
 }
+
+# Capture framerate target for the Star Resonance recognition engine.
+# The platform's config.py does not own this game-specific tuning, so it lives
+# here in the plugin's own config module.
+CAPTURE_FPS_FAST: int = 60
 DEFAULT_PANEL_THEMES = {
     "dps": "dark",
     "hp": "dark",

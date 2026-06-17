@@ -9,7 +9,7 @@ from unittest import mock
 
 import _bootstrap  # noqa: F401
 
-from packet_parser import helpers
+from plugins.star_resonance_plugin.protocol.packet_parser import helpers
 
 
 class EnsureProtobufTests(unittest.TestCase):

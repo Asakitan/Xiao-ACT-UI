@@ -13,7 +13,7 @@ import time
 import logging
 from typing import Optional, Callable, Dict, Any, List
 
-from packet_parser import helpers as _helpers
+from plugins.star_resonance_plugin.protocol.packet_parser import helpers as _helpers
 from plugins.star_resonance_plugin.protocol.packet_parser.enums import (
     MessageType, NotifyMethod, _NOTIFY_METHOD_NAMES, AttrType, BASE_LEVEL_CAP,
     SERVICE_UUID_C3SB, BuffEventType, _BOSS_BUFF_EVENTS, WIPE_BUFF_BASE_ID,

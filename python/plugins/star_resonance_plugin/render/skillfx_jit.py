@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Cython-backed SkillFX hot kernels.
+"""Cython-backed SkillFX hot kernels (Star Resonance plugin).
 
-The module keeps the historical ``skillfx_jit`` import name so callers do not
-need to know whether the implementation is JIT or ahead-of-time compiled.
-Runtime fallback is intentionally not provided: ``_sao_cy_skillfx`` is required.
+Moved from platform ``render/skillfx_jit.py`` in the 5.0.0 platform/plugin
+separation pass.  The module keeps the historical ``skillfx_jit`` import name
+so callers do not need to know whether the implementation is JIT or
+ahead-of-time compiled.  Runtime fallback is intentionally not provided:
+``_sao_cy_skillfx`` is required.
 """
 
 from __future__ import annotations
