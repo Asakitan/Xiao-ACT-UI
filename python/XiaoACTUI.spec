@@ -190,9 +190,6 @@ a = Analysis(
         'xmlrpc',
         'pydoc',
         'doctest',
-        # 被依赖链误拉, 运行时未使用
-        'pygments',
-        'setuptools',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -233,18 +230,6 @@ exe = EXE(
     manifest='XiaoACTUI.exe.manifest',  # v2.1.3: DPI PerMonitorV2 + requireAdministrator (manifest 内已含)
     contents_directory='runtime',  # 默认 _internal -> runtime
 )
-
-# Strip binaries that bloat the package without runtime value:
-# - opencv ffmpeg video I/O DLLs (~52MB): app only does image processing
-# - opencv videoio plugins: same reason
-_STRIP_BINARY_PREFIXES = (
-    'opencv_videoio_ffmpeg',
-    'opencv_videoio_msmf',
-)
-a.binaries = [
-    (name, src, typ) for (name, src, typ) in a.binaries
-    if not any(name.lower().startswith(p) for p in _STRIP_BINARY_PREFIXES)
-]
 
 coll = COLLECT(
     exe,
