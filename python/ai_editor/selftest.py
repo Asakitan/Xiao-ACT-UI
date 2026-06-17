@@ -83,6 +83,17 @@ def test_imports() -> None:
         _check("scopes", False, str(e))
 
     try:
+        from ai_editor.extension_host import (
+            ExtensionDescription, ExtensionRegistry, ExtensionScanner,
+            ExtensionActivator, CommandService, ExtensionContext,
+            ExtensionPoints, ExtensionHost,
+            Position, Range, Uri, Disposable, EventEmitter,
+        )
+        _check("extension_host", True)
+    except Exception as e:
+        _check("extension_host", False, str(e))
+
+    try:
         from gui_modules.sao_gui_ai_editor import AIEditorPanel
         _check("sao_gui_ai_editor", True)
     except Exception as e:
@@ -328,6 +339,115 @@ def test_scopes() -> None:
            tool_permission("edit", "some_unknown_tool") == "allowed")
 
 
+def test_extension_host() -> None:
+    print("── Extension Host ──")
+    import tempfile, shutil
+    from ai_editor.extension_host import (
+        ExtensionDescription, ExtensionRegistry, ExtensionScanner,
+        ExtensionActivator, CommandService, ExtensionContext,
+        ExtensionPoints, ExtensionHost,
+        Position, Range, Uri, Disposable, EventEmitter,
+    )
+
+    # Types
+    pos = Position(1, 5)
+    _check("Position", pos.line == 1 and pos.character == 5)
+    rng = Range(Position(0, 0), Position(10, 0))
+    _check("Range", rng.end.line == 10)
+    uri = Uri.file("C:/test/file.py")
+    _check("Uri.file", uri.scheme == "file" and "test" in uri.path)
+    uri2 = Uri.parse("https://example.com/api")
+    _check("Uri.parse", uri2.scheme == "https")
+    d = Disposable(lambda: None)
+    d.dispose()
+    _check("Disposable", True)
+    ee = EventEmitter()
+    fired = []
+    ee.event(lambda v: fired.append(v))
+    ee.fire(42)
+    _check("EventEmitter", fired == [42])
+
+    # ExtensionDescription from package.json
+    pkg = {
+        "name": "test-ext", "publisher": "test",
+        "version": "1.0.0", "displayName": "Test Extension",
+        "activationEvents": ["onCommand:test.hello"],
+        "contributes": {
+            "commands": [{"command": "test.hello", "title": "Hello"}],
+            "chatParticipants": [{"id": "test-chat", "name": "TestChat",
+                                  "fullName": "Test Chat Bot"}],
+            "languageModelTools": [{"name": "test_tool",
+                                    "displayName": "Test Tool"}],
+        },
+    }
+    desc = ExtensionDescription.from_package_json(pkg, "/fake/path")
+    _check("ExtDesc.id", desc.id == "test.test-ext")
+    _check("ExtDesc.activation", "onCommand:test.hello" in desc.activation_events)
+    _check("ExtDesc.to_dict", desc.to_dict()["displayName"] == "Test Extension")
+
+    # Registry
+    reg = ExtensionRegistry()
+    reg.register(desc)
+    _check("Registry.get", reg.get("test.test-ext") is not None)
+    _check("Registry.list_all", len(reg.list_all()) == 1)
+    targets = reg.get_for_activation_event("onCommand:test.hello")
+    _check("Registry.activation_map", len(targets) == 1)
+
+    # CommandService
+    cmds = CommandService()
+    result_box = []
+    dispose = cmds.register("test.hello", lambda: result_box.append("ok") or "done")
+    _check("Cmd.has", cmds.has("test.hello"))
+    r = cmds.execute("test.hello")
+    _check("Cmd.execute", r == "done" and result_box == ["ok"])
+    _check("Cmd.list", "test.hello" in cmds.list_commands())
+    dispose()
+    _check("Cmd.dispose", not cmds.has("test.hello"))
+
+    # ExtensionPoints
+    ep = ExtensionPoints(cmds)
+    ep.process(desc)
+    _check("EP.chatParticipants", len(ep.chat_participants) == 1)
+    _check("EP.lm_tools", len(ep.language_model_tools) == 1)
+    _check("EP.commands registered", cmds.has("test.hello"))
+    summary = ep.to_summary()
+    _check("EP.summary", summary["chatParticipants"] == 1)
+
+    # ExtensionContext
+    tmpdir = tempfile.mkdtemp(prefix="sao_ext_test_")
+    try:
+        desc2 = ExtensionDescription(id="test.ctx", extension_path=tmpdir)
+        ctx = ExtensionContext(desc2, os.path.join(tmpdir, ".storage"))
+        ctx.global_state.update("key1", "value1")
+        _check("Ctx.globalState.get", ctx.global_state.get("key1") == "value1")
+        ctx.secrets.store("token", "abc123")
+        _check("Ctx.secrets.get", ctx.secrets.get("token") == "abc123")
+
+        # Scanner with temp extension
+        ext_dir = os.path.join(tmpdir, "extensions", "my-ext")
+        os.makedirs(ext_dir)
+        with open(os.path.join(ext_dir, "package.json"), "w") as f:
+            json.dump({"name": "my-ext", "publisher": "test",
+                       "version": "0.1.0", "activationEvents": ["*"]}, f)
+        found = ExtensionScanner.scan_directory(os.path.join(tmpdir, "extensions"))
+        _check("Scanner.scan", len(found) == 1 and found[0].id == "test.my-ext")
+
+        # Full pipeline: ExtensionHost
+        host = ExtensionHost()
+        count = host.scan([os.path.join(tmpdir, "extensions")])
+        _check("Host.scan", count == 1)
+        activated = host.start()
+        _check("Host.start", len(activated) >= 1)
+        _check("Host.is_activated", host.activator.is_activated("test.my-ext"))
+        exts = host.list_extensions()
+        _check("Host.list", len(exts) == 1 and exts[0]["activated"])
+        host.shutdown()
+        _check("Host.shutdown", not host.activator.is_activated("test.my-ext"))
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def test_agents() -> None:
     print("── Agents ──")
     import tempfile, shutil
@@ -520,6 +640,7 @@ def main() -> None:
     test_bridge()
     test_instructions()
     test_scopes()
+    test_extension_host()
     test_agents()
     test_workflows()
     test_tk_window()

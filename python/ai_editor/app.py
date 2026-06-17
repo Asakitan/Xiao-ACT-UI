@@ -117,6 +117,11 @@ class AIEditorAPI:
         self._provider_controllers: Dict[str, ChatController] = {}
         self._active_provider = "chat"
 
+        # Extension host — scan and activate VSCode extensions
+        from ai_editor.extension_host import get_extension_host
+        self._ext_host = get_extension_host()
+        self._init_extension_host()
+
         # Agent & Workflow registries
         from ai_editor.agents import get_agent_registry
         from ai_editor.workflows import get_workflow_registry, WorkflowEngine
@@ -650,6 +655,107 @@ class AIEditorAPI:
             return {"error": f"Workflow not found: {wf_id}",
                     "available": [w.id for w in self._wf_registry.list_all()]}
         return self._wf_engine.run(wf, input_text)
+
+    # ── Extension Host API ──
+
+    def _init_extension_host(self) -> None:
+        """Scan extension directories and start the host."""
+        try:
+            from ai_editor.scopes import _base_dir
+            base = _base_dir()
+        except Exception:
+            base = os.path.dirname(os.path.dirname(__file__))
+        ext_dirs = []
+        ai_ext = os.path.join(base, "ai_editor_extensions")
+        if os.path.isdir(ai_ext):
+            ext_dirs.append(ai_ext)
+        home_ext = os.path.join(os.path.expanduser("~"), ".sao", "extensions")
+        if os.path.isdir(home_ext):
+            ext_dirs.append(home_ext)
+        # VSCode extensions directory
+        vscode_ext = os.path.join(os.path.expanduser("~"),
+                                   ".vscode", "extensions")
+        if os.path.isdir(vscode_ext):
+            ext_dirs.append(vscode_ext)
+        vscode_insiders_ext = os.path.join(
+            os.path.expanduser("~"), ".vscode-insiders", "extensions")
+        if os.path.isdir(vscode_insiders_ext):
+            ext_dirs.append(vscode_insiders_ext)
+        count = self._ext_host.scan(ext_dirs)
+        if count:
+            activated = self._ext_host.start()
+            print(f"[ExtHost] {count} extensions scanned, "
+                  f"{len(activated)} activated")
+            self._register_ext_tools()
+
+    def _register_ext_tools(self) -> None:
+        """Register extension-contributed tools and chat participants."""
+        ep = self._ext_host.ext_points
+        for tool in ep.language_model_tools:
+            name = tool.get("name", "")
+            if not name:
+                continue
+            schema = tool.get("inputSchema") or tool.get("parametersSchema") or {
+                "type": "object", "properties": {}}
+            self._registry.register(
+                name=f"ext_{name}",
+                description=tool.get("displayName", name),
+                parameters=schema,
+                handler=lambda **kw, _n=name: {"stub": True, "tool": _n, **kw},
+                category=f"ext:{tool.get('_extensionId', '')}",
+            )
+        for cp in ep.chat_participants:
+            pid = cp.get("id") or cp.get("name", "")
+            if not pid:
+                continue
+            from ai_editor.chat_providers import ChatProviderDef
+            prov = ChatProviderDef(
+                id=f"ext-{pid}",
+                name=cp.get("fullName") or cp.get("name", pid),
+                icon=cp.get("icon", "\U0001f916"),
+                provider_type=cp.get("_provider_type", "openai"),
+                system_prompt=cp.get("description", ""),
+                auto_agent=True,
+            )
+            self._provider_registry.register(prov)
+
+    def list_vscode_extensions(self) -> Dict:
+        self._ensure_engine()
+        return {"extensions": self._ext_host.list_extensions(),
+                "contributes": self._ext_host.get_contributes_summary()}
+
+    def activate_extension(self, ext_id: str) -> Dict:
+        self._ensure_engine()
+        act = self._ext_host.activator.activate(ext_id)
+        if act:
+            self._register_ext_tools()
+            return {"ok": True, "id": ext_id,
+                    "activationTimeMs": act.activation_time_ms}
+        return {"error": f"Failed to activate: {ext_id}"}
+
+    def execute_command(self, command_id: str, *args: Any) -> Dict:
+        self._ensure_engine()
+        try:
+            result = self._ext_host.commands.execute(command_id, *args)
+            if isinstance(result, dict):
+                return result
+            return {"result": result}
+        except KeyError:
+            return {"error": f"Command not found: {command_id}"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def list_commands(self) -> Dict:
+        self._ensure_engine()
+        return {"commands": self._ext_host.commands.list_commands()}
+
+    def install_extension_dir(self, ext_dir: str) -> Dict:
+        self._ensure_engine()
+        desc = self._ext_host.install_from_dir(ext_dir)
+        if desc:
+            self._register_ext_tools()
+            return {"ok": True, "id": desc.id, "name": desc.display_name}
+        return {"error": "Failed to install from directory"}
 
     def export_chat(self) -> str:
         if not self._controller:
