@@ -1529,6 +1529,27 @@ class SAOWebViewGUI:
         meta = self._plugin_surface_meta.get(str(surface or '').strip(), {}) or {}
         return str(meta.get('title') or surface or '')
 
+    def _plugin_surface_hwnd(self, surface: str) -> int:
+        key = str(surface or '').strip()
+        meta = self._plugin_surface_meta.get(key, {}) or {}
+        try:
+            hwnd = int(meta.get('hwnd') or 0)
+        except Exception:
+            hwnd = 0
+        if hwnd:
+            return hwnd
+        title = self._plugin_surface_title(key)
+        if not title:
+            return 0
+        try:
+            hwnd = int(ctypes.windll.user32.FindWindowW(None, title) or 0)
+        except Exception:
+            hwnd = 0
+        if hwnd:
+            meta['hwnd'] = hwnd
+            self._plugin_surface_meta[key] = meta
+        return hwnd
+
     def _plugin_surface_items(self):
         for surface in list(self._plugin_surface_order):
             win = self._plugin_surfaces.get(surface)
@@ -1547,6 +1568,16 @@ class SAOWebViewGUI:
         title = self._plugin_surface_title(surface)
         if title:
             self._set_window_alpha(title, alpha)
+
+    def _set_plugin_surface_icon(self, surface: str):
+        title = self._plugin_surface_title(surface)
+        if title:
+            self._set_window_icon(title)
+
+    def _native_fade_plugin_surface(self, surface: str, duration_ms: int = 260, steps: int = 12):
+        title = self._plugin_surface_title(surface)
+        if title:
+            self._native_fade_window(title, duration_ms=duration_ms, steps=steps)
 
     def _show_plugin_surface(self, surface: str):
         try:
@@ -2304,7 +2335,7 @@ class SAOWebViewGUI:
                 self._apply_webview2_transparency()
                 # reveal 未完成时不设置 alpha, 避免与 reveal 定时器冲突
                 if not getattr(self, '_hp_reveal_pending', False):
-                    self._set_window_alpha('SAO-HP', alpha)
+                    self._set_plugin_surface_alpha('hp', alpha)
                 self._setup_click_through()
                 self._ensure_hp_on_top()
                 self._request_hp_hit_regions()
@@ -2353,7 +2384,7 @@ class SAOWebViewGUI:
                 try:
                     # 如果 hwnd 还没有获取到, 持续尝试 (首次开机可能延迟)
                     if not self._hp_hwnd:
-                        _found = ctypes.windll.user32.FindWindowW(None, 'SAO-HP')
+                        _found = self._plugin_surface_hwnd('hp')
                         if _found:
                             self._hp_hwnd = _found
                             self._setup_click_through()
@@ -2490,7 +2521,7 @@ class SAOWebViewGUI:
     def _setup_click_through(self):
         try:
             user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, 'SAO-HP')
+            hwnd = self._plugin_surface_hwnd('hp')
             if not hwnd:
                 # Retry after a short delay if the window isn't ready yet
                 threading.Timer(0.15, self._setup_click_through).start()
@@ -3108,7 +3139,7 @@ class SAOWebViewGUI:
             time.sleep(0.15)
             self._apply_webview2_transparency()  # 二次确保
             # 显示前设 alpha=0, 防止冷启动时 WebView2 未就绪导致黑底闪现
-            self._set_window_alpha('SAO-HP', 0.0)
+            self._set_plugin_surface_alpha('hp', 0.0)
             try:
                 if self.hp_win and not self._hp_visible:
                     self.hp_win.show()
@@ -3141,7 +3172,7 @@ class SAOWebViewGUI:
             # HP 启动时 alpha=0, 0.8s 后淡入 (等待透明应用后再变可见)
             def _reveal_windows():
                 self._hp_reveal_pending = False
-                self._set_window_alpha('SAO-HP', 1.0)
+                self._set_plugin_surface_alpha('hp', 1.0)
                 self._mark_update_popup_ready()
             threading.Timer(0.8, _reveal_windows).start()
             # Safety: re-run _force_hp_to_bottom after a delay in case hwnd
@@ -3168,7 +3199,7 @@ class SAOWebViewGUI:
             threading.Timer(12.0, _late_hp_recovery).start()
             threading.Timer(20.0, _late_hp_recovery).start()
             # 任务栏图标
-            self._set_window_icon('SAO-HP')
+            self._set_plugin_surface_icon('hp')
             self._set_window_icon('SAO Menu')
             self._set_window_icon('SAO-PluginManager')
             self._set_window_icon('SAO-TriggerTimerManager')
@@ -4603,7 +4634,7 @@ class SAOWebViewGUI:
                 pass
 
         try:
-            self._native_fade_window('SAO-HP', duration_ms=240, steps=12)
+            self._native_fade_plugin_surface('hp', duration_ms=240, steps=12)
         except Exception:
             pass
         self._dispatch_webview_extension('before_platform_shutdown')

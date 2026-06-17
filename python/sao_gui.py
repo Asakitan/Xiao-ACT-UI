@@ -2,7 +2,7 @@
 """
 SAO Utils 风格完整 GUI — 独立 UI 壳
 
-包含 SAO PopUpMenu 菜单系统, SAO Alert 对话框, HP 血条进度条,
+包含 SAO PopUpMenu 菜单系统, 通用提示对话框, HP 血条进度条,
 LINK START 入场动画, SAO 风格文件选择器
 """
 

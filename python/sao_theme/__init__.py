@@ -6,7 +6,7 @@
   - MenuBar (圆形图标按钮条, 下落动画, 滚轮切换)
   - LeftInfo (左侧用户信息面板, 展开动画)
   - ChildBar (右侧子菜单, 下拉动画)
-  - SAO Alert (对话框, 宽度展开动画, 文字渐现)
+    - Generic Alert (对话框, 宽度展开动画, 文字渐现)
   - HP Bar (血条进度条, 绿/黄/红渐变)
   - LinkStart (LINK START 粒子入场动画)
 

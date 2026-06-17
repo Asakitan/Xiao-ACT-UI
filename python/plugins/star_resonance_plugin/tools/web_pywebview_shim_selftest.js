@@ -172,11 +172,6 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "ui.exit", "exit_app should map to ui.exit");
 
-  await window.pywebview.api.boss_hp_hit_regions([{ left: 1, top: 2, width: 3, height: 4 }]);
-  last = calls[calls.length - 1];
-  assert(last.name === "ui.boss_hp_hit_regions", "boss_hp_hit_regions command mismatch");
-  assert(last.payload.regions[0].width === 3, "boss_hp_hit_regions regions were not forwarded");
-
   await window.pywebview.api.context_action("exit");
   last = calls[calls.length - 1];
   assert(last.name === "ui.context_action", "context_action command mismatch");

@@ -210,12 +210,6 @@
                 return detail;
             });
         },
-        set_buffmon_enabled: function (enabled) {
-            return call('buffmon.set_enabled', { enabled: !!enabled }).then(normalizeOk);
-        },
-        get_buffmon_enabled: function () {
-            return call('buffmon.get_enabled', {}).then(normalizeOk);
-        },
         request_live_snapshot: function () {
             return call('state.snapshot', {}).then(function (snapshot) {
                 try {

@@ -30,7 +30,7 @@ python ..\build_delta.py --version 2.1.1 --files runtime/sao_gui.py web/menu.htm
 python publish_release.py --version 2.1.1 \
   --package ..\dist\delta\update-2.1.1-runtime-delta.zip \
     --type runtime-delta \
-    --notes "修复 BossHP 闪屏; 新增 DPS 详细视图"
+    --notes "修复覆盖层闪屏; 新增详细视图"
 
 # 强制更新 (低于 minimum 的客户端必须升级才能进入)
 python publish_release.py --version 2.2.0 \

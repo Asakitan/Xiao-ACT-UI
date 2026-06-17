@@ -132,6 +132,12 @@
             set_boss_raid_enabled: function (enabled) {
                 return srCall('bossraid.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
             },
+            set_buffmon_enabled: function (enabled) {
+                return srCall('buffmon.set_enabled', { enabled: !!enabled }).then(srNormalizeOk);
+            },
+            get_buffmon_enabled: function () {
+                return srCall('buffmon.get_enabled', {}).then(srNormalizeOk);
+            },
             activate_boss_raid_profile: function (id) {
                 return srCall('bossraid.profile.set_active', { id: String(id || '') }).then(srNormalizeOk);
             },
