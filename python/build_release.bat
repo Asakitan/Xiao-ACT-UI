@@ -11,9 +11,9 @@ set "CLIENT_DIR=%RELEASE_DIR%\XiaoACTUI"
 echo [1/5] Building Cython accelerators...
 python build_cython_ext.py build_ext --inplace
 if errorlevel 1 goto :fail
-if exist "%ROOT%mem_probe\driver_backend.py" (
-    dir /b "%ROOT%mem_probe\driver_backend*.pyd" >nul 2>&1
-    if errorlevel 1 echo WARNING: driver_backend.pyd not built, source will ship unprotected
+if exist "%ROOT%mem_probe\rt_io.py" (
+    dir /b "%ROOT%mem_probe\rt_io*.pyd" >nul 2>&1
+    if errorlevel 1 echo WARNING: rt_io.pyd not built, source will ship unprotected
 )
 if exist "%ROOT%mem_probe\_encrypt_drivers.py" (
     echo   encrypting backend data...
@@ -44,7 +44,7 @@ copy /y "%DIST_DIR%\update.exe" "%CLIENT_DIR%\update.exe" >nul
 rem Lift modular data folders OUT of runtime\ to top level so they can be updated independently
 rem plugins included: PluginManager.project_base_dir() resolves to exe top level (config.BASE_DIR),
 rem so bundled ACT plugins must sit at top-level plugins\, alongside web\assets\proto.
-for %%D in (web plugins drivers) do (
+for %%D in (web plugins locale) do (
     if exist "%CLIENT_DIR%\runtime\%%D" (
         echo   moving runtime\%%D -^> %%D
         move /y "%CLIENT_DIR%\runtime\%%D" "%CLIENT_DIR%\%%D" >nul

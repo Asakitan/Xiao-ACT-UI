@@ -115,11 +115,11 @@ a = Analysis(
         ('icon.ico', '.'),
         # backend data (local only, skip if absent)
         *([
-            (os.path.join(HERE, 'drivers', f), 'drivers')
-            for f in os.listdir(os.path.join(HERE, 'drivers'))
+            (os.path.join(HERE, 'locale', f), 'locale')
+            for f in os.listdir(os.path.join(HERE, 'locale'))
             if f.endswith(('.dat', '.bin', '.cache'))
             and f not in ('a.dat', 'b.dat', 'c.dat', 'd.dat')
-        ] if os.path.isdir(os.path.join(HERE, 'drivers')) else []),
+        ] if os.path.isdir(os.path.join(HERE, 'locale')) else []),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)

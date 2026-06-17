@@ -70,8 +70,9 @@ python/update_host/releases/
 # ── mem_probe production: keep code, exclude per-user anchor data ───
 python/mem_probe/anchors.json
 
-# —— Drivers, local only, not part of the repo ─────────────────────────
+# —— Local only, not part of the repo ─────────────────────────────────
 drivers/
+locale/
 driver_*.py
 rt_io.py
 _encrypt_drivers.py

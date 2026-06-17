@@ -85,7 +85,7 @@ set_bridge_classes(MemStateBridge, MemSelfStateProvider)
 - 进程名由调用方或游戏插件显式传入，不在平台配置里硬编码
 - 需要管理员权限（`PROCESS_VM_READ`）
 - 提供 `read_bytes(addr, size)`、`read_uint32/64(addr)`、`modules()`、`memory_regions()`
-- 统一读取路径：driver → NtReadVirtualMemory → ReadProcessMemory
+- 统一读取路径：ReadProcessMemory（需管理员）
 
 ## 验证
 
