@@ -1,9 +1,10 @@
 """Star Resonance skillfx_pipeline — GPU SDF shader pipeline (plugin-local).
 
 Moved from platform ``render/skillfx_pipeline.py`` in the 5.0.0 platform/plugin
-separation pass.  The shader file ``shaders/skillfx.frag`` remains at the platform
-level because it is a pure GPU effect (no game naming); the path resolver below
-finds it relative to the project root from the plugin's resident path.
+separation pass.  The shader file now lives with the Star Resonance plugin at
+``plugins/star_resonance_plugin/shaders/skillfx.frag``; the path resolver below
+prefers that plugin-local asset and keeps platform-root paths only as legacy
+compatibility fallbacks.
 
 Public API (preserved):
     pipe = get_skillfx_pipeline()           # None if GPU unavailable
@@ -29,23 +30,40 @@ assert hasattr(_CY_UI, 'unpack_skillfx_params'), (
 
 
 def _resolve_shader_path() -> str:
-    """Find ``shaders/skillfx.frag`` relative to the project root.
+    """Find the plugin-owned ``skillfx.frag`` shader asset.
 
-    Dev mode:   sao_auto/python/plugins/star_resonance_plugin/render/  → 4 up → python/
-    Frozen:     runtime/plugins/star_resonance_plugin/render/          → 4 up → runtime/
-    Also checks sys._MEIPASS and exe dir for fallback compatibility.
+    Dev mode:   sao_auto/python/plugins/star_resonance_plugin/render/  → plugin root
+    Frozen:     runtime/plugins/star_resonance_plugin/render/          → plugin root
+    Also checks sys._MEIPASS and exe dir for frozen plugin layouts, then legacy
+    platform-root shader paths for fallback compatibility.
     """
     HERE = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
-    candidates = [os.path.join(project_root, 'shaders', 'skillfx.frag')]
+    plugin_root = os.path.dirname(HERE)
+    runtime_root = os.path.dirname(os.path.dirname(plugin_root))
+    plugin_shader_rel = os.path.join(
+        'plugins', 'star_resonance_plugin', 'shaders', 'skillfx.frag',
+    )
+    legacy_shader_rel = os.path.join('shaders', 'skillfx.frag')
+    candidates = [
+        os.path.join(plugin_root, 'shaders', 'skillfx.frag'),
+        os.path.join(runtime_root, plugin_shader_rel),
+    ]
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
-        candidates.append(os.path.join(meipass, 'shaders', 'skillfx.frag'))
-        candidates.append(os.path.join(meipass, '_internal', 'shaders', 'skillfx.frag'))
+        candidates.append(os.path.join(meipass, plugin_shader_rel))
+        candidates.append(os.path.join(meipass, '_internal', plugin_shader_rel))
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        candidates.append(os.path.join(exe_dir, 'shaders', 'skillfx.frag'))
-        candidates.append(os.path.join(exe_dir, '_internal', 'shaders', 'skillfx.frag'))
+        candidates.append(os.path.join(exe_dir, plugin_shader_rel))
+        candidates.append(os.path.join(exe_dir, '_internal', plugin_shader_rel))
+    candidates.append(os.path.join(runtime_root, legacy_shader_rel))
+    if meipass:
+        candidates.append(os.path.join(meipass, legacy_shader_rel))
+        candidates.append(os.path.join(meipass, '_internal', legacy_shader_rel))
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidates.append(os.path.join(exe_dir, legacy_shader_rel))
+        candidates.append(os.path.join(exe_dir, '_internal', legacy_shader_rel))
     for p in candidates:
         if os.path.isfile(p):
             return p

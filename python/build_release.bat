@@ -7,9 +7,8 @@ pushd "%ROOT%"
 set "DIST_DIR=%ROOT%dist"
 set "RELEASE_DIR=%DIST_DIR%\release"
 set "CLIENT_DIR=%RELEASE_DIR%\XiaoACTUI"
-set "SERVER_DIR=%RELEASE_DIR%\AutoKeyServer"
 
-echo [1/6] Building Cython accelerators...
+echo [1/5] Building Cython accelerators...
 python build_cython_ext.py build_ext --inplace
 if errorlevel 1 goto :fail
 if exist "%ROOT%mem_probe\driver_backend.py" (
@@ -21,29 +20,21 @@ if exist "%ROOT%mem_probe\_encrypt_drivers.py" (
     python "%ROOT%mem_probe\_encrypt_drivers.py"
 )
 
-echo [2/6] Building XiaoACTUI.exe (onedir + runtime/ contents_directory)...
+echo [2/5] Building XiaoACTUI.exe (onedir + runtime/ contents_directory)...
 pyinstaller --clean --noconfirm XiaoACTUI.spec
 if errorlevel 1 goto :fail
 
-echo [3/6] Building update.exe (standalone helper)...
+echo [3/5] Building update.exe (standalone helper)...
 pyinstaller --clean --noconfirm update.spec
 if errorlevel 1 goto :fail
 
-echo [4/6] Building AutoKeyServer.exe...
-pyinstaller --clean --noconfirm server\AutoKeyServer.spec
-if errorlevel 1 goto :fail
-
-echo [5/6] Preparing release folders...
+echo [4/5] Preparing release folders...
 if exist "%RELEASE_DIR%" rmdir /s /q "%RELEASE_DIR%"
 mkdir "%RELEASE_DIR%"
 mkdir "%CLIENT_DIR%"
-mkdir "%CLIENT_DIR%\exports\auto_keys"
-mkdir "%CLIENT_DIR%\exports\boss_raids"
 mkdir "%CLIENT_DIR%\temp"
-mkdir "%SERVER_DIR%"
-mkdir "%SERVER_DIR%\data"
 
-echo [6/6] Copying binaries + lifting modular folders out of runtime/...
+echo [5/5] Copying binaries + lifting modular folders out of runtime/...
 rem onedir build: dist\XiaoACTUI\ contains XiaoACTUI.exe + runtime\ (renamed _internal)
 xcopy /e /i /y "%DIST_DIR%\XiaoACTUI" "%CLIENT_DIR%" >nul
 
@@ -70,8 +61,6 @@ if not exist "%CLIENT_DIR%\user_plugins" mkdir "%CLIENT_DIR%\user_plugins"
 if exist "%CLIENT_DIR%\runtime\icon.ico" (
     move /y "%CLIENT_DIR%\runtime\icon.ico" "%CLIENT_DIR%\icon.ico" >nul
 )
-
-copy /y "%DIST_DIR%\AutoKeyServer.exe" "%SERVER_DIR%\AutoKeyServer.exe" >nul
 
 echo.
 echo Release created at:

@@ -1,4 +1,4 @@
-// sao_auto/shaders/skillfx.frag — v2.3.0 GUI 渲染链路重置
+// plugins/star_resonance_plugin/shaders/skillfx.frag — v2.3.0 GUI 渲染链路重置
 //
 // Single-pass SDF renderer for SkillFX ring + beam + tail + glow.
 // Replaces _render_ring_layer + _render_beam_layer + _draw_glfx PIL/numpy

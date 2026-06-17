@@ -109,8 +109,6 @@ a = Analysis(
     datas=[
         # Web UI (平台 HTML + 字体)
         ('web', 'web'),
-        # GPU fragment shaders used by plugin-rendered overlays
-        ('shaders', 'shaders'),
         # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
         *collect_plugins(),
         # 图标
@@ -142,9 +140,9 @@ a = Analysis(
         'PIL.ImageFilter',
         'cv2',
         'numpy',
-        # 插件依赖保险: hide_seek_plugin 自带的 CV 引擎以 DATA(.py) 下发, 其
+        # 插件依赖保险: 动态插件可能以 DATA(.py) 下发视觉引擎, 其
         # ``import cv2/numpy/utils.window_locator`` 不在 PyInstaller 静态图内,
-        # 故显式钉住, 保证从主程序获取依赖在冻结包里始终可用。
+        # 故显式钉住, 保证平台提供的通用依赖在冻结包里始终可用。
         'utils.window_locator',
         # 截图
         'mss',

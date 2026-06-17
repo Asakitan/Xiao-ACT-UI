@@ -1,23 +1,23 @@
-# SAO Auto — 游戏 HUD 与自动化
-# 依赖清单 (完全复刻 28midi SAO-UI, 去除 MIDI 功能)
+# SAO Auto — 插件化 HUD 与自动化平台
+# 依赖清单
 
 # ═══ 核心 (与 28midi 一致) ═══
 pywebview>=4.0                  # 透明 WebView HUD (EdgeChromium/WebView2)
 numpy>=1.20                     # 图像处理 / 鱼眼变换
 Pillow>=9.0                     # 截图回退 (PIL.ImageGrab)
 mss>=9.0                        # 高性能截图 (优先)
-windows-capture>=1.4.3          # Windows.Graphics.Capture (DXGI / GPU) — 异步免阻塞抓取游戏窗口，规避 PrintWindow 卡顿
+windows-capture>=1.4.3          # Windows.Graphics.Capture (DXGI / GPU) — 异步免阻塞窗口捕获，规避 PrintWindow 卡顿
 pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
 
 # ═══ 特效 / GPU 渲染 (v2.3.0 GUI 渲染链路重置) ═══
-moderngl>=5.12                  # LinkStart 3D 粒子隧道 + SkillFX SDF shader (OpenGL)
+moderngl>=5.12                  # LinkStart 3D 粒子隧道 + 插件渲染 shader (OpenGL)
 moderngl-window>=2.5            # 透明 borderless overlay 窗口 (替代 Tk Toplevel + ULW 路径)
 glfw>=2.7                       # moderngl-window GLFW backend (Win32 borderless transparent overlay)
 skia-python>=144                # GPU 2D 矢量 / 文字 atlas 烘焙 (BSD-3, Skia m144)
 Cython>=3.0                     # build-time: mandatory _sao_cy*.pyd accelerators
 
 # ═══ 识图 ═══
-opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/技能状态检测
+opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/视觉状态检测
 
 # ═══ 热键 ═══
 pynput>=1.7                     # 全局热键监听
@@ -26,7 +26,7 @@ pynput>=1.7                     # 全局热键监听
 pygame>=2.0                     # SAO 音效系统
 
 # ═══ 抓包数据源 (可选, data_source=packet 时需要) ═══
-zstandard>=0.20                 # zstd 解压 (游戏协议压缩)
+zstandard>=0.20                 # zstd 解压 (数据源压缩)
 # dpkt>=1.9                     # 以太网/IP/TCP 解析 (已内置手动解析, 可选)
-protobuf>=6.31.1               # SyncContainerData / compiled proto 解码 (全量身份字段必需)
+protobuf>=6.31.1               # compiled proto 解码
 # Npcap 驱动需单独安装: https://npcap.com
