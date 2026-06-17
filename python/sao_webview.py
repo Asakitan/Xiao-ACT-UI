@@ -1760,10 +1760,7 @@ class SAOWebViewGUI:
         self._lock_hp_position(1.0)
 
         # ── Phase 2: pywebview ──
-        hp_url = _web_file_uri('hp.html')
         menu_url = _web_file_uri('menu.html')
-        alert_url = _web_file_uri('alert.html')
-        mapbanner_url = _web_file_uri('mapbanner.html')
 
         # HP 固定位置: 平台只按当前显示器/DPI 布局; 目标窗口贴合由插件处理。
         layout_hwnd, layout_rect = 0, None
@@ -1787,85 +1784,12 @@ class SAOWebViewGUI:
         self._hp_target_x = tx0
         self._hp_target_y = ty0
 
-        # HP 悬浮窗 — 初始放在动画起点, 避免 show() 时先闪到错误位置
-        if self._hp_fullscreen:
-            cx, cy = monitor_left, monitor_top
-        else:
-            cx = int(monitor_left + max(0, (_sw - hud_w) / 2))
-            cy = int(monitor_top + max(0, (_sh - 500) / 2))
-
-        hp_w = _sw if self._hp_fullscreen else hud_w
-        hp_h = _sh if self._hp_fullscreen else 500
-        self.hp_win = webview.create_window(
-            'SAO-HP', hp_url,
-            width=hp_w, height=hp_h,
-            x=cx, y=cy,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
         self.menu_win = webview.create_window(
             'SAO Menu', menu_url,
             frameless=True,
             easy_drag=False,
             transparent=True,
             hidden=True,
-            js_api=self._api,
-        )
-
-        alert_w, alert_h = 416, 226
-        self.alert_win = webview.create_window(
-            'SAO Alert', alert_url,
-            width=alert_w, height=alert_h,
-            x=max(0, int((_sw - alert_w) / 2)),
-            y=max(32, int(_sh * 0.16)),
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # Map-name banner — 居中大字横幅 (切换地图时淡入), 纯覆盖层鼠标穿透
-        mapbanner_w = max(640, int(_sw * 0.6))
-        mapbanner_h = 280
-        self.mapbanner_win = webview.create_window(
-            'SAO MapBanner', mapbanner_url,
-            width=self._to_webview_px(mapbanner_w),
-            height=self._to_webview_px(mapbanner_h),
-            x=self._to_webview_px(monitor_left + max(0, int((_sw - mapbanner_w) / 2))),
-            y=self._to_webview_px(monitor_top + max(0, int((_sh - mapbanner_h) / 2))),
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # Mechanic banner — 顶部居中机制提醒堆叠条 (倒计时进度条), 纯覆盖层鼠标穿透
-        mech_banner_url = _web_file_uri('mech_banner.html')
-        # 行宽是 CSS-px(DIP, 560)。窗口尺寸也按 DIP 给, 不再二次除 DPI —
-        # 否则高 DPI 下窗口被缩到 ~400 DIP, 560 行被裁切。只有 x/y(由物理坐标来)需转 DIP。
-        mech_banner_w = 600
-        mech_banner_h = 3 * 64 + 2 * 8 + 12
-        _mb_mon_w = self._to_webview_px(_sw)
-        self.mech_banner_win = webview.create_window(
-            'SAO MechBanner', mech_banner_url,
-            width=mech_banner_w,
-            height=mech_banner_h,
-            x=self._to_webview_px(monitor_left) + max(0, (_mb_mon_w - mech_banner_w) // 2),
-            y=self._to_webview_px(monitor_top) + max(0, int(self._to_webview_px(_sh) * 0.08)),
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
             js_api=self._api,
         )
 
@@ -2373,10 +2297,6 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
-        _apply_for('SAO-HP', self.hp_win)
-        _apply_for('SAO Alert', self.alert_win)
-        _apply_for('SAO MapBanner', self.mapbanner_win)
-        _apply_for('SAO MechBanner', self.mech_banner_win)
         # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
         try:

@@ -367,6 +367,77 @@ class StarResonanceWebViewBridge:
                 reg(surface, win, title=title, **meta)
             return win
 
+        hp_url = _plugin_web_uri('hp.html')
+        hud_w = int(_sw * 0.75)
+        if getattr(o, '_hp_fullscreen', False):
+            hp_x, hp_y = int(monitor_left), int(monitor_top)
+        else:
+            hp_x = int(monitor_left) + max(0, int((_sw - hud_w) / 2))
+            hp_y = int(monitor_top) + max(0, int((_sh - 500) / 2))
+        hp_w = _sw if getattr(o, '_hp_fullscreen', False) else hud_w
+        hp_h = _sh if getattr(o, '_hp_fullscreen', False) else 500
+        o.hp_win = _register('hp', webview_module.create_window(
+            'SAO-HP', hp_url,
+            width=hp_w, height=hp_h,
+            x=hp_x, y=hp_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO-HP', click_through=False, dotnet_transparency=True, on_top=True)
+
+        alert_url = _plugin_web_uri('alert.html')
+        alert_w, alert_h = 416, 226
+        o.alert_win = _register('alert', webview_module.create_window(
+            'SAO Alert', alert_url,
+            width=alert_w, height=alert_h,
+            x=max(0, int((_sw - alert_w) / 2)),
+            y=max(32, int(_sh * 0.16)),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO Alert', click_through=False, dotnet_transparency=True, on_top=True)
+
+        mapbanner_url = _plugin_web_uri('mapbanner.html')
+        mapbanner_w = max(640, int(_sw * 0.6))
+        mapbanner_h = 280
+        o.mapbanner_win = _register('mapbanner', webview_module.create_window(
+            'SAO MapBanner', mapbanner_url,
+            width=o._to_webview_px(mapbanner_w),
+            height=o._to_webview_px(mapbanner_h),
+            x=o._to_webview_px(int(monitor_left) + max(0, int((_sw - mapbanner_w) / 2))),
+            y=o._to_webview_px(int(monitor_top) + max(0, int((_sh - mapbanner_h) / 2))),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO MapBanner', click_through=True, dotnet_transparency=True, on_top=True)
+
+        mech_banner_url = _plugin_web_uri('mech_banner.html')
+        mech_banner_w = 600
+        mech_banner_h = 3 * 64 + 2 * 8 + 12
+        mb_mon_w = o._to_webview_px(_sw)
+        o.mech_banner_win = _register('mech_banner', webview_module.create_window(
+            'SAO MechBanner', mech_banner_url,
+            width=mech_banner_w,
+            height=mech_banner_h,
+            x=o._to_webview_px(int(monitor_left)) + max(0, (mb_mon_w - mech_banner_w) // 2),
+            y=o._to_webview_px(int(monitor_top)) + max(0, int(o._to_webview_px(_sh) * 0.08)),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=o._api,
+        ), 'SAO MechBanner', click_through=True, dotnet_transparency=True, on_top=True)
+
         skillfx_url = _plugin_web_uri('skillfx.html')
         o.skillfx_win = _register('skillfx', webview_module.create_window(
             'SAO SkillFX', skillfx_url,
