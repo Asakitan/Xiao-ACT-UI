@@ -143,6 +143,13 @@ _OWNER_METHODS = (
     '_bump_boss_hp_target_hold', '_boss_monster_usable',
     '_pick_burst_trigger_slot', '_save_game_cache', '_reset_sta_offline_state',
     '_should_show_sta_offline',
+    '_eval_mapbanner', '_eval_mech_banner', '_push_mech_banner',
+    '_setup_mech_banner_click_through', '_position_alert_window',
+    '_show_identity_alert_window', '_hide_identity_alert_window',
+    '_position_mapbanner_window', '_schedule_map_banner',
+    '_show_map_banner_window', '_hide_map_banner_window',
+    '_setup_alert_click_through', '_remove_alert_click_through',
+    '_setup_mapbanner_click_through', '_ensure_mapbanner_on_top',
     '_eval_skillfx', '_eval_boss_hp', '_eval_buff_coverage', '_push_buff_coverage',
     '_calc_boss_hp_geometry', '_refresh_boss_hp_geometry',
     '_eval_dps', '_build_dps_act_snapshot', '_push_dps_act_snapshot',
@@ -575,6 +582,8 @@ class StarResonanceWebViewBridge:
     def initialize_owner_state(self) -> None:
         o = self.owner
         o.skillfx_win = None
+        o.mapbanner_win = None
+        o.mech_banner_win = None
         o.boss_hp_win = None
         o.buff_coverage_win = None
         o.dps_win = None
@@ -615,6 +624,13 @@ class StarResonanceWebViewBridge:
         o._commander_visible = False
         o._commander_api = None
         o._skillfx_hwnd = 0
+        o._mapbanner_hwnd = 0
+        o._mapbanner_nonce = 0
+        o._mapbanner_last_name = ''
+        o._mapbanner_last_ts = 0.0
+        o._mapbanner_timer = None
+        o._mech_banner_hwnd = 0
+        o._mech_banner_shown = False
         o._skillfx_visible = False
         o._skillfx_slot_count = 9
         o._skillfx_layout = None
@@ -2144,6 +2160,8 @@ class StarResonanceWebViewBridge:
         except Exception as exc:
             logger.warning("Star Resonance menu asset injection failed: %s", exc)
         o._apply_plugin_surfaces_transparency()
+        o._set_plugin_surface_alpha('alert', 1.0)
+        self._setup_alert_click_through()
         o._set_plugin_surface_alpha('skillfx', 0.0)
         try:
             if getattr(o, 'skillfx_win', None) and not getattr(o, '_skillfx_visible', False):
@@ -2187,8 +2205,9 @@ class StarResonanceWebViewBridge:
             threading.Timer(delay, _late_panel_recovery).start()
 
         for title in (
-            'SAO SkillFX', 'SAO-BossHP', 'SAO-DPS', 'SAO-BuffCoverage',
-            'SAO-RaidEditor', 'SAO-AutoKeyEditor', 'SAO-Commander',
+            'SAO Alert', 'SAO MapBanner', 'SAO MechBanner', 'SAO SkillFX',
+            'SAO-BossHP', 'SAO-DPS', 'SAO-BuffCoverage', 'SAO-RaidEditor',
+            'SAO-AutoKeyEditor', 'SAO-Commander',
         ):
             o._set_window_icon(title)
         self._setup_boss_hp_click_through()
@@ -2237,6 +2256,7 @@ class StarResonanceWebViewBridge:
     def before_platform_shutdown(self):
         o = self.owner
         for title, duration, steps in (
+            ('SAO Alert', 180, 10),
             ('SAO SkillFX', 180, 10),
             ('SAO-BossHP', 180, 10),
             ('SAO-RaidEditor', 140, 8),
@@ -2644,6 +2664,15 @@ class StarResonanceWebViewBridge:
     def _eval_boss_hp(self, js):
         self.owner._eval_plugin_surface('boss_hp', js)
 
+    def _eval_alert(self, js):
+        self.owner._eval_plugin_surface('alert', js)
+
+    def _eval_mapbanner(self, js):
+        self.owner._eval_plugin_surface('mapbanner', js)
+
+    def _eval_mech_banner(self, js):
+        self.owner._eval_plugin_surface('mech_banner', js)
+
     def _eval_buff_coverage(self, js):
         self.owner._eval_plugin_surface('buffmon', js)
 
@@ -2658,6 +2687,332 @@ class StarResonanceWebViewBridge:
 
     def _eval_commander(self, js):
         self.owner._eval_plugin_surface('commander', js)
+
+    def _sync_surface_hwnd_attr(self, surface: str, attr: str):
+        try:
+            meta = getattr(self.owner, '_plugin_surface_meta', {}).get(surface, {}) or {}
+            hwnd = int(meta.get('hwnd') or 0)
+            if hwnd:
+                setattr(self.owner, attr, hwnd)
+        except Exception:
+            pass
+
+    def _push_mech_banner(self, entry):
+        """机制横幅推一行 (懒显示窗口, 常驻鼠标穿透覆盖层)。"""
+        o = self.owner
+        try:
+            if not getattr(o, 'mech_banner_win', None):
+                return
+            if not getattr(o, '_mech_banner_shown', False):
+                o._mech_banner_shown = True
+                try:
+                    o.mech_banner_win.show()
+                except Exception:
+                    pass
+                self._setup_mech_banner_click_through()
+            payload = json.dumps(entry or {}, ensure_ascii=False)
+            self._eval_mech_banner(
+                f'if (window.MechBanner) MechBanner.push({payload})')
+        except Exception:
+            pass
+
+    def _setup_mech_banner_click_through(self, _wait_retries: int = 20):
+        """Make mechanic banner overlay fully click-through (纯覆盖层)。"""
+        self.owner._set_plugin_surface_click_through(
+            'mech_banner', enabled=True, wait_retries=_wait_retries)
+        self._sync_surface_hwnd_attr('mech_banner', '_mech_banner_hwnd')
+
+    def _ensure_alert_on_top(self):
+        self.owner._ensure_plugin_surface_on_top('alert')
+        self._sync_surface_hwnd_attr('alert', '_alert_hwnd')
+
+    def _calc_alert_window_rect(self, width: int = 416, height: int = 226):
+        left, top, right, bottom = self.owner._get_window_monitor_work_area('SAO-HP')
+        work_w = max(width, right - left)
+        work_h = max(height, bottom - top)
+        x = left + max(0, int((work_w - width) / 2))
+        y = top + max(28, int(work_h * 0.16))
+        max_y = bottom - height - 28
+        if max_y >= top:
+            y = min(y, max_y)
+        return int(x), int(y), int(width), int(height)
+
+    def _position_alert_window(self):
+        o = self.owner
+        if not getattr(o, 'alert_win', None):
+            return
+        x, y, width, height = self._calc_alert_window_rect()
+        try:
+            o.alert_win.resize(width, height)
+        except Exception:
+            pass
+        try:
+            o.alert_win.move(x, y)
+        except Exception:
+            pass
+
+    def _show_identity_alert_window(self, title: str, message: str,
+                                    duration_ms: int = 9000,
+                                    play_sound: bool = True,
+                                    alert_kind: str = 'generic'):
+        o = self.owner
+        if not getattr(o, 'alert_win', None):
+            return
+        # v2.1.2-m: 防"alert 一直弹很多次"问题. 调用方很多,
+        # 同一条 (title,message) 在 alert 仍可见 + 4s 窗口内重复触发时,
+        # 直接续展当前 alert, 不再 hide+show 闪一下。
+        try:
+            now_ts = time.time()
+        except Exception:
+            now_ts = 0.0
+        sig = (str(alert_kind or 'generic'), str(title or ''), str(message or ''))
+        last_sig = getattr(o, '_last_alert_sig', None)
+        last_ts = float(getattr(o, '_last_alert_sig_ts', 0.0) or 0.0)
+        if (sig == last_sig
+                and getattr(o, '_identity_alert_visible', False)
+                and (now_ts - last_ts) < 4.0):
+            # 同一条 alert 重复触发: 仅刷新 timestamp / 续 stay 计时, 不重弹
+            o._last_alert_sig_ts = now_ts
+            return
+        o._last_alert_sig = sig
+        o._last_alert_sig_ts = now_ts
+
+        o._identity_alert_visible = True
+        o._identity_alert_kind = str(alert_kind or 'generic')
+        o._identity_alert_nonce = int(getattr(o, '_identity_alert_nonce', 0) or 0) + 1
+        nonce = o._identity_alert_nonce
+        stay_ms = int(duration_ms or 9000)
+        if stay_ms <= 0:
+            stay_ms = 9000
+
+        self._position_alert_window()
+        try:
+            o.alert_win.show()
+        except Exception:
+            pass
+        try:
+            o._apply_webview2_transparency()
+        except Exception:
+            pass
+        # Remove click-through so alert buttons can be clicked while visible
+        self._remove_alert_click_through()
+        o._set_plugin_surface_alpha('alert', 1.0)
+        self._ensure_alert_on_top()
+        if play_sound:
+            o._play_sound('alert')
+
+        safe_title = o._safe_js(title or '提示')
+        safe_message = o._safe_js(message or '')
+
+        def _push():
+            if nonce != int(getattr(o, '_identity_alert_nonce', 0) or 0):
+                return
+            self._eval_alert(
+                f'if (window.AlertPanel && AlertPanel.showAlert) '
+                f'AlertPanel.showAlert("{safe_title}", "{safe_message}")'
+            )
+            self._ensure_alert_on_top()
+
+        _push()
+        threading.Timer(0.35, _push).start()
+        threading.Timer(stay_ms / 1000.0, lambda: self._hide_identity_alert_window(expected_nonce=nonce)).start()
+
+    def _hide_identity_alert_window(self, expected_nonce: int = None, force: bool = False):
+        o = self.owner
+        if not getattr(o, 'alert_win', None):
+            return
+        current_nonce = int(getattr(o, '_identity_alert_nonce', 0) or 0)
+        if expected_nonce is not None and expected_nonce != current_nonce:
+            return
+
+        # While a plugin-registered persistent alert is shown, refuse unforced
+        # external dismiss requests so the plugin's refresh loop keeps it alive.
+        # The plugin's own stop passes force=True to close it. (Stale nonce-
+        # bearing auto-hide timers are already rejected above.)
+        if (not force and expected_nonce is None
+                and o._is_persistent_alert_kind(getattr(o, '_identity_alert_kind', ''))):
+            return
+
+        was_visible = bool(getattr(o, '_identity_alert_visible', False))
+        o._identity_alert_visible = False
+        o._identity_alert_nonce = current_nonce + 1
+        closing_nonce = o._identity_alert_nonce
+
+        if not was_visible:
+            try:
+                o.alert_win.hide()
+            except Exception:
+                pass
+            o._identity_alert_kind = ''
+            self._setup_alert_click_through()
+            return
+
+        o._play_sound('alert_close')
+        self._eval_alert('if (window.AlertPanel && AlertPanel.beginClose) AlertPanel.beginClose()')
+
+        def _finish_hide():
+            if closing_nonce != int(getattr(o, '_identity_alert_nonce', 0) or 0):
+                return
+            try:
+                o.alert_win.hide()
+            except Exception:
+                pass
+            o._identity_alert_kind = ''
+            # Restore click-through so hidden alert window never captures mouse
+            self._setup_alert_click_through()
+
+        threading.Timer(0.52, _finish_hide).start()
+
+    # ── Map-name banner (切换地图中央横幅) ──
+
+    def _position_mapbanner_window(self):
+        """把横幅窗口居中到游戏所在显示器的正中央。"""
+        o = self.owner
+        if not getattr(o, 'mapbanner_win', None):
+            return
+        try:
+            rect = getattr(o, '_hud_monitor_rect', None)
+            if rect:
+                left, top, right, bottom = rect
+            else:
+                left, top = 0, 0
+                right = ctypes.windll.user32.GetSystemMetrics(0)
+                bottom = ctypes.windll.user32.GetSystemMetrics(1)
+            sw = max(1, right - left)
+            sh = max(1, bottom - top)
+            width = max(640, int(sw * 0.6))
+            height = 280
+            x = left + max(0, int((sw - width) / 2))
+            y = top + max(0, int((sh - height) / 2))
+            try:
+                o.mapbanner_win.resize(o._to_webview_px(width), o._to_webview_px(height))
+            except Exception:
+                pass
+            try:
+                o.mapbanner_win.move(o._to_webview_px(x), o._to_webview_px(y))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _schedule_map_banner(self, name: str):
+        """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (WebView)。
+
+        去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
+        吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
+        也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
+        """
+        o = self.owner
+        name = (name or '').strip()
+        if not name or not getattr(o, 'mapbanner_win', None):
+            return
+        now = time.time()
+        last = getattr(o, '_mapbanner_last_name', '')
+        last_ts = float(getattr(o, '_mapbanner_last_ts', 0.0) or 0.0)
+        if name == last and (now - last_ts) < 5.0:
+            return
+        o._mapbanner_last_name = name
+        o._mapbanner_last_ts = now
+        print(f'[MapBanner][webview] schedule name={name!r} (+3s)', flush=True)
+        prev = getattr(o, '_mapbanner_timer', None)
+        if prev is not None:
+            try:
+                prev.cancel()
+            except Exception:
+                pass
+        t = threading.Timer(3.0, lambda n=name: self._show_map_banner_window(n))
+        t.daemon = True
+        o._mapbanner_timer = t
+        t.start()
+
+    def _show_map_banner_window(self, name: str):
+        o = self.owner
+        name = (name or '').strip()
+        if not name or not getattr(o, 'mapbanner_win', None):
+            return
+        o._mapbanner_nonce = int(getattr(o, '_mapbanner_nonce', 0) or 0) + 1
+        nonce = o._mapbanner_nonce
+
+        self._position_mapbanner_window()
+        try:
+            o.mapbanner_win.show()
+        except Exception:
+            pass
+        try:
+            o._apply_webview2_transparency()
+        except Exception:
+            pass
+        o._set_plugin_surface_alpha('mapbanner', 1.0)
+        # 纯覆盖层: 立即设鼠标穿透, 避免拦截游戏点击
+        self._setup_mapbanner_click_through()
+        threading.Timer(0.5, lambda: self._setup_mapbanner_click_through(_wait_retries=0)).start()
+
+        safe_name = o._safe_js(name)
+
+        def _push():
+            if nonce != int(getattr(o, '_mapbanner_nonce', 0) or 0):
+                return
+            self._eval_mapbanner(
+                f'if (window.MapBanner && MapBanner.showBanner) '
+                f'MapBanner.showBanner("{safe_name}")'
+            )
+            self._ensure_mapbanner_on_top()
+
+        _push()
+        threading.Timer(0.35, _push).start()
+        # 显示约 2.6s 后淡出 (与 mapbanner.html 动画时长配合)
+        threading.Timer(3.0, lambda: self._hide_map_banner_window(expected_nonce=nonce)).start()
+
+    def _hide_map_banner_window(self, expected_nonce: int = None):
+        o = self.owner
+        if not getattr(o, 'mapbanner_win', None):
+            return
+        if expected_nonce is not None and expected_nonce != int(getattr(o, '_mapbanner_nonce', 0) or 0):
+            return
+        self._eval_mapbanner('if (window.MapBanner && MapBanner.beginClose) MapBanner.beginClose()')
+        closing_nonce = int(getattr(o, '_mapbanner_nonce', 0) or 0)
+
+        def _finish_hide():
+            if closing_nonce != int(getattr(o, '_mapbanner_nonce', 0) or 0):
+                return
+            try:
+                o.mapbanner_win.hide()
+            except Exception:
+                pass
+
+        threading.Timer(0.6, _finish_hide).start()
+
+    def _setup_alert_click_through(self):
+        """Make alert window fully click-through (WS_EX_TRANSPARENT).
+
+        Default state: always click-through. Temporarily removed
+        when an alert is actively showing so buttons can be clicked.
+        """
+        self.owner._set_plugin_surface_click_through('alert', enabled=True)
+        self._sync_surface_hwnd_attr('alert', '_alert_hwnd')
+
+    def _remove_alert_click_through(self):
+        """Temporarily remove WS_EX_TRANSPARENT so alert buttons are clickable."""
+        self.owner._set_plugin_surface_click_through('alert', enabled=False)
+        self._sync_surface_hwnd_attr('alert', '_alert_hwnd')
+
+    def _setup_mapbanner_click_through(self, _wait_retries: int = 20):
+        """Make Map-name banner overlay fully click-through (纯覆盖层, 永不挡点击)."""
+        self.owner._set_plugin_surface_click_through(
+            'mapbanner', enabled=True, wait_retries=_wait_retries, ensure_on_top=True)
+        self._sync_surface_hwnd_attr('mapbanner', '_mapbanner_hwnd')
+
+    def _ensure_mapbanner_on_top(self):
+        self.owner._ensure_plugin_surface_on_top('mapbanner')
+        self._sync_surface_hwnd_attr('mapbanner', '_mapbanner_hwnd')
+
+    def maintain_transient_surfaces(self):
+        self._setup_mapbanner_click_through(_wait_retries=0)
+        if not getattr(self.owner, '_identity_alert_visible', False):
+            self._setup_alert_click_through()
+
+    def show_platform_notice(self, title: str, message: str, duration_ms: int = 5000):
+        self._show_identity_alert_window(title, message, duration_ms)
 
     def _push_buff_coverage(self, gs, buf_list):
         o = self.owner
