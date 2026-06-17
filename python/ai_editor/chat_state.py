@@ -96,7 +96,7 @@ class Conversation:
                 msgs.append(m.to_api_dict())
             self._api_cache = msgs
             self._api_cache_ver = self._msg_version
-            return msgs
+            return list(msgs)
 
     def clear(self) -> None:
         with self._lock:
@@ -137,6 +137,8 @@ class ChatController:
         self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
         self._agent_mode: bool = False
         self._disabled_tools: set = set()
+        self._tool_result_cache: Dict[str, str] = {}
+        self._tool_result_cache_keys: List[str] = []
 
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
@@ -351,10 +353,24 @@ class ChatController:
                                     self.on_tool_end(tc.id, result)
                                 continue
 
-                    if tc.name.startswith("mcp_") and self.mcp_dispatch:
+                    cache_key = f"{tc.name}:{tc.arguments}"
+                    cached = self._tool_result_cache.get(cache_key)
+                    if cached is not None and tc.name in _READ_ONLY_TOOLS:
+                        result = cached
+                    elif tc.name.startswith("mcp_") and self.mcp_dispatch:
                         result = self.mcp_dispatch(tc.name, tc.arguments)
                     else:
                         result = self.registry.execute(tc.name, tc.arguments)
+
+                    result = _compress_tool_result(result, tc.name)
+
+                    if tc.name in _READ_ONLY_TOOLS:
+                        self._tool_result_cache[cache_key] = result
+                        self._tool_result_cache_keys.append(cache_key)
+                        if len(self._tool_result_cache_keys) > 50:
+                            old = self._tool_result_cache_keys.pop(0)
+                            self._tool_result_cache.pop(old, None)
+
                     tc.result = result
 
                     tool_msg = ChatMessage(
@@ -426,3 +442,42 @@ class ChatController:
                 d["tool_name"] = m.tool_name
             data.append(d)
         return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool result compression (VSCode pattern: >1024 chars → compressed)
+# ---------------------------------------------------------------------------
+
+_MIN_COMPRESSIBLE = 1024
+_MAX_COMPRESSED = 3000
+
+_READ_ONLY_TOOLS = frozenset({
+    "readFile", "listFiles", "searchFiles",
+    "editor_getContent", "editor_getSelection", "editor_getLanguage",
+})
+
+_STRUCTURED_PREFIXES = ('{', '[', '---', '<!', '<?xml')
+
+
+def _compress_tool_result(result: str, tool_name: str) -> str:
+    if not result or len(result) <= _MIN_COMPRESSIBLE:
+        return result
+    stripped = result.lstrip()
+    if any(stripped.startswith(p) for p in _STRUCTURED_PREFIXES):
+        try:
+            json.loads(result)
+            return result
+        except (json.JSONDecodeError, ValueError):
+            pass
+    before = len(result)
+    lines = result.split("\n")
+    if len(lines) > 80:
+        head = "\n".join(lines[:30])
+        tail = "\n".join(lines[-15:])
+        result = (f"{head}\n\n[... {len(lines) - 45} lines omitted, "
+                  f"{before} → ~{len(head) + len(tail) + 80} chars. "
+                  f"Use readFile for full content ...]\n\n{tail}")
+    elif before > _MAX_COMPRESSED:
+        result = (result[:_MAX_COMPRESSED]
+                  + f"\n\n[Output compressed: {before} → {_MAX_COMPRESSED} chars]")
+    return result

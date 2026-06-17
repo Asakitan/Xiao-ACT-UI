@@ -75,6 +75,36 @@ MODEL_CONTEXT_WINDOWS: Dict[str, Dict[str, int]] = {
     "qwen2.5":                  {"max_input": 128000, "max_output": 8192},
 }
 
+MODEL_CAPABILITIES: Dict[str, Dict[str, bool]] = {
+    "gpt-4o":                   {"tools": True, "vision": True, "thinking": False, "streaming": True},
+    "gpt-4o-mini":              {"tools": True, "vision": True, "thinking": False, "streaming": True},
+    "o1":                       {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "o3":                       {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "o3-mini":                  {"tools": True, "vision": False, "thinking": True, "streaming": True},
+    "o4-mini":                  {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "codex-mini-latest":        {"tools": True, "vision": False, "thinking": True, "streaming": True},
+    "claude-sonnet-4-20250514": {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "claude-opus-4-20250514":   {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "claude-haiku-3-5":         {"tools": True, "vision": True, "thinking": False, "streaming": True},
+    "claude-3-5-sonnet":        {"tools": True, "vision": True, "thinking": True, "streaming": True},
+    "deepseek-chat":            {"tools": True, "vision": False, "thinking": False, "streaming": True},
+    "deepseek-coder":           {"tools": True, "vision": False, "thinking": False, "streaming": True},
+    "deepseek-reasoner":        {"tools": True, "vision": False, "thinking": True, "streaming": True},
+    "llama3.1":                 {"tools": True, "vision": False, "thinking": False, "streaming": True},
+    "qwen2.5":                  {"tools": True, "vision": True, "thinking": False, "streaming": True},
+}
+
+
+def get_model_capabilities(model: str) -> Dict[str, bool]:
+    """Return per-model feature flags. Unknown models get conservative defaults."""
+    if model in MODEL_CAPABILITIES:
+        return dict(MODEL_CAPABILITIES[model])
+    for prefix, caps in MODEL_CAPABILITIES.items():
+        if model.startswith(prefix.rsplit("-", 1)[0]):
+            return dict(caps)
+    return {"tools": True, "vision": False, "thinking": False, "streaming": True}
+
+
 COMPACTION_RATIO = 0.9
 
 _custom_models: Dict[str, Dict[str, int]] = {}

@@ -349,6 +349,8 @@ class ExtensionPoints:
         self._configurations: List[Dict[str, Any]] = []
         self._views: Dict[str, List[Dict[str, Any]]] = {}
         self._view_containers: Dict[str, List[Dict[str, Any]]] = {}
+        self._chat_sessions: List[Dict[str, Any]] = []
+        self._lm_providers: List[Dict[str, Any]] = []
 
     def process(self, ext: ExtensionDescription) -> None:
         c = ext.contributes
@@ -413,6 +415,18 @@ class ExtensionPoints:
                         v["_extensionId"] = eid
                         self._views.setdefault(loc, []).append(v)
 
+        for cs in c.get("chatSessions", []):
+            if isinstance(cs, dict):
+                cs = dict(cs)
+                cs["_extensionId"] = eid
+                self._chat_sessions.append(cs)
+
+        for lmp in c.get("languageModelChatProviders", []):
+            if isinstance(lmp, dict):
+                lmp = dict(lmp)
+                lmp["_extensionId"] = eid
+                self._lm_providers.append(lmp)
+
         menus = c.get("menus", {})
         if isinstance(menus, dict):
             for ctx, items in menus.items():
@@ -436,6 +450,9 @@ class ExtensionPoints:
             "commands": self._commands.list_commands(),
             "chatParticipants": len(self._chat_participants),
             "languageModelTools": len(self._lm_tools),
+            "languageModelToolSets": len(self._lm_tool_sets),
+            "chatSessions": len(self._chat_sessions),
+            "languageModelChatProviders": len(self._lm_providers),
             "keybindings": len(self._keybindings),
             "configurations": len(self._configurations),
             "views": sum(len(v) for v in self._views.values()),

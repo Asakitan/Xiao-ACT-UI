@@ -287,7 +287,9 @@ class VscodeNamespace:
         self._auth_providers: Dict[str, Any] = {}
         self._auth_sessions: Dict[str, List[AuthenticationSession]] = {}
         self._variables: Dict[str, Callable] = {}
+        self._lm_providers: Dict[str, Any] = {}
         self._config_change_emitter = EventEmitter()
+        self._tools_change_emitter = EventEmitter()
 
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
@@ -411,7 +413,12 @@ class VscodeNamespace:
         return {
             "selectChatModels": self._select_chat_models,
             "registerTool": self._register_lm_tool,
+            "registerToolDefinition": self._register_tool_definition,
+            "registerLanguageModelChatProvider": self._register_lm_provider,
+            "invokeTool": self._invoke_tool,
+            "getTools": lambda: list(self._lm_tools.keys()),
             "onDidChangeChatModels": EventEmitter().event,
+            "onDidChangeTools": self._tools_change_emitter.event,
             "tools": self._lm_tools,
         }
 
@@ -437,7 +444,38 @@ class VscodeNamespace:
 
     def _register_lm_tool(self, name: str, tool: Any) -> Disposable:
         self._lm_tools[name] = tool
+        self._tools_change_emitter.fire({"added": name})
+        def _dispose():
+            self._lm_tools.pop(name, None)
+            self._tools_change_emitter.fire({"removed": name})
+        return Disposable(_dispose)
+
+    def _register_tool_definition(self, name: str, schema: Dict) -> Disposable:
+        """Register a tool by JSON schema (no handler yet — stub until invokeTool wires it)."""
+        self._lm_tools[name] = {"schema": schema, "stub": True}
+        self._tools_change_emitter.fire({"added": name})
         return Disposable(lambda: self._lm_tools.pop(name, None))
+
+    def _register_lm_provider(self, provider_id: str, provider: Any,
+                               metadata: Dict = None) -> Disposable:
+        """Register a language model chat provider (extension-contributed model)."""
+        self._lm_providers[provider_id] = {
+            "provider": provider, "metadata": metadata or {}}
+        return Disposable(lambda: self._lm_providers.pop(provider_id, None))
+
+    def _invoke_tool(self, name: str, input_data: Any = None,
+                      token: Any = None) -> Any:
+        tool = self._lm_tools.get(name)
+        if not tool:
+            raise KeyError(f"Tool not found: {name}")
+        if isinstance(tool, dict) and tool.get("stub"):
+            return LanguageModelToolResult.text(f"[stub] {name}")
+        if hasattr(tool, "invoke"):
+            opts = LanguageModelToolInvocationOptions(input=input_data)
+            return tool.invoke(opts, token)
+        if callable(tool):
+            return tool(input_data)
+        return LanguageModelToolResult.text(f"[no handler] {name}")
 
     # ── chat ──
 
