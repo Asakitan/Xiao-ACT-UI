@@ -88,17 +88,18 @@ public sealed class UiRunner
             };
         }
 
-        // S156 — share a single AutoKeyProfileService across HUD / future
-        // editor by constructing it once and registering its bridge
-        // handlers on the WebBridge router.
-        using var autoKeyProfile = new AutoKeyProfileLifecycle(_settings, _states);
-        webBridge.AttachAutoKeyProfile(autoKeyProfile);
+        // S156/S204 — register game-facing WebView commands through the
+        // contributor seam so the host composition mirrors Python's plugin
+        // runtime injection boundary.
+        webBridge.AttachContributor(new AutoKeyProfileContributor(), _settings);
         // S169 — wire the declared-but-unhandled HUD commands. BuffMon
         // toggle + DPS reset/last-report are scoped to the bridge
         // runtime (no per-host state); recognition is attached inside
         // the host loop below, once `recognition` is in scope.
         webBridge.AttachBuffMon(_settings);
-        webBridge.AttachDps(packets.ResetDps, packets.DpsSnapshotProvider, _settings);
+        webBridge.AttachContributor(
+            new DpsContributor(packets.ResetDps, packets.DpsSnapshotProvider, packets.DpsTracker),
+            _settings);
         webBridge.AttachHudSettings(_settings);
         webBridge.AttachMenuState(_settings, _states);
         // S172 — best-effort updater pipeline. Settings-gated by
@@ -113,16 +114,18 @@ public sealed class UiRunner
         // HttpClient via the default-ctor branch.
         // S180 — base URLs honor `auto_key.server_url` / `boss_raid.server_url`
         // from settings (with the canonical defaults as fallback).
-        using var autoKeyCloud = AutoKeyCloudClient.FromSettings(_settings);
         // S182 — pass settings so successful searches persist as
         // `auto_key.last_remote_search` for editor restore on next boot.
-        webBridge.AttachAutoKeyCloud(autoKeyCloud, _settings, s => AutoKeyCloudClient.FromSettings(s));
+        webBridge.AttachContributor(
+            new AutoKeyCloudContributor(s => AutoKeyCloudClient.FromSettings(s)),
+            _settings);
 
-        using var bossRaidCloud = BossRaidCloudClient.FromSettings(_settings);
         // S183 — same persistence shape as S182's auto-key.
-        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings, s => BossRaidCloudClient.FromSettings(s), _states);
+        webBridge.AttachContributor(
+            new BossRaidCloudContributor(s => BossRaidCloudClient.FromSettings(s)),
+            _settings);
         var bossRaidEngine = new BossRaidEngine();
-        webBridge.AttachBossRaidRuntime(bossRaidEngine, _settings, _states);
+        webBridge.AttachContributor(new BossRaidRuntimeContributor(bossRaidEngine), _settings);
 
         // S193 — sound playback bridge for the pywebview shim.
         // Catalog points at assets/sounds (deployed by S185); player is
@@ -148,7 +151,7 @@ public sealed class UiRunner
                 catch { /* swallow */ }
             });
         webBridge.AttachFilePicker(settings: _settings, states: _states);
-        webBridge.AttachActRuntime(_settings, _states);
+        webBridge.AttachContributor(new ActRuntimeContributor(), _settings);
 
         var application = (System.Windows.Application.Current as App) ?? new App();
         application.DispatcherUnhandledException += (_, e) =>
