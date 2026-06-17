@@ -94,6 +94,28 @@ def test_imports() -> None:
         _check("extension_host", False, str(e))
 
     try:
+        from ai_editor.vscode_api import (
+            VscodeNamespace, LanguageModelChat, ChatParticipant,
+            ChatRequest, ChatContext, ChatResponseStream,
+            WorkspaceConfiguration, AuthenticationSession,
+        )
+        _check("vscode_api", True)
+    except Exception as e:
+        _check("vscode_api", False, str(e))
+
+    try:
+        from ai_editor.auth import AuthService, AuthSession, get_auth_service
+        _check("auth", True)
+    except Exception as e:
+        _check("auth", False, str(e))
+
+    try:
+        from ai_editor.claude_proxy import ClaudeProxy
+        _check("claude_proxy", True)
+    except Exception as e:
+        _check("claude_proxy", False, str(e))
+
+    try:
         from gui_modules.sao_gui_ai_editor import AIEditorPanel
         _check("sao_gui_ai_editor", True)
     except Exception as e:
@@ -448,6 +470,149 @@ def test_extension_host() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_vscode_api() -> None:
+    print("── VSCode API ──")
+    from ai_editor.extension_host import ExtensionHost
+    from ai_editor.vscode_api import (
+        VscodeNamespace, LanguageModelChat, ChatParticipant,
+        ChatRequest, ChatContext, ChatResponseStream, ChatResult,
+        WorkspaceConfiguration, LanguageModelToolResult,
+    )
+
+    host = ExtensionHost()
+    ns = VscodeNamespace(host)
+    api = ns.build()
+
+    # Namespace structure
+    _check("api.commands", "registerCommand" in api["commands"])
+    _check("api.window", "showInformationMessage" in api["window"])
+    _check("api.workspace", "getConfiguration" in api["workspace"])
+    _check("api.env", api["env"]["appName"] == "SAO AI Editor")
+    _check("api.lm", "selectChatModels" in api["lm"])
+    _check("api.chat", "createChatParticipant" in api["chat"])
+    _check("api.authentication", "getSession" in api["authentication"])
+
+    # Types
+    _check("api.Position", api["Position"] is not None)
+    _check("api.Uri", api["Uri"] is not None)
+    _check("api.Disposable", api["Disposable"] is not None)
+
+    # Commands via namespace
+    box = []
+    api["commands"]["registerCommand"]("test.api", lambda: box.append(1) or "ok")
+    r = api["commands"]["executeCommand"]("test.api")
+    _check("ns.commands.execute", r == "ok" and box == [1])
+
+    # Chat participant
+    handler_calls = []
+    def my_handler(req, ctx, stream, token):
+        handler_calls.append(req.prompt)
+        stream.markdown("**Hello**")
+        return ChatResult()
+    cp = api["chat"]["createChatParticipant"]("test-bot", my_handler)
+    _check("createChatParticipant", cp.id == "test-bot")
+    _check("participant in registry", "test-bot" in ns.chat_participants)
+
+    req = ChatRequest(prompt="Hi there")
+    ctx = ChatContext()
+    stream = ChatResponseStream()
+    cp.request_handler(req, ctx, stream, None)
+    _check("participant.handler called", handler_calls == ["Hi there"])
+    _check("stream.content", stream.get_content() == "**Hello**")
+
+    # LM tool
+    class MyTool:
+        def invoke(self, options, token):
+            return LanguageModelToolResult.text(f"result:{options.input}")
+    dispose = api["lm"]["registerTool"]("my_tool", MyTool())
+    _check("registerTool", "my_tool" in ns.registered_tools)
+    dispose.dispose()
+    _check("tool disposed", "my_tool" not in ns.registered_tools)
+
+    # Variable
+    api["chat"]["registerVariable"]("testvar", "A test variable",
+                                     lambda: "var_value")
+    _check("registerVariable", "testvar" in ns.variables)
+
+    # Configuration
+    cfg = api["workspace"]["getConfiguration"]("ai_editor")
+    _check("getConfiguration", isinstance(cfg, WorkspaceConfiguration))
+
+    # selectChatModels (no engine)
+    models = api["lm"]["selectChatModels"]()
+    _check("selectChatModels (no engine)", len(models) == 0)
+
+    # LanguageModelChat
+    lm = LanguageModelChat(id="test-model", name="Test", vendor="test",
+                            max_input_tokens=100000)
+    _check("LM.countTokens", lm.count_tokens("Hello world") > 0)
+
+
+def test_auth() -> None:
+    print("── Auth ──")
+    import tempfile, shutil
+    from ai_editor.auth import AuthService, AuthSession
+
+    tmpdir = tempfile.mkdtemp(prefix="sao_auth_test_")
+    try:
+        svc = AuthService(storage_dir=tmpdir)
+
+        # No sessions initially
+        _check("no sessions", len(svc.list_sessions()) == 0)
+
+        # Create from token
+        s = svc.create_session_from_token("github", "ghp_test123", "TestUser")
+        _check("session created", s.access_token == "ghp_test123")
+        _check("session listed", len(svc.list_sessions("github")) == 1)
+
+        # Get session
+        got = svc.get_session("github")
+        _check("get_session", got is not None and got.access_token == "ghp_test123")
+
+        # Get session wrong provider
+        _check("get_session miss", svc.get_session("bitbucket") is None)
+
+        # Persistence
+        svc2 = AuthService(storage_dir=tmpdir)
+        _check("persisted", len(svc2.list_sessions("github")) == 1)
+
+        # Remove
+        ok = svc.remove_session("github", s.id)
+        _check("remove", ok and len(svc.list_sessions("github")) == 0)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_claude_proxy() -> None:
+    print("── Claude Proxy ──")
+    from ai_editor.claude_proxy import ClaudeProxy
+
+    proxy = ClaudeProxy()
+    _check("not running", not proxy.is_running)
+    _check("no base_url", proxy.base_url == "")
+    _check("has nonce", len(proxy.nonce) == 32)
+
+    port = proxy.start()
+    _check("started", proxy.is_running and port > 0)
+    _check("base_url", "127.0.0.1" in proxy.base_url)
+
+    env = proxy.get_env()
+    _check("env vars", "ANTHROPIC_BASE_URL" in env and "ANTHROPIC_API_KEY" in env)
+
+    # Health check
+    import urllib.request
+    try:
+        r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+        data = json.loads(r.read())
+        _check("health endpoint", data.get("status") == "ok")
+    except Exception as e:
+        _check("health endpoint", False, str(e))
+
+    proxy.stop()
+    _check("stopped", not proxy.is_running)
+
+
 def test_agents() -> None:
     print("── Agents ──")
     import tempfile, shutil
@@ -641,6 +806,9 @@ def main() -> None:
     test_instructions()
     test_scopes()
     test_extension_host()
+    test_vscode_api()
+    test_auth()
+    test_claude_proxy()
     test_agents()
     test_workflows()
     test_tk_window()

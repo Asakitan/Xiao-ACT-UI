@@ -122,6 +122,14 @@ class AIEditorAPI:
         self._ext_host = get_extension_host()
         self._init_extension_host()
 
+        # VSCode API namespace
+        from ai_editor.vscode_api import VscodeNamespace
+        self._vscode_ns = VscodeNamespace(
+            self._ext_host, self._engine, self._settings_getter)
+
+        # Claude proxy (lazy — started on first CC provider use)
+        self._claude_proxy = None
+
         # Agent & Workflow registries
         from ai_editor.agents import get_agent_registry
         from ai_editor.workflows import get_workflow_registry, WorkflowEngine
@@ -748,6 +756,100 @@ class AIEditorAPI:
     def list_commands(self) -> Dict:
         self._ensure_engine()
         return {"commands": self._ext_host.commands.list_commands()}
+
+    # ── VSCode API ──
+
+    def get_vscode_api(self) -> Dict:
+        """Return summary of the vscode.* namespace state."""
+        self._ensure_engine()
+        return {
+            "chat_participants": list(self._vscode_ns.chat_participants.keys()),
+            "lm_tools": list(self._vscode_ns.registered_tools.keys()),
+            "variables": list(self._vscode_ns.variables.keys()),
+            "commands": self._ext_host.commands.list_commands(),
+        }
+
+    def invoke_chat_participant(self, participant_id: str,
+                                 prompt: str) -> Dict:
+        """Invoke a registered chat participant's handler."""
+        self._ensure_engine()
+        from ai_editor.vscode_api import (
+            ChatRequest, ChatContext, ChatResponseStream)
+        cp = self._vscode_ns.chat_participants.get(participant_id)
+        if not cp:
+            return {"error": f"Participant not found: {participant_id}"}
+        req = ChatRequest(prompt=prompt)
+        ctx = ChatContext()
+        parts = []
+        stream = ChatResponseStream(lambda kind, val: parts.append(val))
+        try:
+            result = cp.request_handler(req, ctx, stream, None)
+            return {"ok": True, "content": stream.get_content(),
+                    "result": str(result) if result else None}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def invoke_lm_tool(self, tool_name: str, input_data: Any = None) -> Dict:
+        """Invoke a registered LM tool."""
+        self._ensure_engine()
+        from ai_editor.vscode_api import LanguageModelToolInvocationOptions
+        tool = self._vscode_ns.registered_tools.get(tool_name)
+        if not tool:
+            return {"error": f"Tool not found: {tool_name}"}
+        opts = LanguageModelToolInvocationOptions(input=input_data)
+        try:
+            result = tool.invoke(opts, None)
+            if hasattr(result, "content"):
+                return {"ok": True, "content": result.content}
+            return {"ok": True, "result": str(result)}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # ── Authentication ──
+
+    def list_auth_sessions(self, provider_id: str = "") -> Dict:
+        from ai_editor.auth import get_auth_service
+        sessions = get_auth_service().list_sessions(provider_id)
+        return {"sessions": [s.to_dict() for s in sessions]}
+
+    def create_auth_session(self, provider_id: str, token: str,
+                             label: str = "") -> Dict:
+        from ai_editor.auth import get_auth_service
+        session = get_auth_service().create_session_from_token(
+            provider_id, token, label)
+        return {"ok": True, "session": session.to_dict()}
+
+    def remove_auth_session(self, provider_id: str,
+                             session_id: str) -> Dict:
+        from ai_editor.auth import get_auth_service
+        ok = get_auth_service().remove_session(provider_id, session_id)
+        return {"ok": ok}
+
+    # ── Claude Proxy ──
+
+    def start_claude_proxy(self) -> Dict:
+        """Start the local Anthropic-compatible proxy for Claude Code SDK."""
+        self._ensure_engine()
+        if self._claude_proxy and self._claude_proxy.is_running:
+            return {"ok": True, "port": self._claude_proxy.port,
+                    "base_url": self._claude_proxy.base_url}
+        from ai_editor.claude_proxy import ClaudeProxy
+        self._claude_proxy = ClaudeProxy(self._engine)
+        port = self._claude_proxy.start()
+        return {"ok": True, "port": port,
+                "base_url": self._claude_proxy.base_url,
+                "env": self._claude_proxy.get_env()}
+
+    def stop_claude_proxy(self) -> Dict:
+        if self._claude_proxy:
+            self._claude_proxy.stop()
+        return {"ok": True}
+
+    def get_claude_proxy_status(self) -> Dict:
+        if self._claude_proxy and self._claude_proxy.is_running:
+            return {"running": True, "port": self._claude_proxy.port,
+                    "base_url": self._claude_proxy.base_url}
+        return {"running": False}
 
     def install_extension_dir(self, ext_dir: str) -> Dict:
         self._ensure_engine()
