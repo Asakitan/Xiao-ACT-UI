@@ -406,9 +406,19 @@ def delete_instruction_file(name: str,
     return {"ok": False, "error": "File not found"}
 
 
+# Cache for agent/workflow prompt sections — rebuild only when registry changes
+_agent_prompt_cache: str = ""
+_agent_prompt_version: int = -1
+_workflow_prompt_cache: str = ""
+_workflow_prompt_version: int = -1
+
+
 def get_system_prompt(agent_mode: bool = False, custom: str = "",
                       settings_getter=None) -> str:
     """Build the system prompt for a conversation."""
+    global _agent_prompt_cache, _agent_prompt_version
+    global _workflow_prompt_cache, _workflow_prompt_version
+
     if custom:
         return custom
     prompt = SYSTEM_PROMPT
@@ -422,12 +432,22 @@ def get_system_prompt(agent_mode: bool = False, custom: str = "",
         prompt += "\n" + inst
     try:
         from ai_editor.agents import get_agent_registry
-        prompt += get_agent_registry().to_prompt_section()
+        reg = get_agent_registry()
+        ver = getattr(reg, '_version', 0)
+        if ver != _agent_prompt_version:
+            _agent_prompt_cache = reg.to_prompt_section()
+            _agent_prompt_version = ver
+        prompt += _agent_prompt_cache
     except Exception:
         pass
     try:
         from ai_editor.workflows import get_workflow_registry
-        prompt += get_workflow_registry().to_prompt_section()
+        reg = get_workflow_registry()
+        ver = getattr(reg, '_version', 0)
+        if ver != _workflow_prompt_version:
+            _workflow_prompt_cache = reg.to_prompt_section()
+            _workflow_prompt_version = ver
+        prompt += _workflow_prompt_cache
     except Exception:
         pass
     if agent_mode:

@@ -19,7 +19,13 @@ Permissions per tool:
 from __future__ import annotations
 
 import os
+import time as _time
 from typing import Any, Dict, List, Optional
+
+# Module-level cache for resolve_scopes (avoids repeated filesystem walks)
+_scope_cache_result: Optional[List[Dict[str, Any]]] = None
+_scope_cache_time: float = 0.0
+_SCOPE_CACHE_TTL: float = 30.0
 
 
 def _base_dir() -> str:
@@ -37,7 +43,15 @@ def _home_sao() -> str:
 # ── Scope resolution ──
 
 def resolve_scopes() -> List[Dict[str, Any]]:
-    """Return all scope directories in merge order (system → workspace → plugins)."""
+    """Return all scope directories in merge order (system -> workspace -> plugins).
+
+    Results are cached for 30 seconds to avoid repeated filesystem walks.
+    """
+    global _scope_cache_result, _scope_cache_time
+    now = _time.monotonic()
+    if _scope_cache_result is not None and (now - _scope_cache_time) < _SCOPE_CACHE_TTL:
+        return _scope_cache_result
+
     scopes: List[Dict[str, Any]] = []
 
     scopes.append({
@@ -62,6 +76,8 @@ def resolve_scopes() -> List[Dict[str, Any]]:
                     "label": f"Plugin: {name}", "plugin_id": name,
                 })
 
+    _scope_cache_result = scopes
+    _scope_cache_time = now
     return scopes
 
 

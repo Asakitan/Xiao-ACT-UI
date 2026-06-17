@@ -75,7 +75,9 @@ class AIEditorAPI:
                 for cfg in configs:
                     ok = self._mcp.add_server(cfg)
                     if ok:
-                        print(f"[MCP] Connected: {cfg.id} ({len([t for c in [self._mcp._clients[cfg.id]] for t in c.tools])} tools)")
+                        client = self._mcp._clients.get(cfg.id)
+                        n = len(client.tools) if client else 0
+                        print(f"[MCP] Connected: {cfg.id} ({n} tools)")
         except Exception as exc:
             print(f"[MCP] Init failed: {exc}")
 
@@ -117,10 +119,11 @@ class AIEditorAPI:
         self._provider_controllers: Dict[str, ChatController] = {}
         self._active_provider = "chat"
 
-        # Extension host — scan and activate VSCode extensions
+        # Extension host — lazy init in background thread
         from ai_editor.extension_host import get_extension_host
         self._ext_host = get_extension_host()
-        self._init_extension_host()
+        self._extensions_inited = False
+        threading.Thread(target=self.init_extensions, daemon=True).start()
 
         # VSCode API namespace
         from ai_editor.vscode_api import VscodeNamespace
@@ -162,33 +165,42 @@ class AIEditorAPI:
     # ── Config ──
 
     def _load_config_obj(self) -> ProviderConfig:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
-        if not settings:
-            return ProviderConfig()
-        raw = settings.get("ai_editor", {}) or {}
-        # Load user-defined custom models into the engine
-        custom_models = raw.get("custom_models", {})
-        if isinstance(custom_models, dict) and custom_models:
-            from ai_editor.llm_engine import set_custom_models
-            set_custom_models(custom_models)
-        return ProviderConfig(
-            provider=raw.get("provider", "openai"),
-            api_key=raw.get("api_key", ""),
-            base_url=raw.get("base_url", ""),
-            model=raw.get("model", ""),
-            temperature=raw.get("temperature", 0.7),
-            max_tokens=raw.get("max_tokens", 4096),
-            system_prompt=raw.get("system_prompt", ""),
-            top_p=raw.get("top_p", 1.0),
-            frequency_penalty=raw.get("frequency_penalty", 0.0),
-            presence_penalty=raw.get("presence_penalty", 0.0),
-            stop=raw.get("stop", []),
-            max_input_tokens=raw.get("max_input_tokens", 0),
-            max_output_tokens=raw.get("max_output_tokens", 0),
-            timeout=raw.get("timeout", 180),
-            extra_headers=raw.get("extra_headers", {}),
-            extra_body=raw.get("extra_body", {}),
-        )
+        return load_provider_config(self._gui_ref)
+
+
+def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
+    """Shared helper: build a ProviderConfig from settings.
+
+    Used by both ``AIEditorAPI`` (pywebview) and ``AIEditorBridge``
+    (C# webview) to avoid duplicated config-parsing logic.
+    """
+    settings = getattr(gui_ref, 'settings', None) if gui_ref else None
+    if not settings:
+        return ProviderConfig()
+    raw = settings.get("ai_editor", {}) or {}
+    # Load user-defined custom models into the engine
+    custom_models = raw.get("custom_models", {})
+    if isinstance(custom_models, dict) and custom_models:
+        from ai_editor.llm_engine import set_custom_models
+        set_custom_models(custom_models)
+    return ProviderConfig(
+        provider=raw.get("provider", "openai"),
+        api_key=raw.get("api_key", ""),
+        base_url=raw.get("base_url", ""),
+        model=raw.get("model", ""),
+        temperature=raw.get("temperature", 0.7),
+        max_tokens=raw.get("max_tokens", 4096),
+        system_prompt=raw.get("system_prompt", ""),
+        top_p=raw.get("top_p", 1.0),
+        frequency_penalty=raw.get("frequency_penalty", 0.0),
+        presence_penalty=raw.get("presence_penalty", 0.0),
+        stop=raw.get("stop", []),
+        max_input_tokens=raw.get("max_input_tokens", 0),
+        max_output_tokens=raw.get("max_output_tokens", 0),
+        timeout=raw.get("timeout", 180),
+        extra_headers=raw.get("extra_headers", {}),
+        extra_body=raw.get("extra_body", {}),
+    )
 
     # ── JS-callable methods (window.pywebview.api.*) ──
 
@@ -666,6 +678,13 @@ class AIEditorAPI:
 
     # ── Extension Host API ──
 
+    def init_extensions(self) -> None:
+        """Scan and activate extensions. Safe to call from a background thread."""
+        if self._extensions_inited:
+            return
+        self._extensions_inited = True
+        self._init_extension_host()
+
     def _init_extension_host(self) -> None:
         """Scan extension directories and start the host."""
         try:
@@ -709,7 +728,7 @@ class AIEditorAPI:
                 name=f"ext_{name}",
                 description=tool.get("displayName", name),
                 parameters=schema,
-                handler=lambda **kw, _n=name: {"stub": True, "tool": _n, **kw},
+                handler=lambda _n=name, **kw: {"stub": True, "tool": _n, **kw},
                 category=f"ext:{tool.get('_extensionId', '')}",
             )
         for cp in ep.chat_participants:
@@ -926,7 +945,12 @@ class AIEditorAPI:
             url=config.get("url", ""),
         )
         ok = self._mcp.add_server(cfg)
-        return {"ok": ok, "id": cfg.id, "tools": len(self._mcp._clients.get(cfg.id, type('',(),{'tools':[]})()).tools) if ok else 0}
+        tool_count = 0
+        if ok:
+            client = self._mcp._clients.get(cfg.id)
+            if client:
+                tool_count = len(client.tools)
+        return {"ok": ok, "id": cfg.id, "tools": tool_count}
 
     def remove_mcp_server(self, server_id: str) -> Dict:
         if self._mcp:

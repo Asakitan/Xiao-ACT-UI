@@ -60,11 +60,14 @@ class LanguageModelChat:
                 self._engine.reset_cancel()
                 r = self._engine.chat_completion_stream(
                     messages=api_msgs, tools=tools_schema,
-                    on_delta=lambda d: resp._chunks.append(d.content or ""))
+                    on_delta=lambda d: resp._chunks.append(d.content or "") if d.content else None)
                 resp.text = r.content or ""
+                if not resp._chunks:
+                    resp._chunks = [resp.text] if resp.text else []
                 resp._done = True
             except Exception as exc:
                 resp.text = f"Error: {exc}"
+                resp._chunks = [resp.text]
                 resp._done = True
         return resp
 
@@ -469,13 +472,47 @@ class VscodeNamespace:
         if not tool:
             raise KeyError(f"Tool not found: {name}")
         if isinstance(tool, dict) and tool.get("stub"):
+            schema = tool.get("schema", {})
+            if schema and input_data is not None:
+                self._validate_input_schema(name, input_data, schema)
             return LanguageModelToolResult.text(f"[stub] {name}")
+        # Validate against inputSchema if the tool exposes one
+        if hasattr(tool, "inputSchema") and tool.inputSchema and input_data is not None:
+            self._validate_input_schema(name, input_data, tool.inputSchema)
         if hasattr(tool, "invoke"):
             opts = LanguageModelToolInvocationOptions(input=input_data)
             return tool.invoke(opts, token)
         if callable(tool):
             return tool(input_data)
         return LanguageModelToolResult.text(f"[no handler] {name}")
+
+    @staticmethod
+    def _validate_input_schema(tool_name: str, input_data: Any,
+                               schema: Dict) -> None:
+        """Basic type validation of input against a JSON-Schema-like dict.
+
+        Checks top-level ``type`` and ``required`` fields.  This is intentionally
+        lightweight -- not a full JSON Schema validator.
+        """
+        schema_type = schema.get("type")
+        if schema_type == "object":
+            if not isinstance(input_data, dict):
+                raise TypeError(
+                    f"Tool '{tool_name}' expects object input, "
+                    f"got {type(input_data).__name__}")
+            required = schema.get("required", [])
+            props = schema.get("properties", {})
+            for key in required:
+                if key not in input_data:
+                    raise ValueError(
+                        f"Tool '{tool_name}' missing required field: {key}")
+            for key, val in input_data.items():
+                if key in props and val is not None:
+                    expected = props[key].get("type")
+                    if expected and not _check_json_type(val, expected):
+                        raise TypeError(
+                            f"Tool '{tool_name}' field '{key}': "
+                            f"expected {expected}, got {type(val).__name__}")
 
     # ── chat ──
 
@@ -541,6 +578,24 @@ class VscodeNamespace:
 # ---------------------------------------------------------------------------
 # Helper stubs
 # ---------------------------------------------------------------------------
+
+def _check_json_type(value: Any, expected: str) -> bool:
+    """Check if a Python value matches a JSON Schema type string."""
+    _MAP = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+    py_type = _MAP.get(expected)
+    if py_type is None:
+        return True  # unknown type, pass
+    if expected == "integer" and isinstance(value, bool):
+        return False  # bool is subclass of int in Python
+    return isinstance(value, py_type)
+
 
 def _lm_message(role: int, content: str) -> Dict:
     roles = {0: "system", 1: "user", 2: "assistant"}

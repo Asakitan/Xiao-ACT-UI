@@ -957,8 +957,11 @@ let editorLang='plaintext', editorDirty=false, editorFileName='untitled';
 const LANGUAGES=['plaintext','python','javascript','typescript','json','html','css','markdown',
   'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
 
+let _prevLineCount=1;
 function updateLineNums(){
   const lines=$('editor-text').value.split('\n').length;
+  if(lines===_prevLineCount)return;
+  _prevLineCount=lines;
   $('line-nums').textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
 }
 function updateCursorPos(){
@@ -1272,7 +1275,22 @@ function onStreamEnd(d){
     if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id));
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
   }
-  if(d.usage){updateContextUsage(totalTokens+(d.usage.total_tokens||0))}
+  if(d.usage){
+    updateContextUsage(totalTokens+(d.usage.total_tokens||0));
+    // Parse prompt_tokens_details for tooltip (cached_tokens, reasoning_tokens)
+    const details=d.usage.prompt_tokens_details;
+    if(details){
+      const parts=[];
+      if(details.cached_tokens)parts.push('Cached: '+details.cached_tokens);
+      if(details.reasoning_tokens)parts.push('Reasoning: '+details.reasoning_tokens);
+      if(parts.length){
+        const tip='Prompt: '+(d.usage.prompt_tokens||d.usage.input_tokens||'?')+
+          ' ('+parts.join(', ')+') | Completion: '+(d.usage.completion_tokens||d.usage.output_tokens||'?');
+        const ctxEl=$('ctx-usage');if(ctxEl)ctxEl.title=tip;
+        const tokEl=$('status-tokens');if(tokEl)tokEl.title=tip;
+      }
+    }
+  }
   if(d.model)$('status-model').textContent=d.model;
   currentMsgBody=null;streamBuf='';
   setStatus(d.tool_calls?'Executing tools...':'Ready');
@@ -1408,19 +1426,25 @@ async function execSlash(raw){
 }
 window.execSlash=execSlash;
 
-// Slash popup
+// Slash popup (debounced 100ms)
 const chatInp=$('chat-input'),slashPopup=$('slash-popup');
+let _chatInputTimer=null;
 chatInp.addEventListener('input',function(){
-  const v=this.value;
-  if(v.startsWith('/')&&!v.includes('\n')){
-    const prefix=v.split(/\s/)[0].toLowerCase();
-    const matches=SLASH_CMDS.filter(c=>c[0].startsWith(prefix));
-    if(matches.length){
-      slashPopup.innerHTML=matches.map(c=>'<div class="slash-item" onclick="pickSlash(\''+c[0]+'\')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span></div>').join('');
-      slashPopup.classList.add('open');
+  const self=this;
+  if(_chatInputTimer)clearTimeout(_chatInputTimer);
+  _chatInputTimer=setTimeout(function(){
+    _chatInputTimer=null;
+    const v=self.value;
+    if(v.startsWith('/')&&!v.includes('\n')){
+      const prefix=v.split(/\s/)[0].toLowerCase();
+      const matches=SLASH_CMDS.filter(c=>c[0].startsWith(prefix));
+      if(matches.length){
+        slashPopup.innerHTML=matches.map(c=>'<div class="slash-item" onclick="pickSlash(\''+c[0]+'\')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span></div>').join('');
+        slashPopup.classList.add('open');
+      } else slashPopup.classList.remove('open');
     } else slashPopup.classList.remove('open');
-  } else slashPopup.classList.remove('open');
-  this.style.height='auto';this.style.height=Math.min(this.scrollHeight,180)+'px';
+    self.style.height='auto';self.style.height=Math.min(self.scrollHeight,180)+'px';
+  },100);
 });
 chatInp.addEventListener('keydown',function(e){
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');doSend()}
@@ -1438,6 +1462,7 @@ function switchSidebar(panel){
   if(panel==='settings'){openSettings();return}
   if(panel==='instructions')refreshInstructions();
   if(panel==='agents')refreshAgents();
+  if(panel==='extensions'&&!$('ext-marketplace-list').children.length)searchExtensions('ai');
   const sb=$('sidebar');sb.classList.remove('hidden');
 }
 document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener('click',()=>switchSidebar(i.dataset.panel)));
@@ -2017,21 +2042,7 @@ async function toggleExtInstall(btn,event){
 }
 window.searchExtensions=searchExtensions;
 
-// Switch to extensions sidebar triggers search
-const origSwitch=switchSidebar;
-function switchSidebar(panel){
-  document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
-  document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
-  const view=$('sb-'+panel);if(view)view.style.display='';
-  if(panel==='settings'){openSettings();return}
-  if(panel==='extensions'&&!$('ext-marketplace-list').children.length)searchExtensions('ai');
-  const sb=$('sidebar');sb.classList.remove('hidden');
-}
-document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>{
-  i.removeEventListener('click',i._clickHandler);
-  i._clickHandler=()=>switchSidebar(i.dataset.panel);
-  i.addEventListener('click',i._clickHandler);
-});
+// (switchSidebar already handles extensions auto-search in its single definition above)
 
 // ── Multi-tab editor ──
 let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0}];
@@ -2127,23 +2138,28 @@ $('term-input')&&$('term-input').addEventListener('keydown',function(e){
 const AT_VARS=[['@file','Current file name'],['@selection','Selected text in editor'],
   ['@editor','Full editor content'],['@state','Game state'],['@language','Editor language']];
 
+let _atPopupTimer=null;
 chatInp.addEventListener('input',function(){
-  const v=this.value,pos=this.selectionStart;
-  const before=v.substring(0,pos);
-  const atMatch=before.match(/@(\w*)$/);
-  const slashMatch=v.match(/^\/\w*/);
-  const atPopup=$('at-popup');
-
-  if(atMatch&&!slashMatch){
-    const prefix=atMatch[1].toLowerCase();
-    const matches=AT_VARS.filter(a=>a[0].substring(1).startsWith(prefix));
-    if(matches.length){
-      atPopup.innerHTML=matches.map(a=>
-        '<div class="slash-item" onclick="pickAtVar(\''+a[0]+'\')">'+
-        '<span class="cmd">'+esc(a[0])+'</span><span class="desc">'+esc(a[1])+'</span></div>').join('');
-      atPopup.classList.add('open');
+  if(_atPopupTimer)clearTimeout(_atPopupTimer);
+  const self=this;
+  _atPopupTimer=setTimeout(function(){
+    _atPopupTimer=null;
+    const v=self.value,pos=self.selectionStart;
+    const before=v.substring(0,pos);
+    const atMatch=before.match(/@(\w*)$/);
+    const slashMatch=v.match(/^\/\w*/);
+    const atPopup=$('at-popup');
+    if(atMatch&&!slashMatch){
+      const prefix=atMatch[1].toLowerCase();
+      const matches=AT_VARS.filter(a=>a[0].substring(1).startsWith(prefix));
+      if(matches.length){
+        atPopup.innerHTML=matches.map(a=>
+          '<div class="slash-item" onclick="pickAtVar(\''+a[0]+'\')">'+
+          '<span class="cmd">'+esc(a[0])+'</span><span class="desc">'+esc(a[1])+'</span></div>').join('');
+        atPopup.classList.add('open');
+      } else atPopup.classList.remove('open');
     } else atPopup.classList.remove('open');
-  } else atPopup.classList.remove('open');
+  },100);
 });
 window.pickAtVar=function(v){$('at-popup').classList.remove('open');
   const inp=$('chat-input'),val=inp.value,pos=inp.selectionStart;

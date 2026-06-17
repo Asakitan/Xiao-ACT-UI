@@ -107,16 +107,17 @@ class ExtensionRegistry:
         self._extensions: Dict[str, ExtensionDescription] = {}
         self._activation_map: Dict[str, List[str]] = {}
         self._lock = threading.Lock()
+        self._dirty = True
 
     def register(self, ext: ExtensionDescription) -> None:
         with self._lock:
             self._extensions[ext.id] = ext
-            self._rebuild_activation_map()
+            self._dirty = True
 
     def unregister(self, ext_id: str) -> None:
         with self._lock:
             self._extensions.pop(ext_id, None)
-            self._rebuild_activation_map()
+            self._dirty = True
 
     def get(self, ext_id: str) -> Optional[ExtensionDescription]:
         return self._extensions.get(ext_id)
@@ -126,6 +127,9 @@ class ExtensionRegistry:
 
     def get_for_activation_event(self, event: str) -> List[ExtensionDescription]:
         with self._lock:
+            if self._dirty:
+                self._rebuild_activation_map()
+                self._dirty = False
             ids = self._activation_map.get(event, [])
             star_ids = self._activation_map.get("*", [])
             combined = list(dict.fromkeys(ids + star_ids))
@@ -351,6 +355,13 @@ class ExtensionPoints:
         self._view_containers: Dict[str, List[Dict[str, Any]]] = {}
         self._chat_sessions: List[Dict[str, Any]] = []
         self._lm_providers: List[Dict[str, Any]] = []
+        self._chat_prompt_files: List[Dict[str, Any]] = []
+        self._chat_skills: List[Dict[str, Any]] = []
+        self._mcp_providers: List[Dict[str, Any]] = []
+        self._terminal_profiles: List[Dict[str, Any]] = []
+        self._config_defaults: List[Dict[str, Any]] = []
+        self._chat_welcome: List[Dict[str, Any]] = []
+        self._interactive_sessions: List[Dict[str, Any]] = []
 
     def process(self, ext: ExtensionDescription) -> None:
         c = ext.contributes
@@ -427,6 +438,51 @@ class ExtensionPoints:
                 lmp["_extensionId"] = eid
                 self._lm_providers.append(lmp)
 
+        for cpf in c.get("chatPromptFiles", []):
+            if isinstance(cpf, dict):
+                cpf = dict(cpf)
+                cpf["_extensionId"] = eid
+                self._chat_prompt_files.append(cpf)
+
+        for cs in c.get("chatSkills", []):
+            if isinstance(cs, dict):
+                cs = dict(cs)
+                cs["_extensionId"] = eid
+                self._chat_skills.append(cs)
+
+        for mp in c.get("mcpServerDefinitionProviders", []):
+            if isinstance(mp, dict):
+                mp = dict(mp)
+                mp["_extensionId"] = eid
+                self._mcp_providers.append(mp)
+
+        for tp in c.get("terminal", []):
+            if isinstance(tp, dict):
+                tp = dict(tp)
+                tp["_extensionId"] = eid
+                self._terminal_profiles.append(tp)
+
+        cfg_defaults = c.get("configurationDefaults")
+        if cfg_defaults:
+            items = cfg_defaults if isinstance(cfg_defaults, list) else [cfg_defaults]
+            for item in items:
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item["_extensionId"] = eid
+                    self._config_defaults.append(item)
+
+        for cw in c.get("chatViewsWelcome", []):
+            if isinstance(cw, dict):
+                cw = dict(cw)
+                cw["_extensionId"] = eid
+                self._chat_welcome.append(cw)
+
+        for isess in c.get("interactiveSession", []):
+            if isinstance(isess, dict):
+                isess = dict(isess)
+                isess["_extensionId"] = eid
+                self._interactive_sessions.append(isess)
+
         menus = c.get("menus", {})
         if isinstance(menus, dict):
             for ctx, items in menus.items():
@@ -458,6 +514,13 @@ class ExtensionPoints:
             "views": sum(len(v) for v in self._views.values()),
             "viewContainers": sum(len(v) for v in self._view_containers.values()),
             "menus": sum(len(v) for v in self._menus.values()),
+            "chatPromptFiles": len(self._chat_prompt_files),
+            "chatSkills": len(self._chat_skills),
+            "mcpServerDefinitionProviders": len(self._mcp_providers),
+            "terminalProfiles": len(self._terminal_profiles),
+            "configurationDefaults": len(self._config_defaults),
+            "chatViewsWelcome": len(self._chat_welcome),
+            "interactiveSessions": len(self._interactive_sessions),
         }
 
 

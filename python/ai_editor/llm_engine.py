@@ -150,6 +150,7 @@ class StreamDelta:
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     finish_reason: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
+    refusal: Optional[str] = None
 
 
 @dataclass
@@ -161,6 +162,7 @@ class LLMResponse:
     usage: Dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
     model: str = ""
+    refusal: Optional[str] = None
 
 
 @dataclass
@@ -291,6 +293,10 @@ class LLMEngine:
 
     # -- OpenAI-compatible SSE streaming --
 
+    _RETRYABLE_STATUS = frozenset({429, 500, 502, 503})
+    _MAX_RETRIES = 2
+    _RETRY_BACKOFFS = (1.0, 2.0)
+
     def _stream_openai(
         self,
         cfg: ProviderConfig,
@@ -301,12 +307,25 @@ class LLMEngine:
         body = self._build_body(cfg, messages, tools, stream=True)
         accumulated = LLMResponse(model=cfg.effective_model)
         tool_call_buffers: Dict[int, Dict[str, Any]] = {}
+        _json_buffer: Dict[int, str] = {}  # partial JSON reassembly per tool call index
 
-        try:
-            headers = self._build_headers(cfg)
-            url = f"{cfg.effective_base_url}/chat/completions"
+        headers = self._build_headers(cfg)
+        url = f"{cfg.effective_base_url}/chat/completions"
+        last_exc: Optional[Exception] = None
 
-            with self._client.stream("POST", url, json=body, headers=headers) as resp:
+        for _attempt in range(1 + self._MAX_RETRIES):
+            if _attempt > 0:
+                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                accumulated = LLMResponse(model=cfg.effective_model)
+                tool_call_buffers.clear()
+                _json_buffer.clear()
+            last_exc = None
+            try:
+                import httpx as _httpx
+                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                    if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                        last_exc = Exception(f"HTTP {resp.status_code}")
+                        continue
                     resp.raise_for_status()
                     for line in resp.iter_lines():
                         if self._cancel.is_set():
@@ -331,6 +350,8 @@ class LLMEngine:
                             accumulated.finish_reason = delta.finish_reason
                         if delta.usage:
                             accumulated.usage = delta.usage
+                        if delta.refusal:
+                            accumulated.refusal = (accumulated.refusal or "") + delta.refusal
 
                         for tc_delta in delta.tool_calls:
                             idx = tc_delta.get("index", 0)
@@ -340,18 +361,30 @@ class LLMEngine:
                                     "name": "",
                                     "arguments": "",
                                 }
+                                _json_buffer[idx] = ""
                             buf = tool_call_buffers[idx]
                             fn = tc_delta.get("function", {})
                             if fn.get("name"):
                                 buf["name"] = fn["name"]
                             if fn.get("arguments"):
-                                buf["arguments"] += fn["arguments"]
+                                _json_buffer[idx] += fn["arguments"]
+                                buf["arguments"] = _json_buffer[idx]
 
                         if on_delta:
                             on_delta(delta)
+                # Stream completed successfully
+                break
 
-        except Exception as exc:
-            accumulated.error = str(exc)
+            except Exception as exc:
+                last_exc = exc
+                status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                    continue
+                accumulated.error = str(exc)
+                break
+
+        if last_exc and not accumulated.error:
+            accumulated.error = str(last_exc)
 
         for _idx in sorted(tool_call_buffers):
             buf = tool_call_buffers[_idx]
@@ -642,6 +675,10 @@ class LLMEngine:
             resp.content = msg.get("content", "") or ""
             resp.thinking = msg.get("reasoning_content", "") or ""
             resp.finish_reason = choice.get("finish_reason", "")
+            # Handle refusal field (e.g. OpenAI content filtering)
+            refusal = msg.get("refusal")
+            if refusal:
+                resp.refusal = refusal
             for tc in msg.get("tool_calls", []):
                 fn = tc.get("function", {})
                 resp.tool_calls.append(ToolCall(
@@ -665,6 +702,10 @@ class LLMEngine:
             delta.thinking = d.get("reasoning_content", "") or ""
             delta.tool_calls = d.get("tool_calls", [])
             delta.finish_reason = choice.get("finish_reason")
+            # Capture refusal from streaming delta
+            refusal = d.get("refusal")
+            if refusal:
+                delta.refusal = refusal
         except (IndexError, TypeError):
             pass
         if "usage" in chunk and chunk["usage"]:
@@ -688,14 +729,24 @@ class LLMEngine:
 
     # -- Token counting (estimation) --
 
+    _CJK_RE = None  # lazy-compiled regex
+
     @staticmethod
     def estimate_tokens(text: str, model: str = "") -> int:
-        """Rough token estimate. ~4 chars per token for English, ~2 for CJK."""
+        """Rough token estimate. ~4 chars per token for English, ~2 for CJK.
+
+        Uses len(text)//4 + CJK char count via regex for speed on large texts.
+        """
         if not text:
             return 0
-        cjk = sum(1 for c in text if '一' <= c <= '鿿' or '　' <= c <= '〿')
-        ascii_chars = len(text) - cjk
-        return int(ascii_chars / 4 + cjk / 1.5)
+        import re
+        if LLMEngine._CJK_RE is None:
+            LLMEngine._CJK_RE = re.compile(r'[一-鿿　-〿]')
+        cjk = len(LLMEngine._CJK_RE.findall(text))
+        # Base: len//4 gives English token estimate.
+        # CJK chars need ~1/1.5 tokens each instead of ~1/4, so add the
+        # difference: cjk * (1/1.5 - 1/4) = cjk * 5/12
+        return len(text) // 4 + (cjk * 5 + 6) // 12
 
     def count_message_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Estimate total tokens for a message array."""

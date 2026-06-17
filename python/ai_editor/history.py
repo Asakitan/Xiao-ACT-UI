@@ -94,11 +94,42 @@ def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _parse_header_fast(fpath: str, cid: str) -> Optional[Dict[str, Any]]:
+    """Read only the first ~200 bytes of a conversation file to extract
+    the header fields (id, title, saved_at, message_count, model) without
+    parsing the full messages array.  Falls back to full parse on failure."""
+    try:
+        with open(fpath, "rb") as f:
+            head = f.read(256)
+        text = head.decode("utf-8", errors="replace")
+        # The JSON is written with indent=1, so header fields appear in the
+        # first ~200 bytes before the "messages" array.
+        entry: Dict[str, Any] = {"id": cid, "title": "Untitled",
+                                  "saved_at": 0, "message_count": 0, "model": ""}
+        import re
+        for key in ("id", "title", "model"):
+            m = re.search(rf'"{key}":\s*"([^"]*)"', text)
+            if m:
+                entry[key] = m.group(1)
+        for key in ("saved_at",):
+            m = re.search(rf'"{key}":\s*([\d.]+)', text)
+            if m:
+                entry[key] = float(m.group(1))
+        for key in ("message_count",):
+            m = re.search(rf'"{key}":\s*(\d+)', text)
+            if m:
+                entry[key] = int(m.group(1))
+        return entry
+    except (OSError, ValueError):
+        return None
+
+
 def list_conversations(limit: int = 50,
                        scope: str = "all") -> List[Dict[str, Any]]:
     """Return recent conversations sorted by saved_at desc.
 
     scope="all" lists across all scopes; "workspace"/"system" scopes to one.
+    Uses fast header-only reads to avoid parsing full message arrays.
     """
     if scope == "all":
         dirs = _all_history_dirs()
@@ -118,19 +149,9 @@ def list_conversations(limit: int = 50,
                 continue
             seen.add(cid)
             fpath = os.path.join(d, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                entries.append({
-                    "id": data.get("id", cid),
-                    "title": data.get("title", "Untitled"),
-                    "saved_at": data.get("saved_at", 0),
-                    "message_count": data.get("message_count",
-                                              len(data.get("messages", []))),
-                    "model": data.get("model", ""),
-                })
-            except (json.JSONDecodeError, OSError):
-                continue
+            entry = _parse_header_fast(fpath, cid)
+            if entry:
+                entries.append(entry)
     entries.sort(key=lambda e: e["saved_at"], reverse=True)
     return entries[:limit]
 

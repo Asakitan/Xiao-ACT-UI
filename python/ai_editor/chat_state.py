@@ -12,10 +12,24 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from ai_editor.llm_engine import LLMEngine, LLMResponse, ProviderConfig, StreamDelta, ToolCall
 from ai_editor.tool_registry import ToolRegistry
+
+
+# ---------------------------------------------------------------------------
+# Tool invocation state machine
+# ---------------------------------------------------------------------------
+
+class ToolInvocationState(Enum):
+    """Lifecycle states for a single tool call."""
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +77,8 @@ class ChatMessage:
 class Conversation:
     """A single conversation thread."""
 
+    MAX_MESSAGES = 200
+
     def __init__(self, system_prompt: str = "") -> None:
         self.id: str = uuid.uuid4().hex[:8]
         self.title: str = "New Chat"
@@ -73,6 +89,7 @@ class Conversation:
         self._msg_version = 0
         self._api_cache: Optional[List[Dict[str, Any]]] = None
         self._api_cache_ver = -1
+        self._compress_callback: Optional[Callable[[], None]] = None
 
     def add_message(self, msg: ChatMessage) -> None:
         with self._lock:
@@ -80,6 +97,9 @@ class Conversation:
             self._msg_version += 1
             if len(self.messages) == 1 and msg.role == "user" and not self.title_set:
                 self.title = msg.content[:40].replace("\n", " ")
+            exceeded = len(self.messages) > self.MAX_MESSAGES
+        if exceeded and self._compress_callback:
+            self._compress_callback()
 
     @property
     def title_set(self) -> bool:
@@ -107,10 +127,11 @@ class Conversation:
 
     @property
     def total_tokens(self) -> int:
-        total = 0
-        for m in self.messages:
-            total += m.usage.get("total_tokens", 0)
-        return total
+        with self._lock:
+            total = 0
+            for m in self.messages:
+                total += m.usage.get("total_tokens", 0)
+            return total
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +152,7 @@ class ChatController:
         self.engine = engine
         self.registry = registry
         self.conversation = conversation or Conversation()
+        self.conversation._compress_callback = self._auto_compress
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
@@ -140,25 +162,44 @@ class ChatController:
         self._tool_result_cache: Dict[str, str] = {}
         self._tool_result_cache_keys: List[str] = []
 
+        # Session-level auto-approve (tool name → always allow for this session)
+        self._session_auto_approve: Dict[str, bool] = {}
+
+        # Per-call tool invocation state tracking
+        self._tool_states: Dict[str, ToolInvocationState] = {}
+        self._tool_states_lock = threading.Lock()
+
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
         self.on_stream_delta: Optional[Callable[[ChatMessage, str], None]] = None
         self.on_thinking_delta: Optional[Callable[[ChatMessage, str], None]] = None
         self.on_stream_end: Optional[Callable[[ChatMessage], None]] = None
-        self.on_tool_start: Optional[Callable[[str, str, str], None]] = None  # call_id, name, args
-        self.on_tool_end: Optional[Callable[[str, str], None]] = None  # call_id, result
-        self.on_tool_confirm: Optional[Callable[[str, str, str], bool]] = None  # call_id, name, args → allow?
+        self.on_tool_start: Optional[Callable[[str, str, str, str], None]] = None  # call_id, name, args, state
+        self.on_tool_end: Optional[Callable[[str, str, str], None]] = None  # call_id, result, state
+        self.on_tool_confirm: Optional[Callable[[str, str, str], Any]] = None  # call_id, name, args → bool|"always_approve"
+        self.on_tool_progress: Optional[Callable[[str, str, float], None]] = None  # call_id, name, progress 0-1
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_idle: Optional[Callable[[], None]] = None
         self.resolve_variable: Optional[Callable[[str], str]] = None  # @mention resolver
 
-        # Confirmation state
+        # Confirmation state (thread-safe)
+        self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = True
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    def _set_tool_state(self, call_id: str, state: ToolInvocationState) -> None:
+        """Update the state machine for a tool invocation."""
+        with self._tool_states_lock:
+            self._tool_states[call_id] = state
+
+    def get_tool_state(self, call_id: str) -> Optional[ToolInvocationState]:
+        """Query current state of a tool invocation."""
+        with self._tool_states_lock:
+            return self._tool_states.get(call_id)
 
     def send(self, text: str, agent_mode: bool = False) -> None:
         if self._running:
@@ -205,12 +246,16 @@ class ChatController:
     MAX_AGENT_ROUNDS = 25
     KEEP_RECENT_MIN = 6
 
+    # Role weights for compaction priority (higher = more important to keep)
+    _COMPACTION_WEIGHTS: Dict[str, int] = {
+        "system": 10, "user": 3, "assistant": 5, "tool": 1,
+    }
+
     def _auto_compress(self) -> None:
         """Compact conversation when token usage exceeds 90% of model context window.
 
-        Mirrors VSCode Copilot's compaction strategy:
-          threshold = floor(modelMaxPromptTokens * 0.9)
-        Keeps system prompt + summary of old messages + recent messages.
+        Uses weighted compaction: messages with lower role-based weights are
+        trimmed first, keeping high-weight messages (system, assistant) longer.
         """
         from ai_editor.llm_engine import compaction_threshold
         model = self.engine.config.effective_model
@@ -238,7 +283,18 @@ class ChatController:
         if cut <= 0:
             return
 
-        old = msgs[:cut]
+        # Sort candidates by weight (ascending) so lowest-weight messages are
+        # trimmed first while higher-weight messages survive compaction.
+        candidates = list(enumerate(msgs[:cut]))
+        candidates.sort(key=lambda pair: self._COMPACTION_WEIGHTS.get(pair[1].role, 1))
+
+        # Build the trimmed set: drop lowest-weight messages first
+        trim_count = max(1, cut // 2)
+        trim_indices = {idx for idx, _m in candidates[:trim_count]}
+
+        old = [m for i, m in enumerate(msgs[:cut]) if i in trim_indices]
+        kept_from_old = [m for i, m in enumerate(msgs[:cut]) if i not in trim_indices]
+
         roles: dict = {}
         for m in old:
             roles[m.role] = roles.get(m.role, 0) + 1
@@ -255,6 +311,7 @@ class ChatController:
         with self.conversation._lock:
             self.conversation.messages.clear()
             self.conversation.messages.append(summary)
+            self.conversation.messages.extend(kept_from_old)
             self.conversation.messages.extend(recent)
             self.conversation._msg_version += 1
             self.conversation._api_cache = None
@@ -333,25 +390,47 @@ class ChatController:
                 for tc in resp.tool_calls:
                     if not self._running:
                         break
+
+                    # Track tool invocation state
+                    self._set_tool_state(tc.id, ToolInvocationState.PENDING)
+
                     if self.on_tool_start:
-                        self.on_tool_start(tc.id, tc.name, tc.arguments)
+                        self.on_tool_start(tc.id, tc.name, tc.arguments,
+                                           ToolInvocationState.PENDING.value)
 
                     # Confirmation gate for dangerous tools
                     desc = self.registry.get(tc.name)
-                    if desc and desc.requires_confirm and self.on_tool_confirm:
-                        self._confirm_event = threading.Event()
-                        self._confirm_result = True
+                    if (desc and desc.requires_confirm and self.on_tool_confirm
+                            and not self._session_auto_approve.get(tc.name, False)):
+                        with self._confirm_lock:
+                            self._confirm_event = threading.Event()
+                            self._confirm_result = True
                         allowed = self.on_tool_confirm(tc.id, tc.name, tc.arguments)
-                        if isinstance(allowed, bool):
-                            if not allowed:
-                                result = json.dumps({"error": "User denied tool execution"})
-                                tc.result = result
-                                tool_msg = ChatMessage(role="tool", content=result,
-                                                       tool_call_id=tc.id, tool_name=tc.name)
-                                self.conversation.add_message(tool_msg)
-                                if self.on_tool_end:
-                                    self.on_tool_end(tc.id, result)
-                                continue
+                        if allowed == "always_approve":
+                            self._session_auto_approve[tc.name] = True
+                        elif isinstance(allowed, bool) and not allowed:
+                            self._set_tool_state(tc.id, ToolInvocationState.CANCELLED)
+                            result = json.dumps({"error": "User denied tool execution"})
+                            tc.result = result
+                            tool_msg = ChatMessage(role="tool", content=result,
+                                                   tool_call_id=tc.id, tool_name=tc.name)
+                            self.conversation.add_message(tool_msg)
+                            if self.on_tool_end:
+                                self.on_tool_end(tc.id, result,
+                                                 ToolInvocationState.CANCELLED.value)
+                            continue
+
+                    self._set_tool_state(tc.id, ToolInvocationState.CONFIRMED)
+
+                    # Build progress callback for this tool call
+                    def _make_progress_cb(call_id: str, name: str):
+                        def _progress(fraction: float) -> None:
+                            if self.on_tool_progress:
+                                self.on_tool_progress(call_id, name, fraction)
+                        return _progress
+                    _progress_cb = _make_progress_cb(tc.id, tc.name)
+
+                    self._set_tool_state(tc.id, ToolInvocationState.EXECUTING)
 
                     cache_key = f"{tc.name}:{tc.arguments}"
                     cached = self._tool_result_cache.get(cache_key)
@@ -368,10 +447,11 @@ class ChatController:
                         self._tool_result_cache[cache_key] = result
                         self._tool_result_cache_keys.append(cache_key)
                         if len(self._tool_result_cache_keys) > 50:
-                            old = self._tool_result_cache_keys.pop(0)
-                            self._tool_result_cache.pop(old, None)
+                            old_key = self._tool_result_cache_keys.pop(0)
+                            self._tool_result_cache.pop(old_key, None)
 
                     tc.result = result
+                    self._set_tool_state(tc.id, ToolInvocationState.COMPLETED)
 
                     tool_msg = ChatMessage(
                         role="tool",
@@ -383,7 +463,8 @@ class ChatController:
                     if self.on_message_added:
                         self.on_message_added(tool_msg)
                     if self.on_tool_end:
-                        self.on_tool_end(tc.id, result)
+                        self.on_tool_end(tc.id, result,
+                                         ToolInvocationState.COMPLETED.value)
 
         except Exception as exc:
             if self.on_error:
@@ -405,7 +486,26 @@ class ChatController:
             if ver == self._last_save_ver:
                 return
             from ai_editor.history import save_conversation
-            msgs = json.loads(self.export_messages())
+            # Build messages list directly instead of serialize+deserialize
+            # round-trip through export_messages()/json.loads().
+            with self.conversation._lock:
+                msgs = []
+                for m in self.conversation.messages:
+                    d = {
+                        "role": m.role,
+                        "content": m.content,
+                        "timestamp": m.timestamp,
+                    }
+                    if m.tool_calls:
+                        d["tool_calls"] = [
+                            {"id": tc.id, "name": tc.name,
+                             "arguments": tc.arguments, "result": tc.result}
+                            for tc in m.tool_calls
+                        ]
+                    if m.tool_call_id:
+                        d["tool_call_id"] = m.tool_call_id
+                        d["tool_name"] = m.tool_name
+                    msgs.append(d)
             save_conversation(
                 conv_id=self.conversation.id,
                 title=self.conversation.title,
@@ -422,25 +522,28 @@ class ChatController:
         self.cancel()
         sp = system_prompt or self.engine.config.system_prompt
         self.conversation = Conversation(system_prompt=sp)
+        self.conversation._compress_callback = self._auto_compress
+        self._session_auto_approve.clear()
         return self.conversation
 
     def export_messages(self) -> str:
-        data = []
-        for m in self.conversation.messages:
-            d = {
-                "role": m.role,
-                "content": m.content,
-                "timestamp": m.timestamp,
-            }
-            if m.tool_calls:
-                d["tool_calls"] = [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "result": tc.result}
-                    for tc in m.tool_calls
-                ]
-            if m.tool_call_id:
-                d["tool_call_id"] = m.tool_call_id
-                d["tool_name"] = m.tool_name
-            data.append(d)
+        with self.conversation._lock:
+            data = []
+            for m in self.conversation.messages:
+                d = {
+                    "role": m.role,
+                    "content": m.content,
+                    "timestamp": m.timestamp,
+                }
+                if m.tool_calls:
+                    d["tool_calls"] = [
+                        {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "result": tc.result}
+                        for tc in m.tool_calls
+                    ]
+                if m.tool_call_id:
+                    d["tool_call_id"] = m.tool_call_id
+                    d["tool_name"] = m.tool_name
+                data.append(d)
         return json.dumps(data, ensure_ascii=False, indent=2)
 
 

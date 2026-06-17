@@ -65,19 +65,8 @@ class AIEditorBridge:
         return get_system_prompt(settings_getter=self._settings_getter)
 
     def _load_config(self) -> ProviderConfig:
-        settings = getattr(self._gui_ref, 'settings', None)
-        if not settings:
-            return ProviderConfig()
-        raw = settings.get("ai_editor", {}) or {}
-        return ProviderConfig(
-            provider=raw.get("provider", "openai"),
-            api_key=raw.get("api_key", ""),
-            base_url=raw.get("base_url", ""),
-            model=raw.get("model", ""),
-            temperature=raw.get("temperature", 0.7),
-            max_tokens=raw.get("max_tokens", 4096),
-            system_prompt=raw.get("system_prompt", ""),
-        )
+        from ai_editor.app import load_provider_config
+        return load_provider_config(self._gui_ref)
 
     # ── Bridge command handlers ──
 

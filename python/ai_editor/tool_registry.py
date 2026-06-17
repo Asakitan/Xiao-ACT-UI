@@ -25,6 +25,7 @@ class ToolDescriptor:
     handler: Callable[..., Any] = field(repr=False)
     category: str = "general"
     requires_confirm: bool = False
+    tags: Dict[str, Any] = field(default_factory=dict)
 
     def to_openai_schema(self) -> Dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: Dict[str, ToolDescriptor] = {}
+        self._openai_cache: Optional[List[Dict[str, Any]]] = None
 
     # -- Registration --
 
@@ -57,6 +59,7 @@ class ToolRegistry:
         handler: Callable[..., Any],
         category: str = "general",
         requires_confirm: bool = False,
+        tags: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._tools[name] = ToolDescriptor(
             name=name,
@@ -65,13 +68,17 @@ class ToolRegistry:
             handler=handler,
             category=category,
             requires_confirm=requires_confirm,
+            tags=tags or {},
         )
+        self._openai_cache = None
 
     def register_tool(self, desc: ToolDescriptor) -> None:
         self._tools[desc.name] = desc
+        self._openai_cache = None
 
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
+        self._openai_cache = None
 
     # -- Decorator --
 
@@ -82,13 +89,15 @@ class ToolRegistry:
         parameters: Optional[Dict[str, Any]] = None,
         category: str = "general",
         requires_confirm: bool = False,
+        tags: Optional[Dict[str, Any]] = None,
     ) -> Callable:
         """Decorator to register a function as a tool."""
         def decorator(fn: Callable) -> Callable:
             tool_name = name or fn.__name__
             tool_desc = description or (fn.__doc__ or "").strip().split("\n")[0]
             tool_params = parameters or self._infer_parameters(fn)
-            self.register(tool_name, tool_desc, tool_params, fn, category, requires_confirm)
+            self.register(tool_name, tool_desc, tool_params, fn, category,
+                          requires_confirm, tags)
             return fn
         return decorator
 
@@ -104,7 +113,12 @@ class ToolRegistry:
         return sorted(tools, key=lambda t: (t.category, t.name))
 
     def to_openai_tools(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        return [t.to_openai_schema() for t in self.list_tools(category)]
+        if category is None and self._openai_cache is not None:
+            return self._openai_cache
+        result = [t.to_openai_schema() for t in self.list_tools(category)]
+        if category is None:
+            self._openai_cache = result
+        return result
 
     def categories(self) -> List[str]:
         return sorted({t.category for t in self._tools.values()})

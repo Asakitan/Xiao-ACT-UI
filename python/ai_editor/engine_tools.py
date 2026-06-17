@@ -41,6 +41,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda path, startLine=0, endLine=0: _read_file(path, int(startLine), int(endLine)),
         category="file",
+        tags={"readOnly": True},
     )
 
     registry.register(
@@ -59,6 +60,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         handler=lambda path, content, startLine=0, endLine=0: _edit_file(path, content, int(startLine), int(endLine)),
         category="file",
         requires_confirm=True,
+        tags={"destructive": True},
     )
 
     registry.register(
@@ -75,6 +77,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda path=".", pattern="", recursive=False, limit=100: _list_files(path, pattern, bool(recursive), int(limit)),
         category="file",
+        tags={"readOnly": True},
     )
 
     registry.register(
@@ -94,6 +97,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda query, path=".", pattern="", caseSensitive=False, regex=False, limit=50: _search_files(query, path, pattern, bool(caseSensitive), bool(regex), int(limit)),
         category="file",
+        tags={"readOnly": True},
     )
 
     # ==================================================================
@@ -114,6 +118,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         handler=lambda command, cwd="": _run_terminal(command, cwd),
         category="terminal",
         requires_confirm=True,
+        tags={"destructive": True},
     )
 
     # ==================================================================
@@ -132,6 +137,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda question: {"type": "question", "question": question, "note": "Displayed to user in chat"},
         category="interaction",
+        tags={"readOnly": True},
     )
 
     registry.register(
@@ -146,6 +152,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda summary: {"status": "complete", "summary": summary},
         category="interaction",
+        tags={"readOnly": True},
     )
 
     registry.register(
@@ -162,6 +169,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         handler=lambda action, risk="medium": {"type": "confirmation", "action": action, "risk": risk},
         category="interaction",
         requires_confirm=True,
+        tags={"readOnly": True},
     )
 
     # ==================================================================
@@ -174,6 +182,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         parameters={"type": "object", "properties": {}},
         handler=lambda: {"note": "Resolved via JS bridge — returns editor text + language"},
         category="editor",
+        tags={"readOnly": True},
     )
 
     registry.register(
@@ -189,6 +198,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda content, language="": {"note": "Dispatched via JS bridge", "length": len(content)},
         category="editor",
+        tags={"destructive": True},
     )
 
     registry.register(
@@ -197,6 +207,57 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         parameters={"type": "object", "properties": {}},
         handler=lambda: {"note": "Resolved via JS bridge"},
         category="editor",
+        tags={"readOnly": True},
+    )
+
+    # ==================================================================
+    # Web Fetch
+    # ==================================================================
+
+    registry.register(
+        name="webFetch",
+        description="Fetch a URL and return its response. Supports GET/POST with optional headers and body.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to fetch"},
+                "method": {"type": "string", "description": "HTTP method (GET, POST, etc.)", "default": "GET"},
+                "headers": {"type": "object", "description": "Request headers as key-value pairs", "default": {}},
+                "body": {"type": "string", "description": "Request body (for POST/PUT)", "default": ""},
+            },
+            "required": ["url"],
+        },
+        handler=lambda url, method="GET", headers=None, body="": _web_fetch(url, method, headers or {}, body),
+        category="network",
+        tags={"readOnly": True},
+    )
+
+    # ==================================================================
+    # Todo List Management
+    # ==================================================================
+
+    registry.register(
+        name="manageTodoList",
+        description=(
+            "Manage a simple todo list. Actions:\n"
+            "  add — add a new item (pass 'text')\n"
+            "  remove — remove item by index (pass 'index', 0-based)\n"
+            "  list — list all items\n"
+            "  update — update item text at index (pass 'index' and 'text')\n"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "Action: add, remove, list, update",
+                           "enum": ["add", "remove", "list", "update"]},
+                "text": {"type": "string", "description": "Todo item text (for add/update)", "default": ""},
+                "index": {"type": "integer", "description": "Item index, 0-based (for remove/update)", "default": -1},
+            },
+            "required": ["action"],
+        },
+        handler=lambda action, text="", index=-1: _manage_todo(gui_ref, action, text, int(index)),
+        category="interaction",
+        tags={"readOnly": False},
     )
 
     # ==================================================================
@@ -233,6 +294,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         },
         handler=lambda **kw: _engine_dispatch(gui_ref, **kw),
         category="engine",
+        tags={"readOnly": False},
     )
 
 
@@ -369,6 +431,77 @@ def _run_terminal(command: str, cwd: str = "") -> Dict[str, Any]:
         return {"error": "Command timed out (30s)", "exitCode": -1}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# ======================================================================
+# Web Fetch handler
+# ======================================================================
+
+def _web_fetch(url: str, method: str = "GET",
+               headers: Dict[str, str] = None,
+               body: str = "") -> Dict[str, Any]:
+    import urllib.request
+    import urllib.error
+    try:
+        data = body.encode("utf-8") if body else None
+        req = urllib.request.Request(url, data=data, method=method.upper())
+        for k, v in (headers or {}).items():
+            req.add_header(str(k), str(v))
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+            try:
+                body_text = raw.decode("utf-8", errors="replace")
+            except Exception:
+                body_text = raw.decode("latin-1")
+            resp_headers = {k: v for k, v in resp.getheaders()}
+            return {
+                "status": resp.status,
+                "headers": resp_headers,
+                "body": body_text[:5000],
+                "truncated": len(body_text) > 5000,
+            }
+    except urllib.error.HTTPError as exc:
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")[:2000]
+        except Exception:
+            err_body = ""
+        return {"status": exc.code, "error": str(exc.reason), "body": err_body}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ======================================================================
+# Todo List handler
+# ======================================================================
+
+def _manage_todo(gui_ref: Any, action: str, text: str = "",
+                 index: int = -1) -> Dict[str, Any]:
+    if not hasattr(gui_ref, '_todo_list'):
+        gui_ref._todo_list = []
+    todo = gui_ref._todo_list
+    if action == "add":
+        if not text:
+            return {"error": "text is required for add"}
+        todo.append(text)
+        return {"ok": True, "index": len(todo) - 1, "count": len(todo)}
+    elif action == "remove":
+        if index < 0 or index >= len(todo):
+            return {"error": f"Invalid index {index}, list has {len(todo)} items"}
+        removed = todo.pop(index)
+        return {"ok": True, "removed": removed, "count": len(todo)}
+    elif action == "list":
+        return {"items": [{"index": i, "text": t} for i, t in enumerate(todo)],
+                "count": len(todo)}
+    elif action == "update":
+        if index < 0 or index >= len(todo):
+            return {"error": f"Invalid index {index}, list has {len(todo)} items"}
+        if not text:
+            return {"error": "text is required for update"}
+        old = todo[index]
+        todo[index] = text
+        return {"ok": True, "old": old, "new": text}
+    else:
+        return {"error": f"Unknown action: {action}. Use add/remove/list/update"}
 
 
 # ======================================================================
