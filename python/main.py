@@ -220,11 +220,8 @@ def _show_tk_license_gate():
         pass
 
     try:
-        import tkinter as tk
-        root = tk.Tk()
-        root.withdraw()
         from gui_modules.sao_gui_license import show_license_dialog
-        show_license_dialog(root)
+        show_license_dialog()
     except Exception as e:
         print(f'[license] dialog failed: {e}')
 
