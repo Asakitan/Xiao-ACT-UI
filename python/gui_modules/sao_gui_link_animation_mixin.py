@@ -42,9 +42,9 @@ Required SAOPlayerGUI attrs:
   * self._after_shutdown
 
 Required SAOPlayerGUI methods (via MRO):
-  * _animate_float_to (FloatHp mixin)
+    * _animate_float_to (FloatChrome mixin)
   * _create_floating_widget (FloatHandlers mixin)
-  * _start_float_breath (FloatHp mixin)
+    * _start_float_breath (FloatChrome mixin)
   * _get_setting (SAOPlayerGUI)
 """
 
@@ -68,44 +68,7 @@ class SAOPlayerGUILinkAnimationMixin:
     """Mixin bundling SAO link-start / link-end full-screen animations."""
 
     def _entity_transition_focus_center(self, fallback_x=None, fallback_y=None):
-        """Return the visible HP/Entity panel center, not the transparent anchor."""
-        hp = getattr(self, '_hp_overlay', None)
-        if hp is not None:
-            try:
-                x = float(getattr(hp, '_x'))
-                y = float(getattr(hp, '_y'))
-                w = float(getattr(hp, 'WIDTH'))
-                h = float(getattr(hp, 'HEIGHT'))
-                if w > 0 and h > 0:
-                    return (x + w * 0.5, y + h * 0.5)
-            except Exception:
-                pass
-        try:
-            from gui_modules import sao_gui_hp as _hp
-            sw = int(self.root.winfo_screenwidth())
-            sh = int(self.root.winfo_screenheight())
-            try:
-                _hp._recompute_layout(sw)
-            except Exception:
-                pass
-            x = int(round(sw * _hp.HUD_WINDOW_LEFT_PCT
-                          + sw * _hp.HUD_VW_PCT * _hp.STAGE_LEFT_PCT))
-            y = max(0, sh - int(_hp.PANEL_H))
-            w = int(getattr(_hp, 'PANEL_W', 0) or 0)
-            h = int(getattr(_hp, 'PANEL_H', 0) or 0) + int(getattr(_hp, 'PANEL_SHADOW_BOTTOM', 0) or 0)
-            settings = getattr(self, 'settings', None)
-            if settings is not None:
-                try:
-                    saved_w = int(settings.get('hp_ov_panel_w', 0))
-                    if saved_w == w:
-                        x = int(settings.get('hp_ov_x', x))
-                        y = int(settings.get('hp_ov_y', y))
-                except Exception:
-                    pass
-            if w > 0 and h > 0:
-                return (x + w * 0.5, y + h * 0.5)
-        except Exception:
-            pass
+        """Return the generic Entity transition focus center."""
         if fallback_x is not None and fallback_y is not None:
             return (float(fallback_x), float(fallback_y))
         try:
@@ -121,21 +84,21 @@ class SAOPlayerGUILinkAnimationMixin:
         saved_x = self.settings.get('float_x', None)
         saved_y = self.settings.get('float_y', None)
         # 固定位置: 左下角覆盖整个底部区域 (统一 HUD)
-        # 向右偏移 4% 屏宽以覆盖游戏原生 HP/STA 条
+        # 向右偏移 4% 屏宽以避开底部系统 UI
         _offset_pct = 0.04
         try:
             if hasattr(self, 'settings') and self.settings:
                 _offset_pct = self.settings.get('hud_offset_x', 0.04)
         except Exception:
             pass
-        _hp_x = int(sw * _offset_pct)
-        _hp_y = sh - self._fh
+        _float_x = int(sw * _offset_pct)
+        _float_y = sh - self._fh
         if saved_x is not None and saved_y is not None:
             fx_final = max(0, min(int(saved_x), sw - self._fw))
             fy_final = max(0, min(int(saved_y), sh - self._fh))
         else:
-            fx_final = _hp_x
-            fy_final = _hp_y
+            fx_final = _float_x
+            fy_final = _float_y
         # 起始位置: 屏幕正中央 (LinkStart 动画中心)
         fx_start = sw // 2 - self._fw // 2
         fy_start = sh // 2 + 80   # 略低于中心 (文字下方)
@@ -500,10 +463,7 @@ void main() {
             # 启动识别循环
             self.root.after(200, self._start_recognition)
             self.root.after(600, self._recognition_loop)
-            if not self._username:
-                self.root.after(420, self._show_welcome_then_menu)
-            else:
-                self.root.after(420, self._toggle_sao_menu)
+            self.root.after(420, self._toggle_sao_menu)
             self.root.after(900, self._restore_panels)
             self.root.after(220, self._mark_update_popup_ready)
 
@@ -994,7 +954,7 @@ void main() {
                 pass
             _add(win, 'panel', order=order)
 
-        # HP float 使用 ULW，不能用 attributes('-alpha') 读写
+        # Float anchor uses ULW, so attributes('-alpha') is not reliable.
         _float = getattr(self, '_float', None)
         if _float:
             try:
@@ -1020,5 +980,5 @@ void main() {
             _add(win, 'panel', order=idx)
         _add(getattr(getattr(self, '_sao_menu', None), '_overlay', None), 'menu')
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
-        # _hp_alpha_windows 已废弃 (ULW 内部渲染)
+        # Legacy alpha-strip windows are obsolete (ULW renders internally).
         return wins

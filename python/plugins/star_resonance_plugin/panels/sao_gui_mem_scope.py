@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode memory-scan explorer (Mem Scope) panel.
+"""Star Resonance Entity-mode memory-scan explorer (Mem Scope) panel.
 
-Browses every memory-scan-readable resource through the read-only ``MemAccess``
-facade (``act_mem_*`` runtime actions), shows live self / entities / damage, and
-runs an asynchronous manual value search where each hit carries a decoded hint.
-The WebView twin is ``web/mem_scope.html`` — both consume the same JSON contract
-(``act_mem_scope_status`` + ``act_mem_search*``) so they stay 1:1.
+This is a game/plugin-owned surface. It consumes the common runtime JSON
+contract (``act_mem_scope_status`` + ``act_mem_search*``) but is registered and
+opened by the Star Resonance plugin, not by the platform menu shell.
 """
 
 from __future__ import annotations
@@ -68,7 +66,7 @@ def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = Non
     if lo is not None:
         number = max(float(lo), number)
     if hi is not None:
-        number = min(float(hi), number)
+        number = min(hi, number)
     return number
 
 
@@ -95,7 +93,6 @@ class MemScopePanel:
         self._last_status: Dict[str, Any] = {}
         self._last_sig = ""
 
-    # ── window lifecycle ──────────────────────────────────────────────────────
     def show(self) -> None:
         if self._win is None or not self._exists():
             self._build()
@@ -139,7 +136,6 @@ class MemScopePanel:
         except Exception:
             return False
 
-    # ── data ──────────────────────────────────────────────────────────────────
     def refresh(self) -> Dict[str, Any]:
         try:
             status = act_mem_scope_status(self.owner, query=self._query_var.get(),
@@ -302,7 +298,6 @@ class MemScopePanel:
     def _reset_render_cache(self) -> None:
         self._last_sig = ""
 
-    # ── render ─────────────────────────────────────────────────────────────────
     def _render_status(self, status: Mapping[str, Any]) -> None:
         st = status.get('status') if isinstance(status.get('status'), Mapping) else {}
         active = bool(st.get('active'))
@@ -374,11 +369,8 @@ class MemScopePanel:
         inner = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         inner.pack(fill='x', padx=SP_SM, pady=SP_SM)
         skip = {'ok', 'reason', 'hint', 'resources', 'attr_level', 'season_level', 'name'}
-        # Fields whose numeric values should display with comma separators
         _COMMA_FIELDS = {'hp', 'max_hp', 'cur_hp', 'damage', 'total'}
-        # Fields that are identifiers (no comma formatting)
         _ID_FIELDS = {'uid', 'base_id', 'id'}
-        # Collect key-value pairs with formatted values
         pairs: List[tuple] = []
         level_val = self_.get('level')
         attr_lv = self_.get('attr_level') or self_.get('season_level')
@@ -393,7 +385,6 @@ class MemScopePanel:
                 pairs.append((k, str(v) if v is not None else ''))
             else:
                 pairs.append((k, _fmt_self_val(v)))
-        # 2-column grid layout matching webref
         grid = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x')
         grid.grid_columnconfigure(0, weight=1)
@@ -418,7 +409,6 @@ class MemScopePanel:
         if not rows:
             empty_state(inner, '暂无实体', '当前没有可见战斗实体（开怪后出现）。').pack(fill='x')
             return
-        # Format entity rows: commas for HP, hex for base_id, abbreviated addr
         fmt_rows = []
         for e in rows[:40]:
             fmt_rows.append({
@@ -505,7 +495,6 @@ class MemScopePanel:
         except Exception as exc:
             self._status_var.set(f"复制失败: {exc}")
 
-    # ── small render helpers ───────────────────────────────────────────────────
     def _kv(self, parent: tk.Misc, label: Any, value: Any) -> None:
         row = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
         row.pack(fill='x', pady=1)
@@ -595,7 +584,6 @@ class MemScopePanel:
 
 
 def _fmt_num(v: Any) -> str:
-    """Format a numeric value with comma separators (963721 -> '963,721')."""
     if v is None:
         return ''
     try:
@@ -606,23 +594,20 @@ def _fmt_num(v: Any) -> str:
 
 
 def _fmt_self_val(v: Any) -> str:
-    """Format a self-section value: integers get commas, floats get 2 decimals."""
     if v is None:
         return ''
     try:
         f = float(v)
-        if f != f:  # NaN
+        if f != f:
             return str(v)
         if f == int(f) and not isinstance(v, float):
             return f"{int(f):,}"
-        # float: show 2 decimal places
         return f"{f:,.2f}"
     except (ValueError, TypeError, OverflowError):
         return str(v)
 
 
 def _fmt_hex(v: Any) -> str:
-    """Format an integer as hex (1001 -> '0x1A2'). Already-hex strings pass through."""
     if v is None:
         return ''
     s = str(v)
@@ -636,7 +621,6 @@ def _fmt_hex(v: Any) -> str:
 
 
 def _fmt_addr(v: Any) -> str:
-    """Abbreviate a long hex address (0x185000010 -> '0x185..010')."""
     if v is None:
         return ''
     s = str(v)
@@ -646,7 +630,6 @@ def _fmt_addr(v: Any) -> str:
             s = f"0x{n:X}"
         except (ValueError, TypeError, OverflowError):
             return s
-    # Abbreviate addresses longer than 7 hex digits (0x + 7+)
     prefix = s[:2]
     hexpart = s[2:]
     if len(hexpart) > 7:
@@ -655,7 +638,6 @@ def _fmt_addr(v: Any) -> str:
 
 
 def _fmt_pct(v: Any) -> str:
-    """Format a percentage value. If already ends with %, pass through."""
     if v is None:
         return ''
     s = str(v)
@@ -679,7 +661,6 @@ def _to_num(v: Any) -> float:
 
 
 def _fmt_hint(r: Mapping[str, Any]) -> str:
-    """Compose one readable line from a decode_hint dict."""
     addr = str(r.get('addr') or '')
     av = r.get('as') if isinstance(r.get('as'), Mapping) else {}
     bits = [addr]

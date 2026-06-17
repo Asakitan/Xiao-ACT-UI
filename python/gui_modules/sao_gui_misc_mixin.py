@@ -28,24 +28,24 @@ class SAOPlayerGUIMiscMixin:
         _apply_window_icon(self.root)
         # icon.ico 应用到 root (所有子窗口自动继承)
 
-    def _create_hp_alpha_strip_windows(self):
-        """(ULW 模式下 HP 填充已由 PIL alpha 梯度渲染, 不再需要条带窗口)"""
-        self._hp_alpha_windows = []
-        self._hp_alpha_photos = []
+    def _create_float_alpha_strip_windows(self):
+        """Legacy layered-float alpha strip placeholder."""
+        self._float_alpha_windows = []
+        self._float_alpha_photos = []
 
-    def _render_hp_strip_image(self, *a, **kw):
+    def _render_float_strip_image(self, *a, **kw):
         return None
 
-    def _sync_hp_alpha_strip_windows(self):
-        """(ULW 模式下不需要同步条带窗口)"""
+    def _sync_float_alpha_strip_windows(self):
+        """Legacy layered-float sync placeholder."""
         pass
 
-    def _render_hp_shell(self, hover=False, scale=4):
-        """(deprecated) HP 外壳已由 sao_gui_hp.HpOverlay 独立渲染。"""
+    def _render_float_shell(self, hover=False, scale=4):
+        """(deprecated) Legacy float shell placeholder."""
         return None
 
-    def _render_hp_dynamic(self):
-        """(deprecated) HP 动态内容已由 sao_gui_hp.HpOverlay 独立渲染。"""
+    def _render_float_dynamic(self):
+        """(deprecated) Legacy float dynamic placeholder."""
         return None
 
     def _fade_panel_in(self, panel, target=0.92, duration_ms=350):

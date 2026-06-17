@@ -15,7 +15,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin
-from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin
+from gui_modules.sao_gui_float_chrome_mixin import SAOPlayerGUIFloatChromeMixin
 from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin
 
 
@@ -217,7 +217,7 @@ class _HpOverlay:
         raise AssertionError('closing blur must not touch HP GPU window')
 
 
-class _MotionBlurOwner(SAOPlayerGUIFloatHpMixin):
+class _MotionBlurOwner(SAOPlayerGUIFloatChromeMixin):
     def __init__(self) -> None:
         self._hp_overlay = _HpOverlay()
         self.raised_panels = []

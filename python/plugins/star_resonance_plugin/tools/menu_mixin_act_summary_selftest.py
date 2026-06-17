@@ -3,13 +3,20 @@
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import os
+import sys
 
-from contextlib import contextmanager
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from contextlib import ExitStack, contextmanager
 import unittest
+from unittest import mock
 
 import gui_modules.sao_gui_menu_mixin as menu_mixin
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin
+import plugins.star_resonance_plugin.plugin as sr_plugin
 
 
 @contextmanager
@@ -37,15 +44,49 @@ class _FakeFloat:
         return None
 
 
+class _FakeRoot:
+    def after(self, _delay, _callback=None):
+        return 'after-id'
+
+    def after_cancel(self, _after_id) -> None:
+        return None
+
+
+class _FakePopUpMenu:
+    def __init__(self, root, icons, children, **kwargs) -> None:
+        self.root = root
+        self.icons = icons
+        self.child_menus = children
+        self.kwargs = kwargs
+        self.visible = False
+        self.bound = False
+
+    def bind_events(self) -> None:
+        self.bound = True
+
+
 class _MenuHarness(SAOPlayerGUIMenuMixin):
     def __init__(self) -> None:
         self.settings = _FakeSettings()
+        self.root = _FakeRoot()
         self._float = _FakeFloat()
         self._cfg_settings_ref = None
         self._recognition_active = False
         self._panels_hidden = False
+        self._act_plugin_manager = None
         self._menu_left_stack = None
         self._session_players = {}
+        self._sao_menu = None
+        self._menu_icons = []
+        self._menu_refresh_after_id = None
+        self._menu_refresh_force = False
+        self._menu_children_cache = None
+        self._menu_children_cache_sig = None
+        self._last_menu_refresh_sig = None
+        self._last_menu_refresh_sig_time = 0.0
+        self._sao_menu_close_pending = False
+        self._fisheye_close_suppress_until = 0.0
+        self._destroyed = False
         self._act_statuses: dict[str, dict] = {}
         self.alerts: list[tuple[str, str, float]] = []
 
@@ -113,13 +154,72 @@ def _labels(children: dict, menu_name: str) -> list[str]:
     return [str(item.get("label") or "") for item in children.get(menu_name, [])]
 
 
+@contextmanager
+def _patched_sr_ctx(owner):
+    old_ctx = sr_plugin._ctx
+    sr_plugin._ctx = type('Ctx', (), {'engine': type('Engine', (), {'owner': owner})()})()
+    try:
+        yield
+    finally:
+        sr_plugin._ctx = old_ctx
+
+
+@contextmanager
+def _patched_sr_runtime(harness: _MenuHarness):
+    import act_platform.runtime as runtime
+
+    patches = {
+        'act_trigger_status': lambda _owner, **_kwargs: {'rule_count': 0, 'timer_count': 0},
+        'act_data_source_health': lambda _owner, **_kwargs: {'status': 'ok', 'sources': {'summary': {'data_source': 'tcp'}}},
+        'act_report_status': lambda _owner, **_kwargs: {'ok': False, 'preview': {}, 'storage_status': {'count': 0}},
+        'act_timeline_status': lambda _owner, **_kwargs: harness._act_statuses.get('timeline', {'ok': True, 'events': [], 'playing': False}),
+        'act_action_log_status': lambda _owner, **_kwargs: harness._act_statuses.get('action_log', {'ok': True, 'rows': [], 'grouped_rows': [], 'cursor': {}, 'filters': {}}),
+        'act_aggregate_status': lambda _owner, **_kwargs: harness._act_statuses.get('aggregate', {'ok': False, 'raw_counts': {}}),
+        'act_death_recap_status': lambda _owner, **_kwargs: {'ok': False, 'summary': {}},
+        'act_graph_timeseries_status': lambda _owner, **_kwargs: harness._act_statuses.get('graph', {'ok': False, 'selected_metric': 'damage', 'row_count': 0}),
+        'act_combatant_drilldown_status': lambda _owner, **_kwargs: {'ok': False, 'combatant_id': '', 'skills': []},
+        'act_skill_drilldown_status': lambda _owner, **_kwargs: {'ok': False, 'skill_id': '', 'timeline_refs': []},
+    }
+    with ExitStack() as stack:
+        for name, value in patches.items():
+            stack.enter_context(mock.patch.object(runtime, name, value))
+        yield
+
+
+def _sr_act_labels(harness: _MenuHarness) -> list[str]:
+    with _patched_sr_ctx(harness), _patched_sr_runtime(harness):
+        return [str(item.get('label') or '') for item in sr_plugin._build_act_items()]
+
+
 class MenuMixinActSummaryTests(unittest.TestCase):
+    def test_setup_sao_menu_creates_platform_menu_shell(self) -> None:
+        harness = _MenuHarness()
+
+        with (
+            _patched_module_attr('SAOPopUpMenu', _FakePopUpMenu),
+            _patched_module_attr('ensure_act_plugin_manager', lambda _owner, load=True: None),
+            _patched_module_attr('act_plugin_menu_surfaces', lambda _owner, _surface_id: {'surfaces': []}),
+        ):
+            harness._setup_sao_menu()
+
+        self.assertIsNotNone(harness._sao_menu)
+        self.assertTrue(harness._sao_menu.bound)
+        self.assertEqual([item['name'] for item in harness._menu_icons], ['控制', '工具', '插件', '皮肤', '关于'])
+        self.assertEqual(_labels(harness._sao_menu.child_menus, '工具'), ['AI Editor (LLM)'])
+
+    def test_platform_tool_menu_excludes_mem_scope(self) -> None:
+        harness = _MenuHarness()
+
+        labels = _labels(harness._build_menu_children(), "工具")
+
+        self.assertEqual(labels, ["AI Editor (LLM)"])
+
     def test_act_menu_counts_ignore_malformed_list_payloads(self) -> None:
         harness = _MenuHarness()
         harness._act_statuses["timeline"] = {"ok": True, "events": "not-a-list", "playing": False}
         harness._act_statuses["action_log"] = {"ok": True, "rows": "bad", "grouped_rows": "bad", "cursor": {}, "filters": {}}
 
-        labels = _labels(harness._build_menu_children(), "ACT")
+        labels = _sr_act_labels(harness)
 
         self.assertIn("ACT时间线/VCR: READY/0", labels)
         self.assertIn("ACT行为日志: READY/0", labels)
@@ -132,7 +232,7 @@ class MenuMixinActSummaryTests(unittest.TestCase):
         }
         harness._act_statuses["graph"] = {"ok": True, "selected_metric": "damage", "row_count": float("nan")}
 
-        labels = _labels(harness._build_menu_children(), "ACT")
+        labels = _sr_act_labels(harness)
 
         self.assertIn("ACT聚合驾驶舱: EMPTY/0/0/0", labels)
         self.assertIn("ACT图表/曲线: READY/damage/0", labels)

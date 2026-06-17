@@ -1,22 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-SAOPlayerGUIFloatHpMixin — fourteenth mixin extracted from
+SAOPlayerGUIFloatChromeMixin — fourteenth mixin extracted from
 SAOPlayerGUI (round 56 of the sao_gui split refactor). 20 methods,
 ~409 lines.
 
-The two clusters bundled together because they're both "the
-peripheral chrome around the SAO HUD" — the floating button and
-the HP overlay context menu + UI hooks:
-
-HP overlay context handlers (6 methods, ~64 lines):
-  * _refresh_hp_layered — deprecated 75%-screen ULW compat shim
-  * _reset_sta_offline_state — clear stamina-offline cache
-  * _should_show_sta_offline — predicate (cython-backed via
-    inline calc)
-  * _hp_overlay_on_click — left-click → open SAO menu
-  * _hp_overlay_restore_position — context menu: restore default xy
-  * _hp_overlay_hide — context menu: hide-panel branch (settings
-    persist + alert pop-up)
+The two clusters bundled together because they're both peripheral chrome around
+the platform float button and menu animations. Game-specific overlay handlers
+are installed by plugins.
 
 Float button + breath + animation (14 methods, ~345 lines):
   * _build_float_hud_items / _animate_float_hud — small HUD items
@@ -35,16 +25,14 @@ Float button + breath + animation (14 methods, ~345 lines):
     screen grab + radial blur + main-thread fade)
 
 Required SAOPlayerGUI attrs:
-  * self._float, self._fw, self._fh, self._float_hp_name_lbl
+    * self._float, self._fw, self._fh, self._float_name_lbl
   * self._breath_active, self._breath_after_id, self._breath_base_x,
     self._breath_base_y, self._breath_phase, self._breath_amp
   * self._panel_float_after_id, self._panel_float_attached
-  * self._hp_overlay, self._hp_ov_visible
-  * self._alert_overlay, self._sao_menu, self.root, self.settings
+    * self._sao_menu, self.root, self.settings
 
 Required SAOPlayerGUI methods (via MRO):
   * _toggle_sao_menu (Menu mixin)
-  * _show_entity_alert (Dialogs mixin)
 """
 
 from __future__ import annotations
@@ -59,16 +47,15 @@ from utils.perf_probe import probe as _probe, gauge as _perf_gauge
 from sao_theme import ease_out
 
 
-class SAOPlayerGUIFloatHpMixin:
-    """Mixin bundling HP overlay context handlers + float button +
-    breath + motion blur + panel-float animations."""
+class SAOPlayerGUIFloatChromeMixin:
+    """Mixin bundling float button, breath, motion blur and panel-float animations."""
 
     def _build_float_hud_items(self):
         """(ULW 模式下 HUD 已统一由 PIL 渲染, 此方法保留接口兼容)"""
         pass
 
-    def _refresh_hp_layered(self):
-        """(deprecated) 旧 75%屏宽 HP ULW 已移除, 此方法为兼容占位。"""
+    def _refresh_float_layered(self):
+        """(deprecated) Legacy layered float refresh placeholder."""
         return
 
     def _set_float_alpha(self, alpha):
@@ -76,39 +63,13 @@ class SAOPlayerGUIFloatHpMixin:
         self._float_alpha = alpha
 
     def _animate_float_hud(self):
-        """(deprecated) 旧 30fps HP 重绘循环已移除 (HpOverlay 自管帧率)。"""
+        """(deprecated) Legacy float HUD redraw loop placeholder."""
         return
 
     # Round-64 note: the _sao_fx_panels + _sao_fx_after_id class attrs
     # were relocated to gui_modules.sao_gui_panel_fx_mixin alongside
     # the methods that use them (_attach_sao_panel_fx + _sao_fx_shared_tick).
     # MRO lookup still resolves them via SAOPlayerGUI's inheritance chain.
-
-    def _reset_sta_offline_state(self):
-        self._sta_offline_armed = False
-        try:
-            if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
-                self._hp_overlay.set_sta_offline(False)
-        except Exception:
-            pass
-
-    def _should_show_sta_offline(self, gs) -> bool:
-        if gs is None:
-            return False
-        # v2.2.23: packet-driven STA wins. When the packet bridge has a
-        # valid stamina_max, the bar IS in the game world — even if the
-        # vision capture transiently fails (skill FX overlays the STA
-        # bar, capture frame goes blank under heavy load, etc.). The
-        # previous logic reported offline based purely on vision, which
-        # caused the entire HP panel to auto-hide after combat bursts
-        # even though packets kept streaming valid STA values.
-        try:
-            if int(getattr(gs, 'stamina_max', 0) or 0) > 0:
-                return False
-        except Exception:
-            pass
-        # No packet STA available — fall back to vision-driven offline.
-        return bool(getattr(gs, 'stamina_offline', False))
 
     def _start_float_breath(self):
         """idle 状态下轻微上下浮动 (模仿 SAO 菜单呼吸动画)"""
@@ -242,14 +203,14 @@ class SAOPlayerGUIFloatHpMixin:
                 self._panel_float_after_id = None
 
     def _update_float_display(self):
-        """更新悬浮 HP 组件 — 由 _render_hp_dynamic 统一处理，仅触发刷新。"""
-        self._refresh_hp_layered()
+        """Refresh the platform float display placeholder."""
+        self._refresh_float_layered()
 
     def _update_float_status(self):
         self._update_float_display()
 
     def _update_float_fname(self, name=''):
-        """HP 组件风格: 无文件名显示, 保留接口兼容"""
+        """Float component style: no filename display; compatibility hook."""
         pass
 
     def _animate_float_to(self, x0, y0, x1, y1, ms=700):
@@ -268,7 +229,7 @@ class SAOPlayerGUIFloatHpMixin:
             y = int(y0 + (y1 - y0) * et)
             self._float.geometry(f'+{x}+{y}')
             try:
-                self._refresh_hp_layered()
+                self._refresh_float_layered()
             except Exception:
                 pass
             if t < 1.0:
@@ -331,37 +292,6 @@ class SAOPlayerGUIFloatHpMixin:
         self._motion_blur_active_count = count
         if count <= 0:
             self._motion_blur_active_until = time.time() + max(0.0, float(settle))
-
-    def _hp_overlay_on_click(self):
-        """Left-click on HP panel: open the SAO radial menu (web parity)."""
-        try:
-            self._toggle_sao_menu(allow_close=True)
-        except Exception:
-            pass
-
-    def _hp_overlay_restore_position(self):
-        ov = getattr(self, '_hp_overlay', None)
-        if ov is not None:
-            try:
-                ov.restore_position()
-            except Exception:
-                pass
-
-    def _hp_overlay_hide(self):
-        ov = getattr(self, '_hp_overlay', None)
-        if ov is not None:
-            try:
-                ov.hide()
-                self._hp_ov_visible = False
-                try:
-                    self.settings.set('hp_ov_enabled', False)
-                    save = getattr(self.settings, 'save', None)
-                    if callable(save):
-                        save()
-                except Exception:
-                    pass
-            except Exception:
-                pass
 
     # ══════════════════════════════════════════════════════════════
     #  点击悬浮按钮 → 径向运动模糊闪现
@@ -569,13 +499,9 @@ class SAOPlayerGUIFloatHpMixin:
     #  持久鱼眼叠加层 (菜单开启时常驻, 关闭时销毁)
     # ══════════════════════════════════════════════════════════════
     def _update_float_title(self):
-        """更新 HP 组件的用户名"""
+        """Refresh the platform HUD label."""
         try:
-            name = self._username if self._username else 'Player'
-            if len(name) > 8:
-                name = name[:7] + '…'
-            self._hp_display_name = name
-            self._refresh_hp_layered()
+            self._refresh_float_layered()
         except Exception:
             pass
 

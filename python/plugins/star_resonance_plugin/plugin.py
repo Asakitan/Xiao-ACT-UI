@@ -428,6 +428,10 @@ def _safe_mapping(value) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _safe_len(value) -> int:
+    return len(value) if isinstance(value, (list, tuple)) else 0
+
+
 def _build_act_items():
     owner = _ctx.engine.owner if _ctx else None
     if owner is None:
@@ -474,13 +478,13 @@ def _build_act_items():
         {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_state}', 'command': getattr(owner, '_toggle_act_data_source_health_panel', lambda: None)},
         {'icon': '⬇', 'label': f"ACT报告/导出: {'READY' if report.get('ok') else 'EMPTY'}/{_safe_count(report_preview.get('total_damage'))}", 'command': getattr(owner, '_toggle_act_report_export_panel', lambda: None)},
         {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': getattr(owner, '_toggle_act_offline_import_panel', lambda: None)},
-        {'icon': '▶', 'label': f"ACT时间线/VCR: {'PLAY' if timeline.get('playing') else 'READY'}/{len(timeline.get('events') or [])}", 'command': getattr(owner, '_toggle_act_timeline_vcr_panel', lambda: None)},
+        {'icon': '▶', 'label': f"ACT时间线/VCR: {'PLAY' if timeline.get('playing') else 'READY'}/{_safe_len(timeline.get('events'))}", 'command': getattr(owner, '_toggle_act_timeline_vcr_panel', lambda: None)},
         {'icon': '▣', 'label': f"ACT聚合驾驶舱: {'READY' if aggregate.get('ok') and rows else 'EMPTY'}/{aggregate_label}", 'command': getattr(owner, '_toggle_act_aggregate_panel', lambda: None)},
-        {'icon': '▤', 'label': f"ACT行为日志: {'READY' if action_log.get('ok') else 'EMPTY'}/{len(action_log.get('rows') or [])}", 'command': getattr(owner, '_toggle_act_action_log_panel', lambda: None)},
+        {'icon': '▤', 'label': f"ACT行为日志: {'READY' if action_log.get('ok') else 'EMPTY'}/{_safe_len(action_log.get('rows'))}", 'command': getattr(owner, '_toggle_act_action_log_panel', lambda: None)},
         {'icon': '✚', 'label': f"ACT死亡回放: {'READY' if _safe_count(death_summary.get('death_events')) else 'EMPTY'}/{_safe_count(death_summary.get('incoming_damage'))}", 'command': getattr(owner, '_toggle_act_death_recap_panel', lambda: None)},
         {'icon': '⌁', 'label': f"ACT图表/曲线: {'READY' if graph.get('ok') else 'EMPTY'}/{graph.get('selected_metric') or 'damage'}/{_safe_count(graph.get('row_count'))}", 'command': getattr(owner, '_toggle_act_graph_timeseries_panel', lambda: None)},
-        {'icon': '◎', 'label': f"ACT成员钻取: {'READY' if combatant.get('ok') else 'EMPTY'}/{combatant.get('combatant_id') or 'NONE'}/{len(combatant.get('skills') or [])}", 'command': getattr(owner, '_toggle_act_combatant_drilldown_panel', lambda: None)},
-        {'icon': '✦', 'label': f"ACT技能钻取: {'READY' if skill.get('ok') else 'EMPTY'}/{skill.get('skill_id') or 'NONE'}/{len(skill.get('timeline_refs') or [])}", 'command': getattr(owner, '_toggle_act_skill_drilldown_panel', lambda: None)},
+        {'icon': '◎', 'label': f"ACT成员钻取: {'READY' if combatant.get('ok') else 'EMPTY'}/{combatant.get('combatant_id') or 'NONE'}/{_safe_len(combatant.get('skills'))}", 'command': getattr(owner, '_toggle_act_combatant_drilldown_panel', lambda: None)},
+        {'icon': '✦', 'label': f"ACT技能钻取: {'READY' if skill.get('ok') else 'EMPTY'}/{skill.get('skill_id') or 'NONE'}/{_safe_len(skill.get('timeline_refs'))}", 'command': getattr(owner, '_toggle_act_skill_drilldown_panel', lambda: None)},
     ]
 
 
@@ -496,6 +500,8 @@ def _build_panel_items():
          'command': getattr(owner, '_toggle_commander_panel', lambda: None)},
         {'icon': '◎', 'label': 'Session Players',
          'command': getattr(owner, '_toggle_session_players_panel', lambda: None)},
+        {'icon': '⌗', 'label': '内存浏览器 Mem Scope',
+            'command': getattr(owner, '_toggle_act_mem_scope_panel', lambda: None)},
     ]
 
 

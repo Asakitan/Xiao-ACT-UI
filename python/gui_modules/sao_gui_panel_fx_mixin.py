@@ -34,7 +34,7 @@ Required SAOPlayerGUI attrs:
   * self.root, self._destroyed
 
 These class attributes previously lived on
-``SAOPlayerGUIFloatHpMixin`` (incidentally — they were declared
+``SAOPlayerGUIFloatChromeMixin`` (incidentally — they were declared
 there because they had been on SAOPlayerGUI proper and survived
 the round-56 extraction). Round 64 relocates them to their
 proper home with the methods that use them. Existing
@@ -206,5 +206,5 @@ class SAOPlayerGUIPanelFxMixin:
             type(self_ref)._sao_fx_after_id = None
 
     # ══════════════════════════════════════════════
-    #  悬浮触发按钮 — 纯 SAO-UI HP 组件 (对标 HP/src/index.vue)
+    #  悬浮触发按钮 — 纯 SAO-UI 菜单组件
     # ══════════════════════════════════════════════

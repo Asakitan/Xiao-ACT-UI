@@ -35,7 +35,7 @@ Required SAOPlayerGUI methods (via MRO):
     (Fisheye mixin)
   * _refresh_menu_if_open (Menu mixin)
   * _get_setting, _set_setting (SAOPlayerGUI)
-  * _start_recognition, _reset_sta_offline_state,
+    * _start_recognition,
     _update_status_panel (SAOPlayerGUI)
 """
 
@@ -46,7 +46,6 @@ import time
 from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
-from gui_modules.sao_gui_mem_scope import MemScopePanel
 from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManagerPanel
 from gui_modules.sao_panel_ui import _set_sao_panel_theme
 
@@ -242,19 +241,6 @@ class SAOPlayerGUIPanelsMixin:
             except Exception:
                 pass
 
-    def _toggle_mem_scope_panel(self):
-        """打开/关闭 内存浏览器 Mem Scope 面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._mem_scope_panel:
-            self._mem_scope_panel = MemScopePanel(self.root, self)
-            self._apply_act_panel_theme()
-        if self._mem_scope_panel.is_visible():
-            self._mem_scope_panel.hide()
-        else:
-            self._mem_scope_panel.show()
-            self._apply_act_panel_theme()
-            self.root.after(120, lambda: self._raise_panel_window(self._mem_scope_panel))
-
     def _push_commander_data(self):
         """Commander data push — 游戏插件覆盖。"""
         pass
@@ -302,7 +288,6 @@ class SAOPlayerGUIPanelsMixin:
 
     _PLATFORM_PANEL_ATTRS = (
         '_act_plugin_manager_panel',
-        '_mem_scope_panel',
     )
 
     def _act_panel_theme(self) -> str:
@@ -339,7 +324,9 @@ class SAOPlayerGUIPanelsMixin:
                     self._recognition_active = True
             else:
                 self._recognition_active = False
-                self._reset_sta_offline_state()
+        notifier = getattr(self, '_notify_plugin_menu_surfaces', None)
+        if callable(notifier):
+            notifier('on_recognition_changed')
         self._refresh_menu_if_open()
 
     def _toggle_sound_enabled(self):

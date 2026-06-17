@@ -2,7 +2,7 @@
 """
 SAO Utils 风格完整 GUI — 独立 UI 壳
 
-包含 SAO PopUpMenu 菜单系统, 通用提示对话框, HP 血条进度条,
+包含 SAO PopUpMenu 菜单系统, 通用提示对话框,
 LINK START 入场动画, SAO 风格文件选择器
 """
 
@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Round 77 of sao_gui split refactor: PIL / numpy / render_capture_sync
 # imports were all used by methods that have moved to mixins (or by the
-# round-71-deleted _get_hp_pil_font). The mixins carry their own
+# deleted legacy PIL font helpers). The mixins carry their own
 # imports; sao_gui.py no longer needs them.
 try:
     from render.gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
@@ -39,7 +39,7 @@ from sao_theme import (
     SAOColors, SAOButton, SAOProgressBar, SAOTitleBar, SAODialog,
     SAOLeaderboardDialog,
     SAOStatusPill, SAOResizeGrip, SAOFilePicker, SAOSeparator,
-    SAOPopUpMenu, SAOHPBar, SAOLinkStart, SAOCircleButton,
+    SAOPopUpMenu, SAOLinkStart, SAOCircleButton,
     Animator, lerp, lerp_color, ease_out, ease_in_out,
     _close_alert as _sao_close_dialog,
 )
@@ -181,7 +181,7 @@ from gui_modules.sao_gui_status_updater_mixin import SAOPlayerGUIStatusUpdaterMi
 from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin  # noqa: E402
 # EngineLifecycleMixin moved to plugin
 # Game mixins (PacketCallbacksMixin/DamageEventsMixin) moved to plugin in 5.0.0
-from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin  # noqa: E402
+from gui_modules.sao_gui_float_chrome_mixin import SAOPlayerGUIFloatChromeMixin  # noqa: E402
 from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin  # noqa: E402
 from gui_modules.sao_gui_lifecycle_mixin import SAOPlayerGUILifecycleMixin  # noqa: E402
 from gui_modules.sao_gui_panel_fx_mixin import SAOPlayerGUIPanelFxMixin  # noqa: E402
@@ -190,7 +190,7 @@ from gui_modules.sao_gui_link_animation_mixin import SAOPlayerGUILinkAnimationMi
 from gui_modules.sao_gui_misc_mixin import SAOPlayerGUIMiscMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatChromeMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
@@ -240,8 +240,8 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._lift_loop_active = False
         self._skip_canvas_click = False
         self._float_progress_pct = 0.0
-        self._hp_alpha_windows = []
-        self._hp_alpha_photos = []
+        self._float_alpha_windows = []
+        self._float_alpha_photos = []
         self._float_hud_ids = []
         self._float_hud_text = []
         self._destroyed = False  # hot-switch 守卫: 阻止 after() 回调在 root 销毁后执行
@@ -264,19 +264,11 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._cache_loop_stop = threading.Event()
         self._recog_lock = threading.Lock()
 
-        self._last_hp_overlay_hp_sig = None
-        self._last_hp_overlay_sta_sig = None
-        self._last_hp_sta_offline = None
         self._panel_float_entries = {}
         self._panel_float_after_id = None
 
-        # ── ULW 覆盖层引用 ──
-        self._hp_overlay = None
-        self._alert_overlay = None
-
         # ── 配置面板实例 ──
         self._act_plugin_manager_panel = None  # PluginManagerPanel
-        self._mem_scope_panel = None  # MemScopePanel
         self._ai_editor_panel = None  # AIEditorPanel
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()

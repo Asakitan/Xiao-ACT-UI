@@ -10,8 +10,8 @@ overlays, hotkeys, and the float button in the right order so
 no Tk after-id leaks past mainloop quit.
 
 Methods:
-  * _destroy_hp_alpha_strip_windows (9) — destroys the legacy HP
-    alpha strip windows (compat path; usually no-op).
+    * _destroy_float_alpha_windows (9) — destroys legacy float alpha
+        strip windows (compat path; usually no-op).
   * _restore_panels (13) — on startup, re-open panels that were
     visible last session (respects _panels_hidden flag).
   * _cleanup_entry_overlay (23) — destroys the SAO link-start
@@ -46,8 +46,7 @@ Required SAOPlayerGUI attrs:
     self._cfg_settings_ref, self._updater_mgr,
     self._update_listener, self._update_listener_installed,
     self._hotkey_mgr, self._cache_loop_stop, self._after_shutdown
-  * self._update_panel, self._fisheye_ov, self._hp_overlay,
-    self._alert_overlay
+    * self._update_panel, self._fisheye_ov
   * Class attr: SAOPlayerGUI._sao_fx_after_id (accessed via type(self))
 
 Required SAOPlayerGUI methods (via MRO):
@@ -70,23 +69,19 @@ from sao_theme import ease_out, ease_in_out
 class SAOPlayerGUILifecycleMixin:
     """Mixin bundling teardown + restore-on-startup helpers."""
 
-    def _destroy_hp_alpha_strip_windows(self):
-        for item in getattr(self, '_hp_alpha_windows', []):
+    def _destroy_float_alpha_windows(self):
+        for item in getattr(self, '_float_alpha_windows', []):
             try:
                 item['win'].destroy()
             except Exception:
                 pass
-        self._hp_alpha_windows = []
-        self._hp_alpha_photos = []
+        self._float_alpha_windows = []
+        self._float_alpha_photos = []
 
     def _restore_panels(self):
         """Restore platform-owned floating panels only."""
         if self._panels_hidden:
             return
-
-    # ──────────────────────────────────────────
-    #  HP overlay click / context-menu hooks
-    # ──────────────────────────────────────────
 
     def _cleanup_exit_overlay(self):
         ov = getattr(self, '_exit_overlay', None)
@@ -189,7 +184,7 @@ class SAOPlayerGUILifecycleMixin:
             self._update_listener_installed = False
         self._cleanup_entry_overlay()
         # Keep the exit overlay alive while child GPU windows are torn
-        # down. If it is destroyed first, the HP/ID layered windows can
+        # down. If it is destroyed first, plugin layered windows can
         # briefly expose a black compositor frame after the animation.
         hotkey_mgr = getattr(self, '_hotkey_mgr', None)
         cleanup_hotkeys = getattr(hotkey_mgr, 'cleanup', None)
@@ -252,14 +247,13 @@ class SAOPlayerGUILifecycleMixin:
                         setattr(self, attr_name, None)
                     except Exception:
                         pass
-        self._mem_scope_panel = None
         if getattr(self, '_ai_editor_panel', None):
             try:
                 self._ai_editor_panel.destroy()
             except Exception:
                 pass
         self._ai_editor_panel = None
-        self._destroy_hp_alpha_strip_windows()
+        self._destroy_float_alpha_windows()
         try:
             if self._float and self._float.winfo_exists():
                 self._float.destroy()

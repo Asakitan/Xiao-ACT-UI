@@ -60,13 +60,16 @@ def install_entity_menu_bridge(ctx) -> None:
     bridge = StarResonanceEntityMenuBridge(ctx)
     bridge.initialize_owner_state()
     setattr(owner, '_star_resonance_entity_menu_bridge', bridge)
-    setattr(owner, '_plugin_menu_left_widget_factory', bridge.make_left_widget)
-    setattr(owner, '_plugin_menu_header_provider', bridge.build_menu_header)
-    setattr(owner, '_plugin_on_menu_open', bridge.on_menu_open)
-    setattr(owner, '_plugin_on_menu_close', bridge.on_menu_close)
-    setattr(owner, '_plugin_toggle_status_panel', bridge.toggle_status_panel)
-    setattr(owner, '_plugin_update_status_panel', bridge.update_status_panel)
-    setattr(owner, '_plugin_edit_profile', bridge.edit_profile)
+    ctx.register_menu_surface('entity_menu', {
+        'header_provider': bridge.build_menu_header,
+        'left_widget_factory': bridge.make_left_widget,
+        'on_open': bridge.on_menu_open,
+        'on_close': bridge.on_menu_close,
+        'on_recognition_changed': bridge.on_recognition_changed,
+        'status_toggle': bridge.toggle_status_panel,
+        'status_update': bridge.update_status_panel,
+    }, priority=10)
+    ctx.register_action_handler(bridge.handle_action)
     for name in (
         '_session_int', '_session_self_uid', '_merge_session_player',
         '_sync_session_players_cache', '_format_session_power',
@@ -74,9 +77,14 @@ def install_entity_menu_bridge(ctx) -> None:
         '_toggle_session_players_panel', '_get_skillfx_layout',
         '_get_game_window_rect', '_get_game_window_context',
         '_format_level_text', '_get_mem_data_source',
+        '_reset_sta_offline_state', '_should_show_sta_offline',
+        '_hp_overlay_on_click', '_hp_overlay_on_menu',
+        '_hp_overlay_restore_position', '_hp_overlay_hide',
+        '_entity_transition_focus_center',
         '_toggle_act_trigger_timer_panel', '_toggle_act_data_source_health_panel',
         '_toggle_act_report_export_panel', '_toggle_act_offline_import_panel',
         '_toggle_act_timeline_vcr_panel', '_toggle_act_aggregate_panel',
+        '_toggle_act_mem_scope_panel',
         '_toggle_act_action_log_panel', '_toggle_act_death_recap_panel',
         '_toggle_act_graph_timeseries_panel', '_toggle_act_combatant_drilldown_panel',
         '_toggle_act_skill_drilldown_panel', '_plugin_open_action_log_at',
@@ -156,6 +164,9 @@ class StarResonanceEntityMenuBridge:
             '_last_gs_uid': '',
             '_last_fast_state_sig': None,
             '_last_player_panel_level_sig': None,
+            '_last_hp_overlay_hp_sig': None,
+            '_last_hp_overlay_sta_sig': None,
+            '_last_hp_sta_offline': None,
             '_last_boss_hp_push_sig': None,
             '_last_commander_push_sig': None,
             '_bb_last_target_uuid': 0,
@@ -170,8 +181,10 @@ class StarResonanceEntityMenuBridge:
             '_scene_hide_token': 0,
             '_damage_self_fallback_log_ts': 0.0,
             '_dps_overlay': None,
+            '_hp_overlay': None,
             '_boss_hp_overlay': None,
             '_skillfx_overlay': None,
+            '_alert_overlay': None,
             '_map_banner_overlay': None,
             '_map_banner_last_name': '',
             '_map_banner_last_ts': 0.0,
@@ -187,6 +200,7 @@ class StarResonanceEntityMenuBridge:
             '_autokey_detail_panel': None,
             '_bossraid_detail_panel': None,
             '_commander_panel': None,
+            '_act_mem_scope_panel': None,
             '_commander_last_push': 0.0,
             '_THEME_OVERLAY_MAP': {
                 'dps': '_dps_overlay',
@@ -289,6 +303,13 @@ class StarResonanceEntityMenuBridge:
             'ActionLogPanel',
         )
 
+    def _toggle_act_mem_scope_panel(self):
+        self._toggle_plugin_panel(
+            '_act_mem_scope_panel',
+            'plugins.star_resonance_plugin.panels.sao_gui_mem_scope',
+            'MemScopePanel',
+        )
+
     def _plugin_open_action_log_at(self, time_ms: int, topic: str = '') -> None:
         owner = self.owner
         panel = getattr(owner, '_act_action_log_panel', None)
@@ -339,13 +360,120 @@ class StarResonanceEntityMenuBridge:
             'SkillDrilldownPanel',
         )
 
+    def _hp_overlay_on_click(self):
+        try:
+            self.owner._toggle_sao_menu(allow_close=True)
+        except Exception:
+            pass
+
+    def _hp_overlay_restore_position(self):
+        ov = getattr(self.owner, '_hp_overlay', None)
+        if ov is not None:
+            try:
+                ov.restore_position()
+            except Exception:
+                pass
+
+    def _hp_overlay_hide(self):
+        owner = self.owner
+        ov = getattr(owner, '_hp_overlay', None)
+        if ov is not None:
+            try:
+                ov.hide()
+                owner._hp_ov_visible = False
+                try:
+                    owner.settings.set('hp_ov_enabled', False)
+                    save = getattr(owner.settings, 'save', None)
+                    if callable(save):
+                        save()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+    def _hp_overlay_on_menu(self, x_root: int, y_root: int):
+        try:
+            import tkinter as tk
+            from utils.sao_sound import get_cjk_font
+
+            owner = self.owner
+            menu = tk.Menu(owner.root, tearoff=0,
+                           bg='#cfd0c5', fg='#3c3e32',
+                           activebackground='#e9ddb7',
+                           activeforeground='#aa7814',
+                           relief='flat', bd=1,
+                           activeborderwidth=0,
+                           font=get_cjk_font(9))
+            menu.add_command(label='◆ SAO 菜单', command=self._hp_overlay_on_click)
+            recog_on = getattr(owner, '_recognition_active', False)
+            recog_label = '识别: ON' if recog_on else '识别: OFF'
+            menu.add_command(label=f'◈ {recog_label}', command=getattr(owner, '_toggle_recognition_menu', lambda: None))
+            menu.add_separator()
+            menu.add_command(label='⟲ 复原位置', command=self._hp_overlay_restore_position)
+            menu.add_command(label='◈ 隐藏 HP 面板', command=self._hp_overlay_hide)
+            menu.add_separator()
+            menu.add_command(label='✕ 退出', command=getattr(owner, '_on_close', lambda: None))
+            try:
+                menu.tk_popup(x_root, max(0, y_root - 90))
+            finally:
+                menu.grab_release()
+        except Exception as exc:
+            print(f'[SR] HP overlay context menu failed: {exc}')
+
+    def _entity_transition_focus_center(self, fallback_x=None, fallback_y=None):
+        owner = self.owner
+        hp = getattr(owner, '_hp_overlay', None)
+        if hp is not None:
+            try:
+                x = float(getattr(hp, '_x'))
+                y = float(getattr(hp, '_y'))
+                w = float(getattr(hp, 'WIDTH'))
+                h = float(getattr(hp, 'HEIGHT'))
+                if w > 0 and h > 0:
+                    return (x + w * 0.5, y + h * 0.5)
+            except Exception:
+                pass
+        try:
+            from plugins.star_resonance_plugin.panels import sao_gui_hp as _hp
+            sw = int(owner.root.winfo_screenwidth())
+            sh = int(owner.root.winfo_screenheight())
+            try:
+                _hp._recompute_layout(sw)
+            except Exception:
+                pass
+            x = int(round(sw * _hp.HUD_WINDOW_LEFT_PCT
+                          + sw * _hp.HUD_VW_PCT * _hp.STAGE_LEFT_PCT))
+            y = max(0, sh - int(_hp.PANEL_H))
+            w = int(getattr(_hp, 'PANEL_W', 0) or 0)
+            h = int(getattr(_hp, 'PANEL_H', 0) or 0) + int(getattr(_hp, 'PANEL_SHADOW_BOTTOM', 0) or 0)
+            settings = getattr(owner, 'settings', None)
+            if settings is not None:
+                try:
+                    saved_w = int(settings.get('hp_ov_panel_w', 0))
+                    if saved_w == w:
+                        x = int(settings.get('hp_ov_x', x))
+                        y = int(settings.get('hp_ov_y', y))
+                except Exception:
+                    pass
+            if w > 0 and h > 0:
+                return (x + w * 0.5, y + h * 0.5)
+        except Exception:
+            pass
+        if fallback_x is not None and fallback_y is not None:
+            return (float(fallback_x), float(fallback_y))
+        try:
+            return (owner.root.winfo_screenwidth() * 0.5,
+                    owner.root.winfo_screenheight() * 0.5)
+        except Exception:
+            return (960.0, 540.0)
+
     def build_menu_header(self) -> dict[str, str]:
         owner = self.owner
         username = str(getattr(owner, '_username', '') or '').strip() or 'Player'
         profession = str(getattr(owner, '_profession', '') or '').strip()
         return {
-            'username': username,
-            'description': profession or 'Star Resonance',
+            'title': username,
+            'subtitle': profession or 'Star Resonance',
         }
 
     def make_left_widget(self, parent):
@@ -397,6 +525,10 @@ class StarResonanceEntityMenuBridge:
 
     def on_menu_open(self) -> None:
         self._refresh_session_players_panel(force=True)
+
+    def on_recognition_changed(self) -> None:
+        if not bool(getattr(self.owner, '_recognition_active', False)):
+            self._reset_sta_offline_state()
 
     def on_menu_close(self) -> None:
         owner = self.owner
@@ -674,6 +806,25 @@ class StarResonanceEntityMenuBridge:
             return str(getter('mem_data_source', 'tcp') or 'tcp').strip().lower()
         return 'tcp'
 
+    def _reset_sta_offline_state(self):
+        owner = self.owner
+        owner._sta_offline_armed = False
+        try:
+            if owner._hp_overlay and getattr(owner, '_hp_ov_visible', True):
+                owner._hp_overlay.set_sta_offline(False)
+        except Exception:
+            pass
+
+    def _should_show_sta_offline(self, gs) -> bool:
+        if gs is None:
+            return False
+        try:
+            if int(getattr(gs, 'stamina_max', 0) or 0) > 0:
+                return False
+        except Exception:
+            pass
+        return bool(getattr(gs, 'stamina_offline', False))
+
     def toggle_status_panel(self):
         return None
 
@@ -681,4 +832,19 @@ class StarResonanceEntityMenuBridge:
         return None
 
     def edit_profile(self):
+        return None
+
+    def handle_action(self, action_id: str, payload: dict[str, Any]):
+        action = str(action_id or '')
+        if action == 'status.toggle':
+            self.toggle_status_panel()
+            return {'handled': True}
+        if action == 'status.update':
+            self.update_status_panel()
+            return {'handled': True}
+        extension = getattr(self.owner, '_webview_extension', None)
+        menu_action = getattr(extension, 'menu_action', None)
+        if callable(menu_action):
+            menu_action(action)
+            return {'handled': True}
         return None

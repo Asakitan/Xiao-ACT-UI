@@ -66,20 +66,20 @@ class SAOPlayerGUIFloatHandlersMixin:
     # Removed to fix the latent AttributeError + clear the noise.
 
     def _float_enter(self, e):
-        """高亮悬浮 HP 组件"""
+        """高亮悬浮菜单按钮"""
         try:
-            self._hp_hover = True
+            self._float_hover = True
             self._float_alpha = 1.0
-            self._refresh_hp_layered()
+            self._refresh_float_layered()
         except Exception:
             pass
 
     def _float_leave(self, e):
         """恢复默认色"""
         try:
-            self._hp_hover = False
+            self._float_hover = False
             self._float_alpha = 1.0   # 完全不透明 — 覆盖游戏原生条
-            self._refresh_hp_layered()
+            self._refresh_float_layered()
         except Exception:
             pass
 
@@ -87,7 +87,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         """SAO 菜单开启时持续将悬浮按钮保持在最上层.
 
         v3.1.9 round 22: cadence bumped from 150 ms (6.7 Hz) to 250 ms
-        (4 Hz). The float button is the small floating HP/status badge
+        (4 Hz). The float button is the small floating menu/status badge
         and the user can't perceive the 100 ms-longer cover-recovery
         delay, but cutting the per-second SetWindowPos calls from ~7
         to ~4 trims ~100-300 us/sec of main-thread work whenever the
@@ -195,21 +195,21 @@ class SAOPlayerGUIFloatHandlersMixin:
         FH = NG_SIZE
         self._fw, self._fh = FW, FH
         self._float_alpha = 0.95
-        self._hp_hover = False
+        self._float_hover = False
         self._ng_drag_start = None
 
         # Legacy stubs (external code may reference these)
-        self._hp_ox = 0
-        self._hp_oy = 0
+        self._float_ox = 0
+        self._float_oy = 0
         self._id_plate_w = 0
-        self._hp_shell_normal = None
-        self._hp_shell_hover = None
-        self._hp_bar_x = 0
-        self._hp_bar_y = 0
-        self._hp_bar_right = 0
-        self._hp_bar_bot_top = 0
-        self._hp_bar_bot_full = 0
-        self._hp_bar_step_x = 0
+        self._float_shell_normal = None
+        self._float_shell_hover = None
+        self._float_bar_x = 0
+        self._float_bar_y = 0
+        self._float_bar_right = 0
+        self._float_bar_bot_top = 0
+        self._float_bar_bot_full = 0
+        self._float_bar_step_x = 0
 
         saved_pos = self._get_setting('nervegear_button_pos', None)
         if saved_pos and isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2:
@@ -245,10 +245,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         except Exception:
             self._float_hwnd = 0
 
-        display_name = self._username if self._username else 'SAO'
-        if len(display_name) > 10:
-            display_name = display_name[:9] + '…'
-        self._hp_display_name = display_name
+        self._float_display_name = 'SAO'
 
         self._ng_theme = self._get_setting('nervegear_theme', 'dark') or 'dark'
         self._ng_glow_phase = 0.0

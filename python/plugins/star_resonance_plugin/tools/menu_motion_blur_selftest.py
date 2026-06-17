@@ -12,7 +12,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin
+from gui_modules.sao_gui_float_chrome_mixin import SAOPlayerGUIFloatChromeMixin
 from sao_theme.popup_menu import SAOPopUpMenu
 
 
@@ -25,7 +25,7 @@ class _Menu:
         self.raise_count += 1
 
 
-class _Owner(SAOPlayerGUIFloatHpMixin):
+class _Owner(SAOPlayerGUIFloatChromeMixin):
     def __init__(self, menu=None) -> None:
         self._sao_menu = menu
 
@@ -51,7 +51,7 @@ class _Overlay:
         self.lift_count += 1
 
 
-class _PanelOwner(SAOPlayerGUIFloatHpMixin):
+class _PanelOwner(SAOPlayerGUIFloatChromeMixin):
     def __init__(self) -> None:
         self.panels = [_Panel(True), _Panel(False)]
         self.raised = []

@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -108,7 +108,7 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
         self.assertIs(overlay['gpu_transition'], gpu)
         self.assertEqual(gpu.kind, 'entry')
         self.assertEqual(gpu.center, (240, 248))
-        self.assertEqual(gpu.target, (692.5, 1044.0))
+        self.assertEqual(gpu.target, (440.0, 448.0))
         self.assertEqual(gpu.progress_values, [0.42])
         self.assertEqual(gpu.destroy_count, 1)
 
@@ -122,16 +122,26 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
         gpu = _FakeGpu.instances[0]
         self.assertIs(overlay['gpu_transition'], gpu)
         self.assertEqual(gpu.kind, 'exit')
-        self.assertEqual(gpu.center, (692.5, 1044.0))
-        self.assertEqual(gpu.target, (692.5, 1044.0))
+        self.assertEqual(gpu.center, (260.0, 888.0))
+        self.assertEqual(gpu.target, (260.0, 888.0))
         self.assertEqual(gpu.progress_values, [0.73])
         self.assertEqual(gpu.destroy_count, 1)
 
-    def test_focus_center_prefers_existing_hp_overlay(self) -> None:
+    def test_platform_focus_center_uses_generic_fallback(self) -> None:
         owner = _Owner()
         owner._hp_overlay = _HpOverlay()
 
-        self.assertEqual(owner._entity_transition_focus_center(1, 2), (300.0, 960.0))
+        self.assertEqual(owner._entity_transition_focus_center(1, 2), (1.0, 2.0))
+
+    def test_star_resonance_focus_center_prefers_existing_hp_overlay(self) -> None:
+        from plugins.star_resonance_plugin.entity_menu_bridge import StarResonanceEntityMenuBridge
+
+        owner = _Owner()
+        owner._hp_overlay = _HpOverlay()
+        ctx = type('Ctx', (), {'engine': type('Engine', (), {'owner': owner})()})()
+        bridge = StarResonanceEntityMenuBridge(ctx)
+
+        self.assertEqual(bridge._entity_transition_focus_center(1, 2), (300.0, 960.0))
 
 
 class _FakeWin:
@@ -248,8 +258,8 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
     def _stop_recognition_engines(self) -> None:
         self.order.append("recognition.stop")
 
-    def _destroy_hp_alpha_strip_windows(self) -> None:
-        self.order.append("hp_alpha_strips.destroy")
+    def _destroy_float_alpha_windows(self) -> None:
+        self.order.append("float_alpha_strips.destroy")
 
 
 class EntityTransitionGpuDestroyTests(unittest.TestCase):

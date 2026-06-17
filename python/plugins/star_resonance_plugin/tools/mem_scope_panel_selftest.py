@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 import unittest
 from unittest import mock
 
-from gui_modules.sao_gui_mem_scope import MemScopePanel
+from plugins.star_resonance_plugin.panels.sao_gui_mem_scope import MemScopePanel
 
 
 def _panel() -> MemScopePanel:
@@ -138,11 +138,11 @@ class MemScopePanelSignatureTests(unittest.TestCase):
         panel._job_id = "job-1"
 
         with (
-            mock.patch("gui_modules.sao_gui_mem_scope.tk.Frame", return_value=_Widget()),
-            mock.patch("gui_modules.sao_gui_mem_scope.tk.Label", return_value=_Widget()),
-            mock.patch("gui_modules.sao_gui_mem_scope.section_card", return_value=_Widget()),
-            mock.patch("gui_modules.sao_gui_mem_scope.empty_state", return_value=_Widget()),
-            mock.patch("gui_modules.sao_gui_mem_scope.action_button", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_mem_scope.tk.Frame", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_mem_scope.tk.Label", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_mem_scope.section_card", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_mem_scope.empty_state", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_mem_scope.action_button", return_value=_Widget()),
         ):
             panel._render_search({
                 "search": {
