@@ -77,8 +77,6 @@ class ChatMessage:
 class Conversation:
     """A single conversation thread."""
 
-    MAX_MESSAGES = 200
-
     def __init__(self, system_prompt: str = "") -> None:
         self.id: str = uuid.uuid4().hex[:8]
         self.title: str = "New Chat"
@@ -89,7 +87,6 @@ class Conversation:
         self._msg_version = 0
         self._api_cache: Optional[List[Dict[str, Any]]] = None
         self._api_cache_ver = -1
-        self._compress_callback: Optional[Callable[[], None]] = None
 
     def add_message(self, msg: ChatMessage) -> None:
         with self._lock:
@@ -97,9 +94,6 @@ class Conversation:
             self._msg_version += 1
             if len(self.messages) == 1 and msg.role == "user" and not self.title_set:
                 self.title = msg.content[:40].replace("\n", " ")
-            exceeded = len(self.messages) > self.MAX_MESSAGES
-        if exceeded and self._compress_callback:
-            self._compress_callback()
 
     @property
     def title_set(self) -> bool:
@@ -152,7 +146,7 @@ class ChatController:
         self.engine = engine
         self.registry = registry
         self.conversation = conversation or Conversation()
-        self.conversation._compress_callback = self._auto_compress
+        # Auto-compress runs at the start of each _run_loop based on token count
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
@@ -522,7 +516,7 @@ class ChatController:
         self.cancel()
         sp = system_prompt or self.engine.config.system_prompt
         self.conversation = Conversation(system_prompt=sp)
-        self.conversation._compress_callback = self._auto_compress
+        # Auto-compress runs at the start of each _run_loop based on token count
         self._session_auto_approve.clear()
         return self.conversation
 
