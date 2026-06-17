@@ -1,6 +1,155 @@
 /* Star Resonance plugin — game-specific menu CSS */
 /* Extracted from menu.html during 5.0.0 restructure */
 
+/* === Star Resonance player info panel === */
+.leftInfo {
+    position: absolute;
+    left: calc(-25px - 240px);
+    top: -180px;
+}
+
+.leftInfoBox {
+    opacity: 0;
+    filter: blur(14px);
+    transition: opacity 0.4s ease, filter 0.42s ease;
+}
+.leftInfoBox.show {
+    opacity: 1;
+    filter: blur(0px);
+    animation: padding_open 1s ease forwards;
+}
+
+.leftInfoBox .top {
+    background: var(--info-top);
+    width: 240px;
+    height: 252px;
+    overflow: hidden;
+    position: relative;
+}
+
+.top .title {
+    margin: 0 10px;
+    padding-top: 10px;
+    padding-bottom: 7px;
+    border-bottom: 2px solid var(--menu-border-strong);
+    letter-spacing: 1px;
+    text-align: center;
+    font-size: 15px;
+    color: var(--menu-text);
+}
+
+.right-triangle {
+    width: 18px;
+    height: 14px;
+    position: absolute;
+    top: 200px;
+    left: 100%;
+    clip-path: polygon(100% 50%, 0 100%, 0 0);
+    background: var(--info-top);
+}
+
+.bottom-triangle {
+    width: 15px;
+    height: 10px;
+    position: absolute;
+    top: 0;
+    left: 30px;
+    clip-path: polygon(50% 100%, 100% 0, 0 0);
+    background: var(--info-bottom);
+}
+
+.leftInfoBox .bottom {
+    background: var(--info-bottom);
+    width: 240px;
+    height: 54px;
+    position: relative;
+    overflow: hidden;
+}
+
+.bottom .des {
+    text-align: left;
+    padding: 14px 10px;
+    font-size: 13px;
+    color: var(--menu-text);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@keyframes padding_open {
+    0%   { padding-left: 240px; padding-top: 252px; padding-bottom: 54px; opacity: 0; }
+    50%  { padding-left: 0; padding-top: 0; opacity: 1; }
+    100% { padding-bottom: 0; }
+}
+
+.sao-clock-container {
+    text-align: center;
+    padding: 10px 4px 6px;
+    border-top: 1px solid var(--menu-border);
+}
+.sao-clock-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+.sao-clock-bracket {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 14px;
+    color: rgba(243,175,18,0.38);
+    font-weight: 300;
+}
+.sao-clock-digits {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 16px;
+    letter-spacing: 2px;
+    color: rgba(100,99,100,0.78);
+    text-shadow: 0 0 6px rgba(243,175,18,0.18);
+    animation: sao-clock-pulse 4s ease-in-out infinite;
+}
+.sao-clock-label {
+    font-size: 9px;
+    letter-spacing: 3px;
+    color: rgba(140,135,138,0.56);
+    margin-top: 3px;
+    text-transform: uppercase;
+}
+@keyframes sao-clock-pulse {
+    0%, 100% { opacity: 0.72; text-shadow: 0 0 6px rgba(243,175,18,0.18); }
+    50%      { opacity: 1.0;  text-shadow: 0 0 10px rgba(243,175,18,0.35); }
+}
+
+.info-content {
+    padding: 12px;
+}
+
+.info-stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--menu-border);
+    font-size: 13px;
+    color: var(--menu-text);
+}
+.info-stat:last-child { border-bottom: none; }
+.info-stat .label { color: var(--menu-text-muted); }
+.info-stat .value { color: var(--menu-text); font-weight: 500; }
+
+.xp-bar-container {
+    margin: 8px 4px;
+    height: 6px;
+    background: rgba(188, 192, 198, 0.36);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.xp-bar-fill {
+    height: 100%;
+    background: linear-gradient(to right, rgb(243, 175, 18), rgb(255, 210, 80));
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
 /* === Burst Slot Grid === */
 /* Slot checkbox grid */
 .slot-grid {

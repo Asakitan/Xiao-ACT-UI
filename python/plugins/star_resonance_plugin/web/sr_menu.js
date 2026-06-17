@@ -792,6 +792,71 @@ function _profileText(value, fallback) {
     return text ? text : fallback;
 }
 
+function _srUserInfoEl(id) {
+    return document.getElementById(id);
+}
+function _srSetUserInfoText(id, value, fallback) {
+    var el = _srUserInfoEl(id);
+    if (!el) return;
+    el.textContent = _profileText(value, fallback || '');
+}
+function updateStarResonanceInfo(data) {
+    data = _profileEntry(data);
+    if (data.username !== undefined) _srSetUserInfoText('info-username', data.username, '');
+    if (data.level !== undefined) _srSetUserInfoText('info-level', 'Lv.' + _profileText(data.level, ''), '');
+    if (data.xp_pct !== undefined) {
+        var xpFill = _srUserInfoEl('info-xp');
+        if (xpFill) xpFill.style.width = _clampNum(data.xp_pct, 0, 0, 100) + '%';
+    }
+    if (data.profession !== undefined) _srSetUserInfoText('info-profession', data.profession, '');
+    if (data.hp !== undefined) _srSetUserInfoText('info-hp', data.hp, '');
+    if (data.sta !== undefined) _srSetUserInfoText('info-sta', data.sta, '');
+    if (data.des !== undefined) _srSetUserInfoText('info-des', data.des, '');
+    var currentFile = document.getElementById('current-file');
+    if (currentFile && data.file !== undefined) {
+        currentFile.textContent = '♪ ' + _profileText(data.file, '');
+    }
+}
+function _srSetUserInfoVisible(visible) {
+    var infoBox = _srUserInfoEl('info-box');
+    if (!infoBox) return;
+    infoBox.classList.toggle('show', !!visible);
+    if (visible) playSound('snd-panel');
+}
+function _srHandleMenuActivate(detail) {
+    var name = _profileText(detail && detail.name, '');
+    _srSetUserInfoVisible(name === 'userInfo');
+}
+function _srMenuClock() {
+    var el = _srUserInfoEl('info-clock');
+    if (!el) return;
+    var now = new Date();
+    var h = String(now.getHours()).padStart(2,'0');
+    var m = String(now.getMinutes()).padStart(2,'0');
+    var s = String(now.getSeconds()).padStart(2,'0');
+    el.textContent = h + ':' + m + ':' + s;
+}
+function _srStartUserInfoClock() {
+    var clockEl = _srUserInfoEl('info-clock');
+    if (!clockEl || clockEl.isConnected !== true || window.__srUserInfoClockStarted) return;
+    window.__srUserInfoClockStarted = true;
+    _srMenuClock();
+    setInterval(_srMenuClock, 1000);
+}
+
+window.addEventListener('sao-menu-activate', function(event) {
+    _srHandleMenuActivate((event && event.detail) || {});
+});
+window.addEventListener('sao-menu-close', function() {
+    _srSetUserInfoVisible(false);
+});
+if (window.__saoMenuInfoPayload) {
+    updateStarResonanceInfo(window.__saoMenuInfoPayload);
+}
+if (window.currentActive === 'userInfo') {
+    _srSetUserInfoVisible(true);
+}
+
 function _akNewClientId(prefix) {
     return (prefix || 'ak') + '_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1000000).toString(36);
 }
@@ -2789,7 +2854,15 @@ function _setLinkageGlobalCD(val) {
 })();
 
 /* ═══ Python bridge: expose Star Resonance JS functions ═══ */
+var __srBaseUpdateInfo = window.SAO && window.SAO.updateInfo;
+function _srUpdateInfo(data) {
+    if (typeof __srBaseUpdateInfo === 'function') {
+        __srBaseUpdateInfo(data);
+    }
+    updateStarResonanceInfo(data);
+}
 window.SAO = Object.assign(window.SAO || {}, {
+    updateInfo: _srUpdateInfo,
     showFilePicker: showFilePicker,
     closeFilePicker: closeFilePicker,
     setSessionPlayersPayload: setSessionPlayersPayload,
@@ -2801,6 +2874,8 @@ window.SAO = Object.assign(window.SAO || {}, {
     restoreStarResonanceMenuSettings: restoreMenuSettings
 });
 window.SRMenu = Object.assign(window.SRMenu || {}, {
+    updateInfo: updateStarResonanceInfo,
+    setUserInfoVisible: _srSetUserInfoVisible,
     setAutoKeyState: _syncAutoKeyState,
     setBossRaidState: _syncBossRaidState,
     restoreMenuSettings: restoreMenuSettings,
@@ -2823,19 +2898,5 @@ setTimeout(function() {
     if (typeof _initPanelThemes === 'function') _initPanelThemes();
     _loadInitialAutoKeyState();
     _loadInitialBossRaidState();
-    // System clock — SAO sci-fi style with seconds
-    function _menuClock() {
-        var el = document.getElementById('info-clock');
-        if (!el) return;
-        var now = new Date();
-        var h = String(now.getHours()).padStart(2,'0');
-        var m = String(now.getMinutes()).padStart(2,'0');
-        var s = String(now.getSeconds()).padStart(2,'0');
-        el.textContent = h + ':' + m + ':' + s;
-    }
-    var clockEl = document.getElementById('info-clock');
-    if (clockEl && clockEl.isConnected === true) {
-        _menuClock();
-        setInterval(_menuClock, 1000);
-    }
+    _srStartUserInfoClock();
 }, 250);

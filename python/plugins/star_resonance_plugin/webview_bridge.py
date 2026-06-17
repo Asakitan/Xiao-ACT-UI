@@ -292,16 +292,20 @@ class StarResonanceWebViewBridge:
     style.textContent = cssText;
 
     var menuBar = document.getElementById('menu-bar');
-    function addMenuItem(name, iconHtml, beforeName) {
+    var menuPosition = document.getElementById('menu-position');
+    function addMenuItem(name, iconHtml, beforeName, options) {
         if (!menuBar || menuBar.querySelector('[data-name="' + name + '"]')) return;
+        options = options || {};
         var li = document.createElement('li');
         li.className = 'item';
         li.setAttribute('data-name', name);
         li.setAttribute('data-sr-menu', '1');
+        if (options.persistent) li.setAttribute('data-menu-persistent', '1');
         li.innerHTML = '<div class="in-circle">' + iconHtml + '</div>';
         var before = beforeName ? menuBar.querySelector('[data-name="' + beforeName + '"]') : null;
         menuBar.insertBefore(li, before || null);
     }
+    addMenuItem('userInfo', '<span class="sao-icon sao-icon-user"></span>', 'act', { persistent: true });
     addMenuItem('panels', '<span class="sao-icon sao-icon-settings"></span>', 'act');
     addMenuItem('skillEffects', '<span style="font-size:15px;line-height:1;color:var(--menu-icon);">9</span>', 'act');
     addMenuItem('autoKeys', '<span class="sao-icon sao-icon-settings"></span>', 'act');
@@ -313,6 +317,11 @@ class StarResonanceWebViewBridge:
         tmp.innerHTML = slotsHtml;
         Array.prototype.slice.call(tmp.children).forEach(function(node) {
             if (node.id && document.getElementById(node.id)) return;
+            var host = node.getAttribute ? node.getAttribute('data-sr-menu-host') : '';
+            if (host === 'position') {
+                if (menuPosition) menuPosition.insertBefore(node, menuBar || null);
+                return;
+            }
             childBar.appendChild(node);
         });
     }
