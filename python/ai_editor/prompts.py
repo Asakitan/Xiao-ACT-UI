@@ -13,6 +13,55 @@ See AGENTS.md "System prompt maintenance" section.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import zlib
+
+
+# ---------------------------------------------------------------------------
+# Encrypted premium guide (Engine A/B/C/D documentation)
+# ---------------------------------------------------------------------------
+
+_ENCRYPTED_ENGINE_GUIDE = (
+    "W<xJ`!utWG1`S*al1b<>{7IO(nD(Y7GBPqY`Ya1A*QlzntRF80a`_!WhZTo(3k^-)Uch0IBc6L<R"
+    "#EWnEp~^BB}%3<^F%d^4iyhji}26}a^&IGnXoGd2Q$MjGYWkG;>hy4cm+Ixrcm%tP~b6PCGIh`m~"
+    "A{>9Sa=^$)60PbU+sS{hTgb%Xm=TRWpB<1Fy0``&CR~`fTV-!195%yAyVs;&5^oBV>Rh^Wqr6BX<"
+    "Y7lDrlw&l6WIP`ziTzLyHt&LEz!Zd6SLa}$QFe9paaVrv%KIQb5U3q!i3p;N}?FURJXAAS{CrCM;"
+    "C6fm|s7j#ai0n8@hXO|U?P~}khN=}Z~B2viX44nk3p$VlbY44KBkoqG{sFP&1{3L%(FJ4qOP%!%#"
+    "RAFsoc3alDRzv_kkFZhKIZc+Fth@9>Ct;}rH(6lbC+C1Q!~8-<It0ITGn}ncfLeOZkj0gnRa416v"
+    "NdW2P(_ON?Mxw4bd4In?j>g?M#d~IclaH>bd(CPP;0A@Oy|m8;^SWP2NRQxKqJp7P{I&@Fsq$qYG"
+    "q^Cr7MAvmR{XD=dCdzK|AJC#NqD@>sBJ^tEzI{0b?~=bAo_uR|1y7^A%S49(t^|X&FCG|3c4!j4A"
+    "29mKM7Oy3!ZwqjwB@`vG?`TwT|2O9Ln&gDEiKzF9D?GycQaSf3HCHWq^UM?+Vn8u1yq5el5(Ae^S"
+    "lZ9K-PKHWV}on7|KbcVg{8>oIIg4~bCY^Q7>EdPD#YLC^hoB2!YuL^DM7Yy!UWzsctXN;pCn#gbR"
+    "Rm-yWEK>HRpw?y*%pzY(FL%T`GOI*?s8rs8Q>TojD5GpplnxR%)QB)&p>{qIUhA}yS>P3%Jq`wl7"
+    "zNN`5lLI^(cbd0+Vv0jLPRyQ@TDS_3Ix>bV>?StM#zVWBcf$w=oRi{$V~jfk!t=QKC?z{_QG6Ai^"
+    "b;z+kWO8wPPCsZwCc0oe8Mk=lrw;#I%$;i3g{f!U0TmelY;;U9iIJw3im4Z0D$yiZ>&pnj#71cYo"
+    "w-=bY6UAsLD0SO8)yzI!}YZstfST=&ZDh0H{g6ADY&R_vw`FZ^H9R-ii-`CWo8OPNJ`ZHLT%`Xoz"
+    "oq={!N=Ob?*N&N!wQbl*!%h2OKxCAmEilG`?*vuquW-+^(_kHUK{TgV)N)Zf0VBg%LFbEv>%MYt8"
+    "!mX&wia<LO{8E{{-dxRW1X23!1m8ntXISY;Ak^m|`lBIY<^a!|qs0FEsQM`}b2djBm`oIdl_rym-"
+    ";`t#Dj!M"
+)
+
+_EG_SEED = b"\x4a\x91\xc3\x7f\x28\xe5\xd6\x0b\x73\xfa\x14\x9d\x55\xa2\x68\xbe"
+
+
+def _decrypt_engine_guide() -> str:
+    k = hashlib.sha256(_EG_SEED).digest()
+    raw = base64.b85decode(_ENCRYPTED_ENGINE_GUIDE)
+    dec = bytearray(len(raw))
+    kl = len(k)
+    for i, b in enumerate(raw):
+        dec[i] = b ^ k[i % kl]
+    return zlib.decompress(bytes(dec)).decode("utf-8")
+
+
+def _check_paid() -> bool:
+    try:
+        from license import get_license_manager
+        return get_license_manager().is_paid
+    except Exception:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Building blocks — composed into the final prompt
@@ -24,9 +73,8 @@ You are a highly sophisticated automated coding agent for **SAO ACT UI** \
 plugin SDK, and extensible automation.
 
 You have expert knowledge of Python, JavaScript/HTML/CSS, Win32, memory \
-scanning, network packet parsing, and game reverse engineering. The user \
-will ask questions or request tasks — you answer accurately and use tools \
-to accomplish work.\
+scanning, and real-time data processing. The user will ask questions or \
+request tasks — you answer accurately and use tools to accomplish work.\
 """
 
 _TOOL_RULES = """\
@@ -117,7 +165,6 @@ The platform includes a generic memory scanning infrastructure. Key modules:
 - **mem_probe.unified_source** — TCP/memory hybrid data source bridge. \
   Plugin-specific bridges are injected by plugins via \
   `set_bridge_classes(StateBridgeCls, SelfStateProviderCls)`.
-- **mem_probe.rt_io** — Optional accelerated I/O backend.
 
 ### Using mem_probe via engine tool
 
@@ -125,22 +172,6 @@ The platform includes a generic memory scanning infrastructure. Key modules:
 engine(action="memory_status")
 ```
 Returns connection state, reader type, and health metrics.
-
-For direct memory operations, use eval/exec:
-```
-engine(action="eval", expression="gui._mem_bridge.status() if hasattr(gui,'_mem_bridge') else 'no bridge'")
-```
-
-```
-engine(action="exec", code=\"\"\"
-from mem_probe.process import GameProcess
-with GameProcess(process_name="target.exe") as proc:
-    base = proc.main_module().base
-    _output.append(f'Base: 0x{base:X}')
-    data = proc.read_bytes(base, 16)
-    _output.append(f'Header: {data.hex() if data else \"failed\"}}')
-\"\"\")
-```
 
 ### Plugin memory bridges
 
@@ -178,7 +209,7 @@ sao_auto/python/
 ├── engines/               — Platform runtime engines
 ├── gui_modules/           — SAO menu, panels, overlays (Entity/Tk)
 ├── sao_webview.py         — WebView overlay host
-├── mem_probe/             — Generic memory scanner (process, scanner, driver)
+├── mem_probe/             — Memory scanner (process, scanner, hybrid source)
 │   └── unified_source.py  — TCP/memory hybrid (bridges injected by plugins)
 ├── plugins/
 │   └── <plugin_id>/       — Plugin-owned runtime, UI, and data adapters
@@ -219,6 +250,11 @@ def get_system_prompt(agent_mode: bool = False, custom: str = "") -> str:
     if custom:
         return custom
     prompt = SYSTEM_PROMPT
+    if _check_paid():
+        try:
+            prompt += _decrypt_engine_guide()
+        except Exception:
+            pass
     if agent_mode:
         prompt += AGENT_MODE_ADDITION
     return prompt
