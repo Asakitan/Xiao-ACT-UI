@@ -24,15 +24,9 @@ actually imported as `from gui_modules import X` stay.
 """
 
 from gui_modules.sao_hotkey_manager import SAOHotkeyManager
-from gui_modules.sao_session_players_panel import SAOSessionPlayersPanel
-from gui_modules.sao_player_panel import SAOPlayerPanel
-from gui_modules.sao_menu_left_stack import SAOMenuLeftStack
 from gui_modules.settings_manager import SettingsManager
 
 __all__ = [
     'SAOHotkeyManager',
-    'SAOSessionPlayersPanel',
-    'SAOPlayerPanel',
-    'SAOMenuLeftStack',
     'SettingsManager',
 ]

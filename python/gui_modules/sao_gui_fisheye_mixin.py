@@ -62,7 +62,6 @@ class SAOPlayerGUIFisheyeMixin:
       * self._lift_loop_active (bool)
       * self._destroyed (bool)
       * self._sao_menu, self._panels_hidden, per-panel handles (dynamic)
-      * self._session_players_panel
       * self.root (the Tk root)
     """
 
@@ -401,22 +400,25 @@ class SAOPlayerGUIFisheyeMixin:
             'cursor_x': 0, 'cursor_y': 0, 'last_y': 0,
             'close_candidate': False,
         }
-        _DRAG_ROW_PX = 40  # row height (36) + gap (4) — see _SessionPlayersRenderer
+        _DRAG_ROW_PX = 40
 
-        def _cursor_in_session_panel(x, y):
-            panel = getattr(self, '_session_players_panel', None)
-            if panel is None:
-                return False, None
-            try:
-                if not panel.winfo_exists() or not panel.winfo_ismapped():
-                    return False, None
-                px = int(panel.winfo_rootx())
-                py = int(panel.winfo_rooty())
-                pw = int(getattr(panel, 'PANEL_W', 0) or panel.winfo_width())
-                ph = int(getattr(panel, 'PANEL_H', 0) or panel.winfo_height())
-                return (px <= x < px + pw and py <= y < py + ph), panel
-            except Exception:
-                return False, None
+        def _cursor_in_scroll_panel(x, y):
+            for attr in self._detect_panel_attrs(self):
+                panel = getattr(self, attr, None)
+                if panel is None or not hasattr(panel, '_on_mousewheel'):
+                    continue
+                try:
+                    if not panel.winfo_exists() or not panel.winfo_ismapped():
+                        continue
+                    px = int(panel.winfo_rootx())
+                    py = int(panel.winfo_rooty())
+                    pw = int(getattr(panel, 'PANEL_W', 0) or panel.winfo_width())
+                    ph = int(getattr(panel, 'PANEL_H', 0) or panel.winfo_height())
+                    if px <= x < px + pw and py <= y < py + ph:
+                        return True, panel
+                except Exception:
+                    continue
+            return False, None
 
         def _scroll_panel_by_rows(panel, rows):
             if not rows or panel is None:
@@ -438,7 +440,10 @@ class SAOPlayerGUIFisheyeMixin:
             _backdrop_drag['cursor_y'] = int(y)
             if not _backdrop_drag['pressed'] or not _backdrop_drag['in_panel']:
                 return
-            panel = getattr(self, '_session_players_panel', None)
+            _inside, panel = _cursor_in_scroll_panel(
+                int(_backdrop_drag.get('cursor_x', 0)),
+                int(_backdrop_drag.get('cursor_y', 0)),
+            )
             if panel is None:
                 return
             dy = int(y) - int(_backdrop_drag['last_y'])
@@ -452,7 +457,7 @@ class SAOPlayerGUIFisheyeMixin:
         def _backdrop_scroll(dx, dy):
             cx = int(_backdrop_drag.get('cursor_x', 0))
             cy = int(_backdrop_drag.get('cursor_y', 0))
-            inside, panel = _cursor_in_session_panel(cx, cy)
+            inside, panel = _cursor_in_scroll_panel(cx, cy)
             if not inside or panel is None:
                 return
             # GLFW yoffset: +up / -down. Tk wheel delta: +120 per notch up.
@@ -479,7 +484,7 @@ class SAOPlayerGUIFisheyeMixin:
                 return
             x = int(_backdrop_drag.get('cursor_x', 0))
             y = int(_backdrop_drag.get('cursor_y', 0))
-            inside, _ = _cursor_in_session_panel(x, y)
+            inside, _ = _cursor_in_scroll_panel(x, y)
             if action == 1:  # press
                 _backdrop_drag['pressed'] = True
                 _backdrop_drag['in_panel'] = bool(inside)
@@ -558,7 +563,7 @@ class SAOPlayerGUIFisheyeMixin:
                     _layer_pos(event)
                     x = int(_backdrop_drag.get('cursor_x', 0))
                     y = int(_backdrop_drag.get('cursor_y', 0))
-                    inside, _ = _cursor_in_session_panel(x, y)
+                    inside, _ = _cursor_in_scroll_panel(x, y)
                     _backdrop_drag['pressed'] = True
                     _backdrop_drag['in_panel'] = bool(inside)
                     _backdrop_drag['last_y'] = y
@@ -1123,36 +1128,11 @@ class SAOPlayerGUIFisheyeMixin:
                 _cap_fn = _cap_static
                 _cap_source = 'static'
 
-            # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
-            if _cap_fn is None and ensure_session is not None and get_latest_bgr is not None:
-                def _cap_dxgi_window():
-                    hwnd, _game_rect = self._get_game_window_context()
-                    hwnd = int(hwnd or 0)
-                    if hwnd <= 0:
-                        return None
-                    try:
-                        if not ensure_session(hwnd):
-                            return None
-                        frame = get_latest_bgr(hwnd, max_age_s=0.2)
-                    except Exception:
-                        return None
-                    if frame is None or frame.size == 0:
-                        return None
-                    return _bgr_to_rgb_payload(frame)
-                _cap_fn = _cap_dxgi_window
-                _cap_source = 'dxgi_window'
+            # ── 优先显示器快速截屏 (DXGI), fallback ImageGrab ──
             if _cap_fn is None and capture_monitor_bgr_for_point is not None:
                 def _cap_dxgi():
                     px = sw // 2
                     py = sh // 2
-                    try:
-                        game_rect = self._get_game_window_rect()
-                        if game_rect and len(game_rect) == 4:
-                            gl, gt, gr, gb = [int(v) for v in game_rect]
-                            px = (gl + gr) // 2
-                            py = (gt + gb) // 2
-                    except Exception:
-                        pass
                     frame = capture_monitor_bgr_for_point(
                         px, py, timeout_ms=16, max_age_s=0.2)
                     if frame is None or frame.size == 0:

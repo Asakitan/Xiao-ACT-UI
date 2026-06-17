@@ -137,7 +137,7 @@ def main():
     root.update_idletasks()
 
     from plugins.star_resonance_plugin.panels.sao_gui_bossraid import BossRaidPanel
-    from gui_modules.sao_gui_profile_editors import BossRaidDetailPanel
+    from plugins.star_resonance_plugin.panels.sao_gui_profile_editors import BossRaidDetailPanel
 
     api = _mech_api(settings)
     load_fn = lambda: __import__("engines.boss_raid_engine",

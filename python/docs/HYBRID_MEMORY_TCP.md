@@ -80,9 +80,9 @@ set_bridge_classes(MemStateBridge, MemSelfStateProvider)
 
 ## GameProcess
 
-`mem_probe.process.GameProcess`（别名 `StarProcess`）：
+`mem_probe.process.GameProcess`：
 
-- 进程名从 `config.GAME_PROCESS_NAMES` 读取，不硬编码
+- 进程名由调用方或游戏插件显式传入，不在平台配置里硬编码
 - 需要管理员权限（`PROCESS_VM_READ`）
 - 提供 `read_bytes(addr, size)`、`read_uint32/64(addr)`、`modules()`、`memory_regions()`
 - 统一读取路径：driver → NtReadVirtualMemory → ReadProcessMemory

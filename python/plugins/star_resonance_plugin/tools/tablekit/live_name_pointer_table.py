@@ -14,7 +14,7 @@ import json
 import os
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

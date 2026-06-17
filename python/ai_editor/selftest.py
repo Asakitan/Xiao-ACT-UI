@@ -73,13 +73,7 @@ def test_imports() -> None:
 
 class _FakeGui:
     settings = None
-    _game_state = {"uid": 12345, "name": "TestPlayer", "level": 60, "profession": "Swordsman"}
-    _rows = {}
-    _dps_tracker = None
-    _encounter_manager = None
-    _boss_raid_engine = None
-    _trigger_engine = None
-    _auto_key_engine = None
+    _ai_engine_actions = {"sample_state": lambda **kw: {"ok": True, "source": "plugin"}}
     _plugin_manager = None
     _packet_bridge = None
     _mem_bridge = None
@@ -104,9 +98,9 @@ def test_tool_registry() -> None:
     _check(f"OpenAI schemas: {len(schemas)}", len(schemas) == len(tools))
 
     # Execute engine aggregate tool
-    result = reg.execute("engine", json.dumps({"action": "game_state"}))
+    result = reg.execute("engine", json.dumps({"action": "sample_state"}))
     data = json.loads(result)
-    _check(f"get_game_state exec: uid={data.get('uid')}", data.get("uid") == 12345)
+    _check(f"plugin action exec: ok={data.get('ok')}", data.get("ok") is True)
 
     result = reg.execute("engine", json.dumps({"action": "system_info"}))
     data = json.loads(result)
@@ -235,7 +229,8 @@ def test_tk_window() -> None:
         _check("Sidebar hidden", not panel._sidebar_visible)
 
         # Slash commands
-        _check("Slash commands defined", len(panel._SLASH_COMMANDS) >= 10)
+        commands = {cmd for cmd, _desc in panel._SLASH_COMMANDS}
+        _check("Slash commands defined", {"/system", "/eval"}.issubset(commands))
 
         # Ensure engine init
         panel._ensure_engine()
@@ -244,8 +239,8 @@ def test_tk_window() -> None:
         _check("Controller initialized", panel._controller is not None)
 
         # Test slash command execution
-        panel._execute_slash_command("/state")
-        _check("/state executed", True)
+        panel._execute_slash_command("/system")
+        _check("/system executed", True)
 
         panel._execute_slash_command("/eval 1 + 1")
         _check("/eval executed", True)
@@ -262,10 +257,10 @@ def test_tk_window() -> None:
         panel._render_markdown("Hello **bold** and `code` and\n```python\ndef foo():\n    return 42\n```")
         _check("Markdown rendered", True)
 
-        panel._render_tool_call("get_game_state", '{"key": "value"}')
+        panel._render_tool_call("engine", '{"key": "value"}')
         _check("Tool call rendered", True)
 
-        panel._render_tool_result("get_game_state", '{"uid": 12345}')
+        panel._render_tool_result("engine", '{"ok": true}')
         _check("Tool result rendered", True)
 
         panel.hide()

@@ -620,13 +620,7 @@ class AIEditorAPI:
 class _DummyGui:
     """Fallback when launched standalone without SAO instance."""
     settings = None
-    _game_state = {"uid": 0, "name": "(standalone)", "level": 0}
-    _rows = {}
-    _dps_tracker = None
-    _encounter_manager = None
-    _boss_raid_engine = None
-    _trigger_engine = None
-    _auto_key_engine = None
+    _ai_engine_actions = {}
     _plugin_manager = None
     _packet_bridge = None
     _mem_bridge = None

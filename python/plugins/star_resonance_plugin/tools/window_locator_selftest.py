@@ -50,7 +50,7 @@ class WindowLocatorTitleMatchTests(unittest.TestCase):
         locator._log_once = False
         with mock.patch.object(window_locator, "_enum_windows", return_value=windows), \
                 mock.patch.object(window_locator, "_get_process_name", side_effect=fake_process_name):
-            hwnd, title, _rect = locator.find_game_window()
+            hwnd, title, _rect = locator.find_target_window()
 
         self.assertEqual(hwnd, 2)
         self.assertEqual(title, "Untitled")

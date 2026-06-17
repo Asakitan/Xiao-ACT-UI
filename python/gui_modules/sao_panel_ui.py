@@ -3,10 +3,9 @@
 SAO-style floating panel UI primitives — extracted from sao_gui.py
 in round 49 of the sao_gui split refactor.
 
-The constants and helpers in this module are used by every floating
-panel that lives on the SAO HUD: the status panel, the AutoKey /
-BossRaid panels (via their detail editors), the Commander panel,
-the updater status panel, etc. Pulling them into a focused utility
+The constants and helpers in this module are used by floating
+panels that live on the SAO HUD, including platform panels and
+plugin-owned panels. Pulling them into a focused utility
 module:
 
   1. removes 10+ module-level constants + 8 helper functions from

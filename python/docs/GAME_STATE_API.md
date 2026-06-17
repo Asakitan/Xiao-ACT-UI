@@ -132,7 +132,7 @@ result = cy_memscan.find_aligned_u64_in_range(buffer, target, offset, size)
 
 ## 进程附加
 
-`mem_probe.process.GameProcess`（别名 `StarProcess`）：
+`mem_probe.process.GameProcess`：
 
 ```python
 from mem_probe.process import GameProcess
@@ -144,4 +144,4 @@ with GameProcess() as proc:
         print(f"0x{region.base:X} size={region.size}")
 ```
 
-进程名从 `config.GAME_PROCESS_NAMES` 配置。需要管理员权限。
+进程名由调用方或游戏插件显式传入。需要管理员权限。

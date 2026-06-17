@@ -104,7 +104,7 @@ class EventBus:
     def publish(self, topic: str, payload: Optional[Mapping[str, Any]] = None,
                 *, event: Optional[Mapping[str, Any]] = None,
                 source_name: str = "unknown", source_kind: str = "unknown",
-                game_id: str = "star_resonance", parser_id: str = "",
+                game_id: str = "", parser_id: str = "",
                 confidence: float = 1.0) -> dict[str, Any]:
         if event is not None and is_event_envelope(event):
             envelope = clone_event(event)

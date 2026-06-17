@@ -17,7 +17,7 @@ _SAO_AUTO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname
 if _SAO_AUTO_ROOT not in sys.path:
     sys.path.insert(0, _SAO_AUTO_ROOT)
 
-from mem_probe.process import StarProcess
+from ..process import StarProcess
 from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 
 

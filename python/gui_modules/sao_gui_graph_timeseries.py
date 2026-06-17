@@ -47,14 +47,14 @@ _BAR_COLORS = {
     "damage": "#f3af12",
     "heal": "#2ebf86",
     "event_count": "#35bfe8",
-    "boss_hp_pct": "#e85c7a",
+    "target_hp_pct": "#e85c7a",
 }
 
 _DEFAULT_METRICS = (
     {"id": "damage", "label": "Damage"},
     {"id": "heal", "label": "Heal"},
     {"id": "event_count", "label": "Events"},
-    {"id": "boss_hp_pct", "label": "Boss HP %"},
+    {"id": "target_hp_pct", "label": "Target HP %"},
 )
 
 
@@ -262,7 +262,7 @@ class GraphTimeseriesPanel:
                         command=lambda _v: self.zoom()).pack(side='left', padx=(0, 8))
         tk.Label(controls, text='指标', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                  font=get_cjk_font(9)).pack(side='left')
-        sao_option_menu(controls, self._metric_var, 'damage', 'heal', 'event_count', 'boss_hp_pct',
+        sao_option_menu(controls, self._metric_var, 'damage', 'heal', 'event_count', 'target_hp_pct',
                         command=lambda _v: self.select_metric()).pack(side='left', padx=(0, 8))
         self._ready_badge_frame = tk.Frame(controls, bg=_SAO_PANEL_BODY_BG)
         self._ready_badge_frame.pack(side='left', padx=(0, 8))

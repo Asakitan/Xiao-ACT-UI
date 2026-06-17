@@ -32,25 +32,6 @@ OVERRIDE_KEY = "__plugin_override__"
 # Wildcard surface — hooks/overlays registered here apply to every surface.
 ALL_SURFACES = "*"
 
-# Known surface ids (informational; any string id is accepted).  Keeping a list
-# lets the plugin manager show a discoverable menu of targets.
-KNOWN_SURFACES = (
-    "main",            # main / link-start window
-    "menu",            # radial / main menu
-    "dps",             # DPS meter overlay
-    "act_aggregate",   # ACT aggregate panel
-    "boss_hp",         # boss HP bar
-    "hp",              # self HP/MP
-    "stamina",
-    "skillfx",
-    "alert",
-    "mapbanner",
-    "commander",
-    "buff_coverage",
-    "mem_scope",       # memory-scan explorer panel
-    "plugin_ui",       # the plugin panel surface itself
-)
-
 HookCallback = Callable[[str, dict], Optional[dict]]
 
 
@@ -221,7 +202,6 @@ class RenderHookRegistry:
             "overlay_count": total_overlays,
             "hook_failures": failures,
             "surfaces": self.surfaces(),
-            "known_surfaces": list(KNOWN_SURFACES),
         }
 
 
@@ -229,5 +209,4 @@ __all__ = [
     "RenderHookRegistry",
     "OVERRIDE_KEY",
     "ALL_SURFACES",
-    "KNOWN_SURFACES",
 ]

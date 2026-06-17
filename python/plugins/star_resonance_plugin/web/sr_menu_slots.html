@@ -24,6 +24,84 @@
                 </li>
             </ul>
 
+            <div class="sessionPlayers" id="session-players">
+                <div class="sessionPlayersBox">
+                    <div class="sp-header">
+                        <div class="sp-title">SESSION PLAYERS</div>
+                        <div class="sp-subtitle" id="sp-summary">本次登录出现过 0 人</div>
+                    </div>
+                    <div class="sp-columns">
+                        <span>NAME</span>
+                        <span>UID</span>
+                        <span>POWER</span>
+                    </div>
+                    <div class="sp-list" id="sp-list">
+                        <div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="saoMsgBox_fa" id="filepicker-dialog">
+                <div class="saoPickerBox" id="filepicker-box">
+                    <div class="picker-header"><span id="picker-title">选择文件</span></div>
+                    <div class="picker-path-bar" id="picker-path"></div>
+                    <div class="picker-list" id="picker-list"></div>
+                    <div class="picker-footer">
+                        <div class="btn-use-folder" id="picker-use-folder">✔ 使用此文件夹</div>
+                        <div class="btn-circle btn-close" id="picker-close"><div class="inner"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="saoMsgBox_fa" id="source-dialog" style="display:none" aria-hidden="true">
+                <div class="saoMsgBox source-msgbox">
+                    <div class="alert-title"><span>DATA SOURCE</span></div>
+                    <div class="source-dialog-body">
+                        <div class="source-row">
+                            <div class="source-name">HP</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="hp" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="hp" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">LEVEL</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="level" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="level" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">STA</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">SKILL CD</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="skills" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="skills" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-row">
+                            <div class="source-name">NAME / UID</div>
+                            <div class="mode-group">
+                                <div class="mode-btn source-mode-btn" data-component="identity" data-mode="packet">NETWORK</div>
+                                <div class="mode-btn source-mode-btn" data-component="identity" data-mode="vision">VISION</div>
+                            </div>
+                        </div>
+                        <div class="source-note">
+                            Packet stays closest to raw game state. Vision uses the on-screen HUD and now runs through the OpenCV/OpenCL preprocessing path when the local machine supports it.
+                        </div>
+                    </div>
+                    <div class="alert-footer">
+                        <div class="btn-circle btn-close" id="source-close"><div class="inner"></div></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Auto Keys sub-menu -->
             <ul class="child-menu auto-key-menu" id="sub-autoKeys" data-group="autoKeys">
                 <li class="widget-row">

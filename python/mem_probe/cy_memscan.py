@@ -18,10 +18,7 @@ if _fast is None:  # pragma: no cover - loud once, so a missing/broken .pyd in a
     # frozen build can't silently turn every heap sweep into a per-8-byte
     # Python loop (orders of magnitude slower) without anyone noticing.
     import logging
-    logging.getLogger(__name__).warning(
-        "[cy_memscan] _sao_cy_memscan extension not loadable - all memory "
-        "scans fall back to pure Python (very slow). Rebuild with "
-        "build_cython_ext.py or check the packaged .pyd.")
+    logging.getLogger(__name__).warning("native extension unavailable, using fallback")
 
 
 def _as_bytes(buf) -> bytes:

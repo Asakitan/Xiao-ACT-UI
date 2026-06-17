@@ -80,7 +80,7 @@ use it. NEVER say the name of a tool to the user (e.g., don't say \
 - **editor_setContent(content, language?)** — Write to the editor tab.
 - **editor_getSelection()** — Get the currently selected text.
 
-### Engine (game runtime)
+### Engine (runtime)
 
 - **engine(action, ...)** — Single entry point for all runtime queries.
 
@@ -95,15 +95,9 @@ use it. NEVER say the name of a tool to the user (e.g., don't say \
   - `engine(action="exec", code="...")` — Execute Python code block \
     (use `_output.append(...)` to return data)
 
-  **Plugin actions** (when Star Resonance plugin is loaded):
-  - `engine(action="game_state")` — Player name, level, HP, scene
-  - `engine(action="entity_list")` — Visible players/monsters/NPCs
-  - `engine(action="dps_summary")` — Current combat DPS table
-  - `engine(action="dps_report")` — Last encounter full report
-  - `engine(action="boss_status")` — Boss HP, break, shield
-  - `engine(action="combat_status")` — In-combat flag, duration
-  - `engine(action="buff_list", target="self|boss")` — Buff list
-  - `engine(action="auto_key_status")` — Auto-key engine state
+  **Plugin actions** are registered dynamically by loaded plugins. Use \
+  `engine(action="plugins")` to inspect what is loaded, then rely on \
+  plugin documentation for plugin-specific action names.
 """
 
 _MEM_PROBE_GUIDE = """\
@@ -112,8 +106,8 @@ _MEM_PROBE_GUIDE = """\
 
 The platform includes a generic memory scanning infrastructure. Key modules:
 
-- **mem_probe.process.GameProcess** — Attaches to the target game process \
-  (name from ``config.GAME_PROCESS_NAMES``). Requires admin. Provides \
+- **mem_probe.process.GameProcess** — Attaches to a target process \
+  (process names supplied by the active plugin). Requires admin. Provides \
   `read_bytes(addr, size)`, `read_uint32/64(addr)`, `modules()`, \
   `memory_regions()`.
 - **mem_probe.scanner** — Multi-frame value search. `scan(process, value)` → \
@@ -121,7 +115,7 @@ The platform includes a generic memory scanning infrastructure. Key modules:
 - **mem_probe.cy_memscan** — AVX2-accelerated scanning (Cython). Falls back \
   to pure Python if the extension isn't built.
 - **mem_probe.unified_source** — TCP/memory hybrid data source bridge. \
-  Game-specific bridges are injected by plugins via \
+  Plugin-specific bridges are injected by plugins via \
   `set_bridge_classes(StateBridgeCls, SelfStateProviderCls)`.
 - **mem_probe.driver_backend** — Optional kernel driver for faster reads.
 
@@ -140,7 +134,7 @@ engine(action="eval", expression="gui._mem_bridge.status() if hasattr(gui,'_mem_
 ```
 engine(action="exec", code=\"\"\"
 from mem_probe.process import GameProcess
-with GameProcess() as proc:
+with GameProcess(process_name="target.exe") as proc:
     base = proc.main_module().base
     _output.append(f'Base: 0x{base:X}')
     data = proc.read_bytes(base, 16)
@@ -150,13 +144,8 @@ with GameProcess() as proc:
 
 ### Plugin memory bridges
 
-The Star Resonance plugin registers IL2CPP-specific bridges:
-- `mem_probe.il2cpp.mem_state_bridge.MemStateBridge` — self-state (HP, stamina, etc.)
-- `mem_probe.il2cpp.mem_entity_combat.EntityCombatReader` — entity attribute reader
-- Auto-offset resolution via live Il2CppClass field tables (no dump needed)
-
-These are injected at plugin load time — the platform code never imports them \
-directly.\
+Plugins may register domain-specific memory bridges at load time. Platform \
+code does not import those bridges directly.\
 """
 
 _SAFETY = """\
@@ -165,7 +154,7 @@ _SAFETY = """\
 
 - Answer in the user's language (Chinese or English).
 - Use markdown with code blocks for code output.
-- **Never guess** file contents or game state — always use tools.
+- **Never guess** file contents or runtime state — always use tools.
 - **Read before edit** — always `readFile` before `editFile`.
 - **Verify after edit** — run `runTerminal` to test/compile.
 - For **multi-step tasks**: read → plan → edit → verify → report.
@@ -183,19 +172,16 @@ _PROJECT_STRUCTURE = """\
 
 ```
 sao_auto/python/
-├── config.py              — Settings, version, GAME_PROCESS_NAMES
+├── config.py              — Settings and version
 ├── main.py                — Entry point
 ├── act_platform/          — Plugin SDK, event bus, UI spec
-├── engines/               — DPS tracker, encounters, triggers, auto-key
+├── engines/               — Platform runtime engines
 ├── gui_modules/           — SAO menu, panels, overlays (Entity/Tk)
 ├── sao_webview.py         — WebView overlay host
 ├── mem_probe/             — Generic memory scanner (process, scanner, driver)
 │   └── unified_source.py  — TCP/memory hybrid (bridges injected by plugins)
 ├── plugins/
-│   └── star_resonance_plugin/  — Reference game adapter
-│       ├── plugin.py           — on_load(ctx) entry point
-│       ├── mem/il2cpp/         — IL2CPP field resolvers, entity readers
-│       └── net/                — TCP packet parser
+│   └── <plugin_id>/       — Plugin-owned runtime, UI, and data adapters
 ├── web/                   — HTML/CSS/JS for WebView + AI Editor
 ├── ai_editor/             — This AI editor backend
 └── license/               — Auth system

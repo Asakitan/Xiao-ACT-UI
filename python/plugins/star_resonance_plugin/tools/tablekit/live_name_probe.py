@@ -14,7 +14,7 @@ import os
 import time
 from typing import Any, Dict, Iterable, List, Optional
 
-from mem_probe.process import StarProcess, is_admin
+from plugins.star_resonance_plugin.mem.process import StarProcess, is_admin
 from mem_probe.scanner import scan
 
 

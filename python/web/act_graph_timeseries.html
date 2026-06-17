@@ -112,7 +112,7 @@
         <option value="damage">Damage</option>
         <option value="heal">Heal</option>
         <option value="event_count">Events</option>
-        <option value="boss_hp_pct">Boss HP %</option>
+        <option value="target_hp_pct">Target HP %</option>
       </select>
       <select id="topic" onchange="GraphTimeseries.filter()">
         <option value="">All topics</option>
@@ -156,8 +156,8 @@
     // Metric -> shared theme token. Resolved to a concrete color at draw time via
     // getComputedStyle so canvas strokes follow the host light/dark theme (the
     // shared --act-* tokens flip on theme change). gold=damage, ok=heal,
-    // cyan=event_count, danger=boss_hp_pct — 1:1 with the Tk accent mapping.
-    const metricVars = { damage: '--act-gold', heal: '--act-ok', event_count: '--act-cyan', boss_hp_pct: '--act-danger' };
+    // cyan=event_count, danger=target_hp_pct — 1:1 with the Tk accent mapping.
+    const metricVars = { damage: '--act-gold', heal: '--act-ok', event_count: '--act-cyan', target_hp_pct: '--act-danger' };
     function cssVar(name, fallback) {
       try {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();

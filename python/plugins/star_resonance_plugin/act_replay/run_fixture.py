@@ -28,7 +28,7 @@ def _summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "entities": len(live.get("entities") or []),
         "render_rows": len(render_spec.get("rows") or []),
         "trigger_events": len(triggers.get("emitted") or triggers.get("recent") or []),
-        "boss_hp_pct": (render_spec.get("boss") or {}).get("hp_pct"),
+        "target_hp_pct": (render_spec.get("target") or render_spec.get("boss") or {}).get("hp_pct"),
         "dungeon_id": (render_spec.get("context") or {}).get("dungeon_id"),
         "dungeon_scene_id": (render_spec.get("context") or {}).get("dungeon_scene_id"),
     }

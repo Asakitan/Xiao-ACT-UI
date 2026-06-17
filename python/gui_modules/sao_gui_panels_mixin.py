@@ -6,34 +6,24 @@ SAOPlayerGUIPanelsMixin — ninth mixin extracted from SAOPlayerGUI
 Combines the remaining panel-toggle helpers and small settings
 toggles that didn't have a natural home in earlier mixins:
 
-Commander cluster (2):
-  * _toggle_commander_panel — open/close the Commander floating panel
-  * _push_commander_data — build a packet-driven snapshot + push to
-    the panel (sig-cached at the GUI level)
-
 Panel visibility (1):
   * _toggle_hide_all_panels — one-shot withdraw / restore of every
-    floating panel (status, updater, 
-    ). Snapshots which panels were
-    visible so restore can re-show only those.
+    floating panel. Snapshots which panels were visible so restore can
+    re-show only those.
 
 Recognition (1):
   * _toggle_recognition_menu — menu entry that flips the
     recognition_active flag (or starts the engines on first toggle)
 
-Settings toggles (7):
+Settings toggles:
   * _toggle_sound_enabled — sound on/off (delegates to sao_sound)
   * _adj_sound_volume(delta) — sound volume +/-
-  * _get_mem_data_source — read mem_data_source setting
-  * _cycle_mem_data_source — cycle tcp/hybrid/auto/memory + alert
   * _toggle_topmost — toggles -topmost on the float + status panels
 
 Required SAOPlayerGUI attrs:
-  * self._commander_panel, self._last_commander_push_sig
   * self._status_panel, self._update_panel
   * self._panels_hidden, self._hidden_panels_snapshot
-  * self._self_buff_overlay, self._boss_buff_overlay
-  * self._float, self.root, self._packet_engine
+  * self._float, self.root
   * self._recog_lock, self._recognition_active,
     self._recognition_engine, self._recognition_engines
   * self._fisheye_ov
@@ -46,8 +36,7 @@ Required SAOPlayerGUI methods (via MRO):
   * _refresh_menu_if_open (Menu mixin)
   * _get_setting, _set_setting (SAOPlayerGUI)
   * _start_recognition, _reset_sta_offline_state,
-    _reconfigure_data_engines, _update_status_panel,
-    _show_entity_alert (SAOPlayerGUI)
+    _update_status_panel (SAOPlayerGUI)
 """
 
 from __future__ import annotations
@@ -463,16 +452,6 @@ class SAOPlayerGUIPanelsMixin:
 
     # ── Panel Theme ──
 
-    _THEME_OVERLAY_MAP = {
-        'dps':     '_dps_overlay',
-        'hp':      '_hp_overlay',
-        'bosshp':  '_boss_hp_overlay',
-        'skillfx': '_skillfx_overlay',
-        'alert':   '_alert_overlay',
-        'act':     '',
-        'buffmon': '',   # self/boss 一对 overlay, theme mixin 内特例分发
-    }
-
     _ACT_PANEL_ATTRS = (
         '_act_plugin_manager_panel',
         '_act_trigger_timer_panel',
@@ -540,19 +519,6 @@ class SAOPlayerGUIPanelsMixin:
         set_sound_volume(nv)
         self._set_setting('sound_volume', nv)
 
-    def _toggle_buffmon_enabled(self):
-        pass
-
-    def _cycle_boss_bar_mode(self):
-        pass
-
-    def _get_mem_data_source(self) -> str:
-        return str(self._get_setting('mem_data_source', 'tcp') or 'tcp').strip().lower()
-
-    def _cycle_mem_data_source(self):
-        """数据源切换 — 游戏插件覆盖。"""
-        pass
-
     # ══════════════════════════════════════════════
     #  其他功能
     # ══════════════════════════════════════════════
@@ -560,11 +526,10 @@ class SAOPlayerGUIPanelsMixin:
         current = self._float.attributes('-topmost')
         new_val = not current
         self._float.attributes('-topmost', new_val)
-        for panel in [self._status_panel, self._update_panel]:
+        for panel in [getattr(self, '_status_panel', None), getattr(self, '_update_panel', None)]:
             try:
                 if panel and panel.winfo_exists():
                     panel.attributes('-topmost', new_val)
             except Exception:
                 pass
         self._refresh_menu_if_open()
-

@@ -26,7 +26,7 @@ if _SAO not in sys.path:
     sys.path.insert(0, _SAO)
 
 from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 
 
 _NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")

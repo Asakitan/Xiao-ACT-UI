@@ -300,8 +300,8 @@ class BurstReadyOverlay:
         theme = get_panel_theme('skillfx', theme_name)
         if not theme:
             return
-        # SkillFX uses module-level constants → mutate the module
-        from gui_modules import sao_gui_skillfx as _mod
+        # Theme values are module-level constants in this plugin panel.
+        from plugins.star_resonance_plugin.panels import sao_gui_skillfx as _mod
         for key, value in theme.items():
             setattr(_mod, key, value)
         self._theme_name = theme_name

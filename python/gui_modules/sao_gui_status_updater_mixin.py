@@ -102,110 +102,18 @@ class SAOPlayerGUIStatusUpdaterMixin:
     """Mixin bundling status panel + updater event chain + update panel."""
 
     def _toggle_status_panel(self):
-        """浮动状态面板 — 显示识别状态 + 引擎信息"""
-        if self._status_panel and self._status_panel.winfo_exists():
-            self._fade_panel_out(self._status_panel, '_status_panel', 'show_status')
-            return
-
-        try: play_sound('panel')
-        except: pass
-        sw, sh = 236, 178
-        saved_sx = self.settings.get('status_x', None)
-        saved_sy = self.settings.get('status_y', None)
-        if saved_sx is not None:
-            fx, fy = int(saved_sx), int(saved_sy)
-        else:
-            fx = self._float.winfo_x() + self._fw + 10
-            fy = self._float.winfo_y()
-            if fx + sw > self._float.winfo_screenwidth() - 10:
-                fx = self._float.winfo_x() - sw - 10
-
-        self._status_panel = tk.Toplevel(self.root)
-        self._status_panel.overrideredirect(True)
-        self._status_panel.attributes('-topmost', True)
-        self._status_panel.attributes('-alpha', 0.0)
-        self._status_panel.geometry(f'{sw}x{sh}+{fx}+{fy}')
-        self._status_panel.configure(bg=_SAO_PANEL_HEADER_BG)
-        _apply_panel_style(self._status_panel)
-
-        border = tk.Frame(self._status_panel, bg=_SAO_PANEL_BORDER, padx=1, pady=1)
-        border.pack(fill=tk.BOTH, expand=True)
-        inner = tk.Frame(border, bg=_SAO_PANEL_BODY_BG)
-        inner.pack(fill=tk.BOTH, expand=True)
-
-        hdr, close_lbl = _sao_panel_header(inner, '◉', 'STATUS', self._toggle_status_panel)
-
-        body = _sao_panel_body(inner)
-        body_pad = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        body_pad.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
-
-        # 识别状态行
-        recog_text = 'ON' if getattr(self, '_recognition_active', False) else 'OFF'
-        recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
-        self._status_recog_lbl = _sao_row(body_pad, '识别', recog_text,
-                                           value_fg=recog_fg,
-                                           value_font=get_cjk_font(9, True))
-
-        # 数据源行
-        src_text = 'Packet'
-        if getattr(self, '_cfg_settings_ref', None):
-            src = str(self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp').lower()
-            src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
-        self._status_source_lbl = _sao_row(body_pad, '数据源', src_text,
-                                            value_fg=_SAO_PANEL_GOLD)
-
-        # 更新状态行
-        self._status_update_lbl = _sao_row(body_pad, '更新', '待机',
-                                           value_fg='#556677',
-                                           value_font=get_cjk_font(9, True))
-        self._status_update_progress_lbl = _sao_row(body_pad, '进度', '--',
-                                                    value_fg=_SAO_PANEL_ACCENT,
-                                                    value_font=get_cjk_font(9, True))
-
-        # 底部 HUD 装饰
-        hud_cv = _sao_panel_hud_canvas(body)
-        hud_cv.create_text(4, 8, text='SYS:STATUS', anchor='w',
-                           font=('Consolas', 6), fill='#d0d0d0')
-        hud_cv.create_line(80, 8, sw - 10, 8, fill='#e8e8e8', width=1)
-
-        # 拖拽
-        _sd = {'x': 0, 'y': 0}
-        def sdstart(e): _sd['x'], _sd['y'] = e.x_root, e.y_root
-        def sdmove(e):
-            dx, dy = e.x_root - _sd['x'], e.y_root - _sd['y']
-            nx, ny = self._status_panel.winfo_x()+dx, self._status_panel.winfo_y()+dy
-            self._status_panel.geometry(f'+{nx}+{ny}')
-            _sd['x'], _sd['y'] = e.x_root, e.y_root
-            self.settings.set('status_x', nx); self.settings.set('status_y', ny)
-        _bind_panel_drag(hdr, close_lbl, sdstart, sdmove)
-
-        self._fade_panel_in(self._status_panel, target=0.92)
-        self._attach_sao_panel_fx(self._status_panel, hdr, inner)
-        self._attach_panel_float(self._status_panel, phase=2.0)
-        self._update_status_panel()
-        self.settings.set('show_status', True)
-        self.settings.save()
+        """Plugin-owned status panel hook."""
+        handler = getattr(self, '_plugin_toggle_status_panel', None)
+        if callable(handler):
+            return handler()
+        return None
 
     def _update_status_panel(self):
-        """刷新状态面板内容"""
-        if not (self._status_panel and self._status_panel.winfo_exists()):
-            return
-        # 识别状态
-        if hasattr(self, '_status_recog_lbl'):
-            recog_text = 'ON' if getattr(self, '_recognition_active', False) else 'OFF'
-            recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
-            self._status_recog_lbl.configure(text=recog_text, fg=recog_fg)
-        if hasattr(self, '_status_source_lbl'):
-            src_text = 'Packet'
-            if getattr(self, '_cfg_settings_ref', None):
-                src = str(self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp').lower()
-                src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
-            self._status_source_lbl.configure(text=src_text, fg=_SAO_PANEL_GOLD)
-        view = self._get_update_view()
-        if hasattr(self, '_status_update_lbl'):
-            self._status_update_lbl.configure(text=view['status_text'], fg=view['status_color'])
-        if hasattr(self, '_status_update_progress_lbl'):
-            self._status_update_progress_lbl.configure(text=view['progress_text'], fg=view['progress_color'])
+        """Refresh the plugin-owned status panel, if present."""
+        handler = getattr(self, '_plugin_update_status_panel', None)
+        if callable(handler):
+            return handler()
+        return None
 
     def _get_update_snapshot(self):
         try:

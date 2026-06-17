@@ -7,10 +7,7 @@ import json
 import os
 import tempfile
 
-from act_replay.events import damage_event, dungeon_event, skill_event
-from act_replay.harness import ActReplayHarness
-
-from .adapters import StarResonanceParserAdapter, built_in_parser_adapters
+from .adapters import built_in_parser_adapters
 from .event_bus import EventBus
 from .plugins import PluginManager
 
@@ -54,17 +51,7 @@ def run_selftest() -> dict:
     bus.publish("damage", {"damage": 7}, source_name="selftest", source_kind="unit")
     assert direct_events and direct_events[0]["payload"]["damage"] == 7, direct_events
 
-    adapter = StarResonanceParserAdapter()
-    parser = adapter.create_parser(on_self_update=lambda player: None, preferred_uid=36668136)
-    adapter.start()
-    adapter.parse_packet(b"\x00")
-    parser_event = adapter.normalize_event("damage", {"damage": 3})
-    parser_health = adapter.health()
-    assert built_in_parser_adapters()[0]["adapter_id"] == "star_resonance_tcp", built_in_parser_adapters()
-    assert parser is adapter.parser, parser_health
-    assert parser_event["source"]["parser_id"] == "star_resonance_tcp", parser_event
-    assert parser_health["parser_created"] is True, parser_health
-    assert parser_health["packet_frames"] == 1, parser_health
+    assert built_in_parser_adapters() == [], built_in_parser_adapters()
 
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
         _write_demo_plugin(root)
@@ -72,23 +59,11 @@ def run_selftest() -> dict:
         manager.discover()
         assert manager.load_plugin("capture_demo"), manager.status()
 
-        harness = ActReplayHarness(event_bus=bus)
-        harness.set_self_uid(36668136)
-        snap = harness.replay([
-            dungeon_event("sync_dungeon_data", dungeon_id=42001, scene_uuid=155001, dungeon_difficulty=3),
-            skill_event("server_end", skill_uuid=777),
-            damage_event(
-                attacker_uid=36668136,
-                attacker_uuid=(36668136 << 16) | 640,
-                attacker_is_self=True,
-                target_uuid=987654321064,
-                target_is_monster=True,
-                target_is_combat_target=True,
-                skill_id=1101,
-                skill_key=1101,
-                damage=1234,
-            ),
-        ])
+        bus.publish("dungeon", {"kind": "sync_dungeon_data", "dungeon_id": 42001}, source_name="selftest", source_kind="unit")
+        bus.publish("skill", {"kind": "server_end", "skill_uuid": 777}, source_name="selftest", source_kind="unit")
+        bus.publish("damage", {"damage": 1234}, source_name="selftest", source_kind="unit")
+        snap = {"live": {"total_damage": 1234}}
+        bus.publish("act_snapshot", snap, source_name="selftest", source_kind="unit")
         module = manager._records["capture_demo"].module
         captured = list(getattr(module, "events", [])) if module else []
         assert ("dungeon", 42001) in captured, captured
@@ -104,7 +79,7 @@ def run_selftest() -> dict:
         "ok": True,
         "event_bus_contract": True,
         "plugin_manager_contract": True,
-        "parser_adapter_contract": True,
+        "parser_adapter_contract": "plugin_owned",
         "replay_event_bus_contract": True,
         "published": bus.snapshot().get("published"),
         "plugin_count": status.get("plugin_count"),

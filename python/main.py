@@ -126,7 +126,7 @@ def run_test():
     engine = RecognitionEngine(state_mgr, settings)
 
     print('\nScanning game window...')
-    result = engine._locator.find_game_window()
+    result = engine._locator.find_target_window()
     if result is None:
         print('Game window not found')
         print(f'   keywords: {engine._locator._keywords}')

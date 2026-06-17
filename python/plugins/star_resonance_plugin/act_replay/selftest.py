@@ -20,9 +20,9 @@ from engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
 from engines.game_state import GameStateManager
-from gui_modules.sao_gui_dps import DpsOverlay
-from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
-from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
+from plugins.star_resonance_plugin.panels.sao_gui_dps import DpsOverlay
+from plugins.star_resonance_plugin.panels.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
+from plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
 from sao_webview import SAOWebViewGUI

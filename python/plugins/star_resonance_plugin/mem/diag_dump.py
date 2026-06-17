@@ -6,7 +6,7 @@ import bisect, json, os, sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-from mem_probe.process import StarProcess
+from .process import StarProcess
 
 ANCHORS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anchors.json")
 

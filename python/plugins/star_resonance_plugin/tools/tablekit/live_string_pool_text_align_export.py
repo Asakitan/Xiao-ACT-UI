@@ -22,7 +22,7 @@ _SAO = os.path.dirname(os.path.dirname(_HERE))
 if _SAO not in sys.path:
     sys.path.insert(0, _SAO)
 
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 
 _NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
 _DEFAULT_POINTER_TABLES = os.path.join(_NAME_TABLES, "live_probe_pointer_tables.json")

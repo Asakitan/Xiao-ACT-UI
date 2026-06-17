@@ -8,6 +8,15 @@ The platform has ZERO imports from this plugin.
 
 from __future__ import annotations
 
+import os
+import sys
+
+_PLUGIN_ROOT = os.path.dirname(os.path.abspath(__file__))
+for _subdir in ("cython", "protocol"):
+    _path = os.path.join(_PLUGIN_ROOT, _subdir)
+    if os.path.isdir(_path) and _path not in sys.path:
+        sys.path.insert(0, _path)
+
 _ctx = None
 _engines_started = False
 
@@ -80,6 +89,13 @@ def _init_game_engines(ctx):
     if cfg is None:
         ctx.log('[SR] No cfg_settings_ref on owner, skipping engine init')
         return
+    bridge = getattr(owner, '_game_webview_bridge', None)
+
+    def _bridge_callback(name: str):
+        fn = getattr(bridge, name, None) if bridge is not None else None
+        if callable(fn):
+            return fn
+        return getattr(owner, name, None)
 
     # ── GameStateManager ──
     try:
@@ -125,7 +141,7 @@ def _init_game_engines(ctx):
         except Exception:
             _rules = []
         trigger_engine = ActTriggerEngine(_rules)
-        _finalize_hook = getattr(owner, '_on_dps_report_finalized', None)
+        _finalize_hook = _bridge_callback('_on_dps_report_finalized')
         if callable(_finalize_hook):
             dps_tracker.register_finalized_hook(_finalize_hook)
         ctx.engine.set_owner_attr('_dps_history_store', dps_history)
@@ -148,12 +164,12 @@ def _init_game_engines(ctx):
         data_mode = str(cfg.get('mem_data_source', 'tcp') or 'tcp').lower()
         packet_engine = PacketBridge(
             state_mgr, cfg,
-            on_damage=getattr(owner, '_on_packet_damage', None),
-            on_monster_update=getattr(owner, '_on_monster_update', None),
-            on_boss_event=getattr(owner, '_on_boss_event', None),
-            on_scene_change=getattr(owner, '_on_scene_change', None),
-            on_skill_event=getattr(owner, '_on_skill_event', None),
-            on_dungeon_event=getattr(owner, '_on_dungeon_event', None),
+            on_damage=_bridge_callback('_on_packet_damage'),
+            on_monster_update=_bridge_callback('_on_monster_update'),
+            on_boss_event=_bridge_callback('_on_boss_event'),
+            on_scene_change=_bridge_callback('_on_scene_change'),
+            on_skill_event=_bridge_callback('_on_skill_event'),
+            on_dungeon_event=_bridge_callback('_on_dungeon_event'),
             data_source=data_mode,
             plugin_manager=ensure_act_plugin_manager(owner, load=False),
             event_bus=ensure_act_event_bus(owner),
@@ -240,7 +256,7 @@ def _init_game_engines(ctx):
             state_mgr, cfg,
             on_alert=_on_boss_alert,
             on_sound=lambda name: play_sound(name),
-            on_boss_action=getattr(owner, '_on_boss_action_with_gate', None),
+            on_boss_action=_bridge_callback('_on_boss_action_with_gate'),
             on_mechanic=getattr(owner, '_on_mechanic_event', None),
         )
         ctx.engine.set_owner_attr('_boss_raid_engine', br)
@@ -359,7 +375,10 @@ def _build_auto_items():
         return []
     ak = getattr(owner, '_auto_key_engine', None)
     ak_on = bool(ak and getattr(ak, 'running', False))
+    recog_on = bool(getattr(owner, '_recognition_active', False))
     return [
+        {'icon': '⚙', 'label': f'识别: {"ON" if recog_on else "OFF"}',
+         'command': getattr(owner, '_toggle_recognition_menu', lambda: None)},
         {'icon': '⚡', 'label': f'AutoKey: {"ON" if ak_on else "OFF"}',
          'command': getattr(owner, '_toggle_auto_script', lambda: None)},
         {'icon': '◆', 'label': 'AutoKey Quick Panel',
@@ -408,11 +427,13 @@ def _build_panel_items():
          'command': getattr(owner, '_toggle_dps_enabled', lambda: None)},
         {'icon': '◈', 'label': 'Commander',
          'command': getattr(owner, '_toggle_commander_panel', lambda: None)},
+        {'icon': '◎', 'label': 'Session Players',
+         'command': getattr(owner, '_toggle_session_players_panel', lambda: None)},
     ]
 
 
 def _inject_game_constants():
-    """Inject game-specific modules and constants into platform at load time.
+    """Register plugin-owned runtime modules at load time.
 
     Registers plugin-owned mem_access / unified_source into sys.modules under
     the ``mem_probe.*`` namespace so platform code that does
@@ -420,12 +441,7 @@ def _inject_game_constants():
     moved from platform to plugin.
     """
     import sys
-    from plugins.star_resonance_plugin.sr_config import (
-        GAME_PROCESS_NAMES, GAME_WINDOW_KEYWORDS, GAME_MAIN_MODULE,
-    )
-    import config
-    config.GAME_PROCESS_NAMES = GAME_PROCESS_NAMES
-    config.GAME_WINDOW_KEYWORDS = GAME_WINDOW_KEYWORDS
+    from plugins.star_resonance_plugin.sr_config import GAME_MAIN_MODULE
 
     # ── Register game modules into mem_probe namespace ──
     try:
@@ -436,12 +452,6 @@ def _inject_game_constants():
         sys.modules['mem_probe.unified_source'] = _us
         mem_probe.mem_access = _ma
         mem_probe.unified_source = _us
-    except Exception:
-        pass
-
-    try:
-        from mem_probe.process import set_game_process_names
-        set_game_process_names(GAME_PROCESS_NAMES)
     except Exception:
         pass
 
@@ -500,6 +510,10 @@ def on_load(ctx):
 
     from plugins.star_resonance_plugin.webview_bridge import install_webview_bridge
     install_webview_bridge(ctx)
+    from plugins.star_resonance_plugin.entity_menu_bridge import install_entity_menu_bridge
+    install_entity_menu_bridge(ctx)
+    from plugins.star_resonance_plugin.ai_actions import install_ai_engine_actions
+    install_ai_engine_actions(ctx.engine.owner)
 
     ctx.register_menu_category('自动', '⚡', _build_auto_items, priority=10)
     ctx.register_menu_category('Boss', '⚔', _build_boss_items, priority=20)
@@ -527,5 +541,10 @@ def on_unload():
     global _ctx, _engines_started
     if _ctx is not None:
         _ctx.log('[SR] Star Resonance plugin unloading')
+        try:
+            from plugins.star_resonance_plugin.ai_actions import uninstall_ai_engine_actions
+            uninstall_ai_engine_actions(_ctx.engine.owner)
+        except Exception:
+            pass
     _ctx = None
     _engines_started = False

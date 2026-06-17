@@ -16,7 +16,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional
 
 from mem_probe import cy_memscan as _cy
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

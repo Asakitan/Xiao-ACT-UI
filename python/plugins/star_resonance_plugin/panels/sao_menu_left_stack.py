@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-SAOMenuLeftStack — left-column stack containing SAOPlayerPanel and
-SAOSessionPlayersPanel, with show/hide animation for the session list.
+SAOMenuLeftStack — Star Resonance left-column stack containing
+SAOPlayerPanel and SAOSessionPlayersPanel, with show/hide animation for
+the session list.
 
-Extracted from sao_gui.py (round 28 of the split refactor).
+Moved out of gui_modules so game-specific Entity/Tk menu UI stays inside
+the Star Resonance plugin.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 
-from gui_modules.sao_player_panel import SAOPlayerPanel
-from gui_modules.sao_session_players_panel import SAOSessionPlayersPanel
+from .sao_player_panel import SAOPlayerPanel
+from .sao_session_players_panel import SAOSessionPlayersPanel
 
 
 class SAOMenuLeftStack(tk.Frame):

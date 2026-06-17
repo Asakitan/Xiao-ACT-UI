@@ -12,8 +12,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin
-from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
+from plugins.star_resonance_plugin.panels.sao_gui_damage_events_mixin import SAOPlayerGUIDamageEventsMixin
+from plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 
 
 class _StateMgr:
@@ -46,7 +46,7 @@ class _PacketOwner(SAOPlayerGUIPacketCallbacksMixin):
         self.banners.append(name)
 
 
-class _FloatOwner(SAOPlayerGUIFloatHandlersMixin):
+class _FloatOwner(SAOPlayerGUIDamageEventsMixin):
     def __init__(self) -> None:
         self._encounter_mgr = _EncounterMgr()
         self._scene_damage_grace_until = "bad"
@@ -60,7 +60,7 @@ class EntityPacketCallbackTests(unittest.TestCase):
         published = []
 
         with mock.patch(
-            "gui_modules.sao_gui_packet_callbacks_mixin.publish_owner_event",
+            "plugins.star_resonance_plugin.panels.sao_gui_packet_callbacks_mixin.publish_owner_event",
             side_effect=lambda *args, **kwargs: published.append((args, kwargs)),
         ):
             owner._on_dungeon_event({

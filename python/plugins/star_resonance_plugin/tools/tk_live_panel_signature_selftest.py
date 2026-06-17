@@ -69,8 +69,8 @@ class TkLivePanelSignatureTests(unittest.TestCase):
         panel._rx_container = _Widget()
 
         with (
-            mock.patch("gui_modules.sao_gui_bossraid.tk.Label", return_value=_Widget()),
-            mock.patch("gui_modules.sao_gui_bossraid.panel_font", return_value=("Segoe UI", 8)),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_bossraid.tk.Label", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.sao_gui_bossraid.panel_font", return_value=("Segoe UI", 8)),
         ):
             panel._render_boss_summary({
                 "skill_count": "bad",

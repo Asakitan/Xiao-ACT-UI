@@ -18,10 +18,11 @@ from gui_modules.sao_child_bar_gpu import BarColors, _ChildBarSnapshot, _RowSnap
 from plugins.star_resonance_plugin.panels.sao_gui_bosshp import BossHpOverlay
 from plugins.star_resonance_plugin.panels.sao_gui_hp import HpOverlay
 from gui_modules.sao_gui_menu_hud import MenuHudOverlay
-from gui_modules.sao_gui_state_mixin import SAOPlayerGUIStateMixin
-from gui_modules.sao_left_info_gpu import (
-    LeftInfoGpuPainter, PlayerPanelGpuPainter, SessionPlayersGpuPainter,
-    _LeftInfoSnapshot, _PlayerPanelSnapshot, _SessionPlayersSnapshot,
+from plugins.star_resonance_plugin.panels.sao_gui_state_mixin import SAOPlayerGUIStateMixin
+from gui_modules.sao_left_info_gpu import LeftInfoGpuPainter, _LeftInfoSnapshot
+from plugins.star_resonance_plugin.panels.sao_left_info_gpu import (
+    PlayerPanelGpuPainter, SessionPlayersGpuPainter,
+    _PlayerPanelSnapshot, _SessionPlayersSnapshot,
 )
 from gui_modules.sao_menu_bar_gpu import _ButtonSnapshot
 from gui_modules.sao_menu_bar_gpu import MenuBarGpuPainter

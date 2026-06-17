@@ -992,14 +992,14 @@ def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
         "encounter": {"id": "act-trigger-test", "status": "active", "duration_s": max(1.0, threshold + 1.0)},
         "totals": {"damage": 0.0, "heal": 0.0, "elapsed_s": max(1.0, threshold + 1.0)},
         "context": {},
-        "boss": {},
+        "target": {},
     }
     if rule_type == "damage_total":
         render_spec["totals"]["damage"] = max(1.0, threshold + 1.0)
     elif rule_type == "heal_total":
         render_spec["totals"]["heal"] = max(1.0, threshold + 1.0)
-    elif rule_type == "boss_hp_pct_below":
-        render_spec["boss"]["hp_pct"] = min(max(threshold, 0.0), 1.0)
+    elif rule_type == "target_hp_pct_below":
+        render_spec["target"]["hp_pct"] = min(max(threshold, 0.0), 1.0)
     elif rule_type == "skill_kind":
         render_spec["context"]["last_skill_kind"] = match or "server_end"
     elif rule_type == "boss_event_type":
@@ -1296,6 +1296,184 @@ def _offline_import_source_probe(source_path: str, fmt: str, event_count: int) -
     }
 
 
+def _split_import_meta_events(events: Iterable[Any], self_uid: int = 0) -> tuple[int, list[dict[str, Any]]]:
+    out: list[dict[str, Any]] = []
+    uid = _coerce_int(self_uid, 0)
+    for event in events or []:
+        if not isinstance(event, Mapping):
+            raise ValueError("normalized import events must be objects")
+        item = dict(_json_safe(event))
+        if str(item.get("kind") or "").strip().lower() == "meta":
+            uid = _coerce_int(item.get("self_uid"), uid)
+            continue
+        out.append(item)
+    return uid, out
+
+
+def _load_normalized_import(path: str) -> tuple[int, list[dict[str, Any]]]:
+    suffix = os.path.splitext(str(path or ""))[1].lower()
+    if suffix in (".jsonl", ".ndjson"):
+        events: list[dict[str, Any]] = []
+        with open(path, "r", encoding="utf-8") as fp:
+            for line in fp:
+                text = line.strip()
+                if not text:
+                    continue
+                value = json.loads(text)
+                if not isinstance(value, Mapping):
+                    raise ValueError("normalized JSONL rows must be objects")
+                events.append(dict(value))
+        return _split_import_meta_events(events)
+    if suffix != ".json":
+        raise ValueError(f"unsupported normalized import format: {suffix.lstrip('.') or os.path.basename(path)}")
+    with open(path, "r", encoding="utf-8") as fp:
+        data = json.load(fp)
+    if isinstance(data, list):
+        return _split_import_meta_events(data)
+    if not isinstance(data, Mapping):
+        raise ValueError("normalized import JSON must be an object or event array")
+    meta = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
+    self_uid = _coerce_int(data.get("self_uid") or meta.get("self_uid"), 0)
+    raw_events = data.get("events") or data.get("items") or []
+    if not isinstance(raw_events, list):
+        raise ValueError("normalized import JSON events must be an array")
+    return _split_import_meta_events(raw_events, self_uid)
+
+
+def _import_normalized_event_file(path: str) -> dict[str, Any]:
+    suffix = os.path.splitext(str(path or ""))[1].lower().lstrip(".") or "unknown"
+    try:
+        self_uid, events = _load_normalized_import(path)
+        return {
+            "ok": True,
+            "format": suffix,
+            "source_path": str(path or ""),
+            "self_uid": int(self_uid or 0),
+            "event_count": len(events),
+            "events": events,
+            "errors": [],
+            "importer": "normalized_event_file",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "format": suffix,
+            "source_path": str(path or ""),
+            "self_uid": 0,
+            "event_count": 0,
+            "events": [],
+            "errors": [str(exc)],
+            "message": str(exc),
+            "importer": "normalized_event_file",
+        }
+
+
+def _topic_from_import_event(event: Mapping[str, Any]) -> str:
+    topic = str(event.get("topic") or "").strip()
+    if topic:
+        return topic
+    kind = str(event.get("kind") or event.get("type") or "").strip().lower()
+    if kind in {"heal", "damage", "skill", "dungeon", "scene", "monster", "boss", "boss_state"}:
+        return kind
+    if kind in {"server_end", "server_stage_end", "client_use"}:
+        return "skill"
+    if "damage" in event:
+        return "damage"
+    if "heal" in event:
+        return "heal"
+    return kind or "parsed_event"
+
+
+def _import_event_amount(event: Mapping[str, Any], *keys: str) -> int:
+    for key in keys:
+        try:
+            value = int(event.get(key) or 0)
+        except Exception:
+            value = 0
+        if value:
+            return value
+    return 0
+
+
+def _generic_import_snapshot(events: Iterable[Mapping[str, Any]], *, self_uid: int = 0) -> dict[str, Any]:
+    rows = [dict(event) for event in events if isinstance(event, Mapping)]
+    topics: dict[str, int] = {}
+    total_damage = 0
+    total_heal = 0
+    for event in rows:
+        topic = _topic_from_import_event(event)
+        topics[topic] = topics.get(topic, 0) + 1
+        total_damage += _import_event_amount(event, "damage", "damage_total")
+        total_heal += _import_event_amount(event, "heal", "heal_total")
+    return {
+        "event_count": len(rows),
+        "topics": topics,
+        "self_uid": int(self_uid or 0),
+        "live": {
+            "total_damage": total_damage,
+            "total_heal": total_heal,
+        },
+        "render_spec": {
+            "title": "Offline Import",
+            "sources": {
+                "summary": {
+                    "data_source": "offline_import",
+                    "mode": "offline_import",
+                    "active": True,
+                },
+            },
+            "totals": {
+                "damage": total_damage,
+                "heal": total_heal,
+                "dps": 0,
+                "hps": 0,
+                "elapsed_s": 0.0,
+            },
+        },
+    }
+
+
+def _generic_import_report(snapshot: Mapping[str, Any], *, source_path: str,
+                           fmt: str, event_count: int) -> dict[str, Any]:
+    live = snapshot.get("live") if isinstance(snapshot.get("live"), Mapping) else {}
+    total_damage = int(live.get("total_damage") or 0)
+    total_heal = int(live.get("total_heal") or 0)
+    return {
+        "encounter_id": f"offline:{os.path.basename(str(source_path or 'import'))}",
+        "report_reason": "offline_import",
+        "source_kind": "offline_import",
+        "source_path": str(source_path or ""),
+        "import_format": str(fmt or ""),
+        "import_event_count": int(event_count or 0),
+        "elapsed_s": 0.0,
+        "total_damage": total_damage,
+        "total_heal": total_heal,
+        "total_dps": 0,
+        "total_hps": 0,
+        "entities": [],
+    }
+
+
+def _publish_import_events(owner: Any, events: Iterable[Mapping[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    try:
+        bus = ensure_act_event_bus(owner)
+    except Exception as exc:
+        return [str(exc)]
+    for event in events or []:
+        if not isinstance(event, Mapping):
+            continue
+        topic = _topic_from_import_event(event)
+        try:
+            if "payload" in event and "source" in event:
+                bus.publish(topic, event=event)
+            else:
+                bus.publish(topic, dict(event), source_name="offline_import", source_kind="offline_import")
+        except Exception as exc:
+            errors.append(str(exc))
+    return errors
+
+
 def _finalize_offline_import_report(harness: Any, *, source_path: str, fmt: str,
                                     event_count: int) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
@@ -1446,7 +1624,7 @@ def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterab
             msg = str(result.get("message") or result.get("reason") or "plugin import did not match")
             errors.append(f"{adapter_id}: {msg}")
             continue
-        raw_events = result.get("events") or result.get("act_replay_events") or result.get("items") or []
+        raw_events = result.get("events") or result.get("items") or []
         if not isinstance(raw_events, list):
             errors.append(f"{adapter_id}: import_file events must be an array")
             continue
@@ -1464,8 +1642,11 @@ def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterab
             "self_uid": _coerce_int(result.get("self_uid") or meta_obj.get("self_uid"), 0),
             "event_count": len(events),
             "events": events,
+            "snapshot": dict(_json_safe(result.get("snapshot"))) if isinstance(result.get("snapshot"), Mapping) else {},
+            "report": dict(_json_safe(result.get("report"))) if isinstance(result.get("report"), Mapping) else None,
             "errors": [],
             "warnings": errors,
+            "message": str(result.get("message") or ""),
             "importer": "plugin_parser_adapter",
             "parser_adapter_id": adapter_id,
             "plugin_id": str(getattr(adapter, "plugin_id", "") or meta.get("plugin_id") or ""),
@@ -1547,64 +1728,20 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
         last_result = state.get("last_result") if isinstance(state.get("last_result"), Mapping) else result
         return dict(last_result)
 
-    try:
-        from act_replay.harness import ActReplayHarness
-        from act_replay.importer import import_normalized_file
-    except Exception as exc:
-        message = str(exc)
-        return _finish({
-            "ok": False,
-            "message": message,
-            "format": "",
-            "source_path": str(path or ""),
-            "self_uid": 0,
-            "event_count": 0,
-            "persist_requested": bool(persist),
-            "persisted": False,
-            "history_item": None,
-            "preview": {},
-            "snapshot": {},
-            "errors": [message],
-            "status": {},
-            "importer": "normalized",
-            "parser_adapter_id": "",
-            "plugin_id": "",
-        })
+    report_import = _import_exported_report_file(
+        owner,
+        path,
+        persist=persist,
+        show=show,
+        history_limit=history_limit,
+        initial_errors=(),
+    )
+    if isinstance(report_import, Mapping):
+        return _finish(dict(report_import))
 
-    try:
-        summary = import_normalized_file(path)
-    except Exception as exc:
-        message = str(exc)
-        return _finish({
-            "ok": False,
-            "message": message,
-            "format": "",
-            "source_path": str(path or ""),
-            "self_uid": 0,
-            "event_count": 0,
-            "persist_requested": bool(persist),
-            "persisted": False,
-            "history_item": None,
-            "preview": {},
-            "snapshot": {},
-            "errors": [message],
-            "status": {},
-            "importer": "normalized",
-            "parser_adapter_id": "",
-            "plugin_id": "",
-        })
+    summary = _import_normalized_event_file(str(path or ""))
     if not bool(summary.get("ok")):
         errors = list(summary.get("errors") or [])
-        report_import = _import_exported_report_file(
-            owner,
-            path,
-            persist=persist,
-            show=show,
-            history_limit=history_limit,
-            initial_errors=(),
-        )
-        if isinstance(report_import, Mapping):
-            return _finish(dict(report_import))
         fallback, fallback_errors = _plugin_offline_import_summary(owner, path, errors)
         if isinstance(fallback, Mapping) and bool(fallback.get("ok")):
             summary = fallback
@@ -1625,7 +1762,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
                 "snapshot": {},
                 "errors": merged_errors or [message],
                 "status": {},
-                "importer": "normalized",
+                "importer": str(summary.get("importer") or "normalized_event_file"),
                 "parser_adapter_id": "",
                 "plugin_id": "",
             })
@@ -1637,50 +1774,31 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
     importer = str(summary.get("importer") or "normalized")
     parser_adapter_id = str(summary.get("parser_adapter_id") or "")
     plugin_id = str(summary.get("plugin_id") or "")
+    events = [dict(event) for event in events if isinstance(event, Mapping)]
     store = getattr(owner, "_dps_history_store", None) if persist else None
     errors: list[str] = []
+    errors.extend(_publish_import_events(owner, events))
 
-    if persist and store is None:
-        errors.append("DPS history is not initialized")
-
-    source_probe = _offline_import_source_probe(source_path, fmt, event_count)
-    harness = ActReplayHarness(history_store=store, source_probe=source_probe)
     self_uid = int(summary.get("self_uid") or 0)
-    if self_uid:
-        try:
-            harness.set_self_uid(self_uid)
-        except Exception as exc:
-            errors.append(str(exc))
-    try:
-        snapshot = harness.replay(events)
-    except Exception as exc:
-        message = str(exc)
-        return _finish({
-            "ok": False,
-            "message": message,
-            "format": fmt,
-            "source_path": source_path,
-            "self_uid": self_uid,
-            "event_count": event_count,
-            "persist_requested": bool(persist),
-            "persisted": False,
-            "history_item": None,
-            "preview": {},
-            "snapshot": {},
-            "errors": errors + [message],
-            "status": {},
-            "importer": importer,
-            "parser_adapter_id": parser_adapter_id,
-            "plugin_id": plugin_id,
-        })
-
-    report, finalize_errors = _finalize_offline_import_report(
-        harness,
-        source_path=source_path,
-        fmt=fmt,
-        event_count=event_count,
-    )
-    errors.extend(finalize_errors)
+    raw_snapshot = summary.get("snapshot") if isinstance(summary.get("snapshot"), Mapping) else {}
+    snapshot_payload = dict(_json_safe(raw_snapshot if raw_snapshot else _generic_import_snapshot(events, self_uid=self_uid)))
+    report = summary.get("report") if isinstance(summary.get("report"), Mapping) else None
+    if report is not None:
+        report = dict(_json_safe(report))
+        report.setdefault("report_reason", "offline_import")
+        report.setdefault("source_kind", "offline_import")
+        report.setdefault("source_path", source_path)
+        report.setdefault("import_format", fmt)
+        report.setdefault("import_event_count", event_count)
+    elif events:
+        report = _generic_import_report(
+            snapshot_payload,
+            source_path=source_path,
+            fmt=fmt,
+            event_count=event_count,
+        )
+    if persist and report is not None and store is None:
+        errors.append("DPS history is not initialized")
 
     history_item: dict[str, Any] | None = None
     if persist and report is not None and store is not None:
@@ -1696,11 +1814,10 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             except Exception as exc:
                 errors.append(str(exc))
 
-    snapshot_payload = dict(_json_safe(snapshot if isinstance(snapshot, Mapping) else {}))
     preview = _report_preview(snapshot_payload, report)
     persisted = bool(history_item)
     status = act_history_status(owner, limit=history_limit) if persist else {}
-    ok = bool(report is not None and (not persist or persisted) and not errors)
+    ok = bool((not persist or (report is not None and persisted)) and not errors)
     return _finish({
         "ok": ok,
         "message": "Imported" if ok else "; ".join(errors) or "Offline import did not produce a report",
@@ -1791,7 +1908,6 @@ def _timeline_replay_events(owner: Any) -> tuple[list[Mapping[str, Any]], int]:
     provider = (
         getattr(owner, "_act_timeline_replay_events", None)
         or getattr(owner, "act_timeline_replay_events", None)
-        or getattr(owner, "_act_replay_events", None)
     )
     events = provider() if callable(provider) else provider
     if not isinstance(events, list):
@@ -1799,7 +1915,6 @@ def _timeline_replay_events(owner: Any) -> tuple[list[Mapping[str, Any]], int]:
     self_uid = (
         getattr(owner, "_act_timeline_replay_self_uid", 0)
         or getattr(owner, "act_timeline_replay_self_uid", 0)
-        or getattr(owner, "_act_replay_self_uid", 0)
     )
     try:
         uid = int(self_uid or 0)
@@ -1808,13 +1923,97 @@ def _timeline_replay_events(owner: Any) -> tuple[list[Mapping[str, Any]], int]:
     return [event for event in events if isinstance(event, Mapping)], uid
 
 
+def _replay_base_timestamp(events: list[Mapping[str, Any]]) -> float:
+    stamps = [
+        _safe_float(event.get("timestamp") or event.get("observed_at") or 0.0)
+        for event in events
+    ]
+    stamps = [stamp for stamp in stamps if stamp > 0.0]
+    return min(stamps) if stamps else 0.0
+
+
+def _generic_replay_timeline_status(events: list[Mapping[str, Any]], *,
+                                    self_uid: int = 0, cursor_ms: int = 0,
+                                    limit: int = 80, query: str = "") -> dict[str, Any]:
+    normalized = [dict(event) for event in events if isinstance(event, Mapping)]
+    normalized.sort(key=lambda item: _safe_float(item.get("timestamp") or item.get("observed_at") or 0.0))
+    cursor = max(0, _coerce_int(cursor_ms, 0))
+    row_limit = max(1, min(_coerce_int(limit, 80), 500))
+    base_ts = _replay_base_timestamp(normalized)
+    compact: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    for index, event in enumerate(normalized):
+        observed_at = _safe_float(event.get("timestamp") or event.get("observed_at") or 0.0)
+        if observed_at and base_ts:
+            time_ms = int(max(0.0, observed_at - base_ts) * 1000.0)
+        else:
+            time_ms = int(max(0.0, observed_at) * 1000.0)
+        replayed = time_ms <= cursor
+        if replayed:
+            selected.append(event)
+        compact.append({
+            "index": index,
+            "id": str(event.get("id") or f"replay:{index}"),
+            "topic": _topic_from_import_event(event),
+            "kind": str(event.get("kind") or event.get("type") or ""),
+            "observed_at": observed_at,
+            "time_ms": time_ms,
+            "absolute_time_ms": int(max(0.0, observed_at) * 1000.0) if observed_at else 0,
+            "label": str(event.get("message") or event.get("label") or event.get("skill_name") or event.get("name") or event.get("kind") or event.get("type") or "event"),
+            "value": event.get("damage") or event.get("heal") or event.get("value") or "",
+            "source": str(event.get("source") or "replay"),
+            "payload": _json_safe(dict(event)),
+            "replayed": replayed,
+            "is_cursor": False,
+        })
+    text = str(query or "").strip().lower()
+    visible = compact
+    if text:
+        visible = [
+            event for event in compact
+            if text in json.dumps(event, ensure_ascii=False, default=str).lower()
+        ]
+    nearest_id = ""
+    if visible:
+        nearest = min(visible, key=lambda item: abs(int(item.get("time_ms") or 0) - cursor))
+        nearest_id = str(nearest.get("id") or "")
+        for item in visible:
+            item["is_cursor"] = str(item.get("id") or "") == nearest_id
+    return {
+        "ok": True,
+        "message": "OK",
+        "replay": {
+            "enabled": True,
+            "source": "owner_events",
+            "event_count": len(normalized),
+            "replayed_event_count": len(selected),
+            "base_timestamp": base_ts,
+            "nearest_event_id": nearest_id,
+        },
+        "events": visible[:row_limit],
+        "cursor_ms": cursor,
+        "filters": {"query": str(query or ""), "limit": row_limit},
+        "replay_snapshot": _generic_import_snapshot(selected, self_uid=self_uid),
+        "errors": [],
+    }
+
+
 def _timeline_replay_status(owner: Any, *, state: Mapping[str, Any], limit: int, query: str) -> Optional[dict[str, Any]]:
     replay_events, self_uid = _timeline_replay_events(owner)
     if not replay_events:
         return None
-    from act_replay.timeline import replay_timeline_status
-
-    return replay_timeline_status(
+    provider = getattr(owner, "_act_timeline_replay_status", None) or getattr(owner, "act_timeline_replay_status", None)
+    if callable(provider):
+        result = provider(
+            replay_events,
+            self_uid=self_uid,
+            cursor_ms=int(state.get("cursor_ms") or 0),
+            limit=limit,
+            query=query,
+        )
+        if isinstance(result, Mapping):
+            return dict(result)
+    return _generic_replay_timeline_status(
         replay_events,
         self_uid=self_uid,
         cursor_ms=int(state.get("cursor_ms") or 0),
@@ -3186,7 +3385,7 @@ _GRAPH_METRICS = [
     {"id": "damage", "label": "Damage", "kind": "cumulative", "unit": "damage"},
     {"id": "heal", "label": "Heal", "kind": "cumulative", "unit": "heal"},
     {"id": "event_count", "label": "Events", "kind": "cumulative", "unit": "events"},
-    {"id": "boss_hp_pct", "label": "Boss HP %", "kind": "gauge", "unit": "pct"},
+    {"id": "target_hp_pct", "label": "Target HP %", "kind": "gauge", "unit": "pct"},
 ]
 
 
@@ -3215,15 +3414,15 @@ def _normalize_graph_metric(metric: str | None) -> str:
     return value if value in allowed else "damage"
 
 
-def _event_boss_hp_pct(payload: Mapping[str, Any]) -> float | None:
-    for key in ("boss_hp_pct", "hp_pct", "boss_hp_est_pct"):
+def _event_target_hp_pct(payload: Mapping[str, Any]) -> float | None:
+    for key in ("target_hp_pct", "hp_pct", "target_hp_est_pct"):
         if key in payload:
             value = _safe_float(payload.get(key), -1.0)
             if value < 0:
                 continue
             return max(0.0, min(100.0, value * 100.0 if value <= 1.0 else value))
-    hp = _safe_float(payload.get("hp") or payload.get("boss_current_hp"), -1.0)
-    total = _safe_float(payload.get("max_hp") or payload.get("boss_total_hp"), -1.0)
+    hp = _safe_float(payload.get("hp") or payload.get("target_current_hp"), -1.0)
+    total = _safe_float(payload.get("max_hp") or payload.get("target_total_hp"), -1.0)
     if hp >= 0 and total > 0:
         return max(0.0, min(100.0, hp * 100.0 / total))
     return None
@@ -3243,12 +3442,12 @@ def _build_graph_series(rows: list[dict[str, Any]], selected_metric: str) -> dic
     damage_total = 0.0
     heal_total = 0.0
     event_total = 0.0
-    last_boss_hp: float | None = None
+    last_target_hp: float | None = None
     series: dict[str, Any] = {
         "damage": {"metric": "damage", "selected": selected_metric == "damage", "points": []},
         "heal": {"metric": "heal", "selected": selected_metric == "heal", "points": []},
         "event_count": {"metric": "event_count", "selected": selected_metric == "event_count", "points": []},
-        "boss_hp_pct": {"metric": "boss_hp_pct", "selected": selected_metric == "boss_hp_pct", "points": []},
+        "target_hp_pct": {"metric": "target_hp_pct", "selected": selected_metric == "target_hp_pct", "points": []},
     }
     for row in rows:
         payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
@@ -3258,15 +3457,15 @@ def _build_graph_series(rows: list[dict[str, Any]], selected_metric: str) -> dic
         if topic == "heal" or "heal" in payload or "heal_total" in payload:
             heal_total += _safe_float(payload.get("heal") or payload.get("heal_total") or row.get("value"), 0.0)
         event_total += 1.0
-        boss_hp = _event_boss_hp_pct(payload)
-        if boss_hp is not None:
-            last_boss_hp = boss_hp
+        target_hp = _event_target_hp_pct(payload)
+        if target_hp is not None:
+            last_target_hp = target_hp
         point_base = {"time_ms": int(row.get("time_ms") or 0), "row_id": str(row.get("id") or ""), "topic": topic}
         series["damage"]["points"].append({**point_base, "value": float(damage_total)})
         series["heal"]["points"].append({**point_base, "value": float(heal_total)})
         series["event_count"]["points"].append({**point_base, "value": float(event_total)})
-        if last_boss_hp is not None:
-            series["boss_hp_pct"]["points"].append({**point_base, "value": float(last_boss_hp)})
+        if last_target_hp is not None:
+            series["target_hp_pct"]["points"].append({**point_base, "value": float(last_target_hp)})
     return series
 
 
@@ -3832,10 +4031,11 @@ def _report_preview(snapshot: Mapping[str, Any], report: Mapping[str, Any] | Non
         render_spec = {}
     encounter = render_spec.get("encounter") if isinstance(render_spec.get("encounter"), Mapping) else {}
     totals = render_spec.get("totals") if isinstance(render_spec.get("totals"), Mapping) else {}
+    live = snapshot.get("live") if isinstance(snapshot.get("live"), Mapping) else {}
     report = report if isinstance(report, Mapping) else {}
     rows = _report_rows_from_snapshot(snapshot, report)
-    total_damage = int(totals.get("damage") or report.get("total_damage") or 0)
-    total_heal = int(totals.get("heal") or report.get("total_heal") or 0)
+    total_damage = int(totals.get("damage") or live.get("total_damage") or report.get("total_damage") or 0)
+    total_heal = int(totals.get("heal") or live.get("total_heal") or report.get("total_heal") or 0)
     elapsed_s = float(totals.get("elapsed_s") or encounter.get("duration_s") or report.get("elapsed_s") or 0.0)
     return {
         "title": str(render_spec.get("title") or report.get("report_reason") or "Last Encounter"),
@@ -4078,14 +4278,14 @@ def _source_active(source: Mapping[str, Any]) -> bool:
     return bool(status and status not in ("error", "missing", "stopped", "disabled", "off"))
 
 
-def _owner_mem_data_source(owner: Any) -> str:
+def _owner_data_source(owner: Any) -> str:
     settings = _owner_settings(owner)
-    default = "tcp"
+    default = ""
     try:
         if isinstance(settings, Mapping):
-            return str(settings.get("mem_data_source", default) or default).lower()
+            return str(settings.get("data_source", default) or default).lower()
         if settings is not None:
-            return str(settings.get("mem_data_source", default) or default).lower()
+            return str(settings.get("data_source", default) or default).lower()
     except Exception:
         pass
     return default
@@ -4113,7 +4313,7 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
     memory = {}
     if isinstance(packet.get("mem"), Mapping):
         memory = dict(packet.pop("mem") or {})
-    packet.setdefault("data_source", str(packet.get("data_source") or _owner_mem_data_source(owner) or "tcp"))
+    packet.setdefault("data_source", str(packet.get("data_source") or _owner_data_source(owner) or "unknown"))
     parser_selection = packet.get("parser_adapter_selection") if isinstance(packet.get("parser_adapter_selection"), Mapping) else {}
 
     packet_active = _source_active(packet)
@@ -4125,7 +4325,7 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
         memory.setdefault("data_source", str(memory.get("data_source") or "memory"))
         sources["memory"] = memory
     sources["summary"] = {
-        "data_source": packet.get("data_source") or _owner_mem_data_source(owner),
+        "data_source": packet.get("data_source") or _owner_data_source(owner),
         "primary": "packet" if packet else ("memory" if memory else "none"),
         "hybrid": bool(packet and memory),
         "packet_active": packet_active,
@@ -4162,7 +4362,7 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
         "latency_ms": latency_ms,
         "last_event_ms": last_event_ms,
         "errors": errors,
-        "requested_mode": _owner_mem_data_source(owner),
+        "requested_mode": _owner_data_source(owner),
         "recognition_active": bool(getattr(owner, "_recognition_active", False)),
         "generated_at": now_ts,
     }

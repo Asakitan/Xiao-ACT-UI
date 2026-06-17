@@ -81,7 +81,7 @@ def _game_in_foreground() -> bool:
         from utils.window_locator import WindowLocator
         if _locator is None:
             _locator = WindowLocator()
-        found = _locator.find_game_window()
+        found = _locator.find_target_window()
         return bool(found and int(found[0]) == int(hwnd))
     except Exception:
         return True

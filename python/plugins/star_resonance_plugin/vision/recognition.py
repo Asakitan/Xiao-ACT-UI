@@ -25,7 +25,7 @@ from config import (
 )
 from render.render_capture_sync import capture_section
 from plugins.star_resonance_plugin.vision.vision_accel import cvt_color, gaussian_blur
-from utils.window_locator import WindowLocator
+from plugins.star_resonance_plugin.windowing import create_window_locator
 
 try:
     from render import gpu_capture as _gpu_capture
@@ -752,7 +752,7 @@ class RecognitionEngine:
     def __init__(self, state_mgr, settings=None):
         self._state_mgr = state_mgr
         self._settings = settings
-        self._locator = WindowLocator()
+        self._locator = create_window_locator()
         self._fps = CAPTURE_FPS_FAST
         self._fps_idle = max(1, int(CAPTURE_FPS_FAST // 4) or 1)  # idle floor
         self._fps_active = CAPTURE_FPS_FAST                       # active ceiling
@@ -917,7 +917,7 @@ class RecognitionEngine:
         # and the frame-cache freshness check. Tightens the 0.10s STA confirm
         # window consistency and saves 2-3 syscalls/tick.
         _tick_now = time.time()
-        result = self._locator.find_game_window()
+        result = self._locator.find_target_window()
         if result is None:
             _set_capture_target(0, None)
             if not self._no_window_logged:

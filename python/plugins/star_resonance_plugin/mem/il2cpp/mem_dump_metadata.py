@@ -26,7 +26,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.process import StarProcess, StarProcessError
+from ..process import StarProcess, StarProcessError
 from mem_probe import cy_memscan as _cy
 
 MAGIC = 0xFAB11BAF

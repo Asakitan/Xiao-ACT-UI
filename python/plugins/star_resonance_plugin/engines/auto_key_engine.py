@@ -14,8 +14,10 @@ import urllib.request
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from config import BASE_DIR, GAME_PROCESS_NAMES
-from utils.window_locator import WindowLocator, _get_process_name
+from config import BASE_DIR
+from plugins.star_resonance_plugin.sr_config import GAME_PROCESS_NAMES
+from plugins.star_resonance_plugin.windowing import create_window_locator
+from utils.window_locator import _get_process_name
 
 AUTO_KEY_SCHEMA_VERSION = 1
 DEFAULT_AUTO_KEY_SERVER_URL = "http://doi.sakisense.top:15538"
@@ -599,7 +601,7 @@ class AutoKeyEngine:
         self._state_mgr = state_mgr
         self._settings = settings
         self._extra_gate = extra_gate
-        self._locator = WindowLocator()
+        self._locator = create_window_locator()
         self._running = False
         self._thread = None
         self._next_loop_at = 0.0
@@ -792,7 +794,7 @@ class AutoKeyEngine:
             exe = _get_process_name(hwnd)
             if exe and exe in [item.lower() for item in GAME_PROCESS_NAMES]:
                 return True
-            found = self._locator.find_game_window()
+            found = self._locator.find_target_window()
             return bool(found and int(found[0]) == int(hwnd))
         except Exception:
             return False

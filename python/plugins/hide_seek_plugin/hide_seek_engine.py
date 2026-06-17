@@ -315,7 +315,7 @@ class HideSeekEngine:
 
     def _tick(self):
         # Find game window
-        found = self._locator.find_game_window()
+        found = self._locator.find_target_window()
         if not found:
             self._fire_status('Game window not found', self._current_step)
             return

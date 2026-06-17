@@ -61,8 +61,8 @@ class AIEditorBridge:
                 names = [t.name for t in self._registry.list_tools(cat)]
                 tools_desc += f"\n- {cat}: {', '.join(names)}"
         return (
-            "你是 SAO ACT (星痕共鸣战斗分析工具) 的AI助手。\n"
-            "你可以通过 tool call 访问游戏引擎的底层接口。\n"
+            "你是 SAO ACT UI 的 AI 助手。\n"
+            "你可以通过 tool call 访问平台和插件暴露的运行时接口。\n"
             f"\n可用工具分类:{tools_desc}"
         )
 

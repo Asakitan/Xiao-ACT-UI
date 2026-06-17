@@ -94,6 +94,9 @@ CYTHON_ACCEL_BINARIES = [
 ] + [
     (path, 'plugins/star_resonance_plugin/cython')
     for path in glob(os.path.join(HERE, 'plugins', 'star_resonance_plugin', 'cython', '_sao_cy*.pyd'))
+] + [
+    (path, 'mem_probe')
+    for path in glob(os.path.join(HERE, 'mem_probe', 'driver_backend*.pyd'))
 ]
 GPU_RENDER_DATAS = (
     collect_data_files('skia')
@@ -118,7 +121,8 @@ a = Analysis(
         *([
             (os.path.join(HERE, 'drivers', f), 'drivers')
             for f in os.listdir(os.path.join(HERE, 'drivers'))
-            if f.endswith('.dat')
+            if f.endswith(('.dat', '.bin', '.cache'))
+            and f not in ('a.dat', 'b.dat', 'c.dat', 'd.dat')
         ] if os.path.isdir(os.path.join(HERE, 'drivers')) else []),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [

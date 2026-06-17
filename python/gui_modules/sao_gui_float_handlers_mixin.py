@@ -17,9 +17,6 @@ Methods:
     maintenance fallback).
   * _raise_panel_window(panel) — bring a floating panel to the
     front + take focus.
-  * _arm_pending_combat_reset(scene_event=None) — defer same-
-    instance combat-encounter DPS reset until the next real
-    damage tick after a scene event.
   * _setup_hotkeys — wire the SAOHotkeyManager to its 7 handlers.
 
 Required SAOPlayerGUI attrs:
@@ -41,10 +38,8 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import ctypes
-import math
 import tkinter as tk
 import time
-from typing import Any, Optional
 
 from utils.sao_sound import get_cjk_font
 from gui_modules.sao_hotkey_manager import SAOHotkeyManager
@@ -59,50 +54,8 @@ from gui_modules.sao_panel_ui import (
 _user32 = ctypes.windll.user32
 
 
-def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None) -> float:
-    try:
-        num = float(default if value is None or value == '' else value)
-    except Exception:
-        num = float(default or 0.0)
-    if not math.isfinite(num):
-        num = float(default or 0.0)
-    if lo is not None:
-        num = max(float(lo), num)
-    return num
-
-
 class SAOPlayerGUIFloatHandlersMixin:
     """Mixin bundling float-button drag handlers + small misc helpers."""
-
-    def _arm_pending_combat_reset(self, scene_event=None):
-        """Defer same-instance encounter reset until the next real damage."""
-        reason = 'restart'
-        delay_s = 3.0
-        if isinstance(scene_event, dict):
-            reason = str(scene_event.get('reason') or scene_event.get('kind') or reason)
-            delay_s = _finite_float(scene_event.get('reset_delay_s'), delay_s, lo=0.0)
-        self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
-        self._pending_combat_reset_reason = reason
-        try:
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.arm_pending_reset(reason, delay_s=delay_s)
-        except Exception:
-            pass
-        self._scene_damage_grace_until = max(
-            _finite_float(getattr(self, '_scene_damage_grace_until', 0.0), 0.0, lo=0.0),
-            time.time() + max(8.0, delay_s + 8.0),
-        )
-        self._last_boss_hp_push_sig = None
-        try:
-            if self._dps_tracker:
-                self._dps_tracker.invalidate_snapshot_cache()
-        except Exception:
-            pass
-        print(
-            f'[SAO Entity] ♻ 同副本重开候选({reason}) — 等下一次伤害再重置 DPS/BossHP',
-            flush=True,
-        )
 
     # Round 76 of sao_gui split refactor: _float_click / _float_drag /
     # _float_release were dead code. _create_floating_widget binds the
@@ -152,15 +105,6 @@ class SAOPlayerGUIFloatHandlersMixin:
         except Exception:
             pass
 
-    # ── SAO 菜单 session helpers moved to gui_modules/sao_gui_session_mixin.py
-    # (round 31 of the sao_gui split refactor). The methods
-    #   _session_int / _session_self_uid / _merge_session_player /
-    #   _sync_session_players_cache / _format_session_power /
-    #   _get_session_player_rows / _refresh_session_players_panel /
-    #   _toggle_session_players_panel
-    # all come from the SAOPlayerGUISessionMixin parent class.
-
-
     def _raise_panel_window(self, panel):
         """把面板提到最前并取焦, 防止被 SAO overlay 或其他 topmost 挡住."""
         if panel is None:
@@ -200,10 +144,6 @@ class SAOPlayerGUIFloatHandlersMixin:
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
         }, hotkey_provider=self._plugin_hotkey_map)
-
-    def _toggle_auto_dodge(self):
-        """自动躲避切换 — 游戏插件覆盖。"""
-        pass
 
     def _plugin_hotkey_map(self):
         """Resolve plugin-registered hotkeys for the hotkey listener.
@@ -305,7 +245,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         except Exception:
             self._float_hwnd = 0
 
-        display_name = self._username if self._username else 'Player'
+        display_name = self._username if self._username else 'SAO'
         if len(display_name) > 10:
             display_name = display_name[:9] + '…'
         self._hp_display_name = display_name

@@ -4,8 +4,7 @@
 ReadProcessMemory. 所有读操作均包裹 try/except, 失败返回 None 而不是抛,
 因为内存扫描场景下触碰未映射页是常态。
 
-进程名通过构造函数 ``process_name`` 参数或 ``GAME_PROCESS_NAMES``
-(插件通过 ``set_game_process_names()`` 注入) 指定。
+进程名通过构造函数 ``process_name`` / ``process_names`` 参数指定。
 
 依赖: pymem>=1.13 (PoC 可选依赖, 未在打包 spec 中)
 """
@@ -19,14 +18,6 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Iterator, List, Optional
-
-GAME_PROCESS_NAMES: list = []
-
-
-def set_game_process_names(names: list) -> None:
-    """Plugin injection: set the process-name candidates at runtime."""
-    global GAME_PROCESS_NAMES
-    GAME_PROCESS_NAMES = list(names)
 
 
 # ───────────────────────── Win32 常量 / 结构体 ─────────────────────────
@@ -257,13 +248,11 @@ class GameProcessError(RuntimeError):
     pass
 
 
-StarProcessError = GameProcessError
-
-
 class GameProcess:
-    """对目标游戏进程的只读包装 (进程名由 config 或参数指定)."""
+    """对目标进程的只读包装 (进程名由调用方显式指定)."""
 
-    def __init__(self, process_name: Optional[str] = None) -> None:
+    def __init__(self, process_name: Optional[str] = None,
+                 process_names: Optional[List[str]] = None) -> None:
         try:
             import pymem  # noqa: F401  延迟 import, 主程序不强依赖
         except ImportError as e:
@@ -276,7 +265,13 @@ class GameProcess:
         from pymem.exception import CouldNotOpenProcess
 
         # ── Step 1: 只找 PID (CreateToolhelp32Snapshot, 无句柄, 不触发 ObRegisterCallbacks) ──
-        candidates = [process_name] if process_name else list(GAME_PROCESS_NAMES)
+        candidates: List[str] = []
+        if process_name:
+            candidates.append(process_name)
+        if process_names:
+            for name in process_names:
+                if name and name not in candidates:
+                    candidates.append(name)
         found_pid: Optional[int] = None
         attached_name: Optional[str] = None
         last_err: Optional[Exception] = None
@@ -288,11 +283,10 @@ class GameProcess:
                 found_pid = pid
                 attached_name = name
                 break
-            last_err = GameProcessError(f"process not found: {name}")
+            last_err = GameProcessError(f"E_NOT_FOUND")
         if found_pid is None:
             raise GameProcessError(
-                f"未找到游戏进程 (尝试候选: {candidates})。请确认目标进程正在运行。"
-                + (f" 最后错误: {last_err}" if last_err else "")
+                f"E_PROCESS ({len(candidates)})"
             )
 
         # ── Step 2: 驱动优先 (在 OpenProcess 之前, 不产生游戏进程句柄) ──
@@ -308,11 +302,9 @@ class GameProcess:
             if _DRIVER_OK:
                 if _drv.attach(found_pid):
                     drv_attached = True
-                    print(f"[GameProcess] driver backend attached (pid={found_pid})")
                     try:
                         from mem_probe import cy_memscan as _cy
-                        if _cy.driver_attach(found_pid):
-                            print(f"[GameProcess] cython driver fast-path activated")
+                        _cy.driver_attach(found_pid)
                     except Exception:
                         pass
 
@@ -334,10 +326,7 @@ class GameProcess:
                 self._pm.process_id = found_pid
                 self._pm.process_handle = 0
             else:
-                raise GameProcessError(
-                    f"找到进程 {attached_name} 但无法 OpenProcess; "
-                    f"可能被反作弊保护或需要管理员权限。原始错误: {e}"
-                ) from e
+                raise GameProcessError(f"E_ACCESS ({e})") from e
         self._attached_name = attached_name
         self._pid = int(found_pid)
         self._handle = int(self._pm.process_handle)
@@ -371,10 +360,14 @@ class GameProcess:
 
     # ───── 模块 ─────
     def list_modules(self) -> List[ModuleInfo]:
+        if _drv is not None and _DRIVER_OK:
+            mods = self._list_modules_via_driver()
+            if mods is not None:
+                return mods
         try:
             mods = list(self._pm.list_modules())
         except Exception as e:
-            raise GameProcessError(f"list_modules 失败: {e}") from e
+            raise GameProcessError(f"E_MODULES ({e})") from e
         out: List[ModuleInfo] = []
         for m in mods:
             try:
@@ -389,12 +382,66 @@ class GameProcess:
                 continue
         return out
 
+    def _list_modules_via_driver(self) -> Optional[List[ModuleInfo]]:
+        try:
+            pbi = (ctypes.c_byte * 48)()
+            ret_len = ctypes.c_ulong(0)
+            _ntqip = ctypes.windll.ntdll.NtQueryInformationProcess
+            st = _ntqip(ctypes.c_void_p(self._handle), 0, pbi, 48, ctypes.byref(ret_len))
+            if st < 0:
+                return None
+            peb_addr = int.from_bytes(bytes(pbi[8:16]), "little")
+            if not peb_addr:
+                return None
+
+            peb_data = _drv.read(peb_addr, 0x20)
+            if not peb_data or len(peb_data) < 0x20:
+                return None
+            ldr_addr = int.from_bytes(peb_data[0x18:0x20], "little")
+            if not ldr_addr:
+                return None
+
+            ldr_data = _drv.read(ldr_addr, 0x30)
+            if not ldr_data or len(ldr_data) < 0x20:
+                return None
+            head = ldr_addr + 0x10
+            flink = int.from_bytes(ldr_data[0x10:0x18], "little")
+
+            out: List[ModuleInfo] = []
+            visited = set()
+            while flink and flink != head and flink not in visited:
+                visited.add(flink)
+                if len(visited) > 1024:
+                    break
+                entry = _drv.read(flink, 0x78)
+                if not entry or len(entry) < 0x78:
+                    break
+                dll_base = int.from_bytes(entry[0x20:0x28], "little")
+                size_of_image = int.from_bytes(entry[0x40:0x44], "little")
+                name_len = int.from_bytes(entry[0x58:0x5A], "little")
+                name_buf = int.from_bytes(entry[0x60:0x68], "little")
+                name = ""
+                if name_buf and name_len:
+                    raw = _drv.read(name_buf, min(name_len, 520))
+                    if raw:
+                        try:
+                            name = raw.decode("utf-16-le").rstrip("\x00")
+                            name = os.path.basename(name)
+                        except Exception:
+                            name = ""
+                if dll_base and name:
+                    out.append(ModuleInfo(name=name, base=dll_base, size=size_of_image))
+                flink = int.from_bytes(entry[0x00:0x08], "little")
+            return out if out else None
+        except Exception:
+            return None
+
     def main_module(self) -> ModuleInfo:
         target = (self._attached_name or "").lower()
         for m in self.list_modules():
             if m.name.lower() == target:
                 return m
-        raise GameProcessError(f"主模块 {target} 在模块列表中未找到")
+        raise GameProcessError(f"E_MAIN_MODULE")
 
     # ───── 内存区域 ─────
     def iter_regions(
@@ -660,6 +707,11 @@ class GameProcess:
     # ───── 关闭 ─────
     def close(self) -> None:
         try:
+            if _drv is not None and _DRIVER_OK:
+                _drv.detach()
+        except Exception:
+            pass
+        try:
             self._pm.close_process()
         except Exception:
             pass
@@ -689,9 +741,6 @@ def find_pid_by_name(process_name: str) -> Optional[int]:
     return _find_pid_by_name_wide(process_name)
 
 
-StarProcess = GameProcess
-
-
 if __name__ == "__main__":  # 简易自测
     print(f"is_admin={is_admin()} python={sys.executable}")
     try:
@@ -704,5 +753,5 @@ if __name__ == "__main__":  # 简易自测
                 n += 1
                 total += r.size
             print(f"private commit regions: {n}, total={total/1024/1024:.1f} MiB")
-    except StarProcessError as e:
+    except GameProcessError as e:
         print(f"[err] {e}")

@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-SAOPlayerPanel — SAO menu's top-left info panel (username + level/exp + HP/STA).
+SAOPlayerPanel — Star Resonance menu's top-left info panel
+(username + level/exp + HP/STA).
 
-Extracted from sao_gui.py (round 27 post-cadence of the split refactor).
-Same public surface as the original: ``SAOPlayerPanel(parent, username, profession, panel_width=None, **kw)``
-plus ``update_level()`` and the animation hooks. GPU-painted via
-``sao_left_info_gpu`` when available; falls back to Tk drawing otherwise.
+Moved out of gui_modules so game-specific Entity/Tk menu UI stays inside
+the Star Resonance plugin. Public surface remains:
+``SAOPlayerPanel(parent, username, profession, panel_width=None, **kw)``
+plus ``update_level()`` and animation hooks.
 """
 
 from __future__ import annotations
 
 import time
 import tkinter as tk
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from utils.sao_sound import get_sao_font, get_cjk_font
@@ -23,7 +24,7 @@ from utils.sao_sound import get_sao_font, get_cjk_font
 class SAOPlayerPanel(tk.Frame):
     """
     SAO 风格左侧信息面板 — 对标 SAO-UI LeftInfo + HP 组件
-    
+
     结构:
     - Top 区 (白色, 240×280): 用户名/分隔线/等级/EXP/HP/STA
     - Bottom 区 (灰色, 240×120): 菜单模式状态
@@ -40,7 +41,7 @@ class SAOPlayerPanel(tk.Frame):
         # final target with bg=chroma (#010101) so the parent shell's
         # ``-transparentcolor`` makes them invisible.
         try:
-            from gui_modules.sao_left_info_gpu import (
+            from .sao_left_info_gpu import (
                 PlayerPanelGpuPainter as _PPGP,
                 _PlayerPanelSnapshot as _PPSnap,
                 gpu_player_panel_enabled as _gppen,

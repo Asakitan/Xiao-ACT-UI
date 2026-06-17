@@ -45,12 +45,56 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any, Dict, Optional
 
 
 class SAOPlayerGUIDamageEventsMixin:
     """Mixin bundling damage-event normalization + pending combat reset."""
+
+    @staticmethod
+    def _finite_combat_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None) -> float:
+        try:
+            num = float(default if value is None or value == '' else value)
+        except Exception:
+            num = float(default or 0.0)
+        if not math.isfinite(num):
+            num = float(default or 0.0)
+        if lo is not None:
+            num = max(float(lo), num)
+        return num
+
+    def _arm_pending_combat_reset(self, scene_event=None):
+        """Defer same-instance encounter reset until the next real damage."""
+        reason = 'restart'
+        delay_s = 3.0
+        if isinstance(scene_event, dict):
+            reason = str(scene_event.get('reason') or scene_event.get('kind') or reason)
+            delay_s = self._finite_combat_float(scene_event.get('reset_delay_s'), delay_s, lo=0.0)
+        self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
+        self._pending_combat_reset_reason = reason
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.arm_pending_reset(reason, delay_s=delay_s)
+        except Exception:
+            pass
+        self._scene_damage_grace_until = max(
+            self._finite_combat_float(getattr(self, '_scene_damage_grace_until', 0.0), 0.0, lo=0.0),
+            time.time() + max(8.0, delay_s + 8.0),
+        )
+        self._last_boss_hp_push_sig = None
+        try:
+            tracker = getattr(self, '_dps_tracker', None)
+            if tracker:
+                tracker.invalidate_snapshot_cache()
+        except Exception:
+            pass
+        print(
+            f'[SAO Entity] ♻ 同副本重开候选({reason}) — 等下一次伤害再重置 DPS/BossHP',
+            flush=True,
+        )
 
     def _maybe_apply_pending_combat_reset(self, event, is_self_combat_target: bool) -> bool:
         """Apply deferred encounter reset immediately before the first new hit."""
@@ -338,4 +382,3 @@ class SAOPlayerGUIDamageEventsMixin:
         fixed['target_is_combat_target'] = True
         fixed['entity_target_fallback'] = 'unknown_target_after_scene_change'
         return fixed
-

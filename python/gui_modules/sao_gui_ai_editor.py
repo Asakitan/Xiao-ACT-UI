@@ -472,7 +472,7 @@ class AIEditorPanel:
         self._append_system_message(
             "✦ SAO AI Editor\n"
             "多模型LLM编辑器, 支持 OpenAI / Claude / DeepSeek / Ollama\n"
-            "引擎工具已就绪: 内存读取 · 实体查询 · DPS数据 · Boss状态 · 触发器 · 设置 · Python执行\n\n"
+            "运行时工具已就绪: 内存状态 · 插件列表 · 设置 · Python执行\n\n"
             "先在 ⚙ Settings 中配置 API Key, 然后开始对话。"
         )
 
@@ -1327,10 +1327,6 @@ class AIEditorPanel:
         ("/tools",    "查看可用工具列表"),
         ("/settings", "打开设置对话框"),
         ("/system",   "查看系统信息"),
-        ("/state",    "查看当前游戏状态"),
-        ("/dps",      "查看DPS汇总"),
-        ("/boss",     "查看Boss状态"),
-        ("/entities", "列出当前实体"),
         ("/eval",     "执行Python表达式 (用法: /eval <expr>)"),
     ]
 
@@ -1413,7 +1409,7 @@ class AIEditorPanel:
             self._show_tools_panel()
         elif cmd == "/settings":
             self._show_settings_dialog()
-        elif cmd in ("/system", "/state", "/dps", "/boss", "/entities"):
+        elif cmd == "/system":
             self._run_slash_tool(cmd)
         elif cmd == "/eval" and arg:
             self._run_slash_eval(arg)
@@ -1423,16 +1419,12 @@ class AIEditorPanel:
     def _run_slash_tool(self, cmd: str) -> None:
         self._ensure_engine()
         tool_map = {
-            "/system": "get_system_info",
-            "/state": "get_game_state",
-            "/dps": "get_dps_summary",
-            "/boss": "get_boss_status",
-            "/entities": "get_entity_list",
+            "/system": {"action": "system_info"},
         }
-        tool_name = tool_map.get(cmd)
-        if not tool_name:
+        payload = tool_map.get(cmd)
+        if not payload:
             return
-        result = self._registry.execute(tool_name, "{}")
+        result = self._registry.execute("engine", json.dumps(payload, ensure_ascii=False))
         self._append_text(f"● {cmd}\n", "system_header")
         try:
             data = json.loads(result)
@@ -1443,7 +1435,10 @@ class AIEditorPanel:
 
     def _run_slash_eval(self, expr: str) -> None:
         self._ensure_engine()
-        result = self._registry.execute("eval_python", json.dumps({"expression": expr}))
+        result = self._registry.execute(
+            "engine",
+            json.dumps({"action": "eval", "expression": expr}, ensure_ascii=False),
+        )
         self._append_text(f"● /eval {expr}\n", "system_header")
         try:
             data = json.loads(result)

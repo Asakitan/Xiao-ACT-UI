@@ -19,9 +19,8 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # onedir 下 sys.path 只含 runtime/, 但 build_release.bat 把
-#   proto/ assets/ web/ 提升到 BASE_DIR (exe 顶层), 导致 `from proto import
-#   star_resonance_pb2` ImportError (-> packet_parser 抓包链路死). 在 config
-#   被任何模块 import 时立即把 BASE_DIR 加入 sys.path 头, 这是最早的修复点。
+#   proto/ assets/ web/ 提升到 BASE_DIR (exe 顶层). 在 config 被任何模块
+#   import 时立即把 BASE_DIR 加入 sys.path 头, 这是最早的修复点。
 try:
     if BASE_DIR and BASE_DIR not in sys.path:
         sys.path.insert(0, BASE_DIR)
@@ -353,8 +352,6 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 USE_GPU_MENU_HUD = True
 USE_GPU_OVERLAY = True
 
-# Game-specific constants moved to plugins/star_resonance_plugin/sr_config.py
-
 DEFAULT_PANEL_THEMES: Dict[str, str] = {"act": "dark"}
 
 
@@ -533,9 +530,6 @@ def _get_config_dir():
 
 
 CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")
-
-GAME_WINDOW_KEYWORDS: list = []
-GAME_PROCESS_NAMES: list = []
 
 
 class SettingsManager:

@@ -505,7 +505,7 @@ class PluginManagerPanel:
 
     def _uninstall(self, plugin_id: str) -> None:
         # 卸载移除已安装插件、不可撤销 → 二次确认 (与 web plugin_manager 的
-        # window.confirm 一致; 同 BossRaid/AutoKey 档案删除的 SAODialog 守护)。
+        # window.confirm 一致, 使用 SAODialog 守护)。
         win = self._win
         try:
             from sao_theme.dialogs import SAODialog

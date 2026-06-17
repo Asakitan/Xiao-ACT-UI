@@ -3,6 +3,11 @@
 
 /* === Burst Slot Handlers === */
 var _watchedSlotsRequestSeq = 0;
+var _watchedSlotsConfirmed = [];
+function _slotId(value) {
+    var n = parseInt(String(value == null ? '' : value), 10);
+    return isFinite(n) && n >= 1 && n <= 9 ? n : null;
+}
 function _watchedSlotsList() {
     var slots = [];
     document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
@@ -48,47 +53,443 @@ function _fmtSize(bytes) {
     return (bytes/1048576).toFixed(1) + 'M';
 }
 
-document.getElementById('picker-close').addEventListener('click', closeFilePicker);
-document.getElementById('picker-use-folder').addEventListener('click', function() {
-    var folderPath = _pickerCurrentDir;
-    closeFilePicker();
-    _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
-});
+var _memDataSource = 'hybrid';
+var _sourceComponents = ['hp', 'level', 'stamina', 'skills', 'identity'];
+var _sourceDefaults = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'packet',
+    identity: 'packet'
+};
+var _dataSourceMap = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'packet',
+    identity: 'packet'
+};
+function _sourceComponentName(value) {
+    var key = String(value || '').trim().toLowerCase();
+    return _sourceComponents.indexOf(key) >= 0 ? key : '';
+}
+function _sourceMode(value, fallback) {
+    var text = String(value || '').trim().toLowerCase();
+    if (text === 'ocr' || text === 'vision' || text === 'screen' || text === 'screen_vision') return 'vision';
+    if (text === 'packet' || text === 'network' || text === 'network_capture') return 'packet';
+    return fallback || 'packet';
+}
+function _componentDefault(component) {
+    var key = _sourceComponentName(component);
+    return key ? _sourceDefaults[key] : 'packet';
+}
+function _componentSourceValue(component, value) {
+    var key = _sourceComponentName(component);
+    if (!key) return '';
+    if (key === 'stamina') return 'vision';
+    if (key === 'skills') return 'packet';
+    return _sourceMode(value, _componentDefault(key));
+}
+function _syncDataSourceMap(map) {
+    var source = (map && typeof map === 'object') ? map : {};
+    _sourceComponents.forEach(function(key) {
+        _dataSourceMap[key] = _componentSourceValue(key, source[key]);
+    });
+}
+function _memSourceValue(value) {
+    var mode = String(value || '').trim().toLowerCase();
+    return ['tcp', 'memory', 'hybrid', 'auto'].indexOf(mode) >= 0 ? mode : 'hybrid';
+}
+function _sourceLabel(mode) {
+    return _sourceMode(mode, 'packet') === 'vision' ? 'VISION' : 'NETWORK';
+}
+function _memSourceLabel(mode) {
+    mode = _memSourceValue(mode);
+    if (mode === 'memory') return 'MEM';
+    if (mode === 'hybrid') return 'HYBRID';
+    if (mode === 'auto') return 'AUTO';
+    return 'TCP';
+}
+function _syncMemSourceButtons() {
+    _memDataSource = _memSourceValue(_memDataSource);
+    document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+        btn.classList.toggle('active', _memSourceValue(btn.getAttribute('data-mode')) === _memDataSource);
+    });
+}
+function _syncSourceButtons() {
+    document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+        var component = _sourceComponentName(btn.getAttribute('data-component'));
+        var mode = _sourceMode(btn.getAttribute('data-mode'), 'packet');
+        btn.classList.toggle('active', component && _componentSourceValue(component, _dataSourceMap[component]) === mode);
+    });
+}
+function _updateSourceSummary() {
+    _syncDataSourceMap(_dataSourceMap);
+    var el = document.getElementById('data-source-summary');
+    if (!el) return;
+    el.textContent = [
+        'DATA: ' + _memSourceLabel(_memDataSource),
+        'HP: ' + _sourceLabel(_dataSourceMap.hp),
+        'LV: ' + _sourceLabel(_dataSourceMap.level),
+        'STA: ' + _sourceLabel(_dataSourceMap.stamina),
+        'SKILL: ' + _sourceLabel(_dataSourceMap.skills)
+    ].join(' · ');
+}
+function openSourceDialog() {
+    playSound('snd-panel');
+    _syncSourceButtons();
+    document.getElementById('source-dialog').classList.add('show');
+}
+function closeSourceDialog() {
+    document.getElementById('source-dialog').classList.remove('show');
+}
 
-/* ═══ Circle click handlers ═══ */
-menuBar.querySelectorAll('.item').forEach(function(item) {
-    item.addEventListener('click', function(e) {
+function _srBridgeCheckbox(el, methodName, requested, label) {
+    if (typeof _setBridgeBackedCheckbox === 'function') {
+        _setBridgeBackedCheckbox(el, methodName, requested, label);
+        return;
+    }
+    var api = window.pywebview && window.pywebview.api;
+    var on = !!requested;
+    if (!api || !api[methodName]) {
+        el.checked = !on;
+        showAlert(label, 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve(api[methodName](on)).then(function(result) {
+        var data = typeof _menuToggleResult === 'function' ? _menuToggleResult(result, on) : { ok: true, enabled: on };
+        if (!data || data.ok === false) {
+            el.checked = data && data.enabled !== undefined ? !!data.enabled : !on;
+            showAlert(label, _menuApiMessage(data, '设置失败 / Unable to update setting'), true);
+            return;
+        }
+        el.checked = !!data.enabled;
+        showToast(label + ': ' + (el.checked ? 'ON' : 'OFF'));
+    }).catch(function(err) {
+        el.checked = !on;
+        showAlert(label, String(err || '设置失败 / Unable to update setting'), true);
+    });
+}
+
+var _pickerMode = 'file';
+var _pickerConsumer = '';
+var _pickerCurrentDir = '';
+function _pickerPayload(dataJson) {
+    if (typeof dataJson === 'string') {
+        try { return JSON.parse(dataJson) || {}; } catch (e) { return {}; }
+    }
+    return (dataJson && typeof dataJson === 'object') ? dataJson : {};
+}
+function _pickerModeValue(value) {
+    return value === 'folder' ? 'folder' : 'file';
+}
+function _pickerEntry(entry) {
+    return (entry && typeof entry === 'object') ? entry : {};
+}
+function _pickerEntryText(value) {
+    if (value == null) return '';
+    var text = String(value);
+    return text ? text : '';
+}
+function _pickerConsumerLabel(consumer) {
+    return consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS';
+}
+function _pickerParseResult(consumer, result) {
+    var fn = window['_' + (consumer === 'boss_raid' ? 'br' : 'ak') + 'ParseApiResult'];
+    return typeof fn === 'function' ? fn(result) : result;
+}
+function showFilePicker(dataJson) {
+    var data = _pickerPayload(dataJson);
+    _pickerMode = _pickerModeValue(data.mode);
+    _pickerCurrentDir = _pickerEntryText(data.current);
+    var parentPath = _pickerEntryText(data.parent);
+    var dirs = Array.isArray(data.dirs) ? data.dirs : [];
+    var files = Array.isArray(data.files) ? data.files : [];
+    document.getElementById('picker-title').textContent = _pickerMode === 'folder' ? '选择文件夹' : '选择文件';
+    document.getElementById('picker-path').textContent = _pickerCurrentDir;
+    document.getElementById('filepicker-box').className =
+        'saoPickerBox' + (_pickerMode === 'folder' ? ' picker-mode-folder' : '');
+    var list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    if (parentPath) {
+        var upEl = document.createElement('div');
+        upEl.className = 'picker-item is-up';
+        upEl.innerHTML = '<i class="menu-glyph mi-back"></i><span class="item-name">..</span>';
+        upEl.addEventListener('click', function() { _pickerBrowse(parentPath); });
+        list.appendChild(upEl);
+    }
+    dirs.forEach(function(rawDir) {
+        var d = _pickerEntry(rawDir);
+        var el = document.createElement('div');
+        el.className = 'picker-item is-dir';
+        el.innerHTML = '<i class="menu-glyph mi-folder"></i><span class="item-name">' + _escHtml(_pickerEntryText(d.name)) + '</span>';
+        el.addEventListener('click', function() { _pickerBrowse(_pickerEntryText(d.path)); });
+        list.appendChild(el);
+    });
+    files.forEach(function(rawFile) {
+        var f = _pickerEntry(rawFile);
+        var el = document.createElement('div');
+        el.className = 'picker-item';
+        var sizeBytes = _clampNum(f.size, 0, 0, Number.MAX_SAFE_INTEGER);
+        var infoStr = sizeBytes > 0 ? '<span class="item-info">' + _fmtSize(sizeBytes) + '</span>' : '';
+        el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(_pickerEntryText(f.name)) + '</span>' + infoStr;
+        el.addEventListener('click', function() {
+            var consumer = _pickerConsumer || 'auto_key';
+            var filePath = _pickerEntryText(f.path);
+            playSound('snd-click');
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.select_file) {
+                var request = Promise.resolve().then(function() {
+                    return window.pywebview.api.select_file(filePath, consumer);
+                });
+                closeFilePicker();
+                request.then(function(result) {
+                    var parsed = _pickerParseResult(consumer, result);
+                    if (parsed && parsed.state) {
+                        if (consumer === 'boss_raid') _syncBossRaidState(parsed.state);
+                        else _syncAutoKeyState(parsed.state);
+                    }
+                    if (parsed && parsed.ok) showToast(consumer === 'boss_raid' ? 'BOSS RAID IMPORTED' : 'IMPORT COMPLETE');
+                    else if (parsed && parsed.message) showAlert(_pickerConsumerLabel(consumer), parsed.message, true);
+                }).catch(function(err) {
+                    showAlert(_pickerConsumerLabel(consumer), String(err || '无法导入文件 / Unable to import file'), true);
+                });
+            } else {
+                closeFilePicker();
+                showAlert(_pickerConsumerLabel(consumer), 'pywebview API 不可用 / pywebview API is not available', true);
+            }
+        });
+        list.appendChild(el);
+    });
+    if (!parentPath && !dirs.length && !files.length) {
+        list.innerHTML = '<div class="picker-empty">暂无 MIDI 文件</div>';
+    }
+    playSound('snd-alert');
+    document.getElementById('filepicker-dialog').classList.add('show');
+}
+function closeFilePicker() {
+    document.getElementById('filepicker-dialog').classList.remove('show');
+    _pickerConsumer = '';
+}
+function _pickerBrowse(path) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.browse_dir) {
+        showAlert('FILE PICKER', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    Promise.resolve().then(function() {
+        return window.pywebview.api.browse_dir(path);
+    }).then(function(result) {
+        var d = _pickerPayload(result);
+        if (d.error) showAlert('FILE PICKER', _pickerEntryText(d.error), true);
+        d.mode = _pickerModeValue(_pickerMode);
+        showFilePicker(d);
+    }).catch(function(err) {
+        showAlert('FILE PICKER', String(err || '无法打开目录 / Unable to open folder'), true);
+    });
+}
+
+var sessionPlayersEl = document.getElementById('session-players');
+var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
+var _sessionPlayersVisible = false;
+var _sessionPlayersManualHidden = false;
+var _sessionPlayersAnimTimer = null;
+var _spRenderRows = [];
+var _spRenderedCount = 0;
+var _spRenderToken = 0;
+var _spRenderPending = false;
+var _SP_INITIAL_ROWS = 80;
+var _SP_BATCH_ROWS = 120;
+function _syncSessionPlayersAnchor(withChild) {
+    if (!sessionPlayersEl) return;
+    sessionPlayersEl.classList.toggle('with-child', !!withChild);
+}
+function _spText(value, fallback) {
+    if (value == null) return fallback;
+    var text = String(value);
+    return text ? text : fallback;
+}
+function _makeSessionPlayerRow(row, idx) {
+    row = (row && typeof row === 'object') ? row : {};
+    var el = document.createElement('div');
+    el.className = 'sp-row' + (row.is_self ? ' self' : '');
+    el.style.setProperty('--sp-delay', (Math.max(0, idx || 0) % 12) * 18 + 'ms');
+    var name = _spText(row.name, '--');
+    if (row.is_self && name !== '--') name = '* ' + name;
+    el.innerHTML =
+        '<div class="sp-name" title="' + _escHtml(_spText(row.name, '')) + '">' + _escHtml(name) + '</div>' +
+        '<div class="sp-uid">' + _escHtml(_spText(row.uid, '--')) + '</div>' +
+        '<div class="sp-power">' + _escHtml(_spText(row.fight_power, '--')) + '</div>';
+    return el;
+}
+function _syncSessionPlayersMore(list) {
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    if (_spRenderedCount >= _spRenderRows.length) return;
+    var more = document.createElement('div');
+    more.className = 'sp-more';
+    more.textContent = '继续滚动加载 · 已载入 ' + _spRenderedCount + '/' + _spRenderRows.length;
+    list.appendChild(more);
+}
+function _renderSessionPlayersBatch(token, batchSize) {
+    var list = document.getElementById('sp-list');
+    if (!list || token !== _spRenderToken) return;
+    _spRenderPending = false;
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    var start = _spRenderedCount;
+    var end = Math.min(_spRenderRows.length, start + Math.max(1, batchSize || _SP_BATCH_ROWS));
+    var frag = document.createDocumentFragment();
+    for (var i = start; i < end; i++) frag.appendChild(_makeSessionPlayerRow(_spRenderRows[i], i));
+    list.appendChild(frag);
+    _spRenderedCount = end;
+    _syncSessionPlayersMore(list);
+    if (_spRenderedCount < _spRenderRows.length && list.scrollHeight <= list.clientHeight + 8) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+function _scheduleSessionPlayersBatch(batchSize) {
+    if (_spRenderPending || _spRenderedCount >= _spRenderRows.length) return;
+    _spRenderPending = true;
+    var token = _spRenderToken;
+    window.requestAnimationFrame(function() {
+        _renderSessionPlayersBatch(token, batchSize || _SP_BATCH_ROWS);
+    });
+}
+function _maybeRenderMoreSessionPlayers() {
+    var list = document.getElementById('sp-list');
+    if (!list || _spRenderedCount >= _spRenderRows.length) return;
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 96) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+function _renderSessionPlayers(dataJson, reveal) {
+    var data = dataJson || _sessionPlayersPayload;
+    if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { data = {}; }
+    }
+    _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
+    var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
+    var total = _clampInt(_sessionPlayersPayload.count, rows.length, 0, 999999);
+    var summary = document.getElementById('sp-summary');
+    var list = document.getElementById('sp-list');
+    if (!summary || !list) return;
+    _spRenderToken += 1;
+    _spRenderPending = false;
+    _spRenderRows = rows;
+    _spRenderedCount = 0;
+    summary.textContent = '本次登录出现过 ' + total + ' 人' +
+        (_sessionPlayersPayload.self_uid ? ' · SELF ' + _sessionPlayersPayload.self_uid : '');
+    list.textContent = '';
+    list.scrollTop = 0;
+    if (!rows.length) list.innerHTML = '<div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>';
+    else _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
+    if (reveal && sessionPlayersEl && menuOpen) {
+        var wasVisible = _sessionPlayersVisible && sessionPlayersEl.classList.contains('show');
+        _sessionPlayersVisible = true;
+        sessionPlayersEl.classList.add('show');
+        if (!wasVisible) _playSessionPlayersOpenAnimation();
+    }
+}
+function _playSessionPlayersOpenAnimation() {
+    if (!sessionPlayersEl) return;
+    var box = sessionPlayersEl.querySelector('.sessionPlayersBox');
+    if (_sessionPlayersAnimTimer) clearTimeout(_sessionPlayersAnimTimer);
+    _sessionPlayersAnimTimer = null;
+    sessionPlayersEl.classList.remove('session-open-anim');
+    sessionPlayersEl.style.animation = 'none';
+    if (box) {
+        box.style.animation = 'none';
+        void sessionPlayersEl.offsetWidth;
+        void box.offsetWidth;
+        box.style.animation = '';
+    } else {
+        void sessionPlayersEl.offsetWidth;
+    }
+    sessionPlayersEl.style.animation = '';
+    sessionPlayersEl.classList.add('session-open-anim');
+    _sessionPlayersAnimTimer = setTimeout(function() {
+        if (sessionPlayersEl) sessionPlayersEl.classList.remove('session-open-anim');
+        _sessionPlayersAnimTimer = null;
+    }, 1040);
+}
+function setSessionPlayersPayload(dataJson) {
+    _renderSessionPlayers(dataJson, _sessionPlayersVisible || (menuOpen && !_sessionPlayersManualHidden));
+}
+function showSessionPlayers(dataJson) {
+    _sessionPlayersManualHidden = false;
+    _renderSessionPlayers(dataJson, true);
+}
+function toggleSessionPlayers(dataJson) {
+    showSessionPlayers(dataJson || _sessionPlayersPayload);
+}
+function closeSessionPlayers(manual) {
+    _sessionPlayersVisible = false;
+    _sessionPlayersManualHidden = !!manual;
+    if (sessionPlayersEl) {
+        sessionPlayersEl.classList.remove('show');
+        sessionPlayersEl.classList.remove('session-open-anim');
+    }
+}
+(function() {
+    var close = document.getElementById('picker-close');
+    if (close) close.addEventListener('click', closeFilePicker);
+    var useFolder = document.getElementById('picker-use-folder');
+    if (useFolder) useFolder.addEventListener('click', function() {
+        var folderPath = _pickerCurrentDir;
+        closeFilePicker();
+        _callMenuSettingApi('select_folder', [folderPath], 'FILE PICKER');
+    });
+    var sourceClose = document.getElementById('source-close');
+    if (sourceClose) sourceClose.addEventListener('click', closeSourceDialog);
+    var list = document.getElementById('sp-list');
+    if (list) list.addEventListener('scroll', _maybeRenderMoreSessionPlayers, { passive: true });
+})();
+
+document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var name = this.getAttribute('data-name');
-        activateCircle(name);
+        var component = _sourceComponentName(this.getAttribute('data-component'));
+        var mode = _componentSourceValue(component, this.getAttribute('data-mode'));
+        if (!component || !mode) return;
+        var previousMap = {};
+        _sourceComponents.forEach(function(key) { previousMap[key] = _dataSourceMap[key]; });
+        playSound('snd-click');
+        _dataSourceMap[component] = mode;
+        _syncSourceButtons();
+        _updateSourceSummary();
+        _callMenuSettingApi('set_component_source', [component, mode], 'DATA SOURCE', function(data) {
+            if (data && data.data_source_map && typeof data.data_source_map === 'object') {
+                _syncDataSourceMap(data.data_source_map);
+            } else if (data && data.component !== undefined && data.mode !== undefined) {
+                var returnedComponent = _sourceComponentName(data.component);
+                if (returnedComponent) _dataSourceMap[returnedComponent] = _componentSourceValue(returnedComponent, data.mode);
+            }
+            _syncSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _syncDataSourceMap(previousMap);
+            _syncSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
-
-/* ═══ Child menu item clicks ═══ */
-document.querySelectorAll('.child-menu li').forEach(function(li) {
-    li.addEventListener('click', function(e) {
+document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var action = this.getAttribute('data-action');
-        if (!action) return;
+        var mode = _memSourceValue(this.getAttribute('data-mode'));
+        var previousMode = _memDataSource;
         playSound('snd-click');
-        if (action === 'exit') {
-            exitApplication();
-            return;
-        }
-        if (action === 'show_plugins') {
-            showPluginPopup();
-            return;
-        }
-        if (action === 'reload_plugins_all') {
-            _callMenuSettingApi('reload_plugins', [''], 'PLUGINS', function() {
-                if (window.renderPluginsCategory) window.renderPluginsCategory();
-                showToast('PLUGINS RELOADED');
-            });
-            return;
-        }
-        if (action) {
-            _callMenuSettingApi('menu_action', [action], 'MENU');
-        }
+        _memDataSource = mode;
+        _syncMemSourceButtons();
+        _updateSourceSummary();
+        _callMenuSettingApi('set_data_source', [mode], 'DATA SOURCE', function(data) {
+            _memDataSource = _memSourceValue(data && data.mode !== undefined ? data.mode : mode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        }, function() {
+            _memDataSource = _memSourceValue(previousMode);
+            _syncMemSourceButtons();
+            _updateSourceSummary();
+        });
     });
 });
 
@@ -120,7 +521,7 @@ document.getElementById('burst-enabled').addEventListener('change', function(e) 
     e.stopPropagation();
     playSound('snd-click');
     var on = !!this.checked;
-    _setBridgeBackedCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
+    _srBridgeCheckbox(this, 'set_burst_enabled', on, 'BURST ALERT');
 });
 
 /* ═══ Sound controls ═══ */
@@ -128,7 +529,7 @@ document.getElementById('sound-enabled').addEventListener('change', function(e) 
     e.stopPropagation();
     playSound('snd-click');
     var on = !!this.checked;
-    _setBridgeBackedCheckbox(this, 'set_sound_enabled', on, 'SOUND');
+    _srBridgeCheckbox(this, 'set_sound_enabled', on, 'SOUND');
 });
 document.getElementById('sound-volume').addEventListener('input', function(e) {
     e.stopPropagation();
@@ -1963,7 +2364,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            _setBridgeBackedCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
+            _srBridgeCheckbox(this, 'set_dps_enabled', on, 'DPS METER');
         });
     }
 })();
@@ -1976,7 +2377,7 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
             e.stopPropagation();
             playSound('snd-click');
             var on = this.checked;
-            _setBridgeBackedCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
+            _srBridgeCheckbox(this, 'set_buffmon_enabled', on, 'BUFF MONITOR');
         });
     }
 })();
@@ -2173,31 +2574,36 @@ function _setLinkageGlobalCD(val) {
     }
 })();
 
-/* ═══ Python bridge: expose JS functions ═══ */
-window.SAO = {
-    openMenu: openMenu,
-    closeMenu: closeMenu,
-    exitApp: exitApplication,
-    updateInfo: updateInfo,
-    updateBadge: updateBadge,
-    showAlert: showAlert,
-    closeAlert: closeAlert,
-    showToast: showToast,
-    setFisheyeBg: setFisheyeBg,
-    stopFisheyeBg: stopFisheyeBg,
+/* ═══ Python bridge: expose Star Resonance JS functions ═══ */
+window.SAO = Object.assign(window.SAO || {}, {
     showFilePicker: showFilePicker,
     closeFilePicker: closeFilePicker,
     setSessionPlayersPayload: setSessionPlayersPayload,
     showSessionPlayers: showSessionPlayers,
     toggleSessionPlayers: toggleSessionPlayers,
     closeSessionPlayers: closeSessionPlayers,
-    showLeaderboard: showLeaderboard,
-    closeLeaderboard: closeLeaderboard,
     syncAutoKeyState: _syncAutoKeyState,
     syncBossRaidState: _syncBossRaidState,
+    restoreStarResonanceMenuSettings: restoreMenuSettings
+});
+window.SRMenu = Object.assign(window.SRMenu || {}, {
+    setAutoKeyState: _syncAutoKeyState,
+    setBossRaidState: _syncBossRaidState,
     restoreMenuSettings: restoreMenuSettings,
-    updateUpdaterState: updateUpdaterState,
-};
+    showFilePicker: showFilePicker,
+    showSessionPlayers: showSessionPlayers,
+    closeSessionPlayers: closeSessionPlayers
+});
+if (window.SAO && !window.SAO.__srRestoreWrapped) {
+    var __srBaseRestoreMenuSettings = window.SAO.restoreMenuSettings;
+    window.SAO.restoreMenuSettings = function(cfg) {
+        if (typeof __srBaseRestoreMenuSettings === 'function') {
+            __srBaseRestoreMenuSettings(cfg);
+        }
+        restoreMenuSettings(cfg);
+    };
+    window.SAO.__srRestoreWrapped = true;
+}
 
 setTimeout(function() {
     _initPanelThemes();

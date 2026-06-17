@@ -52,7 +52,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from mem_probe import cy_memscan as _cy  # noqa: E402
-from mem_probe.process import GameProcess as StarProcess  # noqa: E402
+from ..process import StarProcess  # noqa: E402
 from plugins.star_resonance_plugin.mem.cy_combat import find_skill_cd_arrays_in_blob as _find_skill_cd  # noqa: E402
 
 

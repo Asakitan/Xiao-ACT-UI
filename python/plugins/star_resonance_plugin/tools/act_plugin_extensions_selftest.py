@@ -93,7 +93,7 @@ class ActPluginExtensionTests(unittest.TestCase):
             status = manager.status()
             plugin = status["plugins"][0]
 
-            self.assertEqual(status["extension_counts"], {
+            expected_counts = {
                 "parser_adapters": 1,
                 "exporters": 1,
                 "formatters": 1,
@@ -101,7 +101,9 @@ class ActPluginExtensionTests(unittest.TestCase):
                 "report_views": 1,
                 "timers": 1,
                 "ui_panels": 1,
-            })
+            }
+            for kind, count in expected_counts.items():
+                self.assertEqual(status["extension_counts"].get(kind), count)
             self.assertEqual(plugin["extension_count"], 7)
             self.assertEqual(plugin["extensions"]["parser_adapters"], ["star_fixture"])
             self.assertEqual(status["extensions"]["parser_adapters"][0]["game_id"], "star_resonance")

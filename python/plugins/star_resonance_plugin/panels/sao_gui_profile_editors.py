@@ -33,7 +33,7 @@ from sao_web_panel_common import (
     panel_font,
     place_corner_accents,
 )
-from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
+from plugins.star_resonance_plugin.panels.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
 
 from plugins.star_resonance_plugin.engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,

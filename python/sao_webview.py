@@ -64,9 +64,6 @@ from act_platform.runtime import (
     act_plugin_reload,
     act_plugin_set_hotkey,
     act_plugin_status,
-    act_plugin_ui_action,
-    act_plugin_ui_panels,
-    act_plugin_ui_render,
     act_plugin_uninstall,
     act_render_apply_hooks,
     act_render_overlays,
@@ -95,19 +92,11 @@ from act_platform.runtime import (
     act_trigger_test,
     ensure_act_event_bus,
     ensure_act_plugin_manager,
-    publish_owner_event,
-    should_record_owner_combat_event,
-    enrich_action_log_event,
 )
 from config import (
-    DATA_SOURCE_COMPONENTS,
     DEFAULT_HOTKEYS,
-    DEFAULT_DATA_SOURCE_MAP,
     HOTKEY_MOD_ALL_VKS,
-    get_skill_slot_rects,
     hotkey_mods_down,
-    normalize_source_map,
-    normalize_source_mode,
     parse_hotkey,
     select_hotkey_match,
     WEB_DIR,
@@ -143,16 +132,6 @@ def is_webview_available() -> bool:
 def _get_icon_path() -> Optional[str]:
     icon_path = resource_path('icon.ico')
     return icon_path if os.path.exists(icon_path) else None
-
-
-def _dps_fade_timeout_value(seconds: Any) -> int:
-    try:
-        value = float(seconds)
-        if not math.isfinite(value):
-            value = 0.0
-    except Exception:
-        value = 0.0
-    return max(0, min(120, int(value)))
 
 
 def _setting_bool_value(value: Any) -> bool:
@@ -869,18 +848,6 @@ class SAOWebAPI:
     def set_plugin_hotkey(self, action, key=''):
         return json.dumps(act_plugin_set_hotkey(self._g, str(action or ''), str(key or '')), ensure_ascii=False)
 
-    # ── plugin UI panels + render hooks/overlays (shared with plugin_layer.js) ──
-    def get_plugin_ui_panels(self):
-        return json.dumps(act_plugin_ui_panels(self._g), ensure_ascii=False)
-
-    def render_ui_panel(self, panel_id, payload=''):
-        return json.dumps(act_plugin_ui_render(self._g, str(panel_id or ''), payload), ensure_ascii=False)
-
-    def invoke_ui_action(self, panel_id, action_id, payload=''):
-        return json.dumps(
-            act_plugin_ui_action(self._g, str(panel_id or ''), str(action_id or ''), payload),
-            ensure_ascii=False)
-
     def act_render_overlays(self, surface):
         return json.dumps(act_render_overlays(self._g, str(surface or '')), ensure_ascii=False)
 
@@ -1080,26 +1047,31 @@ class SAOWebAPI:
         try:
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
             defaults = {
-                'dps': 'dark',
                 'hp': 'dark',
-                'bosshp': 'dark',
-                'skillfx': 'dark',
                 'alert': 'dark',
                 'act': 'dark',
-                'buffmon': 'dark',
             }
+            plugin_defaults = self._g._game_plugin_maybe('panel_theme_defaults', default={}) or {}
+            if isinstance(plugin_defaults, dict):
+                defaults.update({
+                    str(k): str(v) for k, v in plugin_defaults.items()
+                    if str(v) in ('light', 'dark')
+                })
             themes = dict(cfg.get('panel_themes', {}) or {})
             defaults.update({k: v for k, v in themes.items() if v in ('light', 'dark')})
             return defaults
         except Exception:
-            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark', 'act': 'dark', 'buffmon': 'dark'}
+            return {'hp': 'dark', 'alert': 'dark', 'act': 'dark'}
 
     def set_panel_theme(self, panel: str, theme: str):
         """从 JS 端设置面板主题并保存."""
         try:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
-            if panel not in {'dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act', 'buffmon'}:
+            allowed = {'hp', 'alert', 'act'}
+            plugin_allowed = self._g._game_plugin_maybe('panel_theme_keys', default=()) or ()
+            allowed.update(str(item) for item in plugin_allowed)
+            if panel not in allowed:
                 return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)
             if theme not in {'light', 'dark'}:
                 theme = 'dark'
@@ -1108,23 +1080,11 @@ class SAOWebAPI:
             themes[panel] = theme
             cfg.set('panel_themes', themes)
             cfg.save()
-            # buffmon: GPU overlay 对 (self/boss) 也吃同一主题键 (若本进程持有)
-            if panel == 'buffmon':
-                for attr in ('_self_buff_overlay', '_boss_buff_overlay'):
-                    ov = getattr(self._g, attr, None)
-                    if ov is not None and hasattr(ov, '_apply_theme'):
-                        try:
-                            ov._apply_theme(theme)
-                        except Exception:
-                            pass
+            self._g._game_plugin_maybe('on_panel_theme_changed', panel, theme)
             # 即时推送到对应 webview 面板窗口
             _win_map = {
-                'dps': getattr(self._g, 'dps_win', None),
                 'hp': getattr(self._g, 'hp_win', None),
-                'bosshp': getattr(self._g, 'boss_hp_win', None),
-                'skillfx': getattr(self._g, 'skillfx_win', None),
                 'alert': getattr(self._g, 'alert_win', None),
-                'buffmon': getattr(self._g, 'buff_coverage_win', None),
             }
             _act_wins = (
                 getattr(self._g, 'plugin_manager_win', None),
@@ -1141,7 +1101,10 @@ class SAOWebAPI:
                 getattr(self._g, 'combatant_drilldown_win', None),
                 getattr(self._g, 'skill_drilldown_win', None),
             )
-            targets = _act_wins if panel == 'act' else (_win_map.get(panel),)
+            if panel == 'act':
+                targets = _act_wins
+            else:
+                targets = (_win_map.get(panel) or self._g._plugin_surface_win(panel),)
             for w in targets:
                 if w:
                     try:
@@ -1223,792 +1186,6 @@ class SAOWebAPI:
         self._g._hp_last_hit_region_ts = time.time()
         self._g._set_hp_region(expanded=self._g._ctx_menu_active, menu_bounds=self._g._ctx_menu_bounds)
 
-    def get_state(self):
-        """供 JS 查询当前识别状态 (JSON 格式)"""
-        gs = self._g._game_state
-        try:
-            sta_pct = int(round(max(0.0, min(1.0, float(getattr(gs, 'stamina_pct', 0.0) or 0.0))) * 100.0))
-        except Exception:
-            sta_pct = 0
-        return json.dumps({
-            'recognition_active': self._g._recognition_active,
-            'hp': gs.hp_current if gs and hasattr(gs, 'hp_current') else 0,
-            'hp_max': gs.hp_max if gs and hasattr(gs, 'hp_max') else 0,
-            'stamina': sta_pct,
-            'stamina_max': 100,
-            'level': gs.level_base if gs and hasattr(gs, 'level_base') else 0,
-        })
-
-    # ── Skill Effects settings ──
-    def set_watched_slots(self, slots):
-        """Set which skill slots to watch for Burst Mode Ready."""
-        normalized = _watched_slot_ids(slots)
-        try:
-            self._g._set_setting('watched_skill_slots', normalized)
-            self._g._reset_burst_tracking()
-            return json.dumps({'ok': True, 'slots': normalized}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'slots': normalized, 'message': str(e)}, ensure_ascii=False)
-
-    def set_burst_enabled(self, enabled):
-        """Enable/disable Burst Mode Ready alerts."""
-        state = _setting_bool_value(enabled)
-        try:
-            self._g._set_setting('burst_enabled', state)
-            return json.dumps({'ok': True, 'enabled': state}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'enabled': state, 'message': str(e)}, ensure_ascii=False)
-
-    def set_auto_key_enabled(self, enabled):
-        try:
-            config = self._g._load_auto_key_config()
-            config['enabled'] = bool(enabled)
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def get_auto_key_state(self):
-        try:
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def create_auto_key_profile(self):
-        try:
-            config = self._g._load_auto_key_config()
-            profile = make_default_profile(self._g._auto_key_author_snapshot())
-            upsert_profile(config, profile, activate=True)
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def copy_auto_key_profile(self, profile_id):
-        try:
-            config = self._g._load_auto_key_config()
-            created = clone_profile(config, profile_id, self._g._auto_key_author_snapshot())
-            if not created:
-                raise RuntimeError('Profile not found')
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def save_auto_key_profile(self, profile_payload):
-        try:
-            if isinstance(profile_payload, str):
-                profile_payload = json.loads(profile_payload)
-            config = self._g._load_auto_key_config()
-            profile = normalize_profile(profile_payload, author_snapshot=self._g._auto_key_author_snapshot())
-            existing = find_auto_key_profile(config, profile.get('id'))
-            if existing and existing.get('created_at'):
-                profile['created_at'] = existing.get('created_at')
-            upsert_profile(config, profile, activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def delete_auto_key_profile(self, profile_id):
-        try:
-            config = self._g._load_auto_key_config()
-            delete_auto_key_profile(config, profile_id)
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def activate_auto_key_profile(self, profile_id):
-        try:
-            config = self._g._load_auto_key_config()
-            if not find_auto_key_profile(config, profile_id):
-                raise RuntimeError('Profile not found')
-            config['active_profile_id'] = str(profile_id or '')
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def export_auto_key_profile(self, profile_id=None):
-        try:
-            config = self._g._load_auto_key_config()
-            profile = find_auto_key_profile(config, profile_id) if profile_id else None
-            if profile is None:
-                profile = find_auto_key_profile(config, config.get('active_profile_id'))
-            if profile is None:
-                raise RuntimeError('No active profile')
-            path = export_profile_to_default_path(profile)
-            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def start_auto_key_import_picker(self, path=None):
-        try:
-            root = str(path or (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))))
-            self._g._auto_key_picker_purpose = 'auto_key_import'
-            data = json.loads(self.browse_dir(root))
-            data['mode'] = 'file'
-            return json.dumps({'ok': True, 'browser': data}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def select_file(self, path):
-        try:
-            purpose = getattr(self._g, '_auto_key_picker_purpose', '')
-            if purpose == 'auto_key_import':
-                config = self._g._load_auto_key_config()
-                profile = import_profile_from_path(str(path), self._g._auto_key_author_snapshot())
-                upsert_profile(config, profile, activate=False)
-                self._g._save_auto_key_config(config)
-                self._g._auto_key_picker_purpose = ''
-                self._g._sync_auto_key_menu()
-                return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-            purpose_br = getattr(self._g, '_boss_raid_picker_purpose', '')
-            if purpose_br == 'boss_raid_import':
-                config = self._g._load_boss_raid_config()
-                profile = import_br_profile_path(str(path), self._g._boss_raid_author_snapshot())
-                upsert_br_profile(config, profile, activate=False)
-                self._g._save_boss_raid_config(config)
-                self._g._boss_raid_picker_purpose = ''
-                self._g._sync_boss_raid_menu()
-                return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-            raise RuntimeError('No file picker action pending')
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def select_folder(self, path):
-        return json.dumps({'ok': False, 'message': 'Folder selection not used here'}, ensure_ascii=False)
-
-    def set_auto_key_upload_token(self, token):
-        try:
-            identity_state = self._g._auto_key_identity_state()
-            config = self._g._load_auto_key_config()
-            self._g._set_auto_key_upload_auth(
-                token=str(token or '').strip(),
-                expires_at='',
-                error='',
-                mode='manual',
-                identity=identity_state,
-                server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
-            )
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_auto_key_server_url(self, url):
-        try:
-            config = self._g._load_auto_key_config()
-            config['server_url'] = str(url or '').strip()
-            self._g._save_auto_key_config(config)
-            self._g._set_auto_key_upload_auth(
-                token='',
-                expires_at='',
-                error='',
-                mode='',
-                identity=self._g._auto_key_identity_state(),
-                server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
-            )
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def refresh_auto_key_upload_auth(self, force=False):
-        try:
-            auth = self._g._refresh_auto_key_upload_auth(force=bool(force))
-            self._g._sync_auto_key_menu()
-            message = str((auth or {}).get('error') or '').strip()
-            if not message and not bool((auth or {}).get('ready')):
-                identity = (auth or {}).get('identity') or {}
-                missing = ', '.join(identity.get('missing') or [])
-                message = f'Upload auth is not ready{": " + missing if missing else ""}'
-            return json.dumps({
-                'ok': bool(auth.get('ready')),
-                'message': message,
-                'upload_auth': auth,
-                'state': self._g._get_auto_key_menu_state(),
-            }, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-
-    def search_remote_profiles(self, query_payload):
-        try:
-            if isinstance(query_payload, str):
-                query_payload = json.loads(query_payload or '{}')
-            config = self._g._load_auto_key_config()
-            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
-            query = {
-                'q': str((query_payload or {}).get('q', '') or '').strip(),
-                'profile_name': str((query_payload or {}).get('profile_name', '') or '').strip(),
-                'player_uid': str((query_payload or {}).get('player_uid', '') or '').strip(),
-                'player_name': str((query_payload or {}).get('player_name', '') or '').strip(),
-                'profession_name': str((query_payload or {}).get('profession_name', '') or '').strip(),
-                'page': int((query_payload or {}).get('page', 1) or 1),
-                'page_size': int((query_payload or {}).get('page_size', 20) or 20),
-            }
-            result = client.search_scripts(query)
-            config['last_remote_search'] = {
-                'query': query,
-                'results': result.get('items', []),
-                'error': '',
-                'fetched_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
-            }
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'results': result.get('items', []), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            config = self._g._load_auto_key_config()
-            last = config.get('last_remote_search', {}) or {}
-            last['error'] = str(e)
-            config['last_remote_search'] = last
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-
-    def download_remote_profile(self, remote_id):
-        try:
-            config = self._g._load_auto_key_config()
-            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
-            result = client.get_script(remote_id)
-            profile_raw = result.get('profile') or {}
-            profile = normalize_profile(profile_raw, author_snapshot=self._g._auto_key_author_snapshot(), source='downloaded')
-            profile['id'] = profile.get('id') or ''
-            profile['id'] = profile['id'] if profile['id'] not in {item.get('id') for item in config.get('profiles', []) or []} else ''
-            if not profile['id']:
-                profile['id'] = f'profile_{int(time.time())}'
-            profile['remote_id'] = result.get('id')
-            profile['source'] = 'downloaded'
-            profile['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            upsert_profile(config, profile, activate=False)
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def upload_auto_key_profile(self, profile_id=None):
-        try:
-            config = self._g._load_auto_key_config()
-            profile = find_auto_key_profile(config, profile_id) if profile_id else None
-            if profile is None:
-                profile = find_auto_key_profile(config, config.get('active_profile_id'))
-            if profile is None:
-                raise RuntimeError('No active profile')
-            auth = self._g._refresh_auto_key_upload_auth(force=False)
-            token = str((auth or {}).get('token') or '').strip()
-            if not token:
-                raise RuntimeError(str((auth or {}).get('error') or 'Upload token is empty'))
-            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
-            author = self._g._auto_key_author_snapshot()
-            payload = {
-                'profile_name': profile.get('profile_name', ''),
-                'description': profile.get('description', ''),
-                'profession_id': author.get('profession_id') or profile.get('profession_id', 0),
-                'profession_name': author.get('profession_name') or profile.get('profession_name', ''),
-                'player_uid': author.get('player_uid', ''),
-                'player_name': author.get('player_name', ''),
-                'schema_version': 1,
-                'profile': profile,
-            }
-            result = client.upload_script(payload, token)
-            profile['source'] = 'uploaded'
-            profile['remote_id'] = result.get('id')
-            upsert_profile(config, profile, activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
-            self._g._save_auto_key_config(config)
-            self._g._sync_auto_key_menu()
-            return json.dumps({'ok': True, 'remote_id': result.get('id'), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
-
-    # ── Boss Raid API ──
-
-    def get_boss_raid_state(self):
-        try:
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_boss_raid_enabled(self, enabled):
-        try:
-            config = self._g._load_boss_raid_config()
-            config['enabled'] = bool(enabled)
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_boss_raid_server_url(self, url):
-        try:
-            config = self._g._load_boss_raid_config()
-            config['server_url'] = str(url or '').strip()
-            self._g._set_boss_raid_upload_auth(
-                token='',
-                expires_at='',
-                error='',
-                mode='',
-                identity=self._g._boss_raid_identity_state(),
-                server_url=str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL),
-            )
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def activate_boss_raid_profile(self, profile_id):
-        try:
-            config = self._g._load_boss_raid_config()
-            if not find_br_profile(config, profile_id):
-                raise RuntimeError('Profile not found')
-            config['active_profile_id'] = str(profile_id or '')
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def create_boss_raid_profile(self):
-        try:
-            config = self._g._load_boss_raid_config()
-            profile = make_default_br_profile(self._g._boss_raid_author_snapshot())
-            upsert_br_profile(config, profile, activate=True)
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def save_boss_raid_profile(self, profile_payload):
-        try:
-            if isinstance(profile_payload, str):
-                profile_payload = json.loads(profile_payload)
-            config = self._g._load_boss_raid_config()
-            profile = normalize_br_profile(profile_payload, author_snapshot=self._g._boss_raid_author_snapshot())
-            existing = find_br_profile(config, profile.get('id'))
-            if existing and existing.get('created_at'):
-                profile['created_at'] = existing.get('created_at')
-            upsert_br_profile(config, profile,
-                              activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def delete_boss_raid_profile(self, profile_id):
-        try:
-            config = self._g._load_boss_raid_config()
-            delete_br_profile(config, profile_id)
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def export_boss_raid_profile(self, profile_id=None):
-        try:
-            config = self._g._load_boss_raid_config()
-            profile = find_br_profile(config, profile_id) if profile_id else None
-            if profile is None:
-                profile = find_br_profile(config, config.get('active_profile_id'))
-            if profile is None:
-                raise RuntimeError('No active profile')
-            path = export_br_profile_path(profile)
-            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def start_boss_raid_import_picker(self, path=None):
-        try:
-            root = str(path or (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))))
-            self._g._boss_raid_picker_purpose = 'boss_raid_import'
-            data = json.loads(self.browse_dir(root))
-            data['mode'] = 'file'
-            return json.dumps({'ok': True, 'browser': data}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def boss_raid_start(self):
-        """Start boss raid from active profile via JS."""
-        try:
-            self._g._toggle_boss_raid()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def boss_raid_stop(self):
-        """Stop boss raid."""
-        try:
-            if self._g._boss_raid_engine:
-                self._g._boss_raid_engine.stop()
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def boss_raid_next_phase(self):
-        """Advance boss raid to next phase via JS."""
-        try:
-            self._g._boss_raid_next_phase()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def boss_raid_reset(self):
-        """Reset boss raid to idle."""
-        try:
-            if self._g._boss_raid_engine:
-                self._g._boss_raid_engine.reset()
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def search_boss_raid_remote(self, query_payload):
-        try:
-            if isinstance(query_payload, str):
-                query_payload = json.loads(query_payload or '{}')
-            config = self._g._load_boss_raid_config()
-            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
-            query = {
-                'q': str((query_payload or {}).get('q', '') or '').strip(),
-                'profile_name': str((query_payload or {}).get('profile_name', '') or '').strip(),
-                'player_uid': str((query_payload or {}).get('player_uid', '') or '').strip(),
-                'player_name': str((query_payload or {}).get('player_name', '') or '').strip(),
-                'page': int((query_payload or {}).get('page', 1) or 1),
-                'page_size': int((query_payload or {}).get('page_size', 20) or 20),
-            }
-            result = client.search(query)
-            config['last_remote_search'] = {
-                'query': query,
-                'results': result.get('items', []),
-                'error': '',
-                'fetched_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
-            }
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'results': result.get('items', []), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            config = self._g._load_boss_raid_config()
-            last = config.get('last_remote_search', {}) or {}
-            last['error'] = str(e)
-            config['last_remote_search'] = last
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-
-    def download_boss_raid_remote(self, remote_id):
-        try:
-            config = self._g._load_boss_raid_config()
-            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
-            result = client.get(remote_id)
-            profile_raw = result.get('profile') or {}
-            profile = normalize_br_profile(profile_raw, author_snapshot=self._g._boss_raid_author_snapshot(), source='downloaded')
-            profile['id'] = profile.get('id') or ''
-            profile['id'] = profile['id'] if profile['id'] not in {item.get('id') for item in config.get('profiles', []) or []} else ''
-            if not profile['id']:
-                import uuid as _uuid
-                profile['id'] = f'boss_{_uuid.uuid4().hex[:12]}'
-            profile['remote_id'] = result.get('id')
-            profile['source'] = 'downloaded'
-            profile['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            upsert_br_profile(config, profile, activate=False)
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def upload_boss_raid_profile(self, profile_id=None):
-        try:
-            config = self._g._load_boss_raid_config()
-            profile = find_br_profile(config, profile_id) if profile_id else None
-            if profile is None:
-                profile = find_br_profile(config, config.get('active_profile_id'))
-            if profile is None:
-                raise RuntimeError('No active profile')
-            auth = self._g._refresh_boss_raid_upload_auth(force=False)
-            token = str((auth or {}).get('token') or '').strip()
-            if not token:
-                raise RuntimeError(str((auth or {}).get('error') or 'Upload token is empty'))
-            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
-            author = self._g._boss_raid_author_snapshot()
-            payload = {
-                'profile_name': profile.get('profile_name', ''),
-                'description': profile.get('description', ''),
-                'boss_total_hp': int(profile.get('boss_total_hp') or 0),
-                'enrage_time_s': int(profile.get('enrage_time_s') or 0),
-                'player_uid': author.get('player_uid', ''),
-                'player_name': author.get('player_name', ''),
-                'schema_version': 1,
-                'profile': profile,
-            }
-            result = client.upload(payload, token)
-            profile['source'] = 'uploaded'
-            profile['remote_id'] = result.get('id')
-            upsert_br_profile(config, profile,
-                              activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
-            self._g._save_boss_raid_config(config)
-            self._g._sync_boss_raid_menu()
-            return json.dumps({'ok': True, 'remote_id': result.get('id'), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-
-    def refresh_boss_raid_upload_auth(self, force=False):
-        try:
-            auth = self._g._refresh_boss_raid_upload_auth(force=bool(force))
-            self._g._sync_boss_raid_menu()
-            return json.dumps({
-                'ok': bool(auth.get('ready')),
-                'message': str(auth.get('error') or ''),
-                'upload_auth': auth,
-                'state': self._g._get_boss_raid_menu_state(),
-            }, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
-
-    # ── Boss ↔ AutoKey Linkage API ──
-
-    def get_linkage_state(self):
-        try:
-            config = load_linkage_config(self._g._cfg_settings_ref)
-            linkage = getattr(self._g, '_boss_autokey_linkage', None)
-            status = linkage.get_status() if linkage else {}
-            return json.dumps({'ok': True, 'state': build_linkage_state(config, status)}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_linkage_enabled(self, enabled):
-        try:
-            config = load_linkage_config(self._g._cfg_settings_ref)
-            config['enabled'] = bool(enabled)
-            save_linkage_config(self._g._cfg_settings_ref, config)
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_linkage_debug(self, enabled):
-        try:
-            config = load_linkage_config(self._g._cfg_settings_ref)
-            config['debug_log'] = bool(enabled)
-            save_linkage_config(self._g._cfg_settings_ref, config)
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_linkage_global_cooldown(self, seconds):
-        try:
-            config = load_linkage_config(self._g._cfg_settings_ref)
-            config['global_cooldown_s'] = max(0.0, min(60.0, float(seconds)))
-            save_linkage_config(self._g._cfg_settings_ref, config)
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def save_linkage_mappings(self, mappings_json):
-        try:
-            mappings = json.loads(mappings_json) if isinstance(mappings_json, str) else mappings_json
-            config = load_linkage_config(self._g._cfg_settings_ref)
-            config['mappings'] = list(mappings) if isinstance(mappings, list) else []
-            save_linkage_config(self._g._cfg_settings_ref, config)
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def reset_linkage(self):
-        try:
-            linkage = getattr(self._g, '_boss_autokey_linkage', None)
-            if linkage:
-                linkage.reset()
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    # ── Boss Reactions editor (memory-driven, in the raid editor) ──
-
-    def _boss_reactions_state(self, scene_key=None, boss_base_id=None):
-        return build_boss_reactions_state(
-            self._g._cfg_settings_ref,
-            getattr(self._g, '_boss_raid_engine', None),
-            getattr(self._g, '_state_mgr', None),
-            scene_key=scene_key,
-            boss_base_id=boss_base_id)
-
-    def get_boss_reactions(self, scene_key=None, boss_base_id=None):
-        try:
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def save_boss_reaction(self, mapping_json, scene_key=None, boss_base_id=None):
-        try:
-            m = json.loads(mapping_json) if isinstance(mapping_json, str) else mapping_json
-            upsert_mapping(self._g._cfg_settings_ref, m)
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def delete_boss_reaction(self, mapping_id, scene_key=None, boss_base_id=None):
-        try:
-            delete_mapping(self._g._cfg_settings_ref, str(mapping_id))
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def import_observed_skills(self, base_id=0, scene_key=None):
-        try:
-            engine = getattr(self._g, '_boss_raid_engine', None)
-            obs = engine.get_observed_boss_skills(int(base_id) or None, scene_key) if engine else {}
-            return json.dumps({'ok': True, 'observed_skills': obs}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    # ── Mechanics editor (shared contract with the Tk panels) ──
-
-    def _mechanics_state(self, scene_key=None, boss_base_id=None):
-        from engines import boss_mechanics_state as bms
-        return bms.build_mechanics_state(
-            self._g._cfg_settings_ref,
-            getattr(self._g, '_boss_raid_engine', None),
-            getattr(self._g, '_state_mgr', None),
-            scene_key=scene_key, boss_base_id=boss_base_id)
-
-    def _mechanics_reply(self, scene_key=None, boss_base_id=None):
-        return json.dumps({'ok': True,
-                           'state': self._mechanics_state(scene_key, boss_base_id)},
-                          ensure_ascii=False)
-
-    def get_mechanics(self, scene_key=None, boss_base_id=None):
-        try:
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def _mechanics_hot_apply(self):
-        """编辑落盘后热应用进正在运行的引擎 (无需重按 START)。"""
-        try:
-            from engines import boss_mechanics_state as bms
-            bms.hot_apply_to_engine(self._g._cfg_settings_ref,
-                                    getattr(self._g, '_boss_raid_engine', None))
-        except Exception:
-            pass
-
-    def save_mechanic(self, mech_json, scene_key=None, boss_base_id=None):
-        try:
-            from engines import boss_mechanics_state as bms
-            mech = json.loads(mech_json) if isinstance(mech_json, str) else mech_json
-            bms.upsert_mechanic(self._g._cfg_settings_ref, mech)
-            try:
-                self._g._presynthesize_active_profile_web()
-            except Exception:
-                pass
-            self._mechanics_hot_apply()
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def delete_mechanic(self, mechanic_id, scene_key=None, boss_base_id=None):
-        try:
-            from engines import boss_mechanics_state as bms
-            bms.delete_mechanic(self._g._cfg_settings_ref, str(mechanic_id))
-            self._mechanics_hot_apply()
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def create_mechanic_from_skill(self, skill_id, skill_name='', cast_duration_ms=None,
-                                   scene_key=None, boss_base_id=None):
-        try:
-            from engines import boss_mechanics_state as bms
-            bms.create_mechanic_from_skill(self._g._cfg_settings_ref, skill_id,
-                                           skill_name, cast_duration_ms)
-            self._mechanics_hot_apply()
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def bind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
-        try:
-            from engines import boss_mechanics_state as bms
-            bms.bind_skill_to_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
-            self._mechanics_hot_apply()
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def unbind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
-        try:
-            from engines import boss_mechanics_state as bms
-            bms.unbind_skill_from_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
-            self._mechanics_hot_apply()
-            return self._mechanics_reply(scene_key, boss_base_id)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def set_mechanics_master(self, flags_json):
-        try:
-            from engines import boss_mechanics_state as bms
-            flags = json.loads(flags_json) if isinstance(flags_json, str) else flags_json
-            master = bms.set_mechanics_master(self._g._cfg_settings_ref, flags)
-            return json.dumps({'ok': True, 'master': master}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def search_skill_catalog(self, query, limit=30):
-        try:
-            from engines import boss_mechanics_state as bms
-            return json.dumps({'ok': True,
-                               'results': bms.search_skill_catalog(query, int(limit or 30))},
-                              ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def test_mechanic(self, mech_json, kinds_json='["tts","banner"]'):
-        try:
-            mech = json.loads(mech_json) if isinstance(mech_json, str) else mech_json
-            kinds = json.loads(kinds_json) if isinstance(kinds_json, str) else (kinds_json or [])
-            kinds = [str(k) for k in kinds]
-            result = {'ok': True}
-            msgs = []
-            tts_fb = {'played': 'TTS已播', 'queued': 'TTS排队中',
-                      'synthesizing': 'TTS合成中(首次稍候再试)',
-                      'disabled': 'TTS未启用或静音', 'error': 'TTS失败'}
-            controller = getattr(self._g, '_mech_alert_controller', None)
-            if {'tts', 'banner'} & set(kinds):
-                if controller is None:
-                    msgs.append('提醒控制器未就绪')
-                else:
-                    result.update(controller.test_mechanic(mech, kinds))
-                    if 'tts' in kinds:
-                        msgs.append(tts_fb.get(result.get('tts'),
-                                               str(result.get('tts') or 'TTS无结果')))
-                    if 'banner' in kinds:
-                        msgs.append('横幅已显示' if result.get('banner') else '横幅未显示')
-            if 'dodge' in kinds:
-                linkage = getattr(self._g, '_boss_autokey_linkage', None)
-                inline = ((mech.get('dodge') or {}).get('inline')
-                          if isinstance(mech, dict) else None)
-                if linkage is None or not isinstance(inline, dict):
-                    msgs.append('按键联动不可用')
-                else:
-                    fired = bool(linkage.fire_mapping_test(inline))
-                    result['dodge'] = fired
-                    msgs.append('按键已发到当前前台窗口' if fired
-                                else '按键未配置(无键/无序列)')
-            result['message'] = ' · '.join(msgs)
-            return json.dumps(result, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
     # ── Sound settings ──
     def set_sound_enabled(self, enabled):
         """Global SFX on/off."""
@@ -2031,191 +1208,6 @@ class SAOWebAPI:
             return json.dumps({'ok': True, 'volume': volume}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'volume': volume, 'message': str(e)}, ensure_ascii=False)
-
-    # ── Boss bar mode ──
-    def set_boss_bar_mode(self, mode):
-        """Set boss bar display mode: 'always' | 'boss_raid' | 'off'."""
-        mode = str(mode or 'boss_raid').strip()
-        if mode not in ('always', 'boss_raid', 'off'):
-            mode = 'boss_raid'
-        self._g._set_setting('boss_bar_mode', mode)
-        self._g._sync_menu_settings()
-        return json.dumps({'ok': True, 'mode': mode}, ensure_ascii=False)
-
-    def get_boss_bar_mode(self):
-        """Return current boss bar display mode."""
-        return self._g._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-
-    def set_dps_enabled(self, enabled):
-        on = bool(enabled)
-        self._g._set_setting('dps_enabled', on)
-        if not on:
-            self._g._hide_dps_window()
-        else:
-            tracker = getattr(self._g, '_dps_tracker', None)
-            try:
-                if tracker and tracker.has_recent_damage(self._g._combat_damage_timeout_s()):
-                    self._g._show_dps_live_snapshot(tracker.get_snapshot())
-            except Exception:
-                pass
-        self._g._sync_menu_settings()
-        return json.dumps({'ok': True, 'enabled': on}, ensure_ascii=False)
-
-    def set_dps_fade_timeout(self, seconds):
-        val = _dps_fade_timeout_value(seconds)
-        self._g._set_setting('dps_fade_timeout_s', val)
-        self._g._sync_menu_settings()
-        return json.dumps({'ok': True, 'timeout': val}, ensure_ascii=False)
-
-    def get_dps_enabled(self):
-        return bool(self._g._get_setting('dps_enabled', True))
-
-    # ── Buff 监视器开关 (同时控制自身奥义 buff + boss target buff) ──
-    def set_buffmon_enabled(self, enabled):
-        on = bool(enabled)
-        self._g._set_setting('buffmon_enabled', on)
-        for attr in ('_self_buff_overlay', '_boss_buff_overlay'):
-            try:
-                ov = getattr(self._g, attr, None)
-                if ov is not None:
-                    ov.set_enabled(on)
-            except Exception:
-                pass
-        self._g._sync_menu_settings()
-        return json.dumps({'ok': True, 'enabled': on}, ensure_ascii=False)
-
-    def get_buffmon_enabled(self):
-        return bool(self._g._get_setting('buffmon_enabled', True))
-
-    def show_last_dps_report(self):
-        try:
-            if self._g._show_dps_last_report():
-                self._g._sync_dps_report_availability()
-                return json.dumps({'ok': True}, ensure_ascii=False)
-            return json.dumps({
-                'ok': False,
-                'message': 'No last combat report yet.',
-            }, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def boss_hp_hit_regions(self, regions):
-        """Receive display regions from boss_hp.html for pass-through."""
-        pass  # Boss HP is always fully click-through
-
-    # ── Raid Editor toggle ──
-    def toggle_raid_editor(self):
-        """Show/hide the Raid Editor overlay."""
-        def _do():
-            if self._g._raid_editor_visible:
-                self._g._hide_raid_editor()
-            else:
-                self._g._show_raid_editor()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def get_raid_editor_visible(self):
-        return bool(self._g._raid_editor_visible)
-
-    # ── AutoKey Editor toggle ──
-    def toggle_autokey_editor(self):
-        """Show/hide the AutoKey Editor overlay."""
-        def _do():
-            if self._g._autokey_editor_visible:
-                self._g._hide_autokey_editor()
-            else:
-                self._g._show_autokey_editor()
-        threading.Thread(target=_do, daemon=True).start()
-
-    def get_autokey_editor_visible(self):
-        return bool(self._g._autokey_editor_visible)
-
-    # ── Hide & Seek toggle ──
-    def get_plugin_menu(self):
-        """Data for the WebView plugin popup menu (manager + plugin list)."""
-        return json.dumps(act_plugin_menu(self._g), ensure_ascii=False)
-
-    # ── Data source mode ──
-    def set_data_source(self, mode):
-        """Switch PacketBridge between tcp/memory/hybrid/auto modes."""
-        normalized = str(mode or 'tcp').strip().lower()
-        if normalized not in ('tcp', 'memory', 'hybrid', 'auto'):
-            normalized = 'hybrid'
-        try:
-            ref = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
-            ref.set('mem_data_source', normalized)
-            try:
-                ref.save()
-            except Exception:
-                pass
-            self._g._reconfigure_data_engines(restart_packet=True)
-        except Exception as e:
-            print(f'[SAO-WV] set_data_source failed: {e}')
-            self._g._sync_menu_info()
-            # ok:False 触发 menu 端既有的回滚回调 + 红色 alert
-            return json.dumps({'ok': False, 'mode': normalized, 'message': str(e)}, ensure_ascii=False)
-        self._g._sync_menu_info()
-        return json.dumps({'ok': True, 'mode': normalized}, ensure_ascii=False)
-
-    def set_component_source(self, component, mode):
-        """Persist per-component packet/vision source choices from the menu."""
-        component_name = str(component or '').strip().lower()
-        if component_name not in DATA_SOURCE_COMPONENTS:
-            self._g._sync_menu_settings()
-            return json.dumps({
-                'ok': False,
-                'error': 'bad_component',
-                'component': component_name,
-            }, ensure_ascii=False)
-
-        mode_name = normalize_source_mode(mode, DEFAULT_DATA_SOURCE_MAP.get(component_name, 'packet'))
-        if component_name == 'stamina':
-            mode_name = 'vision'
-        elif component_name == 'skills':
-            mode_name = 'packet'
-
-        source_map = {}
-        try:
-            ref = getattr(self._g, '_cfg_settings_ref', None) or getattr(self._g, 'settings', None)
-            if ref is None:
-                raise RuntimeError('settings unavailable')
-            if hasattr(ref, 'set_component_source') and hasattr(ref, 'get_data_source_map'):
-                ref.set_component_source(component_name, mode_name)
-                source_map = ref.get_data_source_map()
-            else:
-                raw_map = ref.get('data_source_map', {}) if hasattr(ref, 'get') else {}
-                legacy_mode = ref.get('data_source', 'packet') if hasattr(ref, 'get') else 'packet'
-                source_map = normalize_source_map(raw_map, legacy_mode)
-                source_map[component_name] = mode_name
-                source_map = normalize_source_map(source_map, 'packet')
-                if hasattr(ref, 'set'):
-                    ref.set('data_source_map', dict(source_map))
-                    ref.set('data_source', 'mixed')
-            if hasattr(ref, 'save'):
-                try:
-                    ref.save()
-                except Exception:
-                    pass
-            try:
-                self._g._reconfigure_data_engines(restart_packet=False)
-            except Exception:
-                pass
-        except Exception as e:
-            print(f'[SAO-WV] set_component_source failed: {e}')
-            self._g._sync_menu_settings()
-            return json.dumps({
-                'ok': False,
-                'error': str(e),
-                'component': component_name,
-                'mode': mode_name,
-            }, ensure_ascii=False)
-
-        self._g._sync_menu_settings()
-        return json.dumps({
-            'ok': True,
-            'component': component_name,
-            'mode': mode_name,
-            'data_source_map': dict(source_map),
-        }, ensure_ascii=False)
 
     def browse_dir(self, path: str) -> str:
         """文件选择器: 返回目录内容 JSON"""
@@ -2268,330 +1260,6 @@ class PanelAPI:
     def play_sound(self, name):
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
-    # ── DPS Meter settings ──
-    def set_dps_enabled(self, enabled):
-        """Toggle DPS meter visibility."""
-        on = bool(enabled)
-        self._g._set_setting('dps_enabled', on)
-        if not on:
-            self._g._hide_dps_window()
-        else:
-            tracker = getattr(self._g, '_dps_tracker', None)
-            try:
-                if tracker and tracker.has_recent_damage(self._g._combat_damage_timeout_s()):
-                    self._g._show_dps_live_snapshot(tracker.get_snapshot())
-            except Exception:
-                pass
-        self._g._sync_menu_settings()
-
-    def set_dps_fade_timeout(self, seconds):
-        """Set DPS fade-out idle timeout in seconds (0 = never fade)."""
-        val = _dps_fade_timeout_value(seconds)
-        self._g._set_setting('dps_fade_timeout_s', val)
-        self._g._sync_menu_settings()
-
-    def get_dps_enabled(self):
-        return bool(self._g._get_setting('dps_enabled', True))
-
-
-class DpsWindowAPI:
-    """pywebview js_api for the DPS meter window — supports dragging and data queries."""
-
-    def __init__(self, gui: 'SAOWebViewGUI'):
-        self._g = gui
-
-    def window_drag(self, dx, dy):
-        """Move DPS window by delta pixels."""
-        try:
-            win = self._g.dps_win
-            if win:
-                win.move(win.x + int(dx), win.y + int(dy))
-        except Exception:
-            pass
-
-    def reset_dps(self):
-        """Reset the DPS tracker encounter."""
-        try:
-            tracker = getattr(self._g, '_dps_tracker', None)
-            if tracker:
-                tracker.reset()
-                self._g._sync_dps_report_availability()
-                if getattr(self._g, '_dps_mode', 'hidden') != 'report':
-                    self._g._eval_dps(
-                        f'DpsMeter.showLive({json.dumps(tracker.get_snapshot(), ensure_ascii=False)})'
-                    )
-                    self._g._push_dps_act_snapshot()
-        except Exception:
-            pass
-
-    def request_live_snapshot(self):
-        def _push():
-            try:
-                tracker = getattr(self._g, '_dps_tracker', None)
-                snapshot = tracker.get_snapshot() if tracker else None
-                if snapshot is None:
-                    snapshot = {
-                        'encounter_active': False,
-                        'elapsed_s': 0.0,
-                        'total_damage': 0,
-                        'total_heal': 0,
-                        'total_dps': 0,
-                        'total_hps': 0,
-                        'entities': [],
-                    }
-                self._g._dps_mode = 'live'
-                self._g._eval_dps(
-                    f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})'
-                )
-                self._g._push_dps_act_snapshot()
-            except Exception:
-                pass
-        threading.Thread(target=_push, daemon=True).start()
-
-    def show_last_report(self):
-        try:
-            tracker = getattr(self._g, '_dps_tracker', None)
-            report = tracker.get_last_report() if tracker else None
-            if not report:
-                store = getattr(self._g, '_dps_history_store', None)
-                report = store.latest_report() if store else None
-            if not report:
-                return json.dumps({
-                    'ok': False,
-                    'message': 'No last combat report yet.',
-                }, ensure_ascii=False)
-            self._g._dps_mode = 'report'
-            self._g._eval_dps(
-                f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})'
-            )
-            self._g._push_dps_act_snapshot()
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def get_act_snapshot(self):
-        """Return one ACT-facing snapshot with live, report, history, and context."""
-        try:
-            snapshot = self._g._build_dps_act_snapshot() or {}
-            return json.dumps({
-                'ok': True,
-                **snapshot,
-            }, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def list_history(self, limit=20):
-        payload = act_history_status(self._g, limit=int(limit or 20))
-        return json.dumps({**payload, 'items': payload.get('encounters') or []}, ensure_ascii=False)
-
-    def export_last_report(self, fmt='json'):
-        return json.dumps(act_report_export(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
-
-    def get_entity_detail(self, uid):
-        """Fetch detailed entity stats (with skill breakdown) and push to JS."""
-        def _fetch():
-            try:
-                tracker = getattr(self._g, '_dps_tracker', None)
-                if tracker:
-                    detail = tracker.get_entity_detail(int(uid))
-                    if detail:
-                        self._g._eval_dps(
-                            f'DpsMeter.updateDetail({json.dumps(detail, ensure_ascii=False)})'
-                        )
-            except Exception:
-                pass
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def set_detail_mode(self, active):
-        """Resize the DPS window between compact and detailed layouts."""
-        try:
-            self._g._set_dps_detail_mode(bool(active))
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def resize_dps(self, width, height, commit=False):
-        """Resize the detailed DPS panel; commit=True persists the size."""
-        try:
-            self._g._resize_dps_window(int(width), int(height), persist=bool(commit))
-            return json.dumps({'ok': True}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
-
-    def play_sound(self, name: str):
-        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
-
-
-class RaidEditorAPI:
-    """pywebview js_api for the Raid Editor overlay — entity role, phase control."""
-
-    def __init__(self, gui: 'SAOWebViewGUI'):
-        self._g = gui
-
-    def window_drag(self, dx, dy):
-        try:
-            win = self._g.raid_editor_win
-            if win:
-                win.move(win.x + int(dx), win.y + int(dy))
-        except Exception:
-            pass
-
-    def set_entity_role(self, uuid, role):
-        """Mark a tracked entity as 'boss' or 'enemy'."""
-        try:
-            engine = getattr(self._g, '_boss_raid_engine', None)
-            if engine:
-                engine.set_entity_role(int(uuid), str(role))
-        except Exception:
-            pass
-
-    def raid_next_phase(self):
-        """Force-advance to the next phase."""
-        try:
-            engine = getattr(self._g, '_boss_raid_engine', None)
-            if engine:
-                engine.next_phase()
-        except Exception:
-            pass
-
-    def raid_reset(self):
-        """Reset the raid engine."""
-        try:
-            engine = getattr(self._g, '_boss_raid_engine', None)
-            if engine:
-                engine.reset()
-                self._g._push_raid_editor_full()
-        except Exception:
-            pass
-
-    def play_sound(self, name: str):
-        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
-
-    # ── delegations to the main SAOWebAPI ──
-    # pywebview ≥4 exposes js_api per window, so the raid-editor window needs
-    # explicit pass-throughs for the reactions + mechanics editor endpoints.
-
-    def get_panel_themes(self):
-        return self._g._api.get_panel_themes()
-
-    def get_boss_reactions(self, scene_key=None, boss_base_id=None):
-        return self._g._api.get_boss_reactions(scene_key, boss_base_id)
-
-    def save_boss_reaction(self, mapping_json, scene_key=None, boss_base_id=None):
-        return self._g._api.save_boss_reaction(mapping_json, scene_key, boss_base_id)
-
-    def delete_boss_reaction(self, mapping_id, scene_key=None, boss_base_id=None):
-        return self._g._api.delete_boss_reaction(mapping_id, scene_key, boss_base_id)
-
-    def import_observed_skills(self, base_id=0, scene_key=None):
-        return self._g._api.import_observed_skills(base_id, scene_key)
-
-    def get_mechanics(self, scene_key=None, boss_base_id=None):
-        return self._g._api.get_mechanics(scene_key, boss_base_id)
-
-    def save_mechanic(self, mech_json, scene_key=None, boss_base_id=None):
-        return self._g._api.save_mechanic(mech_json, scene_key, boss_base_id)
-
-    def delete_mechanic(self, mechanic_id, scene_key=None, boss_base_id=None):
-        return self._g._api.delete_mechanic(mechanic_id, scene_key, boss_base_id)
-
-    def create_mechanic_from_skill(self, skill_id, skill_name='', cast_duration_ms=None,
-                                   scene_key=None, boss_base_id=None):
-        return self._g._api.create_mechanic_from_skill(
-            skill_id, skill_name, cast_duration_ms, scene_key, boss_base_id)
-
-    def bind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
-        return self._g._api.bind_mechanic_skill(mechanic_id, skill_id, scene_key, boss_base_id)
-
-    def unbind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
-        return self._g._api.unbind_mechanic_skill(mechanic_id, skill_id, scene_key, boss_base_id)
-
-    def set_mechanics_master(self, flags_json):
-        return self._g._api.set_mechanics_master(flags_json)
-
-    def search_skill_catalog(self, query, limit=30):
-        return self._g._api.search_skill_catalog(query, limit)
-
-    def test_mechanic(self, mech_json, kinds_json='["tts","banner"]'):
-        return self._g._api.test_mechanic(mech_json, kinds_json)
-
-
-class CommanderAPI:
-    """pywebview js_api for the Commander panel — team overview & self CDs."""
-
-    def __init__(self, gui: 'SAOWebViewGUI'):
-        self._g = gui
-
-    def window_drag(self, dx, dy):
-        try:
-            win = self._g.commander_win
-            if win:
-                win.move(win.x + int(dx), win.y + int(dy))
-        except Exception:
-            pass
-
-    def close_commander(self):
-        """Hide the commander panel."""
-        try:
-            self._g._hide_commander()
-        except Exception:
-            pass
-
-    def request_data(self):
-        """JS->Python: request a fresh commander data push."""
-        def _push():
-            try:
-                self._g._push_commander_data()
-            except Exception:
-                pass
-        threading.Thread(target=_push, daemon=True).start()
-
-    def play_sound(self, name: str):
-        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
-
-
-class AutoKeyEditorAPI:
-    """pywebview js_api for the AutoKey Editor overlay — skill recording."""
-
-    def __init__(self, gui: 'SAOWebViewGUI'):
-        self._g = gui
-
-    def window_drag(self, dx, dy):
-        try:
-            win = self._g.autokey_editor_win
-            if win:
-                win.move(win.x + int(dx), win.y + int(dy))
-        except Exception:
-            pass
-
-    def save_autokey_actions(self, actions_json):
-        """Save recorded burst-ready → skill trigger actions.
-        actions_json: JSON string of [{trigger_slot, action_slot}, ...]
-        返回 {'ok': bool, ...} JSON, 让前端能区分保存成功/失败。
-        """
-        try:
-            actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
-            engine = getattr(self._g, '_autokey_engine', None)
-            if engine:
-                engine.set_burst_actions(actions)
-            self._g._set_setting('autokey_burst_actions', actions)
-            self._g._sync_menu_settings()
-            return json.dumps({'ok': True, 'count': len(actions or [])})
-        except Exception as exc:
-            return json.dumps({'ok': False, 'message': str(exc)})
-
-    def get_autokey_actions(self):
-        """Return current burst-ready actions as JSON."""
-        try:
-            actions = self._g._get_setting('autokey_burst_actions', [])
-            return json.dumps(actions, ensure_ascii=False)
-        except Exception:
-            return '[]'
-
-    def play_sound(self, name: str):
-        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
-
-
 # ════════════════════════════════════════════════
 #  主类
 # ════════════════════════════════════════════════
@@ -2621,12 +1289,11 @@ class SAOWebViewGUI:
         except Exception:
             self._sao_sound = None
 
-        # 角色 (游戏插件 on_load 覆盖 _username/_profession)
-        profile = {}
-        self._username = profile.get('username', '') or 'Player'
-        self._profession = profile.get('profession', '剑士')
-        self._level = max(1, int(profile.get('level', 1) or 1))
-        self._last_displayed_level_base = 0  # 用于检测等级变化并触发升级动画
+        # 角色展示由游戏插件 on_load 注入；平台不提供游戏身份默认值
+        self._username = ''
+        self._profession = ''
+        self._level = 0
+        self._last_displayed_level_base = 0
         self._sta_offline_armed = False
 
         # 识别状态
@@ -2646,16 +1313,10 @@ class SAOWebViewGUI:
         # 菜单
         self._sta_detector_started = False
         self._menu_visible = False
-        self._session_players = {}
-        self._session_players_self_uid = 0
-        self._session_players_version = 0
-        self._session_players_last_sig = None
-        self._session_players_last_push_ts = 0.0
 
         # 窗口
         self.hp_win = None
         self.menu_win = None
-        self.skillfx_win = None
         self.alert_win = None
         # 切换地图中央横幅 (延迟 3s 后淡入地图名)
         self.mapbanner_win = None
@@ -2668,52 +1329,10 @@ class SAOWebViewGUI:
         self._mapbanner_last_name = ''
         self._mapbanner_last_ts = 0.0
         self._mapbanner_timer = None
-        self.boss_hp_win = None
-        self._boss_hp_hwnd = 0
-        self._boss_hp_visible = False
-        self._boss_hp_bar_shown = False  # JS-level visibility
-        self._boss_hp_geometry = None
-        self._bb_last_target_uuid = 0     # UUID of last monster damaged by self
-        self._bb_last_damage_ts = 0.0     # timestamp of last self→monster damage
-        self._bb_recent_targets = {}      # uuid -> last_damage_ts for multi-unit secondary panels
-        self._bb_damage_timeout = 60.0    # seconds before boss bar fades out
-        self._pending_combat_reset_after = 0.0
-        self._pending_combat_reset_reason = ''
-        self._damage_self_fallback_log_ts = 0.0
-
-        # DPS Meter
-        self.dps_win = None
-        self._dps_hwnd = 0
-        self._dps_visible = False
-        self._dps_faded = False
-        self._dps_fade_seq = 0
-        self._dps_mode = 'hidden'
-        self._dps_tracker = None
-        self._dps_api = None
-        self._dps_history_store = None
-        self._encounter_mgr = None
-        self._act_trigger_engine = None
-        self._dps_last_report_available = False
-        self._dps_base_w = 0
-        self._dps_base_h = 0
-        self._dps_detail_w = 760
-        self._dps_detail_h = 560
-        self._dps_detail_mode = False
-
-        # Raid Editor overlay
-        self.raid_editor_win = None
-        self._raid_editor_visible = False
-        self._raid_editor_api = None
-
-        # AutoKey Editor overlay
-        self.autokey_editor_win = None
-        self._autokey_editor_visible = False
-        self._autokey_editor_api = None
-
-        # Commander panel
-        self.commander_win = None
-        self._commander_visible = False
-        self._commander_api = None
+        # Game/plugin-owned WebView surfaces are injected dynamically by plugins.
+        self._plugin_surfaces = {}
+        self._plugin_surface_meta = {}
+        self._plugin_surface_order = []
 
         # ACT Plugin Manager panel
         self.plugin_manager_win = None
@@ -2796,17 +1415,8 @@ class SAOWebViewGUI:
         self._hp_reveal_pending = False
         self._hp_mouse_passthrough_started = False
         self._hp_mouse_passthrough = None
-        self._skillfx_hwnd = 0
         self._alert_hwnd = 0
-        self._skillfx_visible = False
-        self._skillfx_slot_count = 9
-        self._skillfx_layout = None
         self._sta_pixel_detector_enabled = False
-        self._last_ready_slots = {}
-        self._burst_seen_cooling = set()
-        self._last_watched_signature = ()
-        self._last_burst_ready = False
-        self._last_burst_slot = 0
         self._hp_viewport_offset_x = 0
         self._hp_viewport_offset_y = 0
         self._fisheye_active = False
@@ -2824,25 +1434,11 @@ class SAOWebViewGUI:
         # 识别相关引用
         self._cfg_settings_ref = None
         self._cache_loop_stop = threading.Event()
-        self._auto_key_engine = None
-        self._auto_key_picker_purpose = ''
-        self._auto_key_last_menu_state = None
-        self._auto_key_upload_auth = default_upload_auth_state()
         self._last_identity_alert_serial = 0
         self._identity_alert_visible = False
         self._identity_alert_nonce = 0
 
-        # Boss Raid 相关引用
-        self._boss_raid_engine = None
-        self._boss_raid_last_menu_state = None
-        self._boss_raid_upload_auth = default_upload_auth_state()
-        self._boss_raid_picker_purpose = ''
-        self._last_boss_timer_text = ''
-        self._last_boss_timer_urgency = ''
-        self._last_boss_event = {}
-
-        # Boss ↔ AutoKey 联动
-        self._boss_autokey_linkage = None
+        self._game_webview_bridge = None
 
         self._bootstrap_runtime_state()
         self._start_packet_engine_early()
@@ -2857,36 +1453,9 @@ class SAOWebViewGUI:
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
-        """Send a keystroke for boss→autokey linkage. 用 scancode (移动/Shift冲刺/E走
-        等躲避键游戏只认扫描码, wVk 不响应) — 与 Tk 端 _send_linked_key 一致。"""
+        """Delegate game-specific key dispatch to the loaded game plugin."""
         try:
-            from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
-            import ctypes
-            KEYEVENTF_SCANCODE = 0x0008
-            key = (key or "").strip().upper()
-            vk = VK_NAME_MAP.get(key)
-            if vk is None and len(key) == 1 and key.isalpha():
-                vk = ord(key)
-            if vk is None:
-                return
-            scan = ctypes.windll.user32.MapVirtualKeyW(int(vk), 0)
-            if not scan:
-                return
-            hold_s = max(0.015, hold_ms / 1000.0) if press_mode == "hold" else 0.015
-            extra = ctypes.c_ulong(0)
-            for _ in range(max(1, press_count)):
-                ki = KEYBDINPUT(wVk=0, wScan=int(scan), dwFlags=KEYEVENTF_SCANCODE,
-                                time=0, dwExtraInfo=ctypes.pointer(extra))
-                ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
-                ctypes.windll.user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
-                time.sleep(hold_s)
-                ki2 = KEYBDINPUT(wVk=0, wScan=int(scan),
-                                 dwFlags=KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, time=0,
-                                 dwExtraInfo=ctypes.pointer(extra))
-                ev2 = INPUT(type=INPUT_KEYBOARD, ki=ki2)
-                ctypes.windll.user32.SendInput(1, ctypes.byref(ev2), ctypes.sizeof(INPUT))
-                if press_count > 1:
-                    time.sleep(0.04)
+            return self._game_plugin_call('_send_linked_key', key, press_mode, hold_ms, press_count)
         except Exception as e:
             print(f"[Linkage] send_key error: {e}")
 
@@ -2913,1137 +1482,200 @@ class SAOWebViewGUI:
         return default
 
     def _bootstrap_runtime_state(self):
-        if getattr(self, '_state_mgr', None) is not None and getattr(self, '_cfg_settings_ref', None):
+        if getattr(self, '_cfg_settings_ref', None):
+            ensure_act_event_bus(self)
+            ensure_act_plugin_manager(self, load=False)
             return
         try:
-            from engines.game_state import GameStateManager
             from config import SettingsManager as CfgSettings
 
-            if getattr(self, '_state_mgr', None) is None:
-                self._state_mgr = GameStateManager()
             if not getattr(self, '_cfg_settings_ref', None):
                 self._cfg_settings_ref = CfgSettings()
-            self._state_mgr.load_cache(self._cfg_settings_ref)
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=False)
         except Exception as e:
             print(f'[SAO] Runtime state bootstrap failed: {e}')
 
     def _start_packet_engine_early(self):
-        if getattr(self, '_packet_engine', None) is not None:
-            return
-        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
-            return
         try:
-            from net.packet_bridge import PacketBridge
-
-            # Phase 7: read mem_data_source preference from settings.
-            # Key is `mem_data_source` (not legacy 'data_source' which is
-            # the packet/vision component toggle). Values:
-            # 'tcp' (default, full TCP) | 'memory' (strict mem_probe, no TCP fallback) |
-            # 'hybrid' (mem_probe + TCP damage-only) | 'auto' (try memory, fall back).
-            try:
-                _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
-                ).lower()
-            except Exception:
-                _data_source_mode = 'tcp'
-            packet_engine = PacketBridge(
-                self._state_mgr,
-                self._cfg_settings_ref,
-                on_damage=self._on_packet_damage,
-                on_monster_update=self._on_monster_update,
-                on_boss_event=self._on_boss_event,
-                on_skill_event=self._on_skill_event,
-                on_dungeon_event=self._on_dungeon_event,
-                on_scene_change=self._on_scene_change,
-                data_source=_data_source_mode,
-                plugin_manager=ensure_act_plugin_manager(self, load=True),
-                event_bus=ensure_act_event_bus(self),
-            )
-            packet_engine.start()
-            self._packet_engine = packet_engine
-            self._recognition_engines = [packet_engine] + [
-                engine for engine in (getattr(self, '_recognition_engines', []) or [])
-                if engine is not packet_engine
-            ]
-            if not getattr(self, '_recognition_engine', None):
-                self._recognition_engine = packet_engine
-            self._recognition_active = True
-            print('[SAO] Packet bridge started early (pre-webview)')
+            ensure_act_plugin_manager(self, load=True)
         except Exception as e:
             import traceback
-            print(f'[SAO] Early packet bridge FAILED to start: {e}', flush=True)
+            print(f'[SAO] Plugin startup failed: {e}', flush=True)
             traceback.print_exc()
             self._packet_engine = None
 
-    def _auto_key_settings_ref(self):
-        return self._cfg_settings_ref or self.settings
+    def _game_plugin_call(self, name: str, *args, **kwargs):
+        bridge = getattr(self, '_game_webview_bridge', None)
+        fn = getattr(bridge, name, None)
+        if not callable(fn):
+            raise RuntimeError(f'Game plugin bridge is not available: {name}')
+        return fn(*args, **kwargs)
 
-    def _auto_key_author_snapshot(self):
-        gs = getattr(self, '_game_state', None)
-        if gs is not None:
-            return snapshot_author_from_state(gs)
-        return {
-            'player_uid': '',
-            'player_name': self._username,
-            'profession_id': 0,
-            'profession_name': self._profession,
-        }
-
-    def _auto_key_identity_state(self):
-        source = 'packet' if getattr(self, '_game_state', None) is not None else 'profile'
-        return build_identity_state(self._auto_key_author_snapshot(), source=source)
-
-    def _set_auto_key_upload_auth(self, token: str = '', expires_at: str = '', error: str = '',
-                                  mode: str = '', identity: Optional[dict] = None,
-                                  server_url: str = ''):
-        identity_state = identity or self._auto_key_identity_state()
-        self._auto_key_upload_auth = {
-            'token': str(token or '').strip(),
-            'ready': bool(str(token or '').strip()),
-            'token_masked': '',
-            'expires_at': str(expires_at or '').strip(),
-            'error': str(error or '').strip(),
-            'mode': str(mode or '').strip(),
-            'identity': identity_state,
-            'server_url': str(server_url or '').strip(),
-        }
-        return self._auto_key_upload_auth
-
-    def _auto_key_upload_auth_matches(self, identity_state, config):
-        auth = getattr(self, '_auto_key_upload_auth', None) or {}
-        cached_identity = auth.get('identity') or {}
-        if str(auth.get('server_url') or '') != str((config or {}).get('server_url') or ''):
-            return False
-        return (
-            str(cached_identity.get('player_uid') or '') == str(identity_state.get('player_uid') or '') and
-            str(cached_identity.get('player_name') or '') == str(identity_state.get('player_name') or '') and
-            int(cached_identity.get('profession_id') or 0) == int(identity_state.get('profession_id') or 0)
-        )
-
-    def _auto_key_upload_auth_valid(self, identity_state=None, config=None):
-        auth = getattr(self, '_auto_key_upload_auth', None) or {}
-        if not auth.get('ready') or not str(auth.get('token') or '').strip():
-            return False
-        identity_state = identity_state or self._auto_key_identity_state()
-        config = config or self._load_auto_key_config()
-        if not self._auto_key_upload_auth_matches(identity_state, config):
-            return False
-        expires_at = str(auth.get('expires_at') or '').strip()
-        if expires_at and expires_at <= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 5)):
-            return False
-        return True
-
-    def _auto_key_upload_auth_state(self, config=None, identity_state=None):
-        config = config or self._load_auto_key_config()
-        identity_state = identity_state or self._auto_key_identity_state()
-        auth = getattr(self, '_auto_key_upload_auth', None) or default_upload_auth_state()
-        if self._auto_key_upload_auth_valid(identity_state, config):
-            return auth
-        error = str(auth.get('error') or '').strip()
-        return self._set_auto_key_upload_auth(
-            token='',
-            expires_at='',
-            error=error,
-            mode=str(auth.get('mode') or ''),
-            identity=identity_state,
-            server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
-        )
-
-    def _refresh_auto_key_upload_auth(self, force: bool = False):
-        config = self._load_auto_key_config()
-        identity_state = self._auto_key_identity_state()
-        server_url = str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
-        if not identity_state.get('ready'):
-            missing = ', '.join(identity_state.get('missing') or [])
-            return self._set_auto_key_upload_auth(
-                token='',
-                expires_at='',
-                error=f'Identity is incomplete: {missing}',
-                mode='',
-                identity=identity_state,
-                server_url=server_url,
-            )
-        if not force and self._auto_key_upload_auth_valid(identity_state, config):
-            return getattr(self, '_auto_key_upload_auth', None) or default_upload_auth_state()
+    def _game_plugin_maybe(self, name: str, *args, default=None, **kwargs):
         try:
-            client = AutoKeyCloudClient(server_url)
-            result = client.issue_upload_token({
-                'player_uid': identity_state.get('player_uid', ''),
-                'player_name': identity_state.get('player_name', ''),
-                'profession_id': int(identity_state.get('profession_id') or 0),
-                'profession_name': identity_state.get('profession_name', ''),
-            })
-            issued_identity = build_identity_state(result.get('identity') or identity_state, source=identity_state.get('source') or 'packet')
-            return self._set_auto_key_upload_auth(
-                token=str(result.get('token') or '').strip(),
-                expires_at=str(result.get('expires_at') or '').strip(),
-                error='',
-                mode=str(result.get('mode') or '').strip(),
-                identity=issued_identity,
-                server_url=server_url,
-            )
-        except Exception as e:
-            return self._set_auto_key_upload_auth(
-                token='',
-                expires_at='',
-                error=str(e),
-                mode='',
-                identity=identity_state,
-                server_url=server_url,
-            )
+            return self._game_plugin_call(name, *args, **kwargs)
+        except Exception:
+            return default
 
-    def _load_auto_key_config(self):
-        ref = self._auto_key_settings_ref()
-        return load_auto_key_config(ref, state_snapshot=self._auto_key_author_snapshot())
+    def _register_plugin_surface(self, surface: str, win, title: str = None, **meta):
+        """Register a plugin-owned WebView window without teaching the platform its game semantics."""
+        key = str(surface or '').strip()
+        if not key:
+            return None
+        title = str(title or getattr(win, 'title', '') or key)
+        self._plugin_surfaces[key] = win
+        merged = dict(self._plugin_surface_meta.get(key, {}) or {})
+        merged.update(meta)
+        merged['title'] = title
+        self._plugin_surface_meta[key] = merged
+        if key not in self._plugin_surface_order:
+            self._plugin_surface_order.append(key)
+        return win
 
-    def _save_auto_key_config(self, config):
-        ref = self._auto_key_settings_ref()
-        saved = save_auto_key_config(ref, config)
-        if self._auto_key_engine:
-            self._auto_key_engine.invalidate()
-        return saved
+    def _plugin_surface_win(self, surface: str):
+        return self._plugin_surfaces.get(str(surface or '').strip())
 
-    def _get_auto_key_menu_state(self):
-        config = self._load_auto_key_config()
-        status = self._auto_key_engine.get_status() if self._auto_key_engine else {}
-        identity_state = self._auto_key_identity_state()
-        upload_auth = self._auto_key_upload_auth_state(config=config, identity_state=identity_state)
-        return build_auto_key_state(
-            config,
-            engine_status=status,
-            identity_snapshot=identity_state,
-            upload_auth=upload_auth,
-        )
+    def _plugin_surface_title(self, surface: str) -> str:
+        meta = self._plugin_surface_meta.get(str(surface or '').strip(), {}) or {}
+        return str(meta.get('title') or surface or '')
 
-    def _sync_auto_key_menu(self):
+    def _plugin_surface_items(self):
+        for surface in list(self._plugin_surface_order):
+            win = self._plugin_surfaces.get(surface)
+            if win:
+                yield win, surface
+
+    def _eval_plugin_surface(self, surface: str, js: str):
         try:
-            state = self._get_auto_key_menu_state()
-            if state != getattr(self, '_auto_key_last_menu_state', None):
-                self._auto_key_last_menu_state = copy.deepcopy(state)
-                self._eval_menu(f'SAO.syncAutoKeyState({json.dumps(state, ensure_ascii=False)})')
+            win = self._plugin_surface_win(surface)
+            if win:
+                win.evaluate_js(js)
         except Exception:
             pass
 
-    # ─── Boss Raid helpers ───
+    def _set_plugin_surface_alpha(self, surface: str, alpha: float):
+        title = self._plugin_surface_title(surface)
+        if title:
+            self._set_window_alpha(title, alpha)
 
-    def _boss_raid_settings_ref(self):
-        return self._cfg_settings_ref or self.settings
-
-    def _boss_raid_author_snapshot(self):
-        gs = getattr(self, '_game_state', None)
-        if gs is not None:
-            return snapshot_author_from_state(gs)
-        return {
-            'player_uid': '',
-            'player_name': self._username,
-            'profession_id': 0,
-            'profession_name': self._profession,
-        }
-
-    def _boss_raid_identity_state(self):
-        source = 'packet' if getattr(self, '_game_state', None) is not None else 'profile'
-        return build_identity_state(self._boss_raid_author_snapshot(), source=source)
-
-    def _set_boss_raid_upload_auth(self, token: str = '', expires_at: str = '', error: str = '',
-                                   mode: str = '', identity: Optional[dict] = None,
-                                   server_url: str = ''):
-        identity_state = identity or self._boss_raid_identity_state()
-        self._boss_raid_upload_auth = {
-            'token': str(token or '').strip(),
-            'ready': bool(str(token or '').strip()),
-            'token_masked': '',
-            'expires_at': str(expires_at or '').strip(),
-            'error': str(error or '').strip(),
-            'mode': str(mode or '').strip(),
-            'identity': identity_state,
-            'server_url': str(server_url or '').strip(),
-        }
-        return self._boss_raid_upload_auth
-
-    def _boss_raid_upload_auth_matches(self, identity_state, config):
-        auth = getattr(self, '_boss_raid_upload_auth', None) or {}
-        cached_identity = auth.get('identity') or {}
-        if str(auth.get('server_url') or '') != str((config or {}).get('server_url') or ''):
-            return False
-        return (
-            str(cached_identity.get('player_uid') or '') == str(identity_state.get('player_uid') or '') and
-            str(cached_identity.get('player_name') or '') == str(identity_state.get('player_name') or '') and
-            int(cached_identity.get('profession_id') or 0) == int(identity_state.get('profession_id') or 0)
-        )
-
-    def _boss_raid_upload_auth_valid(self, identity_state=None, config=None):
-        auth = getattr(self, '_boss_raid_upload_auth', None) or {}
-        if not auth.get('ready') or not str(auth.get('token') or '').strip():
-            return False
-        identity_state = identity_state or self._boss_raid_identity_state()
-        config = config or self._load_boss_raid_config()
-        if not self._boss_raid_upload_auth_matches(identity_state, config):
-            return False
-        expires_at = str(auth.get('expires_at') or '').strip()
-        if expires_at and expires_at <= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 5)):
-            return False
-        return True
-
-    def _boss_raid_upload_auth_state(self, config=None, identity_state=None):
-        config = config or self._load_boss_raid_config()
-        identity_state = identity_state or self._boss_raid_identity_state()
-        auth = getattr(self, '_boss_raid_upload_auth', None) or default_upload_auth_state()
-        if self._boss_raid_upload_auth_valid(identity_state, config):
-            return auth
-        error = str(auth.get('error') or '').strip()
-        return self._set_boss_raid_upload_auth(
-            token='',
-            expires_at='',
-            error=error,
-            mode=str(auth.get('mode') or ''),
-            identity=identity_state,
-            server_url=str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL),
-        )
-
-    def _load_boss_raid_config(self):
-        ref = self._boss_raid_settings_ref()
-        return load_boss_raid_config(ref, state_snapshot=self._boss_raid_author_snapshot())
-
-    def _save_boss_raid_config(self, config):
-        ref = self._boss_raid_settings_ref()
-        saved = save_boss_raid_config(ref, config)
-        return saved
-
-    def _get_boss_raid_menu_state(self):
-        config = self._load_boss_raid_config()
-        status = self._boss_raid_engine.get_status() if self._boss_raid_engine else {}
-        identity_state = self._boss_raid_identity_state()
-        upload_auth = self._boss_raid_upload_auth_state(config=config, identity_state=identity_state)
-        state = build_boss_raid_state(
-            config,
-            engine_status=status,
-            upload_auth=upload_auth,
-        )
-        state['identity'] = identity_state
-        return state
-
-    def _sync_boss_raid_menu(self):
+    def _show_plugin_surface(self, surface: str):
         try:
-            state = self._get_boss_raid_menu_state()
-            if state != getattr(self, '_boss_raid_last_menu_state', None):
-                self._boss_raid_last_menu_state = copy.deepcopy(state)
-                self._eval_menu(f'SAO.syncBossRaidState({json.dumps(state, ensure_ascii=False)})')
+            win = self._plugin_surface_win(surface)
+            if win:
+                win.show()
         except Exception:
             pass
 
-    def _toggle_boss_raid(self):
-        """Hotkey F7: toggle boss raid start/stop."""
-        if not self._boss_raid_engine:
+    def _hide_plugin_surface(self, surface: str):
+        try:
+            win = self._plugin_surface_win(surface)
+            if win:
+                win.hide()
+        except Exception:
+            pass
+
+    def _destroy_plugin_surfaces(self):
+        for surface in list(self._plugin_surface_order):
+            try:
+                win = self._plugin_surfaces.get(surface)
+                if win:
+                    win.destroy()
+            except Exception:
+                pass
+        self._plugin_surfaces.clear()
+        self._plugin_surface_meta.clear()
+        self._plugin_surface_order.clear()
+
+    def _apply_plugin_surfaces_transparency(self):
+        for surface, win in list(self._plugin_surface_items()):
+            meta = self._plugin_surface_meta.get(surface, {}) or {}
+            title = str(meta.get('title') or surface)
+            if not title:
+                continue
+            try:
+                hwnd = ctypes.windll.user32.FindWindowW(None, title)
+                if hwnd:
+                    _make_transparent_ctypes(hwnd)
+                    meta['hwnd'] = hwnd
+            except Exception:
+                pass
+            if bool(meta.get('dotnet_transparency', True)):
+                try:
+                    _invoke_dotnet_transparency(win)
+                except Exception:
+                    pass
+
+    def _set_plugin_surface_click_through(
+            self, surface: str, enabled: bool = True, wait_retries: int = 0,
+            ensure_on_top: bool = False):
+        key = str(surface or '').strip()
+        title = self._plugin_surface_title(key)
+        if not title:
             return
-        config = self._load_boss_raid_config()
-        if not config.get('enabled'):
-            config['enabled'] = True
-            self._save_boss_raid_config(config)
-        status = self._boss_raid_engine.get_status()
-        if status.get('state') == 'running':
-            self._boss_raid_engine.stop()
-            self._eval_menu('SAO.showToast("BOSS RAID: STOPPED")')
-        else:
-            from engines.boss_raid_engine import active_profile as br_active_profile
-            profile = br_active_profile(config)
-            if profile:
-                self._boss_raid_engine.start(profile)
-                self._eval_menu('SAO.showToast("BOSS RAID: START")')
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, title)
+            if not hwnd and wait_retries > 0:
+                threading.Timer(
+                    0.1,
+                    lambda: self._set_plugin_surface_click_through(
+                        key, enabled=enabled, wait_retries=wait_retries - 1,
+                        ensure_on_top=ensure_on_top),
+                ).start()
+                return
+            if not hwnd:
+                return
+            meta = self._plugin_surface_meta.get(key, {}) or {}
+            meta['hwnd'] = hwnd
+            self._plugin_surface_meta[key] = meta
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if enabled:
+                ex |= _WS_EX_TRANSPARENT
             else:
-                self._eval_menu('SAO.showToast("BOSS RAID: No active profile")')
-        self._sync_boss_raid_menu()
+                ex &= ~_WS_EX_TRANSPARENT
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex | _WS_EX_LAYERED)
+            if ensure_on_top or bool(meta.get('on_top', False)):
+                self._ensure_plugin_surface_on_top(key)
+        except Exception:
+            pass
 
-    def _boss_raid_next_phase(self):
-        """Hotkey F8: advance to next phase."""
-        if not self._boss_raid_engine:
+    def _ensure_plugin_surface_on_top(self, surface: str):
+        key = str(surface or '').strip()
+        title = self._plugin_surface_title(key)
+        if not title:
             return
-        self._boss_raid_engine.next_phase()
+        try:
+            meta = self._plugin_surface_meta.get(key, {}) or {}
+            hwnd = int(meta.get('hwnd') or 0)
+            if not hwnd:
+                hwnd = ctypes.windll.user32.FindWindowW(None, title)
+                if hwnd:
+                    meta['hwnd'] = hwnd
+                    self._plugin_surface_meta[key] = meta
+            if not hwnd:
+                return
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _maintain_plugin_surfaces(self):
+        for surface, _win in list(self._plugin_surface_items()):
+            meta = self._plugin_surface_meta.get(surface, {}) or {}
+            if bool(meta.get('click_through', False)):
+                self._set_plugin_surface_click_through(
+                    surface, enabled=True, ensure_on_top=bool(meta.get('on_top', False)))
 
     # ── Hide & Seek ──
 
-    def _arm_pending_combat_reset(self, scene_event=None):
-        """Defer same-instance encounter reset until the next real damage."""
-        reason = 'restart'
-        delay_s = 3.0
-        if isinstance(scene_event, dict):
-            reason = str(scene_event.get('reason') or scene_event.get('kind') or reason)
-            try:
-                delay_s = float(scene_event.get('reset_delay_s', delay_s) or delay_s)
-            except Exception:
-                delay_s = 3.0
-        self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
-        self._pending_combat_reset_reason = reason
-        self._last_boss_bar_sig = None
-        try:
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.arm_pending_reset(reason, delay_s=delay_s)
-        except Exception:
-            pass
-        try:
-            if self._dps_tracker:
-                self._dps_tracker.invalidate_snapshot_cache()
-        except Exception:
-            pass
-        print(
-            f'[SAO] ♻ 同副本重开候选({reason}) — 等下一次伤害再重置 boss bar/DPS',
-            flush=True,
-        )
-
-    def _maybe_apply_pending_combat_reset(self, event, is_self_combat_target: bool) -> bool:
-        """Apply deferred encounter reset immediately before the first new hit."""
-        try:
-            reset_after = float(getattr(self, '_pending_combat_reset_after', 0.0) or 0.0)
-        except Exception:
-            reset_after = 0.0
-        if reset_after <= 0.0 or time.time() < reset_after or not is_self_combat_target:
-            return False
-        try:
-            damage = int(event.get('damage') or 0)
-        except Exception:
-            damage = 0
-        if bool(event.get('is_heal', False)):
-            return False
-        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
-            return False
-
-        reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
-        self._pending_combat_reset_after = 0.0
-        self._pending_combat_reset_reason = ''
-        print(
-            f'[SAO] ♻ 下一次伤害到达，执行延迟重置: {reason}',
-            flush=True,
-        )
-
-        self._bb_last_target_uuid = 0
-        self._bb_last_damage_ts = 0.0
-        self._bb_recent_targets = {}
-        self._pending_combat_reset_after = 0.0
-        self._pending_combat_reset_reason = ''
-        self._last_boss_bar_sig = None
-        try:
-            gs = self._game_state
-            if gs:
-                gs.boss_breaking_stage = -1
-                gs.boss_extinction_pct = 0.0
-                gs.boss_current_hp = 0
-                gs.boss_total_hp = 0
-                gs.boss_hp_source = 'none'
-                gs.boss_hp_est_pct = 1.0
-                gs.boss_shield_active = False
-                gs.boss_shield_pct = 0.0
-                gs.boss_in_overdrive = False
-                gs.boss_invincible = False
-        except Exception:
-            pass
-        if self._dps_tracker:
-            try:
-                if self._dps_tracker.has_active_encounter():
-                    self._dps_tracker.reset()
-                else:
-                    self._dps_tracker.invalidate_snapshot_cache()
-            except Exception:
-                pass
-        self._dps_visible = False
-        self._dps_faded = False
-        self._dps_mode = 'hidden'
-        if self._boss_raid_engine:
-            try:
-                if getattr(self._boss_raid_engine, '_state', '') != 'running':
-                    self._boss_raid_engine.reset()
-            except Exception:
-                pass
-        return True
-
-    def _current_player_uid_int(self) -> int:
-        for source in (
-            getattr(self, '_game_state', None),
-            getattr(getattr(self, '_state_mgr', None), 'state', None),
-        ):
-            try:
-                uid = getattr(source, 'player_id', '') if source is not None else ''
-                if str(uid).isdigit():
-                    return int(uid)
-            except Exception:
-                pass
-        return 0
-
-    def _normalize_damage_event_for_self(self, event):
-        if not isinstance(event, dict):
-            return event
-        if event.get('attacker_is_self'):
-            try:
-                attacker_uid = int(event.get('attacker_uid') or 0)
-            except Exception:
-                attacker_uid = 0
-            self_uid = self._current_player_uid_int()
-            if attacker_uid or self_uid <= 0:
-                return event
-            fixed = dict(event)
-            fixed['attacker_uid'] = self_uid
-            fixed.setdefault('self_uid', self_uid)
-            return fixed
-        self_uid = self._current_player_uid_int()
-        if self_uid <= 0:
-            return event
-
-        def _event_int(name: str) -> int:
-            try:
-                return int(event.get(name) or 0)
-            except Exception:
-                return 0
-
-        candidate_uids = [_event_int('attacker_uid')]
-        for key in ('attacker_uuid', 'attacker_uuid_raw', 'top_summoner_id'):
-            raw = _event_int(key)
-            if raw and (raw & 0xFFFF) == 640:
-                candidate_uids.append(raw >> 16)
-            elif key == 'top_summoner_id' and raw:
-                candidate_uids.append(raw)
-        if self_uid not in candidate_uids:
-            return event
-
-        fixed = dict(event)
-        fixed['attacker_is_self'] = True
-        fixed['attacker_uid'] = self_uid
-        fixed.setdefault('self_uid', self_uid)
-        now = time.time()
-        if now - float(getattr(self, '_damage_self_fallback_log_ts', 0.0) or 0.0) > 10.0:
-            self._damage_self_fallback_log_ts = now
-            print(
-                f'[SAO] 修正伤害归属: attacker_uid -> self_uid={self_uid}',
-                flush=True,
-            )
-        return fixed
-
-    def _normalize_damage_event_target_for_webview(self, event):
-        """Recover combat-target classification after scene/dungeon switches.
-
-        Mirrors the entity overlay fallback: after a map/server transition the
-        parser may still hold old player rows while the first new boss hit
-        arrives before SyncNearEntities refreshes monster identity. If the hit
-        is clearly going to a non-self unknown target, keep DPS/BossHP alive by
-        treating it as a combat target until packet monster data catches up.
-        """
-        if not isinstance(event, dict):
-            return event
-        try:
-            target_uuid = int(event.get('target_uuid') or 0)
-        except Exception:
-            target_uuid = 0
-        if target_uuid <= 0:
-            return event
-        if event.get('target_is_combat_target') or event.get('target_is_monster'):
-            return event
-
-        target_suffix_player = (target_uuid & 0xFFFF) == 640
-        if not target_suffix_player:
-            fixed = dict(event)
-            fixed['target_is_player'] = False
-            fixed['target_is_monster'] = True
-            fixed['target_is_combat_target'] = True
-            fixed['webview_target_fallback'] = 'uuid_suffix_combat_target'
-            return fixed
-
-        if not event.get('attacker_is_self'):
-            return event
-
-        try:
-            target_uid = target_uuid >> 16
-        except Exception:
-            target_uid = 0
-        self_uid = self._current_player_uid_int()
-        if target_uid and self_uid and target_uid == self_uid:
-            return event
-
-        known_player = False
-        bridge = getattr(self, '_packet_engine', None)
-        if bridge and target_uid:
-            try:
-                player = (bridge.get_players() or {}).get(target_uid)
-                known_player = bool(
-                    player and (
-                        str(getattr(player, 'name', '') or '').strip()
-                        or int(getattr(player, 'level', 0) or 0) > 0
-                        or int(getattr(player, 'profession_id', 0) or 0) > 0
-                        or int(getattr(player, 'fight_point', 0) or 0) > 0
-                    )
-                )
-            except Exception:
-                known_player = False
-        if known_player:
-            return event
-
-        try:
-            damage = int(event.get('damage') or 0)
-        except Exception:
-            damage = 0
-        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
-            return event
-
-        fixed = dict(event)
-        fixed['target_is_player'] = False
-        fixed['target_is_monster'] = True
-        fixed['target_is_combat_target'] = True
-        fixed['webview_target_fallback'] = 'unknown_target_after_scene_change'
-        return fixed
-
-    def _on_packet_damage(self, event):
-        """Damage event callback from packet_parser → boss raid engine + DPS tracker.
-
-        This is the critical path: when the DPS panel shows data, damage events
-        ARE flowing. We use this to also ensure the boss bar target is set.
-        """
-        event = self._normalize_damage_event_for_self(event)
-        event = self._normalize_damage_event_target_for_webview(event)
-        event = enrich_action_log_event(event, owner=self, topic='damage')
-        publish_owner_event(self, 'damage', event, source_name='webview', source_kind='tcp')
-        selective_decision = should_record_owner_combat_event(self, event)
-        # Track last self -> non-player combat target damage for boss bar target.
-        # BossHP only displays later if packet_parser has usable HP data.
-        _is_self_combat_target = bool(
-            event.get('attacker_is_self')
-            and event.get('target_uuid', 0)
-            and (
-                event.get('target_is_combat_target', False)
-                or event.get('target_is_monster', False)
-                or ('target_is_player' in event and not event.get('target_is_player', False))
-            )
-        )
-        self._maybe_apply_pending_combat_reset(event, _is_self_combat_target)
-        if _is_self_combat_target:
-            target_uuid = event.get('target_uuid', 0)
-            if target_uuid:
-                # Same-map retry / monster UUID reuse: parser state may still
-                # carry the previous unit's dead flag, which would make the
-                # boss bar filter drop this live target.
-                try:
-                    _bridge = getattr(self, '_packet_engine', None)
-                    _m = _bridge.get_monster(target_uuid) if _bridge else None
-                    if _m is not None and getattr(_m, 'is_dead', False):
-                        _m.is_dead = False
-                        _m.last_update = time.time()
-                except Exception:
-                    pass
-                self._bb_recent_targets[target_uuid] = time.time()
-                self._bb_last_target_uuid = target_uuid
-                self._bb_last_damage_ts = time.time()
-                # Update DPS tracker boss target for boss-only total filtering
-                if bool(selective_decision.get('record', True)) and self._dps_tracker:
-                    try:
-                        self._dps_tracker.set_boss_uuid(target_uuid)
-                    except Exception:
-                        pass
-                # Proactively check if the monster has max_hp in parser.
-                # If not, estimate from current HP (the server never sends
-                # AttrMaxHp for monsters, so packet_parser estimates it from
-                # the first HP observation; this is a secondary fallback).
-                try:
-                    _bridge = getattr(self, '_packet_engine', None)
-                    _m = _bridge.get_monster(target_uuid) if _bridge else None
-                    if _m and _m.max_hp == 0 and _m.hp > 0:
-                        _m.max_hp = _m.hp
-                        logger.info(
-                            f'[WebView] Estimated max_hp from HP on damage: '
-                            f'{_m.hp} uuid={target_uuid}'
-                        )
-                    if _m is not None and getattr(self, '_state_mgr', None):
-                        updates = boss_state_from_monster_update(
-                            _m.to_dict() if hasattr(_m, 'to_dict') else _m)
-                        if updates:
-                            self._state_mgr.update(**updates)
-                except Exception:
-                    pass
-        if self._boss_raid_engine:
-            try:
-                self._boss_raid_engine.on_damage_event(event)
-            except Exception:
-                pass
-        if bool(selective_decision.get('record', True)):
-            if self._dps_tracker:
-                try:
-                    self._dps_tracker.on_damage_event(event)
-                except Exception:
-                    pass
-            try:
-                mgr = getattr(self, '_encounter_mgr', None)
-                if mgr is not None:
-                    mgr.on_damage_event(event)
-            except Exception:
-                pass
-            try:
-                self._push_dps_act_snapshot(throttle=True)
-            except Exception:
-                pass
-
-    def _on_monster_update(self, monster_data):
-        """Monster update callback from packet_parser → boss raid engine + break bar tracking.
-
-        When a boss monster appears in a new scene (after SyncNearEntities),
-        pre-set the target UUID so the boss bar can immediately display HP
-        when the player starts attacking. Also handles break bar pre-tracking.
-        """
-        # ACT per-target cross-tab: feed resolved CN monster name to the tracker.
-        try:
-            if getattr(self, '_dps_tracker', None) is not None:
-                _mu = int(monster_data.get('uuid', 0) or 0)
-                _mn = str(monster_data.get('monster_name') or monster_data.get('name') or '')
-                if _mu and _mn:
-                    self._dps_tracker.update_monster_info(_mu, _mn)
-        except Exception:
-            pass
-        publish_owner_event(self, 'monster', monster_data, source_name='webview', source_kind='tcp')
-        if self._boss_raid_engine:
-            try:
-                self._boss_raid_engine.on_monster_update(monster_data)
-            except Exception:
-                pass
-
-        # Pre-track monsters for boss bar:
-        # - Any monster with HP (for immediate boss bar when damage starts)
-        # - Monsters with break data (for immediate break bar display)
-        try:
-            _uuid = monster_data.get('uuid', 0)
-            _max_ext = int(monster_data.get('max_extinction', 0) or 0)
-            _max_hp = int(monster_data.get('max_hp', 0) or 0)
-            _hp = int(monster_data.get('hp', 0) or 0)
-            _is_dead = monster_data.get('is_dead', False)
-            # Accept monster if it has either max_hp or hp (server may not
-            # send AttrMaxHp; packet_parser estimates max_hp from HP).
-            if _uuid and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0):
-                # Adopt this monster as the target if:
-                # 1. No target yet (first monster after scene change)
-                # 2. Current target is stale (dead, or no longer in monsters dict)
-                _should_adopt = False
-                if not self._bb_last_target_uuid:
-                    _should_adopt = True
-                else:
-                    # Check if current target is still valid
-                    try:
-                        _bridge = getattr(self, '_packet_engine', None)
-                        _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                        if not self._boss_monster_usable(_cur):
-                            _should_adopt = True
-                    except Exception:
-                        pass
-                if _should_adopt:
-                    self._bb_last_target_uuid = _uuid
-                    logger.debug(
-                        f'[WebView] Pre-tracked monster target uuid={_uuid} '
-                        f'max_hp={_max_hp} hp={_hp} max_ext={_max_ext}'
-                    )
-                if _uuid == self._bb_last_target_uuid and getattr(self, '_state_mgr', None):
-                    updates = boss_state_from_monster_update(monster_data)
-                    if updates:
-                        self._state_mgr.update(**updates)
-                        self._push_dps_act_snapshot(throttle=True)
-        except Exception:
-            pass
-
-    def _on_boss_event(self, event):
-        """Boss buff event callback from packet_parser → boss raid engine + boss bar effects."""
-        try:
-            self._last_boss_event = dict(event or {})
-            if getattr(self, '_state_mgr', None):
-                self._state_mgr.update(last_boss_event=self._last_boss_event)
-            self._push_dps_act_snapshot()
-            publish_owner_event(self, 'boss', self._last_boss_event, source_name='webview', source_kind='tcp')
-        except Exception:
-            pass
-        if self._boss_raid_engine:
-            try:
-                self._boss_raid_engine.on_boss_event(event)
-            except Exception:
-                pass
-
-        # Forward break/shield events to boss HP overlay for visual effects
-        try:
-            evt_type = event.get('event_type', 0)
-            host_uuid = event.get('host_uuid', 0)
-            # Match against the monster currently shown on the boss bar
-            _target = self._bb_last_target_uuid
-            # Also check boss_raid_engine's tracked boss
-            if not _target and self._boss_raid_engine:
-                _target = getattr(self._boss_raid_engine, '_boss_uuid', 0)
-            if not _target or host_uuid != _target:
-                return
-            # Map BuffEventType → JS triggerBreakEffect type
-            _EVT_MAP = {58: 'enter_breaking', 47: 'shield_broken', 51: 'super_armor_broken', 88: 'into_fracture_state'}
-            js_type = _EVT_MAP.get(evt_type)
-            if js_type:
-                self._eval_boss_hp(f'triggerBreakEffect("{js_type}")')
-        except Exception:
-            pass
-
-    def _on_skill_event(self, event):
-        """Skill lifecycle event callback from packet_parser for ACT/triggers."""
-        try:
-            self._last_skill_event = enrich_action_log_event(dict(event or {}), owner=self, topic='skill')
-            if getattr(self, '_state_mgr', None):
-                self._state_mgr.update(last_skill_event=self._last_skill_event)
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.on_skill_event(self._last_skill_event)
-            publish_owner_event(self, 'skill', self._last_skill_event, source_name='webview', source_kind='tcp')
-        except Exception:
-            pass
-
-    def _on_dungeon_event(self, event):
-        """Dungeon/scene context callback from packet_parser for ACT/triggers."""
-        try:
-            ev = dict(event or {})
-            self._last_dungeon_event = ev
-            updates = {'last_dungeon_event': ev}
-            dungeon_id = int(ev.get('dungeon_id') or ev.get('scene_uuid') or 0)
-            scene_id = int(ev.get('scene_id') or 0)
-            difficulty = int(ev.get('dungeon_difficulty') or 0)
-            if dungeon_id > 0:
-                updates['dungeon_id'] = dungeon_id
-                try:
-                    from tools.tablekit.name_tables import names
-                    resolved = names.dungeon(dungeon_id, default='')
-                    if resolved:
-                        updates['dungeon_name'] = resolved
-                except Exception:
-                    pass
-            if scene_id > 0:
-                updates['dungeon_scene_id'] = scene_id
-            if difficulty > 0:
-                updates['dungeon_difficulty'] = difficulty
-            # 切换地图中央横幅: 解析地图名后延迟 3s 在屏幕中央淡入。覆盖所有
-            # 场景切换 (副本 dungeon_id + 开放世界 scene_id), 取不到名则不弹。
-            banner_name = (updates.get('dungeon_name') or ev.get('dungeon_name') or '').strip()
-            if not banner_name:
-                _lookup = dungeon_id or scene_id
-                if _lookup > 0:
-                    try:
-                        from tools.tablekit.name_tables import names
-                        banner_name = (names.dungeon(_lookup, default='') or '').strip()
-                    except Exception:
-                        banner_name = ''
-            if banner_name:
-                self._schedule_map_banner(banner_name)
-            elif dungeon_id or scene_id:
-                # 诊断: 有 id 但查不到名 (帮助定位大地图等场景)
-                print(f'[MapBanner][webview] no-name event kind={ev.get("kind")!r} '
-                      f'dungeon_id={dungeon_id} scene_id={scene_id}', flush=True)
-            if getattr(self, '_state_mgr', None):
-                self._state_mgr.update(**updates)
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                ev_for_mgr = dict(ev)
-                if 'dungeon_name' not in ev_for_mgr and updates.get('dungeon_name'):
-                    ev_for_mgr['dungeon_name'] = updates.get('dungeon_name')
-                mgr.on_dungeon_event(ev_for_mgr)
-            ev = enrich_action_log_event(ev, owner=self, topic='dungeon')
-            publish_owner_event(self, 'dungeon', ev, source_name='webview', source_kind='tcp')
-            if scene_id > 0:
-                publish_owner_event(self, 'scene', ev, source_name='webview', source_kind='tcp')
-        except Exception:
-            pass
-
-    def _on_dps_report_finalized(self, report):
-        """Persist finalized DPS reports for ACT history/export."""
-        try:
-            store = getattr(self, '_dps_history_store', None)
-            if store is None:
-                return
-
-            def _persist():
-                try:
-                    store.add_report(report)
-                except Exception:
-                    pass
-
-            threading.Thread(target=_persist, daemon=True).start()
-        except Exception:
-            pass
-
-    def _on_scene_change(self, scene_event=None):
-        """场景服务器切换回调 (切换地图/副本时由 packet_parser 触发)。
-
-        清理:
-        - Boss HP bar: 立即隐藏 (旧怪物已不在新场景)
-        - Boss bar 目标追踪: 清除 uuid + 时间戳
-        - DPS tracker: 结束当前遭遇战并重置
-        - Boss raid engine: 如果不在 raid 中则重置
-        - HP/Level: 强制重推当前值 (确保 webview 在新场景后及时刷新)
-        """
-        _scene_kind = ''
-        _scene_reason = ''
-        _preserve_combat = False
-        _reset_on_next_damage = False
-        if isinstance(scene_event, dict):
-            _scene_kind = str(scene_event.get('kind') or '')
-            _scene_reason = str(scene_event.get('reason') or '')
-            _preserve_combat = bool(scene_event.get('preserve_combat', False))
-            _reset_on_next_damage = bool(scene_event.get('reset_on_next_damage', False))
-        if _reset_on_next_damage:
-            # Only defer the reset when a fight is genuinely in progress. If
-            # the prior encounter is already idle (no recent self/party
-            # outgoing damage), there is nothing live to protect — fall through
-            # to the immediate hard reset below so stale combat data cannot be
-            # kept alive by the post-scene grace window. Without this, after
-            # repeatedly re-entering a dungeon the DPS panel could stay stuck
-            # visible and never fade. (User-confirmed fix direction A.)
-            _combat_live = False
-            try:
-                if self._dps_tracker is not None:
-                    _combat_live = bool(self._dps_tracker.has_recent_damage(
-                        self._combat_damage_timeout_s()))
-            except Exception:
-                _combat_live = False
-            if _combat_live:
-                self._arm_pending_combat_reset(scene_event)
-                return
-            # Idle prior fight → force the hard-reset path (skip preserve).
-            _preserve_combat = False
-        if _preserve_combat:
-            # Same-dungeon layer/map transitions can happen mid-fight. Do not
-            # wipe the live encounter; just invalidate the next boss-bar push.
-            # v2.3.23: clear _bb_recent_targets / _bb_last_target_uuid even on
-            # soft transitions so the boss bar drops monsters that belong to
-            # the previous layer. The next damage event will repopulate the
-            # bar with the live target. DPS accumulators are preserved.
-            print(
-                f'[SAO] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
-                f'— 保留 DPS, 重置 boss bar 候选',
-                flush=True,
-            )
-            self._bb_last_target_uuid = 0
-            self._bb_last_damage_ts = 0.0
-            self._bb_recent_targets = {}
-            self._last_boss_bar_sig = None
-            try:
-                self._eval_boss_hp('updateBossBar({active:false})')
-            except Exception:
-                pass
-            try:
-                if self._dps_tracker:
-                    self._dps_tracker.invalidate_snapshot_cache()
-            except Exception:
-                pass
-            return
-
-        print('[SAO] ⚡ 场景切换 — 重置 boss bar 和 DPS 追踪', flush=True)
-
-        # 1. Boss HP bar: 强制隐藏, 清除所有 boss 状态
-        self._bb_last_target_uuid = 0
-        self._bb_last_damage_ts = 0.0
-        self._bb_recent_targets = {}
-        self._last_boss_bar_sig = None  # 强制下次更新重新推送
-        self._pending_combat_reset_after = 0.0
-        self._pending_combat_reset_reason = ''
-        try:
-            self._eval_boss_hp('updateBossBar({active:false})')
-        except Exception:
-            pass
-        # Reset GameState boss fields to defaults (avoid stale data in fallback path)
-        try:
-            gs = self._game_state
-            if gs:
-                gs.boss_breaking_stage = -1
-                gs.boss_extinction_pct = 0.0
-                gs.boss_current_hp = 0
-                gs.boss_total_hp = 0
-                gs.boss_hp_source = 'none'
-                gs.boss_hp_est_pct = 1.0
-                gs.boss_shield_active = False
-                gs.boss_shield_pct = 0.0
-                gs.boss_in_overdrive = False
-                gs.boss_invincible = False
-        except Exception:
-            pass
-
-        # 2. DPS tracker: 结束当前遭遇战
-        if self._dps_tracker:
-            try:
-                self._dps_tracker.reset()
-                print('[SAO] DPS tracker reset on scene change', flush=True)
-            except Exception:
-                pass
-        try:
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.reset('scene_change')
-        except Exception:
-            pass
-
-        # 3. Boss raid engine: 仅在非活动时重置
-        if self._boss_raid_engine:
-            try:
-                if getattr(self._boss_raid_engine, '_state', '') != 'running':
-                    self._boss_raid_engine.reset()
-            except Exception:
-                pass
-
-        # 4. Force re-push current level + HP to webview so display doesn't go stale
-        try:
-            gs = self._game_state
-            if gs:
-                _lv = getattr(gs, 'level_base', 0) or self._level
-                _lv_extra = int(getattr(gs, 'level_extra', 0) or 0)
-                _lv_str = f'{_lv}(+{_lv_extra})' if _lv_extra > 0 else str(_lv)
-                _hp = int(getattr(gs, 'hp_current', 0) or 0)
-                _hp_max = int(getattr(gs, 'hp_max', 0) or 0)
-                if _hp_max > 0:
-                    self._eval_hp(f'updateHP({_hp}, {_hp_max}, "{_lv_str}")')
-        except Exception:
-            pass
-
-    def _refresh_boss_raid_upload_auth(self, force: bool = False):
-        config = self._load_boss_raid_config()
-        identity_state = self._boss_raid_identity_state()
-        server_url = str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
-        if not identity_state.get('ready'):
-            missing = ', '.join(identity_state.get('missing') or [])
-            return self._set_boss_raid_upload_auth(
-                token='',
-                expires_at='',
-                error=f'Identity is incomplete: {missing}',
-                mode='',
-                identity=identity_state,
-                server_url=server_url,
-            )
-        if not force and self._boss_raid_upload_auth_valid(identity_state, config):
-            return getattr(self, '_boss_raid_upload_auth', None) or default_upload_auth_state()
-        try:
-            client = BossRaidCloudClient(server_url)
-            result = client.issue_upload_token({
-                'player_uid': identity_state.get('player_uid', ''),
-                'player_name': identity_state.get('player_name', ''),
-                'profession_id': int(identity_state.get('profession_id') or 0),
-                'profession_name': identity_state.get('profession_name', ''),
-            })
-            issued_identity = build_identity_state(
-                result.get('identity') or identity_state,
-                source=identity_state.get('source') or 'packet',
-            )
-            return self._set_boss_raid_upload_auth(
-                token=str(result.get('token') or '').strip(),
-                expires_at=str(result.get('expires_at') or '').strip(),
-                error='',
-                mode=str(result.get('mode') or '').strip(),
-                identity=issued_identity,
-                server_url=server_url,
-            )
-        except Exception as e:
-            return self._set_boss_raid_upload_auth(
-                token='',
-                expires_at='',
-                error=str(e),
-                mode='',
-                identity=identity_state,
-                server_url=server_url,
-            )
-
-    def _toggle_auto_script(self):
-        config = self._load_auto_key_config()
-        config['enabled'] = not bool(config.get('enabled', False))
-        self._save_auto_key_config(config)
-        self._sync_auto_key_menu()
-        self._eval_menu(f'SAO.showToast("AUTO KEY: {"ON" if config["enabled"] else "OFF"}")')
-
-    def _reset_burst_tracking(self):
-        self._last_ready_slots = {}
-        self._burst_seen_cooling = set()
-        self._last_watched_signature = ()
-        self._last_burst_ready = False
-        self._last_burst_slot = 0
-
-    def _save_game_cache(self, quiet: bool = False):
-        try:
-            if hasattr(self, '_state_mgr') and getattr(self, '_state_mgr', None) and \
-               hasattr(self, '_cfg_settings_ref') and getattr(self, '_cfg_settings_ref', None):
-                self._persist_cached_identity_state(save_now=False)
-                self._state_mgr.save_cache(self._cfg_settings_ref)
-                if not quiet:
-                    gs = self._state_mgr.state
-                    print(
-                        f"[SAO] 退出前已保存游戏状态缓存: "
-                        f"HP={int(getattr(gs, 'hp_current', 0) or 0)}/"
-                        f"{int(getattr(gs, 'hp_max', 0) or 0)}, "
-                        f"LV={int(getattr(gs, 'level_base', 0) or 0)}"
-                    )
-        except Exception:
-            pass
-
-    def _reset_sta_offline_state(self):
-        self._sta_offline_armed = False
-        try:
-            self._eval_hp('setSTAOffline(false)')
-        except Exception:
-            pass
-
-    def _should_show_sta_offline(self, gs) -> bool:
-        if gs is None:
-            return False
-        # STA OFFLINE 仅由 vision 驱动。packet 活动不会抹除该状态，
-        # 但也不会因为 vision recognition_ok 闪动到 False 而误报。
-        # v2.1.3 修复: 当 vision 抓帧失败时 (onedir 高 DPI 下 PrintWindow
-        # 偶发失败), recognition.py 不会更新 stamina_offline (保留旧值),
-        # 但同时会把 error_msg 设为 "vision capture failed"。这种情况下
-        # 我们不能信任 stamina_offline=True (它可能是上次成功识别留下的
-        # 陈旧值), 因此抑制 OFFLINE 信号, 保持 HP 面板可见 — 比起把整个
-        # HP/STA 面板隐藏掉, 显示一个 stale 的 STA 数值是更好的体验。
-        try:
-            err = str(getattr(gs, 'error_msg', '') or '')
-            if 'vision capture failed' in err:
-                return False
-        except Exception:
-            pass
-        return bool(getattr(gs, 'stamina_offline', False))
-
     def _persist_cached_identity_state(self, save_now: bool = False):
-        settings = getattr(self, '_cfg_settings_ref', None)
-        if not settings:
-            return
-        cache = dict(settings.get('game_cache', {}) or {})
-        gs = getattr(self, '_game_state', None)
-        # v2.1.18: 实例变量 self._username/_profession/_level 只在菜单刷新或
-        # recognition_loop 中显式同步, 切换 UI 时往往是 stale 的. 优先用 GameState
-        # 上的实时数据 (gs.player_name/profession_name/level_base), 实例变量作为兜底.
-        gs_name = str(getattr(gs, 'player_name', '') or '').strip() if gs is not None else ''
-        gs_prof = str(getattr(gs, 'profession_name', '') or '').strip() if gs is not None else ''
-        gs_level = int(getattr(gs, 'level_base', 0) or 0) if gs is not None else 0
-        name = gs_name or str(getattr(self, '_username', '') or '').strip()
-        profession = gs_prof or str(getattr(self, '_profession', '') or '').strip()
-        level_base = gs_level if gs_level > 0 else int(getattr(self, '_level', 0) or 0)
-        if name and name.lower() != 'player':
-            cache['player_name'] = name
-        if profession:
-            cache['profession_name'] = profession
-        if level_base > 0:
-            cache['level_base'] = level_base
-        level_extra = int(getattr(gs, 'level_extra', 0) or 0) if gs is not None else 0
-        season_exp = int(getattr(gs, 'season_exp', 0) or 0) if gs is not None else 0
-        uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
-        if level_extra > 0:
-            cache['level_extra'] = level_extra
-        if season_exp > 0:
-            cache['season_exp'] = season_exp
-        if uid:
-            cache['player_id'] = uid
-        fight_point = int(getattr(gs, 'fight_point', 0) or 0) if gs is not None else 0
-        if fight_point > 0:
-            cache['fight_point'] = fight_point
-        # v2.1.18: HP/MP 也立即写入, 切到 entity 后能直接显示上次的血量条
-        if gs is not None:
-            for fld in ('hp_current', 'hp_max', 'hp_pct',
-                        'stamina_current', 'stamina_max', 'stamina_pct',
-                        'profession_id'):
-                v = getattr(gs, fld, None)
-                if v is not None and (isinstance(v, (int, float)) and v > 0 or
-                                       (isinstance(v, str) and v)):
-                    cache[fld] = v
-        settings.set('game_cache', cache)
-        if save_now:
-            try:
-                settings.save()
-            except Exception:
-                pass
+        self._game_plugin_maybe('persist_cached_identity_state', save_now)
 
     #: Alert kinds that must not be auto-dismissed/overridden while shown
     #: (e.g. a plugin's persistent status alert such as hide_seek's).
@@ -4054,240 +1686,10 @@ class SAOWebViewGUI:
                 and str(getattr(self, '_identity_alert_kind', '') or '') in self._PERSISTENT_ALERT_KINDS)
 
     def _sync_identity_alert(self, gs):
-        if gs is None:
-            return
-        try:
-            alert_serial = int(getattr(gs, 'identity_alert_serial', 0) or 0)
-        except Exception:
-            alert_serial = 0
-        alert_title = str(getattr(gs, 'identity_alert_title', '') or '')
-        alert_message = str(getattr(gs, 'identity_alert_message', '') or '')
-
-        # v2.2.0: 不要让普通 identity 通知打断 hide&seek 持续 alert.
-        # 之前 packet_parser 推一次 identity_alert (例如切场景/上线广播)
-        # 就会用 kind='identity' 覆盖 hide_seek alert 的 nonce, 9s 后
-        # auto-dismiss 把 hide_seek alert 一起拉黑 → 表现为 "过一会就消失".
-        # 现在 hide_seek active 时直接吞掉 identity 推送.
-        if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
-            self._last_identity_alert_serial = alert_serial
-            if self._is_persistent_alert_active():
-                # 仅记账, 不弹窗, 避免覆盖插件持久 alert (如 hide_seek)
-                pass
-            else:
-                self._show_identity_alert_window(alert_title, alert_message, 9000, alert_kind='identity')
-            return
-
-        # Don't auto-dismiss while a persistent plugin alert is shown — the
-        # owning plugin manages its own alert lifecycle via a refresh loop.
-        if self._is_persistent_alert_active():
-            return
-
-        has_identity = bool(
-            str(getattr(gs, 'player_name', '') or '').strip()
-            and int(getattr(gs, 'level_base', 0) or 0) > 0
-        )
-        if (has_identity
-            and getattr(self, '_identity_alert_visible', False)
-            and str(getattr(self, '_identity_alert_kind', '') or '') == 'identity'):
-            self._hide_identity_alert_window()
-
-    def _is_dead_state(self, gs) -> bool:
-        if gs is None:
-            return False
-        try:
-            hp_max = int(getattr(gs, 'hp_max', 0) or 0)
-            hp_current = int(getattr(gs, 'hp_current', 0) or 0)
-            hp_pct = float(getattr(gs, 'hp_pct', 1.0) or 0.0)
-        except Exception:
-            return False
-        return hp_max > 0 and hp_current <= 0 and hp_pct <= 0.001
-
-    def _clear_skillfx_state_for_death(self):
-        self._last_skillfx_sig = None
-        self._reset_burst_tracking()
-        try:
-            self._state_mgr.update(burst_ready=False, skill_slots=[])
-        except Exception:
-            pass
-        payload = {
-            'slots': [],
-            'watched_slots': self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
-            'burst_enabled': bool(self._get_setting('burst_enabled', True)),
-            'burst_slot': 0,
-            'burst_ready': False,
-            'enabled': bool(self._get_setting('burst_enabled', True)),
-        }
-        layout = self._get_skillfx_layout(getattr(self, '_game_state', None))
-        if layout:
-            self._skillfx_layout = layout
-            payload['viewport'] = self._viewport_to_css(layout['viewport'])
-        try:
-            self._eval_skillfx(f'SkillFX.update({json.dumps(payload, ensure_ascii=False)})')
-            self._eval_skillfx('SkillFX.hideBurstReady()')
-        except Exception:
-            pass
-        self._last_burst_ready = False
-
-    def _pause_vision_for_death(self):
-        engine = getattr(self, '_vision_engine', None)
-        if engine is None or getattr(self, '_vision_paused_for_death', False):
-            return
-        try:
-            engine.stop()
-        except Exception:
-            pass
-        self._vision_engine = None
-        self._recognition_engines = [
-            item for item in (getattr(self, '_recognition_engines', []) or [])
-            if item is not engine
-        ]
-        self._vision_paused_for_death = True
-        self._clear_skillfx_state_for_death()
-        print('[SAO] Vision engine paused (death)')
-
-    def _resume_vision_after_revive(self):
-        if not getattr(self, '_vision_paused_for_death', False):
-            return
-        if getattr(self, '_vision_engine', None) is not None:
-            self._vision_paused_for_death = False
-            self._bump_boss_hp_target_hold('revive')
-            return
-        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
-            return
-        from vision.recognition import RecognitionEngine
-        vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
-        vision_engine.start()
-        self._vision_engine = vision_engine
-        self._recognition_engines.append(vision_engine)
-        self._vision_paused_for_death = False
-        self._bump_boss_hp_target_hold('revive')
-        print('[SAO] Vision engine resumed (revive)')
-
-    def _bump_boss_hp_target_hold(self, reason: str = ''):
-        target_uuid = int(getattr(self, '_bb_last_target_uuid', 0) or 0)
-        if not target_uuid:
-            return
-        bridge = getattr(self, '_packet_engine', None)
-        if not bridge:
-            return
-        try:
-            monster = bridge.get_monster(target_uuid)
-            if not monster:
-                return
-            if not self._boss_monster_usable(monster):
-                return
-            now = time.time()
-            self._bb_recent_targets[target_uuid] = now
-            self._bb_last_damage_ts = now
-            self._last_boss_bar_sig = None
-        except Exception:
-            pass
-
-    def _boss_monster_usable(self, monster) -> bool:
-        if not monster:
-            return False
-        try:
-            hp = int(getattr(monster, 'hp', 0) or 0)
-            max_hp = int(getattr(monster, 'max_hp', 0) or 0)
-            is_dead = bool(getattr(monster, 'is_dead', False))
-            if is_dead and hp > 0:
-                monster.is_dead = False
-                monster.last_update = time.time()
-                is_dead = False
-            return (not is_dead) and (max_hp > 0 or hp > 0)
-        except Exception:
-            return False
-
-    def _sync_vision_lifecycle(self, gs):
-        dead_now = self._is_dead_state(gs)
-        dead_prev = bool(getattr(self, '_last_dead_state', False))
-        if dead_now and not dead_prev:
-            self._pause_vision_for_death()
-        elif (not dead_now) and dead_prev:
-            self._resume_vision_after_revive()
-            self._bump_boss_hp_target_hold('revive')
-        self._last_dead_state = dead_now
-
-    def _pick_burst_trigger_slot(self, gs):
-        """Pick the slot index to anchor the Burst Ready visual.
-
-        Stable selection: prefer the slot picked last time as long as it is
-        still usable (state in ready/active, or cooldown_pct ≤ 0.02).
-        A new ``ready_edge`` always wins — that's the slot whose CD just
-        expired, and is the most relevant for the alert.
-        """
-        watched = self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
-        try:
-            watched = [int(x) for x in watched if int(x) > 0]
-        except Exception:
-            watched = []
-        if not watched:
-            watched = [1]
-
-        slots = getattr(gs, 'skill_slots', []) or []
-        edge_slot = 0
-        first_ready = 0
-        first_active = 0
-        first_low_cd = 0
-        prev_slot = getattr(self, '_last_burst_slot', 0)
-        prev_still_ok = False
-
-        for slot in slots:
-            if not isinstance(slot, dict):
-                continue
-            try:
-                idx = int(slot.get('index', 0) or 0)
-            except Exception:
-                continue
-            if idx not in watched:
-                continue
-            state = str(slot.get('state', '') or '').strip().lower()
-            try:
-                cd = float(slot.get('cooldown_pct', 1.0) or 1.0)
-            except Exception:
-                cd = 1.0
-            is_ready = state in ('ready', 'active') or cd <= 0.02
-            if bool(slot.get('ready_edge')) and not edge_slot:
-                edge_slot = idx
-            if state == 'ready' and not first_ready:
-                first_ready = idx
-            if state == 'active' and not first_active:
-                first_active = idx
-            if cd <= 0.02 and not first_low_cd:
-                first_low_cd = idx
-            if idx == prev_slot and is_ready:
-                prev_still_ok = True
-
-        # Priority: ready_edge > sticky previous > first ready > first active > low cd
-        if edge_slot:
-            chosen = edge_slot
-        elif prev_still_ok and prev_slot:
-            chosen = prev_slot
-        elif first_ready:
-            chosen = first_ready
-        elif first_active:
-            chosen = first_active
-        elif first_low_cd:
-            chosen = first_low_cd
-        else:
-            chosen = 0
-
-        self._last_burst_slot = chosen
-        return chosen
+        self._game_plugin_maybe('sync_identity_alert', gs)
 
     def _stop_recognition_engines(self, preserve_packet: bool = False):
-        if getattr(self, '_auto_key_engine', None):
-            try:
-                self._auto_key_engine.stop()
-            except Exception:
-                pass
-            self._auto_key_engine = None
-        if getattr(self, '_boss_raid_engine', None):
-            try:
-                self._boss_raid_engine.stop()
-            except Exception:
-                pass
-            self._boss_raid_engine = None
+        self._game_plugin_maybe('stop_engines', preserve_packet)
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]
@@ -4305,13 +1707,7 @@ class SAOWebViewGUI:
         if not preserve_packet:
             self._packet_engine = None
         self._vision_engine = None
-        self._reset_sta_offline_state()
-        # Flush DPS player cache to disk before teardown
-        if self._dps_tracker:
-            try:
-                self._dps_tracker.save_player_cache()
-            except Exception:
-                pass
+        self._game_plugin_maybe('_reset_sta_offline_state')
         self._vision_paused_for_death = False
         self._last_dead_state = False
         if not preserve_packet:
@@ -4319,79 +1715,10 @@ class SAOWebViewGUI:
 
     def _reconfigure_data_engines(self, restart_packet: bool = True):
         """Restart packet/vision engines to match the current per-component source map."""
-        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
-            return
-
-        self._stop_recognition_engines(preserve_packet=not restart_packet)
         try:
-            self._state_mgr.update(burst_ready=False)
-        except Exception:
-            pass
-        self._reset_burst_tracking()
-        with self._state_mgr._lock:
-            self._state_mgr._state.stamina_current = 0
-            self._state_mgr._state.stamina_max = 0
-            self._state_mgr._state.stamina_pct = 0.0
-        self._state_mgr._prev_stamina_current = 0
-        self._sta_pixel_detector_enabled = False
-
-        engines = list(getattr(self, '_recognition_engines', []) or [])
-        if restart_packet or getattr(self, '_packet_engine', None) is None:
-            try:
-                from net.packet_bridge import PacketBridge
-                # Phase 7: also propagate mem_data_source on restart
-                try:
-                    _data_source_mode = str(
-                        self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
-                    ).lower()
-                except Exception:
-                    _data_source_mode = 'tcp'
-                packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
-                                             on_damage=self._on_packet_damage,
-                                             on_monster_update=self._on_monster_update,
-                                             on_boss_event=self._on_boss_event,
-                                             on_skill_event=self._on_skill_event,
-                                             on_dungeon_event=self._on_dungeon_event,
-                                             on_scene_change=self._on_scene_change,
-                                             data_source=_data_source_mode,
-                                             plugin_manager=ensure_act_plugin_manager(self, load=True),
-                                             event_bus=ensure_act_event_bus(self))
-                packet_engine.start()
-                self._packet_engine = packet_engine
-                engines = [engine for engine in engines if engine is not packet_engine]
-                engines.insert(0, packet_engine)
-                print(f'[SAO] Packet bridge started '
-                      f'(data_source={_data_source_mode!r})')
-            except Exception as e:
-                import traceback
-                print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)
-                traceback.print_exc()
-                self._packet_engine = None
-        elif self._packet_engine not in engines:
-            engines.insert(0, self._packet_engine)
-
-        # 5.0.0: 所有引擎由插件 on_load 创建 (DPS/Encounter/AutoKey/BossRaid...)
-        ensure_act_event_bus(self)
-        ensure_act_plugin_manager(self, load=True)
-
-        try:
-            from vision.recognition import RecognitionEngine
-            vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
-            vision_engine.start()
-            engines.append(vision_engine)
-            self._vision_engine = vision_engine
-            self._vision_paused_for_death = False
-            self._last_dead_state = False
-            print('[SAO] Recognition engine started (window vision / printwindow)')
-        except Exception as e:
-            import traceback
-            print(f'[SAO] Recognition engine FAILED to start: {e}', flush=True)
-            traceback.print_exc()
-            self._vision_engine = None
-
-        self._recognition_engines = engines
-        self._recognition_engine = getattr(self, '_packet_engine', None) or (engines[0] if engines else None)
-        self._recognition_active = bool(getattr(self, '_packet_engine', None) or getattr(self, '_vision_engine', None))
+            return self._game_plugin_call('_reconfigure_data_engines', restart_packet)
+        except Exception as exc:
+            print(f'[SAO] Plugin data-engine reconfigure failed: {exc}')
 
     # ════════════════════════════════════════
     #  入口
@@ -4404,20 +1731,18 @@ class SAOWebViewGUI:
         # ── Phase 2: pywebview ──
         hp_url = _web_file_uri('hp.html')
         menu_url = _web_file_uri('menu.html')
-        skillfx_url = _web_file_uri('skillfx.html')
         alert_url = _web_file_uri('alert.html')
         mapbanner_url = _web_file_uri('mapbanner.html')
 
-        # HP 固定位置: 跟随游戏窗口所在显示器, 避免 webview 在高 DPI /
-        # 多显示器环境下按系统 DPI 定位而产生几何漂移。
-        game_hwnd, game_rect = self._get_game_window_context()
+        # HP 固定位置: 平台只按当前显示器/DPI 布局; 目标窗口贴合由插件处理。
+        layout_hwnd, layout_rect = 0, None
         monitor_left, monitor_top, monitor_right, monitor_bottom = self._get_monitor_rect_for_target(
-            hwnd=game_hwnd, rect=game_rect
+            hwnd=layout_hwnd, rect=layout_rect
         )
         self._hud_monitor_rect = (monitor_left, monitor_top, monitor_right, monitor_bottom)
         _sw = max(1, monitor_right - monitor_left)
         _sh = max(1, monitor_bottom - monitor_top)
-        _dpi_scale = self._refresh_webview_dpi_scale(hwnd=game_hwnd, rect=game_rect)
+        _dpi_scale = self._refresh_webview_dpi_scale(hwnd=layout_hwnd, rect=layout_rect)
 
         # 统一 HUD 窗口: 覆盖左下角 + 中底 HP + STA
         hud_w = int(_sw * 0.75)
@@ -4458,20 +1783,6 @@ class SAOWebViewGUI:
             easy_drag=False,
             transparent=True,
             hidden=True,
-            js_api=self._api,
-        )
-
-        self.skillfx_win = webview.create_window(
-            'SAO SkillFX', skillfx_url,
-            width=self._to_webview_px(max(320, int(_sw * 0.42))),
-            height=self._to_webview_px(max(140, int(_sh * 0.20))),
-            x=self._to_webview_px(monitor_left + max(0, int(_sw * 0.29))),
-            y=self._to_webview_px(monitor_top + max(0, int(_sh * 0.74))),
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
             js_api=self._api,
         )
 
@@ -4527,127 +1838,14 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
-        # Boss HP overlay — covers native boss bar
-        # Reference 1080p: bar 466×61 at (740, 15)-(1206, 76), anchor (1206, 76)
-        boss_hp_url = _web_file_uri('boss_hp.html')
-        _bhp_geom = self._calc_boss_hp_geometry()
-        self._boss_hp_geometry = dict(_bhp_geom)
-        self.boss_hp_win = webview.create_window(
-            'SAO-BossHP', boss_hp_url,
-            width=int(_bhp_geom['width']), height=int(_bhp_geom['height']),
-            x=int(_bhp_geom['x']), y=int(_bhp_geom['y']),
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # DPS meter — right side, vertically centered
-        dps_url = _web_file_uri('dps.html')
-        _dps_w = max(320, int(min(_sw, 1920) * 0.19))
-        _dps_h = max(420, int(min(_sh, 1080) * 0.48))
-        self._dps_base_w = int(_dps_w)
-        self._dps_base_h = int(_dps_h)
-        _detail_w_default = max(760, int(min(_sw, 1920) * 0.40))
-        _detail_h_default = max(560, int(min(_sh, 1080) * 0.56))
-        try:
-            self._dps_detail_w = int(self._get_setting('dps_detail_w', _detail_w_default))
-            self._dps_detail_h = int(self._get_setting('dps_detail_h', _detail_h_default))
-        except Exception:
-            self._dps_detail_w = _detail_w_default
-            self._dps_detail_h = _detail_h_default
-        self._dps_detail_w = max(520, min(1180, int(self._dps_detail_w)))
-        self._dps_detail_h = max(420, min(900, int(self._dps_detail_h)))
-        _dps_x = max(0, _sw - _dps_w - max(16, int(_sw * 0.012)))
-        _dps_y = max(0, int(_sh * 0.18))
-        self._dps_api = DpsWindowAPI(self)
-        self.dps_win = webview.create_window(
-            'SAO-DPS', dps_url,
-            width=_dps_w, height=_dps_h,
-            x=_dps_x, y=_dps_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._dps_api,
-        )
-
-        # Buff coverage overlay — 幻想技能 buff uptime, below the DPS meter
-        buff_cov_url = _web_file_uri('buff_coverage.html')
-        _bc_w = int(getattr(self, '_dps_base_w', 0)) or max(300, int(min(_sw, 1920) * 0.18))
-        _bc_h = max(220, int(min(_sh, 1080) * 0.24))
-        _bc_x = _dps_x
-        _bc_y = min(_dps_y + _dps_h + 12, max(0, _sh - _bc_h - 24))
-        self.buff_coverage_win = webview.create_window(
-            'SAO-BuffCoverage', buff_cov_url,
-            width=_bc_w, height=_bc_h,
-            x=_bc_x, y=_bc_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._api,
-        )
-
-        # Raid Editor overlay — left side, same height as DPS
-        raid_editor_url = _web_file_uri('raid_editor.html')
-        _re_w = max(360, int(min(_sw, 1920) * 0.22))
-        _re_h = max(460, int(min(_sh, 1080) * 0.52))
-        _re_x = max(16, int(_sw * 0.012))
-        _re_y = max(0, int(_sh * 0.18))
-        self._raid_editor_api = RaidEditorAPI(self)
-        self.raid_editor_win = webview.create_window(
-            'SAO-RaidEditor', raid_editor_url,
-            width=_re_w, height=_re_h,
-            x=_re_x, y=_re_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._raid_editor_api,
-        )
-
-        # AutoKey Editor overlay — left side, below raid editor
-        autokey_editor_url = _web_file_uri('autokey_editor.html')
-        _ak_w = max(340, int(min(_sw, 1920) * 0.20))
-        _ak_h = max(400, int(min(_sh, 1080) * 0.44))
-        _ak_x = max(16, int(_sw * 0.012))
-        _ak_y = _re_y + _re_h + 12
-        self._autokey_editor_api = AutoKeyEditorAPI(self)
-        self.autokey_editor_win = webview.create_window(
-            'SAO-AutoKeyEditor', autokey_editor_url,
-            width=_ak_w, height=_ak_h,
-            x=_ak_x, y=_ak_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._autokey_editor_api,
-        )
-
-        # Commander panel — center-left, above raid editor
-        commander_url = _web_file_uri('commander.html')
-        _cmd_w = max(300, int(min(_sw, 1920) * 0.18))
-        _cmd_h = max(380, int(min(_sh, 1080) * 0.42))
-        _cmd_x = max(16, int(_sw * 0.25))
-        _cmd_y = max(0, int(_sh * 0.15))
-        self._commander_api = CommanderAPI(self)
-        self.commander_win = webview.create_window(
-            'SAO-Commander', commander_url,
-            width=_cmd_w, height=_cmd_h,
-            x=_cmd_x, y=_cmd_y,
-            frameless=True,
-            easy_drag=False,
-            transparent=True,
-            hidden=True,
-            on_top=True,
-            js_api=self._commander_api,
+        self._game_plugin_maybe(
+            'create_overlay_windows',
+            webview,
+            _web_file_uri,
+            monitor_left,
+            monitor_top,
+            _sw,
+            _sh,
         )
 
         # ACT Plugin Manager — center, shared API with Entity plugin panel
@@ -4890,32 +2088,6 @@ class SAOWebViewGUI:
         if self._pending_switch:
             self._do_hot_switch(self._pending_switch)
 
-    # ─── HUD 位置自动检测 ───
-    def _get_game_window_context(self):
-        rect = None
-        try:
-            gs = self._state_mgr.state if getattr(self, '_state_mgr', None) is not None else None
-            window_rect = getattr(gs, 'window_rect', None) if gs else None
-            if isinstance(window_rect, (list, tuple)) and len(window_rect) == 4:
-                rect = tuple(int(v) for v in window_rect)
-        except Exception:
-            rect = None
-
-        try:
-            from utils.window_locator import WindowLocator
-            locator = getattr(self, '_locator', None)
-            if locator is None:
-                locator = WindowLocator()
-                self._locator = locator
-            result = locator.find_game_window()
-            if result:
-                hwnd, _title, found_rect = result
-                return int(hwnd or 0), tuple(int(v) for v in found_rect)
-        except Exception:
-            pass
-
-        return 0, rect
-
     def _get_monitor_handle_for_target(self, hwnd: int = 0, rect=None):
         try:
             user32 = ctypes.windll.user32
@@ -5062,19 +2234,10 @@ class SAOWebViewGUI:
             ls_root = tk.Tk()
             ls_root.withdraw()
 
-            # Cover the GAME window's monitor. play() otherwise reads
+            # Cover the platform-selected monitor. play() otherwise reads
             # winfo_screenwidth/height off this withdrawn throwaway root,
-            # which under PerMonitorV2 reports the PRIMARY monitor — so on a
-            # multi-monitor / high-DPI rig the borderless GLFW present window
-            # landed off the game screen and looked like "the window won't
-            # render". Passing the real monitor rect is the entity-parity fix.
-            monitor_rect = None
-            try:
-                game_hwnd, game_rect = self._get_game_window_context()
-                monitor_rect = self._get_monitor_rect_for_target(
-                    hwnd=game_hwnd, rect=game_rect)
-            except Exception as e:
-                print(f"[SAO] LinkStart monitor-rect probe failed: {e}")
+            # which under PerMonitorV2 may report a different monitor.
+            monitor_rect = self._get_monitor_rect_for_target()
 
             done = threading.Event()
 
@@ -5180,19 +2343,9 @@ class SAOWebViewGUI:
                 pass
 
         _apply_for('SAO-HP', self.hp_win)
-        _apply_for('SAO SkillFX', self.skillfx_win)
         _apply_for('SAO Alert', self.alert_win)
         _apply_for('SAO MapBanner', self.mapbanner_win)
         _apply_for('SAO MechBanner', self.mech_banner_win)
-        _apply_for('SAO-BossHP', self.boss_hp_win)
-        # DPS 窗口只做 Win32 色键, 不设 .NET TransparencyKey
-        # (TransparencyKey 会令 HTML 透明区域变成鼠标穿透, 导致按钮/行无法点击)
-        try:
-            dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
-            if dps_hwnd:
-                _make_transparent_ctypes(dps_hwnd)
-        except Exception:
-            pass
         # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
         try:
@@ -5201,13 +2354,7 @@ class SAOWebViewGUI:
                 _make_transparent_ctypes(menu_hwnd)
         except Exception:
             pass
-        # Commander: only Win32 (needs to be clickable when visible; .NET TransparencyKey interferes)
-        try:
-            cmd_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-Commander')
-            if cmd_hwnd:
-                _make_transparent_ctypes(cmd_hwnd)
-        except Exception:
-            pass
+        self._apply_plugin_surfaces_transparency()
 
     def _reassert_hp_transparency(self, alpha: float = 1.0, retries: int = 4, delay: float = 0.18):
         """反复重置 HP 窗口透明状态，修复热切换后偶发白底。"""
@@ -5279,25 +2426,12 @@ class SAOWebViewGUI:
                         self._ensure_hp_clickable()
                     except Exception:
                         pass
-                    try:
-                        self._ensure_dps_clickable()
-                    except Exception:
-                        pass
                     # 确保隐藏面板保持 WS_EX_TRANSPARENT (防止隐藏窗口意外拦截点击)
                     try:
                         self._ensure_hidden_panels_passthrough()
                     except Exception:
                         pass
-                    # 确保纯覆盖层窗口始终保持 WS_EX_TRANSPARENT
-                    # (show() 或其他 WinForms 操作可能重置 exstyle)
-                    try:
-                        self._setup_skillfx_click_through()
-                    except Exception:
-                        pass
-                    try:
-                        self._setup_boss_hp_click_through(_wait_retries=0)
-                    except Exception:
-                        pass
+                    self._maintain_plugin_surfaces()
                     try:
                         self._setup_mapbanner_click_through(_wait_retries=0)
                     except Exception:
@@ -5479,61 +2613,12 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _ensure_dps_clickable(self):
-        """安全检查: 确保 DPS 窗口未被意外设为鼠标穿透.
-
-        与 _ensure_hp_clickable 相同逻辑: 移除 WS_EX_TRANSPARENT, 保留 WS_EX_LAYERED.
-        DPS 面板需要接收点击 (行点击 / 拖拽 / Reset 按钮), 鼠标穿透由 LWA_COLORKEY 处理.
-        """
-        try:
-            dps_hwnd = getattr(self, '_dps_hwnd', 0)
-            if not dps_hwnd:
-                dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
-                if dps_hwnd:
-                    self._dps_hwnd = dps_hwnd
-            if not dps_hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(dps_hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    dps_hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _make_dps_unclickable(self):
-        """隐藏 DPS 面板时设为鼠标穿透, 防止隐藏状态下的误操作.
-
-        设置 WS_EX_TRANSPARENT | WS_EX_LAYERED, 与 _setup_boss_hp_click_through 逻辑相同.
-        重新显示时由 _ensure_dps_clickable 还原.
-        """
-        try:
-            dps_hwnd = getattr(self, '_dps_hwnd', 0)
-            if not dps_hwnd:
-                dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
-                if dps_hwnd:
-                    self._dps_hwnd = dps_hwnd
-            if not dps_hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(dps_hwnd, _GWL_EXSTYLE)
-            user32.SetWindowLongW(
-                dps_hwnd, _GWL_EXSTYLE,
-                ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
     def _ensure_hidden_panels_passthrough(self):
         """确保所有当前隐藏的面板窗口保持 WS_EX_TRANSPARENT, 防止意外拦截点击.
 
         在 position guard 中周期性调用.
         """
         _panels = [
-            ('SAO-DPS', '_dps_visible', '_dps_hwnd'),
-            ('SAO-RaidEditor', '_raid_editor_visible', None),
-            ('SAO-AutoKeyEditor', '_autokey_editor_visible', None),
-            ('SAO-Commander', '_commander_visible', None),
             ('SAO-PluginManager', '_plugin_manager_visible', None),
             ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
             ('SAO-DataSourceHealth', '_data_source_health_visible', None),
@@ -5584,11 +2669,6 @@ class SAOWebViewGUI:
                 time.sleep(0.05)
             if not hwnd:
                 return
-            # Cache hwnd if it's a known window
-            if title == 'SAO-BossHP':
-                self._boss_hp_hwnd = hwnd
-            elif title == 'SAO-DPS':
-                self._dps_hwnd = hwnd
             # Ensure WS_EX_TRANSPARENT + WS_EX_LAYERED is set
             ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
             user32.SetWindowLongW(
@@ -5803,7 +2883,7 @@ class SAOWebViewGUI:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
-        self._ensure_skillfx_on_top()
+        self._maintain_plugin_surfaces()
 
     def _force_hp_to_bottom(self, force: bool = False, quiet: bool = False):
         """用 GetWindowRect + SetWindowPos 强制 HP 窗口贴屏幕底部 (物理像素)。"""
@@ -5813,13 +2893,13 @@ class SAOWebViewGUI:
             return
         try:
             user32 = ctypes.windll.user32
-            game_hwnd, game_rect = self._get_game_window_context()
-            target_hwnd = self._hp_hwnd or game_hwnd
+            target_hwnd = self._hp_hwnd
+            target_rect = None
             monitor_left, monitor_top, monitor_right, monitor_bottom = self._get_monitor_rect_for_target(
-                hwnd=target_hwnd, rect=game_rect
+                hwnd=target_hwnd, rect=target_rect
             )
             self._hud_monitor_rect = (monitor_left, monitor_top, monitor_right, monitor_bottom)
-            self._refresh_webview_dpi_scale(hwnd=target_hwnd, rect=game_rect)
+            self._refresh_webview_dpi_scale(hwnd=target_hwnd, rect=target_rect)
             sw = max(1, monitor_right - monitor_left)
             sh = max(1, monitor_bottom - monitor_top)
 
@@ -6029,19 +3109,12 @@ class SAOWebViewGUI:
         and every floating window — not just the ACT panels.
         """
         g = self
-        return [
+        items = [
             (getattr(g, 'hp_win', None), 'hp'),
             (getattr(g, 'menu_win', None), 'menu'),
-            (getattr(g, 'skillfx_win', None), 'skillfx'),
             (getattr(g, 'alert_win', None), 'alert'),
             (getattr(g, 'mapbanner_win', None), 'mapbanner'),
             (getattr(g, 'mech_banner_win', None), 'mech_banner'),
-            (getattr(g, 'boss_hp_win', None), 'boss_hp'),
-            (getattr(g, 'dps_win', None), 'dps'),
-            (getattr(g, 'buff_coverage_win', None), 'buff_coverage'),
-            (getattr(g, 'raid_editor_win', None), 'raid_editor'),
-            (getattr(g, 'autokey_editor_win', None), 'autokey_editor'),
-            (getattr(g, 'commander_win', None), 'commander'),
             (getattr(g, 'trigger_timer_win', None), 'trigger_timer'),
             (getattr(g, 'data_source_health_win', None), 'data_source_health'),
             (getattr(g, 'report_export_win', None), 'report_export'),
@@ -6055,6 +3128,8 @@ class SAOWebViewGUI:
             (getattr(g, 'combatant_drilldown_win', None), 'combatant_drilldown'),
             (getattr(g, 'skill_drilldown_win', None), 'skill_drilldown'),
         ]
+        items.extend(list(self._plugin_surface_items()))
+        return items
 
     def _plugin_layer_source(self):
         src = getattr(self, '_plugin_layer_js_cache', None)
@@ -6104,28 +3179,17 @@ class SAOWebViewGUI:
             self._apply_webview2_transparency()  # 二次确保
             # 显示前设 alpha=0, 防止冷启动时 WebView2 未就绪导致黑底闪现
             self._set_window_alpha('SAO-HP', 0.0)
-            self._set_window_alpha('SAO SkillFX', 0.0)
             try:
                 if self.hp_win and not self._hp_visible:
                     self.hp_win.show()
                     self._hp_visible = True
             except Exception:
                 pass
-            try:
-                if self.skillfx_win and not self._skillfx_visible:
-                    self.skillfx_win.show()
-                    self._skillfx_visible = True
-            except Exception:
-                pass
-            # SkillFX 是纯覆盖层, 必须立即设为鼠标穿透 (WS_EX_TRANSPARENT)
-            # 否则 show() 到 _update_skillfx_layout() 之间窗口会拦截点击
-            self._setup_skillfx_click_through()
-            threading.Timer(0.5, self._setup_skillfx_click_through).start()
             time.sleep(0.18)
-            self._eval_hp(f'setUsername("{self._safe_js(self._username)}")')
-            # 初始显示等级 (来自 profile 缓存, 等待抓包数据覆盖)
-            self._eval_hp(f'updateHP(0, 1, {self._level})')
+            initial_state = getattr(getattr(self, '_state_mgr', None), 'state', None)
+            self._game_plugin_maybe('sync_identity_panel', initial_state)
             self._sync_menu_info()
+            self._game_plugin_maybe('on_webview_started')
             # 注入插件渲染层 (plugin_layer.js) 到所有 WebView 窗口 —— 给插件
             # overlay/hook 能力覆盖主UI与全部悬浮窗, 延迟确保页面已加载.
             try:
@@ -6136,7 +3200,6 @@ class SAOWebViewGUI:
             # 设置 click-through (延迟确保窗口已完全创建)
             time.sleep(0.3)
             self._setup_click_through()
-            self._update_skillfx_layout()
             self._request_hp_hit_regions()
             self._start_hp_position_guard()
             self._start_hp_click_bootstrap(8.0)
@@ -6145,12 +3208,10 @@ class SAOWebViewGUI:
             # 标记 reveal 未完成, 阻止 _reassert_hp_transparency 修改 alpha
             self._hp_reveal_pending = True
             self._reassert_hp_transparency(1.0, retries=15, delay=0.35)
-            # HP/SkillFX 启动时 alpha=0, 0.8s 后淡入 (等待透明应用后再变可见)
+            # HP 启动时 alpha=0, 0.8s 后淡入 (等待透明应用后再变可见)
             def _reveal_windows():
                 self._hp_reveal_pending = False
                 self._set_window_alpha('SAO-HP', 1.0)
-                self._set_window_alpha('SAO SkillFX', 1.0)
-                self._setup_skillfx_click_through()
                 self._mark_update_popup_ready()
             threading.Timer(0.8, _reveal_windows).start()
             # Safety: re-run _force_hp_to_bottom after a delay in case hwnd
@@ -6171,52 +3232,15 @@ class SAOWebViewGUI:
                     self._ensure_hp_clickable()
                     self._request_hp_hit_regions()
                     self._set_hp_region(False)
-                    # SkillFX 也需要重新设置穿透 (冷启动可能延迟)
-                    self._setup_skillfx_click_through()
+                    self._maintain_plugin_surfaces()
                 except Exception:
                     pass
             threading.Timer(12.0, _late_hp_recovery).start()
             threading.Timer(20.0, _late_hp_recovery).start()
-            # v2.1.17: onedir 冷启动 BossHP / DPS 面板恢复. 第一次 PyInstaller
-            # 解包 + WebView2 初始化可能比 _init 内部的同步 show() 慢, 导致
-            # boss_hp_win.show() / dps_win 准备工作生效前窗口仍处于不可见状态.
-            # 在 4s/10s/16s 处补做一遍, 不会重复 show 已可见窗口.
-            def _late_panel_recovery():
-                try:
-                    if self.boss_hp_win and not self._boss_hp_visible:
-                        self._setup_boss_hp_click_through()
-                        self._set_window_alpha('SAO-BossHP', 1.0)
-                        try:
-                            self.boss_hp_win.show()
-                            self._boss_hp_visible = True
-                            self._setup_boss_hp_click_through()
-                        except Exception:
-                            pass
-                    if self.dps_win:
-                        self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
-                        self._make_dps_unclickable()
-                    _bcw = getattr(self, 'buff_coverage_win', None)
-                    if _bcw and not getattr(self, '_buff_cov_visible', False):
-                        self._wait_and_apply_click_through('SAO-BuffCoverage', timeout=0.5)
-                        self._set_window_alpha('SAO-BuffCoverage', 1.0)
-                        _bcw.show()
-                        self._buff_cov_visible = True
-                except Exception:
-                    pass
-            threading.Timer(4.0, _late_panel_recovery).start()
-            threading.Timer(10.0, _late_panel_recovery).start()
-            threading.Timer(16.0, _late_panel_recovery).start()
             # 任务栏图标
             self._set_window_icon('SAO-HP')
             self._set_window_icon('SAO Menu')
-            self._set_window_icon('SAO SkillFX')
             self._set_window_icon('SAO Alert')
-            self._set_window_icon('SAO-BossHP')
-            self._set_window_icon('SAO-DPS')
-            self._set_window_icon('SAO-BuffCoverage')
-            self._set_window_icon('SAO-RaidEditor')
-            self._set_window_icon('SAO-AutoKeyEditor')
-            self._set_window_icon('SAO-Commander')
             self._set_window_icon('SAO-PluginManager')
             self._set_window_icon('SAO-TriggerTimerManager')
             self._set_window_icon('SAO-DataSourceHealth')
@@ -6227,62 +3251,12 @@ class SAOWebViewGUI:
             self._set_window_alpha('SAO Alert', 1.0)
             # Alert window: default click-through so the hidden window never captures clicks
             self._setup_alert_click_through()
-            # Boss HP overlay: transparency + click-through + show (hidden by default)
-            # Ensure click-through is applied BEFORE the window becomes visible.
-            self._setup_boss_hp_click_through()
-            self._wait_and_apply_click_through('SAO-BossHP', timeout=2.0)
-            self._set_window_alpha('SAO-BossHP', 1.0)
             try:
-                if self.boss_hp_win:
-                    self.boss_hp_win.show()
-                    self._boss_hp_visible = True
-                    # show() 后再确认一次穿透 (防止 show 重置 exstyle)
-                    self._setup_boss_hp_click_through()
-                    # Sync FX overflow margins so CSS padding matches the enlarged window
-                    _g = self._boss_hp_geometry
-                    _fx_lr = _g.get('fx_lr', 200)
-                    _fx_top = _g.get('fx_top', 120)
-                    _fx_bot = _g.get('fx_bot', 160)
-                    multi_h = _g.get('multi_extra_h', 240)
-                    self._eval_boss_hp(
-                        f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr},{multi_h})'
-                    )
-            except Exception:
-                pass
-            # DPS meter: hidden until combat starts or a report is opened
-            try:
-                self._dps_visible = False
-                self._dps_mode = 'hidden'
-                if self.dps_win:
-                    self._apply_webview2_transparency()
-                    self._set_window_alpha('SAO-DPS', 1.0)
-                # 启动时 DPS 面板处于隐藏状态, 设为鼠标穿透避免点击穿透到游戏窗口
-                # 确保 hwnd 已就绪再设穿透, 避免首次 FindWindow 失败
-                # (DPS 本身是隐藏的, 用短超时避免阻塞初始化)
-                self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
-                self._make_dps_unclickable()
-                self._sync_dps_report_availability()
-            except Exception:
-                pass
-            # Raid Editor / AutoKey Editor / Commander: 初始隐藏, 设为鼠标穿透
-            try:
-                self._wait_and_apply_click_through('SAO-RaidEditor', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-AutoKeyEditor', timeout=0.5)
-                self._wait_and_apply_click_through('SAO-Commander', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-PluginManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-DataSourceHealth', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-ReportExport', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-OfflineImport', timeout=0.5)
-            except Exception:
-                pass
-            # Commander panel must start hidden (explicitly enforce after webview init)
-            try:
-                self._commander_visible = False
-                if self.commander_win:
-                    self._set_window_alpha('SAO-Commander', 0.0)
-                    self.commander_win.hide()
-                    self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
             try:
@@ -6407,10 +3381,7 @@ class SAOWebViewGUI:
         try:
             self._bootstrap_runtime_state()
             cfg_settings = self._cfg_settings_ref
-            try:
-                self._update_skillfx_layout()
-            except Exception:
-                pass
+            self._game_plugin_maybe('on_recognition_start')
 
             # Restore sound settings
             try:
@@ -6422,20 +3393,10 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
-            # 游戏状态缓存恢复由插件 on_load 处理 (通过 set_owner_attr)
+            # 游戏状态缓存恢复由插件 on_load 处理
 
-            # 5.0.0: 引擎由插件 on_load 创建 (DPS/AutoKey/BossRaid/MemBridge...)
+            # 5.0.0: 引擎由插件 on_load 创建
             self._reconfigure_data_engines(restart_packet=not bool(getattr(self, '_packet_engine', None)))
-
-            # 同步菜单状态
-            try:
-                self._sync_auto_key_menu()
-            except Exception:
-                pass
-            try:
-                self._sync_boss_raid_menu()
-            except Exception:
-                pass
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
@@ -6469,7 +3430,7 @@ class SAOWebViewGUI:
             self._recognition_active = not self._recognition_active
             state = "ON" if self._recognition_active else "OFF"
             if not self._recognition_active:
-                self._reset_sta_offline_state()
+                self._game_plugin_maybe('_reset_sta_offline_state')
         self._eval_menu(f'SAO.showToast("识别: {state}")')
 
 
@@ -6483,13 +3444,9 @@ class SAOWebViewGUI:
     def _setup_hotkeys(self):
         self._hk_actions = {
             'toggle_recognition': self._toggle_recognition,
-            'toggle_auto_script': self._toggle_auto_script,
             'toggle_topmost': lambda: None,
             'hide_panels': lambda: None,
-            'boss_raid_start': self._toggle_boss_raid,
-            'boss_raid_next_phase': self._boss_raid_next_phase,
             'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
-            'toggle_auto_dodge': self._toggle_auto_dodge,
         }
         self._hk_pressed = set()
         self._hk_listener = None
@@ -6503,7 +3460,7 @@ class SAOWebViewGUI:
             self._hk_listener.daemon = True
             self._hk_listener.start()
             self._hotkeys_ok = True
-            print('[SAO WebView] Hotkeys (pynput): F5=toggle_recognition, F6=toggle_auto_script')
+            print('[SAO WebView] Hotkeys (pynput): enabled')
         except Exception as e:
             self._hotkeys_ok = False
             print(f'[SAO WebView] Hotkeys (pynput) unavailable: {e}')
@@ -6660,13 +3617,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _eval_skillfx(self, js):
-        try:
-            if self.skillfx_win:
-                self.skillfx_win.evaluate_js(js)
-        except Exception:
-            pass
-
     def _eval_alert(self, js):
         try:
             if self.alert_win:
@@ -6724,20 +3674,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _presynthesize_active_profile_web(self):
-        """机制保存后预合成激活档案的 TTS 文案 (战斗路径纯缓存命中)。"""
-        controller = getattr(self, '_mech_alert_controller', None)
-        if controller is None:
-            return
-        try:
-            from engines.boss_raid_engine import active_profile
-            cfg = load_boss_raid_config(self._cfg_settings_ref)
-            profile = active_profile(cfg)
-            if profile:
-                controller.presynthesize_profile(profile)
-        except Exception:
-            pass
-
     def _on_mechanic_event(self, evt):
         """引擎机制事件 → TTS + 顶部横幅 (controller 缺位时静默丢弃)。"""
         controller = getattr(self, '_mech_alert_controller', None)
@@ -6747,512 +3683,11 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
-    def _toggle_auto_dodge(self):
-        """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
-        try:
-            cfg = load_linkage_config(self._cfg_settings_ref)
-            new_state = not bool(cfg.get('dodge_enabled', False))
-            set_linkage_dodge_enabled(self._cfg_settings_ref, new_state)
-            # 急停: 松开定向躲避按住的键 + 作废 linkage 在飞发键线程
-            director = getattr(self, '_auto_dodge_director', None)
-            if director is not None:
-                try:
-                    director.release_all()
-                except Exception:
-                    pass
-            linkage = getattr(self, '_boss_autokey_linkage', None)
-            if linkage is not None:
-                try:
-                    linkage.panic_stop()
-                except Exception:
-                    pass
-            key = 'F12'
-            try:
-                saved = getattr(self, '_cfg_settings_ref', None)
-                v = ((saved.get('hotkeys') or {}) if saved is not None else {}).get('toggle_auto_dodge')
-                if isinstance(v, dict):
-                    v = v.get('key') or v.get('name')
-                if v:
-                    key = str(v).upper()
-            except Exception:
-                pass
-            msg = (f'已启用 ({key} 紧急停用)' if new_state
-                   else f'已禁用 ({key} 重新启用)')
-            self._show_identity_alert_window('自动躲避', msg)
-            # 同步刷新机制编辑器里的总开关显示, 防止 F12 后面板状态脱节
-            try:
-                self._eval_raid_editor(
-                    'if(window.RaidEditor&&RaidEditor.loadMechanics)RaidEditor.loadMechanics()')
-            except Exception:
-                pass
-            print(f'[SAO] auto-dodge {"on" if new_state else "off"}')
-        except Exception as e:
-            print(f'[SAO] toggle_auto_dodge failed: {e}')
-
-    def _eval_boss_hp(self, js):
-        try:
-            if self.boss_hp_win:
-                self.boss_hp_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _eval_buff_coverage(self, js):
-        try:
-            win = getattr(self, 'buff_coverage_win', None)
-            if win:
-                win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _push_buff_coverage(self, gs, buf_list):
-        """Build + push the 幻想技能 buff-coverage payload to the webview panel.
-
-        Merges the dps tracker's encounter uptime (uptime%, trigger count,
-        layers) with the remaining-time of the current self_buffs snapshot,
-        filtered to ultimate (幻想技能) buffs. Deduped + skipped when buffmon
-        is disabled. Runs only on actual buff change (caller dedups by ref).
-        """
-        try:
-            tr = getattr(self, '_dps_tracker', None)
-            if tr is None:
-                return
-            if not self._get_setting('buffmon_enabled', True):
-                if getattr(self, '_last_buff_cov_sig', None) != 'off':
-                    self._last_buff_cov_sig = 'off'
-                    self._eval_buff_coverage('updateBuffCoverage({"buffs":[]})')
-                return
-            is_ultimate_buff = getattr(self, '_is_ultimate_buff', None) or (lambda *a, **k: False)
-            upt = tr.get_buff_uptime()
-            soff = float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0)
-            now_ms = time.time() * 1000.0 + soff
-            rem_by_id = {}
-            for b in (buf_list or []):
-                if not isinstance(b, dict):
-                    continue
-                bid = int(b.get('id', 0) or b.get('buff_id', 0) or 0)
-                begin = int(b.get('begin_ms', 0) or b.get('begin_time', 0) or 0)
-                dur = int(b.get('duration_ms', 0) or b.get('duration', 0) or 0)
-                if bid and dur > 0 and begin > 0:
-                    rem_by_id[bid] = round(max(0.0, (begin + dur - now_ms) / 1000.0), 1)
-            rows = []
-            for u in upt.get('buffs', []):
-                bid = int(u.get('buff_id', 0) or 0)
-                nm = u.get('name', '')
-                if not is_ultimate_buff(nm, bid):
-                    continue
-                rows.append({
-                    'id': bid, 'name': nm,
-                    'uptime_pct': u.get('uptime_pct', 0.0),
-                    'apply_count': u.get('apply_count', 0),
-                    'layer': u.get('layer', 0),
-                    'max_layer': u.get('max_layer', 0),
-                    'active': bool(u.get('active', False)),
-                    'rem_s': rem_by_id.get(bid, -1.0),
-                })
-            payload = {'elapsed_ms': upt.get('elapsed_ms', 0), 'buffs': rows}
-            js_payload = json.dumps(payload, ensure_ascii=False)
-            if js_payload != getattr(self, '_last_buff_cov_sig', None):
-                self._last_buff_cov_sig = js_payload
-                self._eval_buff_coverage('updateBuffCoverage(%s)' % js_payload)
-        except Exception:
-            pass
-
-    def _calc_boss_hp_geometry(self):
-        try:
-            sw = ctypes.windll.user32.GetSystemMetrics(0)
-            sh = ctypes.windll.user32.GetSystemMetrics(1)
-        except Exception:
-            sw, sh = 1920, 1080
-        pad = max(8, int(min(sw, sh) * 0.008))
-        bar_w = max(556, int(sw * 0.28960))
-        bar_h = max(88, int(sh * 0.08150))
-        right = int(sw * 0.62813)
-        # Extra margin so CSS VFX (shards, bloom, burst) aren't clipped.
-        # Break shards can fly ~150 px in any direction; add generous room.
-        fx_lr = max(160, int(min(sw, 1920) * 0.088))
-        fx_top = max(100, int(min(sh, 1080) * 0.096))
-        fx_bot = max(160, int(min(sh, 1080) * 0.150))
-        # Bar's intended screen position (must NOT change when FX margins grow).
-        # At 1080p the bar renders at x=642, y=24 — derived from the original
-        # small-margin code where max(0, 4-24)+24 = 24.
-        bar_screen_x = right - bar_w - pad
-        bar_screen_y = max(0, int(sh * 0.0046) - 24) + 24  # preserve legacy offset
-        # Extra height for multi-unit support (additional attacked units below main bar)
-        multi_extra_h = 240  # room for ~3 additional small bars
-        return {
-            'width':  bar_w + pad * 2 + 20 + fx_lr * 2,
-            'height': bar_h + pad * 2 + fx_top + fx_bot + multi_extra_h,
-            'x': bar_screen_x - fx_lr,
-            'y': bar_screen_y - fx_top,
-            'fx_lr':  fx_lr,
-            'fx_top': fx_top,
-            'fx_bot': fx_bot,
-            'multi_extra_h': multi_extra_h,
-        }
-
-    def _refresh_boss_hp_geometry(self, force: bool = False):
-        geom = self._calc_boss_hp_geometry()
-        prev = getattr(self, '_boss_hp_geometry', None)
-        if (not force) and prev == geom:
-            return
-        self._boss_hp_geometry = geom
-        try:
-            if self.boss_hp_win:
-                self.boss_hp_win.resize(int(geom['width']), int(geom['height']))
-                self.boss_hp_win.move(int(geom['x']), int(geom['y']))
-                _fx_lr = geom.get('fx_lr', 200)
-                _fx_top = geom.get('fx_top', 120)
-                _fx_bot = geom.get('fx_bot', 160)
-                multi_h = geom.get('multi_extra_h', 240)
-                self._eval_boss_hp(
-                    f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr},{multi_h})'
-                )
-                # Re-apply click-through after resize/move (container flags can reset)
-                self._setup_boss_hp_click_through()
-        except Exception:
-            pass
-
-    def _eval_dps(self, js):
-        try:
-            if self.dps_win:
-                self.dps_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _build_dps_act_snapshot(self, history_limit: int = 0):
-        # WebView DpsMeter.showActSnapshot + act_snapshot plugins only read
-        # render_spec/sources/triggers, so use the lite (cached, skill-free, no
-        # report/history deepcopy) build. history_limit defaults to 0: this
-        # factory only feeds the live act_snapshot push.
-        try:
-            return build_act_snapshot(
-                dps_tracker=getattr(self, '_dps_tracker', None),
-                history_store=getattr(self, '_dps_history_store', None),
-                state_mgr=getattr(self, '_state_mgr', None),
-                encounter_mgr=getattr(self, '_encounter_mgr', None),
-                trigger_engine=getattr(self, '_act_trigger_engine', None),
-                packet_probe=getattr(self, '_packet_engine', None),
-                memory_probe=getattr(self, '_mem_bridge', None),
-                history_limit=history_limit,
-                lite=True,
-            )
-        except Exception:
-            return {}
-
-    def _push_dps_act_snapshot(self, throttle: bool = False):
-        try:
-            if not self.dps_win:
-                return
-            # Coalesce the per-damage-event storm fired on the pcap capture
-            # thread. throttle=True comes only from the high-frequency packet
-            # callbacks; the periodic overlay loop + user-triggered pushes leave
-            # it False so the trailing / final snapshot is never dropped
-            # (~14 Hz cap on the storm path).
-            if throttle and (time.time() - getattr(self, '_last_act_snap_push_t', 0.0)) < 0.07:
-                return
-            self._last_act_snap_push_t = time.time()
-            snapshot = self._build_dps_act_snapshot()
-            if snapshot:
-                publish_owner_event(self, 'act_snapshot', snapshot, source_name='webview', source_kind='ui')
-                # Push-side plugin render hooks: let plugins transform the dps
-                # payload before it reaches the meter (entity/web parity with the
-                # Tk set_act_snapshot hook).
-                try:
-                    hooked = act_render_apply_hooks(self, 'dps', snapshot)
-                    if hooked.get('ok') and hooked.get('payload') is not None:
-                        snapshot = hooked['payload']
-                except Exception:
-                    pass
-                self._eval_dps(
-                    f'if(window.DpsMeter&&DpsMeter.showActSnapshot)DpsMeter.showActSnapshot({json.dumps(snapshot, ensure_ascii=False)})'
-                )
-        except Exception:
-            pass
-
-    def _resize_dps_window(self, width: int, height: int,
-                           persist: bool = False):
-        try:
-            width = max(520, min(1180, int(width)))
-            height = max(420, min(900, int(height)))
-        except Exception:
-            return
-        self._dps_detail_w = width
-        self._dps_detail_h = height
-        try:
-            if self.dps_win:
-                self.dps_win.resize(width, height)
-        except Exception:
-            pass
-        if persist:
-            try:
-                self._set_setting('dps_detail_w', width)
-                self._set_setting('dps_detail_h', height)
-            except Exception:
-                pass
-
-    def _set_dps_detail_mode(self, active: bool):
-        self._dps_detail_mode = bool(active)
-        try:
-            if self._dps_detail_mode:
-                self._resize_dps_window(
-                    int(getattr(self, '_dps_detail_w', 760) or 760),
-                    int(getattr(self, '_dps_detail_h', 560) or 560),
-                    persist=False,
-                )
-            else:
-                w = int(getattr(self, '_dps_base_w', 0) or 360)
-                h = int(getattr(self, '_dps_base_h', 0) or 520)
-                if self.dps_win:
-                    self.dps_win.resize(w, h)
-        except Exception:
-            pass
-        try:
-            if self._dps_visible:
-                self._ensure_dps_clickable()
-        except Exception:
-            pass
-
-    def _combat_damage_timeout_s(self) -> float:
-        # User-configurable fade timeout (seconds). Default 5s — overlay
-        # fades when no damage has been seen for that long.
-        try:
-            raw = self._get_setting('dps_fade_timeout_s', 5)
-            v = float(raw if raw is not None else 5)
-        except Exception:
-            v = 5.0
-        if v <= 0:
-            return 86400.0
-        return float(max(1.0, v))
-
-    def _boss_hp_hold_timeout_s(self) -> float:
-        """BossHP fades alongside DPS once HP / damage stop changing."""
-        try:
-            raw = self._get_setting('boss_hp_hold_timeout_s', 5)
-            v = float(raw if raw is not None else 5)
-        except Exception:
-            v = 5.0
-        if v <= 0:
-            return 86400.0
-        return float(max(1.0, v, self._combat_damage_timeout_s()))
-
-    def _get_dps_last_report_available(self) -> bool:
-        tracker = getattr(self, '_dps_tracker', None)
-        if not tracker:
-            return False
-        try:
-            return bool(tracker.has_last_report())
-        except Exception:
-            return False
-
-    def _sync_dps_report_availability(self):
-        available = self._get_dps_last_report_available()
-        if available == getattr(self, '_dps_last_report_available', False):
-            return
-        self._dps_last_report_available = available
-        self._sync_menu_settings()
-
-    def _show_dps_window(self):
-        try:
-            if self.dps_win and not self._dps_visible:
-                self._dps_fade_seq += 1
-                self._apply_webview2_transparency()
-                self._set_window_alpha('SAO-DPS', 0.0)
-                self.dps_win.show()
-                self._eval_dps('if (window.DpsMeter && DpsMeter.fadeIn) DpsMeter.fadeIn()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-DPS', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._dps_visible = True
-                self._ensure_dps_clickable()
-                threading.Timer(0.5, self._ensure_dps_clickable).start()
-                threading.Timer(1.5, self._ensure_dps_clickable).start()
-        except Exception:
-            pass
-
-    def _hide_dps_window(self):
-        self._dps_fade_seq += 1
-        _fade_seq = self._dps_fade_seq
-        # 立即设为鼠标穿透, 防止面板淡出期间及隐藏状态下接收误操作
-        self._make_dps_unclickable()
-        self._dps_detail_mode = False
-        try:
-            if self.dps_win and self._dps_visible:
-                self._eval_dps('if (window.DpsMeter && DpsMeter.setDetailMode) DpsMeter.setDetailMode(false)')
-                try:
-                    self.dps_win.resize(
-                        int(getattr(self, '_dps_base_w', 360) or 360),
-                        int(getattr(self, '_dps_base_h', 520) or 520),
-                    )
-                except Exception:
-                    pass
-                self._eval_dps('if (window.DpsMeter && DpsMeter.fadeOut) DpsMeter.fadeOut()')
-                self._set_window_alpha('SAO-DPS', 1.0)
-                threading.Timer(
-                    0.26,
-                    lambda: self._finish_hide_dps_window(_fade_seq),
-                ).start()
-        except Exception:
-            pass
-        self._dps_visible = False
-        self._dps_faded = False
-        self._dps_mode = 'hidden'
-
-    def _finish_hide_dps_window(self, fade_seq: int):
-        # Keep the OS-level window alive in the background. Toggling
-        # webview.Window.hide()/show() repeatedly across scene switches
-        # can drop topmost / transparency / click-through styles and
-        # leave the panel invisible or behind the game window. Idle
-        # state is now expressed purely through JS CSS fadeOut + the
-        # window-alpha clamp set by the caller, so no OS hide is
-        # required here.
-        try:
-            if fade_seq != self._dps_fade_seq or self._dps_visible:
-                return
-            # Drive the window alpha to 0 so any leftover CSS pixels
-            # cannot bleed through during the idle window. JS fadeOut
-            # has already run; the window itself stays shown.
-            self._set_window_alpha('SAO-DPS', 0.0)
-        except Exception:
-            pass
-
-    def _show_dps_live_snapshot(self, snapshot=None):
-        tracker = getattr(self, '_dps_tracker', None)
-        if snapshot is None and tracker:
-            try:
-                snapshot = tracker.get_snapshot()
-            except Exception:
-                snapshot = None
-        if snapshot is None:
-            snapshot = {
-                'encounter_active': False,
-                'elapsed_s': 0.0,
-                'total_damage': 0,
-                'total_heal': 0,
-                'total_dps': 0,
-                'total_hps': 0,
-                'entities': [],
-            }
-        self._show_dps_window()
-        self._dps_mode = 'live'
-        self._eval_dps(f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})')
-        self._push_dps_act_snapshot()
-
-    def _show_dps_last_report(self, report=None) -> bool:
-        tracker = getattr(self, '_dps_tracker', None)
-        if report is None and tracker:
-            try:
-                report = tracker.get_last_report()
-            except Exception:
-                report = None
-        if not report:
-            return False
-        self._show_dps_window()
-        self._dps_mode = 'report'
-        self._eval_dps(f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})')
-        self._push_dps_act_snapshot()
-        return True
-
     @staticmethod
     def _safe_js(s: str) -> str:
         if not s:
             return ''
         return s.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n')
-
-    # ── Raid Editor overlay ──
-
-    def _eval_raid_editor(self, js):
-        try:
-            if self.raid_editor_win:
-                self.raid_editor_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_raid_editor_clickable(self):
-        """Remove WS_EX_TRANSPARENT so overlay receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-RaidEditor')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_raid_editor(self):
-        try:
-            if self.raid_editor_win and not self._raid_editor_visible:
-                self._apply_webview2_transparency()
-                self._set_window_alpha('SAO-RaidEditor', 0.0)
-                self.raid_editor_win.show()
-                self._eval_raid_editor('if(window.RaidEditor&&RaidEditor.fadeIn)RaidEditor.fadeIn()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-RaidEditor', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._raid_editor_visible = True
-                self._ensure_raid_editor_clickable()
-                threading.Timer(0.5, self._ensure_raid_editor_clickable).start()
-                self._push_raid_editor_full()
-        except Exception:
-            pass
-
-    def _hide_raid_editor(self):
-        try:
-            if self.raid_editor_win and self._raid_editor_visible:
-                self._eval_raid_editor('if(window.RaidEditor&&RaidEditor.fadeOut)RaidEditor.fadeOut()')
-                def _finish():
-                    try:
-                        if self.raid_editor_win and not self._raid_editor_visible:
-                            self.raid_editor_win.hide()
-                    except Exception:
-                        pass
-                threading.Timer(0.3, _finish).start()
-        except Exception:
-            pass
-        self._raid_editor_visible = False
-
-    def _push_raid_editor_entities(self, entities=None):
-        """Push entity list to the raid editor overlay."""
-        if not self._raid_editor_visible:
-            return
-        try:
-            if entities is None:
-                engine = getattr(self, '_boss_raid_engine', None)
-                if engine:
-                    entities = engine.get_entities()
-                else:
-                    entities = []
-            self._eval_raid_editor(
-                f'RaidEditor.updateEntities({json.dumps(entities, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    def _push_raid_editor_status(self):
-        """Push engine status to the raid editor overlay.
-
-        This fires on the 20Hz recognition loop while the editor is visible, so it
-        must NOT pay the O(N) entity build (the crowd / 20-player lag the editor
-        change set out to kill): read the light status and drop the entities key so
-        updateStatus() leaves the throttled entity-card channel untouched."""
-        if not self._raid_editor_visible:
-            return
-        try:
-            engine = getattr(self, '_boss_raid_engine', None)
-            if engine:
-                try:
-                    status = engine.get_status(include_entities=False)
-                except TypeError:
-                    status = engine.get_status()
-                status.pop('entities', None)
-                self._eval_raid_editor(
-                    f'RaidEditor.updateStatus({json.dumps(status, ensure_ascii=False)})')
-        except Exception:
-            pass
 
     def _resolved_hotkey(self, action: str, fallback: str) -> str:
         """热键标签按 {**DEFAULT_HOTKEYS, **saved} 解析 — 标签跟随用户改键不漂移。"""
@@ -7267,120 +3702,6 @@ class SAOWebViewGUI:
             return str(v or fallback).upper()
         except Exception:
             return fallback
-
-    def _push_raid_editor_full(self):
-        """Push full state (entities + status) to the raid editor."""
-        if not self._raid_editor_visible:
-            return
-        try:
-            engine = getattr(self, '_boss_raid_engine', None)
-            if engine:
-                status = engine.get_status()   # include_entities=True, JS updateStatus 消费 status.entities
-                # JS RaidEditor.updateFull 契约是嵌套 {status, phases} — 平铺会被整体忽略
-                payload = {'status': status, 'phases': engine.get_profile_phases(),
-                           'hotkeys': {'next_phase': self._resolved_hotkey('boss_raid_next_phase', 'F8')}}
-                self._eval_raid_editor(
-                    f'RaidEditor.updateFull({json.dumps(payload, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    def _on_raid_entity_update(self, entities):
-        """Callback from BossRaidEngine when entity list changes."""
-        if self._raid_editor_visible:
-            self._push_raid_editor_entities(entities)
-
-    def _on_boss_action_with_gate(self, action):
-        """Gate the memory boss-action feed before driving the auto-key linkage
-        (recognition active + player alive)."""
-        if not bool(getattr(self, '_recognition_active', False)):
-            return
-        gs = getattr(self._state_mgr, 'state', None) if getattr(self, '_state_mgr', None) else None
-        if gs is not None and bool(getattr(gs, 'self_dead', False)):
-            return
-        linkage = getattr(self, '_boss_autokey_linkage', None)
-        if linkage is not None:
-            try:
-                linkage.on_boss_action(action)
-            except Exception:
-                pass
-
-    # ── Commander panel ──
-
-    def _eval_commander(self, js):
-        try:
-            if self.commander_win:
-                self.commander_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_commander_clickable(self):
-        """Remove WS_EX_TRANSPARENT so commander receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-Commander')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_commander(self):
-        try:
-            if self.commander_win and not self._commander_visible:
-                self._apply_webview2_transparency()
-                self._set_window_alpha('SAO-Commander', 0.0)
-                self.commander_win.show()
-                self._eval_commander('if(window.Commander&&Commander.fadeIn)Commander.fadeIn()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-Commander', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._commander_visible = True
-                self._ensure_commander_clickable()
-                threading.Timer(0.5, self._ensure_commander_clickable).start()
-                self._push_commander_data()
-        except Exception:
-            pass
-
-    def _hide_commander(self):
-        try:
-            if self.commander_win and self._commander_visible:
-                self._eval_commander('if(window.Commander&&Commander.fadeOut)Commander.fadeOut()')
-                def _finish():
-                    try:
-                        if self.commander_win:
-                            self.commander_win.hide()
-                            # Ensure click-through when hidden
-                            self._ensure_hidden_panels_passthrough()
-                    except Exception:
-                        pass
-                threading.Timer(0.3, _finish).start()
-        except Exception:
-            pass
-        self._commander_visible = False
-
-    def _push_commander_data(self):
-        """Push team + CD data to the commander panel."""
-        if not self._commander_visible:
-            return
-        try:
-            bridge = getattr(self, '_bridge', None)
-            if bridge:
-                data = bridge.get_commander_data()
-            else:
-                # status 让面板能区分「没队伍」和「数据源还没起来」
-                data = {'members': [], 'team_id': 0, 'leader_uid': 0,
-                        'dungeon_id': 0, 'status': 'backend_not_ready'}
-            self._eval_commander(
-                f'Commander.update({json.dumps(data, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    # ── ACT Plugin Manager panel ──
 
     def _eval_plugin_manager(self, js):
         try:
@@ -8121,134 +4442,6 @@ class SAOWebViewGUI:
             pass
         self._skill_drilldown_visible = False
 
-    # ── AutoKey Editor overlay ──
-
-    def _eval_autokey_editor(self, js):
-        try:
-            if self.autokey_editor_win:
-                self.autokey_editor_win.evaluate_js(js)
-        except Exception:
-            pass
-
-    def _ensure_autokey_editor_clickable(self):
-        """Remove WS_EX_TRANSPARENT so overlay receives clicks."""
-        try:
-            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-AutoKeyEditor')
-            if not hwnd:
-                return
-            user32 = ctypes.windll.user32
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            if ex & _WS_EX_TRANSPARENT:
-                user32.SetWindowLongW(
-                    hwnd, _GWL_EXSTYLE,
-                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
-        except Exception:
-            pass
-
-    def _show_autokey_editor(self):
-        try:
-            if self.autokey_editor_win and not self._autokey_editor_visible:
-                self._apply_webview2_transparency()
-                self._set_window_alpha('SAO-AutoKeyEditor', 0.0)
-                self.autokey_editor_win.show()
-                self._eval_autokey_editor('if(window.AutoKeyEditor&&AutoKeyEditor.fadeIn)AutoKeyEditor.fadeIn()')
-                threading.Timer(
-                    0.03,
-                    lambda: self._animate_window_alpha('SAO-AutoKeyEditor', 0.0, 1.0, duration_ms=220, steps=8),
-                ).start()
-                self._autokey_editor_visible = True
-                self._ensure_autokey_editor_clickable()
-                threading.Timer(0.5, self._ensure_autokey_editor_clickable).start()
-                self._push_autokey_editor_state()
-                # Load saved actions
-                actions = self._get_setting('autokey_burst_actions', [])
-                self._eval_autokey_editor(
-                    f'AutoKeyEditor.loadActions({json.dumps(actions, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    def _hide_autokey_editor(self):
-        try:
-            if self.autokey_editor_win and self._autokey_editor_visible:
-                self._eval_autokey_editor('if(window.AutoKeyEditor&&AutoKeyEditor.fadeOut)AutoKeyEditor.fadeOut()')
-                def _finish():
-                    try:
-                        if self.autokey_editor_win and not self._autokey_editor_visible:
-                            self.autokey_editor_win.hide()
-                    except Exception:
-                        pass
-                threading.Timer(0.3, _finish).start()
-        except Exception:
-            pass
-        self._autokey_editor_visible = False
-
-    def _push_autokey_editor_slots(self, skill_slots=None):
-        """Push current skill slot states to the autokey editor."""
-        if not self._autokey_editor_visible:
-            return
-        try:
-            if skill_slots is None:
-                gs = getattr(self, '_game_state', None)
-                if gs:
-                    skill_slots = getattr(gs, 'skill_slots', [])
-                else:
-                    skill_slots = []
-            slots_data = []
-            for s in skill_slots:
-                if isinstance(s, dict):
-                    slots_data.append(s)
-                else:
-                    slots_data.append({
-                        'slot_index': getattr(s, 'slot_index', 0),
-                        'skill_id': getattr(s, 'skill_id', 0),
-                        'skill_name': getattr(s, 'skill_name', ''),
-                        'state': getattr(s, 'state', 'unknown'),
-                        'cooldown_pct': getattr(s, 'cooldown_pct', 0),
-                        'remaining_ms': getattr(s, 'remaining_ms', 0),
-                        'total_cd_ms': getattr(s, 'total_cd_ms', 0),
-                        'charge_count': getattr(s, 'charge_count', 0),
-                        'max_charges': getattr(s, 'max_charges', 1),
-                    })
-            self._eval_autokey_editor(
-                f'AutoKeyEditor.updateSlots({json.dumps(slots_data, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    def _push_autokey_editor_state(self):
-        """Push burst ready state and profession to autokey editor."""
-        if not self._autokey_editor_visible:
-            return
-        try:
-            gs = getattr(self, '_game_state', None)
-            burst_ready = False
-            profession = self._profession or ''
-            if gs:
-                burst_ready = getattr(gs, 'burst_ready', False)
-            state = {
-                'burst_ready': burst_ready,
-                'profession': profession,
-            }
-            self._eval_autokey_editor(
-                f'AutoKeyEditor.updateState({json.dumps(state, ensure_ascii=False)})')
-        except Exception:
-            pass
-
-    def _ensure_skillfx_on_top(self):
-        try:
-            if not self._skillfx_hwnd:
-                self._skillfx_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO SkillFX')
-            if not self._skillfx_hwnd:
-                return
-            HWND_TOPMOST = ctypes.c_void_p(-1)
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOACTIVATE = 0x0010
-            ctypes.windll.user32.SetWindowPos(
-                self._skillfx_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-        except Exception:
-            pass
-
     def _ensure_alert_on_top(self):
         try:
             if not self._alert_hwnd:
@@ -8339,8 +4532,7 @@ class SAOWebViewGUI:
                                     alert_kind: str = 'generic'):
         if not self.alert_win:
             return
-        # v2.1.2-m: 防"alert 一直弹很多次"问题. 调用方很多 (boss_raid /
-        # identity / hide&seek / update_popup / start_recognition 等),
+        # v2.1.2-m: 防"alert 一直弹很多次"问题. 调用方很多,
         # 同一条 (title,message) 在 alert 仍可见 + 4s 窗口内重复触发时,
         # 直接续展当前 alert, 不再 hide+show 闪一下。
         try:
@@ -8591,20 +4783,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _setup_skillfx_click_through(self):
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, 'SAO SkillFX')
-            if not hwnd:
-                return
-            self._skillfx_hwnd = hwnd
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
-            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
-            self._ensure_skillfx_on_top()
-        except Exception:
-            pass
-
     def _setup_mapbanner_click_through(self, _wait_retries: int = 20):
         """Make Map-name banner overlay fully click-through (纯覆盖层, 永不挡点击)."""
         try:
@@ -8638,141 +4816,6 @@ class SAOWebViewGUI:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
-
-    def _setup_boss_hp_click_through(self, _wait_retries: int = 20):
-        """Make Boss HP overlay fully click-through (like SkillFX).
-
-        Waits for the hwnd to become findable (up to ~2s) before applying,
-        so the window is always transparent before it becomes visible.
-        """
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, 'SAO-BossHP')
-            if not hwnd and _wait_retries > 0:
-                threading.Timer(0.1, lambda: self._setup_boss_hp_click_through(_wait_retries - 1)).start()
-                return
-            if not hwnd:
-                return
-            self._boss_hp_hwnd = hwnd
-            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
-            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
-            self._ensure_boss_hp_on_top()
-        except Exception:
-            pass
-
-    def _ensure_boss_hp_on_top(self):
-        try:
-            if not self._boss_hp_hwnd:
-                self._boss_hp_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-BossHP')
-            if not self._boss_hp_hwnd:
-                return
-            HWND_TOPMOST = ctypes.c_void_p(-1)
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOACTIVATE = 0x0010
-            ctypes.windll.user32.SetWindowPos(
-                self._boss_hp_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-        except Exception:
-            pass
-
-    def _get_skillfx_layout(self, gs=None):
-        if gs is None and hasattr(self, '_state_mgr'):
-            gs = self._state_mgr.state
-
-        client_rect = getattr(gs, 'window_rect', None) if gs else None
-        if not client_rect:
-            try:
-                from utils.window_locator import WindowLocator
-                client_rect = WindowLocator().get_rect()
-            except Exception:
-                client_rect = None
-        if not client_rect:
-            return None
-
-        client_left, client_top, client_right, client_bottom = client_rect
-        client_w = max(1, int(client_right - client_left))
-        client_h = max(1, int(client_bottom - client_top))
-
-        slots = []
-        for slot in list(getattr(gs, 'skill_slots', []) or []) if gs else []:
-            if not isinstance(slot, dict):
-                continue
-            rect = slot.get('rect') or {}
-            try:
-                sx = int(rect.get('x', 0))
-                sy = int(rect.get('y', 0))
-                sw = int(rect.get('w', 0))
-                sh = int(rect.get('h', 0))
-                idx = int(slot.get('index', 0) or 0)
-            except Exception:
-                continue
-            if idx <= 0 or sw <= 0 or sh <= 0:
-                continue
-            slots.append({
-                'index': idx,
-                'screen_rect': {'x': client_left + sx, 'y': client_top + sy, 'w': sw, 'h': sh},
-                'client_rect': {'x': sx, 'y': sy, 'w': sw, 'h': sh},
-            })
-
-        if not slots:
-            for item in get_skill_slot_rects(client_rect):
-                left, top, right, bottom = item['bbox']
-                slots.append({
-                    'index': int(item['index']),
-                    'screen_rect': {'x': left, 'y': top, 'w': right - left, 'h': bottom - top},
-                    'client_rect': {'x': left - client_left, 'y': top - client_top, 'w': right - left, 'h': bottom - top},
-                })
-
-        if not slots:
-            return None
-
-        min_x = min(item['screen_rect']['x'] for item in slots)
-        max_x = max(item['screen_rect']['x'] + item['screen_rect']['w'] for item in slots)
-        max_y = max(item['screen_rect']['y'] + item['screen_rect']['h'] for item in slots)
-        pad_x = max(18, int(round(client_w * 0.012)))
-        pad_y = max(18, int(round(client_h * 0.016)))
-        pad_left = max(96, int(round(client_w * 0.055)))
-        pad_right = max(84, int(round(client_w * 0.044)))
-        win_x = max(0, min_x - pad_left)
-        win_y = max(0, client_top)
-        width = max(420, int((client_right - win_x) + pad_right))
-        height = max(220, int((max_y - win_y) + pad_y))
-        callout_w = max(440, int(round(client_w * 0.29)))
-        callout_h = max(128, int(round(client_h * 0.115)))
-        callout_margin_x = max(28, int(round(client_w * 0.022)))
-        callout_margin_y = max(24, int(round(client_h * 0.040)))
-        callout_x = max(callout_margin_x, width - callout_w - callout_margin_x)
-        callout_y = callout_margin_y
-
-        payload_slots = []
-        for item in slots:
-            rect = item['screen_rect']
-            payload_slots.append({
-                'index': item['index'],
-                'rect': {'x': rect['x'] - win_x, 'y': rect['y'] - win_y, 'w': rect['w'], 'h': rect['h']},
-                'client_rect': dict(item['client_rect']),
-            })
-        payload_slots.sort(key=lambda item: item['index'])
-
-        return {
-            'window': {'x': int(win_x), 'y': int(win_y), 'w': int(width), 'h': int(height)},
-            'viewport': {
-                'width': int(width),
-                'height': int(height),
-                'padding_x': int(max(pad_x, pad_left, pad_right)),
-                'padding_y': int(pad_y),
-                'callout': {
-                    'x': int(callout_x),
-                    'y': int(callout_y),
-                    'w': int(callout_w),
-                    'h': int(callout_h),
-                },
-            },
-            'slots': payload_slots,
-            'client_rect': tuple(client_rect),
-        }
 
     def _viewport_to_css(self, viewport: dict) -> dict:
         """Convert viewport/callout coords from physical pixels to CSS pixels for JS rendering."""
@@ -8808,64 +4851,6 @@ class SAOWebViewGUI:
             return rect
         return {k: (int(round(v / dpi_s)) if isinstance(v, (int, float)) else v) for k, v in rect.items()}
 
-    def _build_skillfx_payload(self, gs):
-        layout = self._get_skillfx_layout(gs)
-        if not layout:
-            return None
-        self._skillfx_layout = layout
-        slot_map = {}
-        for slot in getattr(gs, 'skill_slots', []) or []:
-            if isinstance(slot, dict):
-                try:
-                    slot_map[int(slot.get('index', 0) or 0)] = slot
-                except Exception:
-                    pass
-        payload_slots = []
-        for slot_layout in layout['slots']:
-            slot = slot_map.get(slot_layout['index'], {})
-            payload_slots.append({
-                'index': slot_layout['index'],
-                'rect': self._rect_to_css(slot_layout['rect']),
-                'state': str(slot.get('state', 'unknown') or 'unknown'),
-                'cooldown_ratio': float(slot.get('cooldown_ratio', slot.get('cooldown_pct', 0.0)) or 0.0),
-                'insufficient_energy': bool(slot.get('insufficient_energy')),
-                'ready_edge': bool(slot.get('ready_edge')),
-                'active': bool(slot.get('active')),
-            })
-        return {
-            'viewport': self._viewport_to_css(layout['viewport']),
-            'slots': payload_slots,
-            'watched_slots': self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
-            'burst_enabled': bool(self._get_setting('burst_enabled', True)),
-        }
-
-    def _update_skillfx_layout(self):
-        if not self.skillfx_win:
-            return
-        layout = self._get_skillfx_layout(getattr(self, '_game_state', None))
-        if not layout:
-            return
-        self._skillfx_layout = layout
-        window = layout['window']
-        webview_w = max(1, self._to_webview_px(window['w']))
-        webview_h = max(1, self._to_webview_px(window['h']))
-        webview_x = self._to_webview_px(window['x'])
-        webview_y = self._to_webview_px(window['y'])
-        try:
-            self.skillfx_win.resize(int(webview_w), int(webview_h))
-        except Exception:
-            pass
-        try:
-            self.skillfx_win.move(int(webview_x), int(webview_y))
-        except Exception:
-            pass
-        css_vp = self._viewport_to_css(layout['viewport'])
-        self._eval_skillfx(f'SkillFX.setViewport({json.dumps(css_vp, ensure_ascii=False)})')
-        self._setup_skillfx_click_through()
-
-    # ════════════════════════════════════════
-    #  菜单
-    # ════════════════════════════════════════
     def _toggle_menu(self):
         now = time.time()
         if hasattr(self, '_menu_cd') and now - self._menu_cd < 0.6:
@@ -8929,8 +4914,6 @@ class SAOWebViewGUI:
             self._reassert_menu_transparency(0.0)
             time.sleep(0.12)
             self._eval_menu('SAO.openMenu()')
-            time.sleep(0.04)
-            self._sync_session_players_menu(force=True)
             try:
                 hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
                 if hwnd:
@@ -9032,8 +5015,7 @@ class SAOWebViewGUI:
         #    快照, 后写入的实例会用 stale 数据覆盖前一次写入 (例如 ui_mode='entity' 会被
         #    _cfg_settings_ref 残留的 ui_mode='webview' 覆盖, 或 game_cache 会被
         #    self.settings 中没有 game_cache 的快照覆盖).
-        # 2) save_now=True 让 player_name / level / profession / fight_point 立刻
-        #    持久化, 切换到 entity 后能直接看到角色信息而不用再等一次抓包.
+        # 2) save_now=True 让插件缓存立刻持久化, 切换到 entity 后不用再等一次抓包.
         try:
             target_mode = 'entity' if self._pending_switch == 'entity' else 'webview'
             settings_ref = getattr(self, '_cfg_settings_ref', None)
@@ -9059,8 +5041,8 @@ class SAOWebViewGUI:
         except Exception as e:
             print(f'[SAO-WV] identity pre-save failed: {e}')
 
-        # 退出前保存缓存
-        self._save_game_cache(quiet=False)
+        # 退出前通知插件保存自身缓存
+        self._game_plugin_maybe('_save_game_cache', quiet=False)
 
         # preExit CSS 已由 JS exitApplication() 触发, 此处不再重复调用
 
@@ -9080,29 +5062,10 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
-            self._native_fade_window('SAO SkillFX', duration_ms=180, steps=10)
-        except Exception:
-            pass
-        try:
             self._native_fade_window('SAO Alert', duration_ms=180, steps=10)
         except Exception:
             pass
-        try:
-            self._native_fade_window('SAO-BossHP', duration_ms=180, steps=10)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-RaidEditor', duration_ms=140, steps=8)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-AutoKeyEditor', duration_ms=140, steps=8)
-        except Exception:
-            pass
-        try:
-            self._native_fade_window('SAO-Commander', duration_ms=140, steps=8)
-        except Exception:
-            pass
+        self._game_plugin_maybe('before_platform_shutdown')
         try:
             self._native_fade_window('SAO-PluginManager', duration_ms=140, steps=8)
         except Exception:
@@ -9145,40 +5108,11 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
-            if self.skillfx_win:
-                self.skillfx_win.destroy()
-        except Exception:
-            pass
-        try:
             if self.plugin_manager_win:
                 self.plugin_manager_win.destroy()
         except Exception:
             pass
-        try:
-            if self.boss_hp_win:
-                self.boss_hp_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.dps_win:
-                self.dps_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.raid_editor_win:
-                self.raid_editor_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.autokey_editor_win:
-                self.autokey_editor_win.destroy()
-        except Exception:
-            pass
-        try:
-            if self.commander_win:
-                self.commander_win.destroy()
-        except Exception:
-            pass
+        self._destroy_plugin_surfaces()
         try:
             if self.plugin_manager_win:
                 self.plugin_manager_win.destroy()
@@ -9278,15 +5212,6 @@ class SAOWebViewGUI:
 
             hwnd = 0
             hx, hy = 0, 0
-            try:
-                _hwnd, game_rect = self._get_game_window_context()
-                hwnd = int(_hwnd or 0)
-                if game_rect and len(game_rect) == 4:
-                    gl, gt, gr, gb = [int(v) for v in game_rect]
-                    hx = (gl + gr) // 2
-                    hy = (gt + gb) // 2
-            except Exception:
-                pass
             try:
                 if hx == 0 and hy == 0 and self.hp_win and hasattr(self.hp_win, 'x'):
                     hx = self.hp_win.x or 0
@@ -9509,212 +5434,12 @@ class SAOWebViewGUI:
         self._panel_origins.clear()
 
     # ─── 同步信息 ───
-    @staticmethod
-    def _session_int(value, default: int = 0) -> int:
-        try:
-            if value is None:
-                return default
-            return int(value)
-        except Exception:
-            try:
-                text = str(value).strip()
-                return int(text) if text.isdigit() else default
-            except Exception:
-                return default
-
-    def _session_self_uid(self) -> int:
-        for source in (
-                getattr(self, '_game_state', None),
-                getattr(getattr(self, '_state_mgr', None), 'state', None)):
-            uid = self._session_int(getattr(source, 'player_id', 0), 0)
-            if uid > 0:
-                return uid
-        return 0
-
-    def _merge_session_player(self, uid, name='', fight_point=0, is_self=False):
-        uid = self._session_int(uid, 0)
-        if uid <= 0:
-            return
-        now = time.time()
-        changed = False
-        entry = self._session_players.get(uid)
-        if not entry:
-            entry = {
-                'uid': uid,
-                'name': '',
-                'fight_point': 0,
-                'first_seen': now,
-                'updated_at': now,
-                'is_self': False,
-            }
-            self._session_players[uid] = entry
-            changed = True
-        name = str(name or '').strip()
-        fight_point = self._session_int(fight_point, 0)
-        if name and entry.get('name') != name:
-            entry['name'] = name
-            changed = True
-        if fight_point > 0 and entry.get('fight_point') != fight_point:
-            entry['fight_point'] = fight_point
-            changed = True
-        next_is_self = bool(entry.get('is_self') or is_self)
-        if bool(entry.get('is_self')) != next_is_self:
-            entry['is_self'] = next_is_self
-            changed = True
-        entry['updated_at'] = now
-        if changed:
-            self._session_players_version += 1
-
-    def _sync_session_players_cache(self, gs=None):
-        self_uid = self._session_self_uid()
-        if self_uid > 0 and self_uid != self._session_players_self_uid:
-            if self._session_players_self_uid:
-                self._session_players.clear()
-                self._session_players_version += 1
-            self._session_players_self_uid = self_uid
-
-        if gs is None:
-            gs = getattr(self, '_game_state', None)
-        if gs is not None:
-            gs_uid = self._session_int(getattr(gs, 'player_id', 0), 0)
-            self._merge_session_player(
-                gs_uid,
-                getattr(gs, 'player_name', '') or self._username or '',
-                getattr(gs, 'fight_point', 0) or 0,
-                is_self=bool(gs_uid and gs_uid == self_uid),
-            )
-
-        bridge = getattr(self, '_packet_engine', None)
-        if not bridge:
-            return
-        try:
-            players = bridge.get_players() or {}
-        except Exception:
-            players = {}
-        for raw_uid, pdata in players.items():
-            uid = self._session_int(raw_uid, 0) or self._session_int(getattr(pdata, 'uid', 0), 0)
-            self._merge_session_player(
-                uid,
-                getattr(pdata, 'name', '') or '',
-                getattr(pdata, 'fight_point', 0) or 0,
-                is_self=bool(uid and uid == self_uid),
-            )
-
-    @staticmethod
-    def _format_session_power(value) -> str:
-        value = SAOWebViewGUI._session_int(value, 0)
-        return f'{value:,}' if value > 0 else '--'
-
-    def _get_session_player_rows(self, sync: bool = True) -> List[Dict[str, Any]]:
-        if sync:
-            self._sync_session_players_cache(getattr(self, '_game_state', None))
-        self_uid = self._session_self_uid()
-        rows = []
-        for uid, entry in self._session_players.items():
-            fp = self._session_int(entry.get('fight_point'), 0)
-            is_self = bool(uid and uid == self_uid) or bool(entry.get('is_self'))
-            rows.append({
-                'uid': str(uid) if uid else '--',
-                'name': str(entry.get('name') or ''),
-                'fight_power': self._format_session_power(fp),
-                'fight_power_value': fp,
-                'is_self': is_self,
-                'first_seen': float(entry.get('first_seen') or 0.0),
-            })
-        rows.sort(key=lambda r: (
-            0 if r.get('is_self') else 1,
-            -int(r.get('fight_power_value') or 0),
-            str(r.get('name') or ''),
-            str(r.get('uid') or ''),
-        ))
-        return rows
-
-    def _build_session_players_payload(self, sync: bool = True):
-        rows = self._get_session_player_rows(sync=sync)
-        return {
-            'ok': True,
-            'count': len(rows),
-            'self_uid': str(self._session_self_uid() or ''),
-            'players': rows,
-            'generated_at': int(time.time()),
-        }
-
-    def _sync_session_players_menu(self, force: bool = False):
-        if not self.menu_win:
-            return
-        self._sync_session_players_cache(getattr(self, '_game_state', None))
-        sig = (
-            len(self._session_players),
-            self._session_players_version,
-            str(self._session_self_uid() or ''),
-        )
-        now = time.time()
-        if not force and sig == self._session_players_last_sig:
-            return
-        if not force and now - self._session_players_last_push_ts < 0.5:
-            return
-        payload = self._build_session_players_payload(sync=False)
-        self._session_players_last_sig = sig
-        self._session_players_last_push_ts = now
-        method = 'showSessionPlayers' if force else 'setSessionPlayersPayload'
-        self._eval_menu(
-            f'if(window.SAO&&SAO.{method})SAO.{method}({json.dumps(payload, ensure_ascii=False)})'
-        )
-
-    def _toggle_session_players_menu(self):
-        if not self.menu_win:
-            return
-        self._sync_session_players_cache(getattr(self, '_game_state', None))
-        payload = self._build_session_players_payload(sync=False)
-        self._session_players_last_sig = (
-            len(self._session_players),
-            self._session_players_version,
-            str(self._session_self_uid() or ''),
-        )
-        self._session_players_last_push_ts = time.time()
-        self._eval_menu(
-            f'if(window.SAO&&SAO.showSessionPlayers)SAO.showSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
-        )
-
     def _sync_menu_info(self):
-        gs = self._game_state
-        gs_desc = 'VISION ACTIVE' if self._recognition_active else 'SAO Auto Idle'
-        hp_str = '--'
-        sta_str = '--'
-        if gs and hasattr(gs, 'hp_current'):
-            if gs.hp_max > 0:
-                hp_str = f'{gs.hp_current}/{gs.hp_max}'
-            if getattr(gs, 'stamina_offline', False):
-                sta_str = 'OFFLINE'
-            else:
-                sta_pct = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-                sta_str = f'{sta_pct}%'
-            gs_desc = f'HP: {hp_str}  STA: {sta_str}'
-        # 使用 GameState 中最新的等级数据 (来自 packet bridge)
-        _menu_level = self._level
-        _menu_level_str = str(_menu_level)
-        if gs and hasattr(gs, 'level_base') and gs.level_base > 0:
-            _menu_level = gs.level_base
-            self._level = _menu_level  # 同步到 instance 变量
-            _menu_level_extra = int(getattr(gs, 'level_extra', 0) or 0)
-            if _menu_level_extra > 0:
-                _menu_level_str = f'{_menu_level}(+{_menu_level_extra})'
-            else:
-                _menu_level_str = str(_menu_level)
-        # 使用 GameState 中最新的职业名 (来自 packet bridge)
-        _menu_prof = self._profession
-        if gs and hasattr(gs, 'profession_name') and gs.profession_name:
-            _menu_prof = gs.profession_name
-            self._profession = _menu_prof
-        info = {
-            'username': self._username, 'level': _menu_level_str,
-            'profession': _menu_prof,
-            'hp': hp_str, 'sta': sta_str,
-            'des': gs_desc,
-            'file': '',
-        }
+        info = self._game_plugin_maybe('build_menu_info', default=None)
+        if not isinstance(info, dict):
+            info = {'username': '', 'level': '', 'profession': '',
+                    'hp': '--', 'sta': '--', 'des': '', 'file': ''}
         self._eval_menu(f'SAO.updateInfo({json.dumps(info, ensure_ascii=False)})')
-        self._sync_session_players_menu(force=False)
         # Sync menu settings (watched slots, sound, mode, etc.)
         self._sync_menu_settings()
         self._sync_all_panels()
@@ -9843,55 +5568,27 @@ class SAOWebViewGUI:
     def _sync_menu_settings(self):
         """Push current settings to menu so UI toggles reflect saved state."""
         try:
-            from utils.sao_sound import get_sound_enabled, get_sound_volume
             cfg = {
-                'watched_slots': self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]),
-                'burst_enabled': self._get_setting('burst_enabled', True),
-                'sound_enabled': get_sound_enabled(),
-                'sound_volume': get_sound_volume(),
-                'mem_data_source': str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').lower(),
+                'hotkey_labels': {
+                    'toggle_recognition': self._resolved_hotkey('toggle_recognition', 'F5'),
+                },
             }
-            try:
-                ref = getattr(self, '_cfg_settings_ref', None)
-                if ref is not None and hasattr(ref, 'get_data_source_map'):
-                    cfg['data_source_map'] = ref.get_data_source_map()
-                else:
-                    cfg['data_source_map'] = normalize_source_map(
-                        self._get_setting('data_source_map', {}),
-                        self._get_setting('data_source', 'packet'),
-                    )
-            except Exception:
-                cfg['data_source_map'] = dict(DEFAULT_DATA_SOURCE_MAP)
             try:
                 cfg['panel_themes'] = self._api.get_panel_themes()
             except Exception:
                 cfg['panel_themes'] = {
-                    'dps': 'dark',
                     'hp': 'dark',
-                    'bosshp': 'dark',
-                    'skillfx': 'dark',
                     'alert': 'dark',
                     'act': 'dark',
                 }
-            cfg['auto_key'] = self._get_auto_key_menu_state()
-            cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-            cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
-            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 5))
-            cfg['dps_last_report_available'] = self._get_dps_last_report_available()
-            cfg['buffmon_enabled'] = bool(self._get_setting('buffmon_enabled', True))
-            cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
-            cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
-            cfg['commander_visible'] = bool(self._commander_visible)
             cfg['plugin_manager_visible'] = bool(self._plugin_manager_visible)
             cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             cfg['report_export_visible'] = bool(self._report_export_visible)
             cfg['offline_import_visible'] = bool(self._offline_import_visible)
-            # 菜单快捷键标签跟随用户改键 — 不留硬编码键名
-            cfg['hotkey_labels'] = {
-                'toggle_recognition': self._resolved_hotkey('toggle_recognition', 'F5'),
-                'toggle_auto_script': self._resolved_hotkey('toggle_auto_script', 'F6'),
-            }
+            plugin_cfg = self._game_plugin_maybe('build_menu_settings', default={}) or {}
+            if isinstance(plugin_cfg, dict):
+                cfg.update(plugin_cfg)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
         except Exception:
             pass
@@ -9913,11 +5610,7 @@ class SAOWebViewGUI:
     def _menu_action(self, action: str):
         _map = {
             'toggle_recognition': self._toggle_recognition,
-            'toggle_auto_script': self._toggle_auto_script,
             'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
-            'toggle_raid_editor': lambda: (self._show_raid_editor() if not self._raid_editor_visible else self._hide_raid_editor()),
-            'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
-            'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),
             'toggle_plugin_manager': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
             'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
             'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
@@ -9931,12 +5624,11 @@ class SAOWebViewGUI:
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
             'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
             'toggle_skill_drilldown': lambda: (self._show_skill_drilldown() if not self._skill_drilldown_visible else self._hide_skill_drilldown()),
-            'toggle_session_players': self._toggle_session_players_menu,
             'show_license_panel': self._show_license_panel_from_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
-        fn = _map.get(action)
+        fn = _map.get(action) or (lambda: self._game_plugin_maybe('menu_action', action))
         if fn:
             threading.Thread(target=fn, daemon=True).start()
 
@@ -9963,7 +5655,7 @@ class SAOWebViewGUI:
     #  识别状态循环
     # ════════════════════════════════════════
     def _recognition_loop(self):
-        """后台识别循环 — 从 GameStateManager 读取状态, 推送到 HP 条 + 体力覆盖板"""
+        """后台识别循环 — 读取状态并调用插件渲染钩子。"""
         _panel_tick = 0
         while True:
             time.sleep(0.05)
@@ -9982,506 +5674,14 @@ class SAOWebViewGUI:
             if hasattr(self, '_state_mgr'):
                 try:
                     gs = self._state_mgr.state
-                    self._sync_vision_lifecycle(gs)
+                    self._game_plugin_maybe('sync_vision_lifecycle', gs)
                 except Exception as e:
                     print(f'[SAO-WV] vision lifecycle sync error: {e}')
                     gs = None
-            # v2.1.2-l: 即使 _recognition_active=False (例如 onedir 第一次启动
-            # PacketBridge / RecognitionEngine 还没起来或起失败) 也要把缓存里的
-            # HP/等级推到 HP panel, 否则面板显示空白被用户误判为"HP 不显示"。
-            # 只有 HP 数据推送是无条件的; STA / Boss / SkillFX 这些视觉相关的
-            # 仍然依赖 _recognition_active.
-            if (not self._recognition_active) and gs is not None:
-                try:
-                    if gs.hp_max > 0:
-                        _hp, _hp_max = int(gs.hp_current or 0), int(gs.hp_max)
-                    elif gs.hp_pct > 0:
-                        _hp, _hp_max = int(gs.hp_pct * 100), 100
-                    else:
-                        _hp, _hp_max = 0, 1
-                    _lv_base = gs.level_base if gs.level_base else self._level
-                    if gs.level_extra > 0 and _lv_base > 0:
-                        _lv_str = f'{_lv_base}(+{gs.level_extra})'
-                    elif _lv_base > 0:
-                        _lv_str = str(_lv_base)
-                    else:
-                        _lv_str = str(self._level)
-                    _sig = (_hp, _hp_max, _lv_str)
-                    if getattr(self, '_idle_hp_sig', None) != _sig:
-                        self._idle_hp_sig = _sig
-                        self._eval_hp(f'updateHP({_hp}, {_hp_max}, "{_lv_str}")')
-                        self._eval_hp('setPlayState("idle")')
-                except Exception:
-                    pass
-            if self._recognition_active and gs is not None:
-                try:
-                    self._sync_identity_alert(gs)
-                    # ── HP / Level / STA display ──
-                    # HP and Level come from packets and are always available.
-                    # STA comes from vision and only updates when recognition_ok.
-                    if gs.hp_max > 0:
-                        hp, hp_max = gs.hp_current, gs.hp_max
-                    elif gs.hp_pct > 0:
-                        hp, hp_max = int(gs.hp_pct * 100), 100
-                    elif gs.level_base > 0:
-                        hp, hp_max = 0, 1
-                    else:
-                        hp, hp_max = 0, 1
-                    level_base = gs.level_base if gs.level_base else self._level
-                    if gs.level_extra > 0 and level_base > 0:
-                        level_str = f'{level_base}(+{gs.level_extra})'
-                    elif level_base > 0:
-                        level_str = str(level_base)
-                    else:
-                        level_str = str(self._level)
-                    # ── 等级升级检测 ──
-                    if level_base > 0 and self._last_displayed_level_base > 0 \
-                            and level_base > self._last_displayed_level_base:
-                        self._eval_hp(f'showLevelUp({self._last_displayed_level_base}, {level_base})')
-                    if level_base > 0:
-                        self._last_displayed_level_base = level_base
-                    # Use packet HP data if available
-                    self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
-                    sta_offline = self._should_show_sta_offline(gs)
-                    self._eval_hp(f'setSTAOffline({str(bool(sta_offline)).lower()})')
-                    if not sta_offline:
-                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-                        self._eval_hp(f'updateSTA({sta}, 100)')
-                    if gs.recognition_ok or getattr(gs, 'packet_active', False):
-                        self._eval_hp('setPlayState("playing")')
-                    else:
-                        self._eval_hp('setPlayState("idle")')
-                    # ── Boss Timer push (packet-driven, always runs) ──
-                    _boss_text = getattr(gs, 'boss_timer_text', '') or ''
-                    _boss_active = getattr(gs, 'boss_raid_active', False)
-                    _boss_enrage = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
-                    if _boss_active and _boss_text:
-                        # engine pushes the threshold-config tier; legacy rule as fallback
-                        _boss_urgency = getattr(gs, 'boss_enrage_urgency', '') or (
-                            'urgent' if 0 < _boss_enrage < 60 else 'normal')
-                    else:
-                        _boss_text = ''
-                        _boss_urgency = ''
-                    if _boss_text != getattr(self, '_last_boss_timer_text', '') or \
-                       _boss_urgency != getattr(self, '_last_boss_timer_urgency', ''):
-                        self._last_boss_timer_text = _boss_text
-                        self._last_boss_timer_urgency = _boss_urgency
-                        if _boss_text:
-                            self._eval_hp(f'setBossTimer("{self._safe_js(_boss_text)}", "{_boss_urgency}")')
-                        else:
-                            self._eval_hp('setBossTimer("", "")')
-                    # ── Boss Bar (packet-driven, always runs) ──
-                    _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-                    _bb_raid_active = getattr(gs, 'boss_raid_active', False)
-                    _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
-
-                    # ── Target-based boss bar: show HP of the monster we're attacking ──
-                    # Multi-unit support: highest-HP unit = main panel; others as .additional panels (sorted by HP desc, attack time)
-                    _bb_direct_hp = 0
-                    _bb_direct_max = 0
-                    _bb_direct_data = None
-                    _bb_additional = []
-                    _now = time.time()
-                    _bb_timeout = self._boss_hp_hold_timeout_s()
-                    _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
-
-                    # Cleanup stale recent targets (prevent accumulation)
-                    for uuid in list(self._bb_recent_targets.keys()):
-                        if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
-                            self._bb_recent_targets.pop(uuid, None)
-
-                    if not _bb_raid_active:
-                        _bridge = getattr(self, '_packet_engine', None)
-                        if _bridge and _has_recent_self_damage and self._bb_recent_targets:
-                            # Collect all recently damaged monsters
-                            _recent_monsters = []
-                            for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                                if _now - dmg_ts < _bb_timeout:
-                                    m = _bridge.get_monster(uuid)
-                                    if self._boss_monster_usable(m):
-                                        _recent_monsters.append(m)
-                            if _recent_monsters:
-                                from gui_modules.sao_gui_state_mixin import _boss_bar_main_key
-                                _rt = self._bb_recent_targets
-                                _recent_monsters.sort(key=lambda _m: _boss_bar_main_key(_m, _rt))
-                                main_m = _recent_monsters[0]
-                                self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)  # update target to highest-HP
-                                _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
-                                _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
-                                _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
-                                _bb_src = 'packet'
-                                # Additional units for secondary panels
-                                from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
-                                for m in _recent_monsters[1:]:
-                                    if len(_bb_additional) >= 4: break
-                                    d = m.to_dict() if hasattr(m, 'to_dict') else {}
-                                    # hybrid: MEM-resolved name (uuid->name from the mem bridge)
-                                    # when TCP has none yet -- same resolver as the main slot.
-                                    _add_name = (_bb_name(d, getattr(m, 'uuid', 0), self._dps_tracker)
-                                                 or str(d.get('name', 'Unit'))[:20])
-                                    _bb_additional.append({
-                                        'uuid': int(getattr(m, 'uuid', 0) or 0),
-                                        'name': _add_name,
-                                        'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
-                                        'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
-                                        'has_break_data': bool(d.get('has_break_data', False)),
-                                        'breaking_stage': int(d.get('breaking_stage', -1)),
-                                        'shield_active': bool(d.get('shield_active', False)),
-                                        'shield_pct': round(float(d.get('shield_pct', 0.0)), 3)
-                                    })
-                        elif self._bb_last_target_uuid and not _has_recent_self_damage:
-                            # Pre-tracked boss: still fetch data for when damage arrives (single)
-                            try:
-                                _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                                if self._boss_monster_usable(_m):
-                                    _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
-                                    _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
-                                    _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
-                                    _bb_src = 'packet'
-                            except Exception:
-                                pass
-                        if len(_bb_additional) < 4 and _bb_direct_data is not None:
-                            from gui_modules.sao_gui_state_mixin import _mem_supplement_additional
-                            _bb_additional = _mem_supplement_additional(
-                                _bridge, _bb_additional,
-                                getattr(self, '_bb_last_target_uuid', 0),
-                                getattr(self, '_dps_tracker', None))
-
-                    # Determine if bar should be visible:
-                    # - 'off' mode: never show
-                    # - 'boss_raid' mode: show when raid engine active OR we have recent self-damage
-                    # - 'always' mode: show when we have recent self-damage to any monster
-                    if _bb_mode == 'off':
-                        _bb_show = False
-                    elif _bb_raid_active:
-                        _bb_show = True
-                    else:
-                        # Show only when we have dealt damage recently
-                        _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
-
-                    # Build data: prefer direct monster data; fall back to GameState
-                    if _bb_direct_data and not _bb_raid_active:
-                        _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
-                        _bb_cur_hp = _bb_direct_hp
-                        _bb_total_hp = _bb_direct_max
-                        _bb_shield_active = bool(_bb_direct_data.get('shield_active'))
-                        _bb_shield_pct = float(_bb_direct_data.get('shield_pct') or 0.0)
-                        _bb_breaking = int(_bb_direct_data.get('breaking_stage') or 0)
-                        _bb_has_break = bool(_bb_direct_data.get('has_break_data'))
-                        _bb_extinction = float(_bb_direct_data.get('extinction_pct') or 0.0)
-                        _bb_extinction_raw = int(_bb_direct_data.get('extinction') or 0)
-                        _bb_max_extinction = int(_bb_direct_data.get('max_extinction') or 0)
-                        _bb_stop_ticking = bool(_bb_direct_data.get('stop_breaking_ticking'))
-                        _bb_overdrive = bool(_bb_direct_data.get('in_overdrive'))
-                        _bb_invincible = False
-                    else:
-                        _bb_hp_pct = round(getattr(gs, 'boss_hp_est_pct', 1.0), 3)
-                        _bb_cur_hp = getattr(gs, 'boss_current_hp', 0)
-                        _bb_total_hp = getattr(gs, 'boss_total_hp', 0)
-                        _bb_shield_active = getattr(gs, 'boss_shield_active', False)
-                        _bb_shield_pct = round(getattr(gs, 'boss_shield_pct', 0.0), 3)
-                        _bb_breaking = getattr(gs, 'boss_breaking_stage', -1)
-                        _bb_has_break = getattr(gs, 'boss_breaking_stage', -1) != -1
-                        _bb_extinction = round(getattr(gs, 'boss_extinction_pct', 0.0), 3)
-                        _bb_extinction_raw = 0
-                        _bb_max_extinction = 0
-                        _bb_stop_ticking = False
-                        _bb_overdrive = getattr(gs, 'boss_in_overdrive', False)
-                        _bb_invincible = getattr(gs, 'boss_invincible', False)
-
-                    # Break source priority: in hybrid/auto/memory, once the MEM base is
-                    # acquired (sticky), boss break (stage + gauge%) comes from MEM; in TCP
-                    # mode / before base it stays TCP. Shield is NEVER overridden — TCP-only.
-                    _bb_mem_break = mem_boss_break_override(
-                        getattr(self, '_packet_engine', None))
-                    if _bb_mem_break is not None:
-                        _bb_breaking, _bb_has_break, _bb_extinction, _bb_stop_ticking = _bb_mem_break
-                        _bb_extinction_raw = 0
-                        _bb_max_extinction = 0
-
-                    # Resolve the boss name BEFORE the push-gate signature so a
-                    # late-arriving name (MEM nameplate harvest / tracker uuid map)
-                    # still re-pushes a steady bar. uuid falls back to the last
-                    # damaged target so the gs/MEM branch (no TCP monster object)
-                    # can hit the tracker uuid->name map — mirrors the Tk mixin.
-                    from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
-                    _bb_boss_name = _bb_name(
-                        _bb_direct_data,
-                        (_bb_direct_data or {}).get('uuid', 0)
-                        or getattr(self, '_bb_last_target_uuid', 0),
-                        getattr(self, '_dps_tracker', None)) or ''
-                    _bb_sig = (
-                        _bb_show,
-                        round(float(_bb_hp_pct), 3),
-                        _bb_src,
-                        int(_bb_cur_hp),
-                        int(_bb_total_hp),
-                        bool(_bb_shield_active),
-                        round(float(_bb_shield_pct), 3),
-                        int(_bb_breaking),
-                        bool(_bb_has_break),
-                        round(float(_bb_extinction), 3),
-                        int(_bb_extinction_raw),
-                        int(_bb_max_extinction),
-                        bool(_bb_stop_ticking),
-                        bool(_bb_overdrive),
-                        bool(_bb_invincible),
-                        _bb_boss_name,
-                    )
-                    if _bb_sig != getattr(self, '_last_boss_bar_sig', None):
-                        self._last_boss_bar_sig = _bb_sig
-                        _bb_break_time = 0.0
-                        try:
-                            _bb_tid = int((_bb_direct_data or {}).get('template_id') or 0)
-                            if _bb_tid > 0:
-                                from engines.break_time_lookup import get_break_recovery_time as _brt
-                                _bb_break_time = _brt(_bb_tid)
-                        except Exception:
-                            pass
-                        _bb_data = {
-                            'active': _bb_show,
-                            'hp_pct': _bb_sig[1],
-                            'hp_source': _bb_src,
-                            'current_hp': _bb_sig[3],
-                            'total_hp': _bb_sig[4],
-                            'shield_active': _bb_sig[5],
-                            'shield_pct': _bb_sig[6],
-                            'breaking_stage': _bb_sig[7],
-                            'has_break_data': _bb_sig[8],
-                            'extinction_pct': _bb_sig[9],
-                            'extinction': _bb_sig[10],
-                            'max_extinction': _bb_sig[11],
-                            'stop_breaking_ticking': _bb_sig[12],
-                            'break_recovery_time': _bb_break_time,
-                            'in_overdrive': _bb_sig[13],
-                            'invincible': _bb_sig[14],
-                            'boss_name': _bb_boss_name,
-                            'additional': _bb_additional,
-                        }
-                        self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')
-                    # ── DPS Meter push (packet-driven, always runs) ──
-                    if self._dps_tracker:
-                        try:
-                            # ACT buff/debuff coverage: feed self_buffs (deduped
-                            # by list identity, same trick as the entity mode).
-                            _rb = getattr(gs, 'self_buffs', None)
-                            if _rb is not getattr(self, '_last_self_buffs_ref', None):
-                                self._last_self_buffs_ref = _rb
-                                _bl = list(_rb or [])
-                                self._dps_tracker.update_self_buffs(_bl)
-                                self._push_buff_coverage(gs, _bl)
-                            if gs.player_id:
-                                _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
-                                if _p_uid:
-                                    self._dps_tracker.set_self_uid(_p_uid)
-                                    _self_fp = 0
-                                    _bridge = getattr(self, '_packet_engine', None)
-                                    if _bridge:
-                                        _all_p = _bridge.get_players()
-                                        _sp = _all_p.get(_p_uid)
-                                        if _sp:
-                                            _self_fp = getattr(_sp, 'fight_point', 0) or 0
-                                    self._dps_tracker.update_player_info(
-                                        _p_uid,
-                                        gs.player_name or '',
-                                        gs.profession_name or '',
-                                        _self_fp,
-                                        int(gs.level_base or 0),
-                                    )
-
-                            # ── Sync ALL players' info (name, profession, fight_point) ──
-                            _bridge = getattr(self, '_packet_engine', None)
-                            if _bridge:
-                                try:
-                                    for _pu, _pd in _bridge.get_players().items():
-                                        if _pu and _pd.name:
-                                            self._dps_tracker.update_player_info(
-                                                _pu,
-                                                _pd.name or '',
-                                                _pd.profession or '',
-                                                getattr(_pd, 'fight_point', 0) or 0,
-                                                getattr(_pd, 'level', 0) or 0,
-                                            )
-                                except Exception:
-                                    pass
-
-                            _dps_enabled = bool(self._get_setting('dps_enabled', True))
-                            _dps_idle_timeout = self._combat_damage_timeout_s()
-                            if self._dps_tracker.finalize_if_idle(_dps_idle_timeout, 'idle_timeout'):
-                                self._sync_dps_report_availability()
-                                if self._dps_mode == 'live':
-                                    self._hide_dps_window()
-
-                            if self._dps_tracker.is_dirty():
-                                _dps_snap = self._dps_tracker.get_snapshot()
-                                _dps_has_live = bool(
-                                    int(_dps_snap.get('total_damage') or 0) > 0
-                                    and self._dps_tracker.has_recent_damage(_dps_idle_timeout)
-                                )
-                                if _dps_enabled and _dps_has_live:
-                                    self._show_dps_live_snapshot(_dps_snap)
-                                elif self._dps_visible and self._dps_mode == 'live':
-                                    self._eval_dps(
-                                        f'DpsMeter.updateDps({json.dumps(_dps_snap, ensure_ascii=False)})'
-                                    )
-                                    self._push_dps_act_snapshot()
-                            # ── DPS fade-out on idle ──
-                            if self._dps_visible and self._dps_mode == 'live':
-                                try:
-                                    if not self._dps_tracker.has_recent_damage(_dps_idle_timeout):
-                                        self._hide_dps_window()
-                                except Exception:
-                                    pass
-                            self._sync_dps_report_availability()
-                        except Exception:
-                            pass
-                    # ── Burst Mode Ready 检测 (packet-driven, always runs) ──
-                    _burst_enabled = self._get_setting('burst_enabled', True)
-                    _burst_now = getattr(gs, 'burst_ready', False)
-                    _burst_prev = getattr(self, '_last_burst_ready', False)
-                    _burst_slot = self._pick_burst_trigger_slot(gs) if _burst_enabled else 0
-                    _prev_layout = getattr(self, '_skillfx_layout', None)
-                    _skillfx_payload = self._build_skillfx_payload(gs) or {}
-                    _next_layout = getattr(self, '_skillfx_layout', None)
-                    if _prev_layout != _next_layout:
-                        self._update_skillfx_layout()
-                    _skillfx_payload['burst_slot'] = int(_burst_slot or 0)
-                    _skillfx_payload['burst_ready'] = bool(_burst_now)
-                    _skillfx_payload['enabled'] = bool(_burst_enabled)
-                    _skillfx_sig = (
-                        int(_skillfx_payload.get('burst_slot', 0) or 0),
-                        bool(_skillfx_payload.get('burst_ready')),
-                        tuple(
-                            (
-                                int(item.get('index', 0) or 0),
-                                str(item.get('state', 'unknown') or 'unknown')
-                            )
-                            for item in (_skillfx_payload.get('slots', []) or [])
-                            if isinstance(item, dict)
-                        )
-                    )
-                    if getattr(self, '_last_skillfx_sig', None) != _skillfx_sig:
-                        self._last_skillfx_sig = _skillfx_sig
-                        _watched_dbg = self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]) or []
-                        _state_dbg = []
-                        for item in (_skillfx_payload.get('slots', []) or []):
-                            if not isinstance(item, dict):
-                                continue
-                            try:
-                                _idx_dbg = int(item.get('index', 0) or 0)
-                            except Exception:
-                                _idx_dbg = 0
-                            _state_dbg.append(f"{_idx_dbg}:{str(item.get('state', 'unknown') or 'unknown')}")
-                        print(
-                            f"[SAO-WV] SkillFX sync: watched={list(_watched_dbg)} "
-                            f"burst_slot={_skillfx_payload['burst_slot']} "
-                            f"burst_ready={_skillfx_payload['burst_ready']} "
-                            f"states={_state_dbg}"
-                        )
-                    _custom_css = getattr(gs, 'custom_skill_slots', []) or []
-                    if _custom_css:
-                        _skillfx_payload['custom_slots'] = [
-                            s for s in _custom_css if s.get('visual_enabled')]
-                    self._eval_skillfx(f'SkillFX.update({json.dumps(_skillfx_payload, ensure_ascii=False)})')
-                    if (not _burst_now) and _burst_prev:
-                        self._eval_skillfx('SkillFX.hideBurstReady()')
-                    self._last_burst_ready = _burst_now
-                    # ── Push to AutoKey Editor overlay ──
-                    if self._autokey_editor_visible:
-                        try:
-                            self._push_autokey_editor_slots()
-                            if _burst_now != _burst_prev:
-                                self._push_autokey_editor_state()
-                        except Exception:
-                            pass
-                    # ── Push to Raid Editor overlay (status tick) ──
-                    if self._raid_editor_visible:
-                        try:
-                            self._push_raid_editor_status()
-                        except Exception:
-                            pass
-                    # 缓存到 _game_state 供菜单使用
-                    self._game_state = gs
-                    # ── 同步玩家名到 WebView ──
-                    if gs.player_name and gs.player_name != getattr(self, '_last_gs_name', ''):
-                        self._last_gs_name = gs.player_name
-                        self._username = gs.player_name
-                        self._eval_hp(f'setUsername("{self._safe_js(gs.player_name)}")')
-                    # ── 同步职业/UID 到 id-plate ──
-                    _prof = gs.profession_name or ''
-                    _uid = gs.player_id or ''
-                    if (_prof and _prof != getattr(self, '_last_gs_prof', '')) or \
-                       (_uid and _uid != getattr(self, '_last_gs_uid', '')):
-                        self._last_gs_prof = _prof
-                        self._last_gs_uid = _uid
-                        import json as _json2
-                        info = {}
-                        if _prof:
-                            info['profession'] = _prof
-                        if _uid:
-                            info['uid'] = _uid
-                        self._eval_hp(f'setPlayerInfo({_json2.dumps(info, ensure_ascii=False)})')
-                    # ── 首次获取完整角色数据时自动保存 ──
-                    if not getattr(self, '_profile_auto_saved', False) and gs.player_name:
-                        self._profile_auto_saved = True
-                        try:
-                            from engines.character_profile import save_profile
-                            lv = gs.level_base if gs.level_base > 0 else 1
-                            save_profile(
-                                username=gs.player_name,
-                                profession=gs.profession_name or '',
-                                level=lv,
-                                uid=gs.player_id or '',
-                            )
-                            print(f'[SAO-WV] 自动保存角色: {gs.player_name}, '
-                                  f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
-                        except Exception:
-                            pass
-                except Exception as e:
-                    print(f'[SAO-WV] recognition loop error: {e}')
-            else:
-                # 识别未激活时, 仍保留最后已知数据 (如有)
-                if gs is not None:
-                    try:
-                        self._sync_identity_alert(gs)
-                    except Exception:
-                        pass
-                    if gs.hp_max > 0 or gs.level_base > 0:
-                        hp = gs.hp_current if gs.hp_max > 0 else 0
-                        hp_max = gs.hp_max if gs.hp_max > 0 else 1
-                        level_base = gs.level_base if gs.level_base else self._level
-                        if gs.level_extra > 0 and level_base > 0:
-                            level_str = f'{level_base}(+{gs.level_extra})'
-                        elif level_base > 0:
-                            level_str = str(level_base)
-                        else:
-                            level_str = str(self._level)
-                        # ── 等级升级检测 (idle path) ──
-                        if level_base > 0 and self._last_displayed_level_base > 0 \
-                                and level_base > self._last_displayed_level_base:
-                            self._eval_hp(f'showLevelUp({self._last_displayed_level_base}, {level_base})')
-                        if level_base > 0:
-                            self._last_displayed_level_base = level_base
-                        self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
-                    self._eval_hp('setSTAOffline(false)')
-                    self._eval_hp('setPlayState("idle")')
-                else:
-                    self._eval_hp('setSTAOffline(false)')
-                    self._eval_hp('setPlayState("idle")')
-
+            self._game_plugin_maybe('render_tick', gs, bool(self._recognition_active))
             _panel_tick += 1
             if _panel_tick % 5 == 0:
-                self._refresh_boss_hp_geometry()
-                self._sync_auto_key_menu()
-                self._sync_boss_raid_menu()
-                if self._menu_visible:
-                    self._sync_session_players_menu()
-                # Push commander data every ~0.5s when visible
-                if self._commander_visible:
-                    try:
-                        self._push_commander_data()
-                    except Exception:
-                        pass
+                self._game_plugin_maybe('render_slow_tick', gs, bool(self._recognition_active))
             if _panel_tick >= 10 and self._panel_wins:
                 _panel_tick = 0
                 self._sync_all_panels()
@@ -10550,12 +5750,12 @@ class SAOWebViewGUI:
         self._stop_recognition_engines()
         # 停止后台缓存保存线程
         self._cache_loop_stop.set()
-        # 退出前保存缓存
+        # 退出前通知插件保存自身缓存
         try:
             self._persist_cached_identity_state(save_now=False)
         except Exception:
             pass
-        self._save_game_cache(quiet=False)
+        self._game_plugin_maybe('_save_game_cache', quiet=False)
         self._destroy_all_panels()
         try:
             self.hp_win.destroy()
@@ -10570,8 +5770,4 @@ class SAOWebViewGUI:
                 self.alert_win.destroy()
         except Exception:
             pass
-        try:
-            if self.skillfx_win:
-                self.skillfx_win.destroy()
-        except Exception:
-            pass
+        self._destroy_plugin_surfaces()

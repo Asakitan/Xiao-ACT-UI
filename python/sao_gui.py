@@ -33,7 +33,6 @@ from config import (
     DEFAULT_HOTKEYS,
     FONTS_DIR,
     SettingsManager,
-    get_skill_slot_rects,
     resource_path,
 )
 from sao_theme import (
@@ -70,10 +69,6 @@ from gui_modules.sao_panel_ui import (
 # _sao_cy_uihelpers (_CY_UI) imports were used by methods now in mixins.
 # Each mixin imports what it needs; sao_gui.py is import-clean.
 
-
-# _SESSION_WHEEL_ROOTS / _dispatch_session_wheel moved into
-# gui_modules.sao_session_players_panel along with SAOSessionPlayersPanel
-# (round 26 of the sao_gui split refactor).
 
 try:
     import pynput.keyboard as pynput_kb
@@ -168,33 +163,6 @@ from gui_modules.sao_hotkey_manager import SAOHotkeyManager  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════
-#  SAO Player GUI — 完整独立 UI
-# ══════════════════════════════════════════════════════════
-#  SAO 左侧玩家信息面板 (替代 SAOLeftInfo)
-#  对标 SAO-UI HP 组件 + LeftInfo 组件
-# ══════════════════════════════════════════════════════════
-# SAOPlayerPanel 已迁移到 gui_modules/sao_player_panel.py
-# (round 27 post-cadence of the sao_gui split refactor).
-from gui_modules.sao_player_panel import SAOPlayerPanel  # noqa: E402
-
-
-
-# SAOSessionPlayersPanel 已迁移到 gui_modules/sao_session_players_panel.py
-# (round 26 of the sao_gui split refactor — class + _SESSION_WHEEL_ROOTS
-# registry + _dispatch_session_wheel helper all moved together).
-from gui_modules.sao_session_players_panel import SAOSessionPlayersPanel  # noqa: E402
-
-
-
-
-# SAOMenuLeftStack 已迁移到 gui_modules/sao_menu_left_stack.py
-# (round 28 of the sao_gui split refactor).
-from gui_modules.sao_menu_left_stack import SAOMenuLeftStack  # noqa: E402
-
-
-
-
-# ══════════════════════════════════════════════════════════
 #  SAO Player GUI — 纯悬浮 SAO Menu 架构
 # ══════════════════════════════════════════════════════════
 # v3.2.2 rounds 31-32: SAOPlayerGUI is split across mixins so this
@@ -204,9 +172,7 @@ from gui_modules.sao_menu_left_stack import SAOMenuLeftStack  # noqa: E402
 #   - SAOPlayerGUIStateMixin   (round 32) — _recognition_loop +
 #     _push_packet_overlays + _apply_fast_state_update +
 #     _on_game_state_update (730 lines). Heart of the combat-lag work.
-# More mixins (menu / fisheye / boss_raid / commander) will land in
-# later rounds.
-from gui_modules.sao_gui_session_mixin import SAOPlayerGUISessionMixin  # noqa: E402
+# More platform mixins can be extracted in later rounds.
 # Game mixins (State/Actions/EngineToggles/DpsTheme) moved to plugin
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin  # noqa: E402
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin  # noqa: E402
@@ -224,32 +190,31 @@ from gui_modules.sao_gui_link_animation_mixin import SAOPlayerGUILinkAnimationMi
 from gui_modules.sao_gui_misc_mixin import SAOPlayerGUIMiscMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin, SAOPlayerGUISessionMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatHpMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
     - 展开: SAO PopUpMenu 全屏菜单 = 主界面
-    - 左面板: SAOPlayerPanel (玩家信息/赛季进度/状态)
-    - 菜单按钮: 5 类 (控制/自动/Boss/面板/关于)
+    - 菜单按钮: 平台分类 + 插件动态分类
     - 子菜单: 实时工具与面板控制
     - 可选: 浮动钢琴/可视化面板
     """
 
     def __init__(self):
-        _set_process_app_id('sao.auto.game.ui')
+        _set_process_app_id('sao.auto.platform.ui')
         self.root = tk.Tk()
         self.root.withdraw()  # root 永远隐藏, 只作为 Tk 事件循环
-        self.root.title("SAO Auto — 游戏辅助 UI")
+        self.root.title("SAO Auto — Platform UI")
 
         self.settings = SettingsManager()
         # 记录当前 UI 模式 — 下次启动时使用
         self.settings.set('ui_mode', 'entity')
         self.settings.save()
 
-        # ── 角色配置 (游戏插件 on_load 会覆盖 _username/_profession) ──
+        # Plugin-populated display identity. The platform keeps no game defaults.
         self._username = ''
-        self._profession = profile.get('profession', '')
-        self._level = profile.get('level', 1)
+        self._profession = ''
+        self._level = 0
         self._level_extra = 0
         self._season_exp = 0
         self._sta_offline_armed = False
@@ -257,21 +222,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._current_file = None
         self._panels_hidden = False  # 一键隐藏所有面板
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
-        self._player_panel = None  # 当 SAO 菜单打开时设置
-        self._menu_left_stack = None
-        self._session_players_panel = None
-        self._session_players = {}
-        self._session_players_self_uid = 0
-        self._session_players_version = 0
-        self._session_players_rows_cache_sig = None
-        self._session_players_rows_cache = []
-        self._session_players_last_sync_ts = 0.0
-        self._last_session_players_panel_sig = None
-        self._last_session_players_panel_push_ts = 0.0
-        self._profile_dialog_pending = False
-        self._profile_dialog_ref = None
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
-        self._status_panel = None  # 浮动状态面板
         self._update_panel = None  # 浮动更新面板
         self._update_snapshot = None
         self._update_listener_installed = False
@@ -288,10 +239,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         # v2.3.15: signature computation cache for menu refresh
         self._last_menu_refresh_sig = None
         self._last_menu_refresh_sig_time = 0.0
-        self._cached_auto_key_result = None
-        self._cached_auto_key_sig = None
-        self._cached_boss_raid_result = None
-        self._cached_boss_raid_sig = None
         self._fisheye_ov = None    # 菜单开启时的持久鱼眼叠加层
         self._fisheye_hit_layer = None
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
@@ -326,93 +273,21 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._recognition_active = False
         self._recognition_engine = None
         self._recognition_engines = []
-        self._packet_engine = None
-        self._vision_engine = None
-        self._vision_paused_for_death = False
-        self._last_dead_state = False
-        self._state_mgr = None
-        self._game_state = None
-        self._cfg_settings_ref = None
+        self._cfg_settings_ref = self.settings
         self._cache_loop_stop = threading.Event()
         self._recog_lock = threading.Lock()
 
-        # ── AutoKey / BossRaid / DPS 引擎 ──
-        self._auto_key_engine = None
-        self._boss_raid_engine = None
-        self._boss_autokey_linkage = None
-        self._dps_tracker = None
-        self._dps_history_store = None
-        self._encounter_mgr = None
-        self._last_skill_event = {}
-        self._last_dungeon_event = {}
-        self._last_boss_event = {}
-        self._dps_visible = False
-        self._dps_enabled = True
-        self._dps_faded = False
-        self._dps_idle_reset_after_id = None
-        self._dps_mode = 'hidden'
-        self._dps_last_report_available = False
-        self._last_burst_ready = False
-        self._last_burst_slot = 0
-        self._last_boss_timer_text = ''
-        self._last_boss_timer_urgency = ''
-        self._last_boss_bar_sig = None
-        self._last_skillfx_sig = None
-        self._profile_auto_saved = False
-        self._last_gs_name = ''
-        self._last_gs_prof = ''
-        self._last_gs_uid = ''
-        self._last_fast_state_sig = None
-        self._last_player_panel_level_sig = None
         self._last_hp_overlay_hp_sig = None
         self._last_hp_overlay_sta_sig = None
         self._last_hp_sta_offline = None
-        self._last_boss_hp_push_sig = None
-        self._last_commander_push_sig = None
         self._panel_float_entries = {}
         self._panel_float_after_id = None
 
-        # ── Boss bar target tracking (mirrors webview) ──
-        self._bb_last_target_uuid = 0
-        self._bb_last_damage_ts = 0.0
-        self._bb_recent_targets = {}
-        self._bb_last_hp_motion_sig = None
-        self._bb_last_hp_motion_ts = 0.0
-        self._bb_damage_timeout = 60.0
-        self._pending_combat_reset_after = 0.0
-        self._pending_combat_reset_reason = ''
-        self._scene_damage_grace_until = time.time() + 20.0
-        self._scene_hide_token = 0
-        self._damage_self_fallback_log_ts = 0.0
-
         # ── ULW 覆盖层引用 ──
-        self._dps_overlay = None
-        self._boss_hp_overlay = None
         self._hp_overlay = None
         self._alert_overlay = None
-        self._skillfx_overlay = None
-        # 切换地图中央横幅 (延迟 3s 后淡入地图名); 去重状态见 _schedule_map_banner
-        self._map_banner_overlay = None
-        self._map_banner_last_name = ''
-        self._map_banner_last_ts = 0.0
-        self._map_banner_timer = None
-        # v3.2.x: MemStateBridge (read-only Star.exe → GameState push).
-        # Initialized in _start_recognition_engines once the data stack is
-        # up; stopped in _stop_recognition_engines at top of method.
-        self._mem_bridge = None
-        self._act_trigger_engine = None
-        self._skillfx_layout = None
-        self._self_buff_overlay = None
-        self._boss_buff_overlay = None
-        # buffmon 数据缓存 — 由 _on_game_state_update / _on_monster_update 写入
-        self._buffmon_target_uuid = 0
 
         # ── 配置面板实例 ──
-        self._autokey_panel = None    # AutoKeyPanel
-        self._bossraid_panel = None   # BossRaidPanel
-        self._autokey_detail_panel = None
-        self._bossraid_detail_panel = None
-        self._commander_panel = None  # CommanderPanel
         self._act_plugin_manager_panel = None  # PluginManagerPanel
         self._act_trigger_timer_panel = None  # TriggerTimerManagerPanel
         self._act_data_source_health_panel = None  # DataSourceHealthPanel
@@ -427,7 +302,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._act_skill_drilldown_panel = None  # SkillDrilldownPanel
         self._mem_scope_panel = None  # MemScopePanel
         self._ai_editor_panel = None  # AIEditorPanel
-        self._commander_last_push = 0.0
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()
         self._set_icon()

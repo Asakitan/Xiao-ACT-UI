@@ -37,7 +37,7 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
         bus.publish("damage", {"timestamp": 100.0, "attacker": "Kirito", "damage": 1000}, source_name="tcp", source_kind="packet")
         bus.publish("heal", {"timestamp": 101.0, "name": "Asuna", "heal": 250}, source_name="tcp", source_kind="packet")
         bus.publish("damage", {"timestamp": 102.0, "attacker": "Kirito", "damage_total": 1500}, source_name="tcp", source_kind="packet")
-        bus.publish("boss", {"timestamp": 103.0, "message": "Boss HP", "boss_hp_pct": 0.72}, source_name="memory", source_kind="runtime")
+        bus.publish("boss", {"timestamp": 103.0, "message": "Target HP", "target_hp_pct": 0.72}, source_name="memory", source_kind="runtime")
         return owner
 
     def test_graph_status_contains_parity_fields(self) -> None:

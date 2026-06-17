@@ -258,8 +258,6 @@ button.close {
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>
-<script>window.__SAO_SURFACE__ = 'plugin_ui';</script>
-<script src="plugin_layer.js"></script>
 <style>
 .pm-tabs { display: flex; gap: 8px; padding: 8px 12px 0; }
 .pm-tab {
@@ -272,21 +270,12 @@ button.close {
 .pm-tab:hover { color: var(--ink, #e8f0f4); border-color: rgba(117,205,255,.6); background: rgba(16,26,40,.7); }
 .pm-tab.active { color: #fff8da; border-color: rgba(255,214,117,.74); background: rgba(22,35,54,.85); }
 #manage-body { height: calc(100% - 58px - 40px); }
-.panels-body { height: calc(100% - 58px - 40px); overflow: auto; padding: 12px; }
-.panels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.panel-card {
-    border: 1px solid rgba(117,205,255,.34);
-    border-radius: 10px;
-    background: linear-gradient(180deg, rgba(27,46,68,.86), rgba(9,16,26,.82));
-    padding: 12px;
-}
-.panel-card-head { color: var(--line2); font-size: 11px; letter-spacing: .12em; margin-bottom: 6px; }
 </style>
 <style>
 /* Flat + token migration (ACT panel): drop the bespoke dark chrome so Plugin Manager reads
    flat and follows the host light/dark theme 1:1 with its Tk twin. Generic classes already
    resolve to var(--act-*) via the shared theme; here we flatten the chrome (no brackets,
-   no bevels, no glow) and re-tokenise the custom tab / panel-card / card-more classes the
+    no bevels, no glow) and re-tokenise the custom tab / card-more classes the
    shared theme does not target, so light mode stays legible. Last style block in <head>
    so it wins source-order over the shared theme's !important chrome. */
 .shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
@@ -301,8 +290,6 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 .pm-tab{background:var(--act-card-bg-2)!important;border:1px solid var(--act-edge-soft)!important;border-bottom:none!important;color:var(--act-muted)!important;border-radius:4px 4px 0 0!important;}
 .pm-tab:hover{background:var(--act-card-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-text)!important;}
 .pm-tab.active{background:var(--act-shell-bg)!important;border-color:var(--act-cyan)!important;color:var(--act-gold)!important;}
-.panel-card{border:1px solid var(--act-edge-soft)!important;border-left:3px solid var(--act-cyan)!important;border-radius:4px!important;background:var(--act-card-bg)!important;box-shadow:none!important;}
-.panel-card-head{color:var(--act-gold)!important;}
 </style>
 </head>
 <body>
@@ -322,7 +309,6 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     </div>
     <div class="pm-tabs">
         <div class="pm-tab active" id="tab-manage" onclick="PluginManager.showTab('manage')">管理 Manage</div>
-        <div class="pm-tab" id="tab-panels" onclick="PluginManager.showTab('panels')">面板 Panels</div>
     </div>
     <div class="plugin-body" id="manage-body">
         <div class="plugin-list" id="plugin-list">
@@ -344,11 +330,6 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
             </div>
         </aside>
-    </div>
-    <div class="panels-body" id="panels-body" style="display:none;">
-        <div class="panels-grid" id="panels-grid">
-            <div class="empty">无插件 UI 面板<br/>NO PLUGIN PANELS</div>
-        </div>
     </div>
     <div class="toast" id="toast"></div>
 </div>
@@ -434,82 +415,16 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             import_plugin: 'act.plugins.import',
             uninstall_plugin: 'act.plugins.uninstall',
             get_plugin_hotkeys: 'act.plugins.hotkeys',
-            set_plugin_hotkey: 'act.plugins.set_hotkey',
-            get_plugin_ui_panels: 'act.plugins.ui_panels',
-            render_ui_panel: 'act.plugins.render_ui_panel',
-            invoke_ui_action: 'act.plugins.invoke_ui_action'
+            set_plugin_hotkey: 'act.plugins.set_hotkey'
         };
         var cmd = maps[name] || ('act.plugins.' + name);
-        if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys' || name === 'get_plugin_ui_panels') return { name: cmd, payload: {} };
+        if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys') return { name: cmd, payload: {} };
         if (name === 'enable_plugin' || name === 'disable_plugin' || name === 'uninstall_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || '') } };
         if (name === 'reload_plugins') return { name: cmd, payload: args[0] ? { plugin_id: String(args[0] || '') } : {} };
         if (name === 'pin_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || ''), pinned: args[1] !== false } };
         if (name === 'import_plugin') return { name: cmd, payload: { archive_path: String(args[0] || '') } };
         if (name === 'set_plugin_hotkey') return { name: cmd, payload: { action: String(args[0] || ''), key: String(args[1] || '') } };
-        if (name === 'render_ui_panel') return { name: cmd, payload: { panel_id: String(args[0] || ''), payload: pluginPayloadArg(args, 1) } };
-        if (name === 'invoke_ui_action') return { name: cmd, payload: { panel_id: String(args[0] || ''), action_id: String(args[1] || ''), payload: pluginPayloadArg(args, 2) } };
         return { name: cmd, payload: { args: args } };
-    }
-
-    function pluginPayloadArg(args, index) {
-        if (!args || args.length <= index || args[index] == null) return '';
-        return args[index];
-    }
-
-    function sigOf(value) {
-        try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
-    }
-
-    function panelKey(panel) {
-        return String(panel && (panel.id || panel.panel_id) || '');
-    }
-
-    function clearPanelCards(grid, html) {
-        var cards = PluginManager._panelCards || {};
-        Object.keys(cards).forEach(function (key) {
-            var entry = cards[key];
-            if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
-        });
-        PluginManager._panelCards = Object.create(null);
-        PluginManager._panelEmptyHtml = html || '';
-        if (html && grid.__panelEmptyHtml !== html) {
-            grid.innerHTML = html;
-            grid.__panelEmptyHtml = html;
-        } else if (!html && grid.__panelEmptyHtml) {
-            grid.textContent = '';
-            grid.__panelEmptyHtml = '';
-        }
-    }
-
-    function panelEntry(grid, panel) {
-        var key = panelKey(panel);
-        if (!key) return null;
-        var cards = PluginManager._panelCards || (PluginManager._panelCards = Object.create(null));
-        var entry = cards[key];
-        if (!entry || !entry.card || !entry.card.isConnected) {
-            var card = document.createElement('div');
-            card.className = 'panel-card';
-            var head = document.createElement('div');
-            head.className = 'panel-card-head';
-            card.appendChild(head);
-            var body = document.createElement('div');
-            card.appendChild(body);
-            entry = cards[key] = {
-                card: card,
-                head: head,
-                body: body,
-                action: function (action, payload) { PluginManager.panelAction(key, action, payload); },
-                metaSig: '',
-                renderSig: ''
-            };
-        }
-        var label = (panel.title || panel.id) + ' · ' + (panel.plugin_id || '');
-        if (entry.metaSig !== label) {
-            entry.head.textContent = label;
-            entry.metaSig = label;
-        }
-        grid.appendChild(entry.card);
-        return entry;
     }
 
     function showToast(message) {
@@ -535,7 +450,6 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         var stateBadges = [];
         stateBadges.push(badge(active ? 'ACTIVE' : (enabled ? 'LOADED OFF' : 'DISABLED'), active ? 'ok' : (enabled ? 'warn' : '')));
         if (plugin.pinned) stateBadges.push(badge('★ PINNED', 'warn'));
-        stateBadges.push(badge(plugin.declares_panel ? '▣ 面板' : '无面板', plugin.declares_panel ? 'ok' : ''));
         var hotkeyCount = countNumber(plugin.hotkey_count);
         var failureCount = countNumber(plugin.failures);
         var eventFailureCount = countNumber(plugin.event_failures);
@@ -671,69 +585,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             render(parseResult(data));
         },
         showTab: function (name) {
-            var manage = name !== 'panels';
-            document.getElementById('manage-body').style.display = manage ? '' : 'none';
-            document.getElementById('panels-body').style.display = manage ? 'none' : '';
-            document.getElementById('tab-manage').classList.toggle('active', manage);
-            document.getElementById('tab-panels').classList.toggle('active', !manage);
-            PluginManager._panelsActive = !manage;
-            if (!manage) PluginManager.renderPanels();
-        },
-        panelAction: function (panelId, action, payload) {
-            return apiCall('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})]).then(function () {
-                return PluginManager.renderPanels();
-            });
-        },
-        renderPanels: function () {
-            var grid = document.getElementById('panels-grid');
-            var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
-            var seq = ++PluginManager._panelSeq;
-            return apiCall('get_plugin_ui_panels', []).then(function (data) {
-                if (seq !== PluginManager._panelSeq) return;
-                var panels = objectItems(objectValue(data).panels).filter(function (p) { return p.available && !p.hidden; });
-                if (!panels.length) {
-                    clearPanelCards(grid, '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>');
-                    return;
-                }
-                if (grid.__panelEmptyHtml) {
-                    grid.textContent = '';
-                    grid.__panelEmptyHtml = '';
-                }
-                var seen = Object.create(null);
-                panels.forEach(function (p) {
-                    var key = panelKey(p);
-                    var entry = panelEntry(grid, p);
-                    if (!entry) return;
-                    seen[key] = true;
-                    apiCall('render_ui_panel', [key, '']).then(function (r) {
-                        if (seq !== PluginManager._panelSeq || !entry.card.isConnected) return;
-                        var spec = (r && r.spec) || { nodes: [] };
-                        var renderSig = (renderSpec ? 'hook:' : 'text:') + sigOf(spec);
-                        if (entry.renderSig === renderSig) return;
-                        entry.renderSig = renderSig;
-                        if (renderSpec) {
-                            renderSpec(spec, entry.body, entry.action);
-                        } else {
-                            entry.body.textContent = JSON.stringify(spec);
-                        }
-                    });
-                });
-                var cards = PluginManager._panelCards || {};
-                Object.keys(cards).forEach(function (key) {
-                    if (seen[key]) return;
-                    var entry = cards[key];
-                    if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
-                    delete cards[key];
-                });
-            });
+            document.getElementById('manage-body').style.display = '';
+            document.getElementById('tab-manage').classList.add('active');
         }
     };
 
     window.PluginManager = PluginManager;
-    PluginManager._panelsActive = false;
-    PluginManager._panelCards = Object.create(null);
-    PluginManager._panelSeq = 0;
-    setInterval(function () { if (PluginManager._panelsActive && !document.hidden) PluginManager.renderPanels(); }, 1000);
     window.addEventListener('pywebviewready', function () { PluginManager.refresh(); });
     setTimeout(function () {
         PluginManager.fadeIn();

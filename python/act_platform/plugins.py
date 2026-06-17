@@ -50,8 +50,6 @@ _ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
     "trigger_engine": ("_act_trigger_engine", "act_trigger_engine", "trigger_engine"),
     "packet_bridge": ("_packet_engine", "_packet_bridge", "packet_engine", "packet_bridge"),
     "memory_bridge": ("_mem_bridge", "mem_bridge", "memory_bridge"),
-    "auto_key_engine": ("_auto_key_engine", "auto_key_engine"),
-    "boss_raid_engine": ("_boss_raid_engine", "boss_raid_engine"),
     "window_locator": ("_locator", "locator", "window_locator"),
 }
 
@@ -270,7 +268,7 @@ class PluginRecord:
     path: str
     entry: str
     enabled: bool = True
-    game_ids: tuple[str, ...] = ("star_resonance",)
+    game_ids: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     capabilities: tuple[dict[str, Any], ...] = ()
@@ -2018,7 +2016,7 @@ class PluginManager:
             path=plug_dir,
             entry=entry,
             enabled=bool(manifest.get("enabled", True)),
-            game_ids=tuple(str(x) for x in manifest.get("game_ids", ["star_resonance"])),
+            game_ids=tuple(str(x) for x in manifest.get("game_ids", [])),
             requires=tuple(str(x).strip() for x in manifest.get("requires", []) if str(x or "").strip()),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),

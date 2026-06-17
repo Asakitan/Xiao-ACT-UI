@@ -4,7 +4,7 @@ Core tools mirror VSCode Copilot's tool design:
   editFile, readFile, listFiles, searchFiles, runTerminal,
   askQuestion, taskComplete, getConfirmation
 
-Plus one aggregate ``engine`` tool for all game-engine queries,
+Plus one aggregate ``engine`` tool for platform and plugin runtime queries,
 keeping the tool list clean for the LLM.
 """
 
@@ -200,7 +200,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
     )
 
     # ==================================================================
-    # Engine aggregate — single entry point for all game queries
+    # Engine aggregate — single entry point for platform/plugin queries
     # ==================================================================
 
     registry.register(
@@ -217,15 +217,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
             "  eval — evaluate a Python expression (pass 'expression')\n"
             "  exec — execute Python code block (pass 'code')\n"
             "\n"
-            "Star Resonance plugin actions (available when the SR plugin is loaded):\n"
-            "  game_state — player name, level, HP, scene\n"
-            "  entity_list — all visible entities\n"
-            "  dps_summary — current combat DPS table\n"
-            "  dps_report — last encounter full report\n"
-            "  boss_status — boss HP, break, shield\n"
-            "  combat_status — in_combat, duration\n"
-            "  buff_list — buffs on self or boss\n"
-            "  auto_key_status — auto-key engine state\n"
+            "Plugin actions are registered dynamically by loaded plugins.\n"
         ),
         parameters={
             "type": "object",
@@ -235,7 +227,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
                 "value": {"description": "Value for settings_set", "default": None},
                 "expression": {"type": "string", "description": "Python expression for eval", "default": ""},
                 "code": {"type": "string", "description": "Python code for exec", "default": ""},
-                "target": {"type": "string", "description": "Target for buff_list (self/boss)", "default": "self"},
+                "target": {"type": "string", "description": "Optional plugin-specific target", "default": ""},
             },
             "required": ["action"],
         },
@@ -385,14 +377,6 @@ def _run_terminal(command: str, cwd: str = "") -> Dict[str, Any]:
 
 def _engine_dispatch(gui_ref: Any, action: str = "", **kw) -> Any:
     handlers = {
-        "game_state": lambda: _game_state(gui_ref),
-        "entity_list": lambda: _entity_list(gui_ref),
-        "dps_summary": lambda: _dps_summary(gui_ref),
-        "dps_report": lambda: _dps_report(gui_ref),
-        "boss_status": lambda: _boss_status(gui_ref),
-        "combat_status": lambda: _combat_status(gui_ref),
-        "buff_list": lambda: _buff_list(gui_ref, kw.get("target", "self")),
-        "auto_key_status": lambda: _auto_key_status(gui_ref),
         "memory_status": lambda: _memory_status(gui_ref),
         "system_info": lambda: _system_info(gui_ref),
         "plugins": lambda: _plugins(gui_ref),
@@ -401,69 +385,25 @@ def _engine_dispatch(gui_ref: Any, action: str = "", **kw) -> Any:
         "eval": lambda: _eval(gui_ref, kw.get("expression", "")),
         "exec": lambda: _exec(gui_ref, kw.get("code", "")),
     }
+    platform_action = action in handlers
     fn = handlers.get(action)
+    plugin_handlers = getattr(gui_ref, '_ai_engine_actions', None)
+    if not fn and isinstance(plugin_handlers, dict):
+        fn = plugin_handlers.get(action)
     if not fn:
-        return {"error": f"Unknown engine action: {action}", "available": list(handlers.keys())}
+        available = list(handlers.keys())
+        if isinstance(plugin_handlers, dict):
+            available.extend(sorted(str(k) for k in plugin_handlers.keys()))
+        return {"error": f"Unknown engine action: {action}", "available": available}
     try:
-        return fn()
+        if platform_action:
+            return fn()
+        return fn(**kw)
     except Exception as exc:
         return {"error": str(exc)}
 
 
-# ── Engine sub-handlers ──
-
-def _game_state(g: Any) -> Dict:
-    gs = getattr(g, '_game_state', None) or {}
-    return {k: gs.get(k) for k in ("uid", "name", "level", "profession", "hp", "max_hp", "scene", "scene_id", "in_combat")}
-
-def _entity_list(g: Any) -> List:
-    rows = getattr(g, '_rows', None) or {}
-    return [
-        {k: r.get(k) for k in ("uuid", "name", "kind", "hp", "max_hp", "level", "total_damage", "dps")}
-        for r in (rows.values() if isinstance(rows, dict) else []) if isinstance(r, dict)
-    ][:50]
-
-def _dps_summary(g: Any) -> Dict:
-    rows = getattr(g, '_rows', None) or {}
-    players = sorted(
-        [{"name": r.get("name"), "damage": r.get("total_damage", 0), "dps": r.get("dps", 0), "pct": r.get("damage_pct", 0)}
-         for r in (rows.values() if isinstance(rows, dict) else []) if isinstance(r, dict) and r.get("total_damage", 0) > 0],
-        key=lambda x: x["damage"], reverse=True,
-    )
-    return {"players": players}
-
-def _dps_report(g: Any) -> Dict:
-    t = getattr(g, '_dps_tracker', None)
-    if t:
-        fn = getattr(t, 'get_last_report', None)
-        if callable(fn):
-            r = fn()
-            if r: return r if isinstance(r, dict) else {"data": str(r)}
-    return {"note": "No report available"}
-
-def _boss_status(g: Any) -> Dict:
-    gs = getattr(g, '_game_state', None) or {}
-    return {k: gs.get(k) for k in ("boss_hp", "boss_max_hp", "boss_break", "boss_shield", "boss_name") if gs.get(k) is not None}
-
-def _combat_status(g: Any) -> Dict:
-    gs = getattr(g, '_game_state', None) or {}
-    enc = getattr(g, '_encounter_manager', None)
-    r = {"in_combat": gs.get("in_combat", False)}
-    if enc:
-        r["duration"] = getattr(enc, 'combat_duration', 0)
-        r["encounter_count"] = getattr(enc, 'encounter_count', 0)
-    return r
-
-def _buff_list(g: Any, target: str) -> Dict:
-    gs = getattr(g, '_game_state', None) or {}
-    if target == "boss":
-        return {"target": "boss", "buffs": gs.get("boss_buffs", [])}
-    return {"target": target, "buffs": getattr(g, '_buffmon_data', {}).get("buff_list", [])}
-
-def _auto_key_status(g: Any) -> Dict:
-    ak = getattr(g, '_auto_key_engine', None)
-    if not ak: return {"available": False}
-    return {"available": True, "running": getattr(ak, 'is_running', False), "enabled": getattr(ak, 'enabled', False)}
+# ── Platform engine sub-handlers ──
 
 def _memory_status(g: Any) -> Dict:
     bridge = getattr(g, '_mem_bridge', None)

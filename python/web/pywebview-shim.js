@@ -629,12 +629,6 @@
         set_plugin_hotkey: function (action, key) {
             return call('act.plugins.set_hotkey', { action: String(action || ''), key: String(key || '') });
         },
-        get_plugin_ui_panels: function () {
-            return call('act.plugins.ui_panels', {});
-        },
-        render_ui_panel: function (panelId, payload) {
-            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: pluginPayload(payload) });
-        },
         invoke_ui_action: function (panelId, actionId, payload) {
             return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: pluginPayload(payload) });
         },

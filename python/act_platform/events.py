@@ -56,7 +56,7 @@ def make_event(
     *,
     source_name: str = "unknown",
     source_kind: str = "unknown",
-    game_id: str = "star_resonance",
+    game_id: str = "",
     parser_id: str = "",
     confidence: float = 1.0,
     observed_at: Optional[float] = None,

@@ -10,7 +10,7 @@ from __future__ import annotations
 import struct, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)
 if _ROOT not in sys.path: sys.path.insert(0,_ROOT)
-from mem_probe.process import StarProcess
+from plugins.star_resonance_plugin.mem.process import StarProcess
 from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
 from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader

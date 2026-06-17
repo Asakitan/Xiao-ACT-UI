@@ -7,7 +7,7 @@ import _bootstrap  # noqa: F401
 
 import unittest
 
-from gui_modules.sao_player_panel import SAOPlayerPanel
+from plugins.star_resonance_plugin.panels.sao_player_panel import SAOPlayerPanel
 
 
 def _panel(active: bool = True, gpu: bool = True):

@@ -3,7 +3,7 @@
 SAOSessionPlayersPanel — left-stack panel listing all players seen during
 the current login session (in-game encountered roster).
 
-Extracted from sao_gui.py (round 26 of the split refactor). The panel
+Moved into the Star Resonance plugin so the platform owns no session-player panel. The panel
 is GPU-painted when ``sao_left_info_gpu`` reports availability and
 silently no-ops otherwise (the original ``ENTITY_GPU_ONLY`` invariant
 is preserved).
@@ -72,7 +72,7 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     def __init__(self, parent, rows_provider=None, **kw):
         try:
-            from gui_modules.sao_left_info_gpu import (
+            from .sao_left_info_gpu import (
                 SessionPlayersGpuPainter as _SPGP,
                 _SessionPlayersSnapshot as _SPSnap,
                 gpu_session_players_enabled as _spgen,

@@ -23,11 +23,11 @@ Methods:
       2. cancel all root.after IDs (panel float, menu refresh,
          shared fx tick on the class)
       3. remove updater listener
-      4. unbind SAOHotkeyManager + GameStateManager
+      4. unbind SAOHotkeyManager + optional plugin state manager
       5. stop fisheye overlay
       6. close + destroy SAO menu overlay
-      7. stop recognition engines + persist identity cache
-      8. destroy floating panels, ULW overlays, profile editors
+      7. stop recognition engines + persist optional plugin cache
+      8. destroy floating panels and ULW overlays
       9. quit root.mainloop()
   * _run_exit_animation (124) — confirm + fade-out + exit overlay
     + scheduled hard-exit/finalize after the animation.
@@ -43,22 +43,17 @@ Required SAOPlayerGUI attrs:
   * self._destroyed, self._close_finalized, self._exit_animating,
     self._breath_active, self._lift_loop_active, self._panels_hidden
   * self.root, self.settings, self._float, self._sao_menu,
-    self._state_mgr, self._cfg_settings_ref, self._updater_mgr,
+    self._cfg_settings_ref, self._updater_mgr,
     self._update_listener, self._update_listener_installed,
     self._hotkey_mgr, self._cache_loop_stop, self._after_shutdown
-  * self._status_panel, self._update_panel, self._fisheye_ov,
-    self._dps_overlay, self._boss_hp_overlay, self._hp_overlay,
-    self._alert_overlay, self._skillfx_overlay,
-    self._self_buff_overlay, self._boss_buff_overlay,
-    self._commander_panel
+  * self._update_panel, self._fisheye_ov, self._hp_overlay,
+    self._alert_overlay
   * Class attr: SAOPlayerGUI._sao_fx_after_id (accessed via type(self))
 
 Required SAOPlayerGUI methods (via MRO):
   * _persist_entity_menu_state (Menu mixin)
-  * _persist_cached_identity_state, _stop_recognition_engines
-    (EngineLifecycle mixin)
+  * Optional plugin cache/recognition hooks when installed
   * _stop_fisheye_overlay (Fisheye mixin)
-  * _stop_boss_hp_worker (State mixin)
   * _toggle_status_panel (StatusUpdater mixin)
 """
 
@@ -85,13 +80,9 @@ class SAOPlayerGUILifecycleMixin:
         self._hp_alpha_photos = []
 
     def _restore_panels(self):
-        """恢复上次会话中打开的浮动面板"""
-        # 如果面板处于隐藏状态则跳过恢复
+        """Restore platform-owned floating panels only."""
         if self._panels_hidden:
             return
-        if self.settings.get('show_status', False):
-            if not (self._status_panel and self._status_panel.winfo_exists()):
-                self._toggle_status_panel()
 
     # ──────────────────────────────────────────
     #  HP overlay click / context-menu hooks
@@ -205,8 +196,9 @@ class SAOPlayerGUILifecycleMixin:
         if callable(cleanup_hotkeys):
             cleanup_hotkeys()
         try:
-            if self._state_mgr:
-                self._state_mgr.unsubscribe(self._on_game_state_update)
+            state_mgr = getattr(self, '_state_mgr', None)
+            if state_mgr:
+                state_mgr.unsubscribe(self._on_game_state_update)
         except Exception:
             pass
         self._stop_fisheye_overlay(wait=True)
@@ -219,30 +211,27 @@ class SAOPlayerGUILifecycleMixin:
         # 停止识别引擎
         self._recognition_active = False
         self._cache_loop_stop.set()
-        # Round 35: stop the boss-HP off-main worker before tearing down
-        # overlays (it dereferences self._boss_hp_overlay indirectly via
-        # the compute helper). Safe to call even if never started.
-        try:
-            self._stop_boss_hp_worker()
-        except Exception:
-            pass
-        self._stop_recognition_engines()
+        stop_recognition = getattr(self, '_stop_recognition_engines', None)
+        if callable(stop_recognition):
+            stop_recognition()
         # 保存缓存
-        if self._state_mgr and self._cfg_settings_ref:
+        state_mgr = getattr(self, '_state_mgr', None)
+        cfg_ref = getattr(self, '_cfg_settings_ref', None)
+        if state_mgr and cfg_ref:
             try:
                 self._persist_entity_menu_state(save_now=False)
                 self._persist_cached_identity_state(save_now=False)
-                self._state_mgr.save_cache(self._cfg_settings_ref)
+                state_mgr.save_cache(cfg_ref)
             except Exception:
                 pass
-        elif self._cfg_settings_ref:
+        elif cfg_ref:
             try:
                 self._persist_entity_menu_state(save_now=False)
                 self._persist_cached_identity_state(save_now=True)
             except Exception:
                 pass
         # 销毁所有浮动面板
-        for panel in [self._status_panel, self._update_panel]:
+        for panel in [getattr(self, '_status_panel', None), getattr(self, '_update_panel', None)]:
             try:
                 if panel and panel.winfo_exists():
                     panel.destroy()
@@ -316,16 +305,13 @@ class SAOPlayerGUILifecycleMixin:
                 self._sao_menu.prepare_external_fade()
         except Exception:
             pass
-        # ULW/GPU overlays (HP / BossHP / DPS) cannot be alpha-faded by
-        # _collect_exit_windows() because their windows are layered. Ask
-        # them to self-fade so the panels do not snap off-screen. DPS.hide()
-        # tears down the GPU window immediately, so prefer fade_out() when
-        # the overlay exposes it.
-        for ov in (
-            getattr(self, '_hp_overlay', None),
-            getattr(self, '_boss_hp_overlay', None),
-            getattr(self, '_dps_overlay', None),
-        ):
+        # Layered/GPU overlays cannot be alpha-faded by _collect_exit_windows().
+        # Ask every registered overlay to self-fade/hide if it supports that.
+        overlays = []
+        for attr_name, value in vars(self).items():
+            if attr_name.endswith('_overlay') and value is not None:
+                overlays.append(value)
+        for ov in overlays:
             try:
                 if ov is None:
                     continue

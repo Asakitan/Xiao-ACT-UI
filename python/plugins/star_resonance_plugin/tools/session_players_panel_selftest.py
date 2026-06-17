@@ -7,7 +7,7 @@ import _bootstrap  # noqa: F401
 
 import unittest
 
-from gui_modules.sao_session_players_panel import (
+from plugins.star_resonance_plugin.panels.sao_session_players_panel import (
     SAOSessionPlayersPanel,
     _session_rows_render_signature,
 )

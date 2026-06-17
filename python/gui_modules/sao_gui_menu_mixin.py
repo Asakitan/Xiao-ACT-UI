@@ -288,17 +288,6 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             skill_sig = (False, '', '', 0)
-        session_visible = False
-        session_count = 0
-        session_version = int(getattr(self, '_session_players_version', 0) or 0)
-        try:
-            stack = getattr(self, '_menu_left_stack', None)
-            session_visible = bool(stack and stack.is_session_players_visible())
-            session_count = len(getattr(self, '_session_players', {}) or {})
-        except Exception:
-            session_visible = False
-            session_count = 0
-
         plugin_menu_cat_count = len(self._collect_plugin_menu_categories())
 
         sig = (
@@ -318,9 +307,6 @@ class SAOPlayerGUIMenuMixin:
             graph_sig,
             combatant_sig,
             skill_sig,
-            session_visible,
-            session_count,
-            session_version,
             plugin_menu_cat_count,
         )
         self._last_menu_refresh_sig = sig
@@ -373,7 +359,6 @@ class SAOPlayerGUIMenuMixin:
             v = hk.get(key_id, DEFAULT_HOTKEYS.get(key_id, ''))
             return f'  [{v}]' if v else ''
 
-        recog_label = '识别: ON' if getattr(self, '_recognition_active', False) else '识别: OFF'
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
 
         # 游戏菜单分类由插件通过 register_menu_category 动态注入
@@ -385,7 +370,7 @@ class SAOPlayerGUIMenuMixin:
         trigger_timers = _finite_int(trigger_status.get('timer_count'), 0, lo=0)
         source_status = self._get_act_data_source_menu_status()
         source_summary = _mapping(_mapping(source_status.get('sources')).get('summary'))
-        source_label = str(source_summary.get('data_source') or source_status.get('requested_mode') or mem_mode_disp).upper()
+        source_label = str(source_summary.get('data_source') or source_status.get('requested_mode') or 'ACT').upper()
         source_health_state = str(source_status.get('status') or 'missing').upper()
         report_status = self._get_act_report_menu_status()
         report_preview = _mapping(report_status.get('preview'))
@@ -420,13 +405,6 @@ class SAOPlayerGUIMenuMixin:
         skill_id = str(skill_status.get('skill_id') or 'NONE')
         skill_ref_count = _list_count(skill_status.get('timeline_refs'))
         skill_state = 'READY' if skill_status.get('ok') else 'EMPTY'
-        session_visible = False
-        try:
-            stack = getattr(self, '_menu_left_stack', None)
-            session_visible = bool(stack and stack.is_session_players_visible())
-        except Exception:
-            session_visible = False
-        session_count = len(getattr(self, '_session_players', {}) or {})
         skin_items = [
             {'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')},
             {'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')},
@@ -453,7 +431,6 @@ class SAOPlayerGUIMenuMixin:
 
         children = {
             '控制': [
-                {'icon': '⚙', 'label': recog_label + _k('toggle_recognition'), 'command': self._toggle_recognition_menu},
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
                 {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
@@ -465,7 +442,6 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '🔑', 'label': '授权管理', 'command': self._show_license_panel_from_menu},
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},
-                {'icon': '✎', 'label': '修改角色资料', 'command': self._edit_profile},
                 {'icon': '◇', 'label': '切换到 WebView UI', 'command': self._switch_to_webview_ui},
                 {'icon': '✕', 'label': '退出', 'command': self._on_close},
             ],
@@ -664,10 +640,6 @@ class SAOPlayerGUIMenuMixin:
 
     _PLATFORM_MENU_ICONS = [
         {'name': '控制', 'icon': '⚙', 'can_active': True},
-        {'name': '自动', 'icon': '⚡', 'can_active': True},
-        {'name': 'Boss', 'icon': '⚔', 'can_active': True},
-        {'name': 'Burst', 'icon': 'B', 'can_active': True},
-        {'name': '面板', 'icon': '◆', 'can_active': True},
         {'name': 'ACT', 'icon': 'A', 'can_active': True},
         {'name': '插件', 'icon': '⬢', 'can_active': True},
         {'name': '皮肤', 'icon': 'P', 'can_active': True},
@@ -695,19 +667,45 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             return {}
 
+    def _get_menu_header(self) -> dict[str, str]:
+        provider = getattr(self, '_plugin_menu_header_provider', None)
+        if callable(provider):
+            try:
+                data = provider()
+                if isinstance(data, dict):
+                    username = str(data.get('username') or '').strip()
+                    description = str(data.get('description') or '').strip()
+                    if username or description:
+                        return {
+                            'username': username or 'SAO Auto',
+                            'description': description or 'Platform',
+                        }
+            except Exception:
+                pass
+        return {'username': 'SAO Auto', 'description': 'Platform'}
+
+    def _get_menu_left_widget_factory(self):
+        factory = getattr(self, '_plugin_menu_left_widget_factory', None)
+        return factory if callable(factory) else None
+
     def _setup_sao_menu(self):
         """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
+        try:
+            ensure_act_plugin_manager(self, load=True)
+        except Exception:
+            pass
         self._menu_icons = self._build_menu_icons()
+        header = self._get_menu_header()
 
         self._sao_menu = SAOPopUpMenu(
             self.root, self._menu_icons, self._get_menu_children_cached(force=True),
-            username=self._username or 'Player',
-            description=self._profession or 'SAO Auto — 游戏辅助 UI',
+            username=header['username'],
+            description=header['description'],
             on_close=self._on_sao_menu_close,
             on_open=self._on_sao_menu_open,
             key_code='a',
             slide_down=False,
-            left_widget_factory=self._make_player_panel,
+            left_widget_factory=self._get_menu_left_widget_factory(),
             anchor_widget=self._float,
             external_close=False,
             alt_toggle_close=False,
@@ -800,7 +798,12 @@ class SAOPlayerGUIMenuMixin:
         self._lift_loop_active = False
         # 延迟启动鱼眼叠加 (等菜单渲染完再截图), 带重试确保首次也能生效
         self._start_fisheye_with_retry(retries=5, delay=80)
-        self._refresh_session_players_panel(force=True)
+        plugin_hook = getattr(self, '_plugin_on_menu_open', None)
+        if callable(plugin_hook):
+            try:
+                plugin_hook()
+            except Exception:
+                pass
         try:
             self.root.after(90, self._restore_entity_menu_state)
         except Exception:
@@ -811,16 +814,12 @@ class SAOPlayerGUIMenuMixin:
         self._lift_loop_active = False
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
-        try:
-            stack = getattr(self, '_menu_left_stack', None)
-            panel = getattr(stack, 'session_panel', None) if stack is not None else None
-            if panel is not None and hasattr(panel, 'unbind_global_wheel_fallback'):
-                panel.unbind_global_wheel_fallback()
-        except Exception:
-            pass
-        self._player_panel = None
-        self._menu_left_stack = None
-        self._session_players_panel = None
+        plugin_hook = getattr(self, '_plugin_on_menu_close', None)
+        if callable(plugin_hook):
+            try:
+                plugin_hook()
+            except Exception:
+                pass
         self._maybe_stop_fisheye()
         if not self._destroyed:
             pass  # 呼吸动画已禁用 (固定位置)

@@ -1,21 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 游戏窗口定位
-
-查找游戏窗口句柄、获取矩形，输出归一化坐标。
-"""
+"""SAO Auto target-window locator utilities."""
 
 import ctypes
 import ctypes.wintypes
 import re
 import threading
 from typing import Optional, Tuple, List
-
-try:
-    from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
-except ImportError:
-    GAME_WINDOW_KEYWORDS = []
-    GAME_PROCESS_NAMES = []
 
 
 # ═══════════════════════════════════════════════
@@ -25,7 +15,7 @@ user32 = ctypes.windll.user32
 
 
 # Per-thread results bucket so concurrent callers (recognition /
-# auto_key / hide_seek workers + Tk main thread) don't trample each
+# plugin workers + Tk main thread) don't trample each
 # other's lists.  ``threading.local`` is lock-free.
 _enum_tls = threading.local()
 
@@ -142,9 +132,8 @@ def _get_process_name(hwnd: int) -> str:
 def _keyword_matches_title(keyword: str, title_lower: str) -> bool:
     """Return True when a configured title keyword safely matches a title.
 
-    ASCII keywords such as ``Star`` must match on alphanumeric word
-    boundaries.  A plain substring check treats ``link_start.py`` as a
-    game window because it contains ``star`` inside ``start``.
+    ASCII keywords must match on alphanumeric word boundaries.  A plain
+    substring check can match inside an unrelated word.
     Non-ASCII keywords keep the historical substring behavior.
     """
     kw = (keyword or '').strip().lower()
@@ -156,17 +145,21 @@ def _keyword_matches_title(keyword: str, title_lower: str) -> bool:
 
 
 def _matches_process_name(exe: str, process_names: List[str]) -> bool:
-    """Return True when ``exe`` is one of the configured game processes."""
+    """Return True when ``exe`` is one of the configured target processes."""
     return bool(exe) and exe.lower() in process_names
 
 
 class WindowLocator:
-    """游戏窗口定位器"""
+    """Target-window locator.
+
+    Callers must provide their own title keywords or process names.  The
+    platform keeps no game-specific defaults.
+    """
 
     def __init__(self, keywords: Optional[List[str]] = None,
                  process_names: Optional[List[str]] = None):
-        self._keywords = keywords or GAME_WINDOW_KEYWORDS
-        self._process_names = [p.lower() for p in (process_names or GAME_PROCESS_NAMES)]
+        self._keywords = list(keywords or [])
+        self._process_names = [p.lower() for p in (process_names or [])]
         self._cached_hwnd: int = 0
         self._cached_rect: Optional[tuple] = None
         self._log_once = True
@@ -184,9 +177,9 @@ class WindowLocator:
         title_lower = title.lower()
         return any(_keyword_matches_title(kw, title_lower) for kw in self._keywords)
 
-    def find_game_window(self) -> Optional[Tuple[int, str, tuple]]:
+    def find_target_window(self) -> Optional[Tuple[int, str, tuple]]:
         """
-        查找游戏窗口。返回客户区坐标。
+        查找目标窗口。返回客户区坐标。
 
         Returns:
             (hwnd, title, (left, top, right, bottom)) 或 None
@@ -218,7 +211,7 @@ class WindowLocator:
                     self._log_once = False
                     w, h = rect[2] - rect[0], rect[3] - rect[1]
                     exe = _get_process_name(hwnd)
-                    print(f'[识别] 找到游戏窗口: "{title}" [{exe}] '
+                    print(f'[识别] 找到目标窗口: "{title}" [{exe}] '
                           f'client={rect[0]},{rect[1]}→{rect[2]},{rect[3]} '
                           f'({w}x{h})')
                 return (hwnd, title, rect)
@@ -231,7 +224,7 @@ class WindowLocator:
                     self._log_once = False
                     w, h = rect[2] - rect[0], rect[3] - rect[1]
                     exe = _get_process_name(hwnd)
-                    print(f'[识别] 找到游戏窗口: "{title}" [{exe}] '
+                    print(f'[识别] 找到目标窗口: "{title}" [{exe}] '
                           f'client={rect[0]},{rect[1]}→{rect[2]},{rect[3]} '
                           f'({w}x{h})')
                 return (hwnd, title, rect)
@@ -242,7 +235,7 @@ class WindowLocator:
 
     def get_rect(self) -> Optional[Tuple[int, int, int, int]]:
         """获取窗口客户区矩形 (left, top, right, bottom)"""
-        result = self.find_game_window()
+        result = self.find_target_window()
         return result[2] if result else None
 
     def get_size(self) -> Optional[Tuple[int, int]]:
