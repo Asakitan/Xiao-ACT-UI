@@ -208,6 +208,20 @@ def register_extension_runtime(provider: Callable[[str], Callable[..., Any] | No
         _EXTENSION_RUNTIME_PROVIDER = provider
 
 
+def register_webview_extension(owner: Any, extension: Any) -> Any:
+    """Attach a plugin-contributed WebView extension to the current host owner.
+
+    The platform stores the extension behind a generic owner attribute and
+    dispatches by method name without importing plugin modules.
+    """
+    if owner is not None:
+        try:
+            setattr(owner, "_webview_extension", extension)
+        except Exception:
+            pass
+    return extension
+
+
 def _extension_runtime_handler(name: str) -> Callable[..., Any] | None:
     """Return the plugin-contributed handler for ``name`` or ``None``."""
     provider = _EXTENSION_RUNTIME_PROVIDER
@@ -4238,6 +4252,7 @@ __all__ = [
     "project_base_dir",
     "publish_owner_event",
     "register_extension_runtime",
+    "register_webview_extension",
     "should_record_owner_combat_event",
     "shutdown_act_plugin_manager",
 ]

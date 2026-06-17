@@ -29,6 +29,7 @@ from act_platform.runtime import (
     act_render_apply_hooks,
     enrich_action_log_event,
     publish_owner_event,
+    register_webview_extension,
     should_record_owner_combat_event,
 )
 from plugins.star_resonance_plugin.sr_config import get_skill_slot_rects
@@ -212,7 +213,7 @@ def install_webview_bridge(ctx) -> None:
     if owner is None:
         return
     bridge = StarResonanceWebViewBridge(ctx)
-    setattr(owner, '_game_webview_bridge', bridge)
+    register_webview_extension(owner, bridge)
     bridge.initialize_owner_state()
     for name in _OWNER_METHODS:
         if hasattr(bridge, name):

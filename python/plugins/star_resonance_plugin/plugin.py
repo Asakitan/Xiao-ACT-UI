@@ -89,7 +89,7 @@ def _init_game_engines(ctx):
     if cfg is None:
         ctx.log('[SR] No cfg_settings_ref on owner, skipping engine init')
         return
-    bridge = getattr(owner, '_game_webview_bridge', None)
+    bridge = getattr(owner, '_webview_extension', None)
 
     def _bridge_callback(name: str):
         fn = getattr(bridge, name, None) if bridge is not None else None

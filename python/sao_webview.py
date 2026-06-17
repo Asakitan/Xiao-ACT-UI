@@ -158,10 +158,10 @@ def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
 
-def _game_or_web_file_uri(owner: Any, filename: str) -> str:
+def _webview_extension_or_web_file_uri(owner: Any, filename: str) -> str:
     try:
-        bridge = getattr(owner, '_game_webview_bridge', None)
-        resolve = getattr(bridge, 'resolve_web_uri', None)
+        extension = getattr(owner, '_webview_extension', None)
+        resolve = getattr(extension, 'resolve_web_uri', None)
         if callable(resolve):
             uri = resolve(filename)
             if uri:
@@ -408,6 +408,24 @@ class SAOWebAPI:
 
     def __init__(self, gui: 'SAOWebViewGUI'):
         self._g = gui
+
+    def __getattr__(self, name: str):
+        if not isinstance(name, str) or name.startswith('_'):
+            raise AttributeError(name)
+        extension = getattr(self._g, '_webview_extension', None)
+        if not callable(getattr(extension, name, None)):
+            raise AttributeError(name)
+
+        def _forward(*args, **kwargs):
+            call = getattr(self._g, '_webview_extension_call', None)
+            if callable(call):
+                return call(name, *args, **kwargs)
+            current = getattr(getattr(self._g, '_webview_extension', None), name, None)
+            if not callable(current):
+                raise AttributeError(name)
+            return current(*args, **kwargs)
+        _forward.__name__ = name
+        return _forward
 
     def toggle_menu(self):
         threading.Thread(target=self._g._toggle_menu, daemon=True).start()
@@ -1043,7 +1061,7 @@ class SAOWebAPI:
                 'alert': 'dark',
                 'act': 'dark',
             }
-            plugin_defaults = self._g._game_plugin_maybe('panel_theme_defaults', default={}) or {}
+            plugin_defaults = self._g._dispatch_webview_extension('panel_theme_defaults', default={}) or {}
             if isinstance(plugin_defaults, dict):
                 defaults.update({
                     str(k): str(v) for k, v in plugin_defaults.items()
@@ -1061,7 +1079,7 @@ class SAOWebAPI:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
             allowed = {'hp', 'alert', 'act'}
-            plugin_allowed = self._g._game_plugin_maybe('panel_theme_keys', default=()) or ()
+            plugin_allowed = self._g._dispatch_webview_extension('panel_theme_keys', default=()) or ()
             allowed.update(str(item) for item in plugin_allowed)
             if panel not in allowed:
                 return json.dumps({'ok': False, 'panel': panel, 'message': 'Unknown panel'}, ensure_ascii=False)
@@ -1072,7 +1090,7 @@ class SAOWebAPI:
             themes[panel] = theme
             cfg.set('panel_themes', themes)
             cfg.save()
-            self._g._game_plugin_maybe('on_panel_theme_changed', panel, theme)
+            self._g._dispatch_webview_extension('on_panel_theme_changed', panel, theme)
             # 即时推送到对应 webview 面板窗口
             _win_map = {
                 'hp': getattr(self._g, 'hp_win', None),
@@ -1427,7 +1445,7 @@ class SAOWebViewGUI:
         self._identity_alert_visible = False
         self._identity_alert_nonce = 0
 
-        self._game_webview_bridge = None
+        self._webview_extension = None
 
         self._bootstrap_runtime_state()
         self._start_packet_engine_early()
@@ -1486,16 +1504,16 @@ class SAOWebViewGUI:
             traceback.print_exc()
             self._packet_engine = None
 
-    def _game_plugin_call(self, name: str, *args, **kwargs):
-        bridge = getattr(self, '_game_webview_bridge', None)
-        fn = getattr(bridge, name, None)
+    def _webview_extension_call(self, name: str, *args, **kwargs):
+        extension = getattr(self, '_webview_extension', None)
+        fn = getattr(extension, name, None)
         if not callable(fn):
-            raise RuntimeError(f'Game plugin bridge is not available: {name}')
+            raise RuntimeError(f'WebView extension is not available: {name}')
         return fn(*args, **kwargs)
 
-    def _game_plugin_maybe(self, name: str, *args, default=None, **kwargs):
+    def _dispatch_webview_extension(self, name: str, *args, default=None, **kwargs):
         try:
-            return self._game_plugin_call(name, *args, **kwargs)
+            return self._webview_extension_call(name, *args, **kwargs)
         except Exception:
             return default
 
@@ -1557,16 +1575,28 @@ class SAOWebViewGUI:
             pass
 
     def _destroy_plugin_surfaces(self):
-        for surface in list(self._plugin_surface_order):
+        surfaces = getattr(self, '_plugin_surfaces', None)
+        meta = getattr(self, '_plugin_surface_meta', None)
+        order = getattr(self, '_plugin_surface_order', None)
+        if not isinstance(surfaces, dict):
+            self._plugin_surfaces = {}
+            surfaces = self._plugin_surfaces
+        if not isinstance(meta, dict):
+            self._plugin_surface_meta = {}
+            meta = self._plugin_surface_meta
+        if not isinstance(order, list):
+            self._plugin_surface_order = []
+            order = self._plugin_surface_order
+        for surface in list(order):
             try:
-                win = self._plugin_surfaces.get(surface)
+                win = surfaces.get(surface)
                 if win:
                     win.destroy()
             except Exception:
                 pass
-        self._plugin_surfaces.clear()
-        self._plugin_surface_meta.clear()
-        self._plugin_surface_order.clear()
+        surfaces.clear()
+        meta.clear()
+        order.clear()
 
     def _apply_plugin_surfaces_transparency(self):
         for surface, win in list(self._plugin_surface_items()):
@@ -1653,10 +1683,10 @@ class SAOWebViewGUI:
                 self._set_plugin_surface_click_through(
                     surface, enabled=True, ensure_on_top=bool(meta.get('on_top', False)))
 
-    # ── Plugin bridge hooks ──
+    # ── WebView extension hooks ──
 
     def _persist_cached_identity_state(self, save_now: bool = False):
-        self._game_plugin_maybe('persist_cached_identity_state', save_now)
+        self._dispatch_webview_extension('persist_cached_identity_state', save_now)
 
     def _persistent_alert_kind_set(self) -> set:
         kinds = getattr(self, '_persistent_alert_kinds', None)
@@ -1687,10 +1717,10 @@ class SAOWebViewGUI:
                 and self._is_persistent_alert_kind(getattr(self, '_identity_alert_kind', '')))
 
     def _sync_identity_alert(self, gs):
-        self._game_plugin_maybe('sync_identity_alert', gs)
+        self._dispatch_webview_extension('sync_identity_alert', gs)
 
     def _stop_recognition_engines(self, preserve_packet: bool = False):
-        self._game_plugin_maybe('stop_engines', preserve_packet)
+        self._dispatch_webview_extension('stop_engines', preserve_packet)
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]
@@ -1708,7 +1738,7 @@ class SAOWebViewGUI:
         if not preserve_packet:
             self._packet_engine = None
         self._vision_engine = None
-        self._game_plugin_maybe('_reset_sta_offline_state')
+        self._dispatch_webview_extension('_reset_sta_offline_state')
         self._vision_paused_for_death = False
         self._last_dead_state = False
         if not preserve_packet:
@@ -1717,7 +1747,7 @@ class SAOWebViewGUI:
     def _reconfigure_data_engines(self, restart_packet: bool = True):
         """Restart packet/vision engines to match the current per-component source map."""
         try:
-            return self._game_plugin_call('_reconfigure_data_engines', restart_packet)
+            return self._webview_extension_call('_reconfigure_data_engines', restart_packet)
         except Exception as exc:
             print(f'[SAO] Plugin data-engine reconfigure failed: {exc}')
 
@@ -1839,7 +1869,7 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
-        self._game_plugin_maybe(
+        self._dispatch_webview_extension(
             'create_overlay_windows',
             webview,
             _web_file_uri,
@@ -1868,7 +1898,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Trigger/Timer Manager — same API surface as Entity/Tk panel
-        trigger_timer_url = _game_or_web_file_uri(self, 'trigger_timer_manager.html')
+        trigger_timer_url = _webview_extension_or_web_file_uri(self, 'trigger_timer_manager.html')
         _tt_w = max(640, int(min(_sw, 1920) * 0.40))
         _tt_h = max(520, int(min(_sh, 1080) * 0.52))
         _tt_x = max(16, int(monitor_left + (_sw - _tt_w) * 0.58))
@@ -1886,7 +1916,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Data Source Health — observability panel for PacketBridge + memory fallback
-        data_source_health_url = _game_or_web_file_uri(self, 'data_source_health.html')
+        data_source_health_url = _webview_extension_or_web_file_uri(self, 'data_source_health.html')
         _dh_w = max(640, int(min(_sw, 1920) * 0.40))
         _dh_h = max(500, int(min(_sh, 1080) * 0.50))
         _dh_x = max(16, int(monitor_left + (_sw - _dh_w) * 0.45))
@@ -1904,7 +1934,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Report/Export — shared report exporter surface for WebView + Entity parity
-        report_export_url = _game_or_web_file_uri(self, 'act_report_export.html')
+        report_export_url = _webview_extension_or_web_file_uri(self, 'act_report_export.html')
         _re_w = max(680, int(min(_sw, 1920) * 0.42))
         _re_h = max(520, int(min(_sh, 1080) * 0.52))
         _re_x = max(16, int(monitor_left + (_sw - _re_w) * 0.40))
@@ -1922,7 +1952,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Offline Import — standalone import/history playback wizard
-        offline_import_url = _game_or_web_file_uri(self, 'act_offline_import.html')
+        offline_import_url = _webview_extension_or_web_file_uri(self, 'act_offline_import.html')
         _oi_w = max(700, int(min(_sw, 1920) * 0.44))
         _oi_h = max(520, int(min(_sh, 1080) * 0.52))
         _oi_x = max(16, int(monitor_left + (_sw - _oi_w) * 0.42))
@@ -1940,7 +1970,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Timeline/VCR — shared event timeline controls for WebView parity
-        timeline_vcr_url = _game_or_web_file_uri(self, 'act_timeline_vcr.html')
+        timeline_vcr_url = _webview_extension_or_web_file_uri(self, 'act_timeline_vcr.html')
         _tl_w = max(700, int(min(_sw, 1920) * 0.43))
         _tl_h = max(520, int(min(_sh, 1080) * 0.52))
         _tl_x = max(16, int(monitor_left + (_sw - _tl_w) * 0.34))
@@ -1958,7 +1988,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Semantic Aggregate — cockpit parity with Entity/Tk aggregate panel
-        act_aggregate_url = _game_or_web_file_uri(self, 'act_aggregate.html')
+        act_aggregate_url = _webview_extension_or_web_file_uri(self, 'act_aggregate.html')
         _ag_w = max(820, int(min(_sw, 1920) * 0.54))
         _ag_h = max(620, int(min(_sh, 1080) * 0.62))
         _ag_x = max(16, int(monitor_left + (_sw - _ag_w) * 0.25))
@@ -1994,7 +2024,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Action Log — searchable EventBus table for WebView parity
-        action_log_url = _game_or_web_file_uri(self, 'act_action_log.html')
+        action_log_url = _webview_extension_or_web_file_uri(self, 'act_action_log.html')
         _al_w = max(760, int(min(_sw, 1920) * 0.48))
         _al_h = max(520, int(min(_sh, 1080) * 0.54))
         _al_x = max(16, int(monitor_left + (_sw - _al_w) * 0.30))
@@ -2012,7 +2042,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Death Recap — death-window report surface for WebView parity
-        death_recap_url = _game_or_web_file_uri(self, 'act_death_recap.html')
+        death_recap_url = _webview_extension_or_web_file_uri(self, 'act_death_recap.html')
         _dr_w = max(720, int(min(_sw, 1920) * 0.44))
         _dr_h = max(500, int(min(_sh, 1080) * 0.50))
         _dr_x = max(18, int(monitor_left + (_sw - _dr_w) * 0.32))
@@ -2030,7 +2060,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Graph/Timeseries — rich chart surface for WebView parity
-        graph_timeseries_url = _game_or_web_file_uri(self, 'act_graph_timeseries.html')
+        graph_timeseries_url = _webview_extension_or_web_file_uri(self, 'act_graph_timeseries.html')
         _gt_w = max(780, int(min(_sw, 1920) * 0.50))
         _gt_h = max(540, int(min(_sh, 1080) * 0.55))
         _gt_x = max(16, int(monitor_left + (_sw - _gt_w) * 0.27))
@@ -2048,7 +2078,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Combatant Drilldown — per-combatant detail surface
-        combatant_drilldown_url = _game_or_web_file_uri(self, 'act_combatant_drilldown.html')
+        combatant_drilldown_url = _webview_extension_or_web_file_uri(self, 'act_combatant_drilldown.html')
         _cd_w = max(720, int(min(_sw, 1920) * 0.46))
         _cd_h = max(520, int(min(_sh, 1080) * 0.54))
         _cd_x = max(20, int(monitor_left + (_sw - _cd_w) * 0.31))
@@ -2066,7 +2096,7 @@ class SAOWebViewGUI:
         )
 
         # ACT Skill Drilldown — per-skill detail and timeline refs
-        skill_drilldown_url = _game_or_web_file_uri(self, 'act_skill_drilldown.html')
+        skill_drilldown_url = _webview_extension_or_web_file_uri(self, 'act_skill_drilldown.html')
         _sd_w = max(720, int(min(_sw, 1920) * 0.45))
         _sd_h = max(500, int(min(_sh, 1080) * 0.52))
         _sd_x = max(24, int(monitor_left + (_sw - _sd_w) * 0.34))
@@ -3188,9 +3218,9 @@ class SAOWebViewGUI:
                 pass
             time.sleep(0.18)
             initial_state = getattr(getattr(self, '_state_mgr', None), 'state', None)
-            self._game_plugin_maybe('sync_identity_panel', initial_state)
+            self._dispatch_webview_extension('sync_identity_panel', initial_state)
             self._sync_menu_info()
-            self._game_plugin_maybe('on_webview_started')
+            self._dispatch_webview_extension('on_webview_started')
             # 注入插件渲染层 (plugin_layer.js) 到所有 WebView 窗口 —— 给插件
             # overlay/hook 能力覆盖主UI与全部悬浮窗, 延迟确保页面已加载.
             try:
@@ -3382,7 +3412,7 @@ class SAOWebViewGUI:
         try:
             self._bootstrap_runtime_state()
             cfg_settings = self._cfg_settings_ref
-            self._game_plugin_maybe('on_recognition_start')
+            self._dispatch_webview_extension('on_recognition_start')
 
             # Restore sound settings
             try:
@@ -3431,7 +3461,7 @@ class SAOWebViewGUI:
             self._recognition_active = not self._recognition_active
             state = "ON" if self._recognition_active else "OFF"
             if not self._recognition_active:
-                self._game_plugin_maybe('_reset_sta_offline_state')
+                self._dispatch_webview_extension('_reset_sta_offline_state')
         self._eval_menu(f'SAO.showToast("识别: {state}")')
 
 
@@ -5043,7 +5073,7 @@ class SAOWebViewGUI:
             print(f'[SAO-WV] identity pre-save failed: {e}')
 
         # 退出前通知插件保存自身缓存
-        self._game_plugin_maybe('_save_game_cache', quiet=False)
+        self._dispatch_webview_extension('_save_game_cache', quiet=False)
 
         # preExit CSS 已由 JS exitApplication() 触发, 此处不再重复调用
 
@@ -5066,7 +5096,7 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO Alert', duration_ms=180, steps=10)
         except Exception:
             pass
-        self._game_plugin_maybe('before_platform_shutdown')
+        self._dispatch_webview_extension('before_platform_shutdown')
         try:
             self._native_fade_window('SAO-PluginManager', duration_ms=140, steps=8)
         except Exception:
@@ -5435,7 +5465,7 @@ class SAOWebViewGUI:
 
     # ─── 同步信息 ───
     def _sync_menu_info(self):
-        info = self._game_plugin_maybe('build_menu_info', default=None)
+        info = self._dispatch_webview_extension('build_menu_info', default=None)
         if not isinstance(info, dict):
             info = {'username': '', 'level': '', 'profession': '',
                     'hp': '--', 'sta': '--', 'des': '', 'file': ''}
@@ -5586,7 +5616,7 @@ class SAOWebViewGUI:
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             cfg['report_export_visible'] = bool(self._report_export_visible)
             cfg['offline_import_visible'] = bool(self._offline_import_visible)
-            plugin_cfg = self._game_plugin_maybe('build_menu_settings', default={}) or {}
+            plugin_cfg = self._dispatch_webview_extension('build_menu_settings', default={}) or {}
             if isinstance(plugin_cfg, dict):
                 cfg.update(plugin_cfg)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -5628,7 +5658,7 @@ class SAOWebViewGUI:
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
-        fn = _map.get(action) or (lambda: self._game_plugin_maybe('menu_action', action))
+        fn = _map.get(action) or (lambda: self._dispatch_webview_extension('menu_action', action))
         if fn:
             threading.Thread(target=fn, daemon=True).start()
 
@@ -5674,14 +5704,14 @@ class SAOWebViewGUI:
             if hasattr(self, '_state_mgr'):
                 try:
                     gs = self._state_mgr.state
-                    self._game_plugin_maybe('sync_vision_lifecycle', gs)
+                    self._dispatch_webview_extension('sync_vision_lifecycle', gs)
                 except Exception as e:
                     print(f'[SAO-WV] vision lifecycle sync error: {e}')
                     gs = None
-            self._game_plugin_maybe('render_tick', gs, bool(self._recognition_active))
+            self._dispatch_webview_extension('render_tick', gs, bool(self._recognition_active))
             _panel_tick += 1
             if _panel_tick % 5 == 0:
-                self._game_plugin_maybe('render_slow_tick', gs, bool(self._recognition_active))
+                self._dispatch_webview_extension('render_slow_tick', gs, bool(self._recognition_active))
             if _panel_tick >= 10 and self._panel_wins:
                 _panel_tick = 0
                 self._sync_all_panels()
@@ -5755,7 +5785,7 @@ class SAOWebViewGUI:
             self._persist_cached_identity_state(save_now=False)
         except Exception:
             pass
-        self._game_plugin_maybe('_save_game_cache', quiet=False)
+        self._dispatch_webview_extension('_save_game_cache', quiet=False)
         self._destroy_all_panels()
         try:
             self.hp_win.destroy()
