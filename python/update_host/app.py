@@ -726,10 +726,6 @@ async def publish(
     """接收 dev_publish.py 上传的 zip 包并写入 releases/."""
     _authorize_publish_request(request)
 
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="empty body")
-
     # ── Sanitize ──
     safe_ch, safe_tg = _safe_channel_target(channel, target)
     safe_ver = "".join(c for c in version if c.isalnum() or c in ".-") or "0.0.0"
@@ -741,10 +737,22 @@ async def publish(
     fname = f"update-{safe_ver}-{safe_type}.zip"
     dst = os.path.join(target_dir, fname)
 
+    hasher = hashlib.sha256()
+    size = 0
     with open(dst, "wb") as f:
-        f.write(body)
+        async for chunk in request.stream():
+            f.write(chunk)
+            hasher.update(chunk)
+            size += len(chunk)
 
-    digest = hashlib.sha256(body).hexdigest()
+    if size == 0:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="empty body")
+
+    digest = hasher.hexdigest()
 
     manifest = {
         "version": safe_ver,
@@ -755,7 +763,7 @@ async def publish(
         "channel": safe_ch,
         "download_url": f"/downloads/{safe_ch}/{safe_tg}/{fname}",
         "sha256": digest,
-        "size": len(body),
+        "size": size,
         "notes": notes,
         "commit": commit,
         "commit_short": commit_short,
