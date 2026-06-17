@@ -101,9 +101,6 @@
         set_hit_regions: function (rects) {
             return call('ui.set_hit_regions', { regions: rects });
         },
-        boss_hp_hit_regions: function (rects) {
-            return call('ui.boss_hp_hit_regions', { regions: Array.isArray(rects) ? rects : [] });
-        },
         notify_hp_hit_regions_ready: function () {
             return call('ui.notify_hp_hit_regions_ready', {});
         },

@@ -1,9 +1,8 @@
 // S189 — HUD page bootstrap.
 //
-// Each HUD page (hp.html, stamina.html, dps.html, boss_hp.html) loads
-// this after bridge.js. It subscribes to the C# event broadcaster
-// and dispatches into per-page update functions whose names the
-// Python panels already defined (`updateHP`, `updateSTA`, etc).
+// HUD pages load this after bridge.js. It subscribes to the C# event
+// broadcaster and dispatches into per-page update functions whose names
+// the Python panels already defined (`updateHP`, `updateSTA`, etc).
 //
 // Pages that don't define a given updater just see no-op for that
 // event type. Safe to include in every HUD page; pages that don't

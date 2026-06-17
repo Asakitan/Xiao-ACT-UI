@@ -1380,6 +1380,7 @@ class SAOWebViewGUI:
         self._pending_update_popup_snapshot = None
         self._last_update_popup_key = ''
         self._identity_alert_kind = ''
+        self._persistent_alert_kinds = set()
 
         # License panel
         self._license_win = None
@@ -1652,18 +1653,38 @@ class SAOWebViewGUI:
                 self._set_plugin_surface_click_through(
                     surface, enabled=True, ensure_on_top=bool(meta.get('on_top', False)))
 
-    # ── Hide & Seek ──
+    # ── Plugin bridge hooks ──
 
     def _persist_cached_identity_state(self, save_now: bool = False):
         self._game_plugin_maybe('persist_cached_identity_state', save_now)
 
-    #: Alert kinds that must not be auto-dismissed/overridden while shown
-    #: (e.g. a plugin's persistent status alert such as hide_seek's).
-    _PERSISTENT_ALERT_KINDS = frozenset({'hide_seek'})
+    def _persistent_alert_kind_set(self) -> set:
+        kinds = getattr(self, '_persistent_alert_kinds', None)
+        if not isinstance(kinds, set):
+            kinds = set(kinds or ())
+            self._persistent_alert_kinds = kinds
+        return kinds
+
+    def _register_persistent_alert_kind(self, kind: str) -> bool:
+        kind = str(kind or '').strip()
+        if not kind:
+            return False
+        self._persistent_alert_kind_set().add(kind)
+        return True
+
+    def _unregister_persistent_alert_kind(self, kind: str) -> bool:
+        kind = str(kind or '').strip()
+        if not kind:
+            return False
+        self._persistent_alert_kind_set().discard(kind)
+        return True
+
+    def _is_persistent_alert_kind(self, kind: str) -> bool:
+        return str(kind or '').strip() in self._persistent_alert_kind_set()
 
     def _is_persistent_alert_active(self) -> bool:
         return (bool(getattr(self, '_identity_alert_visible', False))
-                and str(getattr(self, '_identity_alert_kind', '') or '') in self._PERSISTENT_ALERT_KINDS)
+                and self._is_persistent_alert_kind(getattr(self, '_identity_alert_kind', '')))
 
     def _sync_identity_alert(self, gs):
         self._game_plugin_maybe('sync_identity_alert', gs)
@@ -3521,8 +3542,8 @@ class SAOWebViewGUI:
         内置优先), 插件映射在后; 每次按键/轮询现解析。"""
         saved = getattr(self, '_cfg_settings_ref', None)
         user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
-        # Merge saved hotkeys with defaults so new keys (like toggle_hide_seek)
-        # are always available even if settings.json doesn't contain them.
+        # Merge saved hotkeys with defaults so newly added keys are always
+        # available even if settings.json doesn't contain them.
         hotkeys = {**DEFAULT_HOTKEYS, **user_hotkeys}
         bindings = []
         for action, info in hotkeys.items():
@@ -4578,12 +4599,12 @@ class SAOWebViewGUI:
         if expected_nonce is not None and expected_nonce != current_nonce:
             return
 
-        # While a persistent plugin alert (e.g. hide_seek) is shown, refuse
-        # unforced external dismiss requests so the plugin's refresh loop keeps
-        # it alive. The plugin's own stop passes force=True to close it. (Stale
-        # nonce-bearing auto-hide timers are already rejected above.)
+        # While a plugin-registered persistent alert is shown, refuse unforced
+        # external dismiss requests so the plugin's refresh loop keeps it alive.
+        # The plugin's own stop passes force=True to close it. (Stale nonce-
+        # bearing auto-hide timers are already rejected above.)
         if (not force and expected_nonce is None
-                and str(getattr(self, '_identity_alert_kind', '') or '') in self._PERSISTENT_ALERT_KINDS):
+                and self._is_persistent_alert_kind(getattr(self, '_identity_alert_kind', ''))):
             return
 
         was_visible = bool(getattr(self, '_identity_alert_visible', False))
