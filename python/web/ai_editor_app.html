@@ -94,8 +94,29 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 .sb-item .meta { font-size:10px; color:var(--fg-dim); margin-left:auto; }
 .sb-group { padding:6px 16px 3px; font-size:11px; font-weight:600; color:var(--fg-dim); }
 
-/* ── Content area ── */
-.content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+/* ── Content area (editor + bottom terminal) ── */
+.content { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:200px; }
+
+/* ── Right sidebar (Chat / Claude Code / Codex) ── */
+.right-sidebar { width:380px; min-width:260px; max-width:600px; display:flex;
+  flex-direction:column; border-left:1px solid var(--border); background:var(--bg-sidebar); flex-shrink:0; }
+.right-tabs { display:flex; height:35px; background:var(--bg2); border-bottom:1px solid var(--border);
+  padding:0 4px; align-items:center; flex-shrink:0; }
+.rtab { padding:0 12px; height:35px; display:flex; align-items:center; font-size:11px;
+  font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--fg-dim);
+  cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+.rtab:hover { color:var(--fg); }
+.rtab.active { color:var(--fg); border-bottom-color:var(--fg-accent); }
+.right-panel { flex:1; display:none; flex-direction:column; overflow:hidden; }
+.right-panel.active { display:flex; }
+.rp-placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center;
+  flex:1; color:var(--fg-dim); text-align:center; padding:24px; gap:10px; font-size:13px; }
+.rp-placeholder kbd { background:var(--bg3); padding:2px 8px; border-radius:3px;
+  border:1px solid var(--border); font:12px var(--mono); }
+.rsplitter { width:4px; cursor:ew-resize; flex-shrink:0; position:relative; }
+.rsplitter::after { content:''; position:absolute; top:0; bottom:0; left:1px; width:2px;
+  background:var(--border); }
+.rsplitter:hover::after, .rsplitter.dragging::after { background:var(--border-focus); }
 
 /* ── Tab bar ── */
 .tab-bar { display:flex; align-items:center; height:35px; background:var(--bg-tab);
@@ -449,6 +470,8 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
     <div class="ab-icon" data-panel="tools" title="Tools">🔧</div>
     <div class="ab-icon" data-panel="extensions" title="Extensions">🧩</div>
     <div class="ab-icon" data-panel="history" title="History">📋</div>
+    <div class="ab-icon" data-panel="instructions" title="Custom Instructions">📝</div>
+    <div class="ab-icon" data-panel="agents" title="Agents & Workflows">🤖</div>
     <div class="ab-spacer"></div>
     <div class="ab-icon theme-toggle" title="Toggle Theme (Dark/Light)" onclick="toggleTheme()">🌓</div>
     <div class="ab-icon" data-panel="settings" title="Settings">⚙</div>
@@ -508,6 +531,48 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
       <div id="ext-marketplace-list"></div>
       <div id="ext-loading" style="padding:12px 16px;color:var(--fg-dim);font-size:12px;display:none">Searching...</div>
     </div>
+    <!-- Instructions sidebar -->
+    <div class="sb-view" id="sb-instructions" style="display:none">
+      <div class="sb-header">Instructions <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshInstructions()" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section" style="padding:6px 12px">
+        <div class="sb-group">User Instructions</div>
+        <textarea id="inst-user" rows="6" placeholder="Add custom instructions that apply to every conversation..."
+          style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);
+          border-radius:3px;padding:6px 8px;font:12px var(--mono);resize:vertical;box-sizing:border-box"></textarea>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="send-btn" style="font-size:11px;padding:3px 10px" onclick="saveUserInstructions()">Save</button>
+          <span style="color:var(--fg-dim);font-size:11px;line-height:24px" id="inst-user-status"></span>
+        </div>
+        <div class="sb-group" style="margin-top:12px">Project Instructions
+          <span class="sb-action" onclick="createInstructionFile()" title="New file" style="float:right;cursor:pointer">✚</span>
+        </div>
+        <div style="color:var(--fg-dim);font-size:11px;padding:2px 0 6px 0">.sao/instructions/ directory</div>
+        <div id="inst-files-list"></div>
+        <div class="sb-group" style="margin-top:12px">Preview</div>
+        <div id="inst-preview" style="font-size:11px;color:var(--fg-dim);max-height:200px;overflow-y:auto;
+          white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:6px;border-radius:3px;
+          border:1px solid var(--border)"></div>
+      </div>
+    </div>
+    <!-- Agents & Workflows sidebar -->
+    <div class="sb-view" id="sb-agents" style="display:none">
+      <div class="sb-header">Agents & Workflows <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshAgents()" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section" style="padding:6px 12px">
+        <div class="sb-group">Agents
+          <span class="sb-action" onclick="createAgent()" title="New Agent" style="float:right;cursor:pointer">✚</span>
+        </div>
+        <div id="agent-active-badge" style="display:none;font-size:11px;color:var(--accent);padding:2px 0 6px 0"></div>
+        <div id="agents-list"></div>
+        <div class="sb-group" style="margin-top:12px">Workflows
+          <span class="sb-action" onclick="createWorkflow()" title="New Workflow" style="float:right;cursor:pointer">✚</span>
+        </div>
+        <div id="workflows-list"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Content -->
@@ -541,47 +606,62 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
     <!-- Splitter -->
     <div class="splitter" id="splitter"></div>
 
-    <!-- Panel area -->
+    <!-- Panel area (Terminal / Output only) -->
     <div class="panel-area" id="panel-area">
       <div class="panel-tabs">
-        <div class="ptab active" data-ptab="chat">Chat</div>
-        <div class="ptab" data-ptab="terminal">Terminal</div>
+        <div class="ptab active" data-ptab="terminal">Terminal</div>
+        <div class="ptab" data-ptab="output">Output</div>
         <span class="spacer"></span>
-        <span class="panel-btn" onclick="clearChat()" title="Clear">🗑</span>
-        <span class="panel-btn" onclick="exportChat()" title="Export">📋</span>
       </div>
-
-      <!-- Chat panel -->
-      <div class="chat-panel" id="chat-panel">
-        <div class="chat-messages" id="chat-messages"></div>
-        <div class="chat-input-area">
-          <div style="position:relative">
-            <div class="slash-popup" id="slash-popup"></div>
-            <div class="chat-input-row">
-              <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ commands, @ context)"></textarea>
-              <button class="send-btn" id="send-btn" onclick="doSend()">Send</button>
-            </div>
-            <div class="attach-area" id="attach-area"></div>
-            <!-- @-mention popup -->
-            <div class="slash-popup" id="at-popup"></div>
-          </div>
-          <div class="chat-toolbar">
-            <span class="hint">Enter 发送 · / 命令 · @file @selection @editor @state</span>
-            <span class="spacer"></span>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--fg-dim)" title="Agent Mode: autonomous plan→execute→verify">
-              <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Agent
-            </label>
-            <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■ Stop</span>
-            <span class="toolbar-btn" onclick="uploadImage()" title="Attach image (vision)">📷</span>
-            <span class="token-count" id="token-count">0 tokens</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Terminal panel -->
       <div class="terminal-panel" id="terminal-panel">
         <div class="terminal-output" id="terminal-output"></div>
       </div>
+      <div class="terminal-panel" id="output-panel" style="display:none">
+        <div class="terminal-output" id="output-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vertical splitter (editor ↔ right sidebar) -->
+  <div class="rsplitter" id="rsplitter"></div>
+
+  <!-- Right sidebar: dynamic provider tabs -->
+  <div class="right-sidebar" id="right-sidebar">
+    <div class="right-tabs" id="right-tabs">
+      <div class="rtab active" data-rtab="chat">CHAT</div>
+      <!-- CC / Codex / plugin tabs injected by renderProviderTabs() -->
+    </div>
+    <div id="right-panels">
+      <!-- CHAT panel (always present) -->
+      <div class="right-panel active" id="rp-chat">
+        <div class="chat-panel" id="chat-panel">
+          <div class="chat-messages" id="chat-messages"></div>
+          <div class="chat-input-area">
+            <div style="position:relative">
+              <div class="slash-popup" id="slash-popup"></div>
+              <div class="chat-input-row">
+                <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ commands, @ context)"></textarea>
+                <button class="send-btn" id="send-btn" onclick="doSend()">Send</button>
+              </div>
+              <div class="attach-area" id="attach-area"></div>
+              <div class="slash-popup" id="at-popup"></div>
+            </div>
+            <div class="chat-toolbar">
+              <span class="hint">Enter · / 命令 · @file @selection @state</span>
+              <span class="spacer"></span>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--fg-dim)" title="Agent Mode">
+                <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Agent
+              </label>
+              <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■ Stop</span>
+              <span class="toolbar-btn" onclick="uploadImage()" title="Attach image (vision)">📷</span>
+              <span class="toolbar-btn" onclick="clearChat()" title="Clear">🗑</span>
+              <span class="toolbar-btn" onclick="exportChat()" title="Export">📋</span>
+              <span class="token-count" id="token-count">0 tokens</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Provider panels injected dynamically by renderProviderTabs() -->
     </div>
   </div>
 </div>
@@ -595,6 +675,7 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
   <span class="sb-item" id="status-encoding">UTF-8</span>
   <span class="sb-item" id="status-eol">LF</span>
   <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
+  <span class="sb-item" id="status-mode" title="Editor Mode (Chat/Edit/Agent)" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Edit</span>
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tokens</span>
 </div>
@@ -637,19 +718,64 @@ pre.code-block:hover .cb-toolbar { opacity:1; }
 
 <!-- Settings modal -->
 <div class="modal-bg" id="settings-modal">
-  <div class="modal">
+  <div class="modal" style="max-height:90vh;overflow-y:auto">
     <h2>Settings</h2>
+
+    <div class="sb-group" style="padding:0;margin-top:8px">Endpoint</div>
     <label>Provider</label>
     <select id="s-provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
     <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
-    <label>API Key</label>
+    <label>API Key (active provider)</label>
     <div style="display:flex;gap:6px"><input id="s-apikey" type="password" style="flex:1">
     <span class="toolbar-btn" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</span></div>
     <label>Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
-    <label>Model</label><input id="s-model">
+
+    <div class="sb-group" style="padding:0;margin-top:12px">Provider Keys <span style="font-weight:normal;font-size:10px;color:var(--fg-dim)">(for Claude Code / Codex tabs)</span></div>
+    <div style="display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:12px;padding:4px 0">
+      <span style="color:var(--fg-dim)">OpenAI</span><input id="sk-openai" type="password" placeholder="sk-..." style="font-size:11px">
+      <span style="color:var(--fg-dim)">Anthropic</span><input id="sk-anthropic" type="password" placeholder="sk-ant-..." style="font-size:11px">
+      <span style="color:var(--fg-dim)">DeepSeek</span><input id="sk-deepseek" type="password" placeholder="sk-..." style="font-size:11px">
+    </div>
+
+    <div class="sb-group" style="padding:0;margin-top:12px">Model</div>
+    <label>Model Name</label><input id="s-model" placeholder="gpt-4o / claude-sonnet-4-20250514 / deepseek-chat">
+    <div id="s-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
     <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
-    <label>Max Tokens</label><input id="s-maxtok" type="number" value="4096">
+    <label>Max Output Tokens</label><input id="s-maxtok" type="number" value="4096">
+
+    <div class="sb-group" style="padding:0;margin-top:12px">Chat</div>
     <label>System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
+    <label>Mode</label>
+    <select id="s-mode" style="width:100%"><option value="chat">Chat (no tools)</option><option value="edit" selected>Edit (confirm writes)</option><option value="agent">Agent (autonomous)</option></select>
+    <div id="s-perms" style="margin-top:6px;font-size:11px"></div>
+
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Advanced Sampling & Connection</summary>
+      <div style="padding:8px 0;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
+        <div><label>Top P</label><input id="s-topp" type="number" step="0.05" min="0" max="1" value="1.0"></div>
+        <div><label>Freq Penalty</label><input id="s-freqp" type="number" step="0.1" min="-2" max="2" value="0"></div>
+        <div><label>Presence Penalty</label><input id="s-presp" type="number" step="0.1" min="-2" max="2" value="0"></div>
+        <div><label>Timeout (sec)</label><input id="s-timeout" type="number" value="180" min="10" max="600"></div>
+        <div style="grid-column:1/-1"><label>Stop Sequences (comma-sep)</label><input id="s-stop" placeholder="e.g. \n\n,###"></div>
+        <div style="grid-column:1/-1"><label>Max Input Tokens (0 = model default)</label><input id="s-maxinp" type="number" value="0" min="0"></div>
+        <div style="grid-column:1/-1"><label>Extra Headers (JSON)</label><input id="s-xheaders" placeholder='{"X-Custom":"value"}'></div>
+        <div style="grid-column:1/-1"><label>Extra Body (JSON)</label><input id="s-xbody" placeholder='{"logprobs":true}'></div>
+      </div>
+    </details>
+
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Custom Models</summary>
+      <div style="padding:8px 0;font-size:12px">
+        <div id="s-custom-models-list"></div>
+        <div style="display:flex;gap:4px;margin-top:6px">
+          <input id="s-cm-name" placeholder="model-name" style="flex:2;font-size:11px">
+          <input id="s-cm-input" placeholder="maxInput" type="number" style="flex:1;font-size:11px" value="128000">
+          <input id="s-cm-output" placeholder="maxOutput" type="number" style="flex:1;font-size:11px" value="4096">
+          <button class="send-btn" style="font-size:10px;padding:2px 8px" onclick="addCustomModel()">Add</button>
+        </div>
+      </div>
+    </details>
+
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
       <span class="toolbar-btn" onclick="testConn()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Test</span>
@@ -697,6 +823,7 @@ window._onEditorEvent=function(event,data){
   else if(event==='tool_start') onToolStart(data);
   else if(event==='tool_end') onToolEnd(data);
   else if(event==='tool_confirm') onToolConfirm(data);
+  else if(event==='workflow_step') onWorkflowStep(data);
   else if(event==='error') onError(data);
   else if(event==='idle') onIdle();
 };
@@ -706,7 +833,7 @@ async function init(){
   const c=await call('load_config'); if(c)Object.assign(config,c);
   syncUI();
   const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
-  refreshHistory();
+  refreshHistory();await loadMode();await renderProviderTabs();
   appendSystem('✦ SAO AI Editor 就绪\n22 个引擎工具 · 多模型支持 · Tool Calling\n\n在左侧 ⚙ 中配置 API Key，然后开始对话。');
 }
 
@@ -1231,6 +1358,7 @@ window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearCha
 const SLASH_CMDS=[
   ['/clear','Clear chat'],['/new','New conversation'],['/export','Export to clipboard'],
   ['/settings','Open settings'],['/tools','Show tools sidebar'],['/history','Show history'],
+  ['/instructions','Custom instructions'],['/agents','Agents & Workflows'],
   ['/state','Game state'],['/dps','DPS summary'],['/boss','Boss status'],
   ['/entities','Entity list'],['/system','System info'],['/eval','Eval Python (usage: /eval expr)'],
 ];
@@ -1244,6 +1372,8 @@ async function execSlash(raw){
   else if(cmd==='/settings')openSettings();
   else if(cmd==='/tools')switchSidebar('tools');
   else if(cmd==='/history'){switchSidebar('history');refreshHistory()}
+  else if(cmd==='/instructions')switchSidebar('instructions')
+  else if(cmd==='/agents')switchSidebar('agents')
   else if(toolMap[cmd]){
     const r=await call('execute_tool',toolMap[cmd],'{}');
     const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';b.style.color='var(--fg-dim)';
@@ -1286,6 +1416,8 @@ function switchSidebar(panel){
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
   const view=$('sb-'+panel);if(view)view.style.display='';
   if(panel==='settings'){openSettings();return}
+  if(panel==='instructions')refreshInstructions();
+  if(panel==='agents')refreshAgents();
   const sb=$('sidebar');sb.classList.remove('hidden');
 }
 document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener('click',()=>switchSidebar(i.dataset.panel)));
@@ -1314,6 +1446,182 @@ async function refreshHistory(){
 }
 window.refreshHistory=refreshHistory;
 
+// ── Instructions ──
+async function refreshInstructions(){
+  const r=await call('get_instructions');if(!r)return;
+  $('inst-user').value=r.user_instructions||'';
+  $('inst-user-status').textContent='';
+  const list=$('inst-files-list');list.innerHTML='';
+  if(r.files&&r.files.length){
+    r.files.forEach(f=>{
+      const row=document.createElement('div');row.className='sb-item';
+      row.style.cssText='display:flex;align-items:center;gap:4px';
+      const label=document.createElement('span');label.style.cssText='flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis';
+      label.textContent=(f.scope==='project'?'📄 ':'📎 ')+f.name;label.title=f.path||f.name;
+      const editBtn=document.createElement('span');editBtn.textContent='✎';editBtn.title='Edit';
+      editBtn.style.cssText='cursor:pointer;font-size:12px;opacity:0.6';
+      editBtn.onclick=e=>{e.stopPropagation();editInstructionFile(f.name,f.content||'')};
+      const delBtn=document.createElement('span');delBtn.textContent='✕';delBtn.title='Delete';
+      delBtn.style.cssText='cursor:pointer;font-size:12px;opacity:0.6;color:var(--fg-error,#f44)';
+      delBtn.onclick=e=>{e.stopPropagation();deleteInstructionFile(f.name)};
+      row.appendChild(label);row.appendChild(editBtn);row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  }else{
+    list.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:2px 0">No instruction files</div>';
+  }
+  $('inst-preview').textContent=r.combined_preview||'(empty)';
+}
+async function saveUserInstructions(){
+  const text=$('inst-user').value;
+  const r=await call('save_user_instructions',text);
+  if(r&&r.ok){$('inst-user-status').textContent='✓ Saved';setTimeout(()=>{$('inst-user-status').textContent=''},2000);refreshInstructions()}
+  else{$('inst-user-status').textContent='✗ Failed'}
+}
+function createInstructionFile(){
+  const name=prompt('Instruction file name (without .md):');if(!name)return;
+  editInstructionFile(name.endsWith('.md')?name:name+'.md','');
+}
+function editInstructionFile(name,content){
+  const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
+  modal.innerHTML='<div class="modal"><h2>Edit: '+esc(name)+'</h2>'
+    +'<textarea id="inst-edit-content" rows="12" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:8px;font:12px var(--mono);resize:vertical;box-sizing:border-box"></textarea>'
+    +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" id="inst-edit-cancel">Cancel</span>'
+    +'<button class="send-btn" id="inst-edit-save">Save</button></div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('inst-edit-content').value=content;
+  document.getElementById('inst-edit-cancel').onclick=()=>modal.remove();
+  modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  document.getElementById('inst-edit-save').onclick=async()=>{
+    const c=document.getElementById('inst-edit-content').value;
+    await call('save_instruction_file',name,c);modal.remove();refreshInstructions();
+  };
+}
+async function deleteInstructionFile(name){
+  if(!confirm('Delete instruction file "'+name+'"?'))return;
+  await call('delete_instruction_file',name);refreshInstructions();
+}
+window.refreshInstructions=refreshInstructions;window.saveUserInstructions=saveUserInstructions;
+window.createInstructionFile=createInstructionFile;
+
+// ── Agents & Workflows ──
+let activeAgentId='';
+async function refreshAgents(){
+  const ar=await call('list_agents');const wr=await call('list_workflows');
+  const aa=await call('get_active_agent');activeAgentId=(aa&&aa.agent_id)||'';
+  // Active badge
+  const badge=$('agent-active-badge');
+  if(activeAgentId){badge.style.display='';badge.innerHTML='Active: <b>'+esc(activeAgentId)+'</b> <span style="cursor:pointer;opacity:0.6" onclick="clearAgent()">✕</span>'}
+  else{badge.style.display='none'}
+  // Agents list
+  const al=$('agents-list');al.innerHTML='';
+  if(ar&&ar.agents){ar.agents.forEach(a=>{
+    const row=document.createElement('div');row.className='sb-item';
+    row.style.cssText='display:flex;align-items:center;gap:6px'+(a.id===activeAgentId?';background:var(--bg3)':'');
+    const icon=document.createElement('span');icon.textContent=a.icon||'\u{1f916}';icon.style.fontSize='14px';
+    const info=document.createElement('span');info.style.cssText='flex:1;overflow:hidden';
+    const scopeTag=a.builtin?'':'<span style="font-size:9px;opacity:0.5;margin-left:4px">'+(a._scope||'')+'</span>';
+    info.innerHTML='<div style="font-size:12px">'+esc(a.name)+scopeTag+'</div><div style="font-size:10px;color:var(--fg-dim);white-space:nowrap;text-overflow:ellipsis;overflow:hidden">'+esc(a.description)+'</div>';
+    row.appendChild(icon);row.appendChild(info);
+    row.onclick=()=>activateAgent(a.id);row.title='Click to activate · '+a.description;
+    if(!a.builtin){
+      const del=document.createElement('span');del.textContent='✕';del.title='Delete';
+      del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44)';
+      del.onclick=e=>{e.stopPropagation();deleteAgent(a.id)};
+      row.appendChild(del);
+    }
+    al.appendChild(row);
+  })}
+  // Workflows list
+  const wl=$('workflows-list');wl.innerHTML='';
+  if(wr&&wr.workflows){wr.workflows.forEach(w=>{
+    const row=document.createElement('div');row.className='sb-item';
+    row.style.cssText='display:flex;align-items:center;gap:6px';
+    const icon=document.createElement('span');icon.textContent=w.icon||'⚡';icon.style.fontSize='14px';
+    const info=document.createElement('span');info.style.cssText='flex:1;overflow:hidden';
+    const steps=w.steps?w.steps.length:0;
+    info.innerHTML='<div style="font-size:12px">'+esc(w.name)+'</div><div style="font-size:10px;color:var(--fg-dim)">'+steps+' steps · '+esc(w.description)+'</div>';
+    const runBtn=document.createElement('span');runBtn.textContent='▶';runBtn.title='Run workflow';
+    runBtn.style.cssText='cursor:pointer;font-size:12px;opacity:0.7';
+    runBtn.onclick=e=>{e.stopPropagation();promptRunWorkflow(w.id,w.name)};
+    row.appendChild(icon);row.appendChild(info);row.appendChild(runBtn);
+    if(!w.builtin){
+      const del=document.createElement('span');del.textContent='✕';del.title='Delete';
+      del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44)';
+      del.onclick=e=>{e.stopPropagation();deleteWorkflow(w.id)};
+      row.appendChild(del);
+    }
+    wl.appendChild(row);
+  })}
+}
+async function activateAgent(id){
+  const r=await call('set_active_agent',id);
+  if(r&&r.ok){appendSystem('Agent activated: '+(r.agent&&r.agent.name||id));refreshAgents()}
+}
+async function clearAgent(){
+  await call('clear_active_agent');activeAgentId='';refreshAgents();appendSystem('Agent deactivated');}
+window.clearAgent=clearAgent;
+async function deleteAgent(id){if(!confirm('Delete agent "'+id+'"?'))return;await call('delete_agent',id);refreshAgents()}
+async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return;await call('delete_workflow',id);refreshAgents()}
+function promptRunWorkflow(id,name){
+  const input=prompt('Input for workflow "'+name+'":');if(!input)return;
+  appendSystem('⚡ Running workflow: '+name+'...');
+  call('run_workflow',id,input).then(r=>{
+    if(!r)return;
+    if(r.error){appendSystem('Workflow error: '+r.error);return}
+    let out='⚡ Workflow **'+name+'** complete:\n\n';
+    if(r.steps)r.steps.forEach((s,i)=>{out+='### Step '+(i+1)+': '+(s.label||'')+(s.error?' ❌':' ✓')+'\n'+s.output+'\n\n'});
+    const el=createMsg('assistant','workflow');el.innerHTML=renderMd(out);
+  });
+}
+function onWorkflowStep(d){setStatus('⚡ '+(d.label||'Step '+(d.step+1))+' ('+d.status+')')}
+function createAgent(){
+  const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
+  modal.innerHTML='<div class="modal"><h2>New Agent</h2>'
+    +'<label>ID (slug)</label><input id="ag-id" placeholder="my-agent">'
+    +'<label>Name</label><input id="ag-name" placeholder="My Agent">'
+    +'<label>Icon</label><input id="ag-icon" value="\u{1f916}" style="width:60px">'
+    +'<label>Description</label><input id="ag-desc" placeholder="What this agent does">'
+    +'<label>System Prompt</label><textarea id="ag-prompt" rows="6" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box"></textarea>'
+    +'<label>When to Use</label><input id="ag-when" placeholder="When the user asks to...">'
+    +'<label>Scope</label><select id="ag-scope"><option value="workspace">Workspace</option><option value="system">System (global)</option></select>'
+    +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span>'
+    +'<button class="send-btn" id="ag-save">Save</button></div></div>';
+  // Populate plugin scopes
+  call('get_scopes').then(r=>{if(r&&r.scopes)r.scopes.filter(s=>s.scope==='plugin').forEach(s=>{
+    const opt=document.createElement('option');opt.value='plugin:'+s.plugin_id;opt.textContent=s.label;
+    document.getElementById('ag-scope').appendChild(opt);
+  })});
+  document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  document.getElementById('ag-save').onclick=async()=>{
+    const data={id:$('ag-id').value.trim(),name:$('ag-name').value.trim(),icon:$('ag-icon').value,
+      description:$('ag-desc').value,system_prompt:$('ag-prompt').value,when_to_use:$('ag-when').value,
+      _scope:$('ag-scope').value};
+    if(!data.id||!data.name)return;
+    await call('save_agent',data);modal.remove();refreshAgents();
+  };
+}
+function createWorkflow(){
+  const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
+  modal.innerHTML='<div class="modal"><h2>New Workflow</h2>'
+    +'<label>ID (slug)</label><input id="wf-id" placeholder="my-workflow">'
+    +'<label>Name</label><input id="wf-name" placeholder="My Workflow">'
+    +'<label>Icon</label><input id="wf-icon" value="⚡" style="width:60px">'
+    +'<label>Description</label><input id="wf-desc">'
+    +'<label>Steps (JSON array)</label><textarea id="wf-steps" rows="8" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box" placeholder=\'[{"agent":"default","prompt":"{{input}}","output_var":"result","label":"Processing"}]\'></textarea>'
+    +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span>'
+    +'<button class="send-btn" id="wf-save">Save</button></div></div>';
+  document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  document.getElementById('wf-save').onclick=async()=>{
+    let steps;try{steps=JSON.parse($('wf-steps').value)}catch{alert('Invalid JSON');return}
+    const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
+      description:$('wf-desc').value,steps:steps};
+    if(!data.id||!data.name)return;
+    await call('save_workflow',data);modal.remove();refreshAgents();
+  };
+}
+window.refreshAgents=refreshAgents;window.createAgent=createAgent;window.createWorkflow=createWorkflow;
+
 async function loadHistoryConv(id){
   const data=await call('load_history',id);if(!data||data.error){appendSystem('Failed to load');return}
   $('chat-messages').innerHTML='';totalTokens=0;
@@ -1326,13 +1634,110 @@ async function loadHistoryConv(id){
   setStatus('Loaded: '+(data.title||''));
 }
 
-// ── Panel tabs ──
+// ── Panel tabs (bottom: terminal/output) ──
 document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',function(){
   document.querySelectorAll('.ptab').forEach(p=>p.classList.remove('active'));this.classList.add('active');
   const panel=this.dataset.ptab;
-  $('chat-panel').style.display=panel==='chat'?'flex':'none';
-  $('terminal-panel').className='terminal-panel'+(panel==='terminal'?' active':'');
+  $('terminal-panel').style.display=panel==='terminal'?'':'none';
+  if($('output-panel'))$('output-panel').style.display=panel==='output'?'':'none';
 }));
+
+// ── Right sidebar: dynamic provider tabs ──
+let activeProviderId='chat';
+function switchRightTab(pid){
+  activeProviderId=pid;
+  document.querySelectorAll('.rtab').forEach(r=>r.classList.toggle('active',r.dataset.rtab===pid));
+  document.querySelectorAll('.right-panel').forEach(p=>p.classList.remove('active'));
+  const rp=$('rp-'+pid);if(rp)rp.classList.add('active');
+  call('switch_provider',pid);
+}
+async function renderProviderTabs(){
+  const r=await call('list_chat_providers');if(!r||!r.providers)return;
+  const tabs=$('right-tabs'),panels=$('right-panels');
+  // Clear dynamic tabs (keep CHAT tab)
+  tabs.querySelectorAll('.rtab:not([data-rtab="chat"])').forEach(t=>t.remove());
+  // Remove dynamic panels
+  panels.querySelectorAll('.right-panel:not(#rp-chat)').forEach(p=>p.remove());
+  r.providers.forEach(p=>{
+    if(p.id==='chat'||!p.available)return;
+    // Tab
+    const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
+    tab.textContent=p.name.toUpperCase();tab.onclick=()=>switchRightTab(p.id);
+    tabs.appendChild(tab);
+    // Panel
+    const panel=document.createElement('div');panel.className='right-panel';panel.id='rp-'+p.id;
+    panel.innerHTML='<div class="chat-panel"><div class="chat-messages" id="pm-'+p.id+'"></div>'
+      +'<div class="chat-input-area"><div class="chat-input-row">'
+      +'<textarea class="chat-input" rows="1" placeholder="Message '+esc(p.name)+'..." id="pi-'+p.id+'"></textarea>'
+      +'<button class="send-btn" onclick="providerSend(\''+p.id+'\')">Send</button></div>'
+      +'<div class="chat-toolbar"><span class="hint">'+esc(p.name)+' · '+(p.auto_agent?'Agent':'Chat')+' mode</span>'
+      +'<span class="spacer"></span>'
+      +'<span class="toolbar-btn" onclick="providerCancel(\''+p.id+'\')" style="color:var(--fg-error)">■</span>'
+      +'<span class="toolbar-btn" onclick="providerNewChat(\''+p.id+'\')">🗑</span></div></div></div>';
+    panels.appendChild(panel);
+    // Enter key
+    const inp=panel.querySelector('textarea');
+    if(inp)inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(p.id)}});
+  });
+}
+async function providerSend(pid){
+  const inp=$('pi-'+pid);if(!inp)return;const text=inp.value.trim();if(!text)return;
+  inp.value='';
+  const mc=$('pm-'+pid);if(mc){const d=document.createElement('div');d.className='msg';
+    d.innerHTML='<div class="msg-header"><span class="msg-role user">YOU</span></div><div class="msg-body">'+esc(text)+'</div>';
+    mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
+  await call('provider_send',pid,text);
+}
+async function providerCancel(pid){await call('provider_cancel',pid)}
+async function providerNewChat(pid){await call('provider_new_chat',pid);const mc=$('pm-'+pid);if(mc)mc.innerHTML=''}
+window.providerSend=providerSend;window.providerCancel=providerCancel;window.providerNewChat=providerNewChat;
+
+// Provider streaming events
+const _origOnEditorEvent=window._onEditorEvent;
+window._onEditorEvent=function(event,data){
+  if(event.startsWith('provider_')){
+    const pid=data&&data.provider;if(!pid)return;
+    const mc=$('pm-'+pid);if(!mc)return;
+    if(event==='provider_stream_delta'){
+      let last=mc.querySelector('.msg:last-child .msg-body.streaming');
+      if(!last){const d=document.createElement('div');d.className='msg';
+        d.innerHTML='<div class="msg-header"><span class="msg-role assistant">'+esc(pid.toUpperCase())+'</span></div><div class="msg-body streaming"></div>';
+        mc.appendChild(d);last=d.querySelector('.msg-body')}
+      last.textContent+=data.content||'';mc.scrollTop=mc.scrollHeight;
+    }else if(event==='provider_stream_end'){
+      const s=mc.querySelector('.msg-body.streaming');if(s){s.classList.remove('streaming');
+        if(data.content)s.innerHTML=renderMd(data.content)}
+      mc.scrollTop=mc.scrollHeight;
+    }else if(event==='provider_tool_start'){
+      const d=document.createElement('div');d.className='tool-call';d.innerHTML='<div class="tool-header">🔧 '
+        +esc(data.name||'')+'</div>';mc.appendChild(d);
+    }else if(event==='provider_tool_end'){
+      // handled by stream_end
+    }else if(event==='provider_error'){
+      const d=document.createElement('div');d.className='msg';d.innerHTML='<div class="msg-body error-text">'+esc(data.error||'Error')+'</div>';
+      mc.appendChild(d);
+    }else if(event==='provider_idle'){
+      // noop
+    }
+    return;
+  }
+  if(_origOnEditorEvent)_origOnEditorEvent(event,data);
+};
+
+// Static CHAT tab click
+document.querySelector('.rtab[data-rtab="chat"]').addEventListener('click',()=>switchRightTab('chat'));
+
+// ── Right sidebar splitter (horizontal resize) ──
+(function(){
+  const rs=$('rsplitter'),rsb=$('right-sidebar');
+  if(!rs||!rsb)return;
+  let dragging=false,startX=0,startW=0;
+  rs.addEventListener('mousedown',e=>{dragging=true;startX=e.clientX;startW=rsb.offsetWidth;
+    rs.classList.add('dragging');e.preventDefault()});
+  document.addEventListener('mousemove',e=>{if(!dragging)return;
+    const w=startW-(e.clientX-startX);rsb.style.width=Math.max(260,Math.min(600,w))+'px'});
+  document.addEventListener('mouseup',()=>{if(dragging){dragging=false;rs.classList.remove('dragging')}});
+})();
 
 // ── Splitter ──
 const splitter=$('splitter'),panelArea=$('panel-area'),editorArea=$('editor-area');
@@ -1344,15 +1749,47 @@ document.addEventListener('mousemove',e=>{if(!splitterDragging)return;
 document.addEventListener('mouseup',()=>{splitterDragging=false;splitter.classList.remove('dragging')});
 
 // ── Settings ──
+const MODEL_CTX={
+  'gpt-4o':{i:128000,o:16384},'gpt-4o-mini':{i:128000,o:16384},'gpt-4-turbo':{i:128000,o:4096},
+  'o1':{i:200000,o:100000},'o3':{i:200000,o:100000},'o3-mini':{i:200000,o:100000},'o4-mini':{i:200000,o:100000},
+  'codex-mini-latest':{i:200000,o:100000},
+  'claude-sonnet-4-20250514':{i:200000,o:16384},'claude-opus-4-20250514':{i:200000,o:16384},
+  'claude-haiku-3-5':{i:200000,o:8192},'claude-3-5-sonnet':{i:200000,o:8192},
+  'deepseek-chat':{i:64000,o:8192},'deepseek-coder':{i:64000,o:8192},'deepseek-reasoner':{i:64000,o:8192},
+  'llama3.1':{i:128000,o:4096},'qwen2.5':{i:128000,o:8192},
+};
+function showModelInfo(){
+  const m=$('s-model').value.trim(),el=$('s-model-info');if(!el)return;
+  const ctx=MODEL_CTX[m];
+  if(ctx){el.innerHTML='Context: <b>'+Math.round(ctx.i/1000)+'K</b> input · <b>'+Math.round(ctx.o/1000)+'K</b> output · Compress at <b>'+Math.round(ctx.i*0.9/1000)+'K</b>'}
+  else{el.textContent=m?'Unknown model — default 128K context':''}
+}
 function openSettings(){
   $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
   $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
   $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
   $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
+  $('s-mode').value=currentMode;renderPermissions();showModelInfo();
+  // Provider keys
+  const keys=config._provider_keys||{};
+  if($('sk-openai'))$('sk-openai').value=keys.openai||'';
+  if($('sk-anthropic'))$('sk-anthropic').value=keys.anthropic||'';
+  if($('sk-deepseek'))$('sk-deepseek').value=keys.deepseek||'';
+  // Advanced params
+  if($('s-topp'))$('s-topp').value=config.top_p??1.0;
+  if($('s-freqp'))$('s-freqp').value=config.frequency_penalty??0;
+  if($('s-presp'))$('s-presp').value=config.presence_penalty??0;
+  if($('s-timeout'))$('s-timeout').value=config.timeout??180;
+  if($('s-stop'))$('s-stop').value=(config.stop||[]).join(',');
+  if($('s-maxinp'))$('s-maxinp').value=config.max_input_tokens??0;
+  if($('s-xheaders'))$('s-xheaders').value=config.extra_headers?JSON.stringify(config.extra_headers):'';
+  if($('s-xbody'))$('s-xbody').value=config.extra_body?JSON.stringify(config.extra_body):'';
+  renderCustomModels();
   $('settings-modal').classList.add('open');
 }
 function closeSettings(){$('settings-modal').classList.remove('open')}
 window.openSettings=openSettings;window.closeSettings=closeSettings;
+if($('s-model'))$('s-model').addEventListener('input',showModelInfo);
 
 async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
@@ -1366,7 +1803,26 @@ async function saveSettings(){
   config.base_url=$('s-baseurl').value;config.model=$('s-model').value;
   config.temperature=parseFloat($('s-temp').value)||0.7;config.max_tokens=parseInt($('s-maxtok').value)||4096;
   config.system_prompt=$('s-sysprompt').value;
+  // Advanced sampling
+  config.top_p=parseFloat($('s-topp').value)||1.0;
+  config.frequency_penalty=parseFloat($('s-freqp').value)||0;
+  config.presence_penalty=parseFloat($('s-presp').value)||0;
+  config.timeout=parseInt($('s-timeout').value)||180;
+  config.stop=($('s-stop').value||'').split(',').map(s=>s.trim()).filter(Boolean);
+  config.max_input_tokens=parseInt($('s-maxinp').value)||0;
+  try{config.extra_headers=JSON.parse($('s-xheaders').value||'{}')}catch{config.extra_headers={}}
+  try{config.extra_body=JSON.parse($('s-xbody').value||'{}')}catch{config.extra_body={}}
+  // Collect provider keys
+  config._provider_keys={
+    openai:($('sk-openai')?$('sk-openai').value:''),
+    anthropic:($('sk-anthropic')?$('sk-anthropic').value:''),
+    deepseek:($('sk-deepseek')?$('sk-deepseek').value:''),
+  };
+  config.provider_keys=config._provider_keys;
+  const newMode=$('s-mode').value;
+  if(newMode!==currentMode){await call('set_mode',newMode);currentMode=newMode;updateModeUI()}
   syncUI();await call('save_config',config);closeSettings();
+  renderProviderTabs();
 }
 window.saveSettings=saveSettings;
 
@@ -1381,6 +1837,62 @@ $('provider-sel').onchange=e=>{config.provider=e.target.value;
 $('model-inp').onchange=e=>{config.model=e.target.value;$('status-model').textContent=e.target.value||config.provider};
 
 function setStatus(t){$('status-text').textContent=t}
+
+// ── Mode & Permissions ──
+let currentMode='edit';
+const MODE_LABELS={chat:'💬 Chat',edit:'✏️ Edit',agent:'🤖 Agent'};
+const MODE_ORDER=['chat','edit','agent'];
+function updateModeUI(){$('status-mode').textContent=MODE_LABELS[currentMode]||currentMode}
+async function cycleMode(){
+  const idx=(MODE_ORDER.indexOf(currentMode)+1)%MODE_ORDER.length;
+  const next=MODE_ORDER[idx];
+  const r=await call('set_mode',next);
+  if(r&&r.ok){currentMode=next;updateModeUI();setStatus('Mode: '+currentMode)}
+}
+window.cycleMode=cycleMode;
+async function loadMode(){
+  const r=await call('get_mode');if(r){currentMode=r.mode||'edit';updateModeUI()}
+}
+function renderPermissions(){
+  const el=$('s-perms');if(!el)return;
+  call('get_mode').then(r=>{
+    if(!r||!r.permissions){el.innerHTML='';return}
+    const perms=r.permissions;
+    let html='<div style="margin-top:4px"><b>Tool Permissions</b> <span style="color:var(--fg-dim)">('+currentMode+' mode)</span></div><table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:4px">';
+    Object.keys(perms).sort().forEach(t=>{
+      const p=perms[t];
+      const cls=p==='allowed'?'color:var(--fg-success,#4c4)':p==='confirm'?'color:var(--accent)':'color:var(--fg-error,#f44);opacity:0.6';
+      html+='<tr><td style="padding:2px 4px;font-family:var(--mono)">'+esc(t)+'</td><td style="padding:2px 4px;'+cls+'">'+p+'</td></tr>';
+    });
+    html+='</table>';el.innerHTML=html;
+  });
+}
+$('s-mode').onchange=()=>renderPermissions();
+
+// Custom model management
+async function renderCustomModels(){
+  const r=await call('list_models');if(!r||!r.models)return;
+  const el=$('s-custom-models-list');if(!el)return;
+  const models=r.models;const keys=Object.keys(models).sort();
+  el.innerHTML='';
+  keys.forEach(m=>{const c=models[m];
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px';
+    row.innerHTML='<span style="flex:2;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis" title="'+esc(m)+'">'+esc(m)+'</span>'
+      +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_input/1000)+'K</span>'
+      +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_output/1000)+'K</span>';
+    el.appendChild(row);
+  });
+}
+async function addCustomModel(){
+  const name=$('s-cm-name').value.trim();if(!name)return;
+  const inp=parseInt($('s-cm-input').value)||128000;
+  const out=parseInt($('s-cm-output').value)||4096;
+  await call('save_custom_model',name,inp,out);
+  $('s-cm-name').value='';renderCustomModels();showModelInfo();
+}
+window.addCustomModel=addCustomModel;
+
 $('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings()};
 
 // ── Ready ──
@@ -1687,6 +2199,8 @@ const COMMANDS=[
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
   {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
   {label:'Chat History',shortcut:'',action:()=>{switchSidebar('history');refreshHistory()}},
+  {label:'Custom Instructions',shortcut:'',action:()=>switchSidebar('instructions')},
+  {label:'Agents & Workflows',shortcut:'',action:()=>switchSidebar('agents')},
 ];
 
 function openCommandPalette(){

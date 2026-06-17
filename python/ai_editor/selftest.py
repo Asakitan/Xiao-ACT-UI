@@ -65,6 +65,24 @@ def test_imports() -> None:
         _check("webview_bridge", False, str(e))
 
     try:
+        from ai_editor.agents import AgentDef, AgentRegistry, get_agent_registry
+        _check("agents", True)
+    except Exception as e:
+        _check("agents", False, str(e))
+
+    try:
+        from ai_editor.workflows import WorkflowDef, WorkflowRegistry, WorkflowEngine, get_workflow_registry
+        _check("workflows", True)
+    except Exception as e:
+        _check("workflows", False, str(e))
+
+    try:
+        from ai_editor.scopes import resolve_scopes, effective_permissions, tool_permission, MODES
+        _check("scopes", True)
+    except Exception as e:
+        _check("scopes", False, str(e))
+
+    try:
         from gui_modules.sao_gui_ai_editor import AIEditorPanel
         _check("sao_gui_ai_editor", True)
     except Exception as e:
@@ -198,8 +216,217 @@ def test_bridge() -> None:
     result = bridge.handle_command("ai_editor_list_history", {})
     _check("list_history", "entries" in result)
 
+    result = bridge.handle_command("ai_editor_get_instructions", {})
+    _check("get_instructions", "user_instructions" in result and "files" in result)
+
     result = bridge.handle_command("unknown_cmd", {})
     _check("unknown cmd", "error" in result)
+
+
+def test_instructions() -> None:
+    print("── Instructions ──")
+    import tempfile, shutil
+    from ai_editor.prompts import (
+        load_instructions, list_instruction_files,
+        save_instruction_file, delete_instruction_file, get_system_prompt,
+    )
+
+    tmpdir = tempfile.mkdtemp(prefix="sao_inst_test_")
+    try:
+        # Empty initially
+        inst = load_instructions(workspace_root=tmpdir)
+        _check("empty instructions", inst == "")
+
+        files = list_instruction_files(workspace_root=tmpdir)
+        _check("no files initially", len(files) == 0)
+
+        # Save project-level instructions.md
+        r = save_instruction_file("instructions.md", "Be concise.", workspace_root=tmpdir)
+        _check("save project inst", r.get("ok") is True)
+
+        files = list_instruction_files(workspace_root=tmpdir)
+        _check("project file listed", len(files) == 1 and files[0]["scope"] == "workspace")
+
+        # Save per-file instruction
+        r = save_instruction_file("coding-style.md", "Use 4 spaces.", workspace_root=tmpdir)
+        _check("save coding-style", r.get("ok") is True)
+
+        files = list_instruction_files(workspace_root=tmpdir)
+        _check("2 files listed", len(files) == 2)
+
+        # Load combined
+        inst = load_instructions(workspace_root=tmpdir)
+        _check("combined has project text", "Be concise" in inst)
+        _check("combined has file text", "4 spaces" in inst)
+
+        # User instructions via settings_getter
+        def fake_settings(key, default=None):
+            if key == "ai_editor":
+                return {"user_instructions": "Always explain code"}
+            return default
+        inst = load_instructions(settings_getter=fake_settings, workspace_root=tmpdir)
+        _check("user instructions included", "Always explain" in inst)
+
+        # get_system_prompt with instructions
+        sp = get_system_prompt(settings_getter=fake_settings)
+        _check("system prompt includes custom", "Custom Instructions" in sp)
+
+        # Delete file
+        r = delete_instruction_file("coding-style.md", workspace_root=tmpdir)
+        _check("delete file", r.get("ok") is True)
+        files = list_instruction_files(workspace_root=tmpdir)
+        _check("1 file after delete", len(files) == 1)
+
+        # Delete nonexistent
+        r = delete_instruction_file("nope.md", workspace_root=tmpdir)
+        _check("delete nonexistent", r.get("ok") is False)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_scopes() -> None:
+    print("── Scopes ──")
+    from ai_editor.scopes import (
+        resolve_scopes, scope_subdirs, effective_permissions,
+        tool_permission, MODES, MODE_PERMISSIONS,
+    )
+
+    scopes = resolve_scopes()
+    _check(f"scopes resolved: {len(scopes)}", len(scopes) >= 2)
+    _check("system scope first", scopes[0]["scope"] == "system")
+    _check("workspace scope second", scopes[1]["scope"] == "workspace")
+
+    agent_dirs = scope_subdirs("agents")
+    _check("agent subdirs", len(agent_dirs) >= 2)
+    _check("agents subdir path", agent_dirs[0]["path"].endswith("agents"))
+
+    # Mode permissions
+    _check("3 modes", len(MODES) == 3)
+
+    chat_perms = effective_permissions("chat")
+    _check("chat: readFile disabled", chat_perms.get("readFile") == "disabled")
+    _check("chat: engine allowed", chat_perms.get("engine") == "allowed")
+
+    edit_perms = effective_permissions("edit")
+    _check("edit: readFile allowed", edit_perms.get("readFile") == "allowed")
+    _check("edit: editFile confirm", edit_perms.get("editFile") == "confirm")
+
+    agent_perms = effective_permissions("agent")
+    _check("agent: editFile allowed", agent_perms.get("editFile") == "allowed")
+
+    # Overrides
+    custom = effective_permissions("edit", {"readFile": "disabled"})
+    _check("override readFile", custom["readFile"] == "disabled")
+
+    # tool_permission helper
+    _check("tool_permission chat/readFile",
+           tool_permission("chat", "readFile") == "disabled")
+    _check("tool_permission edit/readFile",
+           tool_permission("edit", "readFile") == "allowed")
+    _check("tool_permission unknown tool defaults allowed",
+           tool_permission("edit", "some_unknown_tool") == "allowed")
+
+
+def test_agents() -> None:
+    print("── Agents ──")
+    import tempfile, shutil
+    from ai_editor.agents import AgentDef, AgentRegistry
+
+    tmpdir = tempfile.mkdtemp(prefix="sao_agent_test_")
+    try:
+        reg = AgentRegistry()
+        builtins = reg.list_all()
+        _check(f"builtin agents: {len(builtins)}", len(builtins) >= 5)
+
+        cr = reg.get("code-reviewer")
+        _check("code-reviewer exists", cr is not None and cr.builtin)
+
+        _check("get nonexistent", reg.get("nope") is None)
+
+        # Save custom agent
+        custom = AgentDef(id="test-agent", name="Test Agent",
+                          description="For testing", system_prompt="Be helpful.")
+        r = reg.save_custom(custom, workspace_root=tmpdir)
+        _check("save custom", r.get("ok") is True)
+        _check("custom in registry", reg.get("test-agent") is not None)
+
+        # Load custom from disk
+        reg2 = AgentRegistry()
+        reg2.load_custom(workspace_root=tmpdir)
+        _check("loaded from disk", reg2.get("test-agent") is not None)
+
+        # Delete custom
+        r = reg.delete_custom("test-agent", workspace_root=tmpdir)
+        _check("delete custom", r.get("ok") is True)
+        _check("gone after delete", reg.get("test-agent") is None)
+
+        # Cannot delete builtin
+        r = reg.delete_custom("code-reviewer")
+        _check("cant delete builtin", r.get("ok") is False)
+
+        # Prompt section
+        section = reg.to_prompt_section()
+        _check("prompt section", "Code Reviewer" in section and "invoke_agent" in section)
+
+        # to_dict / from_dict
+        d = cr.to_dict()
+        _check("to_dict has id", d["id"] == "code-reviewer")
+        restored = AgentDef.from_dict(d)
+        _check("from_dict roundtrip", restored.id == "code-reviewer")
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_workflows() -> None:
+    print("── Workflows ──")
+    import tempfile, shutil
+    from ai_editor.workflows import WorkflowDef, WorkflowStep, WorkflowRegistry
+
+    tmpdir = tempfile.mkdtemp(prefix="sao_wf_test_")
+    try:
+        reg = WorkflowRegistry()
+        builtins = reg.list_all()
+        _check(f"builtin workflows: {len(builtins)}", len(builtins) >= 3)
+
+        rf = reg.get("review-and-fix")
+        _check("review-and-fix exists", rf is not None and len(rf.steps) == 2)
+
+        # Save custom workflow
+        custom = WorkflowDef(
+            id="test-wf", name="Test WF", description="Testing",
+            steps=[WorkflowStep(prompt="Echo: {{input}}", output_var="out", label="Echo")],
+        )
+        r = reg.save_custom(custom, workspace_root=tmpdir)
+        _check("save custom wf", r.get("ok") is True)
+
+        # Load from disk
+        reg2 = WorkflowRegistry()
+        reg2.load_custom(workspace_root=tmpdir)
+        _check("loaded wf from disk", reg2.get("test-wf") is not None)
+        _check("steps preserved", len(reg2.get("test-wf").steps) == 1)
+
+        # Delete custom
+        r = reg.delete_custom("test-wf", workspace_root=tmpdir)
+        _check("delete custom wf", r.get("ok") is True)
+
+        # Cannot delete builtin
+        r = reg.delete_custom("review-and-fix")
+        _check("cant delete builtin wf", r.get("ok") is False)
+
+        # Prompt section
+        section = reg.to_prompt_section()
+        _check("wf prompt section", "Review & Fix" in section and "run_workflow" in section)
+
+        # to_dict / from_dict roundtrip
+        d = rf.to_dict()
+        _check("wf to_dict", d["id"] == "review-and-fix" and len(d["steps"]) == 2)
+        restored = WorkflowDef.from_dict(d)
+        _check("wf from_dict roundtrip", restored.id == "review-and-fix")
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_tk_window() -> None:
@@ -291,6 +518,10 @@ def main() -> None:
     test_conversation()
     test_history()
     test_bridge()
+    test_instructions()
+    test_scopes()
+    test_agents()
+    test_workflows()
     test_tk_window()
 
     print()

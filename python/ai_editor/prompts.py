@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import zlib
 
 
@@ -245,7 +246,168 @@ genuinely blocked on a decision the user must make.
 """
 
 
-def get_system_prompt(agent_mode: bool = False, custom: str = "") -> str:
+def _resolve_base_dir() -> str:
+    try:
+        from config import BASE_DIR
+        return BASE_DIR
+    except Exception:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_instructions_from_dir(base: str, label: str = "") -> list[str]:
+    """Collect instructions from a single scope directory."""
+    parts: list[str] = []
+    proj_file = os.path.join(base, "instructions.md")
+    if os.path.isfile(proj_file):
+        try:
+            with open(proj_file, "r", encoding="utf-8") as f:
+                body = f.read().strip()
+            if body:
+                parts.append(body)
+        except Exception:
+            pass
+    inst_dir = os.path.join(base, "instructions")
+    if os.path.isdir(inst_dir):
+        for fname in sorted(os.listdir(inst_dir)):
+            if not fname.endswith(".md"):
+                continue
+            fpath = os.path.join(inst_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    body = f.read().strip()
+                if body:
+                    parts.append(f"### {fname[:-3]}\n\n{body}")
+            except Exception:
+                pass
+    return parts
+
+
+def load_instructions(settings_getter=None, workspace_root: str = "") -> str:
+    """Collect custom instructions from all scopes.
+
+    Sources (all appended):
+      1. User instructions from settings
+      2. System scope  ``~/.sao/``
+      3. Workspace scope ``<BASE_DIR>/.sao/``
+      4. Plugin scopes ``plugins/<id>/.sao/``
+    """
+    parts: list[str] = []
+
+    # User-level from settings
+    if settings_getter:
+        ai = settings_getter("ai_editor", {}) or {}
+        if isinstance(ai, dict):
+            text = ai.get("user_instructions", "")
+        else:
+            text = ""
+        if text and text.strip():
+            parts.append(text.strip())
+
+    # All scopes
+    if workspace_root:
+        scope_parts = _load_instructions_from_dir(
+            os.path.join(workspace_root, ".sao"), "Workspace")
+        parts.extend(scope_parts)
+    else:
+        try:
+            from ai_editor.scopes import resolve_scopes
+            for entry in resolve_scopes():
+                scope_parts = _load_instructions_from_dir(
+                    entry["path"], entry.get("label", ""))
+                if scope_parts:
+                    parts.append(f"<!-- scope: {entry.get('label','')} -->")
+                    parts.extend(scope_parts)
+        except Exception:
+            root = _resolve_base_dir()
+            parts.extend(_load_instructions_from_dir(
+                os.path.join(root, ".sao")))
+
+    if not parts:
+        return ""
+    return "\n\n# Custom Instructions\n\n" + "\n\n---\n\n".join(parts)
+
+
+def _list_files_in_scope(sao_dir: str, scope_label: str) -> list[dict]:
+    files: list[dict] = []
+    proj_file = os.path.join(sao_dir, "instructions.md")
+    if os.path.isfile(proj_file):
+        try:
+            with open(proj_file, "r", encoding="utf-8") as f:
+                body = f.read()
+            files.append({"name": "instructions.md", "path": proj_file,
+                          "scope": scope_label, "content": body})
+        except Exception:
+            pass
+    inst_dir = os.path.join(sao_dir, "instructions")
+    if os.path.isdir(inst_dir):
+        for fname in sorted(os.listdir(inst_dir)):
+            if not fname.endswith(".md"):
+                continue
+            fpath = os.path.join(inst_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    body = f.read()
+                files.append({"name": fname, "path": fpath,
+                              "scope": scope_label, "content": body})
+            except Exception:
+                pass
+    return files
+
+
+def list_instruction_files(workspace_root: str = "") -> list[dict]:
+    """Return metadata for instruction files across all scopes."""
+    if workspace_root:
+        return _list_files_in_scope(
+            os.path.join(workspace_root, ".sao"), "workspace")
+    files: list[dict] = []
+    try:
+        from ai_editor.scopes import resolve_scopes
+        for entry in resolve_scopes():
+            files.extend(_list_files_in_scope(
+                entry["path"], entry.get("label", entry["scope"])))
+    except Exception:
+        root = _resolve_base_dir()
+        files.extend(_list_files_in_scope(
+            os.path.join(root, ".sao"), "workspace"))
+    return files
+
+
+def save_instruction_file(name: str, content: str,
+                          workspace_root: str = "") -> dict:
+    """Create or update an instruction file. Returns ``{ok, path}``."""
+    root = workspace_root or _resolve_base_dir()
+    if name == "instructions.md":
+        target = os.path.join(root, ".sao", "instructions.md")
+    else:
+        if not name.endswith(".md"):
+            name += ".md"
+        target = os.path.join(root, ".sao", "instructions", name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(content)
+    return {"ok": True, "path": target}
+
+
+def delete_instruction_file(name: str,
+                            workspace_root: str = "") -> dict:
+    """Delete an instruction file. Returns ``{ok}``."""
+    root = workspace_root or _resolve_base_dir()
+    if name == "instructions.md":
+        target = os.path.join(root, ".sao", "instructions.md")
+    else:
+        target = os.path.join(root, ".sao", "instructions", name)
+    if os.path.isfile(target):
+        os.remove(target)
+        return {"ok": True}
+    return {"ok": False, "error": "File not found"}
+
+
+def get_system_prompt(agent_mode: bool = False, custom: str = "",
+                      settings_getter=None) -> str:
     """Build the system prompt for a conversation."""
     if custom:
         return custom
@@ -255,6 +417,19 @@ def get_system_prompt(agent_mode: bool = False, custom: str = "") -> str:
             prompt += _decrypt_engine_guide()
         except Exception:
             pass
+    inst = load_instructions(settings_getter=settings_getter)
+    if inst:
+        prompt += "\n" + inst
+    try:
+        from ai_editor.agents import get_agent_registry
+        prompt += get_agent_registry().to_prompt_section()
+    except Exception:
+        pass
+    try:
+        from ai_editor.workflows import get_workflow_registry
+        prompt += get_workflow_registry().to_prompt_section()
+    except Exception:
+        pass
     if agent_mode:
         prompt += AGENT_MODE_ADDITION
     return prompt

@@ -1,8 +1,8 @@
 # AI Editor 架构
 
-> 当前版本：`5.0.0`。配套文档：`docs/ACT_PLATFORM.md`、`docs/PLUGIN_SDK.md`。
+> 当前版本：`5.1.0`。配套文档：`docs/ACT_PLATFORM.md`、`docs/PLUGIN_SDK.md`。
 
-SAO ACT UI 内置的 AI 编辑器是一个**独立 pywebview 窗口**，提供多 Provider LLM 对话、VSCode 风格的 tool calling、MCP 服务器集成、VSCode Marketplace 扩展浏览器，以及 dark/light 双主题。
+SAO ACT UI 内置的 AI 编辑器是一个**独立 pywebview 窗口**，提供多 Provider LLM 对话、VSCode 风格布局与工具系统、三层 scope 体系、自定义 Agent/Workflow、Chat Provider 动态注册、模型级 context window 管理、MCP 集成、VSCode Marketplace 扩展浏览器，以及 dark/light 双主题。
 
 从 SAO 菜单 → ACT → "AI Editor (LLM)" 打开。也可命令行 `python -m ai_editor.app` 独立启动。
 
@@ -10,281 +10,237 @@ SAO ACT UI 内置的 AI 编辑器是一个**独立 pywebview 窗口**，提供�
 
 | 文件 | 职责 |
 |------|------|
-| `prompts.py` | VSCode Copilot 风格 system prompt（模块化拼接: _IDENTITY + _TOOL_RULES + _MEM_PROBE_GUIDE + _SAFETY + _PROJECT_STRUCTURE）|
-| `llm_engine.py` | 多 Provider LLM 引擎（OpenAI / Anthropic 原生 SSE / 兼容端点），持久 httpx 连接池 |
-| `tool_registry.py` | 工具注册中心、OpenAI function-calling schema 生成、参数自动推断 |
-| `engine_tools.py` | 12 个 VSCode 对齐工具 + `engine` 聚合入口（15 个 sub-action） |
-| `chat_state.py` | 对话管理、tool 循环、@-mention（预编译正则）、Agent Mode、to_api_messages 缓存 |
-| `app.py` | pywebview 启动器 + `AIEditorAPI` JS bridge（30+ 方法），stream delta 批量合并 |
-| `mcp_client.py` | MCP 客户端：stdio + HTTP/SSE + **内部 Python 注册**（InternalMcpProvider） |
-| `extensions.py` | VSCode Marketplace API 客户端 + VSIX tool 加载，共享 httpx 连接池 |
-| `history.py` | 对话历史持久化（JSON 文件、原子写入、版本号跳过无变更保存） |
-| `selftest.py` | 59 项自测套件 |
+| `prompts.py` | System prompt 模块化拼接 + 三 scope 指令加载 + Agent/Workflow 描述注入 |
+| `llm_engine.py` | 多 Provider LLM 引擎（OpenAI / Anthropic 原生 SSE），全量采样参数，模型 context window 表 |
+| `tool_registry.py` | 工具注册中心、OpenAI function-calling schema 生成 |
+| `engine_tools.py` | 12 个 VSCode 对齐工具 + `engine` 聚合入口 |
+| `chat_state.py` | 对话管理、tool 循环、@-mention、Agent Mode、自动压缩（90% context window 阈值） |
+| `app.py` | pywebview 启动器 + `AIEditorAPI`（60+ JS-callable 方法） |
+| `agents.py` | 自定义 Agent 系统：5 个内置 + `.sao/agents/*.json` 三 scope 加载 |
+| `workflows.py` | Workflow 引擎：3 个内置 + 链式 LLM 调用 + `{{var}}` 变量插值 |
+| `scopes.py` | 三层 scope（System/Workspace/Plugin）+ 三模式（Chat/Edit/Agent）+ 权限管理 |
+| `chat_providers.py` | 右侧边栏 Chat Provider 动态注册（CHAT / Claude Code / Codex / 插件自定义） |
+| `mcp_client.py` | MCP 客户端：stdio + HTTP/SSE + 内部 Python 注册 |
+| `extensions.py` | VSCode Marketplace API 客户端 + VSIX tool 加载 |
+| `history.py` | 对话历史分 scope 持久化（workspace / system 两级目录） |
+| `selftest.py` | 113 项自测套件 |
+
+## 布局（VSCode 对齐）
+
+```
+┌─────────┬──────────┬─────────────────┬──┬──────────────────┐
+│ Activity│ Left     │  Editor         │⟷│ Right Sidebar    │
+│ Bar     │ Sidebar  │  Tab bar        │  │ CHAT│CC│CODEX│..│
+│         │          │  Code editor    │  │ ┌──────────────┐ │
+│ 💬🔧🧩 │ Model    │                 │  │ │ Chat msgs    │ │
+│ 📋📝🤖│ Actions  │  ──────────     │  │ │              │ │
+│         │ Agents   │  Terminal/Output│  │ ├──────────────┤ │
+│ 🌓⚙   │          │                 │  │ │ Input + tools│ │
+├─────────┴──────────┴─────────────────┴──┴──────────────────┤
+│ Status: Ready │ Ln 1 │ UTF-8 │ ✏️ Edit │ gpt-4o │ 0 tokens│
+└────────────────────────────────────────────────────────────┘
+```
+
+- Chat 面板在**右侧边栏**（VSCode Claude Code / Copilot 布局）
+- 底部面板只有 Terminal / Output
+- 右侧边栏宽度可拖拽（260-600px）
+- Provider tab 按 API key 可用性**动态出现**
+
+## 三层 Scope 体系
+
+| Scope | 路径 | 加载内容 |
+|-------|------|---------|
+| **System** | `~/.sao/` | 全局，跨所有项目 |
+| **Workspace** | `<BASE_DIR>/.sao/` | 当前项目级 |
+| **Plugin** | `plugins/<id>/.sao/` | 每个插件独立工作区 |
+
+每个 scope 下可以有：
+- `instructions.md` + `instructions/*.md` — 自定义指令
+- `agents/*.json` — 自定义 Agent
+- `workflows/*.json` — 自定义 Workflow
+- `chat_history/` — 对话历史
+
+合并策略：**全部加载，后者按 ID 覆盖前者**。
+
+## 三模式（VSCode 对齐）
+
+| 模式 | 说明 | 工具权限 |
+|------|------|---------|
+| **Chat** | 纯对话 | 读写/终端 disabled，只留 engine/askQuestion |
+| **Edit** | 可读可编辑 | 读 allowed，写/终端 confirm |
+| **Agent** | 全自主 | 全部 allowed |
+
+状态栏点击循环切换。每个 tool 可独立覆盖权限（allowed/confirm/disabled）。
+
+## Endpoint 全量配置
+
+所有参数均可在 Settings UI 自定义：
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `provider` | str | openai | 提供商（openai/anthropic/deepseek/ollama/custom） |
+| `api_key` | str | | API Key |
+| `base_url` | str | | 自定义端点（空=默认） |
+| `model` | str | | 模型名 |
+| `temperature` | float | 0.7 | 采样温度 |
+| `top_p` | float | 1.0 | 核采样 |
+| `frequency_penalty` | float | 0.0 | 频率惩罚 |
+| `presence_penalty` | float | 0.0 | 存在惩罚 |
+| `max_tokens` | int | 4096 | 最大输出 token |
+| `stop` | list | [] | 停止序列 |
+| `max_input_tokens` | int | 0 | 覆盖模型默认输入窗口（0=用内置表） |
+| `max_output_tokens` | int | 0 | 覆盖模型默认输出窗口 |
+| `timeout` | int | 180 | HTTP 连接超时（秒） |
+| `extra_headers` | dict | {} | 自定义 HTTP 头 |
+| `extra_body` | dict | {} | 任意额外请求参数（如 logprobs） |
+
+Settings UI 分三区：
+- **Endpoint** — Provider、Key、Base URL
+- **Provider Keys** — 分别填 OpenAI/Anthropic/DeepSeek（CC/Codex tab 按 key 自动出现）
+- **Advanced Sampling & Connection** — 折叠区，top_p/penalties/stop/timeout/headers/body
+
+## 模型 Context Window
+
+内置 20+ 模型的 context window 表（`MODEL_CONTEXT_WINDOWS`）：
+
+| 模型 | Max Input | Max Output |
+|------|-----------|------------|
+| gpt-4o | 128K | 16K |
+| o3/o4-mini | 200K | 100K |
+| claude-sonnet-4 | 200K | 16K |
+| deepseek-chat | 64K | 8K |
+| llama3.1 | 128K | 4K |
+
+用户可在 Settings → Custom Models 区**添加/覆盖任何模型**：
+```
+save_custom_model("my-local-model", max_input=32000, max_output=4096)
+```
+覆盖存入 `settings.json → ai_editor.custom_models`。
+
+## 自动压缩
+
+对齐 VSCode Copilot 的 compaction 策略：
+- 阈值 = `floor(model_max_input * 0.9)`
+- 每轮 LLM 调用前估算 total tokens
+- 超阈值时：动态计算保留多少条最近消息（填到 70% 以内）
+- 旧消息压缩为一条 `[Compacted: N messages, Topics: ...]` 摘要
+- 自定义 `max_input_tokens` 覆盖模型默认值
+
+## Chat Provider 动态注册
+
+右侧边栏 tab 由 provider 注册驱动：
+
+| Provider | 检测条件 | 系统行为 |
+|----------|---------|---------|
+| **CHAT** | 始终存在 | 多模型，用户配置 |
+| **Claude Code** | Anthropic key 已配置 或 `claude` CLI 可用 | 自动 Agent Mode |
+| **Codex** | OpenAI key 已配置 | 自动 Agent Mode |
+| **插件自定义** | 插件调用 `register_chat_provider()` | 按插件配置 |
+
+每个 provider 有**独立的 ChatController + LLMEngine**，会话隔离。
+
+### 插件注册 Provider
+
+```python
+# 在 plugin.py 中:
+ctx.ai_editor.register_chat_provider({
+    "id": "my-bot",
+    "name": "My Bot",
+    "icon": "🤖",
+    "provider_type": "openai",
+    "model": "gpt-4o-mini",
+    "system_prompt": "You are a helpful assistant for my game.",
+    "auto_agent": False,
+})
+```
+
+## 自定义 Agent
+
+5 个内置 Agent + 用户自定义（`.sao/agents/*.json`）：
+
+| Agent | 用途 |
+|-------|------|
+| code-reviewer | 审查代码（bug/安全/性能/风格） |
+| explainer | 解释代码逻辑和模式 |
+| debugger | 系统化诊断和修复 |
+| optimizer | 性能瓶颈分析 |
+| documenter | 生成文档 |
+
+激活方式：
+- 侧边栏点击 Agent
+- 聊天输入 `@code-reviewer 检查这个函数`
+- LLM 调用 `engine(action="invoke_agent", agent_id="code-reviewer", message="...")`
+
+Agent 可保存到任意 scope（System/Workspace/Plugin）。
+
+## Workflow 引擎
+
+3 个内置 Workflow + 用户自定义：
+
+| Workflow | 步骤 |
+|----------|------|
+| review-and-fix | Code Reviewer 审查 → 生成修复 |
+| explain-and-improve | Explainer 分析 → Optimizer 改进 |
+| debug-trace | Debugger 诊断 → 生成修复 |
+
+每个步骤可指定不同 Agent，支持 `{{var}}` 变量插值。LLM 可调用 `engine(action="run_workflow", workflow_id="review-and-fix", input="...")`。
+
+自定义 Workflow JSON：
+```json
+{
+  "id": "my-pipeline",
+  "name": "My Pipeline",
+  "steps": [
+    {"agent": "code-reviewer", "prompt": "Review: {{input}}", "output_var": "review", "label": "Reviewing"},
+    {"agent": "default", "prompt": "Fix issues:\n{{review}}", "output_var": "fix", "label": "Fixing"}
+  ]
+}
+```
+
+## Custom Instructions
+
+三种来源，全部追加到 system prompt：
+1. **Settings** — `ai_editor.user_instructions`（全局持久）
+2. **项目** — `.sao/instructions.md`
+3. **多文件** — `.sao/instructions/*.md`（按文件名排序）
+
+跨三层 scope 全部收集。
 
 ## LLM 通讯协议
 
 ### OpenAI Chat Completions（默认）
 
-适用于 OpenAI、DeepSeek、Ollama、vLLM、SiliconFlow 等所有 OpenAI 兼容端点。
-
-```
-POST {base_url}/chat/completions
-Content-Type: application/json
-Authorization: Bearer {api_key}
-
-{
-  "model": "gpt-4o",
-  "messages": [...],
-  "tools": [...],          // OpenAI function-calling schema
-  "stream": true,
-  "stream_options": {"include_usage": true}
-}
-
-SSE 响应:
-  data: {"choices":[{"delta":{"content":"..."}}]}
-  data: {"choices":[{"delta":{"tool_calls":[...]}}]}
-  data: {"choices":[{"delta":{"reasoning_content":"..."}}]}  // DeepSeek R1
-  data: [DONE]
-```
+适用于 OpenAI、DeepSeek、Ollama、vLLM 等所有兼容端点。全量采样参数（top_p/penalties/stop）+ extra_body 均传入请求体。
 
 ### Anthropic Messages API（原生）
 
-当 provider=anthropic 且 base_url 含 `anthropic.com` 时自动切换。
-
-```
-POST {base_url}/messages
-Content-Type: application/json
-x-api-key: {api_key}
-anthropic-version: 2023-06-01
-
-{
-  "model": "claude-sonnet-4-20250514",
-  "system": "...",
-  "messages": [...],       // tool_result → user role
-  "tools": [...],          // input_schema 格式
-  "stream": true,
-  "max_tokens": 4096
-}
-
-SSE 响应:
-  event: message_start     data: {"type":"message_start",...}
-  event: content_block_start data: {"type":"content_block_start","content_block":{"type":"thinking"}}
-  event: content_block_delta data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"..."}}
-  event: content_block_delta data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
-  event: content_block_start data: {"content_block":{"type":"tool_use","id":"toolu_...","name":"readFile"}}
-  event: content_block_delta data: {"delta":{"type":"input_json_delta","partial_json":"..."}}
-  event: message_delta     data: {"delta":{"stop_reason":"end_turn"},"usage":{...}}
-  event: message_stop
-```
-
-### 消息格式转换
-
-Anthropic 原生模式下，`llm_engine.py` 自动处理：
-- `system` 消息从 messages 提取为顶级 `system` 字段
-- `tool` 角色转为 `user` 角色的 `tool_result` content block
-- `assistant` 的 `tool_calls` 转为 `tool_use` content block
-- `thinking` content block 解析并传播到 `ChatMessage.thinking`
+provider=anthropic 时自动切换。支持 thinking block、tool_use、stop_sequences、extra_body。
 
 ## 工具系统
 
-工具对齐 VSCode Copilot 的设计。12 个工具，5 个分类：
+12 个工具，5 个分类（file/terminal/interaction/editor/engine）。模式权限控制哪些工具对 LLM 可见。
 
-### 文件操作（file）
-
-| 工具 | 功能 |
-|------|------|
-| `readFile(path, startLine?, endLine?)` | 读取文件内容 |
-| `editFile(path, content, startLine?, endLine?)` | 创建或编辑文件 |
-| `listFiles(path, pattern?, recursive?)` | 列出目录 |
-| `searchFiles(query, path?, pattern?, regex?, caseSensitive?)` | grep 搜索 |
-
-### 终端（terminal）
-
-| 工具 | 功能 |
-|------|------|
-| `runTerminal(command, cwd?)` | 执行 shell 命令（30s 超时） |
-
-### 交互（interaction）
-
-| 工具 | 功能 |
-|------|------|
-| `askQuestion(question)` | 向用户提问 |
-| `taskComplete(summary)` | 标记任务完成 |
-| `getConfirmation(action, risk?)` | 确认危险操作 |
-
-### 编辑器（editor）
-
-| 工具 | 功能 |
-|------|------|
-| `editor_getContent()` | 读取编辑器内容 |
-| `editor_setContent(content, language?)` | 写入编辑器 |
-| `editor_getSelection()` | 获取选中文本 |
-
-### 引擎聚合（engine）
-
-单一入口 `engine(action, ...)` 分发到平台和插件：
-
-**平台 action**（始终可用）：`system_info`、`plugins`、`settings_get`、`settings_set`、`memory_status`、`eval`、`exec`
-
-**Star Resonance 插件 action**（加载 SR 时可用）：`game_state`、`entity_list`、`dps_summary`、`dps_report`、`boss_status`、`combat_status`、`buff_list`、`auto_key_status`
+`engine` 聚合入口的 action 包括：
+- 平台：`system_info`、`plugins`、`settings_get/set`、`memory_status`、`eval`、`exec`
+- Agent：`list_agents`、`invoke_agent`
+- Workflow：`list_workflows`、`run_workflow`
+- 插件动态注册的 action
 
 ## MCP 集成
 
-`mcp_client.py` 支持三种传输模式：
+三种传输：stdio / HTTP+SSE / internal Python。配置来源：settings → workspace mcp.json → ~/.sao/mcp.json → plugin manifest。
 
-| 模式 | 场景 | 示例 |
-|------|------|------|
-| **stdio** | 外部进程, JSON-RPC over stdin/stdout | `npx @modelcontextprotocol/server-filesystem` |
-| **sse** | 远程 HTTP+SSE 端点 | `https://mcp.example.com/sse` |
-| **internal** | Python 插件直接注册, 无子进程 | 插件 `on_load` 时调用 |
+## 对话历史
 
-### 配置来源 (优先级)
-
-1. `settings.ai_editor_mcp_servers` 列表
-2. 工作区 `mcp.json` / `.vscode/mcp.json` / `.mcp/mcp.json`
-3. 用户主目录 `~/.sao/mcp.json`
-4. 插件 manifest `plugins/*/plugin.json` → `mcpServers`
-
-### 协议 (stdio/sse)
-
-```
-→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
-← {"jsonrpc":"2.0","id":1,"result":{"capabilities":{...}}}
-→ {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-← {"jsonrpc":"2.0","id":2,"result":{"tools":[...]}}
-→ {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"...","arguments":{...}}}
-← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"..."}]}}
-```
-
-### 内部 MCP (插件注册)
-
-```python
-# 在 plugin.py on_load(ctx) 中:
-from ai_editor.mcp_client import InternalMcpProvider
-
-provider = InternalMcpProvider("my_plugin")
-provider.add_tool(
-    "get_hp", "Read player HP",
-    {"type": "object", "properties": {}},
-    handler=lambda: {"hp": 50000},
-)
-# 注册到 MCP manager
-mcp_manager.register_provider(provider)
-```
-
-或通过 app API 批量注册:
-
-```python
-mcp_manager.register_internal("my_game", [
-    {"name": "scan_memory", "description": "Scan for value",
-     "inputSchema": {"type":"object","properties":{"value":{"type":"integer"}}}},
-], handlers={"scan_memory": lambda value=0: {"found": 3}})
-```
-
-MCP 工具自动注册为 `mcp_{server}_{tool}` 出现在 LLM 工具列表中。
-
-## 扩展市场
-
-`extensions.py` 直接对接 VSCode Marketplace API：
-
-```
-POST https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery
-Accept: application/json;api-version=6.1-preview.1
-```
-
-安装流程：搜索 → 下载 VSIX → 提取 package.json → 解析 `contributes`（languageModelTools / chatParticipants / commands）→ 注册为可用工具。
-
-## UI 特性
-
-HTML GUI (`web/ai_editor_app.html`) 完整复刻 VSCode 布局：
-
-- **Activity Bar**：Chat / Tools / Extensions / History / Theme / Settings
-- **Sidebar**：模型选择器、快捷操作、工具列表、扩展市场、对话历史
-- **Editor**：多 Tab、行号、语法高亮（20 种语言）、Find/Replace（正则/大小写/全词）、右键菜单、Ctrl+G/Ctrl+//Ctrl+D 等快捷键
-- **Chat Panel**：流式 markdown（word-by-word fade）、代码块语法高亮 + Copy、可折叠 thinking 块（shimmer 动画）、可折叠 tool call/result（spinner→checkmark）、tool 确认栏（Allow/Deny）、image 上传
-- **Terminal Panel**：shell 命令输入+执行+stdout/stderr 显示
-- **Status Bar**：Ln/Col、Spaces、UTF-8、LF、Language、Model、Tokens
-- **Command Palette**：Ctrl+Shift+P，19 个命令
-- **Toast 通知**：info/success/error/warning
-- **Dark/Light 主题**：`[data-theme]` CSS 变量双套，同步 ACT `panel_themes.act`
-
-## 主题系统
-
-Dark 和 Light 各定义完整的 CSS 变量集。accent 颜色与 ACT 平台对齐：
-
-| 变量 | Dark | Light |
-|------|------|-------|
-| `--bg` | `#1e1e1e` | `#f5f5f5` |
-| `--fg` | `#cccccc` | `#3b3a3c` |
-| `--fg-accent` | `#68e4ff` | `#16a9d6` |
-| `--border` | `#3c3c3c` | `#d0d0d0` |
-| `--statusbar-bg` | `#007acc` | `#007acc` |
-
-主题从 `ai_editor.theme` 设置或 ACT `panel_themes.act` 读取，通过 `document.documentElement.setAttribute('data-theme', theme)` 切换。
-
-## @-mention 上下文变量
-
-输入 `@` 触发补全弹窗：
-
-| 变量 | 解析内容 |
-|------|---------|
-| `@file` | 当前编辑器文件名 |
-| `@selection` | 编辑器选中文本 |
-| `@editor` | 编辑器全部内容（截断 2000 字符） |
-| `@state` | 游戏状态（via engine(game_state)） |
-| `@language` | 当前编辑器语言模式 |
-
-## Agent Mode
-
-勾选 Agent Mode 后：
-- System prompt 追加 plan→execute→verify→report 指令
-- `MAX_TOOL_ROUNDS` 从 10 提高到 25
-- 响应以 `...` 或 `[continue]` 结尾时自动注入 "Continue with the next step"
-
-## mem_probe 集成
-
-mem_probe 是通用内存扫描基础设施（游戏无关）。system prompt 教 LLM 如何使用：
-
-- `mem_probe.process.GameProcess` — 附加目标进程（进程名从 config，不硬编码）
-- `mem_probe.scanner` — 多帧值搜索 scan→narrow
-- `mem_probe.cy_memscan` — AVX2 加速（Cython，有纯 Python fallback）
-- `mem_probe.unified_source` — TCP/内存混合数据源，插件通过 `set_bridge_classes()` 注入桥接
-
-LLM 通过 `engine(action="eval/exec")` 直接操作内存：
-
-```
-engine(action="exec", code="from mem_probe.process import GameProcess; ...")
-```
-
-## Chat 交互功能
-
-对齐 VSCode Copilot 的用户交互：
-
-- **代码块 toolbar** — Copy📋 / Insert📥 / Run▶ / New Tab📄（hover 显示）
-- **消息 footer** — 👍/👎 评分 + 📋复制 + 🔄重试
-- **Follow-up 建议** — 响应后自动生成上下文相关建议
-- **文件拖拽附件** — 拖入文件 → pill 显示 → 发送时 prepend
-- **消息右键菜单** — Copy / Insert to Editor / Run in Terminal / Delete
-- **命令面板** — Ctrl+Shift+P，19 个命令
-- **Toast 通知** — info/success/error/warning
-
-## 性能优化
-
-已修复的关键瓶颈：
-
-| 优化 | 模块 | 效果 |
-|------|------|------|
-| httpx 持久连接池 | llm_engine, extensions, mcp_client | -400ms/请求 |
-| stream delta 批量合并 | app.py | -93% JS eval 调用 |
-| to_api_messages 版本缓存 | chat_state | -90% 消息拷贝 |
-| @-mention 正则预编译 | chat_state | 消除重复编译 |
-| auto-save 版本号跳过 | chat_state | -50% 磁盘写 |
-| editor_get_content 单次 JS eval | app.py | -50% 延迟 |
-| MCP stdio bufsize 8192 | mcp_client | -90% 系统调用 |
+分 scope 持久化：
+- Workspace: `<BASE_DIR>/.sao/chat_history/`
+- System: `~/.sao/chat_history/`
+- 兼容旧 `ai_editor_history/` 目录
+- `list_conversations(scope="all")` 跨 scope 搜索
 
 ## 验证
 
 ```bash
-python -m ai_editor.selftest     # 59 项自测
+python -m ai_editor.selftest     # 113 项自测
 python -m ai_editor.app           # 独立启动 GUI
 ```

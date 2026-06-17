@@ -136,6 +136,7 @@ class ChatController:
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
         self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
         self._agent_mode: bool = False
+        self._disabled_tools: set = set()
 
         # UI callbacks
         self.on_message_added: Optional[Callable[[ChatMessage], None]] = None
@@ -200,10 +201,66 @@ class ChatController:
         self._running = False
 
     MAX_AGENT_ROUNDS = 25
+    KEEP_RECENT_MIN = 6
+
+    def _auto_compress(self) -> None:
+        """Compact conversation when token usage exceeds 90% of model context window.
+
+        Mirrors VSCode Copilot's compaction strategy:
+          threshold = floor(modelMaxPromptTokens * 0.9)
+        Keeps system prompt + summary of old messages + recent messages.
+        """
+        from ai_editor.llm_engine import compaction_threshold
+        model = self.engine.config.effective_model
+        threshold = compaction_threshold(model)
+
+        api_msgs = self.conversation.to_api_messages()
+        total_tokens = self.engine.count_message_tokens(api_msgs)
+        if total_tokens < threshold:
+            return
+
+        msgs = self.conversation.messages
+        if len(msgs) <= self.KEEP_RECENT_MIN * 2:
+            return
+
+        keep = self.KEEP_RECENT_MIN
+        while keep < len(msgs) - 2:
+            test_msgs = [{"role": "system", "content": self.conversation.system_prompt or ""}]
+            test_msgs.extend(m.to_api_dict() for m in msgs[-keep:])
+            if self.engine.count_message_tokens(test_msgs) < threshold * 0.7:
+                keep += 2
+            else:
+                break
+
+        cut = len(msgs) - keep
+        if cut <= 0:
+            return
+
+        old = msgs[:cut]
+        roles: dict = {}
+        for m in old:
+            roles[m.role] = roles.get(m.role, 0) + 1
+        topics = [m.content[:150] for m in old if m.role == "user" and m.content][:3]
+        summary = ChatMessage(
+            role="system",
+            content=(
+                f"[Compacted: {len(old)} earlier messages "
+                f"({', '.join(f'{c} {r}' for r, c in roles.items())}). "
+                f"Topics: {'; '.join(topics)}]"
+            ),
+        )
+        recent = msgs[cut:]
+        with self.conversation._lock:
+            self.conversation.messages.clear()
+            self.conversation.messages.append(summary)
+            self.conversation.messages.extend(recent)
+            self.conversation._msg_version += 1
+            self.conversation._api_cache = None
 
     def _run_loop(self) -> None:
         max_rounds = self.MAX_AGENT_ROUNDS if self._agent_mode else self.MAX_TOOL_ROUNDS
         try:
+            self._auto_compress()
             for _round in range(max_rounds):
                 if not self._running:
                     break
@@ -221,6 +278,10 @@ class ChatController:
                 tools = self.registry.to_openai_tools()
                 if self.extra_tools:
                     tools = (tools or []) + self.extra_tools
+                if tools and self._disabled_tools:
+                    tools = [t for t in tools
+                             if t.get("function", {}).get("name")
+                             not in self._disabled_tools]
                 tools = tools or None
 
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:

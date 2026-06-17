@@ -46,6 +46,8 @@ class AIEditorAPI:
         self._delta_buf: List[str] = []
         self._thinking_buf: List[str] = []
         self._delta_last_flush: float = 0.0
+        self._mode: str = "edit"
+        self._perm_overrides: Dict[str, str] = {}
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -103,9 +105,46 @@ class AIEditorAPI:
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
 
-    def _default_system_prompt(self) -> str:
+        # Load mode from settings
+        ai_cfg = (self._settings_getter("ai_editor", {}) or {})
+        if isinstance(ai_cfg, dict):
+            self._mode = ai_cfg.get("mode", "edit")
+            self._perm_overrides = ai_cfg.get("permissions", {})
+
+        # Chat provider registry + per-provider controllers
+        from ai_editor.chat_providers import get_provider_registry
+        self._provider_registry = get_provider_registry()
+        self._provider_controllers: Dict[str, ChatController] = {}
+        self._active_provider = "chat"
+
+        # Agent & Workflow registries
+        from ai_editor.agents import get_agent_registry
+        from ai_editor.workflows import get_workflow_registry, WorkflowEngine
+        self._agent_registry = get_agent_registry()
+        self._wf_registry = get_workflow_registry()
+        self._wf_engine = WorkflowEngine(self._engine, self._agent_registry)
+        self._active_agent_id: Optional[str] = None
+
+        gui = self._gui_ref or _DummyGui()
+        actions = getattr(gui, '_ai_engine_actions', None)
+        if not isinstance(actions, dict):
+            actions = {}
+            gui._ai_engine_actions = actions
+        actions["list_agents"] = lambda **kw: self._eng_list_agents()
+        actions["invoke_agent"] = lambda **kw: self._eng_invoke_agent(kw)
+        actions["list_workflows"] = lambda **kw: self._eng_list_workflows()
+        actions["run_workflow"] = lambda **kw: self._eng_run_workflow(kw)
+
+    def _settings_getter(self, key: str, default=None):
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if settings:
+            return settings.get(key, default)
+        return default
+
+    def _default_system_prompt(self, agent_mode: bool = False) -> str:
         from ai_editor.prompts import get_system_prompt
-        return get_system_prompt()
+        return get_system_prompt(agent_mode=agent_mode,
+                                 settings_getter=self._settings_getter)
 
     # ── Config ──
 
@@ -114,6 +153,11 @@ class AIEditorAPI:
         if not settings:
             return ProviderConfig()
         raw = settings.get("ai_editor", {}) or {}
+        # Load user-defined custom models into the engine
+        custom_models = raw.get("custom_models", {})
+        if isinstance(custom_models, dict) and custom_models:
+            from ai_editor.llm_engine import set_custom_models
+            set_custom_models(custom_models)
         return ProviderConfig(
             provider=raw.get("provider", "openai"),
             api_key=raw.get("api_key", ""),
@@ -122,6 +166,15 @@ class AIEditorAPI:
             temperature=raw.get("temperature", 0.7),
             max_tokens=raw.get("max_tokens", 4096),
             system_prompt=raw.get("system_prompt", ""),
+            top_p=raw.get("top_p", 1.0),
+            frequency_penalty=raw.get("frequency_penalty", 0.0),
+            presence_penalty=raw.get("presence_penalty", 0.0),
+            stop=raw.get("stop", []),
+            max_input_tokens=raw.get("max_input_tokens", 0),
+            max_output_tokens=raw.get("max_output_tokens", 0),
+            timeout=raw.get("timeout", 180),
+            extra_headers=raw.get("extra_headers", {}),
+            extra_body=raw.get("extra_body", {}),
         )
 
     # ── JS-callable methods (window.pywebview.api.*) ──
@@ -137,12 +190,21 @@ class AIEditorAPI:
             if not theme:
                 themes = settings.get("panel_themes", {}) or {}
                 theme = themes.get("act", "dark")
+        pkeys = {}
+        if settings:
+            ai_cfg2 = settings.get("ai_editor", {}) or {}
+            pkeys = ai_cfg2.get("provider_keys", {}) if isinstance(ai_cfg2, dict) else {}
+        from ai_editor.llm_engine import get_model_context
+        model_name = cfg.model or cfg.effective_model
+        ctx = get_model_context(model_name)
         return {
             "provider": cfg.provider, "api_key": cfg.api_key,
-            "base_url": cfg.base_url, "model": cfg.model or cfg.effective_model,
+            "base_url": cfg.base_url, "model": model_name,
             "temperature": cfg.temperature, "max_tokens": cfg.max_tokens,
             "system_prompt": cfg.system_prompt,
             "theme": theme,
+            "_provider_keys": pkeys,
+            "context_window": ctx,
         }
 
     def save_config(self, data: Dict) -> Dict:
@@ -168,11 +230,19 @@ class AIEditorAPI:
                 self._engine.config.provider = config["provider"]
             if config.get("model"):
                 self._engine.config.model = config["model"]
-        # Update system prompt for agent mode
-        if agent_mode and self._controller.conversation:
-            from ai_editor.prompts import get_system_prompt
-            self._controller.conversation.system_prompt = get_system_prompt(agent_mode=True)
-        self._controller.send(text.strip(), agent_mode=agent_mode)
+        # @agent-id prefix → activate agent for this message
+        stripped = text.strip()
+        if stripped.startswith("@") and " " in stripped:
+            mention, rest = stripped.split(" ", 1)
+            agent_id = mention[1:]
+            if self._agent_registry and self._agent_registry.get(agent_id):
+                self._set_active_agent(agent_id)
+                stripped = rest.strip()
+        effective_agent = agent_mode or self._mode == "agent"
+        if effective_agent and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
+        self._apply_mode_permissions()
+        self._controller.send(stripped, agent_mode=effective_agent)
         return {"ok": True}
 
     def _resolve_variable(self, name: str) -> str:
@@ -208,6 +278,378 @@ class AIEditorAPI:
             sp = self._engine.config.system_prompt if self._engine else ""
             self._controller.new_conversation(sp or self._default_system_prompt())
         return {"ok": True}
+
+    # ── Custom Instructions API ──
+
+    def get_instructions(self) -> Dict:
+        """Return user instructions text + project instruction files."""
+        from ai_editor.prompts import load_instructions, list_instruction_files
+        ai = self._settings_getter("ai_editor", {}) or {}
+        user_text = ai.get("user_instructions", "") if isinstance(ai, dict) else ""
+        files = list_instruction_files()
+        combined = load_instructions(settings_getter=self._settings_getter)
+        return {"user_instructions": user_text, "files": files,
+                "combined_preview": combined}
+
+    def save_user_instructions(self, text: str) -> Dict:
+        """Persist user-level instructions to settings."""
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            return {"error": "Settings not available"}
+        ai = settings.get("ai_editor", {}) or {}
+        if not isinstance(ai, dict):
+            ai = {}
+        ai["user_instructions"] = text
+        settings.set("ai_editor", ai)
+        try:
+            settings.save()
+        except Exception:
+            pass
+        if self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return {"ok": True}
+
+    def get_instruction_files(self) -> Dict:
+        """List .sao/instructions.md and .sao/instructions/*.md files."""
+        from ai_editor.prompts import list_instruction_files
+        return {"files": list_instruction_files()}
+
+    def save_instruction_file(self, name: str, content: str) -> Dict:
+        """Create or update an instruction file under .sao/."""
+        from ai_editor.prompts import save_instruction_file as _save
+        result = _save(name, content)
+        if result.get("ok") and self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return result
+
+    def delete_instruction_file(self, name: str) -> Dict:
+        """Delete an instruction file."""
+        from ai_editor.prompts import delete_instruction_file as _del
+        result = _del(name)
+        if result.get("ok") and self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return result
+
+    # ── Mode & Permission API ──
+
+    def get_mode(self) -> Dict:
+        from ai_editor.scopes import MODES, effective_permissions
+        return {
+            "mode": self._mode,
+            "modes": list(MODES),
+            "permissions": effective_permissions(self._mode, self._perm_overrides),
+        }
+
+    def set_mode(self, mode: str) -> Dict:
+        from ai_editor.scopes import MODES
+        if mode not in MODES:
+            return {"error": f"Invalid mode: {mode}. Valid: {list(MODES)}"}
+        self._mode = mode
+        self._save_mode_to_settings()
+        self._apply_mode_permissions()
+        return {"ok": True, "mode": mode}
+
+    def set_tool_permission(self, tool_name: str, permission: str) -> Dict:
+        if permission not in ("allowed", "confirm", "disabled"):
+            return {"error": "Invalid permission"}
+        self._perm_overrides[tool_name] = permission
+        self._save_mode_to_settings()
+        self._apply_mode_permissions()
+        return {"ok": True}
+
+    def get_scopes(self) -> Dict:
+        from ai_editor.scopes import resolve_scopes
+        scopes = resolve_scopes()
+        for s in scopes:
+            s["exists"] = os.path.isdir(s["path"])
+        return {"scopes": scopes}
+
+    def _save_mode_to_settings(self) -> None:
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            return
+        ai = settings.get("ai_editor", {}) or {}
+        if not isinstance(ai, dict):
+            ai = {}
+        ai["mode"] = self._mode
+        ai["permissions"] = self._perm_overrides
+        settings.set("ai_editor", ai)
+        try:
+            settings.save()
+        except Exception:
+            pass
+
+    def _apply_mode_permissions(self) -> None:
+        """Update tool registry confirm flags + controller tool filter based on mode."""
+        if not self._registry:
+            return
+        from ai_editor.scopes import effective_permissions
+        perms = effective_permissions(self._mode, self._perm_overrides)
+        disabled: List[str] = []
+        for tool in self._registry.list_tools():
+            p = perms.get(tool.name, "allowed")
+            if p == "disabled":
+                disabled.append(tool.name)
+            elif p == "confirm":
+                tool.requires_confirm = True
+            else:
+                tool.requires_confirm = False
+        if self._controller:
+            self._controller._disabled_tools = set(disabled)
+
+    # ── Chat Provider API ──
+
+    def list_chat_providers(self) -> Dict:
+        self._ensure_engine()
+        return {"providers": self._provider_registry.list_available(
+            self._settings_getter)}
+
+    def switch_provider(self, provider_id: str) -> Dict:
+        self._ensure_engine()
+        prov = self._provider_registry.get(provider_id)
+        if not prov:
+            return {"error": f"Unknown provider: {provider_id}"}
+        self._active_provider = provider_id
+        if provider_id == "chat":
+            return {"ok": True, "provider": "chat"}
+        ctrl = self._provider_controllers.get(provider_id)
+        if not ctrl:
+            ctrl = self._create_provider_controller(prov)
+            self._provider_controllers[provider_id] = ctrl
+        return {"ok": True, "provider": provider_id}
+
+    def provider_send(self, provider_id: str, text: str) -> Dict:
+        """Send a message to a specific provider's conversation."""
+        self._ensure_engine()
+        if provider_id == "chat":
+            return self.send_message(text)
+        prov = self._provider_registry.get(provider_id)
+        if not prov:
+            return {"error": f"Unknown provider: {provider_id}"}
+        ctrl = self._provider_controllers.get(provider_id)
+        if not ctrl:
+            ctrl = self._create_provider_controller(prov)
+            self._provider_controllers[provider_id] = ctrl
+        if ctrl.is_running:
+            return {"error": "Already running"}
+        ctrl.send(text.strip(), agent_mode=prov.auto_agent)
+        return {"ok": True}
+
+    def provider_cancel(self, provider_id: str) -> Dict:
+        if provider_id == "chat":
+            return self.cancel()
+        ctrl = self._provider_controllers.get(provider_id)
+        if ctrl:
+            ctrl.cancel()
+        return {"ok": True}
+
+    def provider_new_chat(self, provider_id: str) -> Dict:
+        if provider_id == "chat":
+            return self.new_chat()
+        ctrl = self._provider_controllers.get(provider_id)
+        if ctrl:
+            prov = self._provider_registry.get(provider_id)
+            sp = prov.system_prompt if prov else ""
+            ctrl.new_conversation(sp)
+        return {"ok": True}
+
+    def register_chat_provider(self, data: Dict) -> Dict:
+        """Plugin API: register a custom chat provider tab."""
+        self._ensure_engine()
+        from ai_editor.chat_providers import ChatProviderDef
+        prov = ChatProviderDef.from_dict(data)
+        self._provider_registry.register(prov)
+        return {"ok": True, "id": prov.id}
+
+    def unregister_chat_provider(self, provider_id: str) -> Dict:
+        self._ensure_engine()
+        ctrl = self._provider_controllers.pop(provider_id, None)
+        if ctrl:
+            ctrl.cancel()
+        self._provider_registry.unregister(provider_id)
+        return {"ok": True}
+
+    def _create_provider_controller(self, prov) -> ChatController:
+        """Create a ChatController for a non-default provider."""
+        from ai_editor.llm_engine import ProviderConfig
+        key = self._resolve_provider_key(prov.provider_type)
+        cfg = ProviderConfig(
+            provider=prov.provider_type,
+            api_key=key or self._engine.config.api_key,
+            base_url=prov.base_url or "",
+            model=prov.model,
+            system_prompt=prov.system_prompt,
+        )
+        engine = LLMEngine(cfg)
+        conv = Conversation(system_prompt=prov.system_prompt)
+        ctrl = ChatController(engine, self._registry, conv)
+        pid = prov.id
+        ctrl.on_stream_delta = lambda msg, t: self._emit(
+            f"provider_stream_delta", {"provider": pid, "content": t})
+        ctrl.on_thinking_delta = lambda msg, t: self._emit(
+            f"provider_thinking_delta", {"provider": pid, "content": t})
+        ctrl.on_stream_end = lambda msg: self._emit(
+            f"provider_stream_end", {"provider": pid,
+             "content": msg.content, "model": msg.model,
+             "thinking": msg.thinking,
+             **({"error": msg.content} if msg.is_error else {}),
+             **({"usage": msg.usage} if msg.usage else {})})
+        ctrl.on_tool_start = lambda cid, n, a: self._emit(
+            f"provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a})
+        ctrl.on_tool_end = lambda cid, r: self._emit(
+            f"provider_tool_end", {"provider": pid, "id": cid, "result": r})
+        ctrl.on_error = lambda e: self._emit(
+            f"provider_error", {"provider": pid, "error": e})
+        ctrl.on_idle = lambda: self._emit(
+            f"provider_idle", {"provider": pid})
+        ctrl.resolve_variable = self._resolve_variable
+        return ctrl
+
+    def _resolve_provider_key(self, provider_type: str) -> str:
+        ai = self._settings_getter("ai_editor", {}) or {}
+        if not isinstance(ai, dict):
+            return ""
+        if ai.get("provider") == provider_type:
+            return ai.get("api_key", "")
+        keys = ai.get("provider_keys", {})
+        if isinstance(keys, dict):
+            return keys.get(provider_type, "")
+        return ""
+
+    # ── Agent API (JS-callable) ──
+
+    def list_agents(self) -> Dict:
+        self._ensure_engine()
+        return {"agents": [a.to_dict() for a in self._agent_registry.list_all()]}
+
+    def get_agent(self, agent_id: str) -> Dict:
+        self._ensure_engine()
+        a = self._agent_registry.get(agent_id)
+        return a.to_dict() if a else {"error": "Not found"}
+
+    def save_agent(self, data: Dict) -> Dict:
+        self._ensure_engine()
+        from ai_editor.agents import AgentDef
+        scope = data.pop("_scope", "workspace")
+        agent = AgentDef.from_dict(data)
+        return self._agent_registry.save_custom(agent, scope=scope)
+
+    def delete_agent(self, agent_id: str) -> Dict:
+        self._ensure_engine()
+        return self._agent_registry.delete_custom(agent_id)
+
+    def set_active_agent(self, agent_id: str) -> Dict:
+        self._ensure_engine()
+        return self._set_active_agent(agent_id)
+
+    def clear_active_agent(self) -> Dict:
+        self._ensure_engine()
+        self._active_agent_id = None
+        if self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return {"ok": True}
+
+    def get_active_agent(self) -> Dict:
+        return {"agent_id": self._active_agent_id or ""}
+
+    def _set_active_agent(self, agent_id: str) -> Dict:
+        agent = self._agent_registry.get(agent_id)
+        if not agent:
+            return {"error": f"Agent not found: {agent_id}"}
+        self._active_agent_id = agent_id
+        if self._controller and self._controller.conversation:
+            base = self._default_system_prompt()
+            self._controller.conversation.system_prompt = (
+                base + f"\n\n# Active Agent: {agent.name}\n\n"
+                + agent.system_prompt
+            )
+        return {"ok": True, "agent": agent.to_dict()}
+
+    # ── Workflow API (JS-callable) ──
+
+    def list_workflows(self) -> Dict:
+        self._ensure_engine()
+        return {"workflows": [w.to_dict() for w in self._wf_registry.list_all()]}
+
+    def get_workflow(self, wf_id: str) -> Dict:
+        self._ensure_engine()
+        w = self._wf_registry.get(wf_id)
+        return w.to_dict() if w else {"error": "Not found"}
+
+    def save_workflow(self, data: Dict) -> Dict:
+        self._ensure_engine()
+        from ai_editor.workflows import WorkflowDef
+        scope = data.pop("_scope", "workspace")
+        wf = WorkflowDef.from_dict(data)
+        return self._wf_registry.save_custom(wf, scope=scope)
+
+    def delete_workflow(self, wf_id: str) -> Dict:
+        self._ensure_engine()
+        return self._wf_registry.delete_custom(wf_id)
+
+    def run_workflow(self, wf_id: str, input_text: str) -> Dict:
+        """Run a workflow from the UI. Executes in the calling thread."""
+        self._ensure_engine()
+        wf = self._wf_registry.get(wf_id)
+        if not wf:
+            return {"error": f"Workflow not found: {wf_id}"}
+
+        def _on_start(i, total, step):
+            self._emit("workflow_step", {
+                "step": i, "total": total,
+                "label": step.label, "status": "running"})
+
+        def _on_end(i, total, step, output, error):
+            self._emit("workflow_step", {
+                "step": i, "total": total,
+                "label": step.label, "status": "done",
+                "preview": (output or "")[:300], "error": error})
+
+        return self._wf_engine.run(wf, input_text, _on_start, _on_end)
+
+    # ── Engine action handlers (registered on gui._ai_engine_actions) ──
+
+    def _eng_list_agents(self) -> Dict:
+        return {"agents": [
+            {"id": a.id, "name": a.name, "description": a.description,
+             "icon": a.icon, "when_to_use": a.when_to_use}
+            for a in self._agent_registry.list_all()
+        ]}
+
+    def _eng_invoke_agent(self, kw: Dict) -> Dict:
+        agent_id = kw.get("agent_id", "")
+        message = kw.get("message", "")
+        agent = self._agent_registry.get(agent_id)
+        if not agent:
+            return {"error": f"Agent not found: {agent_id}",
+                    "available": [a.id for a in self._agent_registry.list_all()]}
+        self._set_active_agent(agent_id)
+        return {
+            "agent": agent.id,
+            "name": agent.name,
+            "activated": True,
+            "instruction": (
+                f"Now acting as {agent.name}. "
+                f"Apply this guidance:\n\n{agent.system_prompt}"
+            ),
+        }
+
+    def _eng_list_workflows(self) -> Dict:
+        return {"workflows": [
+            {"id": w.id, "name": w.name, "description": w.description,
+             "icon": w.icon, "steps": len(w.steps),
+             "when_to_use": w.when_to_use}
+            for w in self._wf_registry.list_all()
+        ]}
+
+    def _eng_run_workflow(self, kw: Dict) -> Dict:
+        wf_id = kw.get("workflow_id", "")
+        input_text = kw.get("input", "")
+        wf = self._wf_registry.get(wf_id)
+        if not wf:
+            return {"error": f"Workflow not found: {wf_id}",
+                    "available": [w.id for w in self._wf_registry.list_all()]}
+        return self._wf_engine.run(wf, input_text)
 
     def export_chat(self) -> str:
         if not self._controller:
@@ -381,6 +823,69 @@ class AIEditorAPI:
             return {"error": "Not found"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    def get_model_info(self, model: str = "") -> Dict:
+        """Return context window info for a model."""
+        from ai_editor.llm_engine import get_model_context, compaction_threshold
+        m = model or (self._engine.config.effective_model if self._engine else "")
+        ctx = get_model_context(m)
+        return {"model": m, "max_input": ctx["max_input"],
+                "max_output": ctx["max_output"],
+                "compact_at": compaction_threshold(m)}
+
+    def list_models(self) -> Dict:
+        """Return all known models (built-in + custom)."""
+        from ai_editor.llm_engine import list_all_models
+        return {"models": list_all_models()}
+
+    def save_custom_model(self, model_name: str, max_input: int,
+                          max_output: int = 4096) -> Dict:
+        """Add/override a model's context window in settings."""
+        from ai_editor.llm_engine import set_custom_models, _custom_models
+        _custom_models[model_name] = {"max_input": max_input,
+                                       "max_output": max_output}
+        self._save_custom_models_to_settings()
+        return {"ok": True, "model": model_name}
+
+    def delete_custom_model(self, model_name: str) -> Dict:
+        from ai_editor.llm_engine import _custom_models
+        _custom_models.pop(model_name, None)
+        self._save_custom_models_to_settings()
+        return {"ok": True}
+
+    def _save_custom_models_to_settings(self) -> None:
+        from ai_editor.llm_engine import _custom_models
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            return
+        ai = settings.get("ai_editor", {}) or {}
+        if not isinstance(ai, dict):
+            ai = {}
+        ai["custom_models"] = dict(_custom_models)
+        settings.set("ai_editor", ai)
+        try:
+            settings.save()
+        except Exception:
+            pass
+
+    def get_full_config(self) -> Dict:
+        """Return ALL configurable parameters for the active endpoint."""
+        self._ensure_engine()
+        c = self._engine.config
+        return {
+            "provider": c.provider, "model": c.effective_model,
+            "base_url": c.effective_base_url,
+            "temperature": c.temperature, "top_p": c.top_p,
+            "max_tokens": c.max_tokens,
+            "frequency_penalty": c.frequency_penalty,
+            "presence_penalty": c.presence_penalty,
+            "stop": c.stop, "timeout": c.timeout,
+            "max_input_tokens": c.max_input_tokens,
+            "max_output_tokens": c.max_output_tokens,
+            "extra_headers": c.extra_headers,
+            "extra_body": c.extra_body,
+            "context_window": c.effective_context,
+        }
 
     def count_tokens(self, text: str = "") -> Dict:
         self._ensure_engine()

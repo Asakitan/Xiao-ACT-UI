@@ -54,17 +54,15 @@ class AIEditorBridge:
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
 
+    def _settings_getter(self, key: str, default=None):
+        settings = getattr(self._gui_ref, 'settings', None)
+        if settings:
+            return settings.get(key, default)
+        return default
+
     def _default_system_prompt(self) -> str:
-        tools_desc = ""
-        if self._registry:
-            for cat in self._registry.categories():
-                names = [t.name for t in self._registry.list_tools(cat)]
-                tools_desc += f"\n- {cat}: {', '.join(names)}"
-        return (
-            "你是 SAO ACT UI 的 AI 助手。\n"
-            "你可以通过 tool call 访问平台和插件暴露的运行时接口。\n"
-            f"\n可用工具分类:{tools_desc}"
-        )
+        from ai_editor.prompts import get_system_prompt
+        return get_system_prompt(settings_getter=self._settings_getter)
 
     def _load_config(self) -> ProviderConfig:
         settings = getattr(self._gui_ref, 'settings', None)
@@ -96,6 +94,17 @@ class AIEditorBridge:
             "ai_editor_test_connection": self._cmd_test_connection,
             "ai_editor_list_history": self._cmd_list_history,
             "ai_editor_load_history": self._cmd_load_history,
+            "ai_editor_get_instructions": self._cmd_get_instructions,
+            "ai_editor_save_user_instructions": self._cmd_save_user_instructions,
+            "ai_editor_get_instruction_files": self._cmd_get_instruction_files,
+            "ai_editor_save_instruction_file": self._cmd_save_instruction_file,
+            "ai_editor_delete_instruction_file": self._cmd_delete_instruction_file,
+            "ai_editor_list_agents": self._cmd_list_agents,
+            "ai_editor_save_agent": self._cmd_save_agent,
+            "ai_editor_delete_agent": self._cmd_delete_agent,
+            "ai_editor_list_workflows": self._cmd_list_workflows,
+            "ai_editor_save_workflow": self._cmd_save_workflow,
+            "ai_editor_delete_workflow": self._cmd_delete_workflow,
         }
         handler = handlers.get(name)
         if handler:
@@ -210,6 +219,81 @@ class AIEditorBridge:
             return {"error": "Not found"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    # ── Agents & Workflows ──
+
+    def _cmd_list_agents(self, payload: Dict) -> Dict:
+        from ai_editor.agents import get_agent_registry
+        return {"agents": [a.to_dict() for a in get_agent_registry().list_all()]}
+
+    def _cmd_save_agent(self, payload: Dict) -> Dict:
+        from ai_editor.agents import AgentDef, get_agent_registry
+        agent = AgentDef.from_dict(payload)
+        return get_agent_registry().save_custom(agent)
+
+    def _cmd_delete_agent(self, payload: Dict) -> Dict:
+        from ai_editor.agents import get_agent_registry
+        return get_agent_registry().delete_custom(payload.get("id", ""))
+
+    def _cmd_list_workflows(self, payload: Dict) -> Dict:
+        from ai_editor.workflows import get_workflow_registry
+        return {"workflows": [w.to_dict() for w in get_workflow_registry().list_all()]}
+
+    def _cmd_save_workflow(self, payload: Dict) -> Dict:
+        from ai_editor.workflows import WorkflowDef, get_workflow_registry
+        wf = WorkflowDef.from_dict(payload)
+        return get_workflow_registry().save_custom(wf)
+
+    def _cmd_delete_workflow(self, payload: Dict) -> Dict:
+        from ai_editor.workflows import get_workflow_registry
+        return get_workflow_registry().delete_custom(payload.get("id", ""))
+
+    # ── Instructions ──
+
+    def _cmd_get_instructions(self, payload: Dict) -> Dict:
+        from ai_editor.prompts import load_instructions, list_instruction_files
+        ai = self._settings_getter("ai_editor", {}) or {}
+        user_text = ai.get("user_instructions", "") if isinstance(ai, dict) else ""
+        files = list_instruction_files()
+        combined = load_instructions(settings_getter=self._settings_getter)
+        return {"user_instructions": user_text, "files": files,
+                "combined_preview": combined}
+
+    def _cmd_save_user_instructions(self, payload: Dict) -> Dict:
+        settings = getattr(self._gui_ref, 'settings', None)
+        if not settings:
+            return {"error": "Settings not available"}
+        ai = settings.get("ai_editor", {}) or {}
+        if not isinstance(ai, dict):
+            ai = {}
+        ai["user_instructions"] = payload.get("text", "")
+        settings.set("ai_editor", ai)
+        try:
+            settings.save()
+        except Exception:
+            pass
+        if self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return {"ok": True}
+
+    def _cmd_get_instruction_files(self, payload: Dict) -> Dict:
+        from ai_editor.prompts import list_instruction_files
+        return {"files": list_instruction_files()}
+
+    def _cmd_save_instruction_file(self, payload: Dict) -> Dict:
+        from ai_editor.prompts import save_instruction_file
+        result = save_instruction_file(payload.get("name", ""),
+                                       payload.get("content", ""))
+        if result.get("ok") and self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return result
+
+    def _cmd_delete_instruction_file(self, payload: Dict) -> Dict:
+        from ai_editor.prompts import delete_instruction_file
+        result = delete_instruction_file(payload.get("name", ""))
+        if result.get("ok") and self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt()
+        return result
 
     # ── Event emitters (called from background thread) ──
 

@@ -52,6 +52,68 @@ _PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
     },
 }
 
+MODEL_CONTEXT_WINDOWS: Dict[str, Dict[str, int]] = {
+    "gpt-4o":                   {"max_input": 128000, "max_output": 16384},
+    "gpt-4o-mini":              {"max_input": 128000, "max_output": 16384},
+    "gpt-4-turbo":              {"max_input": 128000, "max_output": 4096},
+    "gpt-4":                    {"max_input":   8192, "max_output": 4096},
+    "gpt-3.5-turbo":            {"max_input":  16384, "max_output": 4096},
+    "o1":                       {"max_input": 200000, "max_output": 100000},
+    "o1-mini":                  {"max_input": 128000, "max_output": 65536},
+    "o3":                       {"max_input": 200000, "max_output": 100000},
+    "o3-mini":                  {"max_input": 200000, "max_output": 100000},
+    "o4-mini":                  {"max_input": 200000, "max_output": 100000},
+    "codex-mini-latest":        {"max_input": 200000, "max_output": 100000},
+    "claude-sonnet-4-20250514": {"max_input": 200000, "max_output": 16384},
+    "claude-opus-4-20250514":   {"max_input": 200000, "max_output": 16384},
+    "claude-haiku-3-5":         {"max_input": 200000, "max_output": 8192},
+    "claude-3-5-sonnet":        {"max_input": 200000, "max_output": 8192},
+    "deepseek-chat":            {"max_input":  64000, "max_output": 8192},
+    "deepseek-coder":           {"max_input":  64000, "max_output": 8192},
+    "deepseek-reasoner":        {"max_input":  64000, "max_output": 8192},
+    "llama3.1":                 {"max_input": 128000, "max_output": 4096},
+    "qwen2.5":                  {"max_input": 128000, "max_output": 8192},
+}
+
+COMPACTION_RATIO = 0.9
+
+_custom_models: Dict[str, Dict[str, int]] = {}
+
+
+def set_custom_models(models: Dict[str, Dict[str, int]]) -> None:
+    """Merge user-defined model context windows (from settings)."""
+    _custom_models.clear()
+    _custom_models.update(models)
+
+
+def get_model_context(model: str) -> Dict[str, int]:
+    """Return {max_input, max_output} for a model.
+
+    Priority: user custom_models > built-in table > prefix match > default 128K.
+    """
+    if model in _custom_models:
+        return dict(_custom_models[model])
+    if model in MODEL_CONTEXT_WINDOWS:
+        return dict(MODEL_CONTEXT_WINDOWS[model])
+    for src in (_custom_models, MODEL_CONTEXT_WINDOWS):
+        for prefix, ctx in src.items():
+            if model.startswith(prefix.rsplit("-", 1)[0]):
+                return dict(ctx)
+    return {"max_input": 128000, "max_output": 4096}
+
+
+def list_all_models() -> Dict[str, Dict[str, int]]:
+    """Return merged model table (built-in + custom overrides)."""
+    merged = dict(MODEL_CONTEXT_WINDOWS)
+    merged.update(_custom_models)
+    return merged
+
+
+def compaction_threshold(model: str) -> int:
+    """Token count at which conversation should be compacted (90% of max input)."""
+    ctx = get_model_context(model)
+    return int(ctx["max_input"] * COMPACTION_RATIO)
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -95,7 +157,18 @@ class ProviderConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     system_prompt: str = ""
+    # Advanced sampling
+    top_p: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    stop: List[str] = field(default_factory=list)
+    # Context window overrides (0 = use MODEL_CONTEXT_WINDOWS default)
+    max_input_tokens: int = 0
+    max_output_tokens: int = 0
+    # Connection
+    timeout: int = 180
     extra_headers: Dict[str, str] = field(default_factory=dict)
+    extra_body: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def effective_base_url(self) -> str:
@@ -110,6 +183,15 @@ class ProviderConfig:
             return self.model
         defaults = _PROVIDER_DEFAULTS.get(self.provider, {})
         return defaults.get("default_model", "")
+
+    @property
+    def effective_context(self) -> Dict[str, int]:
+        ctx = get_model_context(self.effective_model)
+        if self.max_input_tokens > 0:
+            ctx["max_input"] = self.max_input_tokens
+        if self.max_output_tokens > 0:
+            ctx["max_output"] = self.max_output_tokens
+        return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +210,8 @@ class LLMEngine:
     def _client(self):
         if self._http is None:
             import httpx
-            self._http = httpx.Client(timeout=180.0, http2=False, follow_redirects=True)
+            t = self.config.timeout if self.config else 180
+            self._http = httpx.Client(timeout=float(t), http2=False, follow_redirects=True)
         return self._http
 
     def close(self) -> None:
@@ -410,12 +493,22 @@ class LLMEngine:
             "stream": stream,
             "temperature": cfg.temperature,
         }
+        if cfg.top_p != 1.0:
+            body["top_p"] = cfg.top_p
+        if cfg.frequency_penalty != 0.0:
+            body["frequency_penalty"] = cfg.frequency_penalty
+        if cfg.presence_penalty != 0.0:
+            body["presence_penalty"] = cfg.presence_penalty
+        if cfg.stop:
+            body["stop"] = cfg.stop
         if cfg.max_tokens > 0:
             body["max_tokens"] = cfg.max_tokens
         if tools:
             body["tools"] = tools
         if stream:
             body["stream_options"] = {"include_usage": True}
+        if cfg.extra_body:
+            body.update(cfg.extra_body)
         return body
 
     def _build_anthropic_body(
@@ -443,8 +536,14 @@ class LLMEngine:
             body["system"] = "\n\n".join(system_parts)
         if cfg.temperature is not None:
             body["temperature"] = cfg.temperature
+        if cfg.top_p != 1.0:
+            body["top_p"] = cfg.top_p
+        if cfg.stop:
+            body["stop_sequences"] = cfg.stop
         if tools:
             body["tools"] = [self._convert_tool_to_anthropic(t) for t in tools]
+        if cfg.extra_body:
+            body.update(cfg.extra_body)
         return body
 
     @staticmethod

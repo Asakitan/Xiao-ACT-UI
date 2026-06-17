@@ -93,43 +93,44 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 
 ## AI Editor (`python/ai_editor/`)
 
-Standalone pywebview IDE with multi-provider LLM chat, VSCode-aligned tools, MCP, and extension marketplace.
+Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Chat Provider tabs (CHAT / Claude Code / Codex / plugin), custom Agents & Workflows, three-scope system, and full endpoint customization. See `docs/AI_EDITOR.md` for full architecture reference.
 
 ### Architecture
 
-- **Platform code** — but aware of the Star Resonance plugin as reference example.
-- `engine()` tool dispatches to platform engines + whatever plugin is loaded.
-- Tools follow VSCode Copilot pattern: `readFile`, `editFile`, `listFiles`, `searchFiles`, `runTerminal`, `askQuestion`, `taskComplete`, `getConfirmation`, editor tools, and the `engine` aggregate.
+- VSCode layout: Activity Bar → Left Sidebar → Editor + Terminal → **Right Sidebar (Chat)**
+- Three-scope system: System (`~/.sao/`) → Workspace (`<BASE_DIR>/.sao/`) → Plugin (`plugins/<id>/.sao/`)
+- Three modes: Chat (no tools) / Edit (confirm writes) / Agent (autonomous)
+- Chat Provider registry: plugins call `register_chat_provider()` to add right-sidebar tabs
+- Model context windows: built-in 20+ model table + user custom overrides in settings
+- Auto-compress: threshold = 90% of model max_input_tokens (VSCode Copilot pattern)
 
-### System prompt (`prompts.py`)
-
-- `SYSTEM_PROMPT` describes the platform, lists the Star Resonance plugin's specific features as the reference adapter, enumerates tools, and explains IDE usage.
-- **When tools change**: update the tool table and engine action list in `SYSTEM_PROMPT`.
-- **When project scope changes**: update the "About This Project" section.
-- `AGENT_MODE_ADDITION` appended when Agent Mode is checked.
-- Both `app.py` (pywebview) and `sao_gui_ai_editor.py` (Tk fallback) call `get_system_prompt()`.
-
-### IDE rules
+### Key rules
 
 - Tools stay generic. All engine queries go through `engine(action=...)`.
-- HTML UI (`web/ai_editor_app.html`) supports dark/light via `[data-theme]` CSS variables, synced with ACT `panel_themes.act`.
-- Extension tools loaded from VSIX `package.json` `contributes`.
-- MCP servers loaded from `mcp.json` / settings.
+- Agent/Workflow/Instructions load from all three scopes (system → workspace → plugin).
+- `ProviderConfig` has full sampling params (top_p, penalties, stop, extra_body, extra_headers, timeout). All customizable from settings UI.
+- Right-sidebar provider tabs appear only when their API key is configured (dynamic detection).
+- History saved per workspace scope (`<BASE_DIR>/.sao/chat_history/`).
+- `SYSTEM_PROMPT` auto-injects: Custom Instructions + Available Agents + Available Workflows.
 
 ### Files
 
 | File | Responsibility |
 |------|---------------|
-| `prompts.py` | System prompts — update when tools or scope change |
-| `llm_engine.py` | Multi-provider LLM (OpenAI, Anthropic native, compatible) |
+| `prompts.py` | System prompts + three-scope instruction loading |
+| `llm_engine.py` | Multi-provider LLM, model context window table, full sampling params |
 | `tool_registry.py` | Tool registration and dispatch |
-| `engine_tools.py` | VSCode-aligned tools + engine aggregate |
-| `chat_state.py` | Conversation, tool loop, @-mentions, agent mode |
-| `app.py` | pywebview launcher + JS API bridge |
-| `mcp_client.py` | MCP server connections (stdio + SSE) |
-| `extensions.py` | VSCode Marketplace API client + extension tool loading |
-| `history.py` | Conversation persistence |
-| `selftest.py` | Self-test suite |
+| `engine_tools.py` | 12 VSCode-aligned tools + engine aggregate |
+| `chat_state.py` | Conversation, tool loop, @-mentions, agent mode, auto-compress |
+| `app.py` | pywebview launcher + 60+ JS API methods |
+| `agents.py` | Agent registry: 5 built-in + custom from `.sao/agents/` |
+| `workflows.py` | Workflow engine: 3 built-in + custom, chain LLM calls with `{{var}}` |
+| `scopes.py` | Three-scope resolution + mode/permission defaults |
+| `chat_providers.py` | Right-sidebar provider tabs: CHAT/CC/Codex/plugin |
+| `mcp_client.py` | MCP server connections (stdio + SSE + internal) |
+| `extensions.py` | VSCode Marketplace API client |
+| `history.py` | Scope-aware conversation persistence |
+| `selftest.py` | 113-item self-test suite |
 
 ## Documentation Hygiene
 
