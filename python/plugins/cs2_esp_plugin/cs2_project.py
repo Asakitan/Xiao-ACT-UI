@@ -46,14 +46,25 @@ def project_point(world: Sequence[float], matrix: Sequence[float],
 
 
 def filter_enemies(entities: Iterable[dict], local_team: int) -> List[dict]:
-    """Keep only alive entities whose team differs from the local team."""
+    """Keep alive entities whose team differs from the local team.
+
+    When ``local_team`` is 0 or negative (user did not configure it), there is
+    no reliable way to decide allegiance — CS2 team 0 is "Unassigned/Spectator"
+    and is not a safe default for the local team. In that case return *all*
+    alive entities so the overlay is useful while the user is told via the
+    panel status to set ``local_team``.
+    """
+    try:
+        local_team = int(local_team)
+    except (TypeError, ValueError):
+        local_team = 0
     out = []
     for ent in entities or []:
         if not isinstance(ent, dict):
             continue
         if int(ent.get("health") or 0) <= 0:
             continue
-        if int(ent.get("team") or 0) == int(local_team):
+        if local_team > 0 and int(ent.get("team") or 0) == local_team:
             continue
         out.append(ent)
     return out

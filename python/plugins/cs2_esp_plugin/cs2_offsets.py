@@ -15,7 +15,11 @@ import os
 from typing import Any, Dict, Optional
 
 DEFAULT_CONFIG_VERSION = "0"
-_REQUIRED_OFFSETS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewMatrix")
+# dwLocalPlayerPawn is intentionally NOT in _REQUIRED_OFFSETS: the reader
+# derives local_team from settings rather than the pawn pointer, so requiring
+# it would force users to fill an offset the plugin never consumes. offsets.json
+# may still carry it as documentation/future-use.
+_REQUIRED_OFFSETS = ("dwEntityList", "dwViewMatrix")
 _REQUIRED_ENTITY_FIELDS = ("m_iHealth", "m_iTeamNum", "m_pGameSceneNode")
 _REQUIRED_SCENE_FIELDS = ("m_vecOrigin",)
 _DEFAULT_CONSTANTS = {

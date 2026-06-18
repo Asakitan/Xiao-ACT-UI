@@ -37,7 +37,7 @@ _ctx = None
 _reader: Optional[EngineAReader] = None
 _config: Optional[OffsetConfig] = None
 _timer_token = ""
-_running = False
+_running_state = False  # bool state; do NOT name a function _running (see _running())
 _last_status: dict = {}
 _last_snapshot: dict = {}
 _last_spec: dict = {}
@@ -78,24 +78,29 @@ def _toggle():
 
 
 def _start() -> bool:
-    global _reader, _timer_token, _running
+    global _reader, _timer_token, _running_state
     if _ctx is None:
         return False
     if not _ensure_config_ok():
         return False
+    if _running_state:
+        return True  # already started; idempotent
     use_scan = _bool_setting("use_pattern_scan", True)
     _reader = EngineAReader(_config, use_pattern_scan=use_scan)
     if not _reader.ensure_engine():
         _fail(f"引擎 A 加载失败: {_reader._last_error or 'unknown'}")
+        _reader = None
         return False
     pid = _reader.find_process()
     if pid <= 0:
         _fail(f"未找到进程 {_config.target_process!r}")
+        _reader = None
         return False
     if not _reader.attach(pid):
         _fail(f"attach 失败 (pid={pid}): {_reader._last_error or 'unknown'}")
+        _reader = None
         return False
-    _running = True
+    _running_state = True
     tick_s = float(_ctx.get_setting("tick_s", DEFAULT_TICK_S) or DEFAULT_TICK_S)
     tick_s = max(0.02, min(1.0, tick_s))
     _timer_token = _ctx.set_interval(_tick, tick_s)
@@ -106,7 +111,7 @@ def _start() -> bool:
 
 
 def _stop(reason: str = "manual") -> None:
-    global _reader, _timer_token, _running
+    global _reader, _timer_token, _running_state
     if _ctx is not None and _timer_token:
         try:
             _ctx.clear_timer(_timer_token)
@@ -115,7 +120,7 @@ def _stop(reason: str = "manual") -> None:
     _timer_token = ""
     if _reader is not None:
         _reader.detach()
-    _running = False
+    _running_state = False
     if _ctx is not None:
         try:
             _ctx.clear_overlay(SURFACE)
@@ -131,7 +136,7 @@ def _reload_config() -> bool:
     global _config
     if _ctx is None:
         return False
-    was_running = _running
+    was_running = _running_state
     if was_running:
         _stop("reload")
     _config = load_config(_ctx.path) or default_config()
@@ -170,13 +175,13 @@ def _fail(message: str) -> None:
 
 
 def _running() -> bool:
-    return bool(_running)
+    return bool(_running_state)
 
 
 # ── tick ────────────────────────────────────────────────────────────────
 def _tick() -> None:
     global _last_status, _last_snapshot, _last_spec, _last_tick_ts
-    if _ctx is None or not _running or _reader is None:
+    if _ctx is None or not _running_state or _reader is None:
         return
     if not _reader.attached:
         _stop("detached")
@@ -209,6 +214,13 @@ def _tick() -> None:
         try:
             _ctx.set_overlay(SURFACE, spec)
         except Exception as exc:
+            # Fail-closed: clear stale overlay so the screen does not show
+            # the previous frame's boxes when the renderer rejected the spec.
+            try:
+                _ctx.clear_overlay(SURFACE)
+            except Exception:
+                pass
+            _last_spec = {}
             _last_status = {**_reader.status(), "last_error": f"set_overlay: {exc}"}
             _refresh_panel()
             return
@@ -264,8 +276,10 @@ def _render(_payload=None) -> dict:
     cfg = _config or default_config()
     st = _last_status or {}
     snap = _last_snapshot or {}
-    running = _running
+    running = _running()
     complete = cfg.is_complete()
+    local_team = _local_team_or_default()
+    warn_local_team = local_team <= 0 and running
     status_text = "运行中" if running else ("就绪" if complete else "配置不完整")
     scanned = getattr(_reader, "scanned_rvas", lambda: {})() if _reader is not None else {}
     scan_state = "已扫描" if scanned else ("未启用" if not _bool_setting("use_pattern_scan", True) else "待扫描")
@@ -285,6 +299,7 @@ def _render(_payload=None) -> dict:
             ui.kv("最近错误", str(st.get("last_error") or "")),
             ui.kv("配置版本", str(cfg.config_version or "")),
             ui.kv("缺字段", ", ".join(cfg.missing()) if not complete else "无"),
+            ui.kv("local_team", f"{local_team}" + ("（未设置：显示全部存活实体）" if warn_local_team else "")),
         ]),
         ui.section("控制", [
             ui.row([

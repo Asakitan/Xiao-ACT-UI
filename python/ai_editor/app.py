@@ -1813,6 +1813,15 @@ class AIEditorAPI:
             return "[]"
         return self._controller.export_messages()
 
+    def get_premium_guide(self) -> Dict:
+        from ai_editor.prompts import _check_paid, _decrypt_engine_guide
+        if not _check_paid():
+            return {"paid": False, "content": ""}
+        try:
+            return {"paid": True, "content": _decrypt_engine_guide()}
+        except Exception:
+            return {"paid": True, "content": ""}
+
     def list_tools(self) -> Dict:
         try:
             self._ensure_engine()
