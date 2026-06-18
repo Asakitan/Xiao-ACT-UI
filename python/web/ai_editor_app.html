@@ -202,8 +202,21 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 
 /* ── Chat panel ── */
 .chat-panel { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
-.chat-messages { flex:1; overflow-y:auto; padding:0; }
+.chat-messages { flex:1; overflow-y:auto; padding:0; position:relative; }
 .chat-messages-inner { max-width:950px; margin:0 auto; padding:8px 0; }
+.chat-welcome { display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:40px 20px; flex:1; }
+.welcome-prompts { display:flex; flex-direction:column; gap:6px; width:100%; max-width:320px; }
+.welcome-prompt-btn { background:var(--bg3); color:var(--fg); border:1px solid var(--border);
+  border-radius:6px; padding:8px 12px; font:13px var(--sans); cursor:pointer; text-align:left;
+  transition:background .15s, border-color .15s; }
+.welcome-prompt-btn:hover { background:var(--bg-hover); border-color:var(--fg-dim); }
+.scroll-down-btn { position:absolute; bottom:8px; right:16px; width:32px; height:32px;
+  border-radius:50%; background:var(--bg3); border:1px solid var(--border); color:var(--fg-dim);
+  display:none; align-items:center; justify-content:center; cursor:pointer; font-size:14px;
+  box-shadow:0 2px 8px #00000040; z-index:10; }
+.scroll-down-btn:hover { background:var(--bg-hover); color:var(--fg); }
+.scroll-down-btn.visible { display:flex; }
 .msg { padding:12px 16px; animation:fadeIn .2s; }
 .msg.user-msg .msg-body { margin-left:auto; width:fit-content; max-width:85%;
   background:color-mix(in srgb, var(--selection) 40%, transparent); border-radius:12px; padding:8px 12px; }
@@ -856,11 +869,12 @@ pre.code-block { overflow:visible; }
       <div class="rtab active" data-rtab="chat">CHAT</div>
       <!-- CC / Codex / plugin tabs injected by renderProviderTabs() -->
     </div>
-    <div id="right-panels">
+    <div id="right-panels" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <!-- CHAT panel (always present) -->
       <div class="right-panel active" id="rp-chat">
         <div class="chat-panel" id="chat-panel">
           <div class="chat-messages" id="chat-messages"></div>
+          <div class="scroll-down-btn" id="scroll-down-btn" onclick="scrollChatBottom()" title="Scroll to bottom">↓</div>
           <div class="chat-input-area">
             <div style="position:relative">
               <div class="slash-popup" id="slash-popup"></div>
@@ -986,7 +1000,9 @@ pre.code-block { overflow:visible; }
     </div>
 
     <div class="sb-group" style="padding:0;margin-top:12px">Model</div>
-    <label>Model Name</label><input id="s-model" placeholder="gpt-4o / claude-sonnet-4-20250514 / deepseek-chat">
+    <label>Model Name <span style="font-weight:400;color:var(--fg-dim)">(type or select)</span></label>
+    <input id="s-model" list="s-model-list" placeholder="gpt-4o / claude-sonnet-4-20250514 / deepseek-chat" autocomplete="off">
+    <datalist id="s-model-list"></datalist>
     <div id="s-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
     <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
     <label>Max Output Tokens</label><input id="s-maxtok" type="number" value="4096">
@@ -1198,7 +1214,8 @@ async function init(){
   const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
   refreshRuntimeSupport();
   refreshHistory();await loadMode();await loadChatControls();await renderProviderTabs();
-  appendSystem('✦ SAO AI Editor\n\n多模型 LLM · Tool Calling · 流式输出\n在左侧 ⚙ 中配置 API Key，然后开始对话。');
+  renderWelcome();
+  $('chat-input').focus();
 }
 
 // ── Render ──
@@ -1230,6 +1247,10 @@ function createMsg(role,model){
 }
 
 function appendSystem(text){const b=createMsg('system');b.style.color='var(--fg-dim)';b.textContent=text}
+function appendApiKeyError(){
+  const b=createMsg('system');b.style.color='var(--fg-warning)';
+  b.innerHTML='⚠ No API key configured. <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">Open Settings</span> to add your key for <b>'+esc(config.provider||'current provider')+'</b>.';
+}
 
 function renderMd(container,text){
   const parts=text.split(/(```[\s\S]*?```)/g);
@@ -1693,6 +1714,7 @@ function onIdle(){
   $('stop-btn').style.display='none';
   const ic=$('chat-input-container');if(ic)ic.classList.remove('working');
   updateTokenCount();
+  const ci=$('chat-input');if(ci)ci.focus();
 }
 
 // ── Tool confirmation ──
@@ -1765,11 +1787,12 @@ async function doSend(){
   const inp=$('chat-input'),text=inp.value.trim();
   if(!text||streaming)return;
   inp.value='';inp.style.height='auto';
+  const wm=$('chat-welcome-msg');if(wm)wm.remove();
 
   // Slash command?
   if(text.startsWith('/')){execSlash(text);return}
 
-  if(!config.api_key&&config.provider!=='ollama'){appendSystem('⚠ 请先在 ⚙ Settings 中配置 API Key');return}
+  if(!config.api_key&&config.provider!=='ollama'){appendApiKeyError();return}
 
   createMsg('user').textContent=text;
   streaming=true;$('send-btn').disabled=true;_setSendIcon(true);$('stop-btn').style.display='';
@@ -1842,7 +1865,15 @@ chatInp.addEventListener('input',function(){
   },100);
 });
 chatInp.addEventListener('keydown',function(e){
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');doSend()}
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();slashPopup.classList.remove('open');$('at-popup').classList.remove('open');doSend()}
+  if(e.key==='Escape'){
+    if(slashPopup.classList.contains('open')){slashPopup.classList.remove('open');e.stopPropagation();return}
+    if($('at-popup').classList.contains('open')){$('at-popup').classList.remove('open');e.stopPropagation();return}
+    if(streaming){doStop();e.stopPropagation()}
+  }
+});
+chatInp.addEventListener('input',function(){
+  this.style.height='auto';this.style.height=Math.min(this.scrollHeight,200)+'px';
 });
 window.pickSlash=function(cmd){slashPopup.classList.remove('open');chatInp.value='';execSlash(cmd)};
 
@@ -2188,10 +2219,10 @@ async function renderProviderTabs(){
   r.providers.forEach(p=>{
     if(p.id==='chat')return;
     providerDefs[p.id]=p;
+    if(p.available===false)return;
     // Tab
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
-    if(p.available===false)tab.classList.add('unavailable');
-    tab.textContent=(p.icon?p.icon+' ':'')+p.name.toUpperCase();tab.title=p.available===false?providerUnavailableText(p):p.name;
+    tab.textContent=(p.icon?p.icon+' ':'')+p.name.toUpperCase();tab.title=p.name;
     tab.onclick=()=>switchRightTab(p.id);
     tabs.appendChild(tab);
     // Panel
@@ -2494,6 +2525,33 @@ function openSettings(){
 function closeSettings(){$('settings-modal').classList.remove('open')}
 window.openSettings=openSettings;window.closeSettings=closeSettings;
 if($('s-model'))$('s-model').addEventListener('input',showModelInfo);
+if($('s-provider'))$('s-provider').addEventListener('change',function(){
+  const p=this.value;
+  const presets={
+    openai:{base_url:'https://api.openai.com/v1',model:'gpt-4o'},
+    anthropic:{base_url:'https://api.anthropic.com/v1',model:'claude-sonnet-4-20250514'},
+    deepseek:{base_url:'https://api.deepseek.com/v1',model:'deepseek-chat'},
+    ollama:{base_url:'http://localhost:11434/v1',model:'llama3.1'},
+    custom:{base_url:'',model:''},
+  };
+  const d=presets[p];if(!d)return;
+  const bu=$('s-baseurl'),mo=$('s-model');
+  if(bu)bu.value=d.base_url;
+  if(mo)mo.value=d.model;
+  showModelInfo();
+  fetchProviderModels(p,d.base_url);
+});
+async function fetchProviderModels(provider,base_url){
+  const list=$('s-model-list');if(!list)return;
+  list.innerHTML='<option value="">Loading models...</option>';
+  const key=$('s-apikey')?$('s-apikey').value:'';
+  const r=await call('list_provider_models',provider||'',base_url||'',key||'');
+  list.innerHTML='';
+  if(r&&r.models&&r.models.length){
+    r.models.forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;list.appendChild(o)});
+  }
+}
+window.fetchProviderModels=fetchProviderModels;
 
 async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
@@ -3052,7 +3110,7 @@ doSend=async function(){
   inp.value='';inp.style.height='auto';
   $('at-popup').classList.remove('open');
   if(text.startsWith('/')){execSlash(text);return}
-  if(!config.api_key&&config.provider!=='ollama'){appendSystem('⚠ 请先配置 API Key');return}
+  if(!config.api_key&&config.provider!=='ollama'){appendApiKeyError();return}
   createMsg('user').textContent=text;
   streaming=true;$('send-btn').disabled=true;_setSendIcon(true);$('stop-btn').style.display='';
   {const ic=$('chat-input-container');if(ic)ic.classList.add('working')}
@@ -3337,6 +3395,38 @@ onStreamEnd=function(d){
 };
 window.onStreamEnd=onStreamEnd;
 
+// ── Welcome screen with suggested prompts ──
+function renderWelcome(){
+  let container=$('chat-messages').querySelector('.chat-messages-inner');
+  if(!container){container=document.createElement('div');container.className='chat-messages-inner';$('chat-messages').appendChild(container)}
+  const w=document.createElement('div');w.className='chat-welcome';w.id='chat-welcome-msg';
+  w.innerHTML='<div style="font-size:32px;margin-bottom:8px">✦</div>'
+    +'<div style="font-size:14px;font-weight:600;margin-bottom:4px">SAO AI Editor</div>'
+    +'<div style="color:var(--fg-dim);font-size:12px;margin-bottom:16px;text-align:center;max-width:300px">'
+    +'Multi-model LLM · Tool Calling · Streaming<br>'
+    +'Configure your API key in <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">⚙ Settings</span></div>'
+    +'<div class="welcome-prompts"></div>';
+  const prompts=w.querySelector('.welcome-prompts');
+  ['Explain this codebase','Write a Python script','Help me debug an error','Summarize the current file'].forEach(s=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='welcome-prompt-btn';
+    btn.textContent=s;
+    btn.onclick=()=>{$('chat-input').value=s;$('chat-input').focus();w.remove()};
+    prompts.appendChild(btn);
+  });
+  container.appendChild(w);
+}
+
+// ── Scroll-to-bottom button ──
+function scrollChatBottom(){const el=$('chat-messages');if(el)el.scrollTop=el.scrollHeight}
+(function(){
+  const cm=$('chat-messages');if(!cm)return;
+  const btn=$('scroll-down-btn');if(!btn)return;
+  cm.addEventListener('scroll',()=>{
+    const gap=cm.scrollHeight-cm.scrollTop-cm.clientHeight;
+    btn.classList.toggle('visible',gap>100);
+  });
+})();
+
 // ── Title bar menus ──
 let _activeMenu=null;
 function tbMenu(el,name){
@@ -3402,6 +3492,19 @@ function openFileDialog(){/* pywebview file dialog */
   }
 }
 function saveFile(){showToast('Saved','success',1000)}
+
+// Expose to global scope for HTML onclick attributes
+window.tbMenu=tbMenu;window.toggleSidebarVis=toggleSidebarVis;
+window.toggleEditorVis=toggleEditorVis;window.toggleChatVis=toggleChatVis;
+window.toggleTheme=toggleTheme;window.openSettings=openSettings;
+window.openCmdPalette=openCmdPalette;window.addTab=addTab;
+window.focusTerminal=focusTerminal;window.goToLineDialog=goToLineDialog;
+window.showAbout=showAbout;window.openFileDialog=openFileDialog;
+window.saveFile=saveFile;window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
+window.newChat=newChat;window.doSend=doSend;window.doStop=doStop;
+window.clearChat=clearChat;window.uploadImage=uploadImage;
+window.execSlash=execSlash;window.refreshHistory=refreshHistory;
+window.closeTab=closeTab;window.switchTab=switchTab;
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();

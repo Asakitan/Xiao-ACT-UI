@@ -2119,6 +2119,50 @@ class AIEditorAPI:
         from ai_editor.llm_engine import list_all_models
         return {"models": list_all_models()}
 
+    def list_provider_models(self, provider: str = "", base_url: str = "",
+                              api_key: str = "") -> Dict:
+        """Fetch available models from a provider's /models endpoint."""
+        self._ensure_engine()
+        from ai_editor.llm_engine import _PROVIDER_DEFAULTS
+        if not provider:
+            provider = self._engine.config.provider
+        if not base_url:
+            defaults = _PROVIDER_DEFAULTS.get(provider, {})
+            base_url = defaults.get("base_url", self._engine.config.effective_base_url)
+        if not api_key:
+            api_key = self._resolve_provider_key(provider) or self._engine.config.api_key
+        if not base_url:
+            return {"error": "No base_url configured", "models": []}
+        try:
+            import httpx
+            headers = {"Content-Type": "application/json"}
+            if provider == "anthropic" and "anthropic.com" in base_url:
+                headers["x-api-key"] = api_key
+                headers["anthropic-version"] = "2023-06-01"
+                url = f"{base_url.rstrip('/')}/models"
+            else:
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                url = f"{base_url.rstrip('/')}/models"
+            with httpx.Client(timeout=10.0, verify=False) as client:
+                resp = client.get(url, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            models = []
+            for m in data.get("data", data.get("models", [])):
+                if isinstance(m, dict):
+                    models.append({
+                        "id": m.get("id", ""),
+                        "name": m.get("name", m.get("id", "")),
+                        "created": m.get("created", 0),
+                    })
+                elif isinstance(m, str):
+                    models.append({"id": m, "name": m})
+            models.sort(key=lambda x: x.get("id", ""))
+            return {"models": models, "provider": provider}
+        except Exception as exc:
+            return {"error": str(exc), "models": []}
+
     def save_custom_model(self, model_name: str, max_input: int = 128000,
                           max_output: int = 4096, tools: bool = True,
                           vision: bool = False, thinking: bool = False,

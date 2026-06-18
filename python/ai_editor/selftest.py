@@ -434,26 +434,26 @@ def test_phase1_ai_editor_regressions() -> None:
            custom_tool is not None
            and custom_tool.requires_confirm is True
            and custom_default.get("requires_confirmation") is True)
-        agent_preview = custom_api.get_mode("agent")
-        chat_preview = custom_api.get_mode("chat")
-        _check("get_mode returns computed dynamic tool permissions",
-            agent_preview.get("permissions", {}).get("customPhaseTool") == "confirm"
-            and agent_preview.get("defaults", {}).get("customPhaseTool") == "confirm"
-            and chat_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
-        custom_api._confirmation_timeout = 0.0
-        confirm_events = []
-        custom_api._emit = lambda event, data: confirm_events.append((event, data))
-        denied = custom_api._on_tool_confirm("phase-call", "customPhaseTool", "{}")
-        stale = custom_api.confirm_tool("phase-call", True)
-        provider_denied = custom_api._on_provider_tool_confirm(
-         "codex", "provider-phase-call", "customPhaseTool", "{}")
-        _check("tool confirmation defaults fail closed and provider-scoped",
-            denied is False
-            and provider_denied is False
-            and stale.get("error") == "No pending confirmation"
-            and confirm_events[0][0] == "tool_confirm"
-            and confirm_events[-1][0] == "provider_tool_confirm"
-            and confirm_events[-1][1].get("provider") == "codex")
+    agent_preview = custom_api.get_mode("agent")
+    chat_preview = custom_api.get_mode("chat")
+    _check("get_mode returns computed dynamic tool permissions",
+        agent_preview.get("permissions", {}).get("customPhaseTool") == "confirm"
+        and agent_preview.get("defaults", {}).get("customPhaseTool") == "confirm"
+        and chat_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
+    custom_api._confirmation_timeout = 0.0
+    confirm_events = []
+    custom_api._emit = lambda event, data: confirm_events.append((event, data))
+    denied = custom_api._on_tool_confirm("phase-call", "customPhaseTool", "{}")
+    stale = custom_api.confirm_tool("phase-call", True)
+    provider_denied = custom_api._on_provider_tool_confirm(
+     "codex", "provider-phase-call", "customPhaseTool", "{}")
+    _check("tool confirmation defaults fail closed and provider-scoped",
+        denied is False
+        and provider_denied is False
+        and stale.get("error") == "No pending confirmation"
+        and confirm_events[0][0] == "tool_confirm"
+        and confirm_events[-1][0] == "provider_tool_confirm"
+        and confirm_events[-1][1].get("provider") == "codex")
     custom_api.set_tool_permission("customPhaseTool", "allowed")
     custom_allowed = json.loads(custom_api.execute_tool("customPhaseTool", "{}"))
     _check("custom tool override allowed runs",
