@@ -138,12 +138,18 @@ def _parse_one_extension(ext: Dict[str, Any]) -> Dict[str, Any]:
     rating = round(stats.get("averagerating", 0), 1)
     rating_count = int(stats.get("ratingcount", 0))
 
-    # VSIX download URL
-    vsix_url = ""
-    for f in latest.get("files", []):
-        if f.get("assetType") == "Microsoft.VisualStudio.Services.VSIXPackage":
-            vsix_url = f.get("source", "")
-            break
+    # VSIX download URL — prefer the canonical marketplace download endpoint
+    # over the CDN source URL which may 404 on .azure.cn mirrors.
+    ext_name = ext.get("extensionName", "")
+    vsix_url = (
+        f"https://marketplace.visualstudio.com/_apis/public/gallery/publishers/"
+        f"{pub_name}/vsextensions/{ext_name}/{version}/vspackage"
+    ) if pub_name and ext_name and version else ""
+    if not vsix_url:
+        for f in latest.get("files", []):
+            if f.get("assetType") == "Microsoft.VisualStudio.Services.VSIXPackage":
+                vsix_url = f.get("source", "")
+                break
 
     # Tags / categories
     tags = [t for t in (ext.get("tags") or []) if not t.startswith("__")]
