@@ -2170,7 +2170,6 @@ const SLASH_CMDS=[
 
 async function execSlash(raw){
   const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),arg=parts.slice(1).join(' ');
-  const toolMap={'/system':'get_system_info'};
   if(cmd==='/clear')clearChat();
   else if(cmd==='/new')newChat();
   else if(cmd==='/export')exportChat();
@@ -2179,13 +2178,13 @@ async function execSlash(raw){
   else if(cmd==='/history'){switchSidebar('history');refreshHistory()}
   else if(cmd==='/instructions')switchSidebar('instructions')
   else if(cmd==='/agents')switchSidebar('agents')
-  else if(toolMap[cmd]){
-    const r=await call('execute_tool',toolMap[cmd],'{}');
+  else if(cmd==='/system'){
+    const r=await call('execute_tool','engine',JSON.stringify({action:'system_info'}),true);
     const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';b.style.color='var(--fg-dim)';
     try{b.textContent=JSON.stringify(JSON.parse(r),null,2)}catch{b.textContent=r}
-    logTerminal(cmd+': '+r);
+    logTerminal('/system: '+r);
   } else if(cmd==='/eval'&&arg){
-    const r=await call('execute_tool','eval_python',JSON.stringify({expression:arg}));
+    const r=await call('execute_tool','engine',JSON.stringify({action:'eval',expression:arg}),true);
     const b=createMsg('system');b.style.fontFamily='var(--mono)';b.style.fontSize='12px';
     try{b.textContent=JSON.stringify(JSON.parse(r),null,2)}catch{b.textContent=r}
     logTerminal('/eval '+arg+': '+r);
