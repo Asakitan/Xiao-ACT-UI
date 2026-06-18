@@ -2091,7 +2091,7 @@ class AIEditorAPI:
             return {"error": str(exc)}
 
     def install_extension(self, ext_id: str, vsix_url: str = "", confirmed: bool = False) -> Dict:
-        """Install an extension from the marketplace."""
+        """Install an extension from the marketplace and activate it."""
         try:
             policy = self._extension_settings()
             if policy.get("confirm_install", True) and not confirmed:
@@ -2099,7 +2099,15 @@ class AIEditorAPI:
             if not self._extension_id_allowed(ext_id):
                 return {"error": f"Extension blocked by trust policy: {ext_id}"}
             from ai_editor.extensions import install_extension
-            return install_extension(ext_id, vsix_url)
+            result = install_extension(ext_id, vsix_url)
+            if result.get("ok") and result.get("ext_dir"):
+                self._ensure_engine()
+                desc = self._ext_host.install_from_dir(result["ext_dir"])
+                if desc:
+                    self._register_ext_tools()
+                    result["activated"] = True
+                    result["display_name"] = desc.display_name
+            return result
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -2115,12 +2123,33 @@ class AIEditorAPI:
             return {"error": str(exc)}
 
     def list_installed_extensions(self) -> Dict:
-        """List locally installed extensions."""
+        """List locally installed extensions + ACT plugins."""
+        exts = []
         try:
             from ai_editor.extensions import list_installed
-            return {"extensions": list_installed()}
-        except Exception as exc:
-            return {"error": str(exc)}
+            exts.extend(list_installed())
+        except Exception:
+            pass
+        try:
+            pm = getattr(self._gui_ref, '_act_plugin_manager', None) if self._gui_ref else None
+            if pm:
+                manifests = getattr(pm, '_manifests', None) or {}
+                enabled = getattr(pm, '_enabled', None) or {}
+                for pid, m in manifests.items():
+                    exts.append({
+                        "id": f"act.{pid}",
+                        "name": m.get("name", pid),
+                        "description": m.get("description", ""),
+                        "version": m.get("version", ""),
+                        "publisher": "ACT Plugin",
+                        "installed_at": 0,
+                        "has_manifest": True,
+                        "is_act_plugin": True,
+                        "enabled": enabled.get(pid, False),
+                    })
+        except Exception:
+            pass
+        return {"extensions": exts}
 
     def get_extension_detail(self, publisher: str, name: str) -> Dict:
         """Fetch a single extension detail from marketplace."""

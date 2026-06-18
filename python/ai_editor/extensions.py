@@ -30,7 +30,7 @@ def _get_http_client():
     if _http_client is None:
         import httpx
         _http_client = httpx.Client(
-            timeout=15.0, follow_redirects=True,
+            timeout=60.0, follow_redirects=True,
             verify=True,
         )
     return _http_client
@@ -211,8 +211,11 @@ def extract_vsix_manifest(vsix_path: str) -> Dict[str, Any]:
 
 
 def install_extension(ext_id: str, vsix_url: str = "") -> Dict[str, Any]:
-    """Download, extract, and register an extension."""
+    """Download VSIX, extract to ext directory, and save install state."""
     try:
+        ext_dir = os.path.join(_extensions_dir(), ext_id)
+        manifest: Dict[str, Any] = {}
+
         if vsix_url:
             vsix_path = download_vsix(vsix_url, ext_id)
             manifest = extract_vsix_manifest(vsix_path)
@@ -229,20 +232,50 @@ def install_extension(ext_id: str, vsix_url: str = "") -> Dict[str, Any]:
                 except OSError:
                     pass
                 return {"error": f"VSIX manifest id mismatch: expected {ext_id}, got {manifest_id}"}
-        else:
-            manifest = {}
+            _extract_vsix_to_dir(vsix_path, ext_dir)
+            try:
+                os.remove(vsix_path)
+            except OSError:
+                pass
+
         # Save install state
         state_path = os.path.join(_extensions_dir(), f"{ext_id}.json")
         state = {
             "id": ext_id,
             "installed_at": __import__("time").time(),
             "manifest": manifest,
+            "ext_dir": ext_dir,
         }
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=1)
-        return {"ok": True, "id": ext_id, "has_manifest": bool(manifest)}
+        return {"ok": True, "id": ext_id, "has_manifest": bool(manifest),
+                "ext_dir": ext_dir}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def _extract_vsix_to_dir(vsix_path: str, dest_dir: str) -> None:
+    """Extract a VSIX (zip) into dest_dir, finding the extension/ subfolder."""
+    import shutil
+    if os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    with zipfile.ZipFile(vsix_path, "r") as zf:
+        prefix = ""
+        for name in zf.namelist():
+            if name.endswith("package.json"):
+                prefix = name.rsplit("package.json", 1)[0]
+                break
+        for member in zf.namelist():
+            if not member.startswith(prefix):
+                continue
+            rel = member[len(prefix):]
+            if not rel or rel.endswith("/"):
+                continue
+            out = os.path.join(dest_dir, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with zf.open(member) as src, open(out, "wb") as dst:
+                dst.write(src.read())
 
 
 def uninstall_extension(ext_id: str) -> Dict[str, Any]:

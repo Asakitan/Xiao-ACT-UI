@@ -2934,7 +2934,11 @@ async function refreshInstalledExts(){
     if(cached){renderExtCard(list,{...cached,installed:true})}
     else{
       const card=document.createElement('div');card.className='ext-card';
-      card.innerHTML='<div class="ext-icon">📦</div><div class="ext-info"><div class="ext-name">'+esc(e.id)+'</div><div class="ext-desc">Installed</div></div>';
+      const icon=e.is_act_plugin?'⚡':'📦';
+      const tag=e.is_act_plugin?'<span class="ext-badge">ACT Plugin</span>':'';
+      const statusDot=e.is_act_plugin?(e.enabled?'<span style="color:var(--fg-success)">●</span>':'<span style="color:var(--fg-dim)">○</span>'):'';
+      card.innerHTML='<div class="ext-icon">'+icon+'</div><div class="ext-info"><div class="ext-name">'+statusDot+' '+esc(e.name||e.id)+' '+tag+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
+        +(e.version?'<div class="ext-meta"><span class="ext-badge">v'+esc(e.version)+'</span></div>':'')+'</div>';
       list.appendChild(card);
     }
   });
