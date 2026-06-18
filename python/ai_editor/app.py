@@ -768,6 +768,35 @@ class AIEditorAPI:
         if self._window:
             self._window.destroy()
 
+    def open_file_dialog(self) -> Dict:
+        """Open a native file dialog to pick an image, return base64."""
+        if not self._window:
+            return {"error": "No window"}
+        import base64 as _b64
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=10,  # OPEN_DIALOG
+                allow_multiple=False,
+                file_types=('Image Files (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp)',),
+            )
+            if not result:
+                return {}
+            path = result[0] if isinstance(result, (list, tuple)) else str(result)
+            with open(path, "rb") as f:
+                data = f.read()
+            ext = os.path.splitext(path)[1].lower()
+            mime_map = {".png": "image/png", ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg", ".gif": "image/gif",
+                        ".bmp": "image/bmp", ".webp": "image/webp"}
+            return {
+                "path": path,
+                "name": os.path.basename(path),
+                "base64": _b64.b64encode(data).decode("ascii"),
+                "mime": mime_map.get(ext, "image/png"),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def new_chat(self) -> Dict:
         if self._controller:
             sp = self._engine.config.system_prompt if self._engine else ""
