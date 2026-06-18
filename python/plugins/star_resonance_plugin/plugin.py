@@ -576,8 +576,11 @@ def on_load(ctx):
 
     _inject_game_constants()
 
-    # Bootstrap runtime deps from plugin's own libs/vendor/requirements.txt
-    ctx.ensure_requirements(install=True)
+    # Bootstrap runtime deps from plugin's own libs/vendor/requirements.txt.
+    # install=False: skip pip subprocess (blocks main thread 5+ min on slow
+    # network); dev deps are already globally installed, frozen builds skip
+    # pip anyway.  Path prepending still runs so vendor/libs are importable.
+    ctx.ensure_requirements(install=False)
 
     _ensure_toplevel_defaults(ctx)
 

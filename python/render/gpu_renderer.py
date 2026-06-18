@@ -330,7 +330,7 @@ def _get_fbo(w: int, h: int, tag: str = 'rgba'):
 def _to_rgba_np(img) -> np.ndarray:
     if isinstance(img, np.ndarray):
         arr = img
-    elif isinstance(img, Image.Image):
+    elif hasattr(img, 'convert') and callable(img.convert):
         arr = np.asarray(img.convert('RGBA'))
     else:
         raise TypeError(f'unsupported image type: {type(img)}')
@@ -348,7 +348,7 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
 
     Falls back to PIL.ImageFilter.GaussianBlur on any failure.
     """
-    pil_in = img if isinstance(img, Image.Image) else None
+    pil_in = img if hasattr(img, 'filter') and callable(img.filter) else None
     if sigma <= 0.05:
         return pil_in.copy() if pil_in is not None else Image.fromarray(
             _to_rgba_np(img), 'RGBA',

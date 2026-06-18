@@ -13,18 +13,20 @@ import types
 from typing import Any
 
 
-def _bind(target: Any, name: str, callback) -> None:
+def _bind_via_sdk(ctx, name: str, callback) -> None:
+    """Bind a bridge method onto the platform owner through the SDK."""
     def _wrapped(*args, **kwargs):
         return callback(*args, **kwargs)
     _wrapped.__name__ = name
-    setattr(target, name, _wrapped)
+    ctx.engine.set_owner_attr(name, _wrapped)
 
 
-def _bind_mixin_methods(owner: Any) -> None:
-    """Bind plugin-owned Tk mixin methods onto the platform owner.
+def _bind_mixin_methods_via_sdk(ctx, owner: Any) -> None:
+    """Bind plugin-owned Tk mixin methods onto the platform owner via SDK.
 
-    This keeps the platform class free of game mixins while preserving the
-    existing method surface expected by game engines and menu commands.
+    Uses ctx.engine.set_owner_attr() instead of raw setattr/MethodType,
+    keeping the platform class free of game mixins while going through the
+    proper SDK registration pathway.
     """
     mixin_paths = (
         'plugins.star_resonance_plugin.panels.sao_gui_state_mixin:SAOPlayerGUIStateMixin',
@@ -48,7 +50,7 @@ def _bind_mixin_methods(owner: Any) -> None:
             if hasattr(owner, name):
                 continue
             try:
-                setattr(owner, name, types.MethodType(value, owner))
+                ctx.engine.set_owner_attr(name, types.MethodType(value, owner))
             except Exception:
                 pass
 
@@ -59,7 +61,7 @@ def install_entity_menu_bridge(ctx) -> None:
         return
     bridge = StarResonanceEntityMenuBridge(ctx)
     bridge.initialize_owner_state()
-    setattr(owner, '_star_resonance_entity_menu_bridge', bridge)
+    ctx.engine.set_owner_attr('_star_resonance_entity_menu_bridge', bridge)
     ctx.register_menu_surface('entity_menu', {
         'header_provider': bridge.build_menu_header,
         'left_widget_factory': bridge.make_left_widget,
@@ -90,8 +92,8 @@ def install_entity_menu_bridge(ctx) -> None:
         '_toggle_act_skill_drilldown_panel', '_toggle_commander_panel',
         '_push_commander_data', '_plugin_open_action_log_at',
     ):
-        _bind(owner, name, getattr(bridge, name))
-    _bind_mixin_methods(owner)
+        _bind_via_sdk(ctx, name, getattr(bridge, name))
+    _bind_mixin_methods_via_sdk(ctx, owner)
     ctx.log('[SR] Entity menu bridge installed')
 
 
@@ -111,6 +113,7 @@ class StarResonanceEntityMenuBridge:
 
     def initialize_owner_state(self) -> None:
         owner = self.owner
+        engine = self.ctx.engine
         defaults = {
             # Game identity / progression / vitals — owned by the plugin so
             # the platform stays free of game-specific defaults.
@@ -217,7 +220,7 @@ class StarResonanceEntityMenuBridge:
         for name, value in defaults.items():
             if hasattr(owner, name):
                 continue
-            setattr(owner, name, value.copy() if isinstance(value, dict) else value)
+            engine.set_owner_attr(name, value.copy() if isinstance(value, dict) else value)
 
     def _toggle_plugin_panel(self, attr_name: str, module_name: str, class_name: str) -> None:
         owner = self.owner
@@ -229,7 +232,7 @@ class StarResonanceEntityMenuBridge:
             module = __import__(module_name, fromlist=[class_name])
             panel_cls = getattr(module, class_name)
             panel = panel_cls(owner.root, owner)
-            setattr(owner, attr_name, panel)
+            self.ctx.engine.set_owner_attr(attr_name, panel)
         apply_theme = getattr(owner, '_apply_act_panel_theme', None)
         if callable(apply_theme):
             apply_theme()
@@ -265,7 +268,7 @@ class StarResonanceEntityMenuBridge:
         if panel is None:
             from plugins.star_resonance_plugin.panels.sao_gui_commander import CommanderPanel
             panel = CommanderPanel(owner.root)
-            owner._commander_panel = panel
+            self.ctx.engine.set_owner_attr('_commander_panel', panel)
         try:
             visible = bool(panel.is_visible())
         except Exception:

@@ -51,9 +51,42 @@ def _prepend_path(path: str, rec: dict[str, Any]) -> None:
         return
     while path in sys.path:
         sys.path.remove(path)
-    sys.path.insert(0, path)
+    idx = _safe_plugin_insert_index(path)
+    sys.path.insert(idx, path)
     if path not in rec["added"]:
         rec["added"].append(path)
+
+
+def _safe_plugin_insert_index(plugin_path: str) -> int:
+    """Find an insertion index that will NOT shadow packages already
+    importable from the host environment.
+
+    Walk ``sys.path`` entries; if an entry contains a top-level package
+    directory whose name also exists inside *plugin_path*, skip past it
+    so the host copy wins.  Falls back to ``0`` (prepend) when nothing
+    collides.
+    """
+    colliders: set[str] = set()
+    try:
+        for name in os.listdir(plugin_path):
+            pkg_dir = os.path.join(plugin_path, name)
+            if os.path.isdir(pkg_dir) and os.path.isfile(
+                    os.path.join(pkg_dir, '__init__.py')):
+                colliders.add(name)
+    except OSError:
+        return 0
+    if not colliders:
+        return 0
+    last_host = -1
+    for i, sp in enumerate(sys.path):
+        try:
+            for c in colliders:
+                if os.path.isdir(os.path.join(sp, c)):
+                    last_host = i
+                    break
+        except OSError:
+            continue
+    return last_host + 1 if last_host >= 0 else 0
 
 
 def _parse_requirements(req_file: str) -> list[str]:
@@ -98,10 +131,16 @@ def _is_inside(path: str, root: str) -> bool:
 
 
 def _fresh_import(mod_name: str) -> bool:
-    """清掉缓存后重新解析+导入，确保从当前 sys.path（插件本地优先）加载。"""
-    for key in list(sys.modules):
-        if key == mod_name or key.startswith(mod_name + "."):
-            del sys.modules[key]
+    """Validate that *mod_name* is importable; reload from current
+    ``sys.path`` if it was not previously loaded.
+
+    **Never** evict modules that are already in ``sys.modules`` — doing
+    so breaks C-extension packages like numpy/PIL whose ``.pyd`` files
+    cannot be loaded twice in one process.
+    """
+    existing = sys.modules.get(mod_name)
+    if existing is not None:
+        return True
     importlib.invalidate_caches()
     try:
         importlib.import_module(mod_name)

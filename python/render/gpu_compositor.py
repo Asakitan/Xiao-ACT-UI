@@ -426,12 +426,12 @@ class LayerCompositor:
         """
         if not self._available:
             return None
-        if isinstance(image, Image.Image):
-            arr = np.asarray(image.convert('RGBA'), dtype=np.uint8)
-        elif isinstance(image, np.ndarray):
+        if isinstance(image, np.ndarray):
             arr = np.ascontiguousarray(image)
             if arr.dtype != np.uint8 or arr.ndim != 3 or arr.shape[2] != 4:
                 raise ValueError(f'expected uint8 RGBA, got {arr.shape} {arr.dtype}')
+        elif hasattr(image, 'convert') and callable(image.convert):
+            arr = np.asarray(image.convert('RGBA'), dtype=np.uint8)
         else:
             raise TypeError(f'unsupported image type: {type(image)}')
         h, w, _ = arr.shape

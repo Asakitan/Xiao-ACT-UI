@@ -772,7 +772,7 @@ class StarResonanceWebViewBridge:
 """.replace('__CSS__', json.dumps(css, ensure_ascii=False)) \
             .replace('__SLOTS__', json.dumps(slots, ensure_ascii=False)) \
             .replace('__SCRIPT__', json.dumps(script, ensure_ascii=False))
-        self.owner._eval_menu(js)
+        getattr(self.owner, '_eval_menu', lambda _: None)(js)
 
     def make_window_api(self, surface: str):
         key = str(surface or '').strip().lower().replace('-', '_')
@@ -2159,7 +2159,7 @@ class StarResonanceWebViewBridge:
         if state == getattr(self.owner, '_auto_key_last_menu_state', None):
             return
         self.owner._auto_key_last_menu_state = state
-        self.owner._eval_menu('if(window.SRMenu&&SRMenu.setAutoKeyState)SRMenu.setAutoKeyState(%s)' % json.dumps(state, ensure_ascii=False))
+        getattr(self.owner, '_eval_menu', lambda _: None)('if(window.SRMenu&&SRMenu.setAutoKeyState)SRMenu.setAutoKeyState(%s)' % json.dumps(state, ensure_ascii=False))
 
     def _boss_raid_settings_ref(self):
         return self.owner._cfg_settings_ref or self.owner.settings
@@ -2245,7 +2245,7 @@ class StarResonanceWebViewBridge:
         if state == getattr(self.owner, '_boss_raid_last_menu_state', None):
             return
         self.owner._boss_raid_last_menu_state = state
-        self.owner._eval_menu('if(window.SRMenu&&SRMenu.setBossRaidState)SRMenu.setBossRaidState(%s)' % json.dumps(state, ensure_ascii=False))
+        getattr(self.owner, '_eval_menu', lambda _: None)('if(window.SRMenu&&SRMenu.setBossRaidState)SRMenu.setBossRaidState(%s)' % json.dumps(state, ensure_ascii=False))
 
     def _refresh_boss_raid_upload_auth(self, force: bool = False):
         config = self._load_boss_raid_config()
@@ -2275,12 +2275,12 @@ class StarResonanceWebViewBridge:
             return
         if getattr(engine, 'running', False):
             engine.stop()
-            self.owner._eval_menu('SAO.showToast("BOSS RAID: STOP")')
+            getattr(self.owner, '_eval_menu', lambda _: None)('SAO.showToast("BOSS RAID: STOP")')
         else:
             profile = br_active_profile(self._load_boss_raid_config())
             if profile:
                 engine.start(profile)
-                self.owner._eval_menu('SAO.showToast("BOSS RAID: START")')
+                getattr(self.owner, '_eval_menu', lambda _: None)('SAO.showToast("BOSS RAID: START")')
         self._sync_boss_raid_menu()
 
     def _boss_raid_next_phase(self):
@@ -2307,9 +2307,22 @@ class StarResonanceWebViewBridge:
 
     def _reconfigure_data_engines(self, restart_packet: bool = True):
         from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager
-        if not getattr(self.owner, '_cfg_settings_ref', None) or not getattr(self.owner, '_state_mgr', None):
+        if not getattr(self.owner, '_cfg_settings_ref', None) and not getattr(self.owner, 'settings', None):
             return
-        self.owner._stop_recognition_engines(preserve_packet=not restart_packet)
+        if not getattr(self.owner, '_state_mgr', None):
+            return
+        if hasattr(self.owner, '_stop_recognition_engines'):
+            try:
+                self.owner._stop_recognition_engines(preserve_packet=not restart_packet)
+            except TypeError:
+                self.owner._stop_recognition_engines()
+        else:
+            for eng in list(getattr(self.owner, '_recognition_engines', [])):
+                try:
+                    eng.stop()
+                except Exception:
+                    pass
+            self.owner._recognition_active = False
         try:
             self.owner._state_mgr.update(burst_ready=False)
         except Exception:
@@ -2367,16 +2380,15 @@ class StarResonanceWebViewBridge:
 
     def _start_recognition(self):
         try:
-            self.owner._bootstrap_runtime_state()
-            try:
-                self.owner._update_skillfx_layout()
-            except Exception:
-                pass
+            _call = lambda o, m, *a, **kw: getattr(o, m)(*a, **kw) if hasattr(o, m) else None
+            _call(self.owner, '_bootstrap_runtime_state')
+            _call(self.owner, '_update_skillfx_layout')
             try:
                 from utils.sao_sound import set_sound_enabled, set_sound_volume
-                cfg = self.owner._cfg_settings_ref
-                set_sound_enabled(bool(cfg.get('sound_enabled', True)))
-                set_sound_volume(int(cfg.get('sound_volume', 70) or 70))
+                cfg = getattr(self.owner, '_cfg_settings_ref', None) or getattr(self.owner, 'settings', None)
+                if cfg:
+                    set_sound_enabled(bool(cfg.get('sound_enabled', True)))
+                    set_sound_volume(int(cfg.get('sound_volume', 70) or 70))
             except Exception:
                 pass
             self._reconfigure_data_engines(restart_packet=not bool(getattr(self.owner, '_packet_engine', None)))
@@ -2385,15 +2397,22 @@ class StarResonanceWebViewBridge:
                     fn()
                 except Exception:
                     pass
-            stop_evt = self.owner._cache_loop_stop
+            stop_evt = getattr(self.owner, '_cache_loop_stop', None)
+            if stop_evt is None:
+                import threading as _thr
+                stop_evt = _thr.Event()
+                self.owner._cache_loop_stop = stop_evt
             def _cache_loop():
                 while not stop_evt.is_set():
                     stop_evt.wait(30)
                     if stop_evt.is_set():
                         break
                     try:
-                        self.owner._persist_cached_identity_state(save_now=False)
-                        self.owner._state_mgr.save_cache(self.owner._cfg_settings_ref)
+                        _call(self.owner, '_persist_cached_identity_state', save_now=False)
+                        sm = getattr(self.owner, '_state_mgr', None)
+                        cfg = getattr(self.owner, '_cfg_settings_ref', None) or getattr(self.owner, 'settings', None)
+                        if sm and cfg:
+                            sm.save_cache(cfg)
                     except Exception:
                         pass
             threading.Thread(target=_cache_loop, daemon=True, name='cache_saver').start()
@@ -2740,7 +2759,7 @@ class StarResonanceWebViewBridge:
         self._session_players_last_sig = sig
         self._session_players_last_push_ts = now
         method = 'showSessionPlayers' if force else 'setSessionPlayersPayload'
-        self.owner._eval_menu(
+        getattr(self.owner, '_eval_menu', lambda _: None)(
             f'if(window.SAO&&SAO.{method})SAO.{method}({json.dumps(payload, ensure_ascii=False)})'
         )
 
@@ -2755,7 +2774,7 @@ class StarResonanceWebViewBridge:
             str(self._session_self_uid() or ''),
         )
         self._session_players_last_push_ts = time.time()
-        self.owner._eval_menu(
+        getattr(self.owner, '_eval_menu', lambda _: None)(
             f'if(window.SAO&&SAO.showSessionPlayers)SAO.showSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
         )
 

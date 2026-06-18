@@ -2079,14 +2079,22 @@ class PluginManager:
         into ``libs/`` via ``ctx.ensure_requirements``) and just ``import`` it —
         no global install. Added entries are tracked on the record and removed on
         unload (see :meth:`_unregister_plugin_extensions`).
+
+        Packages already loaded in the host (e.g. PIL, numpy) are protected:
+        if the plugin ships a copy of such a package, the loader would create
+        a second, incompatible module object.  The insertion index is chosen
+        so that sys.path entries that already provide those packages stay
+        ahead.
         """
+        from act_platform.plugin_deps import _safe_plugin_insert_index
         for sub in ("vendor", "libs"):
             path = os.path.abspath(os.path.join(record.path, sub))
             if not os.path.isdir(path):
                 continue
             while path in sys.path:
                 sys.path.remove(path)
-            sys.path.insert(0, path)
+            idx = _safe_plugin_insert_index(path)
+            sys.path.insert(idx, path)
             if path not in record.added_sys_paths:
                 record.added_sys_paths.append(path)
 
