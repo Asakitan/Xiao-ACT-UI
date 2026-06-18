@@ -25,6 +25,11 @@ pynput>=1.7                     # 全局热键监听
 # ═══ 音效 ═══
 pygame>=2.0                     # SAO 音效系统
 
+# ═══ 多语言插件脚本运行时 (可选) ═══
+lupa>=2.0                       # Lua 插件运行时 (LuaJIT binding)
+# pythonnet 已在核心依赖中 — C# 插件运行时 (.NET CLR hosting)
+# AngelScript / Emma — 纯 Python 内置解释器, 零额外依赖
+
 # ═══ 抓包数据源 (可选, data_source=packet 时需要) ═══
 zstandard>=0.20                 # zstd 解压 (数据源压缩)
 # dpkt>=1.9                     # 以太网/IP/TCP 解析 (已内置手动解析, 可选)

@@ -1,0 +1,17 @@
+{
+  "id": "example_lua",
+  "name": "Lua Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.lua",
+  "language": "lua",
+  "description": "Lua 插件示例。展示如何用 Lua 编写平台插件并调用全部 SDK API。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Lua Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  }
+}

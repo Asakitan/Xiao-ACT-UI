@@ -1,0 +1,100 @@
+-- plugin.emma — Emma 插件示例
+--
+-- Emma 是内置零依赖脚本语言, 语法简洁:
+--   let x = 42                    变量声明
+--   fn name(args) ... end         函数定义
+--   if/elif/else/end              条件
+--   while cond ... end            循环
+--   for item in list ... end      遍历
+--   {key: value}                  字典
+--   [a, b, c]                     数组
+--   "string" .. "concat"          字符串拼接
+--   ctx.method(args)              调用平台 API
+--
+-- 平台 SDK 通过 ctx 对象访问, 与 Python 插件 API 完全一致。
+
+let click_count = 0
+let timer_token = ""
+let timer_running = false
+
+fn on_load(ctx)
+    ctx.log("Emma 插件已加载!")
+    ctx.set_defaults({greeting: "你好", auto_count: false})
+
+    ctx.register_ui_panel("emma_demo",
+        {title: "Emma Demo", description: "Emma 语言插件示例"},
+        render_panel, on_panel_action)
+
+    ctx.subscribe("damage", fn(event)
+        ctx.log("Emma 收到伤害事件")
+    end)
+end
+
+fn render_panel(payload)
+    let greeting = ctx.get_setting("greeting", "你好")
+    let status_text = "停止"
+    if timer_running
+        status_text = "运行中"
+    end
+
+    return ctx.ui.panel("Emma Plugin", [
+        ctx.ui.section("状态", [
+            ctx.ui.kv("语言", "Emma (内置解释器)"),
+            ctx.ui.kv("问候语", greeting),
+            ctx.ui.kv("点击次数", tostring(click_count)),
+            ctx.ui.kv("定时器", status_text),
+        ]),
+        ctx.ui.section("操作", [
+            ctx.ui.row([
+                ctx.ui.button("问候", "greet", "primary"),
+                ctx.ui.button("计数 +1", "count"),
+                ctx.ui.button("定时器开关", "timer_toggle"),
+            ]),
+        ]),
+    ])
+end
+
+fn on_panel_action(action_id, payload)
+    if action_id == "greet"
+        let greeting = ctx.get_setting("greeting", "你好")
+        ctx.notify("Emma Plugin", greeting .. ", 来自 Emma!", 3.0)
+    elif action_id == "count"
+        click_count = click_count + 1
+        ctx.request_redraw("emma_demo")
+    elif action_id == "timer_toggle"
+        if timer_running
+            ctx.clear_timer(timer_token)
+            timer_running = false
+            ctx.log("定时器已停止")
+        else
+            timer_token = ctx.set_interval(fn()
+                click_count = click_count + 1
+                ctx.request_redraw("emma_demo")
+            end, 2.0)
+            timer_running = true
+            ctx.log("定时器已启动 (2s)")
+        end
+        ctx.request_redraw("emma_demo")
+    end
+    return {ok: true}
+end
+
+fn on_enable()
+    ctx.log("Emma 插件已启用")
+end
+
+fn on_disable()
+    if timer_running
+        ctx.clear_timer(timer_token)
+        timer_running = false
+    end
+    ctx.log("Emma 插件已禁用")
+end
+
+fn on_unload()
+    if timer_running
+        ctx.clear_timer(timer_token)
+        timer_running = false
+    end
+    ctx.log("Emma 插件已卸载")
+end

@@ -1,0 +1,17 @@
+{
+  "id": "example_csharp",
+  "name": "C# Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.cs",
+  "language": "csharp",
+  "description": "C# 插件示例。通过 pythonnet 宿主 .NET CLR, 自动编译 .cs 到 .dll。也支持直接加载 .dll。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "C# Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  }
+}

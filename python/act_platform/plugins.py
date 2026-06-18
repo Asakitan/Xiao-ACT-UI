@@ -253,6 +253,8 @@ class PluginRecord:
     path: str
     entry: str
     enabled: bool = False
+    #: Scripting language: "python" (default), "lua", "csharp", "angelscript", "emma".
+    language: str = "python"
     game_ids: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
@@ -283,6 +285,7 @@ class PluginRecord:
             "version": self.version,
             "path": self.path,
             "entry": self.entry,
+            "language": self.language,
             "enabled": self.enabled,
             "loaded": self.loaded,
             "active": self.active,
@@ -1213,10 +1216,16 @@ class PluginManager:
             # before its entry module runs, so a vendored pure-Python dependency
             # resolves without the plugin having to call ctx.ensure_requirements.
             self._prepare_plugin_sys_path(record)
-            module = self._load_module(record)
-            record.module = module
-            record.context = PluginContext(self, record)
-            self._call_hook(record, "on_load", record.context)
+            if record.language == "python":
+                module = self._load_module(record)
+                record.module = module
+                record.context = PluginContext(self, record)
+                self._call_hook(record, "on_load", record.context)
+            else:
+                record.context = PluginContext(self, record)
+                module = self._load_script_module(record)
+                record.module = module
+                self._call_hook(record, "on_load", record.context)
             self._call_hook(record, "on_enable")
             record.loaded = True
             record.active = True
@@ -1246,6 +1255,13 @@ class PluginManager:
                 pass
             try:
                 self._call_hook(record, "on_unload")
+            except Exception:
+                pass
+        if record.language != "python" and record.module is not None:
+            try:
+                from .scripting import get_runtime
+                runtime = get_runtime(record.language)
+                runtime.unload_script(record)
             except Exception:
                 pass
         for token in list(record.subscriptions):
@@ -1914,6 +1930,11 @@ class PluginManager:
                     capabilities.setdefault(cap_id, []).append(record.plugin_id)
         for cap_id in list(capabilities):
             capabilities[cap_id] = sorted(set(capabilities[cap_id]))
+        try:
+            from .scripting import list_runtimes
+            script_runtimes = list_runtimes()
+        except Exception:
+            script_runtimes = {}
         return {
             "ok": True,
             "plugin_count": len(self._records),
@@ -1931,6 +1952,7 @@ class PluginManager:
             "render": self.render_registry.status(),
             "hotkeys": self.list_hotkeys(),
             "pinned": self.pinned_plugins(),
+            "script_runtimes": script_runtimes,
         }
 
     def engine_status(self) -> dict[str, Any]:
@@ -2058,6 +2080,8 @@ class PluginManager:
             raise ValueError("plugin entry must stay inside plugin directory")
         if not os.path.isfile(entry_path):
             raise FileNotFoundError(entry)
+        from .scripting import detect_language
+        language = detect_language(entry, str(manifest.get("language") or ""))
         return PluginRecord(
             plugin_id=plugin_id,
             name=str(manifest.get("name") or plugin_id),
@@ -2065,6 +2089,7 @@ class PluginManager:
             path=plug_dir,
             entry=entry,
             enabled=bool(manifest.get("enabled", False)),
+            language=language,
             game_ids=tuple(str(x) for x in manifest.get("game_ids", [])),
             requires=tuple(str(x).strip() for x in manifest.get("requires", []) if str(x or "").strip()),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
@@ -2109,6 +2134,14 @@ class PluginManager:
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
+        return module
+
+    def _load_script_module(self, record: PluginRecord) -> ModuleType:
+        """Load a non-Python plugin via its language's ScriptRuntime."""
+        from .scripting import get_runtime
+        runtime = get_runtime(record.language)
+        entry_path = os.path.abspath(os.path.join(record.path, record.entry))
+        module = runtime.load_script(entry_path, record, record.context)
         return module
 
     def _call_hook(self, record: PluginRecord, name: str, *args: Any) -> Any:

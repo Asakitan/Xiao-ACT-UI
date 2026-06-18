@@ -1,0 +1,17 @@
+{
+  "id": "example_angelscript",
+  "name": "AngelScript Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.as",
+  "language": "angelscript",
+  "description": "AngelScript 插件示例。C 风格语法, 纯 Python 子集解释器, 零外部依赖。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "AS Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  }
+}
