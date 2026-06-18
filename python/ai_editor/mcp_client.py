@@ -6,10 +6,10 @@ Supports three transport modes:
   - **internal** — Python-native tools registered directly by plugins
 
 External MCP config sources (in priority order):
-  1. settings ``ai_editor_mcp_servers`` list
-  2. Workspace ``mcp.json`` / ``.mcp/mcp.json`` / ``.vscode/mcp.json``
-  3. User home ``~/.sao/mcp.json``
-  4. Plugin manifests (``plugin.json`` → ``mcpServers``)
+1. settings ``ai_editor_mcp_servers`` list and ``ai_editor.mcp`` servers
+2. Workspace ``mcp.json`` / ``.mcp/mcp.json`` / ``.vscode/mcp.json``
+3. User home ``~/.sao/mcp.json``
+4. Plugin manifests (``plugin.json`` → ``mcpServers``)
 
 Internal (plugin) MCP:
   Plugins call ``mcp_manager.register_internal(server_id, tools)``
@@ -46,6 +46,7 @@ class McpServerConfig:
     env: Dict[str, str] = field(default_factory=dict)
     url: str = ""              # for sse
     headers: Dict[str, str] = field(default_factory=dict)
+    enabled: bool = True
 
 
 class McpStdioClient:
@@ -328,6 +329,8 @@ class McpManager:
         self._clients: Dict[str, Any] = {}  # McpStdioClient | McpSseClient | InternalMcpProvider
 
     def add_server(self, config: McpServerConfig) -> bool:
+        if not config.enabled:
+            return False
         if config.id in self._clients:
             self.remove_server(config.id)
         if config.transport == "internal":
@@ -430,22 +433,39 @@ class McpManager:
 def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
     """Load MCP server configs from settings or mcp.json."""
     configs: List[McpServerConfig] = []
+    seen_ids: set[str] = set()
+    discovery_enabled = True
+    normalized_autostart = False
+    collision_behavior = "first"
+
     # From settings
     if settings_get:
         raw = settings_get("ai_editor_mcp_servers", [])
-        if isinstance(raw, list):
-            for entry in raw:
-                if isinstance(entry, dict) and entry.get("id"):
-                    configs.append(McpServerConfig(
-                        id=entry["id"],
-                        name=entry.get("name", entry["id"]),
-                        transport=entry.get("transport", "stdio"),
-                        command=entry.get("command", ""),
-                        args=entry.get("args", []),
-                        env=entry.get("env", {}),
-                        url=entry.get("url", ""),
-                        headers=entry.get("headers", {}),
-                    ))
+        _append_server_configs(configs, seen_ids, raw)
+
+        ai_editor = settings_get("ai_editor", {})
+        has_mcp_settings = isinstance(ai_editor, dict) and isinstance(ai_editor.get("mcp"), dict)
+        mcp_settings = ai_editor.get("mcp", {}) if isinstance(ai_editor, dict) else {}
+        if has_mcp_settings:
+            if str(mcp_settings.get("access", "")).strip().lower() == "disabled":
+                return []
+            if not _as_bool(mcp_settings.get("enabled"), True):
+                return []
+            discovery_enabled = _as_bool(mcp_settings.get("discovery_enabled"), True)
+            normalized_autostart = _as_bool(mcp_settings.get("autostart"), False)
+            raw_collision = str(mcp_settings.get("collision_behavior", "first")).strip().lower()
+            if raw_collision in {"first", "last", "error"}:
+                collision_behavior = raw_collision
+            if normalized_autostart:
+                _append_server_configs(configs, seen_ids, mcp_settings.get("servers", []), collision_behavior)
+                _append_server_configs(configs, seen_ids, mcp_settings.get("mcpServers", {}), collision_behavior)
+
+    if settings_get and has_mcp_settings and (not discovery_enabled or not normalized_autostart):
+        return []
+
+    if not discovery_enabled or not normalized_autostart:
+        return configs
+
     # From mcp.json in workspace
     for candidate in ["mcp.json", ".mcp/mcp.json", ".vscode/mcp.json"]:
         try:
@@ -458,18 +478,7 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 servers = data.get("mcpServers") or data.get("servers") or {}
-                for sid, sconf in servers.items():
-                    if sid not in {c.id for c in configs}:
-                        configs.append(McpServerConfig(
-                            id=sid,
-                            name=sconf.get("name", sid),
-                            transport=sconf.get("transport", "stdio"),
-                            command=sconf.get("command", ""),
-                            args=sconf.get("args", []),
-                            env=sconf.get("env", {}),
-                            url=sconf.get("url", ""),
-                            headers=sconf.get("headers", {}),
-                        ))
+                _append_server_configs(configs, seen_ids, servers, collision_behavior)
             except Exception:
                 pass
 
@@ -480,9 +489,7 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
             with open(home_mcp, "r", encoding="utf-8") as f:
                 data = json.load(f)
             servers = data.get("mcpServers") or data.get("servers") or {}
-            for sid, sconf in servers.items():
-                if sid not in {c.id for c in configs}:
-                    configs.append(_parse_server_config(sid, sconf))
+            _append_server_configs(configs, seen_ids, servers, collision_behavior)
     except Exception:
         pass
 
@@ -502,22 +509,92 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                     pdata = json.load(f)
                 for sid, sconf in (pdata.get("mcpServers") or {}).items():
                     full_id = f"{pname}.{sid}"
-                    if full_id not in {c.id for c in configs}:
-                        configs.append(_parse_server_config(full_id, sconf))
+                    _append_server_configs(configs, seen_ids, {full_id: sconf}, collision_behavior)
             except Exception:
                 continue
 
     return configs
 
 
+def _append_server_configs(
+    configs: List[McpServerConfig],
+    seen_ids: set[str],
+    raw: Any,
+    collision_behavior: str = "first",
+) -> None:
+    for sid, sconf in _iter_server_configs(raw):
+        if not sid:
+            continue
+        if sid in seen_ids:
+            if collision_behavior == "last":
+                configs[:] = [c for c in configs if c.id != sid]
+                seen_ids.discard(sid)
+            elif collision_behavior == "error":
+                raise ValueError(f"Duplicate MCP server id: {sid}")
+            else:
+                continue
+        config = _parse_server_config(sid, sconf)
+        seen_ids.add(sid)
+        if config.enabled:
+            configs.append(config)
+
+
+def _iter_server_configs(raw: Any) -> List[Tuple[str, Dict[str, Any]]]:
+    if isinstance(raw, dict):
+        entries = []
+        for sid, sconf in raw.items():
+            if isinstance(sconf, dict):
+                entries.append((str(sid), sconf))
+        return entries
+    if isinstance(raw, list):
+        entries = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            sid = entry.get("id")
+            if sid:
+                entries.append((str(sid), entry))
+        return entries
+    return []
+
+
+def _as_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return default
+
+
+def _as_string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _as_string_dict(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items()}
+
+
 def _parse_server_config(sid: str, sconf: Dict[str, Any]) -> McpServerConfig:
     return McpServerConfig(
         id=sid,
         name=sconf.get("name", sid),
-        transport=sconf.get("transport", "stdio"),
+        transport=str(sconf.get("transport", "stdio")),
         command=sconf.get("command", ""),
-        args=sconf.get("args", []),
-        env=sconf.get("env", {}),
+        args=_as_string_list(sconf.get("args", [])),
+        env=_as_string_dict(sconf.get("env", {})),
         url=sconf.get("url", ""),
-        headers=sconf.get("headers", {}),
+        headers=_as_string_dict(sconf.get("headers", {})),
+        enabled=_as_bool(sconf.get("enabled"), True),
     )

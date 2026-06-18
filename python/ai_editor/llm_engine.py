@@ -174,6 +174,8 @@ class ProviderConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     system_prompt: str = ""
+    # Transport: chat_completions (default) or responses.
+    transport: str = "chat_completions"
     # Advanced sampling
     top_p: float = 1.0
     frequency_penalty: float = 0.0
@@ -254,18 +256,24 @@ class LLMEngine:
         config_override: Optional[ProviderConfig] = None,
     ) -> LLMResponse:
         cfg = config_override or self.config
-        body = self._build_body(cfg, messages, tools, stream=False)
         try:
             headers = self._build_headers(cfg)
             if self._is_anthropic_native(cfg):
+                body = self._build_body(cfg, messages, tools, stream=False)
                 url = f"{cfg.effective_base_url}/messages"
+            elif self._uses_openai_responses(cfg):
+                body = self._build_responses_body(cfg, messages, tools, stream=False)
+                url = f"{cfg.effective_base_url}/responses"
             else:
+                body = self._build_body(cfg, messages, tools, stream=False)
                 url = f"{cfg.effective_base_url}/chat/completions"
             resp = self._client.post(url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             if self._is_anthropic_native(cfg):
                 return self._parse_anthropic_response(data, cfg)
+            if self._uses_openai_responses(cfg):
+                return self._parse_responses_response(data, cfg)
             return self._parse_response(data, cfg)
         except Exception as exc:
             return LLMResponse(error=str(exc))
@@ -288,6 +296,9 @@ class LLMEngine:
 
         if self._is_anthropic_native(cfg):
             return self._stream_anthropic_native(cfg, messages, tools, on_delta)
+
+        if self._uses_openai_responses(cfg):
+            return self._stream_openai_responses(cfg, messages, tools, on_delta)
 
         return self._stream_openai(cfg, messages, tools, on_delta)
 
@@ -391,6 +402,161 @@ class LLMEngine:
             accumulated.tool_calls.append(
                 ToolCall(id=buf["id"], name=buf["name"], arguments=buf["arguments"])
             )
+
+        return accumulated
+
+    # -- OpenAI Responses API SSE streaming --
+
+    def _stream_openai_responses(
+        self,
+        cfg: ProviderConfig,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        on_delta: Optional[Callable[[StreamDelta], None]],
+    ) -> LLMResponse:
+        body = self._build_responses_body(cfg, messages, tools, stream=True)
+        accumulated = LLMResponse(model=cfg.effective_model)
+        tool_call_buffers: Dict[Any, Dict[str, Any]] = {}
+        completed: Optional[LLMResponse] = None
+
+        headers = self._build_headers(cfg)
+        url = f"{cfg.effective_base_url}/responses"
+        last_exc: Optional[Exception] = None
+
+        for _attempt in range(1 + self._MAX_RETRIES):
+            if _attempt > 0:
+                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                accumulated = LLMResponse(model=cfg.effective_model)
+                tool_call_buffers.clear()
+                completed = None
+            last_exc = None
+            try:
+                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                    if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                        last_exc = Exception(f"HTTP {resp.status_code}")
+                        continue
+                    resp.raise_for_status()
+                    event_type = ""
+                    for line in resp.iter_lines():
+                        if self._cancel.is_set():
+                            accumulated.finish_reason = "cancelled"
+                            break
+                        if not line:
+                            event_type = ""
+                            continue
+                        if line.startswith("event:"):
+                            event_type = line[6:].strip()
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+
+                        dtype = data.get("type", event_type)
+                        if dtype == "response.output_text.delta":
+                            text = data.get("delta", "")
+                            if text:
+                                accumulated.content += text
+                                if on_delta:
+                                    on_delta(StreamDelta(content=text))
+                        elif dtype in (
+                            "response.reasoning_text.delta",
+                            "response.reasoning_summary_text.delta",
+                        ):
+                            text = data.get("delta", "")
+                            if text:
+                                accumulated.thinking += text
+                                if on_delta:
+                                    on_delta(StreamDelta(thinking=text))
+                        elif dtype == "response.refusal.delta":
+                            text = data.get("delta", "")
+                            if text:
+                                accumulated.refusal = (accumulated.refusal or "") + text
+                        elif dtype == "response.output_item.added":
+                            item = data.get("item", {})
+                            if item.get("type") == "function_call":
+                                key = data.get("output_index", item.get("id", len(tool_call_buffers)))
+                                tool_call_buffers[key] = {
+                                    "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                                    "name": item.get("name", ""),
+                                    "arguments": item.get("arguments", "") or "",
+                                }
+                        elif dtype == "response.function_call_arguments.delta":
+                            key = data.get("output_index", data.get("item_id", 0))
+                            buf = tool_call_buffers.setdefault(key, {
+                                "id": data.get("call_id") or data.get("item_id") or f"call_{uuid.uuid4().hex[:8]}",
+                                "name": data.get("name", ""),
+                                "arguments": "",
+                            })
+                            buf["arguments"] += data.get("delta", "") or ""
+                        elif dtype == "response.function_call_arguments.done":
+                            key = data.get("output_index", data.get("item_id", 0))
+                            buf = tool_call_buffers.setdefault(key, {
+                                "id": data.get("call_id") or data.get("item_id") or f"call_{uuid.uuid4().hex[:8]}",
+                                "name": data.get("name", ""),
+                                "arguments": "",
+                            })
+                            if data.get("arguments") is not None:
+                                buf["arguments"] = data.get("arguments", "") or ""
+                        elif dtype == "response.output_item.done":
+                            item = data.get("item", {})
+                            if item.get("type") == "function_call":
+                                key = data.get("output_index", item.get("id", len(tool_call_buffers)))
+                                buf = tool_call_buffers.setdefault(key, {
+                                    "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                                    "name": "",
+                                    "arguments": "",
+                                })
+                                buf["id"] = item.get("call_id") or item.get("id") or buf["id"]
+                                buf["name"] = item.get("name", buf["name"])
+                                buf["arguments"] = item.get("arguments", buf["arguments"]) or ""
+                        elif dtype == "response.completed":
+                            completed = self._parse_responses_response(data.get("response", {}), cfg)
+                            break
+                        elif dtype in ("response.failed", "response.incomplete"):
+                            response = data.get("response", {})
+                            err = response.get("error") or response.get("incomplete_details") or data
+                            accumulated.error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                            break
+                        elif dtype == "error":
+                            err = data.get("error", data)
+                            accumulated.error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                            break
+                break
+
+            except Exception as exc:
+                last_exc = exc
+                status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                    continue
+                accumulated.error = str(exc)
+                break
+
+        if last_exc and not accumulated.error:
+            accumulated.error = str(last_exc)
+
+        if completed:
+            if not accumulated.content:
+                accumulated.content = completed.content
+            if completed.thinking and not accumulated.thinking:
+                accumulated.thinking = completed.thinking
+            if completed.refusal and not accumulated.refusal:
+                accumulated.refusal = completed.refusal
+            accumulated.finish_reason = completed.finish_reason
+            accumulated.usage = completed.usage
+            if not tool_call_buffers:
+                accumulated.tool_calls = completed.tool_calls
+
+        if tool_call_buffers:
+            accumulated.tool_calls = [
+                ToolCall(id=buf["id"], name=buf["name"], arguments=buf["arguments"])
+                for buf in tool_call_buffers.values()
+            ]
 
         return accumulated
 
@@ -535,6 +701,11 @@ class LLMEngine:
             and "anthropic.com" in cfg.effective_base_url
         )
 
+    @staticmethod
+    def _uses_openai_responses(cfg: ProviderConfig) -> bool:
+        transport = (cfg.transport or "chat_completions").strip().lower().replace("-", "_")
+        return transport in {"responses", "openai_responses", "response"}
+
     # -- Internal helpers --
 
     def _build_headers(self, cfg: ProviderConfig) -> Dict[str, str]:
@@ -576,6 +747,33 @@ class LLMEngine:
             body["tools"] = tools
         if stream:
             body["stream_options"] = {"include_usage": True}
+        if cfg.extra_body:
+            body.update(cfg.extra_body)
+        return body
+
+    def _build_responses_body(
+        self,
+        cfg: ProviderConfig,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        stream: bool,
+    ) -> Dict[str, Any]:
+        instructions, input_items = self._convert_messages_to_responses_input(messages)
+        body: Dict[str, Any] = {
+            "model": cfg.effective_model,
+            "input": input_items,
+            "stream": stream,
+        }
+        if instructions:
+            body["instructions"] = instructions
+        if cfg.temperature is not None:
+            body["temperature"] = cfg.temperature
+        if cfg.top_p != 1.0:
+            body["top_p"] = cfg.top_p
+        if cfg.max_tokens > 0:
+            body["max_output_tokens"] = cfg.max_tokens
+        if tools:
+            body["tools"] = [self._convert_tool_to_responses(t) for t in tools]
         if cfg.extra_body:
             body.update(cfg.extra_body)
         return body
@@ -655,6 +853,102 @@ class LLMEngine:
             "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
         }
 
+    @classmethod
+    def _convert_messages_to_responses_input(
+        cls,
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        instructions: List[str] = []
+        input_items: List[Dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in {"system", "developer"}:
+                text = cls._stringify_message_content(content)
+                if text:
+                    instructions.append(text)
+                continue
+            if role == "tool":
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": cls._stringify_message_content(content),
+                })
+                continue
+            if role == "assistant" and msg.get("tool_calls"):
+                text = cls._stringify_message_content(content)
+                if text:
+                    input_items.append({"role": "assistant", "content": text})
+                for tc in msg.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "arguments": fn.get("arguments", ""),
+                    })
+                continue
+            item_role = role if role in {"user", "assistant"} else "user"
+            input_items.append({
+                "role": item_role,
+                "content": cls._convert_responses_message_content(content),
+            })
+        return "\n\n".join(instructions), input_items
+
+    @staticmethod
+    def _convert_tool_to_responses(tool: Dict[str, Any]) -> Dict[str, Any]:
+        fn = tool.get("function", {})
+        return {
+            "type": "function",
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+        }
+
+    @classmethod
+    def _convert_responses_message_content(cls, content: Any) -> Any:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[Dict[str, Any]] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    text = str(part)
+                    if text:
+                        parts.append({"type": "input_text", "text": text})
+                    continue
+                ptype = part.get("type")
+                if ptype == "text":
+                    text = part.get("text", "")
+                    if text:
+                        parts.append({"type": "input_text", "text": text})
+                elif ptype == "image_url":
+                    image = part.get("image_url", {})
+                    url = image.get("url") if isinstance(image, dict) else image
+                    if url:
+                        parts.append({"type": "input_image", "image_url": url})
+            return parts if parts else ""
+        return cls._stringify_message_content(content)
+
+    @staticmethod
+    def _stringify_message_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts: List[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        texts.append(str(part.get("text", "")))
+                    elif "text" in part:
+                        texts.append(str(part.get("text", "")))
+                elif part is not None:
+                    texts.append(str(part))
+            return "\n".join(t for t in texts if t)
+        if content is None:
+            return ""
+        return str(content)
+
     # -- Response parsing --
 
     @staticmethod
@@ -686,6 +980,57 @@ class LLMEngine:
         except (KeyError, TypeError) as exc:
             resp.error = f"Anthropic parse error: {exc}\nRaw: {json.dumps(data, ensure_ascii=False)[:500]}"
         return resp
+
+    @staticmethod
+    def _parse_responses_response(data: Dict[str, Any], cfg: ProviderConfig) -> LLMResponse:
+        """Parse OpenAI Responses API non-streaming response."""
+        resp = LLMResponse(model=data.get("model", cfg.effective_model))
+        try:
+            resp.finish_reason = data.get("status", "")
+            err = data.get("error")
+            if err:
+                resp.error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            output_text = data.get("output_text", "") or ""
+            if output_text:
+                resp.content = output_text
+            include_item_text = not bool(output_text)
+            for item in data.get("output", []):
+                LLMEngine._merge_responses_output_item(resp, item, include_item_text)
+            usage = data.get("usage", {})
+            if usage:
+                resp.usage = dict(usage)
+        except (KeyError, TypeError) as exc:
+            resp.error = f"Responses parse error: {exc}\nRaw: {json.dumps(data, ensure_ascii=False)[:500]}"
+        return resp
+
+    @staticmethod
+    def _merge_responses_output_item(
+        resp: LLMResponse,
+        item: Dict[str, Any],
+        include_text: bool,
+    ) -> None:
+        itype = item.get("type", "")
+        if itype == "message":
+            for part in item.get("content", []):
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type", "")
+                if ptype in {"output_text", "text"} and include_text:
+                    resp.content += part.get("text", "") or ""
+                elif ptype == "refusal":
+                    resp.refusal = (resp.refusal or "") + (part.get("refusal") or part.get("text", "") or "")
+                elif ptype in {"reasoning_text", "summary_text"}:
+                    resp.thinking += part.get("text", "") or ""
+        elif itype == "function_call":
+            resp.tool_calls.append(ToolCall(
+                id=item.get("call_id") or item.get("id", ""),
+                name=item.get("name", ""),
+                arguments=item.get("arguments", "") or "",
+            ))
+        elif itype == "reasoning":
+            for part in item.get("summary", []):
+                if isinstance(part, dict):
+                    resp.thinking += part.get("text", "") or ""
 
     @staticmethod
     def _parse_response(data: Dict[str, Any], cfg: ProviderConfig) -> LLMResponse:

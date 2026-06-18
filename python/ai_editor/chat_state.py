@@ -151,6 +151,8 @@ class ChatController:
         self._thread: Optional[threading.Thread] = None
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
         self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
+        self.mcp_tool_requires_confirm: Optional[Callable[[str], bool]] = None
+        self.mcp_tool_allowed: Optional[Callable[[str], bool]] = None
         self._agent_mode: bool = False
         self._disabled_tools: set = set()
         self._tool_result_cache: Dict[str, str] = {}
@@ -417,7 +419,24 @@ class ChatController:
 
                     # Confirmation gate for dangerous tools
                     desc = self.registry.get(tc.name)
-                    if (desc and desc.requires_confirm and self.on_tool_confirm
+                    mcp_allowed = True
+                    if tc.name.startswith("mcp_") and self.mcp_tool_allowed:
+                        mcp_allowed = self.mcp_tool_allowed(tc.name)
+                    if not mcp_allowed:
+                        self._set_tool_state(tc.id, ToolInvocationState.CANCELLED)
+                        result = json.dumps({"error": f"MCP tool disabled by policy: {tc.name}"})
+                        tc.result = result
+                        tool_msg = ChatMessage(role="tool", content=result,
+                                               tool_call_id=tc.id, tool_name=tc.name)
+                        self.conversation.add_message(tool_msg)
+                        if self.on_tool_end:
+                            self.on_tool_end(tc.id, result,
+                                             ToolInvocationState.CANCELLED.value)
+                        continue
+                    needs_confirm = bool(desc and desc.requires_confirm)
+                    if tc.name.startswith("mcp_") and self.mcp_tool_requires_confirm:
+                        needs_confirm = self.mcp_tool_requires_confirm(tc.name)
+                    if (needs_confirm and self.on_tool_confirm
                             and not self._session_auto_approve.get(tc.name, False)):
                         with self._confirm_lock:
                             self._confirm_event = threading.Event()

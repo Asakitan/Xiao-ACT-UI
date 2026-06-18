@@ -13,6 +13,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import shlex
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
@@ -106,7 +107,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
 
     registry.register(
         name="runTerminal",
-        description="Execute a shell command and return stdout/stderr. Timeout 30s.",
+        description="Execute a shell command and return stdout/stderr. Honors AI Editor terminal settings when configured.",
         parameters={
             "type": "object",
             "properties": {
@@ -115,7 +116,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
             },
             "required": ["command"],
         },
-        handler=lambda command, cwd="": _run_terminal(command, cwd),
+        handler=lambda command, cwd="": _run_terminal(command, cwd, gui_ref),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -414,21 +415,135 @@ def _search_files(query: str, path: str, pattern: str, case_sensitive: bool,
 # Terminal handler
 # ======================================================================
 
-def _run_terminal(command: str, cwd: str = "") -> Dict[str, Any]:
+_DEFAULT_TERMINAL_TIMEOUT = 30
+_DEFAULT_STDOUT_LIMIT = 8000
+_DEFAULT_STDERR_LIMIT = 4000
+
+
+def _get_terminal_settings(gui_ref: Any = None) -> Dict[str, Any]:
+    settings = getattr(gui_ref, "settings", None) if gui_ref else None
+    if not settings:
+        return {}
     try:
+        ai_cfg = settings.get("ai_editor", {}) or {}
+    except Exception:
+        return {}
+    terminal = ai_cfg.get("terminal", {}) if isinstance(ai_cfg, dict) else {}
+    if not isinstance(terminal, dict) or not terminal:
+        try:
+            dotted = settings.get("ai_editor.terminal", {}) or {}
+        except Exception:
+            dotted = {}
+        if isinstance(dotted, dict) and dotted:
+            terminal = dotted
+    return dict(terminal) if isinstance(terminal, dict) else {}
+
+
+def _terminal_shell_path(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    shell_path = value.strip().strip('"').strip("'")
+    if not shell_path:
+        return ""
+    return os.path.expandvars(os.path.expanduser(shell_path))
+
+
+def _terminal_args(value: Any) -> List[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(arg) for arg in value if arg is not None and str(arg) != ""]
+    if isinstance(value, str) and value.strip():
+        try:
+            return shlex.split(value, posix=os.name != "nt")
+        except ValueError:
+            return [value]
+    return []
+
+
+def _terminal_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _build_explicit_shell_command(shell_path: str, shell_args: List[str], command: str) -> List[str]:
+    resolved_args = [arg.replace("{command}", command) for arg in shell_args]
+    if any("{command}" in arg for arg in shell_args):
+        return [shell_path, *resolved_args]
+
+    lower_args = [arg.lower() for arg in resolved_args]
+    has_command_switch = any(arg in {"-command", "-c", "/c"} for arg in lower_args)
+    if has_command_switch:
+        return [shell_path, *resolved_args, command]
+
+    shell_name = os.path.basename(shell_path).lower()
+    if shell_name in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"}:
+        return [shell_path, *resolved_args, "-Command", command]
+    if shell_name in {"cmd.exe", "cmd"}:
+        return [shell_path, *resolved_args, "/c", command]
+    if shell_name in {"bash.exe", "bash", "sh.exe", "sh", "zsh.exe", "zsh"}:
+        return [shell_path, *resolved_args, "-lc", command]
+    return [shell_path, *resolved_args, command]
+
+
+def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int,
+                       explicit_shell: bool) -> Dict[str, Any]:
+    metadata = {
+        "configured": bool(terminal),
+        "timeout": timeout,
+        "outputLimit": output_limit,
+        "explicitShell": explicit_shell,
+    }
+    profile = terminal.get("profile")
+    if profile:
+        metadata["profile"] = str(profile)
+    shell_path = _terminal_shell_path(terminal.get("shell_path"))
+    if shell_path:
+        metadata["shellPath"] = shell_path
+    auto_approve = terminal.get("auto_approve")
+    if auto_approve not in (None, {}, [], ""):
+        metadata["autoApproveConfigured"] = True
+    return metadata
+
+
+def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None) -> Dict[str, Any]:
+    try:
+        terminal = _get_terminal_settings(gui_ref)
+        timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
+        output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
+        shell_path = _terminal_shell_path(terminal.get("shell_path"))
+        shell_args = _terminal_args(terminal.get("shell_args"))
+        explicit_shell = bool(shell_path)
+
         kwargs: Dict[str, Any] = {
-            "shell": True, "capture_output": True, "text": True, "timeout": 30,
+            "shell": not explicit_shell,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
         }
         if cwd:
             kwargs["cwd"] = os.path.abspath(cwd)
-        result = subprocess.run(command, **kwargs)
+        run_command: Any = command
+        if explicit_shell:
+            run_command = _build_explicit_shell_command(shell_path, shell_args, command)
+        result = subprocess.run(run_command, **kwargs)
         return {
             "exitCode": result.returncode,
-            "stdout": result.stdout[:8000] if result.stdout else "",
-            "stderr": result.stderr[:4000] if result.stderr else "",
+            "stdout": result.stdout[:output_limit] if result.stdout else "",
+            "stderr": result.stderr[:output_limit if terminal else _DEFAULT_STDERR_LIMIT] if result.stderr else "",
+            "terminal": _terminal_metadata(terminal, timeout, output_limit, explicit_shell),
         }
     except subprocess.TimeoutExpired:
-        return {"error": "Command timed out (30s)", "exitCode": -1}
+        terminal = _get_terminal_settings(gui_ref)
+        timeout = _terminal_int(terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
+        output_limit = _terminal_int(terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
+        return {
+            "error": f"Command timed out ({timeout}s)",
+            "exitCode": -1,
+            "terminal": _terminal_metadata(terminal, timeout, output_limit,
+                                           bool(_terminal_shell_path(terminal.get("shell_path")))),
+        }
     except Exception as exc:
         return {"error": str(exc)}
 

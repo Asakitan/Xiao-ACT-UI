@@ -284,6 +284,42 @@ def _load_instructions_from_dir(base: str, label: str = "") -> list[str]:
     return parts
 
 
+def _read_markdown_file(path: str, heading: str = "") -> list[str]:
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                body = f.read().strip()
+            if body:
+                return [f"### {heading}\n\n{body}" if heading else body]
+    except Exception:
+        pass
+    return []
+
+
+def _load_custom_location(path: str, root: str) -> list[str]:
+    if not path:
+        return []
+    target = path if os.path.isabs(path) else os.path.join(root, path)
+    if os.path.isdir(target):
+        parts: list[str] = []
+        for fname in sorted(os.listdir(target)):
+            if fname.endswith(".md"):
+                parts.extend(_read_markdown_file(os.path.join(target, fname), fname[:-3]))
+        return parts
+    return _read_markdown_file(target, os.path.basename(target))
+
+
+def _customization_settings(settings_getter=None) -> dict:
+    if not settings_getter:
+        return {}
+    try:
+        ai = settings_getter("ai_editor", {}) or {}
+    except Exception:
+        return {}
+    customization = ai.get("customization", {}) if isinstance(ai, dict) else {}
+    return customization if isinstance(customization, dict) else {}
+
+
 def load_instructions(settings_getter=None, workspace_root: str = "") -> str:
     """Collect custom instructions from all scopes.
 
@@ -296,6 +332,12 @@ def load_instructions(settings_getter=None, workspace_root: str = "") -> str:
     parts: list[str] = []
 
     # User-level from settings
+    customization = _customization_settings(settings_getter)
+    use_agent_md = customization.get("use_agent_md", True) is not False
+    use_claude_md = customization.get("use_claude_md", False) is True
+    extra_locations = customization.get("instructions_locations", [])
+    if not isinstance(extra_locations, list):
+        extra_locations = []
     if settings_getter:
         ai = settings_getter("ai_editor", {}) or {}
         if isinstance(ai, dict):
@@ -314,8 +356,21 @@ def load_instructions(settings_getter=None, workspace_root: str = "") -> str:
         try:
             from ai_editor.scopes import resolve_scopes
             for entry in resolve_scopes():
+                scope_root = os.path.dirname(entry["path"]) if os.path.basename(entry["path"]) == ".sao" else entry["path"]
                 scope_parts = _load_instructions_from_dir(
                     entry["path"], entry.get("label", ""))
+                if use_agent_md:
+                    scope_parts.extend(_read_markdown_file(
+                        os.path.join(scope_root, "AGENTS.md"), "AGENTS.md"))
+                if use_claude_md:
+                    scope_parts.extend(_read_markdown_file(
+                        os.path.join(scope_root, "CLAUDE.md"), "CLAUDE.md"))
+                if entry.get("scope") == "workspace":
+                    for loc in extra_locations:
+                        norm = str(loc).replace("\\", "/").strip("/")
+                        if norm in {".sao/instructions.md", ".sao/instructions"}:
+                            continue
+                        scope_parts.extend(_load_custom_location(str(loc), scope_root))
                 if scope_parts:
                     parts.append(f"<!-- scope: {entry.get('label','')} -->")
                     parts.extend(scope_parts)

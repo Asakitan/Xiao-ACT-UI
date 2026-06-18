@@ -31,7 +31,7 @@ def _get_http_client():
         import httpx
         _http_client = httpx.Client(
             timeout=15.0, follow_redirects=True,
-            verify=False,
+            verify=True,
         )
     return _http_client
 
@@ -210,6 +210,19 @@ def install_extension(ext_id: str, vsix_url: str = "") -> Dict[str, Any]:
         if vsix_url:
             vsix_path = download_vsix(vsix_url, ext_id)
             manifest = extract_vsix_manifest(vsix_path)
+            if not manifest:
+                try:
+                    os.remove(vsix_path)
+                except OSError:
+                    pass
+                return {"error": "Downloaded VSIX did not contain a package.json manifest"}
+            manifest_id = f"{manifest.get('publisher', '')}.{manifest.get('name', '')}".strip(".")
+            if manifest_id and manifest_id.lower() != ext_id.lower():
+                try:
+                    os.remove(vsix_path)
+                except OSError:
+                    pass
+                return {"error": f"VSIX manifest id mismatch: expected {ext_id}, got {manifest_id}"}
         else:
             manifest = {}
         # Save install state
@@ -268,7 +281,8 @@ def is_installed(ext_id: str) -> bool:
 # Extension tool loading — parse package.json contributes
 # ---------------------------------------------------------------------------
 
-def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
+def load_extension_tools(ext_id: str,
+                         enabled_contributions: Optional[set[str]] = None) -> List[Dict[str, Any]]:
     """Extract tool definitions from an installed extension's package.json.
 
     Reads ``contributes.chatParticipants``, ``contributes.menus``,
@@ -287,8 +301,11 @@ def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
         contributes = manifest.get("contributes", {})
         tools: List[Dict[str, Any]] = []
 
+        def _enabled(name: str) -> bool:
+            return enabled_contributions is None or name in enabled_contributions
+
         # languageModelTools (VSCode proposed API)
-        for t in contributes.get("languageModelTools", []):
+        for t in (contributes.get("languageModelTools", []) if _enabled("languageModelTools") else []):
             tools.append({
                 "type": "function",
                 "function": {
@@ -302,7 +319,7 @@ def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
             })
 
         # chatParticipants → register as tools
-        for p in contributes.get("chatParticipants", []):
+        for p in (contributes.get("chatParticipants", []) if _enabled("chatParticipants") else []):
             pid = p.get("id", "")
             tools.append({
                 "type": "function",
@@ -319,7 +336,7 @@ def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
             })
 
         # commands → register as callable tools
-        for cmd in contributes.get("commands", []):
+        for cmd in (contributes.get("commands", []) if _enabled("commands") else []):
             cmd_id = cmd.get("command", "")
             if not cmd_id:
                 continue
@@ -340,9 +357,9 @@ def load_extension_tools(ext_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def load_all_extension_tools() -> List[Dict[str, Any]]:
+def load_all_extension_tools(enabled_contributions: Optional[set[str]] = None) -> List[Dict[str, Any]]:
     """Load tools from all installed extensions."""
     all_tools = []
     for entry in list_installed():
-        all_tools.extend(load_extension_tools(entry["id"]))
+        all_tools.extend(load_extension_tools(entry["id"], enabled_contributions))
     return all_tools

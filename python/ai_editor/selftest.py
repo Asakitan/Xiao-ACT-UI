@@ -131,6 +131,199 @@ class _FakeGui:
     _start_time = 0.0
 
 
+class _FakeSettings:
+    def __init__(self, data):
+        self.data = data
+        self.saved = False
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+
+    def save(self):
+        self.saved = True
+
+
+class _SettingsGui(_FakeGui):
+    def __init__(self, data):
+        self.settings = _FakeSettings(data)
+        self._ai_engine_actions = dict(_FakeGui._ai_engine_actions)
+
+
+def test_app_settings_parity() -> None:
+    print("── App Settings Parity ──")
+    from ai_editor.app import AIEditorAPI
+
+    api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    js_methods = (
+        "load_config", "save_config", "list_tools", "confirm_tool",
+        "send_image_message", "count_conversation_tokens", "send_message",
+        "cancel", "new_chat", "export_chat", "execute_tool",
+        "list_history", "get_instructions", "save_user_instructions",
+        "save_instruction_file", "delete_instruction_file", "list_agents",
+        "list_workflows", "get_active_agent", "set_active_agent",
+        "clear_active_agent", "delete_agent", "delete_workflow",
+        "run_workflow", "get_scopes", "save_agent", "save_workflow",
+        "load_history", "switch_provider", "list_chat_providers",
+        "provider_send", "provider_cancel", "provider_new_chat",
+        "get_model_info", "test_connection", "set_mode", "save_config",
+        "get_mode", "list_models", "save_custom_model",
+        "delete_custom_model", "search_extensions",
+        "list_installed_extensions", "uninstall_extension",
+        "install_extension", "win_minimize", "win_maximize", "win_close",
+    )
+    missing = [name for name in js_methods if not callable(getattr(api, name, None))]
+    _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+
+    data = {
+        "ai_editor": {
+            "provider": "openai",
+            "api_key": "old-key",
+            "user_instructions": "keep me",
+            "provider_keys": {"anthropic": "old-claude"},
+            "custom_models": {"kept-model": {"max_input": 123, "max_output": 45}},
+            "mode": "agent",
+            "permissions": {"readFile": "disabled"},
+            "claude_code": {"cli_path": "claude-cli"},
+            "future_section": {"enabled": True},
+        },
+        "panel_themes": {"act": "light"},
+    }
+    gui = _SettingsGui(data)
+    api = AIEditorAPI(gui)
+    loaded = api.load_config()
+    advanced_keys = (
+        "top_p", "frequency_penalty", "presence_penalty", "stop",
+        "max_input_tokens", "max_output_tokens", "timeout",
+        "extra_headers", "extra_body", "provider_keys", "_provider_keys",
+        "custom_models", "mode", "permissions",
+    )
+    _check("load_config advanced fields", all(k in loaded for k in advanced_keys))
+    _check("load_config existing safe section",
+           loaded.get("claude_code", {}).get("cli_path") == "claude-cli")
+    _check("load_config skips absent safe section", "codex" not in loaded)
+
+    payload = {
+        "provider": "custom",
+        "api_key": "new-key",
+        "base_url": "https://example.invalid/v1",
+        "model": "phase-one-model",
+        "temperature": "0.25",
+        "max_tokens": "8192",
+        "top_p": "0.82",
+        "frequency_penalty": "0.15",
+        "presence_penalty": "-0.2",
+        "stop": "END, STOP",
+        "max_input_tokens": "64000",
+        "max_output_tokens": "2048",
+        "timeout": "45",
+        "extra_headers": {"X-Test": "1"},
+        "extra_body": {"stream_options": {"include_usage": True}},
+        "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
+        "unknown_payload": {"preserve": True},
+    }
+    result = api.save_config(payload)
+    stored = gui.settings.data["ai_editor"]
+    loaded = api.load_config()
+    _check("save_config ok", result.get("ok") is True and gui.settings.saved)
+    _check("save_config preserves siblings",
+           stored.get("user_instructions") == "keep me"
+           and stored.get("future_section") == {"enabled": True}
+           and stored.get("claude_code", {}).get("cli_path") == "claude-cli")
+    _check("advanced settings round-trip",
+           loaded.get("provider") == "custom"
+           and abs(loaded.get("top_p", 0) - 0.82) < 0.0001
+           and abs(loaded.get("frequency_penalty", 0) - 0.15) < 0.0001
+           and abs(loaded.get("presence_penalty", 0) + 0.2) < 0.0001
+           and loaded.get("stop") == ["END", "STOP"]
+           and loaded.get("max_input_tokens") == 64000
+           and loaded.get("max_output_tokens") == 2048
+           and loaded.get("timeout") == 45
+           and loaded.get("extra_headers") == {"X-Test": "1"}
+           and loaded.get("extra_body") == {"stream_options": {"include_usage": True}})
+    _check("provider keys and unknown keys preserved",
+           loaded.get("_provider_keys", {}).get("deepseek") == "new-deepseek"
+           and stored.get("unknown_payload") == {"preserve": True})
+
+    malformed = _SettingsGui({
+        "ai_editor": {
+            "provider_keys": "broken",
+            "_provider_keys": {"anthropic": "legacy-key"},
+            "top_p": "nan",
+            "timeout": "never",
+            "stop": "A,, B",
+            "extra_headers": ["bad"],
+            "mode": ["bad"],
+            "permissions": "bad",
+            "terminal": "bad",
+        }
+    })
+    loaded_bad = AIEditorAPI(malformed).load_config()
+    _check("malformed settings normalized safely",
+           loaded_bad.get("provider_keys") == {"anthropic": "legacy-key"}
+           and loaded_bad.get("top_p") == 1.0
+           and loaded_bad.get("timeout") == 180
+           and loaded_bad.get("stop") == ["A", "B"]
+           and loaded_bad.get("extra_headers") == {}
+           and loaded_bad.get("mode") == "edit"
+           and loaded_bad.get("permissions") == {}
+           and loaded_bad.get("terminal", {}).get("profile"))
+
+    provider_gui = _SettingsGui({"ai_editor": {
+        "provider_keys": {"openai": "test-openai"},
+        "codex": {"model": "codex-test", "transport": "responses"},
+    }})
+    provider_api = AIEditorAPI(provider_gui)
+    provider_api._ensure_engine()
+    codex = provider_api._provider_registry.get("codex")
+    ctrl = provider_api._create_provider_controller(codex)
+    _check("codex provider settings applied",
+           ctrl.engine.config.model == "codex-test"
+           and ctrl.engine.config.transport == "responses")
+
+    provider_gui.settings.data["ai_editor"]["codex"]["transport"] = "cli"
+    _check("unsupported CLI transport rejected",
+           "CLI transport" in provider_api._unsupported_provider_transport(codex))
+
+    mode_data = {"ai_editor": {"mode": "chat", "permissions": {"readFile": "allowed"}}}
+    mode_api = AIEditorAPI(_SettingsGui(mode_data))
+    mode_api._ensure_engine()
+    mode = mode_api.get_mode("edit")
+    _check("get_mode returns defaults and overrides",
+           mode.get("mode") == "chat"
+           and mode.get("selected_mode") == "edit"
+           and mode.get("defaults", {}).get("runTerminal") == "confirm"
+           and mode.get("overrides", {}).get("readFile") == "allowed")
+
+    mode_api.set_mode("edit")
+    direct_result = json.loads(mode_api.execute_tool(
+        "runTerminal", json.dumps({"command": "echo ok"})))
+    _check("direct mutating tool requires confirmation",
+           direct_result.get("requires_confirmation") is True)
+
+    from ai_editor.mcp_client import load_mcp_configs
+    mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
+        {"id": "local", "transport": "stdio", "command": "cmd"}
+    ]}}}
+    getter = lambda key, default=None: mcp_payload.get(key, default)
+    _check("mcp autostart default prevents launch", load_mcp_configs(getter) == [])
+    mcp_payload["ai_editor"]["mcp"]["autostart"] = True
+    _check("mcp autostart loads configured server",
+           [c.id for c in load_mcp_configs(getter)] == ["local"])
+    mcp_payload["ai_editor"]["mcp"]["access"] = "disabled"
+    _check("mcp disabled blocks configs", load_mcp_configs(getter) == [])
+
+    ext_api = AIEditorAPI(_SettingsGui({"ai_editor": {
+        "extensions": {"confirm_install": True, "blocked_publishers": ["blocked"]}
+    }}))
+    _check("extension install requires confirmation",
+           ext_api.install_extension("allowed.sample").get("requires_confirmation") is True)
+    _check("blocked extension publisher rejected",
+           "blocked" in ext_api.install_extension("blocked.sample", confirmed=True).get("error", ""))
+
+
 def test_tool_registry() -> None:
     print("── Tool Registry ──")
     from ai_editor.tool_registry import ToolRegistry
@@ -893,6 +1086,7 @@ def main() -> None:
     test_conversation()
     test_history()
     test_bridge()
+    test_app_settings_parity()
     test_instructions()
     test_scopes()
     test_extension_host()

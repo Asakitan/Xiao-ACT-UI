@@ -3,13 +3,12 @@
 Providers are tabs in the right sidebar (CHAT / CLAUDE CODE / CODEX / plugin).
 Each provider wraps a conversation with its own model config and system prompt.
 
-Built-in providers auto-detect availability from settings (API keys).
+Built-in providers auto-detect availability from settings (API keys and CLIs).
 Plugins call ``register_chat_provider()`` to add custom tabs.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -98,7 +97,7 @@ class ChatProviderRegistry:
     def list_available(self,
                        settings_getter: Optional[Callable] = None,
                        ) -> List[Dict[str, Any]]:
-        """Return providers with availability flag based on configured keys."""
+        """Return providers with availability flag based on configured keys/CLIs."""
         result = []
         for p in self._providers.values():
             avail = self._check_available(p, settings_getter)
@@ -114,12 +113,26 @@ class ChatProviderRegistry:
         if p.id == "chat":
             return True
         if p.id == "claude-code":
-            key = _get_provider_key("anthropic", settings_getter)
-            if key:
+            prefer_cli = _get_provider_bool("claude_code", "prefer_cli", settings_getter)
+            cli_path = _get_provider_cli_path("claude_code", settings_getter)
+            if _cli_available(cli_path):
                 return True
-            return shutil.which("claude") is not None
+            if shutil.which("claude") is not None:
+                return True
+            if prefer_cli:
+                return False
+            return bool(_get_provider_key("anthropic", settings_getter))
         if p.id == "codex":
-            return bool(_get_provider_key("openai", settings_getter))
+            transport = _get_provider_option("codex", "transport", settings_getter).lower()
+            if transport == "cli":
+                cli_path = _get_provider_cli_path("codex", settings_getter)
+                return _cli_available(cli_path) or shutil.which("codex") is not None
+            if _get_provider_key("openai", settings_getter):
+                return True
+            cli_path = _get_provider_cli_path("codex", settings_getter)
+            if _cli_available(cli_path):
+                return True
+            return shutil.which("codex") is not None
         if p.api_key:
             return True
         key = _get_provider_key(p.provider_type, settings_getter)
@@ -142,6 +155,59 @@ def _get_provider_key(provider_type: str,
     if isinstance(keys, dict):
         return keys.get(provider_type, "")
     return ""
+
+
+def _get_ai_editor_settings(settings_getter: Optional[Callable]) -> Dict[str, Any]:
+    if not settings_getter:
+        return {}
+    ai = settings_getter("ai_editor", {}) or {}
+    return ai if isinstance(ai, dict) else {}
+
+
+def _get_provider_cli_path(section_name: str,
+                           settings_getter: Optional[Callable]) -> str:
+    """Read ai_editor.<section>.cli_path without leaking the configured path."""
+    ai = _get_ai_editor_settings(settings_getter)
+    section = ai.get(section_name, {})
+    if isinstance(section, dict):
+        cli_path = section.get("cli_path", "")
+        if isinstance(cli_path, str) and cli_path.strip():
+            return cli_path.strip()
+    if settings_getter:
+        dotted = settings_getter(f"ai_editor.{section_name}.cli_path", "") or ""
+        if isinstance(dotted, str):
+            return dotted.strip()
+    return ""
+
+
+def _get_provider_option(section_name: str, option: str,
+                         settings_getter: Optional[Callable]) -> str:
+    ai = _get_ai_editor_settings(settings_getter)
+    section = ai.get(section_name, {})
+    if isinstance(section, dict):
+        value = section.get(option, "")
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
+def _get_provider_bool(section_name: str, option: str,
+                       settings_getter: Optional[Callable]) -> bool:
+    ai = _get_ai_editor_settings(settings_getter)
+    section = ai.get(section_name, {})
+    return bool(section.get(option)) if isinstance(section, dict) else False
+
+
+def _cli_available(cli_path: str) -> bool:
+    if not cli_path:
+        return False
+    candidate = cli_path.strip().strip('"').strip("'")
+    if not candidate:
+        return False
+    expanded = os.path.expandvars(os.path.expanduser(candidate))
+    if os.path.isabs(expanded) or os.path.dirname(expanded):
+        return os.path.isfile(expanded)
+    return shutil.which(expanded) is not None
 
 
 _singleton: Optional[ChatProviderRegistry] = None

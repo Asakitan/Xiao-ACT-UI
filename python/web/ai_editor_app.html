@@ -385,6 +385,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal textarea { min-height:80px; resize:vertical; }
 .modal-btns { display:flex; gap:8px; margin-top:20px; justify-content:flex-end; }
 .modal-status { margin-top:8px; font-size:12px; min-height:18px; }
+.modal .settings-section { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
+.modal .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; font-size:12px; }
+.modal .settings-grid .full { grid-column:1/-1; }
+.modal .settings-help { color:var(--fg-dim); font-size:11px; line-height:1.4; margin-top:4px; }
+.modal label.settings-check { display:flex; align-items:flex-start; gap:8px; margin:8px 0 0; color:var(--fg-dim); }
+.modal label.settings-check input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:2px; }
+.modal label.settings-check b { color:var(--fg); font-weight:600; }
+.modal label.settings-check small { display:block; color:var(--fg-dim); line-height:1.35; margin-top:2px; }
+.modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
+.modal input[type="checkbox"] { width:auto; }
 
 /* ── Slash command popup ── */
 .slash-popup { position:absolute; bottom:100%; left:0; right:0; background:var(--bg2);
@@ -904,6 +914,72 @@ pre.code-block { overflow:visible; }
     <select id="s-mode" style="width:100%"><option value="chat">Chat (no tools)</option><option value="edit" selected>Edit (confirm writes)</option><option value="agent">Agent (autonomous)</option></select>
     <div id="s-perms" style="margin-top:6px;font-size:11px"></div>
 
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Claude Code</div>
+      <div class="settings-grid">
+        <div><label>CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
+        <div><label>Model</label><input id="s-cc-model" placeholder="claude-sonnet-4-20250514"></div>
+        <div class="full"><label>CLI Args (one per line)</label><textarea id="s-cc-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
+      </div>
+      <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Use the configured CLI path when available; otherwise provider discovery can continue to use saved settings.</small></span></label>
+      <label class="settings-check settings-danger"><input id="s-cc-skip-permissions" type="checkbox"><span><b>Opt in to dangerous Claude skip permissions</b><small>Disabled by default. Check only if you explicitly want permission prompts bypassed for this local workspace.</small></span></label>
+    </div>
+
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Codex</div>
+      <div class="settings-grid">
+        <div><label>CLI Command</label><input id="s-codex-cli" placeholder="Leave empty for auto-discovery"></div>
+        <div><label>Model</label><input id="s-codex-model" placeholder="codex-mini-latest"></div>
+        <div><label>Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI (reserved)</option></select></div>
+        <div class="full"><label>CLI Args (one per line)</label><textarea id="s-codex-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">MCP Policy</div>
+      <div class="settings-grid">
+        <div><label>Tool Access</label><select id="s-mcp-access"><option value="prompt">Prompt before use</option><option value="read_only">Read-only allowed</option><option value="allow">Allow configured tools</option><option value="disabled">Disabled</option></select></div>
+        <div><label>Name Collisions</label><select id="s-mcp-collision"><option value="first">Use first registered</option><option value="last">Use latest registered</option><option value="error">Treat as error</option></select></div>
+      </div>
+      <label class="settings-check"><input id="s-mcp-discovery" type="checkbox"><span><b>Discover configured MCP servers</b><small>Reads configured server entries only; missing backend APIs are not called from this modal.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b>Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b>Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
+    </div>
+
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Terminal Profile</div>
+      <div class="settings-grid">
+        <div><label>Profile Name</label><input id="s-term-profile" placeholder="PowerShell"></div>
+        <div><label>Shell Command</label><input id="s-term-shell" placeholder="Leave empty for platform default"></div>
+        <div><label>Timeout (sec)</label><input id="s-term-timeout" type="number" min="1" value="30"></div>
+        <div><label>Output Limit</label><input id="s-term-output" type="number" min="1000" value="8000"></div>
+        <div class="full"><label>Shell Args (one per line)</label><textarea id="s-term-args" rows="2" placeholder="Optional non-secret args only"></textarea></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Extension Trust</div>
+      <label class="settings-check"><input id="s-ext-confirm" type="checkbox"><span><b>Confirm extension installs</b><small>Recommended. Keep install/uninstall actions user-confirmed.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Allowed Publishers</label><textarea id="s-ext-allow" rows="2" placeholder="One publisher per line"></textarea></div>
+        <div><label>Blocked Publishers</label><textarea id="s-ext-block" rows="2" placeholder="One publisher per line"></textarea></div>
+        <div class="full"><label>Enabled Contributions</label><textarea id="s-ext-contribs" rows="2" placeholder="chatParticipants&#10;languageModelTools&#10;commands"></textarea></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Customization Discovery</div>
+      <label class="settings-check"><input id="s-cust-agent-md" type="checkbox"><span><b>Read AGENTS.md</b><small>Include workspace instruction files when available.</small></span></label>
+      <label class="settings-check"><input id="s-cust-claude-md" type="checkbox"><span><b>Read CLAUDE.md</b><small>Disabled by default unless this workspace intentionally uses Claude-style project memory.</small></span></label>
+      <div class="settings-grid">
+        <div><label>Instructions Locations</label><textarea id="s-cust-instructions" rows="2" placeholder=".sao/instructions.md"></textarea></div>
+        <div><label>Agent Locations</label><textarea id="s-cust-agents" rows="2" placeholder=".sao/agents"></textarea></div>
+        <div><label>Workflow Locations</label><textarea id="s-cust-workflows" rows="2" placeholder=".sao/workflows"></textarea></div>
+        <div><label>Skill Locations</label><textarea id="s-cust-skills" rows="2" placeholder=".agents/skills/.local"></textarea></div>
+      </div>
+      <div class="settings-help">Defaults are relative discovery paths only; no secrets or local absolute paths are prefilled.</div>
+    </div>
+
     <details style="margin-top:12px">
       <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Advanced Sampling & Connection</summary>
       <div style="padding:8px 0;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
@@ -913,6 +989,7 @@ pre.code-block { overflow:visible; }
         <div><label>Timeout (sec)</label><input id="s-timeout" type="number" value="180" min="10" max="600"></div>
         <div style="grid-column:1/-1"><label>Stop Sequences (comma-sep)</label><input id="s-stop" placeholder="e.g. \n\n,###"></div>
         <div style="grid-column:1/-1"><label>Max Input Tokens (0 = model default)</label><input id="s-maxinp" type="number" value="0" min="0"></div>
+        <div style="grid-column:1/-1"><label>Max Output Tokens Override (0 = model default)</label><input id="s-maxout" type="number" value="0" min="0"></div>
         <div style="grid-column:1/-1"><label>Extra Headers (JSON)</label><input id="s-xheaders" placeholder='{"X-Custom":"value"}'></div>
         <div style="grid-column:1/-1"><label>Extra Body (JSON)</label><input id="s-xbody" placeholder='{"logprobs":true}'></div>
       </div>
@@ -966,7 +1043,45 @@ pre.code-block { overflow:visible; }
 'use strict';
 
 // ── State ──
-let config={provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:''};
+const SETTINGS_SECTION_DEFAULTS={
+  claude_code:{cli_path:'',cli_args:[],prefer_cli:false,allow_dangerously_skip_permissions:false,model:'claude-sonnet-4-20250514'},
+  codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
+  mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
+  terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
+  extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands']},
+  customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
+};
+const SETTINGS_DEFAULTS={
+  provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
+  top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'edit',
+  ...SETTINGS_SECTION_DEFAULTS
+};
+function clonePlain(value){return JSON.parse(JSON.stringify(value))}
+function isPlainObject(value){return !!value&&typeof value==='object'&&!Array.isArray(value)}
+function toList(value){
+  if(Array.isArray(value))return value.map(v=>String(v)).filter(Boolean);
+  if(typeof value==='string')return value.split(/\r?\n|,/).map(v=>v.trim()).filter(Boolean);
+  return [];
+}
+function mergeSectionDefaults(name,value){
+  const base=clonePlain(SETTINGS_SECTION_DEFAULTS[name]||{});
+  return isPlainObject(value)?Object.assign(base,value):base;
+}
+function withSettingsDefaults(raw){
+  const src=isPlainObject(raw)?raw:{};
+  const merged=Object.assign(clonePlain(SETTINGS_DEFAULTS),src);
+  Object.keys(SETTINGS_SECTION_DEFAULTS).forEach(name=>{merged[name]=mergeSectionDefaults(name,src[name])});
+  merged.provider_keys=isPlainObject(src.provider_keys)?Object.assign({},src.provider_keys):isPlainObject(src._provider_keys)?Object.assign({},src._provider_keys):{};
+  merged._provider_keys=isPlainObject(src._provider_keys)?Object.assign({},src._provider_keys):Object.assign({},merged.provider_keys);
+  merged.extra_headers=isPlainObject(src.extra_headers)?Object.assign({},src.extra_headers):{};
+  merged.extra_body=isPlainObject(src.extra_body)?Object.assign({},src.extra_body):{};
+  merged.custom_models=isPlainObject(src.custom_models)?Object.assign({},src.custom_models):{};
+  merged.permissions=isPlainObject(src.permissions)?Object.assign({},src.permissions):{};
+  merged.stop=toList(src.stop);
+  return merged;
+}
+let config=withSettingsDefaults({});
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
 
 // ── API ──
@@ -991,7 +1106,7 @@ window._onEditorEvent=function(event,data){
 
 // ── Init ──
 async function init(){
-  const c=await call('load_config'); if(c)Object.assign(config,c);
+  const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
   syncUI();
   const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
   refreshHistory();await loadMode();await renderProviderTabs();
@@ -1664,7 +1779,7 @@ async function refreshInstructions(){
       const row=document.createElement('div');row.className='sb-item';
       row.style.cssText='display:flex;align-items:center;gap:4px';
       const label=document.createElement('span');label.style.cssText='flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis';
-      label.textContent=(f.scope==='project'?'📄 ':'📎 ')+f.name;label.title=f.path||f.name;
+      label.textContent=(f.scope==='Workspace'||f.scope==='workspace'?'📄 ':'📎 ')+f.name;label.title=(f.scope?f.scope+' · ':'')+(f.path||f.name);
       const editBtn=document.createElement('span');editBtn.textContent='✎';editBtn.title='Edit';
       editBtn.style.cssText='cursor:pointer;font-size:12px;opacity:0.6';
       editBtn.onclick=e=>{e.stopPropagation();editInstructionFile(f.name,f.content||'')};
@@ -1747,7 +1862,8 @@ async function refreshAgents(){
     const icon=document.createElement('span');icon.textContent=w.icon||'⚡';icon.style.fontSize='14px';
     const info=document.createElement('span');info.style.cssText='flex:1;overflow:hidden';
     const steps=w.steps?w.steps.length:0;
-    info.innerHTML='<div style="font-size:12px">'+esc(w.name)+'</div><div style="font-size:10px;color:var(--fg-dim)">'+steps+' steps · '+esc(w.description)+'</div>';
+    const scopeTag=w.builtin?'':'<span style="font-size:9px;opacity:0.5;margin-left:4px">'+(w._scope||'')+'</span>';
+    info.innerHTML='<div style="font-size:12px">'+esc(w.name)+scopeTag+'</div><div style="font-size:10px;color:var(--fg-dim)">'+steps+' steps · '+esc(w.description)+'</div>';
     const runBtn=document.createElement('span');runBtn.textContent='▶';runBtn.title='Run workflow';
     runBtn.style.cssText='cursor:pointer;font-size:12px;opacity:0.7';
     runBtn.onclick=e=>{e.stopPropagation();promptRunWorkflow(w.id,w.name)};
@@ -1816,13 +1932,18 @@ function createWorkflow(){
     +'<label>Icon</label><input id="wf-icon" value="⚡" style="width:60px">'
     +'<label>Description</label><input id="wf-desc">'
     +'<label>Steps (JSON array)</label><textarea id="wf-steps" rows="8" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box" placeholder=\'[{"agent":"default","prompt":"{{input}}","output_var":"result","label":"Processing"}]\'></textarea>'
+    +'<label>Scope</label><select id="wf-scope"><option value="workspace">Workspace</option><option value="system">System (global)</option></select>'
     +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span>'
     +'<button class="send-btn" id="wf-save">Save</button></div></div>';
+  call('get_scopes').then(r=>{if(r&&r.scopes)r.scopes.filter(s=>s.scope==='plugin').forEach(s=>{
+    const opt=document.createElement('option');opt.value='plugin:'+s.plugin_id;opt.textContent=s.label;
+    document.getElementById('wf-scope').appendChild(opt);
+  })});
   document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
   document.getElementById('wf-save').onclick=async()=>{
     let steps;try{steps=JSON.parse($('wf-steps').value)}catch{alert('Invalid JSON');return}
     const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
-      description:$('wf-desc').value,steps:steps};
+      description:$('wf-desc').value,steps:steps,_scope:$('wf-scope').value};
     if(!data.id||!data.name)return;
     await call('save_workflow',data);modal.remove();refreshAgents();
   };
@@ -1956,6 +2077,41 @@ document.addEventListener('mousemove',e=>{if(!splitterDragging)return;
 document.addEventListener('mouseup',()=>{splitterDragging=false;splitter.classList.remove('dragging')});
 
 // ── Settings ──
+function settingSection(name){return mergeSectionDefaults(name,config[name])}
+function setInputValue(id,value){const el=$(id);if(el)el.value=value??''}
+function setCheckedValue(id,value){const el=$(id);if(el)el.checked=!!value}
+function setSelectValue(id,value,fallback){
+  const el=$(id);if(!el)return;
+  const v=value||fallback||'';
+  if(v&&!Array.from(el.options).some(o=>o.value===v))el.add(new Option(v,v));
+  el.value=v;
+}
+function readInputValue(id){const el=$(id);return el?el.value:''}
+function readCheckedValue(id){const el=$(id);return !!(el&&el.checked)}
+function readNumberValue(id,fallback,integer){
+  const raw=readInputValue(id);const n=Number(raw);
+  if(!Number.isFinite(n))return fallback;
+  return integer?Math.trunc(n):n;
+}
+function listToText(value){return Array.isArray(value)?value.join('\n'):(typeof value==='string'?value:'')}
+function readListValue(id,splitCommas){
+  const text=readInputValue(id).trim();if(!text)return[];
+  if(text.startsWith('[')){
+    try{const arr=JSON.parse(text);if(Array.isArray(arr))return arr.map(v=>String(v)).filter(Boolean)}catch{}
+  }
+  const re=splitCommas?/\r?\n|,/:/\r?\n/;
+  return text.split(re).map(v=>v.trim()).filter(Boolean);
+}
+function stringifyJsonValue(value){
+  if(!value)return'';
+  if(typeof value==='string')return value;
+  if(isPlainObject(value)&&!Object.keys(value).length)return'';
+  try{return JSON.stringify(value)}catch{return''}
+}
+function readJsonObjectValue(id,fallback){
+  const text=readInputValue(id).trim();if(!text)return fallback||{};
+  try{const parsed=JSON.parse(text);return isPlainObject(parsed)?parsed:(fallback||{})}catch{return fallback||{}}
+}
 async function showModelInfo(){
   const m=$('s-model').value.trim(),el=$('s-model-info');if(!el)return;
   if(!m){el.textContent='';return}
@@ -1964,13 +2120,14 @@ async function showModelInfo(){
   else{el.textContent='Custom model — default 128K context. Add via Custom Models below.'}
 }
 function openSettings(){
+  Object.assign(config,withSettingsDefaults(config));
   $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
   $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
   $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
   $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
-  $('s-mode').value=currentMode;renderPermissions();showModelInfo();
+  $('s-mode').value=currentMode||config.mode||'edit';renderPermissions();showModelInfo();
   // Provider keys
-  const keys=config._provider_keys||{};
+  const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
   if($('sk-anthropic'))$('sk-anthropic').value=keys.anthropic||'';
   if($('sk-deepseek'))$('sk-deepseek').value=keys.deepseek||'';
@@ -1979,10 +2136,29 @@ function openSettings(){
   if($('s-freqp'))$('s-freqp').value=config.frequency_penalty??0;
   if($('s-presp'))$('s-presp').value=config.presence_penalty??0;
   if($('s-timeout'))$('s-timeout').value=config.timeout??180;
-  if($('s-stop'))$('s-stop').value=(config.stop||[]).join(',');
+  if($('s-stop'))$('s-stop').value=toList(config.stop).join(',');
   if($('s-maxinp'))$('s-maxinp').value=config.max_input_tokens??0;
-  if($('s-xheaders'))$('s-xheaders').value=config.extra_headers?JSON.stringify(config.extra_headers):'';
-  if($('s-xbody'))$('s-xbody').value=config.extra_body?JSON.stringify(config.extra_body):'';
+  if($('s-maxout'))$('s-maxout').value=config.max_output_tokens??0;
+  if($('s-xheaders'))$('s-xheaders').value=stringifyJsonValue(config.extra_headers);
+  if($('s-xbody'))$('s-xbody').value=stringifyJsonValue(config.extra_body);
+  const cc=settingSection('claude_code');
+  setInputValue('s-cc-cli',cc.cli_path);setInputValue('s-cc-model',cc.model);setInputValue('s-cc-args',listToText(cc.cli_args));
+  setCheckedValue('s-cc-prefer-cli',cc.prefer_cli);setCheckedValue('s-cc-skip-permissions',cc.allow_dangerously_skip_permissions===true);
+  const codex=settingSection('codex');
+  setInputValue('s-codex-cli',codex.cli_path);setInputValue('s-codex-model',codex.model);setInputValue('s-codex-args',listToText(codex.cli_args));
+  setSelectValue('s-codex-transport',codex.transport,'chat_completions');
+  const mcp=settingSection('mcp');
+  setSelectValue('s-mcp-access',mcp.access,'prompt');setSelectValue('s-mcp-collision',mcp.collision_behavior,'first');
+  setCheckedValue('s-mcp-discovery',mcp.discovery_enabled!==false);setCheckedValue('s-mcp-autostart',mcp.autostart===true);setCheckedValue('s-mcp-sampling',mcp.server_sampling===true);
+  const term=settingSection('terminal');
+  setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
+  setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
+  const ext=settingSection('extensions');
+  setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));setInputValue('s-ext-contribs',listToText(ext.enabled_contributions));
+  const cust=settingSection('customization');
+  setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
+  setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
+  setInputValue('s-cust-workflows',listToText(cust.workflow_locations));setInputValue('s-cust-skills',listToText(cust.skill_locations));
   renderCustomModels();
   $('settings-modal').classList.add('open');
 }
@@ -1992,25 +2168,27 @@ if($('s-model'))$('s-model').addEventListener('input',showModelInfo);
 
 async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
-  const r=await call('test_connection',{provider:$('s-provider').value,api_key:$('s-apikey').value,base_url:$('s-baseurl').value,model:$('s-model').value});
+  const r=await call('test_connection',{provider:$('s-provider').value,api_key:$('s-apikey').value,base_url:$('s-baseurl').value,model:$('s-model').value,transport:$('s-codex-transport')?$('s-codex-transport').value:'chat_completions'});
   if(r&&r.ok){s.textContent=r.message;s.style.color='var(--fg-success)'}else{s.textContent=(r&&r.message)||'Failed';s.style.color='var(--fg-error)'}
 }
 window.testConn=testConn;
 
 async function saveSettings(){
+  Object.assign(config,withSettingsDefaults(config));
   config.provider=$('s-provider').value;config.api_key=$('s-apikey').value;
   config.base_url=$('s-baseurl').value;config.model=$('s-model').value;
-  config.temperature=parseFloat($('s-temp').value)||0.7;config.max_tokens=parseInt($('s-maxtok').value)||4096;
+  config.temperature=readNumberValue('s-temp',0.7,false);config.max_tokens=readNumberValue('s-maxtok',4096,true);
   config.system_prompt=$('s-sysprompt').value;
   // Advanced sampling
-  config.top_p=parseFloat($('s-topp').value)||1.0;
-  config.frequency_penalty=parseFloat($('s-freqp').value)||0;
-  config.presence_penalty=parseFloat($('s-presp').value)||0;
-  config.timeout=parseInt($('s-timeout').value)||180;
-  config.stop=($('s-stop').value||'').split(',').map(s=>s.trim()).filter(Boolean);
-  config.max_input_tokens=parseInt($('s-maxinp').value)||0;
-  try{config.extra_headers=JSON.parse($('s-xheaders').value||'{}')}catch{config.extra_headers={}}
-  try{config.extra_body=JSON.parse($('s-xbody').value||'{}')}catch{config.extra_body={}}
+  config.top_p=readNumberValue('s-topp',1.0,false);
+  config.frequency_penalty=readNumberValue('s-freqp',0,false);
+  config.presence_penalty=readNumberValue('s-presp',0,false);
+  config.timeout=readNumberValue('s-timeout',180,true);
+  config.stop=readListValue('s-stop',true);
+  config.max_input_tokens=readNumberValue('s-maxinp',0,true);
+  config.max_output_tokens=readNumberValue('s-maxout',0,true);
+  config.extra_headers=readJsonObjectValue('s-xheaders',{});
+  config.extra_body=readJsonObjectValue('s-xbody',{});
   // Collect provider keys
   config._provider_keys={
     openai:($('sk-openai')?$('sk-openai').value:''),
@@ -2018,7 +2196,14 @@ async function saveSettings(){
     deepseek:($('sk-deepseek')?$('sk-deepseek').value:''),
   };
   config.provider_keys=config._provider_keys;
+  config.claude_code={...settingSection('claude_code'),cli_path:readInputValue('s-cc-cli'),model:readInputValue('s-cc-model'),cli_args:readListValue('s-cc-args',false),prefer_cli:readCheckedValue('s-cc-prefer-cli'),allow_dangerously_skip_permissions:readCheckedValue('s-cc-skip-permissions')};
+  config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
+  config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
+  config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
+  config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
+  config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   const newMode=$('s-mode').value;
+  config.mode=newMode;
   if(newMode!==currentMode){await call('set_mode',newMode);currentMode=newMode;updateModeUI()}
   syncUI();await call('save_config',config);closeSettings();
   renderProviderTabs();
@@ -2066,16 +2251,35 @@ async function loadMode(){
 }
 function renderPermissions(){
   const el=$('s-perms');if(!el)return;
-  call('get_mode').then(r=>{
+  const selectedMode=$('s-mode')?$('s-mode').value:currentMode;
+  call('get_mode',selectedMode).then(r=>{
     if(!r||!r.permissions){el.innerHTML='';return}
     const perms=r.permissions;
-    let html='<div style="margin-top:4px"><b>Tool Permissions</b> <span style="color:var(--fg-dim)">('+currentMode+' mode)</span></div><table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:4px">';
-    Object.keys(perms).sort().forEach(t=>{
+    const defaults=r.defaults||{};
+    const overrides=config.permissions||r.overrides||{};
+    const tools=(r.tools&&r.tools.length?r.tools:Object.keys(perms)).sort();
+    let html='<div style="margin-top:4px"><b>Tool Permissions</b> <span style="color:var(--fg-dim)">('+esc(selectedMode)+' preview)</span></div><table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:4px">';
+    tools.forEach(t=>{
       const p=perms[t];
       const cls=p==='allowed'?'color:var(--fg-success,#4c4)':p==='confirm'?'color:var(--accent)':'color:var(--fg-error,#f44);opacity:0.6';
-      html+='<tr><td style="padding:2px 4px;font-family:var(--mono)">'+esc(t)+'</td><td style="padding:2px 4px;'+cls+'">'+p+'</td></tr>';
+      const ov=overrides[t]||'';
+      html+='<tr><td style="padding:2px 4px;font-family:var(--mono)">'+esc(t)+'</td><td style="padding:2px 4px;'+cls+'">'+esc(p||'allowed')+'</td>'
+        +'<td style="padding:2px 4px"><select class="perm-select" data-tool="'+esc(t)+'" style="font-size:11px;width:100%">'
+        +'<option value="" '+(!ov?'selected':'')+'>Default ('+esc(defaults[t]||'allowed')+')</option>'
+        +'<option value="allowed" '+(ov==='allowed'?'selected':'')+'>Allowed</option>'
+        +'<option value="confirm" '+(ov==='confirm'?'selected':'')+'>Confirm</option>'
+        +'<option value="disabled" '+(ov==='disabled'?'selected':'')+'>Disabled</option>'
+        +'</select></td></tr>';
     });
     html+='</table>';el.innerHTML=html;
+    el.querySelectorAll('.perm-select').forEach(sel=>{
+      sel.onchange=()=>{
+        const tool=sel.getAttribute('data-tool');
+        config.permissions=config.permissions||{};
+        if(sel.value)config.permissions[tool]=sel.value;else delete config.permissions[tool];
+        renderPermissions();
+      };
+    });
   });
 }
 $('s-mode').onchange=()=>renderPermissions();
@@ -2188,14 +2392,16 @@ async function toggleExtInstall(btn,event){
   const extId=btn.dataset.extId;
   const vsix=btn.dataset.vsix;
   if(btn.classList.contains('installed')||btn.classList.contains('uninstall')){
+    if(!confirm('Uninstall extension?\n\n'+extId))return;
     btn.textContent='...';
-    const r=await call('uninstall_extension',extId);
+    const r=await call('uninstall_extension',extId,true);
     if(r&&r.ok){btn.className='ext-btn install';btn.textContent='Install';setStatus('Uninstalled: '+extId)}
     else{btn.textContent='✓ Installed';btn.className='ext-btn installed'}
   } else {
+    if(!confirm('Install extension?\n\n'+extId))return;
     btn.textContent='Installing...';btn.disabled=true;
     setStatus('Installing '+extId+'...');
-    const r=await call('install_extension',extId,vsix);
+    const r=await call('install_extension',extId,vsix,true);
     if(r&&r.ok){btn.className='ext-btn installed';btn.textContent='✓ Installed';setStatus('Installed: '+extId)}
     else{btn.className='ext-btn install';btn.textContent='Install';setStatus('Failed: '+(r?r.error:''))}
     btn.disabled=false;
@@ -2277,9 +2483,9 @@ async function execTerminalCmd(cmd){
   if(!cmd)return;
   const out=$('terminal-output');
   out.textContent+='$ '+cmd+'\n';
-  const r=await call('execute_tool','exec_python',JSON.stringify({code:
-    "import subprocess;_r=subprocess.run("+JSON.stringify(cmd)+",shell=True,capture_output=True,text=True,timeout=30);_output.append(_r.stdout or '');_output.append(_r.stderr or '')"}));
-  try{const d=JSON.parse(r);(d.output||[]).forEach(o=>{if(o)out.textContent+=o})}
+  if(!confirm('Run terminal command?\n\n'+cmd)){out.textContent+='Cancelled\n\n';return}
+  const r=await call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true);
+  try{const d=JSON.parse(r);if(d.stdout)out.textContent+=d.stdout;if(d.stderr)out.textContent+=d.stderr;if(d.error)out.textContent+=d.error+'\n'}
   catch{out.textContent+=r+'\n'}
   out.textContent+='\n';
   out.scrollTop=out.scrollHeight;

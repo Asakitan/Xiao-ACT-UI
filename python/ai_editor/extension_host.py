@@ -414,6 +414,7 @@ class ExtensionPoints:
 
     def __init__(self, commands: CommandService) -> None:
         self._commands = commands
+        self.enabled_contributions: Optional[Set[str]] = None
         self._chat_participants: List[Dict[str, Any]] = []
         self._lm_tools: List[Dict[str, Any]] = []
         self._lm_tool_sets: List[Dict[str, Any]] = []
@@ -447,8 +448,12 @@ class ExtensionPoints:
         if not c:
             return
         eid = ext.id
+        enabled = self.enabled_contributions
 
-        for cmd in c.get("commands", []):
+        def _enabled(name: str) -> bool:
+            return enabled is None or name in enabled
+
+        for cmd in (c.get("commands", []) if _enabled("commands") else []):
             if isinstance(cmd, dict) and cmd.get("command"):
                 cmd["_extensionId"] = eid
                 if not self._commands.has(cmd["command"]):
@@ -456,13 +461,13 @@ class ExtensionPoints:
                         cmd["command"],
                         lambda *a, _c=cmd: {"stub": True, "command": _c["command"]})
 
-        for cp in c.get("chatParticipants", []):
+        for cp in (c.get("chatParticipants", []) if _enabled("chatParticipants") else []):
             if isinstance(cp, dict):
                 cp = dict(cp)
                 cp["_extensionId"] = eid
                 self._chat_participants.append(cp)
 
-        for tool in c.get("languageModelTools", []):
+        for tool in (c.get("languageModelTools", []) if _enabled("languageModelTools") else []):
             if isinstance(tool, dict):
                 tool = dict(tool)
                 tool["_extensionId"] = eid
@@ -868,23 +873,36 @@ class ExtensionHost:
         self.activator = ExtensionActivator(
             self.registry, self.commands, self.ext_points)
         self._started = False
+        self._policy: Optional[Callable[[ExtensionDescription], bool]] = None
+
+    def set_policy(self, policy: Optional[Callable[[ExtensionDescription], bool]] = None,
+                   enabled_contributions: Optional[Set[str]] = None) -> None:
+        self._policy = policy
+        self.ext_points.enabled_contributions = enabled_contributions
+
+    def _allowed_by_policy(self, ext: ExtensionDescription) -> bool:
+        return True if self._policy is None else bool(self._policy(ext))
 
     def scan(self, directories: List[str],
              builtin_dirs: Optional[List[str]] = None) -> int:
         count = 0
         for d in (builtin_dirs or []):
             for ext in ExtensionScanner.scan_directory(d, is_builtin=True):
+                if not self._allowed_by_policy(ext):
+                    continue
                 self.registry.register(ext)
                 count += 1
         for d in directories:
             for ext in ExtensionScanner.scan_directory(d, is_builtin=False):
+                if not self._allowed_by_policy(ext):
+                    continue
                 self.registry.register(ext)
                 count += 1
         return count
 
     def install_from_dir(self, ext_dir: str) -> Optional[ExtensionDescription]:
         desc = ExtensionScanner.scan_vsix_extracted(ext_dir)
-        if desc:
+        if desc and self._allowed_by_policy(desc):
             self.registry.register(desc)
             if self._started:
                 self.activator.activate(desc.id)

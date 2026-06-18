@@ -11,6 +11,7 @@ the pywebview window in a background thread if not already running.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -35,11 +36,15 @@ from ai_editor.chat_state import ChatController, Conversation, ChatMessage
 
 _PROVIDER_CONFIG_KEYS = {
     "provider", "api_key", "base_url", "model", "temperature", "max_tokens",
-    "system_prompt", "top_p", "frequency_penalty", "presence_penalty", "stop",
+    "system_prompt", "transport", "top_p", "frequency_penalty", "presence_penalty", "stop",
     "max_input_tokens", "max_output_tokens", "timeout", "extra_headers", "extra_body",
 }
 
 _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
+
+_MODE_VALUES = {"chat", "edit", "agent"}
+_ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
+_CODEX_TRANSPORT_VALUES = {"chat_completions", "responses", "cli"}
 
 _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "claude_code": {
@@ -97,7 +102,8 @@ def _as_list(value: Any) -> List[Any]:
 
 def _as_float(value: Any, default: float) -> float:
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else default
     except (TypeError, ValueError):
         return default
 
@@ -105,7 +111,7 @@ def _as_float(value: Any, default: float) -> float:
 def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -117,6 +123,15 @@ def _normalize_stop(value: Any) -> List[str]:
     return []
 
 
+def _normalize_transport(value: Any, default: str = "chat_completions",
+                         allowed: Optional[set[str]] = None) -> str:
+    allowed_values = allowed or _ENGINE_TRANSPORT_VALUES
+    raw = str(value or default).strip().lower().replace("-", "_")
+    if raw in {"openai_responses", "response"}:
+        raw = "responses"
+    return raw if raw in allowed_values else default
+
+
 def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     """Return a backward-compatible AI Editor config dict.
 
@@ -125,6 +140,10 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     runtime and UI so saving endpoint settings does not corrupt sibling fields.
     """
     cfg = dict(raw) if isinstance(raw, dict) else {}
+    if ("provider_keys" not in cfg or not isinstance(cfg.get("provider_keys"), dict)):
+        legacy_provider_keys = cfg.get("_provider_keys")
+        if isinstance(legacy_provider_keys, dict):
+            cfg["provider_keys"] = dict(legacy_provider_keys)
     cfg["provider"] = str(cfg.get("provider") or "openai")
     cfg["api_key"] = str(cfg.get("api_key") or "")
     cfg["base_url"] = str(cfg.get("base_url") or "")
@@ -132,6 +151,7 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     cfg["temperature"] = _as_float(cfg.get("temperature"), 0.7)
     cfg["max_tokens"] = _as_int(cfg.get("max_tokens"), 4096)
     cfg["system_prompt"] = str(cfg.get("system_prompt") or "")
+    cfg["transport"] = _normalize_transport(cfg.get("transport"))
     cfg["top_p"] = _as_float(cfg.get("top_p"), 1.0)
     cfg["frequency_penalty"] = _as_float(cfg.get("frequency_penalty"), 0.0)
     cfg["presence_penalty"] = _as_float(cfg.get("presence_penalty"), 0.0)
@@ -144,11 +164,20 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     cfg["provider_keys"] = _as_dict(cfg.get("provider_keys"))
     cfg["custom_models"] = _as_dict(cfg.get("custom_models"))
     cfg["permissions"] = _as_dict(cfg.get("permissions"))
+    if "mode" in cfg:
+        mode = str(cfg.get("mode") or "edit").strip().lower()
+        cfg["mode"] = mode if mode in _MODE_VALUES else "edit"
+    if "theme" in cfg:
+        cfg["theme"] = str(cfg.get("theme") or "")
     for section, defaults in _AI_EDITOR_SECTION_DEFAULTS.items():
-        current = _as_dict(cfg.get(section))
-        merged = dict(defaults)
-        merged.update(current)
-        cfg[section] = merged
+        if section in cfg:
+            current = _as_dict(cfg.get(section))
+            merged = dict(defaults)
+            merged.update(current)
+            if section == "codex":
+                merged["transport"] = _normalize_transport(
+                    merged.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
+            cfg[section] = merged
     return cfg
 
 
@@ -186,6 +215,7 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
         temperature=raw["temperature"],
         max_tokens=raw["max_tokens"],
         system_prompt=raw["system_prompt"],
+        transport=raw["transport"],
         top_p=raw["top_p"],
         frequency_penalty=raw["frequency_penalty"],
         presence_penalty=raw["presence_penalty"],
@@ -271,6 +301,8 @@ class AIEditorAPI:
             self._controller.mcp_dispatch = lambda name, args: self._mcp.call_tool(
                 name, json.loads(args) if isinstance(args, str) else args
             )
+            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
+            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
 
         # @-mention variable resolver
         self._controller.resolve_variable = self._resolve_variable
@@ -356,10 +388,11 @@ class AIEditorAPI:
         pkeys = ai_cfg.get("provider_keys", {}) if isinstance(ai_cfg, dict) else {}
         model_name = cfg.model or cfg.effective_model
         ctx = cfg.effective_context
-        return {
+        result = {
             "provider": cfg.provider, "api_key": cfg.api_key,
             "base_url": cfg.base_url, "model": model_name,
             "temperature": cfg.temperature, "max_tokens": cfg.max_tokens,
+            "transport": cfg.transport,
             "top_p": cfg.top_p,
             "frequency_penalty": cfg.frequency_penalty,
             "presence_penalty": cfg.presence_penalty,
@@ -376,14 +409,12 @@ class AIEditorAPI:
             "custom_models": ai_cfg.get("custom_models", {}),
             "mode": ai_cfg.get("mode", self._mode),
             "permissions": ai_cfg.get("permissions", self._perm_overrides),
-            "claude_code": ai_cfg.get("claude_code", _AI_EDITOR_SECTION_DEFAULTS["claude_code"]),
-            "codex": ai_cfg.get("codex", _AI_EDITOR_SECTION_DEFAULTS["codex"]),
-            "mcp": ai_cfg.get("mcp", _AI_EDITOR_SECTION_DEFAULTS["mcp"]),
-            "terminal": ai_cfg.get("terminal", _AI_EDITOR_SECTION_DEFAULTS["terminal"]),
-            "extensions": ai_cfg.get("extensions", _AI_EDITOR_SECTION_DEFAULTS["extensions"]),
-            "customization": ai_cfg.get("customization", _AI_EDITOR_SECTION_DEFAULTS["customization"]),
             "context_window": ctx,
         }
+        for section in _AI_EDITOR_SECTION_DEFAULTS:
+            if isinstance(ai_cfg, dict) and section in ai_cfg:
+                result[section] = ai_cfg[section]
+        return result
 
     def save_config(self, data: Dict) -> Dict:
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
@@ -399,12 +430,27 @@ class AIEditorAPI:
             for k, v in merged.items():
                 if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
                     setattr(self._engine.config, k, v)
+        self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
             self._mode = merged.get("mode") or self._mode
         if isinstance(merged.get("permissions"), dict):
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
         return {"ok": True}
+
+    def _invalidate_provider_controllers(self, data: Dict) -> None:
+        if not hasattr(self, "_provider_controllers"):
+            return
+        provider_keys = set(_PROVIDER_CONFIG_KEYS) | {"provider_keys", "claude_code", "codex"}
+        if not any(k in data for k in provider_keys):
+            return
+        for provider_id in ("claude-code", "codex"):
+            ctrl = self._provider_controllers.pop(provider_id, None)
+            if ctrl:
+                try:
+                    ctrl.cancel()
+                except Exception:
+                    pass
 
     def send_message(self, text: str, config: Optional[Dict] = None, agent_mode: bool = False) -> Dict:
         if not text or not text.strip():
@@ -536,12 +582,20 @@ class AIEditorAPI:
 
     # ── Mode & Permission API ──
 
-    def get_mode(self) -> Dict:
-        from ai_editor.scopes import MODES, effective_permissions
+    def get_mode(self, mode: str = "") -> Dict:
+        from ai_editor.scopes import MODES, MODE_PERMISSIONS, effective_permissions
+        selected = mode if mode in MODES else self._mode
+        tool_names = set(effective_permissions(selected, {}).keys())
+        if self._registry:
+            tool_names.update(t.name for t in self._registry.list_tools(include_disabled=True))
         return {
             "mode": self._mode,
+            "selected_mode": selected,
             "modes": list(MODES),
-            "permissions": effective_permissions(self._mode, self._perm_overrides),
+            "permissions": effective_permissions(selected, self._perm_overrides),
+            "defaults": dict(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["edit"])),
+            "overrides": dict(self._perm_overrides),
+            "tools": sorted(tool_names),
         }
 
     def set_mode(self, mode: str) -> Dict:
@@ -554,6 +608,11 @@ class AIEditorAPI:
         return {"ok": True, "mode": mode}
 
     def set_tool_permission(self, tool_name: str, permission: str) -> Dict:
+        if permission in ("", "default"):
+            self._perm_overrides.pop(tool_name, None)
+            self._save_mode_to_settings()
+            self._apply_mode_permissions()
+            return {"ok": True}
         if permission not in ("allowed", "confirm", "disabled"):
             return {"error": "Invalid permission"}
         self._perm_overrides[tool_name] = permission
@@ -590,16 +649,22 @@ class AIEditorAPI:
         from ai_editor.scopes import effective_permissions
         perms = effective_permissions(self._mode, self._perm_overrides)
         disabled: List[str] = []
-        for tool in self._registry.list_tools():
+        for tool in self._registry.list_tools(include_disabled=True):
             p = perms.get(tool.name, "allowed")
             if p == "disabled":
                 disabled.append(tool.name)
+                tool.enabled = False
             elif p == "confirm":
+                tool.enabled = True
                 tool.requires_confirm = True
             else:
+                tool.enabled = True
                 tool.requires_confirm = False
+        self._registry._openai_cache = None
         if self._controller:
             self._controller._disabled_tools = set(disabled)
+            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
+            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
 
     # ── Chat Provider API ──
 
@@ -630,6 +695,9 @@ class AIEditorAPI:
         prov = self._provider_registry.get(provider_id)
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
+        unsupported = self._unsupported_provider_transport(prov)
+        if unsupported:
+            return {"error": unsupported}
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -677,12 +745,30 @@ class AIEditorAPI:
         """Create a ChatController for a non-default provider."""
         from ai_editor.llm_engine import ProviderConfig
         key = self._resolve_provider_key(prov.provider_type)
+        provider_settings = self._provider_section_settings(prov.id)
+        base_cfg = self._engine.config if self._engine else ProviderConfig()
+        transport = "chat_completions"
+        if prov.id == "codex":
+            transport = _normalize_transport(
+                provider_settings.get("transport"), "chat_completions", _ENGINE_TRANSPORT_VALUES)
         cfg = ProviderConfig(
             provider=prov.provider_type,
             api_key=key or self._engine.config.api_key,
             base_url=prov.base_url or "",
-            model=prov.model,
+            model=str(provider_settings.get("model") or prov.model),
+            temperature=base_cfg.temperature,
+            max_tokens=base_cfg.max_tokens,
             system_prompt=prov.system_prompt,
+            transport=transport,
+            top_p=base_cfg.top_p,
+            frequency_penalty=base_cfg.frequency_penalty,
+            presence_penalty=base_cfg.presence_penalty,
+            stop=list(base_cfg.stop),
+            max_input_tokens=base_cfg.max_input_tokens,
+            max_output_tokens=base_cfg.max_output_tokens,
+            timeout=base_cfg.timeout,
+            extra_headers=dict(base_cfg.extra_headers),
+            extra_body=dict(base_cfg.extra_body),
         )
         engine = LLMEngine(cfg)
         conv = Conversation(system_prompt=prov.system_prompt)
@@ -707,7 +793,28 @@ class AIEditorAPI:
         ctrl.on_idle = lambda: self._emit(
             f"provider_idle", {"provider": pid})
         ctrl.resolve_variable = self._resolve_variable
+        ctrl.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
+        ctrl.mcp_tool_allowed = self._mcp_tool_allowed
         return ctrl
+
+    def _provider_section_settings(self, provider_id: str) -> Dict[str, Any]:
+        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
+        if provider_id == "claude-code":
+            return _as_dict(ai.get("claude_code"))
+        if provider_id == "codex":
+            return _as_dict(ai.get("codex"))
+        return {}
+
+    def _unsupported_provider_transport(self, prov) -> str:
+        settings = self._provider_section_settings(prov.id)
+        if prov.id == "codex":
+            transport = _normalize_transport(
+                settings.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
+            if transport == "cli":
+                return "Codex CLI transport is configured, but chat execution currently supports Chat Completions or Responses only."
+        if prov.id == "claude-code" and settings.get("prefer_cli") is True:
+            return "Claude Code CLI preference is configured, but chat execution currently uses the Anthropic API/proxy path."
+        return ""
 
     def _resolve_provider_key(self, provider_type: str) -> str:
         ai = self._settings_getter("ai_editor", {}) or {}
@@ -724,7 +831,14 @@ class AIEditorAPI:
 
     def list_agents(self) -> Dict:
         self._ensure_engine()
-        return {"agents": [a.to_dict() for a in self._agent_registry.list_all()]}
+        agents = []
+        for a in self._agent_registry.list_all():
+            item = a.to_dict()
+            if not getattr(a, "builtin", False):
+                item["_scope"] = getattr(a, "_scope", "workspace")
+                item["_plugin_id"] = getattr(a, "_plugin_id", "")
+            agents.append(item)
+        return {"agents": agents}
 
     def get_agent(self, agent_id: str) -> Dict:
         self._ensure_engine()
@@ -773,7 +887,14 @@ class AIEditorAPI:
 
     def list_workflows(self) -> Dict:
         self._ensure_engine()
-        return {"workflows": [w.to_dict() for w in self._wf_registry.list_all()]}
+        workflows = []
+        for w in self._wf_registry.list_all():
+            item = w.to_dict()
+            if not getattr(w, "builtin", False):
+                item["_scope"] = getattr(w, "_scope", "workspace")
+                item["_plugin_id"] = getattr(w, "_plugin_id", "")
+            workflows.append(item)
+        return {"workflows": workflows}
 
     def get_workflow(self, wf_id: str) -> Dict:
         self._ensure_engine()
@@ -887,6 +1008,10 @@ class AIEditorAPI:
             os.path.expanduser("~"), ".vscode-insiders", "extensions")
         if os.path.isdir(vscode_insiders_ext):
             ext_dirs.append(vscode_insiders_ext)
+        self._ext_host.set_policy(
+            self._extension_allowed,
+            set(self._enabled_extension_contributions()),
+        )
         count = self._ext_host.scan(ext_dirs)
         if count:
             activated = self._ext_host.start()
@@ -897,7 +1022,10 @@ class AIEditorAPI:
     def _register_ext_tools(self) -> None:
         """Register extension-contributed tools and chat participants."""
         ep = self._ext_host.ext_points
+        enabled = set(self._enabled_extension_contributions())
         for tool in ep.language_model_tools:
+            if "languageModelTools" not in enabled:
+                continue
             name = tool.get("name", "")
             if not name:
                 continue
@@ -911,6 +1039,8 @@ class AIEditorAPI:
                 category=f"ext:{tool.get('_extensionId', '')}",
             )
         for cp in ep.chat_participants:
+            if "chatParticipants" not in enabled:
+                continue
             pid = cp.get("id") or cp.get("name", "")
             if not pid:
                 continue
@@ -925,6 +1055,42 @@ class AIEditorAPI:
             )
             self._provider_registry.register(prov)
 
+    def _extension_settings(self) -> Dict[str, Any]:
+        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
+        return _as_dict(ai.get("extensions"))
+
+    def _enabled_extension_contributions(self) -> List[str]:
+        ext = self._extension_settings()
+        raw = ext.get("enabled_contributions", [])
+        if isinstance(raw, list) and raw:
+            return [str(x) for x in raw]
+        return list(_AI_EDITOR_SECTION_DEFAULTS["extensions"]["enabled_contributions"])
+
+    @staticmethod
+    def _publisher_from_extension_id(ext_id: str) -> str:
+        return ext_id.split(".", 1)[0].strip().lower() if "." in ext_id else ""
+
+    def _extension_allowed(self, ext: Any) -> bool:
+        settings = self._extension_settings()
+        publisher = str(getattr(ext, "publisher", "") or "").strip().lower()
+        if not publisher:
+            publisher = self._publisher_from_extension_id(str(getattr(ext, "id", "")))
+        blocked = {str(x).strip().lower() for x in settings.get("blocked_publishers", []) if str(x).strip()}
+        allowed = {str(x).strip().lower() for x in settings.get("allowed_publishers", []) if str(x).strip()}
+        if publisher in blocked:
+            return False
+        if allowed and publisher not in allowed:
+            return False
+        return True
+
+    def _extension_id_allowed(self, ext_id: str) -> bool:
+        class _Ext:
+            pass
+        ext = _Ext()
+        ext.id = ext_id
+        ext.publisher = self._publisher_from_extension_id(ext_id)
+        return self._extension_allowed(ext)
+
     def list_vscode_extensions(self) -> Dict:
         self._ensure_engine()
         return {"extensions": self._ext_host.list_extensions(),
@@ -932,6 +1098,9 @@ class AIEditorAPI:
 
     def activate_extension(self, ext_id: str) -> Dict:
         self._ensure_engine()
+        ext = self._ext_host.registry.get(ext_id)
+        if ext and not self._extension_allowed(ext):
+            return {"error": f"Extension blocked by trust policy: {ext_id}"}
         act = self._ext_host.activator.activate(ext_id)
         if act:
             self._register_ext_tools()
@@ -1053,6 +1222,8 @@ class AIEditorAPI:
         self._ensure_engine()
         desc = self._ext_host.install_from_dir(ext_dir)
         if desc:
+            if not self._extension_allowed(desc):
+                return {"error": f"Extension blocked by trust policy: {desc.id}"}
             self._register_ext_tools()
             return {"ok": True, "id": desc.id, "name": desc.display_name}
         return {"error": "Failed to install from directory"}
@@ -1072,18 +1243,25 @@ class AIEditorAPI:
         ]
         # Add MCP tools
         if self._mcp:
+            mcp_access = self._mcp_access()
             for t in self._mcp.all_tools():
+                tool_name = f"mcp_{t.server_id}_{t.name}"
+                if not self._mcp_tool_allowed(tool_name):
+                    continue
                 tools.append({
-                    "name": f"mcp_{t.server_id}_{t.name}",
+                    "name": tool_name,
                     "description": f"[MCP:{t.server_id}] {t.description}",
                     "category": f"mcp:{t.server_id}",
-                    "requires_confirm": False,
+                    "requires_confirm": mcp_access == "prompt",
                     "parameters": t.input_schema,
                 })
         # Add extension-contributed tools
         try:
             from ai_editor.extensions import load_all_extension_tools
-            for et in load_all_extension_tools():
+            enabled = set(self._enabled_extension_contributions())
+            for et in load_all_extension_tools(enabled):
+                if not self._extension_id_allowed(et.get("extension_id", "")):
+                    continue
                 fn = et.get("function", {})
                 tools.append({
                     "name": fn.get("name", ""),
@@ -1096,18 +1274,73 @@ class AIEditorAPI:
             pass
         return {"tools": tools}
 
-    def execute_tool(self, name: str, arguments: str = "{}") -> str:
+    def execute_tool(self, name: str, arguments: str = "{}", confirmed: bool = False) -> str:
         self._ensure_engine()
         if name.startswith("mcp_") and self._mcp:
+            if not self._mcp_tool_allowed(name):
+                return json.dumps({"error": f"MCP tool disabled by policy: {name}"}, ensure_ascii=False)
+            if self._mcp_tool_requires_confirm(name) and not confirmed:
+                return json.dumps({"error": "Tool execution requires confirmation", "requires_confirmation": True}, ensure_ascii=False)
             args = json.loads(arguments) if isinstance(arguments, str) else arguments
             return self._mcp.call_tool(name, args)
+        from ai_editor.scopes import tool_permission
+        perm = tool_permission(self._mode, name, self._perm_overrides)
+        if perm == "disabled":
+            return json.dumps({"error": f"Tool disabled by mode policy: {name}"}, ensure_ascii=False)
+        if perm == "confirm" and not confirmed:
+            return json.dumps({"error": "Tool execution requires confirmation", "requires_confirmation": True}, ensure_ascii=False)
         return self._registry.execute(name, arguments)
+
+    def _mcp_settings(self) -> Dict[str, Any]:
+        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
+        return _as_dict(ai.get("mcp"))
+
+    def _mcp_access(self) -> str:
+        access = str(self._mcp_settings().get("access", "prompt")).strip().lower()
+        return access if access in {"prompt", "read_only", "allow", "disabled"} else "prompt"
+
+    @staticmethod
+    def _is_probably_read_only_mcp_tool(name: str) -> bool:
+        leaf = name.rsplit("_", 1)[-1].lower()
+        return leaf.startswith(("read", "list", "get", "search", "show", "fetch", "query", "find"))
+
+    def _mcp_tool_allowed(self, name: str) -> bool:
+        access = self._mcp_access()
+        if access == "disabled":
+            return False
+        if access == "read_only":
+            return self._is_probably_read_only_mcp_tool(name)
+        return True
+
+    def _mcp_tool_requires_confirm(self, name: str) -> bool:
+        return self._mcp_access() == "prompt" and self._mcp_tool_allowed(name)
+
+    def _refresh_mcp_tools(self) -> None:
+        if self._controller:
+            self._controller.extra_tools = self._mcp.to_openai_tools() if self._mcp else []
+            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
+            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
 
     def list_mcp_servers(self) -> Dict:
         self._ensure_engine()
-        if not self._mcp:
-            return {"servers": []}
-        return {"servers": self._mcp.list_servers()}
+        saved = self._saved_mcp_servers()
+        live = {s.get("id"): s for s in (self._mcp.list_servers() if self._mcp else [])}
+        result = []
+        for entry in saved:
+            item = dict(entry)
+            if item.get("id") in live:
+                item.update(live[item.get("id")])
+                item["configured"] = True
+            else:
+                item["running"] = False
+                item["configured"] = True
+            result.append(item)
+        for sid, item in live.items():
+            if not any(s.get("id") == sid for s in result):
+                item = dict(item)
+                item["configured"] = False
+                result.append(item)
+        return {"servers": result}
 
     def add_mcp_server(self, config: Dict) -> Dict:
         self._ensure_engine()
@@ -1115,26 +1348,77 @@ class AIEditorAPI:
             from ai_editor.mcp_client import McpManager
             self._mcp = McpManager()
         from ai_editor.mcp_client import McpServerConfig
+        server = {
+            "id": str(config.get("id", "")).strip(),
+            "name": str(config.get("name", config.get("id", ""))).strip(),
+            "transport": str(config.get("transport", "stdio")),
+            "command": str(config.get("command", "")),
+            "args": list(config.get("args", [])) if isinstance(config.get("args", []), list) else [],
+            "env": dict(config.get("env", {})) if isinstance(config.get("env", {}), dict) else {},
+            "url": str(config.get("url", "")),
+            "headers": dict(config.get("headers", {})) if isinstance(config.get("headers", {}), dict) else {},
+            "enabled": bool(config.get("enabled", True)),
+        }
+        if not server["id"]:
+            return {"error": "MCP server id is required"}
+        self._upsert_saved_mcp_server(server)
         cfg = McpServerConfig(
-            id=config.get("id", ""),
-            name=config.get("name", config.get("id", "")),
-            transport=config.get("transport", "stdio"),
-            command=config.get("command", ""),
-            args=config.get("args", []),
-            url=config.get("url", ""),
+            id=server["id"],
+            name=server["name"] or server["id"],
+            transport=server["transport"],
+            command=server["command"],
+            args=server["args"],
+            env=server["env"],
+            url=server["url"],
+            headers=server["headers"],
+            enabled=server["enabled"],
         )
-        ok = self._mcp.add_server(cfg)
+        ok = self._mcp.add_server(cfg) if server["enabled"] and self._mcp_settings().get("autostart") else True
         tool_count = 0
         if ok:
             client = self._mcp._clients.get(cfg.id)
             if client:
                 tool_count = len(client.tools)
+        self._refresh_mcp_tools()
         return {"ok": ok, "id": cfg.id, "tools": tool_count}
 
     def remove_mcp_server(self, server_id: str) -> Dict:
+        self._remove_saved_mcp_server(server_id)
         if self._mcp:
             self._mcp.remove_server(server_id)
+        self._refresh_mcp_tools()
         return {"ok": True}
+
+    def _saved_mcp_servers(self) -> List[Dict[str, Any]]:
+        mcp = self._mcp_settings()
+        raw = mcp.get("servers", [])
+        if isinstance(raw, list):
+            return [dict(s) for s in raw if isinstance(s, dict) and s.get("id")]
+        if isinstance(raw, dict):
+            return [dict(v, id=str(k)) for k, v in raw.items() if isinstance(v, dict)]
+        return []
+
+    def _save_mcp_servers(self, servers: List[Dict[str, Any]]) -> None:
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            return
+        ai = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
+        mcp = _as_dict(ai.get("mcp"))
+        mcp["servers"] = servers
+        ai["mcp"] = mcp
+        settings.set("ai_editor", ai)
+        try:
+            settings.save()
+        except Exception:
+            pass
+
+    def _upsert_saved_mcp_server(self, server: Dict[str, Any]) -> None:
+        servers = [s for s in self._saved_mcp_servers() if s.get("id") != server.get("id")]
+        servers.append(server)
+        self._save_mcp_servers(servers)
+
+    def _remove_saved_mcp_server(self, server_id: str) -> None:
+        self._save_mcp_servers([s for s in self._saved_mcp_servers() if s.get("id") != server_id])
 
     def register_mcp_tools(self, server_id: str, tools: list, handlers: dict = None) -> Dict:
         """Register internal (Python-native) MCP tools — no subprocess needed.
@@ -1159,6 +1443,7 @@ class AIEditorAPI:
             api_key=cfg.get("api_key", ""),
             base_url=cfg.get("base_url", ""),
             model=cfg.get("model", ""),
+            transport=_normalize_transport(cfg.get("transport")),
         )
         ok, msg = self._engine.test_connection(test_cfg)
         return {"ok": ok, "message": msg}
@@ -1199,17 +1484,25 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
-    def install_extension(self, ext_id: str, vsix_url: str = "") -> Dict:
+    def install_extension(self, ext_id: str, vsix_url: str = "", confirmed: bool = False) -> Dict:
         """Install an extension from the marketplace."""
         try:
+            policy = self._extension_settings()
+            if policy.get("confirm_install", True) and not confirmed:
+                return {"error": "Extension install requires confirmation", "requires_confirmation": True}
+            if not self._extension_id_allowed(ext_id):
+                return {"error": f"Extension blocked by trust policy: {ext_id}"}
             from ai_editor.extensions import install_extension
             return install_extension(ext_id, vsix_url)
         except Exception as exc:
             return {"error": str(exc)}
 
-    def uninstall_extension(self, ext_id: str) -> Dict:
+    def uninstall_extension(self, ext_id: str, confirmed: bool = False) -> Dict:
         """Uninstall an extension."""
         try:
+            policy = self._extension_settings()
+            if policy.get("confirm_install", True) and not confirmed:
+                return {"error": "Extension uninstall requires confirmation", "requires_confirmation": True}
             from ai_editor.extensions import uninstall_extension
             return uninstall_extension(ext_id)
         except Exception as exc:
