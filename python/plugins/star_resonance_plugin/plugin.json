@@ -4,7 +4,7 @@
     "version": "1.0.0",
     "entry": "plugin.py",
     "description": "星痕共鸣游戏适配器 — TCP/内存抓包、DPS面板、Boss血条、HP面板、AutoKey、BossRaid、Buff监视、技能CD、地图横幅、死亡回放",
-    "enabled": true,
+    "enabled": false,
     "game_ids": ["star_resonance"],
     "permissions": [
         "engine_access",

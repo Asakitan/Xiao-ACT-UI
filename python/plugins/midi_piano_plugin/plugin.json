@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "entry": "plugin.py",
   "description": "把 MIDI 自动弹成游戏电子琴：mido 解析 → 智能编排 → 60键(CTRL/SHIFT)/88键(</>)键位映射 → ctypes 扫描码注入。支持自动识别(自动选60/88+自动移调)、手动切键、调速、移调、延音、分通道、覆盖率/状态显示、folder-scan 曲库、可改键热键、前台门控。依赖随包自带、无需全局安装。",
-  "enabled": true,
+  "enabled": false,
   "requires": ["star_resonance"],
   "subscriptions": [],
   "capabilities": [
