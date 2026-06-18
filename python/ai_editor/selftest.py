@@ -166,6 +166,9 @@ def test_app_settings_parity() -> None:
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
+        "get_chat_controls", "set_active_provider", "set_active_model",
+        "set_active_mode", "set_provider_model", "set_chat_provider",
+        "set_chat_controls",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "get_model_info", "test_connection", "set_mode", "save_config",
@@ -322,6 +325,171 @@ def test_app_settings_parity() -> None:
            ext_api.install_extension("allowed.sample").get("requires_confirmation") is True)
     _check("blocked extension publisher rejected",
            "blocked" in ext_api.install_extension("blocked.sample", confirmed=True).get("error", ""))
+
+    controls_gui = _SettingsGui({"ai_editor": {
+        "provider": "openai",
+        "api_key": "old-key",
+        "model": "gpt-4o",
+        "provider_keys": {"anthropic": "old-claude"},
+        "custom_models": {"toolbar-model": {"max_input": 321, "max_output": 45}},
+        "mode": "edit",
+        "permissions": {"readFile": "allowed"},
+        "future_section": {"enabled": True},
+    }})
+    controls_api = AIEditorAPI(controls_gui)
+    controls = controls_api.get_chat_controls()
+    _check("get_chat_controls payload includes selectors",
+           controls.get("provider") == "openai"
+           and controls.get("model") == "gpt-4o"
+           and controls.get("mode") == "edit"
+           and isinstance(controls.get("providers"), list)
+           and any(m.get("id") == "toolbar-model" for m in controls.get("models", []))
+           and isinstance(controls.get("agents"), list)
+           and isinstance(controls.get("workflows"), list)
+           and controls.get("context_window", {}).get("max_input") == 128000)
+
+    provider_result = controls_api.set_active_provider("anthropic")
+    stored_controls = controls_gui.settings.data["ai_editor"]
+    _check("set_active_provider updates engine and preserves settings",
+           provider_result.get("ok") is True
+           and controls_api._engine.config.provider == "anthropic"
+           and controls_api._engine.config.model == "claude-sonnet-4-20250514"
+           and stored_controls.get("provider") == "anthropic"
+           and stored_controls.get("model") == "claude-sonnet-4-20250514"
+           and stored_controls.get("provider_keys", {}).get("anthropic") == "old-claude"
+           and stored_controls.get("future_section") == {"enabled": True})
+
+    model_result = controls_api.set_active_model("toolbar-model")
+    mode_result = controls_api.set_active_mode("agent")
+    _check("active chat setters refresh controls",
+           model_result.get("controls", {}).get("model") == "toolbar-model"
+           and model_result.get("controls", {}).get("status", {}).get("model") == "toolbar-model"
+           and controls_api._engine.config.model == "toolbar-model"
+           and mode_result.get("controls", {}).get("mode") == "agent")
+
+    chat_provider_result = controls_api.set_chat_provider("chat")
+    _check("set_chat_provider switches active provider tab",
+           chat_provider_result.get("ok") is True
+           and chat_provider_result.get("controls", {}).get("active_chat_provider") == "chat")
+
+    aggregate_result = controls_api.set_chat_controls({
+        "provider": "openai", "model": "gpt-4o-mini", "mode": "edit",
+        "agent_id": "code-reviewer", "active_chat_provider": "chat",
+    })
+    _check("set_chat_controls aggregate setter updates state",
+           aggregate_result.get("ok") is True
+           and aggregate_result.get("controls", {}).get("provider") == "openai"
+           and aggregate_result.get("controls", {}).get("model") == "gpt-4o-mini"
+           and aggregate_result.get("controls", {}).get("mode") == "edit"
+           and aggregate_result.get("controls", {}).get("active_agent_id") == "code-reviewer")
+
+    provider_model_result = controls_api.set_provider_model("anthropic", "claude-test")
+    _check("set_provider_model compatibility alias updates provider and model",
+           provider_model_result.get("ok") is True
+           and provider_model_result.get("controls", {}).get("provider") == "anthropic"
+           and provider_model_result.get("controls", {}).get("model") == "claude-test")
+
+
+def test_phase1_ai_editor_regressions() -> None:
+    print("── Phase 1 AI Editor Regressions ──")
+    from ai_editor.app import AIEditorAPI
+    from ai_editor.chat_providers import ChatProviderRegistry
+    from ai_editor.scopes import tool_permission
+
+    eval_args = json.dumps({"action": "eval", "expression": "2 + 2"})
+
+    chat_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "chat"}}))
+    chat_eval = json.loads(chat_api.execute_tool("engine", eval_args, confirmed=True))
+    _check("chat mode blocks direct engine(eval)",
+           "Engine action disabled" in chat_eval.get("error", ""))
+
+    edit_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "edit"}}))
+    edit_eval = json.loads(edit_api.execute_tool("engine", eval_args))
+    _check("edit mode requires confirmation for direct engine(eval)",
+           edit_eval.get("requires_confirmation") is True)
+
+    agent_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "agent"}}))
+    agent_eval = json.loads(agent_api.execute_tool("engine", eval_args, confirmed=True))
+    _check("agent mode can run confirmed direct engine(eval)",
+           agent_eval.get("result") == 4)
+
+    _check("unknown tool default permissions by mode",
+           tool_permission("chat", "customPhaseTool") == "disabled"
+           and tool_permission("edit", "customPhaseTool") == "confirm"
+           and tool_permission("agent", "customPhaseTool") == "confirm")
+    _check("unknown tool explicit overrides honored",
+           tool_permission("chat", "customPhaseTool", {"customPhaseTool": "allowed"}) == "allowed"
+           and tool_permission("edit", "customPhaseTool", {"customPhaseTool": "disabled"}) == "disabled"
+           and tool_permission("agent", "customPhaseTool", {"customPhaseTool": "allowed"}) == "allowed")
+
+    custom_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "agent"}}))
+    custom_api._ensure_engine()
+    custom_api._registry.register(
+        "customPhaseTool", "Custom phase test tool", {"type": "object"},
+        lambda **kw: {"ok": True}, category="custom")
+    custom_api._apply_mode_permissions()
+    custom_tool = custom_api._registry.get("customPhaseTool")
+    custom_default = json.loads(custom_api.execute_tool("customPhaseTool", "{}"))
+    _check("custom tool defaults to confirm in agent mode",
+           custom_tool is not None
+           and custom_tool.requires_confirm is True
+           and custom_default.get("requires_confirmation") is True)
+        agent_preview = custom_api.get_mode("agent")
+        chat_preview = custom_api.get_mode("chat")
+        _check("get_mode returns computed dynamic tool permissions",
+            agent_preview.get("permissions", {}).get("customPhaseTool") == "confirm"
+            and agent_preview.get("defaults", {}).get("customPhaseTool") == "confirm"
+            and chat_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
+        custom_api._confirmation_timeout = 0.0
+        confirm_events = []
+        custom_api._emit = lambda event, data: confirm_events.append((event, data))
+        denied = custom_api._on_tool_confirm("phase-call", "customPhaseTool", "{}")
+        stale = custom_api.confirm_tool("phase-call", True)
+        provider_denied = custom_api._on_provider_tool_confirm(
+         "codex", "provider-phase-call", "customPhaseTool", "{}")
+        _check("tool confirmation defaults fail closed and provider-scoped",
+            denied is False
+            and provider_denied is False
+            and stale.get("error") == "No pending confirmation"
+            and confirm_events[0][0] == "tool_confirm"
+            and confirm_events[-1][0] == "provider_tool_confirm"
+            and confirm_events[-1][1].get("provider") == "codex")
+    custom_api.set_tool_permission("customPhaseTool", "allowed")
+    custom_allowed = json.loads(custom_api.execute_tool("customPhaseTool", "{}"))
+    _check("custom tool override allowed runs",
+           custom_allowed.get("ok") is True)
+
+    def flags(settings):
+        getter = lambda key, default=None: settings.get(key, default)
+        return {p["id"]: p["available"]
+                for p in ChatProviderRegistry().list_available(getter)}
+
+    cli_only_settings = {"ai_editor": {
+        "claude_code": {"prefer_cli": True, "cli_path": "claude"},
+        "codex": {"transport": "cli", "cli_path": "codex"},
+        "provider_keys": {"openai": "test-openai"},
+    }}
+    registry_cli_flags = flags(cli_only_settings)
+    _check("ChatProviderRegistry rejects unsupported CLI transports",
+           registry_cli_flags.get("claude-code") is False
+           and registry_cli_flags.get("codex") is False)
+
+    api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
+    api_cli_flags = {p["id"]: p["available"]
+                     for p in api_cli.list_chat_providers().get("providers", [])}
+    _check("list_chat_providers reports CLI transports unavailable",
+           api_cli_flags.get("claude-code") is False
+           and api_cli_flags.get("codex") is False)
+
+    api_key_settings = {"ai_editor": {
+        "claude_code": {"prefer_cli": False},
+        "codex": {"transport": "responses"},
+        "provider_keys": {"anthropic": "test-anthropic", "openai": "test-openai"},
+    }}
+    registry_key_flags = flags(api_key_settings)
+    _check("ChatProviderRegistry keeps API-key transports available",
+           registry_key_flags.get("claude-code") is True
+           and registry_key_flags.get("codex") is True)
 
 
 def test_tool_registry() -> None:
@@ -550,8 +718,8 @@ def test_scopes() -> None:
            tool_permission("chat", "readFile") == "disabled")
     _check("tool_permission edit/readFile",
            tool_permission("edit", "readFile") == "allowed")
-    _check("tool_permission unknown tool defaults allowed",
-           tool_permission("edit", "some_unknown_tool") == "allowed")
+    _check("tool_permission unknown tool defaults confirm",
+           tool_permission("edit", "some_unknown_tool") == "confirm")
 
 
 def test_extension_host() -> None:
@@ -913,21 +1081,30 @@ def test_agents() -> None:
         _check("get nonexistent", reg.get("nope") is None)
 
         # Save custom agent
+        initial_version = reg._version
         custom = AgentDef(id="test-agent", name="Test Agent",
                           description="For testing", system_prompt="Be helpful.")
         r = reg.save_custom(custom, workspace_root=tmpdir)
         _check("save custom", r.get("ok") is True)
         _check("custom in registry", reg.get("test-agent") is not None)
+        saved_version = reg._version
+        _check("agent registry version bumps after save",
+               saved_version > initial_version)
 
         # Load custom from disk
         reg2 = AgentRegistry()
+        load_initial_version = reg2._version
         reg2.load_custom(workspace_root=tmpdir)
         _check("loaded from disk", reg2.get("test-agent") is not None)
+        _check("agent registry version bumps after load",
+               reg2._version > load_initial_version)
 
         # Delete custom
         r = reg.delete_custom("test-agent", workspace_root=tmpdir)
         _check("delete custom", r.get("ok") is True)
         _check("gone after delete", reg.get("test-agent") is None)
+        _check("agent registry version bumps after delete",
+               reg._version > saved_version)
 
         # Cannot delete builtin
         r = reg.delete_custom("code-reviewer")
@@ -962,22 +1139,31 @@ def test_workflows() -> None:
         _check("review-and-fix exists", rf is not None and len(rf.steps) == 2)
 
         # Save custom workflow
+        initial_version = reg._version
         custom = WorkflowDef(
             id="test-wf", name="Test WF", description="Testing",
             steps=[WorkflowStep(prompt="Echo: {{input}}", output_var="out", label="Echo")],
         )
         r = reg.save_custom(custom, workspace_root=tmpdir)
         _check("save custom wf", r.get("ok") is True)
+        saved_version = reg._version
+        _check("workflow registry version bumps after save",
+               saved_version > initial_version)
 
         # Load from disk
         reg2 = WorkflowRegistry()
+        load_initial_version = reg2._version
         reg2.load_custom(workspace_root=tmpdir)
         _check("loaded wf from disk", reg2.get("test-wf") is not None)
         _check("steps preserved", len(reg2.get("test-wf").steps) == 1)
+        _check("workflow registry version bumps after load",
+               reg2._version > load_initial_version)
 
         # Delete custom
         r = reg.delete_custom("test-wf", workspace_root=tmpdir)
         _check("delete custom wf", r.get("ok") is True)
+        _check("workflow registry version bumps after delete",
+               reg._version > saved_version)
 
         # Cannot delete builtin
         r = reg.delete_custom("review-and-fix")
@@ -1087,6 +1273,7 @@ def main() -> None:
     test_history()
     test_bridge()
     test_app_settings_parity()
+    test_phase1_ai_editor_regressions()
     test_instructions()
     test_scopes()
     test_extension_host()

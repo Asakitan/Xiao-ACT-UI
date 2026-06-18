@@ -131,8 +131,13 @@ class AgentRegistry:
 
     def __init__(self) -> None:
         self._agents: Dict[str, AgentDef] = {}
+        self._version = 0
         for a in BUILTIN_AGENTS:
             self._agents[a.id] = a
+        self._bump_version()
+
+    def _bump_version(self) -> None:
+        self._version += 1
 
     def load_custom(self, workspace_root: str = "") -> None:
         """Load from a single directory (legacy / testing)."""
@@ -165,6 +170,7 @@ class AgentRegistry:
                 agent._scope = scope              # type: ignore[attr-defined]
                 agent._plugin_id = plugin_id      # type: ignore[attr-defined]
                 self._agents[agent.id] = agent
+                self._bump_version()
             except Exception:
                 pass
 
@@ -186,6 +192,7 @@ class AgentRegistry:
         agent.builtin = False
         agent._scope = scope  # type: ignore[attr-defined]
         self._agents[agent.id] = agent
+        self._bump_version()
         return {"ok": True, "path": fpath, "scope": scope}
 
     def delete_custom(self, agent_id: str,
@@ -203,7 +210,8 @@ class AgentRegistry:
             fpath = os.path.join(entry["path"], f"{agent_id}.json")
             if os.path.isfile(fpath):
                 os.remove(fpath)
-        self._agents.pop(agent_id, None)
+        if self._agents.pop(agent_id, None) is not None:
+            self._bump_version()
         return {"ok": True}
 
     @staticmethod

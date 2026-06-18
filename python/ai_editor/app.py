@@ -45,6 +45,7 @@ _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
 _MODE_VALUES = {"chat", "edit", "agent"}
 _ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
 _CODEX_TRANSPORT_VALUES = {"chat_completions", "responses", "cli"}
+_DANGEROUS_ENGINE_ACTIONS = {"settings_set", "eval", "exec"}
 
 _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "claude_code": {
@@ -113,6 +114,22 @@ def _as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return default
 
 
 def _normalize_stop(value: Any) -> List[str]:
@@ -247,6 +264,7 @@ class AIEditorAPI:
         self._delta_last_flush: float = 0.0
         self._mode: str = "edit"
         self._perm_overrides: Dict[str, str] = {}
+        self._mcp = None
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -261,6 +279,7 @@ class AIEditorAPI:
         self._engine = LLMEngine(config)
         self._registry = ToolRegistry()
         register_engine_tools(self._registry, self._gui_ref or _DummyGui())
+        self._install_engine_policy()
 
         # Initialize MCP servers
         self._mcp = None
@@ -309,6 +328,7 @@ class AIEditorAPI:
 
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
+        self._confirmation_timeout = 60.0
 
         # Load mode from settings
         ai_cfg = _normalize_ai_editor_config(
@@ -316,6 +336,7 @@ class AIEditorAPI:
         if isinstance(ai_cfg, dict):
             self._mode = ai_cfg.get("mode", "edit")
             self._perm_overrides = ai_cfg.get("permissions", {})
+        self._apply_mode_permissions()
 
         # Chat provider registry + per-provider controllers
         from ai_editor.chat_providers import get_provider_registry
@@ -427,9 +448,7 @@ class AIEditorAPI:
             except Exception:
                 pass
         if self._engine:
-            for k, v in merged.items():
-                if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
-                    setattr(self._engine.config, k, v)
+            self._apply_config_to_engine(merged)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
             self._mode = merged.get("mode") or self._mode
@@ -437,6 +456,232 @@ class AIEditorAPI:
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
         return {"ok": True}
+
+    def _apply_config_to_engine(self, config: Dict[str, Any]) -> None:
+        if not self._engine:
+            return
+        for k, v in config.items():
+            if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
+                setattr(self._engine.config, k, v)
+
+    def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        current = settings.get("ai_editor", {}) if settings else self.load_config()
+        merged = _merge_ai_editor_config(current or {}, data)
+        if settings:
+            settings.set("ai_editor", merged)
+            try:
+                settings.save()
+            except Exception:
+                pass
+        self._apply_config_to_engine(merged)
+        self._invalidate_provider_controllers(data)
+        if isinstance(merged.get("mode"), str):
+            self._mode = merged.get("mode") or self._mode
+        if isinstance(merged.get("permissions"), dict):
+            self._perm_overrides = dict(merged.get("permissions") or {})
+        self._apply_mode_permissions()
+        return merged
+
+    @staticmethod
+    def _default_model_for_provider(provider: str) -> str:
+        return ProviderConfig(provider=provider).effective_model
+
+    def _provider_options(self, ai_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        from ai_editor.llm_engine import Provider
+        current_provider = self._engine.config.provider if self._engine else ai_cfg.get("provider", "openai")
+        configured_provider = ai_cfg.get("provider", "")
+        active_key_present = bool(ai_cfg.get("api_key"))
+        provider_keys = _as_dict(ai_cfg.get("provider_keys"))
+        providers = []
+        for p in Provider:
+            cfg = ProviderConfig(provider=p.value)
+            providers.append({
+                "id": p.value,
+                "name": p.value.replace("_", " ").title(),
+                "current": p.value == current_provider,
+                "configured": bool(provider_keys.get(p.value)) or (configured_provider == p.value and active_key_present),
+                "default_model": cfg.effective_model,
+                "base_url": cfg.effective_base_url,
+            })
+        return providers
+
+    def _model_options(self, current_model: str, custom_models: Dict[str, Any]) -> List[Dict[str, Any]]:
+        from ai_editor.llm_engine import get_model_capabilities, get_model_context, list_all_models, Provider
+        names: Dict[str, Dict[str, Any]] = {}
+        for name, meta in list_all_models().items():
+            names[str(name)] = _as_dict(meta)
+        for provider in Provider:
+            default_model = self._default_model_for_provider(provider.value)
+            if default_model:
+                names.setdefault(default_model, {})
+        if current_model:
+            names.setdefault(current_model, {})
+        items = []
+        for name in sorted(names):
+            ctx = get_model_context(name)
+            items.append({
+                "id": name,
+                "name": name,
+                "current": name == current_model,
+                "custom": name in custom_models,
+                "max_input": ctx["max_input"],
+                "max_output": ctx["max_output"],
+                "capabilities": get_model_capabilities(name),
+            })
+        return items
+
+    def _current_context_window(self) -> Dict[str, Any]:
+        self._ensure_engine()
+        cfg = self._engine.config
+        model = cfg.effective_model
+        ctx = cfg.effective_context
+        used = 0
+        messages = 0
+        if self._controller and self._controller.conversation:
+            try:
+                api_messages = self._controller.conversation.to_api_messages()
+                used = self._engine.count_message_tokens(api_messages)
+                messages = len(api_messages)
+            except Exception:
+                used = 0
+                messages = 0
+        max_input = max(1, int(ctx.get("max_input", 0) or 1))
+        return {
+            "model": model,
+            "max_input": ctx.get("max_input", 0),
+            "max_output": ctx.get("max_output", 0),
+            "compact_at": int(max_input * 0.9),
+            "used": used,
+            "messages": messages,
+            "percent": round((used / max_input) * 100, 2) if used else 0,
+        }
+
+    def get_chat_controls(self) -> Dict:
+        """Return the active chat toolbar selector state in one safe payload."""
+        self._ensure_engine()
+        ai_cfg = _normalize_ai_editor_config(
+            self._settings_getter("ai_editor", {}) or {})
+        cfg = self._engine.config
+        model = cfg.effective_model
+        active_agent = None
+        if self._active_agent_id:
+            agent = self._agent_registry.get(self._active_agent_id)
+            if agent:
+                active_agent = agent.to_dict()
+        agents = self.list_agents().get("agents", [])
+        workflows = self.list_workflows().get("workflows", [])
+        chat_providers = self._provider_registry.list_available(self._settings_getter)
+        context_window = self._current_context_window()
+        custom_models = _as_dict(ai_cfg.get("custom_models"))
+        return {
+            "provider": cfg.provider,
+            "model": model,
+            "mode": self._mode,
+            "active_agent_id": self._active_agent_id or "",
+            "active_agent": active_agent,
+            "active_chat_provider": self._active_provider,
+            "providers": self._provider_options(ai_cfg),
+            "chat_providers": chat_providers,
+            "models": self._model_options(model, custom_models),
+            "custom_models": custom_models,
+            "agents": agents,
+            "workflows": workflows,
+            "context_window": context_window,
+            "context_window_info": context_window,
+            "status": {
+                "provider": cfg.provider,
+                "model": model,
+                "mode": self._mode,
+                "active_agent_id": self._active_agent_id or "",
+                "active_chat_provider": self._active_provider,
+                "tokens": context_window["used"],
+                "context_percent": context_window["percent"],
+            },
+        }
+
+    def set_active_provider(self, provider: str, model: str = "") -> Dict:
+        """Set the main chat LLM provider without opening settings."""
+        self._ensure_engine()
+        from ai_editor.llm_engine import Provider
+        provider_id = str(provider or "").strip().lower()
+        valid = {p.value for p in Provider}
+        if provider_id not in valid:
+            return {"error": f"Invalid provider: {provider}. Valid: {sorted(valid)}"}
+        selected_model = str(model or "").strip() or self._default_model_for_provider(provider_id)
+        patch: Dict[str, Any] = {"provider": provider_id, "model": selected_model}
+        self._save_config_patch(patch)
+        return {"ok": True, "provider": provider_id, "model": selected_model,
+                "controls": self.get_chat_controls()}
+
+    def set_active_model(self, model: str) -> Dict:
+        """Set the main chat model without opening settings."""
+        self._ensure_engine()
+        selected_model = str(model or "").strip()
+        if not selected_model:
+            return {"error": "Model is required"}
+        self._save_config_patch({"model": selected_model})
+        return {"ok": True, "model": selected_model,
+                "controls": self.get_chat_controls()}
+
+    def set_active_mode(self, mode: str) -> Dict:
+        """Alias for toolbar callers that use active-control naming."""
+        result = self.set_mode(mode)
+        if result.get("ok"):
+            result["controls"] = self.get_chat_controls()
+        return result
+
+    def set_provider_model(self, provider: str = "", model: str = "") -> Dict:
+        """Compatibility setter for toolbar code that sends provider+model."""
+        if provider:
+            return self.set_active_provider(provider, model)
+        return self.set_active_model(model)
+
+    def set_chat_provider(self, provider_id: str) -> Dict:
+        """Set the active right-sidebar chat provider tab."""
+        result = self.switch_provider(provider_id)
+        if result.get("ok"):
+            result["controls"] = self.get_chat_controls()
+        return result
+
+    def set_chat_controls(self, data: Optional[Dict[str, Any]] = None) -> Dict:
+        """Apply one or more chat toolbar selector updates in a single call."""
+        self._ensure_engine()
+        payload = data if isinstance(data, dict) else {}
+
+        provider = str(payload.get("provider") or "").strip()
+        model_value = payload.get("model")
+        model = str(model_value or "").strip() if model_value is not None else ""
+        if provider:
+            result = self.set_active_provider(provider, model)
+            if result.get("error"):
+                return result
+        elif model:
+            result = self.set_active_model(model)
+            if result.get("error"):
+                return result
+
+        if "mode" in payload:
+            result = self.set_mode(str(payload.get("mode") or ""))
+            if result.get("error"):
+                return result
+
+        agent_key_present = "agent_id" in payload or "active_agent_id" in payload
+        if agent_key_present:
+            agent_id = str(payload.get("agent_id", payload.get("active_agent_id", "")) or "").strip()
+            result = self._set_active_agent(agent_id) if agent_id else self.clear_active_agent()
+            if result.get("error"):
+                return result
+
+        chat_provider = str(
+            payload.get("chat_provider") or payload.get("active_chat_provider") or ""
+        ).strip()
+        if chat_provider:
+            result = self.switch_provider(chat_provider)
+            if result.get("error"):
+                return result
+
+        return {"ok": True, "controls": self.get_chat_controls()}
 
     def _invalidate_provider_controllers(self, data: Dict) -> None:
         if not hasattr(self, "_provider_controllers"):
@@ -583,17 +828,56 @@ class AIEditorAPI:
     # ── Mode & Permission API ──
 
     def get_mode(self, mode: str = "") -> Dict:
-        from ai_editor.scopes import MODES, MODE_PERMISSIONS, effective_permissions
+        from ai_editor.scopes import MODES, MODE_PERMISSIONS, tool_permission
         selected = mode if mode in MODES else self._mode
-        tool_names = set(effective_permissions(selected, {}).keys())
+        registry_tools: Dict[str, Any] = {}
+        tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["edit"]).keys())
         if self._registry:
-            tool_names.update(t.name for t in self._registry.list_tools(include_disabled=True))
+            for tool in self._registry.list_tools(include_disabled=True):
+                registry_tools[tool.name] = tool
+                tool_names.add(tool.name)
+        if self._mcp:
+            for t in self._mcp.all_tools():
+                tool_names.add(f"mcp_{t.server_id}_{t.name}")
+        try:
+            from ai_editor.extensions import load_all_extension_tools
+            enabled = set(self._enabled_extension_contributions())
+            for et in load_all_extension_tools(enabled):
+                fn = et.get("function", {})
+                if fn.get("name"):
+                    tool_names.add(fn.get("name"))
+        except Exception:
+            pass
+
+        permissions: Dict[str, str] = {}
+        defaults: Dict[str, str] = {}
+        for tool_name in sorted(tool_names):
+            tool = registry_tools.get(tool_name)
+            category = getattr(tool, "category", "") if tool is not None else ""
+            read_only = self._tool_read_only(tool) if tool is not None else None
+            if tool_name.startswith("mcp_"):
+                category = category or "mcp"
+                read_only = self._is_probably_read_only_mcp_tool(tool_name)
+            permissions[tool_name] = tool_permission(
+                selected,
+                tool_name,
+                self._perm_overrides,
+                read_only=read_only,
+                category=category,
+            )
+            defaults[tool_name] = tool_permission(
+                selected,
+                tool_name,
+                {},
+                read_only=read_only,
+                category=category,
+            )
         return {
             "mode": self._mode,
             "selected_mode": selected,
             "modes": list(MODES),
-            "permissions": effective_permissions(selected, self._perm_overrides),
-            "defaults": dict(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["edit"])),
+            "permissions": permissions,
+            "defaults": defaults,
             "overrides": dict(self._perm_overrides),
             "tools": sorted(tool_names),
         }
@@ -642,15 +926,73 @@ class AIEditorAPI:
         except Exception:
             pass
 
+    def _install_engine_policy(self) -> None:
+        if not self._registry:
+            return
+        desc = self._registry.get("engine")
+        if not desc or getattr(desc.handler, "_sao_engine_policy", False):
+            return
+        raw_handler = desc.handler
+
+        def _guarded_engine_handler(**kw):
+            action = str(kw.get("action", ""))
+            if self._engine_action_blocked(action):
+                return {"error": f"Engine action disabled by mode policy: {action}"}
+            return raw_handler(**kw)
+
+        setattr(_guarded_engine_handler, "_sao_engine_policy", True)
+        desc.handler = _guarded_engine_handler
+
+    @staticmethod
+    def _tool_read_only(tool: Any) -> Optional[bool]:
+        tags = getattr(tool, "tags", None)
+        if isinstance(tags, dict) and isinstance(tags.get("readOnly"), bool):
+            return bool(tags.get("readOnly"))
+        return None
+
+    def _permission_for_tool(self, tool: Any, name: str = "") -> str:
+        from ai_editor.scopes import tool_permission
+        tool_name = name or getattr(tool, "name", "")
+        return tool_permission(
+            self._mode,
+            tool_name,
+            self._perm_overrides,
+            read_only=self._tool_read_only(tool) if tool is not None else None,
+            category=getattr(tool, "category", "") if tool is not None else "",
+        )
+
+    @staticmethod
+    def _engine_action_from_arguments(arguments: Any) -> str:
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except json.JSONDecodeError:
+                return ""
+        if isinstance(arguments, dict):
+            return str(arguments.get("action", ""))
+        return ""
+
+    def _engine_action_blocked(self, action: str) -> bool:
+        return self._mode == "chat" and action in _DANGEROUS_ENGINE_ACTIONS
+
+    def _engine_action_gate(self, arguments: Any, confirmed: bool) -> Optional[Dict[str, Any]]:
+        action = self._engine_action_from_arguments(arguments)
+        if action not in _DANGEROUS_ENGINE_ACTIONS:
+            return None
+        if self._engine_action_blocked(action):
+            return {"error": f"Engine action disabled by mode policy: {action}"}
+        if self._mode != "agent" and not confirmed:
+            return {"error": "Tool execution requires confirmation",
+                    "requires_confirmation": True}
+        return None
+
     def _apply_mode_permissions(self) -> None:
         """Update tool registry confirm flags + controller tool filter based on mode."""
         if not self._registry:
             return
-        from ai_editor.scopes import effective_permissions
-        perms = effective_permissions(self._mode, self._perm_overrides)
         disabled: List[str] = []
         for tool in self._registry.list_tools(include_disabled=True):
-            p = perms.get(tool.name, "allowed")
+            p = self._permission_for_tool(tool)
             if p == "disabled":
                 disabled.append(tool.name)
                 tool.enabled = False
@@ -659,7 +1001,9 @@ class AIEditorAPI:
                 tool.requires_confirm = True
             else:
                 tool.enabled = True
-                tool.requires_confirm = False
+                tool.requires_confirm = (
+                    tool.name == "engine" and self._mode == "edit"
+                )
         self._registry._openai_cache = None
         if self._controller:
             self._controller._disabled_tools = set(disabled)
@@ -784,10 +1128,11 @@ class AIEditorAPI:
              "thinking": msg.thinking,
              **({"error": msg.content} if msg.is_error else {}),
              **({"usage": msg.usage} if msg.usage else {})})
-        ctrl.on_tool_start = lambda cid, n, a: self._emit(
-            f"provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a})
-        ctrl.on_tool_end = lambda cid, r: self._emit(
-            f"provider_tool_end", {"provider": pid, "id": cid, "result": r})
+        ctrl.on_tool_start = lambda cid, n, a, state="": self._emit(
+            f"provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a, "state": state})
+        ctrl.on_tool_end = lambda cid, r, state="": self._emit(
+            f"provider_tool_end", {"provider": pid, "id": cid, "result": r, "state": state})
+        ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
         ctrl.on_error = lambda e: self._emit(
             f"provider_error", {"provider": pid, "error": e})
         ctrl.on_idle = lambda: self._emit(
@@ -987,6 +1332,20 @@ class AIEditorAPI:
 
     def _init_extension_host(self) -> None:
         """Scan extension directories and start the host."""
+        ext_dirs = self._extension_scan_dirs()
+        self._ext_host.set_policy(
+            self._extension_allowed,
+            set(self._enabled_extension_contributions()),
+        )
+        count = self._ext_host.scan(ext_dirs)
+        if count:
+            activated = self._ext_host.start()
+            print(f"[ExtHost] {count} extensions scanned, "
+                  f"{len(activated)} activated")
+            self._register_ext_tools()
+
+    def _extension_scan_dirs(self) -> List[str]:
+        """Return extension directories to scan without activating anything."""
         try:
             from ai_editor.scopes import _base_dir
             base = _base_dir()
@@ -1008,16 +1367,7 @@ class AIEditorAPI:
             os.path.expanduser("~"), ".vscode-insiders", "extensions")
         if os.path.isdir(vscode_insiders_ext):
             ext_dirs.append(vscode_insiders_ext)
-        self._ext_host.set_policy(
-            self._extension_allowed,
-            set(self._enabled_extension_contributions()),
-        )
-        count = self._ext_host.scan(ext_dirs)
-        if count:
-            activated = self._ext_host.start()
-            print(f"[ExtHost] {count} extensions scanned, "
-                  f"{len(activated)} activated")
-            self._register_ext_tools()
+        return ext_dirs
 
     def _register_ext_tools(self) -> None:
         """Register extension-contributed tools and chat participants."""
@@ -1037,6 +1387,7 @@ class AIEditorAPI:
                 parameters=schema,
                 handler=lambda _n=name, **kw: {"stub": True, "tool": _n, **kw},
                 category=f"ext:{tool.get('_extensionId', '')}",
+                tags={"extension": True},
             )
         for cp in ep.chat_participants:
             if "chatParticipants" not in enabled:
@@ -1054,6 +1405,7 @@ class AIEditorAPI:
                 auto_agent=True,
             )
             self._provider_registry.register(prov)
+        self._apply_mode_permissions()
 
     def _extension_settings(self) -> Dict[str, Any]:
         ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
@@ -1090,6 +1442,205 @@ class AIEditorAPI:
         ext.id = ext_id
         ext.publisher = self._publisher_from_extension_id(ext_id)
         return self._extension_allowed(ext)
+
+    def _count_extension_manifests(self) -> int:
+        """Count VS Code-compatible package.json manifests without activation."""
+        try:
+            from ai_editor.extension_host import ExtensionScanner
+        except Exception:
+            return 0
+        count = 0
+        for directory in self._extension_scan_dirs():
+            try:
+                for ext in ExtensionScanner.scan_directory(directory):
+                    if self._extension_allowed(ext):
+                        count += 1
+            except Exception:
+                continue
+        return count
+
+    def _mcp_discovered_server_entries(self) -> List[Dict[str, Any]]:
+        """Discover MCP server configs without starting stdio/SSE transports."""
+        try:
+            from ai_editor.mcp_client import _iter_server_configs, _parse_server_config
+        except Exception:
+            return []
+
+        mcp = self._mcp_settings()
+        collision = str(mcp.get("collision_behavior", "first")).strip().lower()
+        if collision not in {"first", "last", "error"}:
+            collision = "first"
+        entries: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def append(raw: Any, source: str) -> None:
+            nonlocal entries
+            for sid, sconf in _iter_server_configs(raw):
+                if not sid:
+                    continue
+                if sid in seen:
+                    if collision == "last":
+                        entries = [e for e in entries if e.get("id") != sid]
+                        seen.discard(sid)
+                    elif collision == "error":
+                        continue
+                    else:
+                        continue
+                try:
+                    cfg = _parse_server_config(sid, sconf)
+                except Exception:
+                    continue
+                if not cfg.enabled:
+                    continue
+                seen.add(cfg.id)
+                entries.append({
+                    "id": cfg.id,
+                    "name": cfg.name,
+                    "transport": cfg.transport,
+                    "enabled": cfg.enabled,
+                    "source": source,
+                })
+
+        append(self._settings_getter("ai_editor_mcp_servers", []),
+               "settings.ai_editor_mcp_servers")
+        append(mcp.get("servers", []), "settings.ai_editor.mcp.servers")
+        append(mcp.get("mcpServers", {}), "settings.ai_editor.mcp.mcpServers")
+
+        if not _as_bool(mcp.get("discovery_enabled"), True):
+            return entries
+
+        try:
+            from config import BASE_DIR
+            base = BASE_DIR
+        except Exception:
+            base = os.path.dirname(os.path.dirname(__file__))
+        for candidate in ("mcp.json", ".mcp/mcp.json", ".vscode/mcp.json"):
+            path = os.path.join(base, candidate)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                append(data.get("mcpServers") or data.get("servers") or {}, candidate)
+            except Exception:
+                continue
+
+        try:
+            home_mcp = os.path.join(os.path.expanduser("~"), ".sao", "mcp.json")
+            if os.path.isfile(home_mcp):
+                with open(home_mcp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                append(data.get("mcpServers") or data.get("servers") or {}, "~/.sao/mcp.json")
+        except Exception:
+            pass
+
+        plugins_dir = os.path.join(base, "plugins")
+        if os.path.isdir(plugins_dir):
+            for pname in sorted(os.listdir(plugins_dir)):
+                manifest = os.path.join(plugins_dir, pname, "plugin.json")
+                if not os.path.isfile(manifest):
+                    continue
+                try:
+                    with open(manifest, "r", encoding="utf-8") as f:
+                        pdata = json.load(f)
+                    plugin_servers = {}
+                    for sid, sconf in (pdata.get("mcpServers") or {}).items():
+                        plugin_servers[f"{pname}.{sid}"] = sconf
+                    append(plugin_servers, f"plugins/{pname}/plugin.json")
+                except Exception:
+                    continue
+        return entries
+
+    def get_runtime_support_summary(self) -> Dict:
+        """Read-only JS API: summarize extension/MCP support visibility.
+
+        This method intentionally does not call ``_ensure_engine()`` and does
+        not start Node, CLI, stdio, or SSE transports.
+        """
+        installed: List[Dict[str, Any]] = []
+        try:
+            from ai_editor.extensions import list_installed
+            installed = list_installed()
+        except Exception:
+            installed = []
+
+        host = getattr(self, "_ext_host", None)
+        scanned: List[Dict[str, Any]] = []
+        contributions: Dict[str, Any] = {}
+        if host:
+            try:
+                scanned = host.list_extensions()
+            except Exception:
+                scanned = []
+            try:
+                contributions = host.get_contributes_summary()
+            except Exception:
+                contributions = {}
+
+        mcp = self._mcp_settings()
+        autostart = _as_bool(mcp.get("autostart"), False)
+        discovery_enabled = _as_bool(mcp.get("discovery_enabled"), True)
+        discovered = self._mcp_discovered_server_entries()
+        manager = getattr(self, "_mcp", None)
+        live_servers = manager.list_servers() if manager else []
+        live_by_id = {str(s.get("id")): s for s in live_servers}
+        servers = []
+        for entry in discovered:
+            live = live_by_id.get(str(entry.get("id")), {})
+            servers.append({
+                "id": entry.get("id", ""),
+                "name": entry.get("name", ""),
+                "transport": entry.get("transport", ""),
+                "enabled": entry.get("enabled", True),
+                "source": entry.get("source", ""),
+                "connected": bool(live.get("alive")),
+                "tools": int(live.get("tools", 0) or 0),
+            })
+        for live in live_servers:
+            sid = str(live.get("id", ""))
+            if sid and sid not in {str(s.get("id")) for s in servers}:
+                servers.append({
+                    "id": sid,
+                    "name": sid,
+                    "transport": live.get("transport", ""),
+                    "enabled": True,
+                    "source": "runtime",
+                    "connected": bool(live.get("alive")),
+                    "tools": int(live.get("tools", 0) or 0),
+                })
+        connected_count = sum(1 for s in servers if s.get("connected"))
+        tool_count = sum(int(s.get("tools", 0) or 0) for s in servers)
+        status = "connected" if connected_count else (
+            "configured" if discovered else "not_configured")
+        if self._mcp_access() == "disabled":
+            status = "disabled"
+
+        return {
+            "support_tier": "manifest_api_compatibility",
+            "support_label": "Manifest/API compatibility; full Node VS Code host not yet enabled",
+            "node_host_enabled": False,
+            "node_sidecar_enabled": False,
+            "summary_api_launches_external_commands": False,
+            "extensions": {
+                "installed_count": len(installed),
+                "installed": installed,
+                "scanned_manifest_count": len(scanned),
+                "compatible_manifest_count": self._count_extension_manifests(),
+                "activated_count": sum(1 for e in scanned if e.get("activated")),
+                "enabled_contributions": self._enabled_extension_contributions(),
+                "contribution_counts": contributions,
+            },
+            "mcp": {
+                "access": self._mcp_access(),
+                "autostart": autostart,
+                "discovery_enabled": discovery_enabled,
+                "discovered_server_count": len(discovered),
+                "connected_server_count": connected_count,
+                "tool_count": tool_count,
+                "status": status,
+                "servers": servers,
+            },
+        }
 
     def list_vscode_extensions(self) -> Dict:
         self._ensure_engine()
@@ -1252,7 +1803,7 @@ class AIEditorAPI:
                     "name": tool_name,
                     "description": f"[MCP:{t.server_id}] {t.description}",
                     "category": f"mcp:{t.server_id}",
-                    "requires_confirm": mcp_access == "prompt",
+                    "requires_confirm": self._mcp_tool_requires_confirm(tool_name),
                     "parameters": t.input_schema,
                 })
         # Add extension-contributed tools
@@ -1263,11 +1814,16 @@ class AIEditorAPI:
                 if not self._extension_id_allowed(et.get("extension_id", "")):
                     continue
                 fn = et.get("function", {})
+                tool_name = fn.get("name", "")
+                perm = self._permission_for_tool(
+                    None, tool_name) if tool_name else "disabled"
+                if perm == "disabled":
+                    continue
                 tools.append({
-                    "name": fn.get("name", ""),
+                    "name": tool_name,
                     "description": fn.get("description", ""),
                     "category": f"ext:{et.get('extension_id','')}",
-                    "requires_confirm": False,
+                    "requires_confirm": perm == "confirm",
                     "parameters": fn.get("parameters", {}),
                 })
         except Exception:
@@ -1283,10 +1839,14 @@ class AIEditorAPI:
                 return json.dumps({"error": "Tool execution requires confirmation", "requires_confirmation": True}, ensure_ascii=False)
             args = json.loads(arguments) if isinstance(arguments, str) else arguments
             return self._mcp.call_tool(name, args)
-        from ai_editor.scopes import tool_permission
-        perm = tool_permission(self._mode, name, self._perm_overrides)
+        tool = self._registry.get(name) if self._registry else None
+        perm = self._permission_for_tool(tool, name)
         if perm == "disabled":
             return json.dumps({"error": f"Tool disabled by mode policy: {name}"}, ensure_ascii=False)
+        if name == "engine":
+            engine_gate = self._engine_action_gate(arguments, confirmed)
+            if engine_gate:
+                return json.dumps(engine_gate, ensure_ascii=False)
         if perm == "confirm" and not confirmed:
             return json.dumps({"error": "Tool execution requires confirmation", "requires_confirmation": True}, ensure_ascii=False)
         return self._registry.execute(name, arguments)
@@ -1305,6 +1865,13 @@ class AIEditorAPI:
         return leaf.startswith(("read", "list", "get", "search", "show", "fetch", "query", "find"))
 
     def _mcp_tool_allowed(self, name: str) -> bool:
+        if self._mode == "chat":
+            return False
+        override = self._perm_overrides.get(name)
+        if override == "disabled":
+            return False
+        if override in {"allowed", "confirm"}:
+            return True
         access = self._mcp_access()
         if access == "disabled":
             return False
@@ -1313,7 +1880,17 @@ class AIEditorAPI:
         return True
 
     def _mcp_tool_requires_confirm(self, name: str) -> bool:
-        return self._mcp_access() == "prompt" and self._mcp_tool_allowed(name)
+        if not self._mcp_tool_allowed(name):
+            return False
+        override = self._perm_overrides.get(name)
+        if override == "allowed":
+            return False
+        if override == "confirm":
+            return True
+        access = self._mcp_access()
+        if access == "prompt":
+            return True
+        return self._mode == "agent" and access != "allow"
 
     def _refresh_mcp_tools(self) -> None:
         if self._controller:
@@ -1649,6 +2226,8 @@ class AIEditorAPI:
     def confirm_tool(self, call_id: str, allowed: bool) -> Dict:
         """UI calls this to allow/deny a pending tool confirmation."""
         evt = self._pending_confirm.pop(call_id, None)
+        if not evt and call_id not in self._confirm_results:
+            return {"error": "No pending confirmation"}
         self._confirm_results[call_id] = allowed
         if evt:
             evt.set()
@@ -1806,17 +2385,32 @@ class AIEditorAPI:
             payload["usage"] = msg.usage
         self._emit("stream_end", payload)
 
-    def _on_tool_start(self, call_id: str, name: str, args: str) -> None:
-        self._emit("tool_start", {"id": call_id, "name": name, "arguments": args})
+    def _on_tool_start(self, call_id: str, name: str, args: str, state: str = "") -> None:
+        self._emit("tool_start", {"id": call_id, "name": name, "arguments": args, "state": state})
 
     def _on_tool_confirm(self, call_id: str, name: str, args: str) -> bool:
         """Called from background thread. Pushes confirm request to JS, blocks until response."""
+        return self._wait_for_tool_confirmation("tool_confirm", {
+            "id": call_id, "name": name, "arguments": args,
+        }, call_id, name, args)
+
+    def _on_provider_tool_confirm(self, provider_id: str, call_id: str, name: str, args: str) -> bool:
+        return self._wait_for_tool_confirmation("provider_tool_confirm", {
+            "provider": provider_id, "id": call_id, "name": name, "arguments": args,
+        }, call_id, name, args)
+
+    def _wait_for_tool_confirmation(self, event: str, payload: Dict[str, Any],
+                                    call_id: str, name: str, args: str) -> bool:
+        engine_action = self._engine_action_from_arguments(args) if name == "engine" else ""
+        if name == "engine" and engine_action not in _DANGEROUS_ENGINE_ACTIONS:
+            return True
         evt = threading.Event()
         self._pending_confirm[call_id] = evt
-        self._confirm_results[call_id] = True
-        self._emit("tool_confirm", {"id": call_id, "name": name, "arguments": args})
-        evt.wait(timeout=60.0)
-        return self._confirm_results.pop(call_id, True)
+        self._confirm_results[call_id] = False
+        self._emit(event, payload)
+        evt.wait(timeout=float(getattr(self, "_confirmation_timeout", 60.0)))
+        self._pending_confirm.pop(call_id, None)
+        return self._confirm_results.pop(call_id, False)
 
     def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
         self._emit("tool_end", {"id": call_id, "result": result, "state": state})

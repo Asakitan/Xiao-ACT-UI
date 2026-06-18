@@ -134,6 +134,8 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
   cursor:pointer; border-bottom:1px solid transparent; white-space:nowrap; position:relative; }
 .rtab:hover { color:var(--fg); }
 .rtab.active { color:var(--fg); border-bottom-color:var(--fg); }
+.rtab.unavailable { opacity:.55; }
+.rtab.unavailable::after { content:'!'; margin-left:6px; color:var(--fg-warning); font-size:10px; }
 .right-panel { flex:1; display:none; flex-direction:column; overflow:hidden; }
 .right-panel.active { display:flex; }
 .rp-placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -212,10 +214,13 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 .msg-avatar.user { background:var(--fg-accent); color:#000; }
 .msg-avatar.assistant { background:var(--fg-success); color:#000; }
 .msg-avatar.system { background:var(--fg-warning); color:#000; }
+.msg-avatar.tool { background:var(--fg-tool); color:#000; }
+.msg-avatar.error { background:var(--fg-error); color:#fff; }
 .msg-role { font-weight:600; font-size:13px; }
 .msg-role.user { color:var(--fg); }
 .msg-role.assistant { color:var(--fg); }
 .msg-role.system { color:var(--fg-warning); }
+.msg-role.error { color:var(--fg-error); }
 .msg-model { color:var(--fg-dim); font-size:11px; margin-left:auto; }
 .msg-body { line-height:1.5em; font-size:13px; }
 .msg-body p { margin:0 0 16px; }
@@ -343,6 +348,22 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { flex:1; }
 .chat-toolbar .token-count { color:var(--fg-dim); }
+.chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
+.chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
+  border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
+  outline:none; min-width:0; }
+.chat-chip,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer; }
+.chat-select-chip { max-width:142px; padding:0 20px 0 8px; cursor:pointer; }
+.chat-model-inline { width:120px; padding:0 8px; font-family:var(--mono); }
+.chat-model-inline::placeholder { color:var(--fg-dim); }
+.chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
+.chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); }
+.chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
+.chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
+.chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
+.chat-select-chip.workflow { max-width:156px; }
+.chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
+.chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
 .ctx-usage { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--fg-dim); cursor:default; }
 .ctx-bar { width:48px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
 .ctx-fill { height:100%; border-radius:3px; background:var(--fg-success); transition:width .3s; }
@@ -355,6 +376,36 @@ pre.code-block code .type { color:var(--fg-type); }
 .model-chip .provider-badge { font-size:9px; opacity:0.6; }
 .toolbar-btn { color:var(--fg-dim); cursor:pointer; padding:2px 8px; border-radius:3px; }
 .toolbar-btn:hover { background:var(--bg-hover); color:var(--fg); }
+
+/* Provider panels */
+.provider-messages { display:flex; flex-direction:column; }
+.provider-messages .msg, .provider-messages .tool-call { flex-shrink:0; }
+.provider-empty { flex:1; min-height:180px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; padding:28px 22px; gap:10px;
+  color:var(--fg-dim); text-align:center; }
+.provider-empty-icon { width:40px; height:40px; border-radius:10px; display:flex;
+  align-items:center; justify-content:center; background:var(--bg3); color:var(--fg-accent);
+  border:1px solid var(--border); font-size:20px; }
+.provider-empty-title { color:var(--fg); font-size:14px; font-weight:600; }
+.provider-empty-subtitle { max-width:340px; line-height:1.45; }
+.provider-empty.unavailable .provider-empty-icon { color:var(--fg-warning); }
+.provider-actions { display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap; justify-content:center; }
+.provider-action { background:transparent; color:var(--fg-accent); border:1px solid var(--border);
+  border-radius:4px; padding:4px 10px; font:12px var(--sans); cursor:pointer; }
+.provider-action:hover { background:var(--bg-hover); color:var(--fg); }
+.provider-input-area { padding-top:6px; }
+.provider-input-area .send-btn { width:28px; }
+.provider-footer { display:flex; align-items:center; gap:8px; padding:0 8px 6px;
+  color:var(--fg-dim); font-size:11px; min-height:24px; }
+.provider-footer .provider-hint { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.provider-footer .provider-status { display:inline-flex; align-items:center; gap:4px; }
+.provider-footer .provider-status.running { color:var(--fg-accent); }
+.provider-footer .provider-status.error { color:var(--fg-error); }
+.provider-footer .provider-context { display:inline-flex; align-items:center; gap:4px; }
+.provider-footer .ctx-bar { width:42px; }
+.provider-stream-content { white-space:pre-wrap; }
+.provider-tool-msg .msg-body { display:flex; flex-direction:column; gap:6px; }
+.tool-state .state-text { color:var(--fg-dim); }
 
 /* ── Terminal panel ── */
 .terminal-panel { flex:1; display:none; flex-direction:column; }
@@ -534,6 +585,12 @@ pre.code-block { overflow:visible; }
 .ext-btn.installed { background:transparent; color:var(--fg-success); border:1px solid var(--fg-success); pointer-events:none; }
 .ext-badge { display:inline-flex; align-items:center; gap:2px; background:var(--bg3); padding:1px 5px;
   border-radius:3px; font-size:9px; color:var(--fg-dim); }
+.support-panel { margin:6px 10px 8px; padding:8px 10px; border:1px solid var(--border);
+  border-radius:var(--radius); background:var(--bg2); font-size:11px; color:var(--fg-dim); line-height:1.45; }
+.support-panel .support-title { color:var(--fg); font-weight:600; font-size:12px; margin-bottom:3px; }
+.support-panel .support-tier { color:var(--fg-warning); }
+.support-panel .support-row { display:flex; justify-content:space-between; gap:8px; margin-top:3px; }
+.support-panel .support-value { color:var(--fg); text-align:right; }
 
 @media(max-width:900px) { .sidebar { display:none !important; } }
 </style>
@@ -687,6 +744,12 @@ pre.code-block { overflow:visible; }
           border-radius:3px;padding:4px 8px;font-size:12px;outline:none"
           onkeydown="if(event.key==='Enter')searchExtensions()">
       </div>
+      <div class="support-panel" id="runtime-support-panel">
+        <div class="support-title">Runtime Support</div>
+        <div class="support-tier" id="runtime-support-tier">Manifest/API compatibility; full Node VS Code host not yet enabled</div>
+        <div class="support-row"><span>Extensions</span><span class="support-value" id="runtime-support-ext">Loading...</span></div>
+        <div class="support-row"><span>MCP</span><span class="support-value" id="runtime-support-mcp">Loading...</span></div>
+      </div>
       <div class="sb-group" id="ext-installed-header" style="display:none">INSTALLED</div>
       <div id="ext-installed-list"></div>
       <div class="sb-group">MARKETPLACE</div>
@@ -808,8 +871,28 @@ pre.code-block { overflow:visible; }
                 </div>
                 <div class="attach-area" id="attach-area"></div>
                 <div class="chat-toolbar">
-                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--fg-dim)" title="Agent Mode">
-                    <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Agent
+                  <div class="chat-control-strip" aria-label="Chat controls">
+                    <select class="chat-select-chip" id="chat-provider-sel" title="Chat provider">
+                      <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+                      <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                    <input class="chat-model-inline" id="chat-model-inline" placeholder="model" title="Chat model">
+                    <select class="chat-select-chip agent muted" id="chat-agent-sel" title="Active agent">
+                      <option value="">Agent: Default</option>
+                    </select>
+                    <select class="chat-select-chip mode" id="chat-mode-sel" title="Mode">
+                      <option value="chat">Mode: Chat</option>
+                      <option value="edit">Mode: Edit</option>
+                      <option value="agent">Mode: Agent</option>
+                    </select>
+                    <select class="chat-select-chip workflow muted" id="chat-workflow-sel" title="Workflow">
+                      <option value="">Workflow</option>
+                    </select>
+                    <button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>
+                  </div>
+                  <label class="chat-chip muted" title="Use autonomous tool loop for this message">
+                    <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Tools
                   </label>
                   <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■</span>
                   <span class="toolbar-btn" onclick="uploadImage()" title="Attach image">📎</span>
@@ -944,6 +1027,7 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-mcp-discovery" type="checkbox"><span><b>Discover configured MCP servers</b><small>Reads configured server entries only; missing backend APIs are not called from this modal.</small></span></label>
       <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b>Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
       <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b>Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
+      <div class="settings-help" id="mcp-runtime-status">MCP status not loaded.</div>
     </div>
 
     <div class="settings-section">
@@ -965,6 +1049,7 @@ pre.code-block { overflow:visible; }
         <div><label>Blocked Publishers</label><textarea id="s-ext-block" rows="2" placeholder="One publisher per line"></textarea></div>
         <div class="full"><label>Enabled Contributions</label><textarea id="s-ext-contribs" rows="2" placeholder="chatParticipants&#10;languageModelTools&#10;commands"></textarea></div>
       </div>
+      <div class="settings-help" id="extension-runtime-status">Extension runtime status not loaded.</div>
     </div>
 
     <div class="settings-section">
@@ -1097,8 +1182,10 @@ window._onEditorEvent=function(event,data){
   else if(event==='thinking_delta') onThinkingDelta(data);
   else if(event==='stream_end') onStreamEnd(data);
   else if(event==='tool_start') onToolStart(data);
+  else if(event==='tool_progress') onToolProgress(data);
   else if(event==='tool_end') onToolEnd(data);
   else if(event==='tool_confirm') onToolConfirm(data);
+  else if(event==='token_warning') onTokenWarning(data);
   else if(event==='workflow_step') onWorkflowStep(data);
   else if(event==='error') onError(data);
   else if(event==='idle') onIdle();
@@ -1109,7 +1196,8 @@ async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
   syncUI();
   const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
-  refreshHistory();await loadMode();await renderProviderTabs();
+  refreshRuntimeSupport();
+  refreshHistory();await loadMode();await loadChatControls();await renderProviderTabs();
   appendSystem('✦ SAO AI Editor\n\n多模型 LLM · Tool Calling · 流式输出\n在左侧 ⚙ 中配置 API Key，然后开始对话。');
 }
 
@@ -1575,10 +1663,28 @@ function onStreamEnd(d){
 function onToolStart(d){
   setStatus('Tool: '+d.name+'...');
 }
+function onToolProgress(d){
+  const progress=Number(d&&d.progress);
+  const pct=Number.isFinite(progress)?Math.max(0,Math.min(100,Math.round(progress*100))):0;
+  const el=d&&d.id?document.getElementById('tc-'+d.id):null;
+  if(el){
+    const state=el.querySelector('.tool-state');
+    if(state)state.innerHTML='<span class="spinner"></span><span>'+pct+'%</span>';
+  }
+  setStatus('Tool: '+((d&&d.name)||'running')+' '+pct+'%');
+}
 function onToolEnd(d){
   markToolComplete(d.id,!d.error);
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
   if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,d.name||'?',d.result||'')}
+}
+function onTokenWarning(d){
+  const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
+  const percent=Number(d&&d.percent)||0;
+  if(used>0)updateContextUsage(used);
+  const label=limit>0?used+' / '+limit+' tokens ('+percent+'%)':used+' tokens';
+  setStatus('Context warning: '+label);
+  if(typeof showToast==='function')showToast('Context warning: '+label,'warning',5000);
 }
 function onError(d){appendSystem('⚠ Error: '+(d.error||d));setStatus('Error')}
 function onIdle(){
@@ -1590,17 +1696,28 @@ function onIdle(){
 }
 
 // ── Tool confirmation ──
+function renderConfirmBar(container,d,scrollEl,statusPrefix){
+  if(!container||!d)return null;
+  const existing=d.id?document.getElementById('confirm-'+providerDomKey(d.id)):null;
+  if(existing)return existing;
+  const bar=document.createElement('div');bar.className='confirm-bar';
+  if(d.id)bar.id='confirm-'+providerDomKey(d.id);
+  const msg=document.createElement('span');msg.className='msg';
+  msg.innerHTML='⚠ <b>'+esc(d.name||'tool')+'</b> requires confirmation';
+  const allow=document.createElement('span');allow.className='confirm-btn confirm-allow';allow.textContent='✓ Allow';
+  const deny=document.createElement('span');deny.className='confirm-btn confirm-deny';deny.textContent='✗ Deny';
+  allow.onclick=()=>confirmTool(d.id,true,allow);
+  deny.onclick=()=>confirmTool(d.id,false,deny);
+  bar.appendChild(msg);bar.appendChild(allow);bar.appendChild(deny);container.appendChild(bar);
+  if(scrollEl)scrollEl.scrollTop=scrollEl.scrollHeight;
+  setStatus((statusPrefix||'Waiting for confirmation')+': '+(d.name||'tool'));
+  return bar;
+}
 function onToolConfirm(d){
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
-  if(!last)return;
-  const body=last.querySelector('.msg-body');if(!body)return;
-  const bar=document.createElement('div');bar.className='confirm-bar';
-  bar.innerHTML='<span class="msg">⚠ <b>'+esc(d.name)+'</b> requires confirmation</span>'+
-    '<span class="confirm-btn confirm-allow" onclick="confirmTool(\''+d.id+'\',true,this)">✓ Allow</span>'+
-    '<span class="confirm-btn confirm-deny" onclick="confirmTool(\''+d.id+'\',false,this)">✗ Deny</span>';
-  body.appendChild(bar);
-  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-  setStatus('Waiting for confirmation: '+d.name);
+  let body=last?last.querySelector('.msg-body'):null;
+  if(!body){body=createMsg('system');body.style.color='var(--fg-dim)'}
+  renderConfirmBar(body,d,msgs,'Waiting for confirmation');
 }
 window.confirmTool=async function(callId,allowed,btn){
   const bar=btn.closest('.confirm-bar');
@@ -1637,8 +1754,9 @@ async function updateTokenCount(){
   const r=await call('count_conversation_tokens');
   if(r&&r.tokens!==undefined){
     totalTokens=r.tokens;
-    $('token-count').textContent=totalTokens+' tokens';
-    $('status-tokens').textContent=totalTokens+' tokens';
+    const legacy=$('token-count');if(legacy)legacy.textContent=totalTokens+' tokens';
+    updateContextUsage(totalTokens);
+    const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=totalTokens+' tokens';
   }
 }
 
@@ -1739,7 +1857,10 @@ function switchSidebar(panel){
   if(panel==='settings'){openSettings();return}
   if(panel==='instructions')refreshInstructions();
   if(panel==='agents')refreshAgents();
-  if(panel==='extensions'&&!$('ext-marketplace-list').children.length)searchExtensions('ai');
+  if(panel==='extensions'){
+    refreshRuntimeSupport();
+    if(!$('ext-marketplace-list').children.length)searchExtensions('ai');
+  }
   const sb=$('sidebar');sb.classList.remove('hidden');
 }
 document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener('click',()=>switchSidebar(i.dataset.panel)));
@@ -1831,6 +1952,8 @@ let activeAgentId='';
 async function refreshAgents(){
   const ar=await call('list_agents');const wr=await call('list_workflows');
   const aa=await call('get_active_agent');activeAgentId=(aa&&aa.agent_id)||'';
+  chatControlState.agents=normalizeControlList(ar,'agents');
+  chatControlState.workflows=normalizeControlList(wr,'workflows');
   // Active badge
   const badge=$('agent-active-badge');
   if(activeAgentId){badge.style.display='';badge.innerHTML='Active: <b>'+esc(activeAgentId)+'</b> <span style="cursor:pointer;opacity:0.6" onclick="clearAgent()">✕</span>'}
@@ -1876,6 +1999,7 @@ async function refreshAgents(){
     }
     wl.appendChild(row);
   })}
+  renderChatControlOptions();
 }
 async function activateAgent(id){
   const r=await call('set_active_agent',id);
@@ -1972,80 +2096,284 @@ document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',functio
 
 // ── Right sidebar: dynamic provider tabs ──
 let activeProviderId='chat';
+let providerDefs=Object.create(null);
+let providerUiState=Object.create(null);
+function providerDomKey(pid){
+  const raw=String(pid||'provider');
+  return raw.split('').map(ch=>/[a-zA-Z0-9_-]/.test(ch)?ch:'_'+ch.charCodeAt(0).toString(16)+'_').join('')||'provider';
+}
+function providerElId(prefix,pid){return prefix+'-'+providerDomKey(pid)}
+function providerRefs(pid){
+  return {panel:$(providerElId('rp',pid)),messages:$(providerElId('pm',pid)),input:$(providerElId('pi',pid)),
+    send:$(providerElId('psend',pid)),stop:$(providerElId('pstop',pid)),status:$(providerElId('pstatus',pid)),
+    tokens:$(providerElId('ptokens',pid)),ctxFill:$(providerElId('pctx',pid))};
+}
+function providerDisplayName(pid){const p=providerDefs[pid]||{};return p.name||pid}
+function providerModelLabel(pid){const p=providerDefs[pid]||{};return p.model||p.provider_type||''}
+function providerModeHint(p){return (p&&p.auto_agent)?'Agent mode':'Chat mode'}
+function providerUnavailableText(p){
+  if(!p)return 'Provider is unavailable.';
+  if(p.id==='codex')return 'Configure an OpenAI key and use Chat Completions or Responses transport.';
+  if(p.id==='claude-code')return 'Configure an Anthropic key and disable CLI-only preference.';
+  return 'Configure this provider in Settings.';
+}
+function providerHasMessages(mc){return !!mc&&Array.from(mc.children).some(c=>!c.classList.contains('provider-empty'))}
+function providerScroll(mc){if(mc)mc.scrollTop=mc.scrollHeight}
+function clearProviderEmpty(pid){const mc=providerRefs(pid).messages;if(!mc)return;mc.querySelectorAll('.provider-empty').forEach(e=>e.remove())}
+function createProviderEmpty(pid){
+  const p=providerDefs[pid]||{id:pid,name:pid,available:true};
+  const empty=document.createElement('div');empty.className='provider-empty'+(p.available===false?' unavailable':'');
+  const icon=document.createElement('div');icon.className='provider-empty-icon';icon.textContent=p.icon||'✦';
+  const title=document.createElement('div');title.className='provider-empty-title';
+  title.textContent=p.available===false?providerDisplayName(pid)+' is unavailable':'Start a '+providerDisplayName(pid)+' chat';
+  const subtitle=document.createElement('div');subtitle.className='provider-empty-subtitle';
+  subtitle.textContent=p.available===false?providerUnavailableText(p):(providerModeHint(p)+' · '+(providerModelLabel(pid)||'Default model')+' · shares editor context and tools.');
+  const actions=document.createElement('div');actions.className='provider-actions';
+  const primary=document.createElement('button');primary.type='button';primary.className='provider-action';
+  primary.textContent=p.available===false?'Open Settings':'Focus prompt';
+  primary.onclick=()=>{if(p.available===false)openSettings();else{const input=providerRefs(pid).input;if(input)input.focus()}};
+  actions.appendChild(primary);
+  const fresh=document.createElement('button');fresh.type='button';fresh.className='provider-action';fresh.textContent='New chat';fresh.onclick=()=>providerNewChat(pid);actions.appendChild(fresh);
+  empty.appendChild(icon);empty.appendChild(title);empty.appendChild(subtitle);empty.appendChild(actions);
+  return empty;
+}
+function updateProviderEmpty(pid){
+  const mc=providerRefs(pid).messages;if(!mc)return;
+  if(providerHasMessages(mc)){clearProviderEmpty(pid);return}
+  if(!mc.querySelector('.provider-empty'))mc.appendChild(createProviderEmpty(pid));
+}
+function updateProviderStatus(pid,text,kind){
+  const state=providerUiState[pid]||(providerUiState[pid]={});state.status=text||'Ready';state.kind=kind||'';
+  const status=providerRefs(pid).status;if(!status)return;
+  status.textContent=state.status;status.className='provider-status'+(state.kind?' '+state.kind:'');
+}
+function providerTokenLabel(n){return n>=1000?(Math.round(n/100)/10)+'K':String(n)}
+function updateProviderContext(pid,usage){
+  let used=0;
+  if(typeof usage==='number')used=usage;
+  else if(usage&&typeof usage==='object')used=Number(usage.total_tokens||usage.input_tokens+usage.output_tokens||usage.prompt_tokens+usage.completion_tokens||0)||0;
+  const state=providerUiState[pid]||(providerUiState[pid]={});if(used>0)state.tokens=used;
+  const refs=providerRefs(pid),tokens=Number(state.tokens)||0;
+  if(refs.tokens)refs.tokens.textContent=tokens>0?'last '+providerTokenLabel(tokens)+' tokens':'0 tokens';
+  if(refs.ctxFill){
+    const cw=Number(config.context_window&&config.context_window.max_input)||128000;
+    const pct=cw>0?Math.min(100,Math.round(tokens/cw*100)):0;
+    refs.ctxFill.style.width=pct+'%';refs.ctxFill.className='ctx-fill'+(pct>=90?' crit':pct>=75?' warn':'');
+  }
+}
+function setProviderRunning(pid,running,status,kind){
+  const p=providerDefs[pid]||{},state=providerUiState[pid]||(providerUiState[pid]={});state.running=running;
+  const refs=providerRefs(pid);
+  if(refs.send)refs.send.disabled=running||p.available===false;
+  if(refs.stop)refs.stop.style.display=running?'inline-flex':'none';
+  updateProviderStatus(pid,status||(running?'Thinking...':'Ready'),kind||(running?'running':''));
+}
 function switchRightTab(pid){
   activeProviderId=pid;
   document.querySelectorAll('.rtab').forEach(r=>r.classList.toggle('active',r.dataset.rtab===pid));
   document.querySelectorAll('.right-panel').forEach(p=>p.classList.remove('active'));
-  const rp=$('rp-'+pid);if(rp)rp.classList.add('active');
-  call('switch_provider',pid);
+  const rp=pid==='chat'?$('rp-chat'):$(providerElId('rp',pid));if(rp)rp.classList.add('active');
+  const p=providerDefs[pid];
+  if(pid!=='chat'&&p&&p.available===false){updateProviderStatus(pid,'Unavailable','error');return}
+  call('switch_provider',pid).then(r=>{if(r&&r.error&&pid!=='chat')appendProviderError(pid,r.error)});
 }
 async function renderProviderTabs(){
   const r=await call('list_chat_providers');if(!r||!r.providers)return;
   const tabs=$('right-tabs'),panels=$('right-panels');
+  providerDefs=Object.create(null);
   // Clear dynamic tabs (keep CHAT tab)
   tabs.querySelectorAll('.rtab:not([data-rtab="chat"])').forEach(t=>t.remove());
   // Remove dynamic panels
   panels.querySelectorAll('.right-panel:not(#rp-chat)').forEach(p=>p.remove());
   r.providers.forEach(p=>{
-    if(p.id==='chat'||!p.available)return;
+    if(p.id==='chat')return;
+    providerDefs[p.id]=p;
     // Tab
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
-    tab.textContent=p.name.toUpperCase();tab.onclick=()=>switchRightTab(p.id);
+    if(p.available===false)tab.classList.add('unavailable');
+    tab.textContent=(p.icon?p.icon+' ':'')+p.name.toUpperCase();tab.title=p.available===false?providerUnavailableText(p):p.name;
+    tab.onclick=()=>switchRightTab(p.id);
     tabs.appendChild(tab);
     // Panel
-    const panel=document.createElement('div');panel.className='right-panel';panel.id='rp-'+p.id;
-    panel.innerHTML='<div class="chat-panel"><div class="chat-messages" id="pm-'+p.id+'"></div>'
-      +'<div class="chat-input-area"><div class="chat-input-row">'
-      +'<textarea class="chat-input" rows="1" placeholder="Message '+esc(p.name)+'..." id="pi-'+p.id+'"></textarea>'
-      +'<button class="send-btn" onclick="providerSend(\''+p.id+'\')">Send</button></div>'
-      +'<div class="chat-toolbar"><span class="hint">'+esc(p.name)+' · '+(p.auto_agent?'Agent':'Chat')+' mode</span>'
-      +'<span class="spacer"></span>'
-      +'<span class="toolbar-btn" onclick="providerCancel(\''+p.id+'\')" style="color:var(--fg-error)">■</span>'
-      +'<span class="toolbar-btn" onclick="providerNewChat(\''+p.id+'\')">🗑</span></div></div></div>';
+    const panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panel.dataset.providerId=p.id;
+    const chatPanel=document.createElement('div');chatPanel.className='chat-panel';
+    const mc=document.createElement('div');mc.className='chat-messages provider-messages';mc.id=providerElId('pm',p.id);chatPanel.appendChild(mc);
+    const inputArea=document.createElement('div');inputArea.className='chat-input-area provider-input-area';
+    const inputBox=document.createElement('div');inputBox.className='chat-input-container';
+    const row=document.createElement('div');row.className='chat-input-row';
+    const input=document.createElement('textarea');input.className='chat-input';input.rows=1;input.id=providerElId('pi',p.id);
+    input.placeholder=p.available===false?providerUnavailableText(p):'Message '+p.name+'...';input.disabled=p.available===false;
+    const send=document.createElement('button');send.className='send-btn';send.id=providerElId('psend',p.id);send.title='Send';send.innerHTML=_SEND_SVG;send.disabled=p.available===false;send.onclick=()=>providerSend(p.id);
+    row.appendChild(input);row.appendChild(send);inputBox.appendChild(row);
+    const footer=document.createElement('div');footer.className='provider-footer';
+    const hint=document.createElement('span');hint.className='provider-hint';hint.textContent=p.name+' · '+providerModeHint(p)+' · '+(p.model||p.provider_type||'default model');
+    const spacer=document.createElement('span');spacer.style.flex='1';
+    const status=document.createElement('span');status.className='provider-status';status.id=providerElId('pstatus',p.id);status.textContent=p.available===false?'Unavailable':'Ready';
+    const ctx=document.createElement('span');ctx.className='provider-context';ctx.title='Last response context usage';
+    const tok=document.createElement('span');tok.id=providerElId('ptokens',p.id);tok.textContent='0 tokens';
+    const bar=document.createElement('span');bar.className='ctx-bar';const fill=document.createElement('span');fill.className='ctx-fill';fill.id=providerElId('pctx',p.id);fill.style.width='0%';bar.appendChild(fill);ctx.appendChild(tok);ctx.appendChild(bar);
+    const stop=document.createElement('span');stop.className='toolbar-btn';stop.id=providerElId('pstop',p.id);stop.title='Stop';stop.style.color='var(--fg-error)';stop.style.display='none';stop.innerHTML=_STOP_SVG;stop.onclick=()=>providerCancel(p.id);
+    const fresh=document.createElement('span');fresh.className='toolbar-btn';fresh.title='New chat';fresh.textContent='＋';fresh.onclick=()=>providerNewChat(p.id);
+    footer.appendChild(hint);footer.appendChild(spacer);footer.appendChild(status);footer.appendChild(ctx);footer.appendChild(stop);footer.appendChild(fresh);
+    inputArea.appendChild(inputBox);inputArea.appendChild(footer);chatPanel.appendChild(inputArea);panel.appendChild(chatPanel);
     panels.appendChild(panel);
-    // Enter key
-    const inp=panel.querySelector('textarea');
-    if(inp)inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(p.id)}});
+    updateProviderEmpty(p.id);updateProviderContext(p.id,0);updateProviderStatus(p.id,p.available===false?'Unavailable':'Ready',p.available===false?'error':'');
+    input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(p.id)}});
   });
+  if(activeProviderId!=='chat'&&!providerDefs[activeProviderId])activeProviderId='chat';
+  document.querySelectorAll('.rtab').forEach(t=>t.classList.toggle('active',t.dataset.rtab===activeProviderId));
+  document.querySelectorAll('.right-panel').forEach(p=>p.classList.remove('active'));
+  const activePanel=activeProviderId==='chat'?$('rp-chat'):$(providerElId('rp',activeProviderId));if(activePanel)activePanel.classList.add('active');
+}
+function createProviderMessage(pid,role,model,text){
+  const refs=providerRefs(pid),mc=refs.messages;if(!mc)return null;clearProviderEmpty(pid);
+  const msg=document.createElement('div');msg.className='msg'+(role==='user'?' user-msg':role==='tool'?' provider-tool-msg':'');
+  const hdr=document.createElement('div');hdr.className='msg-header';
+  const av=document.createElement('span');av.className='msg-avatar '+role;av.textContent={user:'U',assistant:'✦',tool:'⚡',error:'!'}[role]||'ℹ';
+  const label=document.createElement('span');label.className='msg-role '+role;label.textContent={user:'You',assistant:providerDisplayName(pid),tool:'Tool',error:'Error'}[role]||role;
+  hdr.appendChild(av);hdr.appendChild(label);
+  if(model){const m=document.createElement('span');m.className='msg-model';m.textContent=model;hdr.appendChild(m)}
+  const body=document.createElement('div');body.className='msg-body';if(text!==undefined)body.textContent=text;
+  msg.appendChild(hdr);msg.appendChild(body);mc.appendChild(msg);providerScroll(mc);return body;
 }
 async function providerSend(pid){
-  const inp=$('pi-'+pid);if(!inp)return;const text=inp.value.trim();if(!text)return;
+  const p=providerDefs[pid];
+  if(p&&p.available===false){appendProviderError(pid,providerUnavailableText(p));updateProviderStatus(pid,'Unavailable','error');return}
+  const inp=providerRefs(pid).input;if(!inp)return;const text=inp.value.trim();if(!text)return;
+  const state=providerUiState[pid]||{};if(state.running)return;
   inp.value='';
-  const mc=$('pm-'+pid);if(mc){const d=document.createElement('div');d.className='msg';
-    d.innerHTML='<div class="msg-header"><span class="msg-avatar user">U</span><span class="msg-role user">You</span></div><div class="msg-body">'+esc(text)+'</div>';
-    mc.appendChild(d);mc.scrollTop=mc.scrollHeight}
-  await call('provider_send',pid,text);
+  createProviderMessage(pid,'user','',text);setProviderRunning(pid,true,'Thinking...','running');
+  let r;try{r=await call('provider_send',pid,text)}catch(e){r={error:String(e)}}
+  if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,'Error','error')}
 }
-async function providerCancel(pid){await call('provider_cancel',pid)}
-async function providerNewChat(pid){await call('provider_new_chat',pid);const mc=$('pm-'+pid);if(mc)mc.innerHTML=''}
+async function providerCancel(pid){updateProviderStatus(pid,'Stopping...','running');await call('provider_cancel',pid);setProviderRunning(pid,false,'Ready','')}
+async function providerNewChat(pid){await call('provider_new_chat',pid);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);setProviderRunning(pid,false,(providerDefs[pid]&&providerDefs[pid].available===false)?'Unavailable':'Ready',(providerDefs[pid]&&providerDefs[pid].available===false)?'error':'');updateProviderEmpty(pid)}
 window.providerSend=providerSend;window.providerCancel=providerCancel;window.providerNewChat=providerNewChat;
 
 // Provider streaming events
 const _origOnEditorEvent=window._onEditorEvent;
+function getProviderStreamBody(mc,pid){
+  let body=mc.querySelector('.msg:last-child .msg-body.streaming');
+  if(!body){
+    body=createProviderMessage(pid,'assistant',providerModelLabel(pid)||'');
+    if(body)body.classList.add('streaming');
+  }
+  return body;
+}
+function appendProviderStreamText(body,text){
+  if(!text)return;
+  let content=body._streamContent;
+  if(!content){
+    content=document.createElement('span');content.className='provider-stream-content';
+    const textNodes=Array.from(body.childNodes).filter(n=>n.nodeType===Node.TEXT_NODE);
+    content.textContent=textNodes.map(n=>n.textContent).join('');
+    textNodes.forEach(n=>n.remove());
+    body.appendChild(content);body._streamContent=content;
+  }
+  content.textContent+=text;
+}
+function renderProviderThinkingBlock(container,text,open){
+  const tb=document.createElement('div');tb.className='thinking-block';
+  const hdr=document.createElement('div');hdr.className='thinking-header'+(open?' open':'');
+  hdr.innerHTML=open?'<span class="arrow">▸</span> <span class="thinking-shimmer">Thinking...</span>':'<span class="arrow">▸</span> Thinking ('+text.split(/\s+/).filter(Boolean).length+' words)';
+  const body=document.createElement('div');body.className='thinking-body'+(open?' open':'');
+  body.textContent=text;
+  hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
+  tb.appendChild(hdr);tb.appendChild(body);container.appendChild(tb);
+  tb._hdr=hdr;tb._body=body;
+  return tb;
+}
+function onProviderThinkingDelta(mc,pid,data){
+  const body=getProviderStreamBody(mc,pid);
+  if(!body)return;
+  body._thinkingBuf=(body._thinkingBuf||'')+(data.content||'');
+  if(!body._thinkingEl)body._thinkingEl=renderProviderThinkingBlock(body,'',true);
+  if(body._thinkingEl._body)body._thinkingEl._body.textContent=body._thinkingBuf;
+  mc.scrollTop=mc.scrollHeight;
+}
+function providerValueToText(value){
+  if(value===undefined||value===null)return '';
+  if(typeof value==='string')return value;
+  try{return JSON.stringify(value,null,2)}catch{return String(value)}
+}
+function providerToolElementId(pid,callId){return 'ptc-'+providerDomKey(pid)+'-'+providerDomKey(callId||'last')}
+function providerToolStateLabel(data,done){
+  const raw=Number(data&&data.progress);let progress='';
+  if(Number.isFinite(raw)){const pct=Math.max(0,Math.min(100,Math.round(raw<=1?raw*100:raw)));progress=pct+'%'}
+  const state=(data&&data.state)||'';
+  return progress?(state?state+' · '+progress:progress):(state|| (done?'done':'running'));
+}
+function renderProviderToolStart(pid,data){
+  const name=data.name||'tool',callId=data.id||name,existing=document.getElementById(providerToolElementId(pid,callId));
+  const args=providerValueToText(data.arguments);
+  if(existing){updateProviderToolState(pid,data,false);return existing}
+  const body=createProviderMessage(pid,'tool',name);if(!body)return null;
+  const el=document.createElement('div');el.className='tool-call';el.id=providerToolElementId(pid,callId);el.dataset.toolName=name;
+  const hdr=document.createElement('div');hdr.className='tool-header';
+  hdr.innerHTML='<span class="arrow">▸</span> Tool: <span class="tool-name">'+esc(name)+'</span><span class="tool-state"><span class="spinner"></span><span class="state-text">'+esc(providerToolStateLabel(data,false))+'</span></span>';
+  const tb=document.createElement('div');tb.className='tool-body';
+  try{tb.textContent=JSON.stringify(JSON.parse(args),null,2)}catch{tb.textContent=args||'No arguments'}
+  hdr.onclick=()=>{hdr.classList.toggle('open');tb.classList.toggle('open')};
+  el.appendChild(hdr);el.appendChild(tb);body.appendChild(el);providerScroll(providerRefs(pid).messages);return el;
+}
+function updateProviderToolState(pid,data,done){
+  const callId=data.id||data.name||'last';let el=document.getElementById(providerToolElementId(pid,callId));
+  if(!el)el=renderProviderToolStart(pid,data||{});if(!el)return;
+  const label=providerToolStateLabel(data,done),state=el.querySelector('.tool-state');
+  if(state){
+    const mark=done?(data&&data.error?'<span class="error-mark">✗</span>':'<span class="checkmark">✓</span>'):'<span class="spinner"></span>';
+    state.innerHTML=mark+'<span class="state-text">'+esc(label)+'</span>';
+  }
+}
+function renderProviderToolEnd(pid,data){
+  data=data||{};const name=data.name||'tool';
+  updateProviderToolState(pid,data,true);
+  const el=document.getElementById(providerToolElementId(pid,data.id||name||'last'));if(!el)return;
+  const body=el.closest('.msg-body');const result=providerValueToText(data.result!==undefined?data.result:data.error);
+  if(body&&result&&!body.querySelector('.tool-result'))renderToolResult(body,el.dataset.toolName||name,result);
+  providerScroll(providerRefs(pid).messages);
+}
+function appendProviderError(pid,error){
+  const body=createProviderMessage(pid,'error','provider',error||'Error');if(body)body.classList.add('error-text');
+}
+function renderProviderToolConfirm(pid,data){
+  const body=createProviderMessage(pid,'tool',data.name||'tool');
+  if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');
+}
 window._onEditorEvent=function(event,data){
-  if(event.startsWith('provider_')){
+  if(event&&event.startsWith('provider_')){
     const pid=data&&data.provider;if(!pid)return;
-    const mc=$('pm-'+pid);if(!mc)return;
+    const mc=providerRefs(pid).messages;if(!mc)return;
     if(event==='provider_stream_delta'){
-      let last=mc.querySelector('.msg:last-child .msg-body.streaming');
-      if(!last){const d=document.createElement('div');d.className='msg';
-        d.innerHTML='<div class="msg-header"><span class="msg-avatar assistant">✦</span><span class="msg-role assistant">'+esc(pid)+'</span></div><div class="msg-body streaming"></div>';
-        mc.appendChild(d);last=d.querySelector('.msg-body')}
-      last.textContent+=data.content||'';mc.scrollTop=mc.scrollHeight;
+      setProviderRunning(pid,true,'Streaming...','running');
+      appendProviderStreamText(getProviderStreamBody(mc,pid),data.content||'');mc.scrollTop=mc.scrollHeight;
+    }else if(event==='provider_thinking_delta'){
+      setProviderRunning(pid,true,'Thinking...','running');
+      onProviderThinkingDelta(mc,pid,data);
     }else if(event==='provider_stream_end'){
-      const s=mc.querySelector('.msg-body.streaming');if(s){s.classList.remove('streaming');
-        if(data.content)s.innerHTML=renderMd(data.content)}
+      const s=mc.querySelector('.msg-body.streaming')||((data.content||data.thinking||data.error)?getProviderStreamBody(mc,pid):null);if(s){
+        const streamed=s._streamContent?s._streamContent.textContent:'';
+        const content=data.content!==undefined&&data.content!==''?data.content:streamed;
+        const thinking=data.thinking||s._thinkingBuf||'';
+        s.classList.remove('streaming');s.innerHTML='';s._streamContent=null;s._thinkingEl=null;s._thinkingBuf='';
+        if(thinking)renderProviderThinkingBlock(s,thinking,false);
+        if(content)renderMd(s,content);
+        if(data.error&&!content){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+data.error;s.appendChild(e)}
+      }
+      updateProviderContext(pid,data.usage);setProviderRunning(pid,false,data.error?'Error':'Ready',data.error?'error':'');
       mc.scrollTop=mc.scrollHeight;
     }else if(event==='provider_tool_start'){
-      const d=document.createElement('div');d.className='tool-call';d.innerHTML='<div class="tool-header">🔧 '
-        +esc(data.name||'')+'</div>';mc.appendChild(d);
+      setProviderRunning(pid,true,'Tool: '+(data.name||'running'),'running');renderProviderToolStart(pid,data);
+    }else if(event==='provider_tool_confirm'){
+      setProviderRunning(pid,true,'Waiting for confirmation','running');renderProviderToolConfirm(pid,data);
+    }else if(event==='provider_tool_progress'){
+      setProviderRunning(pid,true,'Tool: '+(data.name||'running')+' '+providerToolStateLabel(data,false),'running');updateProviderToolState(pid,data,false);
     }else if(event==='provider_tool_end'){
-      // handled by stream_end
+      renderProviderToolEnd(pid,data);updateProviderStatus(pid,'Tool complete','');
     }else if(event==='provider_error'){
-      const d=document.createElement('div');d.className='msg';d.innerHTML='<div class="msg-body error-text">'+esc(data.error||'Error')+'</div>';
-      mc.appendChild(d);
+      appendProviderError(pid,data.error||'Error');setProviderRunning(pid,false,'Error','error');
     }else if(event==='provider_idle'){
-      // noop
+      setProviderRunning(pid,false,'Ready','');updateProviderEmpty(pid);
     }
     return;
   }
@@ -2159,6 +2487,7 @@ function openSettings(){
   setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
   setInputValue('s-cust-workflows',listToText(cust.workflow_locations));setInputValue('s-cust-skills',listToText(cust.skill_locations));
+  refreshRuntimeSupport();
   renderCustomModels();
   $('settings-modal').classList.add('open');
 }
@@ -2211,26 +2540,172 @@ async function saveSettings(){
 window.saveSettings=saveSettings;
 
 function syncUI(){
+  ensureSelectOption($('provider-sel'),config.provider,providerLabel(config.provider));
+  ensureSelectOption($('chat-provider-sel'),config.provider,providerLabel(config.provider));
   $('provider-sel').value=config.provider;$('model-inp').value=config.model;
+  const chatProvider=$('chat-provider-sel');if(chatProvider)chatProvider.value=config.provider;
+  const chatModel=$('chat-model-inline');if(chatModel)chatModel.value=config.model||'';
   const mname=config.model||config.provider;
   $('status-model').textContent=mname;
   if($('model-chip'))$('model-chip').textContent=mname;
+  renderChatControlOptions();
 }
 function updateContextUsage(usedTokens){
   totalTokens=usedTokens;
+  const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=usedTokens+' tokens';
   const ctxEl=$('ctx-text'),fillEl=$('ctx-fill');if(!ctxEl||!fillEl)return;
   const cw=(config.context_window&&config.context_window.max_input)||128000;
   const pct=Math.min(100,Math.round(usedTokens/cw*100));
   ctxEl.textContent=usedTokens>=1000?Math.round(usedTokens/1000)+'K / '+Math.round(cw/1000)+'K':usedTokens+' / '+Math.round(cw/1000)+'K';
   fillEl.style.width=pct+'%';
   fillEl.className='ctx-fill'+(pct>=90?' crit':pct>=75?' warn':'');
-  $('status-tokens').textContent=usedTokens+' tokens';
 }
-$('provider-sel').onchange=e=>{config.provider=e.target.value;
+function providerLabel(value){
+  const labels={openai:'OpenAI',anthropic:'Anthropic',deepseek:'DeepSeek',ollama:'Ollama',custom:'Custom'};
+  return labels[value]||value||'Provider';
+}
+function ensureSelectOption(sel,value,label){
+  if(!sel||!value)return;
+  if(!Array.from(sel.options).some(o=>o.value===value))sel.add(new Option(label||value,value));
+}
+function readProviderModelDefaults(provider){
   const defs={openai:'gpt-4o',anthropic:'claude-sonnet-4-20250514',deepseek:'deepseek-chat',ollama:'llama3.1',custom:''};
-  if(!config.model)$('model-inp').value=defs[config.provider]||'';
-  $('status-model').textContent=$('model-inp').value||config.provider};
-$('model-inp').onchange=e=>{config.model=e.target.value;$('status-model').textContent=e.target.value||config.provider};
+  return defs[provider]||'';
+}
+function updateProviderModel(provider,model,persist){
+  config.provider=provider||config.provider||'openai';
+  config.model=model!==undefined?model:(config.model||readProviderModelDefaults(config.provider));
+  syncUI();
+  if(persist)persistProviderModel();
+}
+async function persistProviderModel(){
+  const payload={provider:config.provider,model:config.model};
+  let r=await call('set_chat_controls',payload);
+  if(!(r&&r.ok))r=await call('set_active_provider',config.provider,config.model);
+  if(!(r&&r.ok)&&config.model)r=await call('set_active_model',config.model);
+  if(!(r&&r.ok))r=await call('set_provider_model',config.provider,config.model);
+  if(!(r&&r.ok))await call('save_config',config);
+}
+$('provider-sel').onchange=e=>{
+  const provider=e.target.value;
+  const model=config.model||$('model-inp').value||readProviderModelDefaults(provider);
+  updateProviderModel(provider,model,true);
+};
+$('model-inp').onchange=e=>updateProviderModel(config.provider,e.target.value,true);
+
+// ── Inline CHAT controls ──
+let chatControlState={agents:[],workflows:[],providers:[]};
+function normalizeControlList(value,key){
+  const raw=Array.isArray(value)?value:(value&&Array.isArray(value[key])?value[key]:[]);
+  return raw.filter(Boolean);
+}
+function controlItemId(item){return String((item&&typeof item==='object'&&(item.id||item.value||item.name))||item||'')}
+function controlItemName(item){return String((item&&typeof item==='object'&&(item.name||item.label||item.id||item.value))||item||'')}
+function renderProviderControlOptions(providers){
+  const rows=normalizeControlList(providers,'providers');
+  if(!rows.length)return;
+  [$('provider-sel'),$('chat-provider-sel')].forEach(sel=>{
+    if(!sel)return;
+    rows.forEach(p=>ensureSelectOption(sel,controlItemId(p),controlItemName(p)));
+  });
+}
+function renderChatControlOptions(){
+  const agentSel=$('chat-agent-sel');
+  if(agentSel){
+    agentSel.innerHTML='';
+    agentSel.add(new Option('Agent: Default',''));
+    chatControlState.agents.forEach(a=>{
+      const id=controlItemId(a);if(!id)return;
+      const name=controlItemName(a)||id;
+      agentSel.add(new Option((id===activeAgentId?'Agent: ':'')+name,id));
+    });
+    agentSel.value=activeAgentId||'';
+    agentSel.classList.toggle('active',!!activeAgentId);
+    agentSel.classList.toggle('muted',!activeAgentId);
+    agentSel.title=activeAgentId?'Active agent: '+activeAgentId:'Active agent: Default';
+  }
+  const modeSel=$('chat-mode-sel');
+  if(modeSel)modeSel.value=currentMode||config.mode||'edit';
+  const wfSel=$('chat-workflow-sel');
+  if(wfSel){
+    const selected=wfSel.value;
+    wfSel.innerHTML='';
+    wfSel.add(new Option('Workflow',''));
+    chatControlState.workflows.forEach(w=>{
+      const id=controlItemId(w);if(!id)return;
+      wfSel.add(new Option('⚡ '+(controlItemName(w)||id),id));
+    });
+    if(selected&&Array.from(wfSel.options).some(o=>o.value===selected))wfSel.value=selected;
+    wfSel.classList.toggle('muted',!wfSel.value);
+  }
+  updateToolbarWorkflowButton();
+}
+async function loadChatControls(){
+  const controls=await call('get_chat_controls');
+  if(controls&&!controls.error){
+    if(controls.config)Object.assign(config,withSettingsDefaults({...config,...controls.config}));
+    if(controls.provider)config.provider=controls.provider;
+    if(controls.model!==undefined)config.model=controls.model;
+    if(controls.mode)currentMode=controls.mode;
+    activeAgentId=controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'';
+    chatControlState.agents=normalizeControlList(controls.agents,'agents');
+    chatControlState.workflows=normalizeControlList(controls.workflows,'workflows');
+    chatControlState.providers=normalizeControlList(controls.providers,'providers');
+    renderProviderControlOptions(chatControlState.providers);
+  }else{
+    const c=await call('load_config');if(c)Object.assign(config,withSettingsDefaults({...config,...c}));
+    const ar=await call('list_agents');const wr=await call('list_workflows');const aa=await call('get_active_agent');
+    chatControlState.agents=normalizeControlList(ar,'agents');
+    chatControlState.workflows=normalizeControlList(wr,'workflows');
+    activeAgentId=(aa&&aa.agent_id)||activeAgentId||'';
+  }
+  renderChatControlOptions();syncUI();updateModeUI();bindChatToolbarControls();
+}
+let chatToolbarBound=false;
+function bindChatToolbarControls(){
+  if(chatToolbarBound)return;chatToolbarBound=true;
+  const provider=$('chat-provider-sel');if(provider)provider.onchange=e=>{
+    const next=e.target.value;
+    const model=config.model||readProviderModelDefaults(next);
+    updateProviderModel(next,model,true);
+  };
+  const model=$('chat-model-inline');if(model){
+    model.onchange=e=>updateProviderModel(config.provider,e.target.value,true);
+    model.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();model.blur()}else if(e.key==='Escape'){model.value=config.model||'';model.blur()}};
+  }
+  const agent=$('chat-agent-sel');if(agent)agent.onchange=e=>setToolbarAgent(e.target.value);
+  const mode=$('chat-mode-sel');if(mode)mode.onchange=e=>setToolbarMode(e.target.value);
+  const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=updateToolbarWorkflowButton;
+}
+async function setToolbarAgent(agentId){
+  let r=await call('set_chat_controls',{agent_id:agentId||''});
+  if(!(r&&r.ok))r=agentId?await call('set_active_agent',agentId):await call('clear_active_agent');
+  if((r&&r.ok)||!api()){
+    activeAgentId=agentId||'';renderChatControlOptions();if(api())refreshAgents();
+    setStatus(activeAgentId?'Agent: '+activeAgentId:'Agent: Default');
+  }else{renderChatControlOptions();setStatus((r&&r.error)||'Failed to change agent')}
+}
+async function setToolbarMode(mode){
+  if(!MODE_ORDER.includes(mode)){renderChatControlOptions();return}
+  let r=await call('set_chat_controls',{mode:mode});
+  if(!(r&&r.ok))r=await call('set_active_mode',mode);
+  if(!(r&&r.ok))r=await call('set_mode',mode);
+  if((r&&r.ok)||!api()){
+    currentMode=mode;config.mode=mode;updateModeUI();renderChatControlOptions();setStatus('Mode: '+mode);
+  }else{renderChatControlOptions();setStatus((r&&r.error)||'Failed to change mode')}
+}
+function updateToolbarWorkflowButton(){
+  const wfSel=$('chat-workflow-sel'),run=$('chat-workflow-run');
+  if(!wfSel||!run)return;
+  run.disabled=!wfSel.value;
+  wfSel.classList.toggle('muted',!wfSel.value);
+}
+function runToolbarWorkflow(){
+  const wfSel=$('chat-workflow-sel');if(!wfSel||!wfSel.value){switchSidebar('agents');return}
+  const wf=chatControlState.workflows.find(w=>controlItemId(w)===wfSel.value);
+  promptRunWorkflow(wfSel.value,(wf&&controlItemName(wf))||wfSel.value);
+}
+window.runToolbarWorkflow=runToolbarWorkflow;
 
 function setStatus(t){$('status-text').textContent=t}
 
@@ -2238,12 +2713,15 @@ function setStatus(t){$('status-text').textContent=t}
 let currentMode='edit';
 const MODE_LABELS={chat:'💬 Chat',edit:'✏️ Edit',agent:'🤖 Agent'};
 const MODE_ORDER=['chat','edit','agent'];
-function updateModeUI(){$('status-mode').textContent=MODE_LABELS[currentMode]||currentMode}
+function updateModeUI(){
+  $('status-mode').textContent=MODE_LABELS[currentMode]||currentMode;
+  const modeSel=$('chat-mode-sel');if(modeSel)modeSel.value=currentMode||'edit';
+}
 async function cycleMode(){
   const idx=(MODE_ORDER.indexOf(currentMode)+1)%MODE_ORDER.length;
   const next=MODE_ORDER[idx];
   const r=await call('set_mode',next);
-  if(r&&r.ok){currentMode=next;updateModeUI();setStatus('Mode: '+currentMode)}
+  if(r&&r.ok){currentMode=next;updateModeUI();renderChatControlOptions();setStatus('Mode: '+currentMode)}
 }
 window.cycleMode=cycleMode;
 async function loadMode(){
@@ -2260,12 +2738,13 @@ function renderPermissions(){
     const tools=(r.tools&&r.tools.length?r.tools:Object.keys(perms)).sort();
     let html='<div style="margin-top:4px"><b>Tool Permissions</b> <span style="color:var(--fg-dim)">('+esc(selectedMode)+' preview)</span></div><table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:4px">';
     tools.forEach(t=>{
-      const p=perms[t];
+      const p=perms[t]||defaults[t]||'confirm';
+      const def=defaults[t]||p;
       const cls=p==='allowed'?'color:var(--fg-success,#4c4)':p==='confirm'?'color:var(--accent)':'color:var(--fg-error,#f44);opacity:0.6';
       const ov=overrides[t]||'';
-      html+='<tr><td style="padding:2px 4px;font-family:var(--mono)">'+esc(t)+'</td><td style="padding:2px 4px;'+cls+'">'+esc(p||'allowed')+'</td>'
+      html+='<tr><td style="padding:2px 4px;font-family:var(--mono)">'+esc(t)+'</td><td style="padding:2px 4px;'+cls+'">'+esc(p)+'</td>'
         +'<td style="padding:2px 4px"><select class="perm-select" data-tool="'+esc(t)+'" style="font-size:11px;width:100%">'
-        +'<option value="" '+(!ov?'selected':'')+'>Default ('+esc(defaults[t]||'allowed')+')</option>'
+        +'<option value="" '+(!ov?'selected':'')+'>Default ('+esc(def)+')</option>'
         +'<option value="allowed" '+(ov==='allowed'?'selected':'')+'>Allowed</option>'
         +'<option value="confirm" '+(ov==='confirm'?'selected':'')+'>Confirm</option>'
         +'<option value="disabled" '+(ov==='disabled'?'selected':'')+'>Disabled</option>'
@@ -2323,6 +2802,35 @@ $('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings(
 // ── Extensions marketplace ──
 let extCache=[];
 
+function contributionTotal(counts){
+  if(!counts||typeof counts!=='object')return 0;
+  return Object.values(counts).reduce((sum,v)=>sum+(Array.isArray(v)?v.length:(Number(v)||0)),0);
+}
+function renderRuntimeSupport(summary){
+  const support=summary||{};
+  const ext=support.extensions||{};
+  const mcp=support.mcp||{};
+  const label=support.support_label||'Manifest/API compatibility; full Node VS Code host not yet enabled';
+  const scanned=Number(ext.scanned_manifest_count)||0;
+  const compatible=Number(ext.compatible_manifest_count)||0;
+  const manifestCount=scanned||compatible;
+  const contribs=contributionTotal(ext.contribution_counts);
+  const extText=(Number(ext.installed_count)||0)+' installed · '+manifestCount+' manifests · '+contribs+' contributions';
+  const mcpText='access '+(mcp.access||'prompt')+' · autostart '+(mcp.autostart?'on':'off')+' · '+(Number(mcp.discovered_server_count)||0)+' discovered · '+(Number(mcp.connected_server_count)||0)+' connected';
+  const tierEl=$('runtime-support-tier'),extEl=$('runtime-support-ext'),mcpEl=$('runtime-support-mcp');
+  if(tierEl)tierEl.textContent=label;
+  if(extEl)extEl.textContent=extText;
+  if(mcpEl)mcpEl.textContent=mcpText;
+  const extStatus=$('extension-runtime-status');
+  if(extStatus)extStatus.textContent=label+' — '+extText+'.';
+  const mcpStatus=$('mcp-runtime-status');
+  if(mcpStatus)mcpStatus.textContent='MCP '+(mcp.status||'not_configured')+': '+mcpText+'. No summary refresh launches external commands.';
+}
+async function refreshRuntimeSupport(){
+  const r=await call('get_runtime_support_summary');
+  if(r&&!r.error)renderRuntimeSupport(r);
+}
+
 async function searchExtensions(query){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
   if(!query) query='ai chat model';
@@ -2334,6 +2842,7 @@ async function searchExtensions(query){
   extCache=r.extensions||[];
   renderExtList($('ext-marketplace-list'),extCache);
   refreshInstalledExts();
+  refreshRuntimeSupport();
 }
 
 async function refreshInstalledExts(){
@@ -2869,7 +3378,16 @@ function toggleChatVis(){
   $('rsplitter').style.display=(_chatVis&&_editorVis)?'':'none';
   $('tb-toggle-chat').classList.toggle('active',_chatVis);
 }
-function focusTerminal(){/* placeholder */}
+function focusTerminal(){
+  showEditorArea();_editorVis=true;
+  const toggle=$('tb-toggle-editor');if(toggle)toggle.classList.add('active');
+  document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));
+  const termPanel=$('terminal-panel');if(termPanel){termPanel.style.display='flex';termPanel.classList.add('active')}
+  const outPanel=$('output-panel');if(outPanel){outPanel.style.display='none';outPanel.classList.remove('active')}
+  const input=$('term-input'),out=$('terminal-output');
+  if(input)input.focus();else if(out){out.setAttribute('tabindex','-1');out.focus()}
+  setStatus('Terminal focused');
+}
 function goToLineDialog(){
   const ln=prompt('Go to line:');if(ln){const n=parseInt(ln);if(n>0){showEditorArea();
   const ed=$('editor-text');if(ed){const lines=ed.value.split('\\n');let pos=0;

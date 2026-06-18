@@ -336,8 +336,8 @@ class AIEditorBridge:
             payload["usage"] = msg.usage
         self._emit("ai_editor_stream_end", payload)
 
-    def _on_tool_start(self, call_id: str, name: str, args: str) -> None:
-        self._emit("ai_editor_tool_start", {"id": call_id, "name": name, "arguments": args})
+    def _on_tool_start(self, call_id: str, name: str, args: str, state: str = "") -> None:
+        self._emit("ai_editor_tool_start", {"id": call_id, "name": name, "arguments": args, "state": state})
 
     def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
         self._emit("ai_editor_tool_end", {"id": call_id, "result": result, "state": state})

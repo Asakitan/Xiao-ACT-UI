@@ -3,7 +3,7 @@
 Providers are tabs in the right sidebar (CHAT / CLAUDE CODE / CODEX / plugin).
 Each provider wraps a conversation with its own model config and system prompt.
 
-Built-in providers auto-detect availability from settings (API keys and CLIs).
+Built-in providers auto-detect availability from supported settings.
 Plugins call ``register_chat_provider()`` to add custom tabs.
 """
 
@@ -97,7 +97,7 @@ class ChatProviderRegistry:
     def list_available(self,
                        settings_getter: Optional[Callable] = None,
                        ) -> List[Dict[str, Any]]:
-        """Return providers with availability flag based on configured keys/CLIs."""
+        """Return providers with availability flag based on supported configuration."""
         result = []
         for p in self._providers.values():
             avail = self._check_available(p, settings_getter)
@@ -114,25 +114,14 @@ class ChatProviderRegistry:
             return True
         if p.id == "claude-code":
             prefer_cli = _get_provider_bool("claude_code", "prefer_cli", settings_getter)
-            cli_path = _get_provider_cli_path("claude_code", settings_getter)
-            if _cli_available(cli_path):
-                return True
-            if shutil.which("claude") is not None:
-                return True
             if prefer_cli:
                 return False
             return bool(_get_provider_key("anthropic", settings_getter))
         if p.id == "codex":
             transport = _get_provider_option("codex", "transport", settings_getter).lower()
             if transport == "cli":
-                cli_path = _get_provider_cli_path("codex", settings_getter)
-                return _cli_available(cli_path) or shutil.which("codex") is not None
-            if _get_provider_key("openai", settings_getter):
-                return True
-            cli_path = _get_provider_cli_path("codex", settings_getter)
-            if _cli_available(cli_path):
-                return True
-            return shutil.which("codex") is not None
+                return False
+            return bool(_get_provider_key("openai", settings_getter))
         if p.api_key:
             return True
         key = _get_provider_key(p.provider_type, settings_getter)

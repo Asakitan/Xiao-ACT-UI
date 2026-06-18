@@ -101,11 +101,13 @@ MODES = ("chat", "edit", "agent")
 
 MUTATING_TOOLS = frozenset({
     "editFile", "runTerminal", "editor_setContent",
+    "manageTodoList",
 })
 
 READ_TOOLS = frozenset({
     "readFile", "listFiles", "searchFiles",
     "editor_getContent", "editor_getSelection",
+    "webFetch",
 })
 
 ALWAYS_TOOLS = frozenset({
@@ -142,6 +144,22 @@ def effective_permissions(mode: str,
 
 
 def tool_permission(mode: str, tool_name: str,
-                    overrides: Optional[Dict[str, str]] = None) -> str:
+                    overrides: Optional[Dict[str, str]] = None,
+                    read_only: Optional[bool] = None,
+                    category: str = "") -> str:
     perms = effective_permissions(mode, overrides)
-    return perms.get(tool_name, "allowed")
+    explicit = perms.get(tool_name)
+    if explicit in {"allowed", "confirm", "disabled"}:
+        return explicit
+
+    selected_mode = mode if mode in MODES else "edit"
+    if selected_mode == "chat":
+        return "disabled"
+
+    normalized_category = (category or "").strip().lower()
+    if normalized_category.startswith("ext:") or normalized_category.startswith("mcp:"):
+        return "confirm"
+
+    if read_only is True:
+        return "allowed"
+    return "confirm"

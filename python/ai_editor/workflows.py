@@ -142,8 +142,13 @@ class WorkflowRegistry:
 
     def __init__(self) -> None:
         self._workflows: Dict[str, WorkflowDef] = {}
+        self._version = 0
         for w in BUILTIN_WORKFLOWS:
             self._workflows[w.id] = w
+        self._bump_version()
+
+    def _bump_version(self) -> None:
+        self._version += 1
 
     def load_custom(self, workspace_root: str = "") -> None:
         if workspace_root:
@@ -174,6 +179,7 @@ class WorkflowRegistry:
                 wf._scope = scope              # type: ignore[attr-defined]
                 wf._plugin_id = plugin_id      # type: ignore[attr-defined]
                 self._workflows[wf.id] = wf
+                self._bump_version()
             except Exception:
                 pass
 
@@ -194,6 +200,7 @@ class WorkflowRegistry:
         wf.builtin = False
         wf._scope = scope  # type: ignore[attr-defined]
         self._workflows[wf.id] = wf
+        self._bump_version()
         return {"ok": True, "path": fpath, "scope": scope}
 
     def delete_custom(self, wf_id: str,
@@ -210,7 +217,8 @@ class WorkflowRegistry:
             fpath = os.path.join(entry["path"], f"{wf_id}.json")
             if os.path.isfile(fpath):
                 os.remove(fpath)
-        self._workflows.pop(wf_id, None)
+        if self._workflows.pop(wf_id, None) is not None:
+            self._bump_version()
         return {"ok": True}
 
     @staticmethod
