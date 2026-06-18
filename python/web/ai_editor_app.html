@@ -629,7 +629,7 @@ pre.code-block { overflow:visible; }
   <div class="title">SAO AI Editor</div>
   <!-- Panel toggle actions -->
   <div class="tb-actions">
-    <div class="tb-act" id="tb-toggle-sidebar" onclick="toggleSidebarVis()" title="Toggle Sidebar">
+    <div class="tb-act" id="tb-toggle-sidebar" onclick="toggleSidebarVis()" title="Toggle Sidebar (Ctrl+B)">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h4v12H2V2zm5 0h7v12H7V2z" opacity=".6"/><path d="M2 2h4v12H2V2z"/></svg>
     </div>
     <div class="tb-act" id="tb-toggle-editor" onclick="toggleEditorVis()" title="Toggle Editor">
@@ -637,18 +637,6 @@ pre.code-block { overflow:visible; }
     </div>
     <div class="tb-act active" id="tb-toggle-chat" onclick="toggleChatVis()" title="Toggle Chat Panel">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10 2h4v12h-4V2zm-1 0H2v12h7V2z" opacity=".6"/><path d="M10 2h4v12h-4V2z"/></svg>
-    </div>
-  </div>
-  <!-- Window control buttons -->
-  <div class="tb-chrome">
-    <div class="tb-btn" onclick="pywebview.api.win_minimize()" title="Minimize">
-      <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
-    </div>
-    <div class="tb-btn" onclick="pywebview.api.win_maximize()" title="Maximize">
-      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor"/></svg>
-    </div>
-    <div class="tb-btn close" onclick="pywebview.api.win_close()" title="Close">
-      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2"/></svg>
     </div>
   </div>
 </div>
@@ -2934,10 +2922,7 @@ async function refreshInstalledExts(){
     if(cached){renderExtCard(list,{...cached,installed:true})}
     else{
       const card=document.createElement('div');card.className='ext-card';
-      const icon=e.is_act_plugin?'⚡':'📦';
-      const tag=e.is_act_plugin?'<span class="ext-badge">ACT Plugin</span>':'';
-      const statusDot=e.is_act_plugin?(e.enabled?'<span style="color:var(--fg-success)">●</span>':'<span style="color:var(--fg-dim)">○</span>'):'';
-      card.innerHTML='<div class="ext-icon">'+icon+'</div><div class="ext-info"><div class="ext-name">'+statusDot+' '+esc(e.name||e.id)+' '+tag+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
+      card.innerHTML='<div class="ext-icon">📦</div><div class="ext-info"><div class="ext-name">'+esc(e.name||e.id)+'</div><div class="ext-desc">'+esc(e.description||'Installed')+'</div>'
         +(e.version?'<div class="ext-meta"><span class="ext-badge">v'+esc(e.version)+'</span></div>':'')+'</div>';
       list.appendChild(card);
     }

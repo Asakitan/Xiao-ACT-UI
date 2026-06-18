@@ -2123,33 +2123,12 @@ class AIEditorAPI:
             return {"error": str(exc)}
 
     def list_installed_extensions(self) -> Dict:
-        """List locally installed extensions + ACT plugins."""
-        exts = []
+        """List locally installed VSCode-style extensions."""
         try:
             from ai_editor.extensions import list_installed
-            exts.extend(list_installed())
-        except Exception:
-            pass
-        try:
-            pm = getattr(self._gui_ref, '_act_plugin_manager', None) if self._gui_ref else None
-            if pm:
-                manifests = getattr(pm, '_manifests', None) or {}
-                enabled = getattr(pm, '_enabled', None) or {}
-                for pid, m in manifests.items():
-                    exts.append({
-                        "id": f"act.{pid}",
-                        "name": m.get("name", pid),
-                        "description": m.get("description", ""),
-                        "version": m.get("version", ""),
-                        "publisher": "ACT Plugin",
-                        "installed_at": 0,
-                        "has_manifest": True,
-                        "is_act_plugin": True,
-                        "enabled": enabled.get(pid, False),
-                    })
-        except Exception:
-            pass
-        return {"extensions": exts}
+            return {"extensions": list_installed()}
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def get_extension_detail(self, publisher: str, name: str) -> Dict:
         """Fetch a single extension detail from marketplace."""
@@ -2616,6 +2595,41 @@ def _launch_subprocess() -> None:
         print(f"[AIEditor] subprocess failed: {exc}")
 
 
+_WIN_POS_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_pos.json")
+
+
+def _load_window_pos() -> dict:
+    try:
+        with open(_WIN_POS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_window_pos(x: int, y: int, w: int, h: int) -> None:
+    os.makedirs(os.path.dirname(_WIN_POS_FILE), exist_ok=True)
+    try:
+        with open(_WIN_POS_FILE, "w") as f:
+            json.dump({"x": x, "y": y, "w": w, "h": h}, f)
+    except Exception:
+        pass
+
+
+def _default_bottom_right_pos(width: int = 1000, height: int = 700) -> tuple:
+    """Screen bottom-right, 20px above taskbar."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        sw = user32.GetSystemMetrics(0)
+        sh = user32.GetSystemMetrics(1)
+        # Taskbar ~ 40px, 20px margin above it
+        x = max(0, sw - width - 20)
+        y = max(0, sh - height - 60)
+        return x, y
+    except Exception:
+        return 200, 100
+
+
 def _launch_webview_blocking(gui_ref: Any = None) -> None:
     """Run pywebview in the current thread (must be main thread)."""
     global _running_window
@@ -2624,16 +2638,27 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
     if not os.path.isfile(html_file):
         print(f"[AIEditor] HTML not found: {html_file}")
         return
+
+    saved = _load_window_pos()
+    w = saved.get("w", 1000)
+    h = saved.get("h", 700)
+    if saved.get("x") is not None:
+        x, y = saved["x"], saved["y"]
+    else:
+        x, y = _default_bottom_right_pos(w, h)
+
     api = AIEditorAPI(gui_ref)
     url = f"file:///{html_file.replace(os.sep, '/')}"
     window = webview.create_window(
         "SAO AI Editor",
         url=url,
-        width=1200,
-        height=800,
-        min_size=(800, 500),
+        width=w,
+        height=h,
+        x=x,
+        y=y,
+        min_size=(600, 400),
         js_api=api,
-        frameless=True,
+        frameless=False,
         easy_drag=False,
         text_select=True,
     )
@@ -2642,6 +2667,10 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
 
     def _on_closed():
         global _running_window
+        try:
+            _save_window_pos(window.x, window.y, window.width, window.height)
+        except Exception:
+            pass
         _running_window = None
 
     window.events.closed += _on_closed
