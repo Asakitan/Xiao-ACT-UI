@@ -246,6 +246,7 @@ class SAOPlayerGUIMenuMixin:
 
         tool_items = [
             {'icon': '✦', 'label': 'AI Editor (LLM)', 'command': self._toggle_ai_editor_panel},
+            {'icon': '⚙', 'label': 'Process Selector', 'command': self._toggle_process_selector_panel},
         ]
 
         plugin_items = self._build_plugin_menu_items()

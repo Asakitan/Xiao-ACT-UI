@@ -88,6 +88,17 @@ class SAOPlayerGUIPanelsMixin:
             except Exception:
                 pass
 
+    def _toggle_process_selector_panel(self):
+        self._dismiss_sao_menu_for_panel()
+        if not getattr(self, '_process_selector_panel', None):
+            from gui_modules.sao_gui_process_selector import ProcessSelectorPanel
+            self._process_selector_panel = ProcessSelectorPanel(self.root, self)
+        if self._process_selector_panel.is_visible():
+            self._process_selector_panel.hide()
+        else:
+            self._process_selector_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._process_selector_panel))
+
     def _toggle_act_plugin_manager_panel(self):
         """打开/关闭插件管理面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()

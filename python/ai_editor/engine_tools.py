@@ -729,6 +729,8 @@ def _engine_dispatch(gui_ref: Any, action: str = "", **kw) -> Any:
         "plugins": lambda: _plugins(gui_ref),
         "settings_get": lambda: _settings_get(gui_ref, kw.get("key", "")),
         "settings_set": lambda: _settings_set(gui_ref, kw.get("key", ""), kw.get("value")),
+        "list_processes": lambda: _list_processes(),
+        "select_process": lambda: _select_process(gui_ref, kw.get("name", ""), kw.get("pid", 0)),
         "eval": lambda: _eval(gui_ref, kw.get("expression", "")),
         "exec": lambda: _exec(gui_ref, kw.get("code", "")),
     }
@@ -807,5 +809,44 @@ def _exec(g: Any, code: str) -> Dict:
     try:
         exec(code + "\n", {"__builtins__": __builtins__}, ns)
         return {"ok": True, "output": ns.get("_output", [])}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _list_processes() -> Dict:
+    try:
+        from gui_modules.sao_gui_process_selector import list_processes
+        procs = list_processes()
+        return {"ok": True, "count": len(procs),
+                "processes": [{"name": p["name"], "pid": p["pid"]} for p in procs[:200]]}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _select_process(g: Any, name: str = "", pid: int = 0) -> Dict:
+    if not name and not pid:
+        return {"error": "Provide name or pid"}
+    try:
+        import config
+        from mem_probe.process import set_game_process_names
+        if name:
+            config.GAME_PROCESS_NAMES = [name]
+            set_game_process_names([name])
+        if pid:
+            from mem_probe.process import _find_pid_by_name_wide, _iter_process_entries_wide
+            if not name:
+                for exe, p in _iter_process_entries_wide():
+                    if p == pid:
+                        name = os.path.basename(exe)
+                        break
+            if name:
+                config.GAME_PROCESS_NAMES = [name]
+                set_game_process_names([name])
+        s = getattr(g, 'settings', None)
+        if s:
+            s.set("attached_process_name", name)
+            s.set("attached_process_pid", int(pid))
+            s.save()
+        return {"ok": True, "attached": name, "pid": int(pid)}
     except Exception as exc:
         return {"error": str(exc)}
