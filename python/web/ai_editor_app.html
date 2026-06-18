@@ -616,14 +616,14 @@ pre.code-block { overflow:visible; }
   <!-- Menu bar -->
   <div class="tb-menu-bar">
     <div class="tb-menu-item app-icon">✦</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'file')">File</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'edit')">Edit</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'selection')">Selection</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'view')">View</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'go')">Go</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'run')">Run</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'terminal')">Terminal</div>
-    <div class="tb-menu-item" onclick="tbMenu(this,'help')">Help</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'file')" data-i18n="file">File</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'edit')" data-i18n="edit">Edit</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'selection')" data-i18n="selection">Selection</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'view')" data-i18n="view">View</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'go')" data-i18n="go">Go</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'run')" data-i18n="run">Run</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'terminal')" data-i18n="terminal">Terminal</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'help')" data-i18n="help">Help</div>
   </div>
   <!-- Window title -->
   <div class="title">SAO AI Editor</div>
@@ -642,71 +642,73 @@ pre.code-block { overflow:visible; }
 </div>
 <!-- Menu dropdowns (positioned absolute, toggled by tbMenu) -->
 <div class="tb-dropdown" id="dd-file">
-  <div class="dd-item" onclick="addTab()">New File <span class="shortcut">Ctrl+N</span></div>
-  <div class="dd-item" onclick="openFileDialog()">Open File... <span class="shortcut">Ctrl+O</span></div>
+  <div class="dd-item" onclick="addTab()"><span data-i18n="new_file">New File</span> <span class="shortcut">Ctrl+N</span></div>
+  <div class="dd-item" onclick="openFileDialog()"><span data-i18n="open_file">Open File...</span> <span class="shortcut">Ctrl+O</span></div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="saveFile()">Save <span class="shortcut">Ctrl+S</span></div>
-  <div class="dd-item" onclick="exportChat()">Export Chat...</div>
+  <div class="dd-item" onclick="saveFile()"><span data-i18n="save">Save</span> <span class="shortcut">Ctrl+S</span></div>
+  <div class="dd-item" onclick="exportChat()" data-i18n="export_chat">Export Chat...</div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="openSettings()">Preferences</div>
+  <div class="dd-item" onclick="openSettings()" data-i18n="preferences">Preferences</div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="toggleLang()">🌐 中文 / English</div>
 </div>
 <div class="tb-dropdown" id="dd-edit">
-  <div class="dd-item" onclick="document.execCommand('undo')">Undo <span class="shortcut">Ctrl+Z</span></div>
-  <div class="dd-item" onclick="document.execCommand('redo')">Redo <span class="shortcut">Ctrl+Y</span></div>
+  <div class="dd-item" onclick="document.execCommand('undo')"><span data-i18n="undo">Undo</span> <span class="shortcut">Ctrl+Z</span></div>
+  <div class="dd-item" onclick="document.execCommand('redo')"><span data-i18n="redo">Redo</span> <span class="shortcut">Ctrl+Y</span></div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="document.execCommand('cut')">Cut <span class="shortcut">Ctrl+X</span></div>
-  <div class="dd-item" onclick="document.execCommand('copy')">Copy <span class="shortcut">Ctrl+C</span></div>
-  <div class="dd-item" onclick="document.execCommand('paste')">Paste <span class="shortcut">Ctrl+V</span></div>
+  <div class="dd-item" onclick="document.execCommand('cut')"><span data-i18n="cut">Cut</span> <span class="shortcut">Ctrl+X</span></div>
+  <div class="dd-item" onclick="document.execCommand('copy')"><span data-i18n="copy">Copy</span> <span class="shortcut">Ctrl+C</span></div>
+  <div class="dd-item" onclick="document.execCommand('paste')"><span data-i18n="paste">Paste</span> <span class="shortcut">Ctrl+V</span></div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="toggleFind()">Find <span class="shortcut">Ctrl+F</span></div>
-  <div class="dd-item" onclick="toggleReplace()">Replace <span class="shortcut">Ctrl+H</span></div>
+  <div class="dd-item" onclick="toggleFind()"><span data-i18n="find">Find</span> <span class="shortcut">Ctrl+F</span></div>
+  <div class="dd-item" onclick="toggleReplace()"><span data-i18n="replace">Replace</span> <span class="shortcut">Ctrl+H</span></div>
 </div>
 <div class="tb-dropdown" id="dd-selection">
-  <div class="dd-item" onclick="document.execCommand('selectAll')">Select All <span class="shortcut">Ctrl+A</span></div>
+  <div class="dd-item" onclick="document.execCommand('selectAll')"><span data-i18n="select_all">Select All</span> <span class="shortcut">Ctrl+A</span></div>
 </div>
 <div class="tb-dropdown" id="dd-view">
-  <div class="dd-item" onclick="openCmdPalette()">Command Palette <span class="shortcut">Ctrl+Shift+P</span></div>
+  <div class="dd-item" onclick="openCmdPalette()"><span data-i18n="cmd_palette">Command Palette</span> <span class="shortcut">Ctrl+Shift+P</span></div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="toggleSidebarVis()">Toggle Sidebar <span class="shortcut">Ctrl+B</span></div>
-  <div class="dd-item" onclick="toggleEditorVis()">Toggle Editor</div>
-  <div class="dd-item" onclick="toggleChatVis()">Toggle Chat Panel</div>
+  <div class="dd-item" onclick="toggleSidebarVis()"><span data-i18n="toggle_sidebar">Toggle Sidebar</span> <span class="shortcut">Ctrl+B</span></div>
+  <div class="dd-item" onclick="toggleEditorVis()" data-i18n="toggle_editor">Toggle Editor</div>
+  <div class="dd-item" onclick="toggleChatVis()" data-i18n="toggle_chat">Toggle Chat Panel</div>
   <div class="dd-sep"></div>
-  <div class="dd-item" onclick="toggleTheme()">Toggle Theme</div>
+  <div class="dd-item" onclick="toggleTheme()" data-i18n="toggle_theme">Toggle Theme</div>
 </div>
 <div class="tb-dropdown" id="dd-go">
-  <div class="dd-item" onclick="goToLineDialog()">Go to Line... <span class="shortcut">Ctrl+G</span></div>
+  <div class="dd-item" onclick="goToLineDialog()"><span data-i18n="go_to_line">Go to Line...</span> <span class="shortcut">Ctrl+G</span></div>
 </div>
 <div class="tb-dropdown" id="dd-run">
-  <div class="dd-item" onclick="execSlash('/eval')">Run Selection</div>
+  <div class="dd-item" onclick="execSlash('/eval')" data-i18n="run_selection">Run Selection</div>
 </div>
 <div class="tb-dropdown" id="dd-terminal">
-  <div class="dd-item" onclick="focusTerminal()">New Terminal</div>
+  <div class="dd-item" onclick="focusTerminal()" data-i18n="new_terminal">New Terminal</div>
 </div>
 <div class="tb-dropdown" id="dd-help">
-  <div class="dd-item" onclick="execSlash('/system')">System Info</div>
-  <div class="dd-item" onclick="showAbout()">About</div>
+  <div class="dd-item" onclick="execSlash('/system')" data-i18n="system_info">System Info</div>
+  <div class="dd-item" onclick="showAbout()" data-i18n="about">About</div>
 </div>
 
 <!-- Main -->
 <div class="main">
   <!-- Activity bar -->
   <div class="activity-bar">
-    <div class="ab-icon active" data-panel="chat" title="Chat"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="history" title="History"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-    <div class="ab-icon" data-panel="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
-    <div class="ab-icon" data-panel="agents" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Chat"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon" data-panel="history" data-i18n-title="history" title="History"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon" data-panel="agents" data-i18n-title="agents_wf" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-spacer"></div>
-    <div class="ab-icon theme-toggle" title="Toggle Theme" onclick="toggleTheme()"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
-    <div class="ab-icon" data-panel="settings" title="Settings"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2.5M10 15.5V18M2 10h2.5M15.5 10H18M4.2 4.2l1.8 1.8M14 14l1.8 1.8M15.8 4.2L14 6M6 14l-1.8 1.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon theme-toggle" data-i18n-title="toggle_theme" title="Toggle Theme" onclick="toggleTheme()"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon" data-panel="settings" data-i18n-title="settings" title="Settings"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2.5M10 15.5V18M2 10h2.5M15.5 10H18M4.2 4.2l1.8 1.8M14 14l1.8 1.8M15.8 4.2L14 6M6 14l-1.8 1.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
   </div>
 
   <!-- Sidebar -->
   <div class="sidebar" id="sidebar">
     <!-- Chat sidebar (default) -->
     <div class="sb-view" id="sb-chat">
-      <div class="sb-header">Chat <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="chat">Chat</span> <span class="spacer"></span>
         <span class="sb-action" onclick="newChat()" title="New Chat">✚</span>
       </div>
       <div class="sb-section">
@@ -725,19 +727,19 @@ pre.code-block { overflow:visible; }
     </div>
     <!-- Tools sidebar -->
     <div class="sb-view" id="sb-tools" style="display:none">
-      <div class="sb-header">Engine Tools</div>
+      <div class="sb-header"><span data-i18n="tools">Engine Tools</span></div>
       <div class="sb-section" id="tools-list"></div>
     </div>
     <!-- History sidebar -->
     <div class="sb-view" id="sb-history" style="display:none">
-      <div class="sb-header">History <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="history">History</span> <span class="spacer"></span>
         <span class="sb-action" onclick="refreshHistory()">↻</span>
       </div>
       <div class="sb-section" id="history-list"></div>
     </div>
     <!-- Extensions sidebar (VSCode marketplace) -->
     <div class="sb-view" id="sb-extensions" style="display:none">
-      <div class="sb-header">Extensions <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="extensions">Extensions</span> <span class="spacer"></span>
         <span class="sb-action" onclick="searchExtensions()" title="Refresh">↻</span>
       </div>
       <div style="padding:4px 10px">
@@ -762,7 +764,7 @@ pre.code-block { overflow:visible; }
     </div>
     <!-- Instructions sidebar -->
     <div class="sb-view" id="sb-instructions" style="display:none">
-      <div class="sb-header">Instructions <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="instructions">Instructions</span> <span class="spacer"></span>
         <span class="sb-action" onclick="refreshInstructions()" title="Refresh">↻</span>
       </div>
       <div class="sb-section" style="padding:6px 12px">
@@ -787,7 +789,7 @@ pre.code-block { overflow:visible; }
     </div>
     <!-- Agents & Workflows sidebar -->
     <div class="sb-view" id="sb-agents" style="display:none">
-      <div class="sb-header">Agents & Workflows <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="agents_wf">Agents & Workflows</span> <span class="spacer"></span>
         <span class="sb-action" onclick="refreshAgents()" title="Refresh">↻</span>
       </div>
       <div class="sb-section" style="padding:6px 12px">
@@ -871,7 +873,7 @@ pre.code-block { overflow:visible; }
               <div class="slash-popup" id="slash-popup"></div>
               <div class="chat-input-container" id="chat-input-container">
                 <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask anything... (/ for commands, @ for context)"></textarea>
+                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ for commands, @ for context)"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
                 <div class="attach-area" id="attach-area"></div>
@@ -1205,6 +1207,7 @@ async function init(){
   const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
   refreshRuntimeSupport();
   refreshHistory();await loadMode();await loadChatControls();await renderProviderTabs();
+  if(_curLang!=='en')setLang(_curLang);
   renderWelcome();
   $('chat-input').focus();
 }
@@ -1212,6 +1215,63 @@ async function init(){
 // ── Render ──
 const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+
+// ── i18n ──
+const _LANG={
+en:{
+  file:'File',edit:'Edit',selection:'Selection',view:'View',go:'Go',run:'Run',terminal:'Terminal',help:'Help',
+  new_file:'New File',open_file:'Open File...',save:'Save',export_chat:'Export Chat...',preferences:'Preferences',
+  undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',
+  cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
+  go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
+  chat:'Chat',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
+  send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ for commands, @ for context)',
+  agents:'Agents',workflows:'Workflows',new_agent:'New Agent',new_wf:'New Workflow',
+  model:'Model',quick_actions:'Quick Actions',
+  welcome_title:'SAO AI Editor',welcome_desc:'Multi-model LLM · Tool Calling · Streaming',
+  welcome_settings:'Configure your API key in',welcome_settings_link:'⚙ Settings',
+  prompt_explain:'Explain this codebase',prompt_write:'Write a Python script',prompt_debug:'Help me debug an error',prompt_summarize:'Summarize the current file',
+  no_api_key:'No API key configured.',open_settings:'Open Settings',
+  ready:'Ready',thinking:'Thinking...',agent_mode:'Agent',
+  installed:'INSTALLED',marketplace:'MARKETPLACE',search_ext:'Search Extensions in Marketplace',
+  user_instructions:'User Instructions',inst_placeholder:'Add custom instructions that apply to every conversation...',
+  new_chat:'New conversation started.',
+  mode_chat:'Chat',mode_edit:'Edit',mode_agent:'Agent',
+},
+zh:{
+  file:'文件',edit:'编辑',selection:'选择',view:'视图',go:'转到',run:'运行',terminal:'终端',help:'帮助',
+  new_file:'新建文件',open_file:'打开文件...',save:'保存',export_chat:'导出对话...',preferences:'偏好设置',
+  undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',
+  cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
+  go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
+  chat:'聊天',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
+  send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文)',
+  agents:'代理',workflows:'工作流',new_agent:'新建代理',new_wf:'新建工作流',
+  model:'模型',quick_actions:'快捷操作',
+  welcome_title:'SAO AI Editor',welcome_desc:'多模型 LLM · 工具调用 · 流式输出',
+  welcome_settings:'在',welcome_settings_link:'⚙ 设置',
+  prompt_explain:'解释这个代码库',prompt_write:'写一个 Python 脚本',prompt_debug:'帮我调试一个错误',prompt_summarize:'总结当前文件',
+  no_api_key:'未配置 API Key。',open_settings:'打开设置',
+  ready:'就绪',thinking:'思考中...',agent_mode:'代理',
+  installed:'已安装',marketplace:'应用市场',search_ext:'在应用市场搜索扩展',
+  user_instructions:'用户指令',inst_placeholder:'添加适用于所有对话的自定义指令...',
+  new_chat:'新对话已开始。',
+  mode_chat:'聊天',mode_edit:'编辑',mode_agent:'代理',
+}};
+let _curLang='en';
+function t(key){return (_LANG[_curLang]||_LANG.en)[key]||(_LANG.en[key]||key)}
+function setLang(lang){
+  _curLang=lang;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const k=el.dataset.i18n;
+    if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){el.placeholder=t(k)}
+    else{el.textContent=t(k)}
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el=>{el.title=t(el.dataset.i18nTitle)});
+  try{localStorage.setItem('sao-ai-lang',lang)}catch(e){}
+}
+function toggleLang(){setLang(_curLang==='en'?'zh':'en')}
+try{const saved=localStorage.getItem('sao-ai-lang');if(saved)_curLang=saved}catch(e){}
 const _SEND_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg>';
 const _STOP_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>';
 function _setSendIcon(streaming){$('send-btn').innerHTML=streaming?_STOP_SVG:_SEND_SVG}
@@ -1240,7 +1300,7 @@ function createMsg(role,model){
 function appendSystem(text){const b=createMsg('system');b.style.color='var(--fg-dim)';b.textContent=text}
 function appendApiKeyError(){
   const b=createMsg('system');b.style.color='var(--fg-warning)';
-  b.innerHTML='⚠ No API key configured. <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">Open Settings</span> to add your key for <b>'+esc(config.provider||'current provider')+'</b>.';
+  b.innerHTML='⚠ '+esc(t('no_api_key'))+' <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">'+esc(t('open_settings'))+'</span> — <b>'+esc(config.provider||'')+'</b>';
 }
 
 function renderMd(container,text){
@@ -3409,13 +3469,13 @@ function renderWelcome(){
   if(!container){container=document.createElement('div');container.className='chat-messages-inner';$('chat-messages').appendChild(container)}
   const w=document.createElement('div');w.className='chat-welcome';w.id='chat-welcome-msg';
   w.innerHTML='<div style="font-size:32px;margin-bottom:8px">✦</div>'
-    +'<div style="font-size:14px;font-weight:600;margin-bottom:4px">SAO AI Editor</div>'
+    +'<div style="font-size:14px;font-weight:600;margin-bottom:4px">'+esc(t('welcome_title'))+'</div>'
     +'<div style="color:var(--fg-dim);font-size:12px;margin-bottom:16px;text-align:center;max-width:300px">'
-    +'Multi-model LLM · Tool Calling · Streaming<br>'
-    +'Configure your API key in <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">⚙ Settings</span></div>'
+    +esc(t('welcome_desc'))+'<br>'
+    +esc(t('welcome_settings'))+' <span style="color:var(--fg-accent);cursor:pointer;text-decoration:underline" onclick="openSettings()">'+esc(t('welcome_settings_link'))+'</span></div>'
     +'<div class="welcome-prompts"></div>';
   const prompts=w.querySelector('.welcome-prompts');
-  ['Explain this codebase','Write a Python script','Help me debug an error','Summarize the current file'].forEach(s=>{
+  [t('prompt_explain'),t('prompt_write'),t('prompt_debug'),t('prompt_summarize')].forEach(s=>{
     const btn=document.createElement('button');btn.type='button';btn.className='welcome-prompt-btn';
     btn.textContent=s;
     btn.onclick=()=>{$('chat-input').value=s;$('chat-input').focus();w.remove()};
@@ -3509,6 +3569,7 @@ window.openCmdPalette=openCmdPalette;window.addTab=addTab;
 window.focusTerminal=focusTerminal;window.goToLineDialog=goToLineDialog;
 window.showAbout=showAbout;window.openFileDialog=openFileDialog;
 window.saveFile=saveFile;window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
+window.toggleLang=toggleLang;window.setLang=setLang;
 window.newChat=newChat;window.doSend=doSend;window.doStop=doStop;
 window.clearChat=clearChat;window.uploadImage=uploadImage;
 window.execSlash=execSlash;window.refreshHistory=refreshHistory;
