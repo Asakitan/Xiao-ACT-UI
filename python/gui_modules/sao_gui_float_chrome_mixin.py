@@ -56,17 +56,22 @@ class SAOPlayerGUIFloatChromeMixin:
                 pass
 
     def _sync_float_button_geometry(self, show: Optional[bool] = None) -> None:
-        """Mirror the hidden Tk anchor's position onto the GPU button."""
+        """Keep the hidden Tk anchor and GPU button in sync.
+
+        The GPU button is the source of truth for position (user drags it).
+        The Tk anchor follows so menu positioning (anchor_widget) is correct.
+        """
         gpu_btn = getattr(self, '_float_gpu_button', None)
         anchor = getattr(self, '_float', None)
         if gpu_btn is None or anchor is None:
             return
         try:
-            x = int(anchor.winfo_x())
-            y = int(anchor.winfo_y())
-            w = int(getattr(self, '_fw', 0) or anchor.winfo_width() or 1)
-            h = int(getattr(self, '_fh', 0) or anchor.winfo_height() or 1)
-            gpu_btn.geometry(f'{w}x{h}+{x}+{y}')
+            gx = getattr(gpu_btn, '_x', None)
+            gy = getattr(gpu_btn, '_y', None)
+            if gx is not None and gy is not None:
+                w = int(getattr(self, '_fw', 0) or 1)
+                h = int(getattr(self, '_fh', 0) or 1)
+                anchor.geometry(f'{w}x{h}+{int(gx)}+{int(gy)}')
         except Exception:
             pass
         try:
@@ -110,13 +115,14 @@ class SAOPlayerGUIFloatChromeMixin:
         if self._destroyed or not self._breath_active:
             return
         try:
-            # v2.4.33: cython sin offsets — saves ~0.7us per frame at 60fps.
             new_dx, new_dy = _CY_UI.breath_offsets(time.time() - self._breath_t0)
             fx = self._breath_base_x + new_dx
             fy = self._breath_base_y + new_dy
-            if self._float and self._float.winfo_exists():
-                self._float.geometry(f'+{fx}+{fy}')
-                self._sync_float_button_geometry(show=True)
+            gpu_btn = getattr(self, '_float_gpu_button', None)
+            if gpu_btn is not None:
+                w = int(getattr(self, '_fw', 0) or 1)
+                h = int(getattr(self, '_fh', 0) or 1)
+                gpu_btn.geometry(f'{w}x{h}+{int(fx)}+{int(fy)}')
             self.root.after(16, self._breath_step)
         except Exception:
             pass
@@ -239,14 +245,17 @@ class SAOPlayerGUIFloatChromeMixin:
         def tick():
             if self._destroyed:
                 return
-            if not self._float.winfo_exists():
-                return
             step[0] += 1
             t = min(1.0, step[0] / steps)
             et = ease_out(t)
             x = int(x0 + (x1 - x0) * et)
             y = int(y0 + (y1 - y0) * et)
-            self._float.geometry(f'+{x}+{y}')
+            gpu_btn = getattr(self, '_float_gpu_button', None)
+            w = int(getattr(self, '_fw', 0) or 1)
+            h = int(getattr(self, '_fh', 0) or 1)
+            if gpu_btn is not None:
+                gpu_btn.geometry(f'{w}x{h}+{x}+{y}')
+            self._float.geometry(f'{w}x{h}+{x}+{y}')
             self._sync_float_button_geometry(show=True)
             try:
                 self._refresh_float_layered()
