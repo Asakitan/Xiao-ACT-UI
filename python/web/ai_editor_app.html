@@ -1958,6 +1958,9 @@ function switchSidebar(panel){
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
   const view=$('sb-'+panel);if(view)view.style.display='';
   if(panel==='settings'){openSettings();return}
+  if(panel==='tools'&&!$('tools-list').children.length){
+    call('list_tools').then(t=>{if(t&&t.tools)renderToolsSidebar(t.tools)});
+  }
   if(panel==='instructions')refreshInstructions();
   if(panel==='agents')refreshAgents();
   if(panel==='extensions'){
