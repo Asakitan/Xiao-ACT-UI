@@ -54,15 +54,15 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 
 /* ── Menu bar (frameless window — title area is draggable) ── */
 .titlebar { display:flex; align-items:center; height:30px; background:var(--bg2);
-  -webkit-app-region:drag; user-select:none; font-size:12px; flex-shrink:0; }
-.tb-menu-bar { display:flex; align-items:center; flex-shrink:0; -webkit-app-region:no-drag; }
+  user-select:none; font-size:12px; flex-shrink:0; }
+.tb-menu-bar { display:flex; align-items:center; flex-shrink:0; }
 .tb-menu-item { padding:0 8px; height:30px; display:flex; align-items:center;
   color:var(--fg-dim); cursor:pointer; font-size:12px; font-family:var(--sans); }
 .tb-menu-item:hover { background:var(--bg-hover); color:var(--fg); }
 .tb-menu-item.app-icon { padding:0 10px; font-size:16px; color:var(--fg-accent); }
 .titlebar .title { color:var(--fg-dim); flex:1; text-align:center; font-size:12px; }
 .titlebar .title b { color:var(--fg-accent); }
-.tb-actions { display:flex; align-items:center; margin-right:4px; gap:2px; -webkit-app-region:no-drag; }
+.tb-actions { display:flex; align-items:center; margin-right:4px; gap:2px; }
 .tb-actions .tb-act { width:28px; height:22px; display:flex; align-items:center; justify-content:center;
   color:var(--fg-dim); cursor:pointer; border-radius:3px; font-size:14px; }
 .tb-actions .tb-act:hover { background:var(--bg-hover); color:var(--fg); }
@@ -627,7 +627,7 @@ pre.code-block { overflow:visible; }
     <div class="tb-menu-item" onclick="tbMenu(this,'help')" data-i18n="help">Help</div>
   </div>
   <!-- Window title -->
-  <div class="title">SAO AI Editor</div>
+  <div class="title pywebview-drag-region">SAO AI Editor</div>
   <!-- Panel toggle actions -->
   <div class="tb-actions">
     <div class="tb-act" id="tb-toggle-sidebar" onclick="toggleSidebarVis()" title="Toggle Sidebar (Ctrl+B)">
