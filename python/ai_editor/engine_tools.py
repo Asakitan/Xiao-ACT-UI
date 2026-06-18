@@ -298,6 +298,105 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         tags={"readOnly": False},
     )
 
+    # ==================================================================
+    # SDK Dumper
+    # ==================================================================
+
+    registry.register(
+        name="sdkDumper",
+        description=(
+            "Dump game engine SDK from a running process using memory reading.\n"
+            "Supports: il2cpp (Unity IL2CPP), mono (Unity Mono), unreal (UE4/5), source (Valve Source).\n\n"
+            "Actions:\n"
+            "  detect — auto-detect game engine for a PID\n"
+            "  dump — extract classes/fields/methods from process memory\n"
+            "  list_engines — show supported engines\n"
+            "  save — save dump result to file (json or header format)\n"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "detect | dump | list_engines | save",
+                           "enum": ["detect", "dump", "list_engines", "save"]},
+                "pid": {"type": "integer", "description": "Target process ID"},
+                "engine": {"type": "string", "description": "Engine type (il2cpp/mono/unreal/source). Auto-detected if omitted."},
+                "output": {"type": "string", "description": "Output file path (for save action)"},
+                "format": {"type": "string", "description": "Output format: json or header", "default": "json"},
+            },
+            "required": ["action"],
+        },
+        handler=lambda **kw: _sdk_dumper_dispatch(**kw),
+        category="engine",
+        tags={"readOnly": True},
+    )
+
+
+# ======================================================================
+# SDK Dumper dispatcher
+# ======================================================================
+
+_last_dump_result = None
+
+def _sdk_dumper_dispatch(action: str = "", pid: int = 0, engine: str = "",
+                          output: str = "", format: str = "json", **kw):
+    global _last_dump_result
+    try:
+        from ai_editor.sdk_dumper import detect_engine, create_dumper, list_engines
+    except ImportError as exc:
+        return {"error": f"SDK Dumper not available: {exc}"}
+
+    if action == "list_engines":
+        return {"engines": list_engines()}
+
+    if action == "detect":
+        if not pid:
+            return {"error": "pid is required"}
+        eng = detect_engine(pid)
+        return {"engine": eng, "pid": pid}
+
+    if action == "dump":
+        if not pid:
+            return {"error": "pid is required"}
+        if not engine:
+            engine = detect_engine(pid)
+            if engine == "unknown":
+                return {"error": f"Could not auto-detect engine for PID {pid}. Specify engine manually."}
+        try:
+            dumper = create_dumper(engine, pid)
+            result = dumper.dump()
+            _last_dump_result = result
+            summary = {
+                "engine": result.engine,
+                "classes": len(result.classes),
+                "enums": len(result.enums),
+                "errors": result.errors[:5],
+            }
+            if result.classes:
+                summary["sample_classes"] = [
+                    {"name": c.full_name, "fields": len(c.fields), "methods": len(c.methods)}
+                    for c in result.classes[:10]
+                ]
+            return summary
+        except Exception as exc:
+            return {"error": str(exc)}
+        finally:
+            try:
+                dumper.reader.close()
+            except Exception:
+                pass
+
+    if action == "save":
+        if not _last_dump_result:
+            return {"error": "No dump result available. Run 'dump' first."}
+        if not output:
+            import time
+            ext = "json" if format == "json" else "h"
+            output = f"sdk_dump_{_last_dump_result.engine}_{int(time.time())}.{ext}"
+        path = _last_dump_result.save(output, format)
+        return {"ok": True, "path": path, "classes": len(_last_dump_result.classes)}
+
+    return {"error": f"Unknown action: {action}. Use detect/dump/list_engines/save"}
+
 
 # ======================================================================
 # File operation handlers
