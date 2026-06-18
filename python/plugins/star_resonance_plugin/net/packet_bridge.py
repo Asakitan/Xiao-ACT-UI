@@ -1391,13 +1391,16 @@ class PacketBridge:
             cached_prof = self._settings.get('profession_skill_cache')
             if isinstance(cached_prof, dict):
                 for k, v in cached_prof.items():
+                    if not isinstance(v, dict):
+                        logger.warning(f'[Bridge] profession_skill_cache pid={k} not a dict, skipping')
+                        continue
                     try:
                         pid = int(k)
                         slot_map = {int(sk): int(sv) for sk, sv in v.items()}
                         self._parser._profession_skill_cache[pid] = slot_map
                         logger.info(f'[Bridge] restored profession_skill_cache pid={pid} slots={slot_map}')
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(f'[Bridge] profession_skill_cache pid={k} restore failed: {exc}')
 
         # 创建抓包器
         self._capture = PacketCapture(
@@ -1966,15 +1969,17 @@ class PacketBridge:
 
     def _save_cache_async(self) -> None:
         try:
-            self._state_mgr.save_cache(self._settings)
+            self._state_mgr.save_cache(self._settings, persist=False)
             if self._parser and self._parser._profession_skill_cache:
                 serializable = {}
                 for pid, smap in self._parser._profession_skill_cache.items():
+                    if not isinstance(smap, dict):
+                        continue
                     serializable[str(pid)] = {str(k): int(v) for k, v in smap.items()}
                 self._settings.set('profession_skill_cache', serializable)
-                self._settings.save()
-        except Exception:
-            pass
+            self._settings.save()
+        except Exception as exc:
+            logger.warning(f'[Bridge] cache save failed: {exc}')
 
     def _error(self, msg: str):
         logger.error(f'[Bridge] {msg}')

@@ -490,31 +490,33 @@ class GameStateManager:
             print(f'[GameState] 从缓存加载: HP={self._state.hp_current}/{self._state.hp_max}, '
                   f'LV={self._state.level_base}'
                   f'{"(+" + str(self._state.level_extra) + ")" if self._state.level_extra > 0 else ""}')
-        # 通知订阅者立即渲染缓存数据 (避免等待首个数据包)
-        try:
-            snapshot = _copy.copy(self._state)
-            for cb in self._listeners:
-                try:
-                    cb(snapshot)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            if self._listeners:
+                snapshot = _copy.copy(self._state)
+                listeners = tuple(self._listeners)
+            else:
+                snapshot = None
+                listeners = ()
+        for cb in listeners:
+            try:
+                cb(snapshot)
+            except Exception:
+                pass
 
-    def save_cache(self, settings):
+    def save_cache(self, settings, *, persist: bool = True):
         """将当前状态持久化到 settings (定期调用)
 
         身份类字段 (name/level/profession) 仅在收到有效值时才覆写缓存,
         避免工具中途启动时用默认 0/空字符串覆盖上次缓存的值。
+
+        persist=False 时只写 settings dict 不落盘, 由调用方统一 save()
+        避免同一批写入中出现多次磁盘 I/O。
         """
         with self._lock:
-            # 以现有缓存为基底, 避免丢失上次保存的身份数据
             cache = dict(settings.get('game_cache', {}) or {})
             for k in _CACHE_FIELDS:
                 v = getattr(self._state, k, None)
                 if v is None:
                     continue
-                # 身份类字段: 仅当值非零/非空时覆写
                 if k in _CACHE_IDENTITY_FIELDS:
                     if isinstance(v, str) and not v.strip():
                         continue
@@ -522,4 +524,5 @@ class GameStateManager:
                         continue
                 cache[k] = v
         settings.set('game_cache', cache)
-        settings.save()
+        if persist:
+            settings.save()

@@ -106,6 +106,7 @@ class MemSelfStateProvider:
         self._tick_no: int = 0
         self._last_anchor_strength: str = "none"
         self._last_anchor_skip_reason: str = ""
+        self._last_snap_skip_weak: bool = False
 
     # ───────── public ─────────
 
@@ -182,13 +183,14 @@ class MemSelfStateProvider:
 
                 snap = self._get_snapshot_nowait()
                 if snap is None:
-                    # 缓存未命中, 后台扫描中
-                    self._consecutive_fails += 1
-                    if self._consecutive_fails >= self.FAIL_THRESHOLD \
-                            and not self._src.scan_in_progress:
-                        # 扫完了还是 None → 真失败
-                        self._set_mode("tcp",
-                                       "memory snapshot unavailable, fallback")
+                    if self._last_snap_skip_weak:
+                        pass
+                    else:
+                        self._consecutive_fails += 1
+                        if self._consecutive_fails >= self.FAIL_THRESHOLD \
+                                and not self._src.scan_in_progress:
+                            self._set_mode("tcp",
+                                           "memory snapshot unavailable, fallback")
                 else:
                     self._consecutive_fails = 0
                     if self.mode != "memory":
@@ -216,6 +218,7 @@ class MemSelfStateProvider:
         target process and it reuses the same StarProcess handle as the static
         source.
         """
+        self._last_snap_skip_weak = False
         if self.anchor_source and self._anchor_reader and self._src:
             try:
                 anchor = self.anchor_source() or AnchorPack()
@@ -223,6 +226,7 @@ class MemSelfStateProvider:
                     if not anchor.is_strong():
                         self._last_anchor_strength = "weak"
                         self._last_anchor_skip_reason = "weak_anchor_no_scan"
+                        self._last_snap_skip_weak = True
                     else:
                         self._last_anchor_strength = "strong"
                         self._last_anchor_skip_reason = ""

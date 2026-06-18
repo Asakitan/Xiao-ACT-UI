@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 from typing import Any, Dict, Optional
 
 if getattr(sys, "frozen", False):
@@ -564,6 +565,7 @@ class SettingsManager:
     def __init__(self, path: Optional[str] = None):
         self._path = path or os.path.join(BASE_DIR, "settings.json")
         self._data: dict = {}
+        self._lock = threading.Lock()
         self._load()
 
     def _load(self):
@@ -599,38 +601,38 @@ class SettingsManager:
     def set(self, key: str, value: Any):
         if key == "panel_themes":
             value = normalize_panel_themes(value)
-        self._data[key] = value
+        with self._lock:
+            self._data[key] = value
 
     def save(self):
-        tmp_path = ""
-        try:
+        with self._lock:
             for legacy_key in self._LEGACY_KEYS:
                 self._data.pop(legacy_key, None)
-            # Atomic write to improve reliability on exit/crash (80% failure rate fixed)
+            blob = json.dumps(self._data, indent=2, ensure_ascii=False)
+        tmp_path = ""
+        try:
             dir_name = os.path.dirname(self._path) or os.getcwd()
             os.makedirs(dir_name, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp.json"
             ) as tmp:
-                json.dump(self._data, tmp, indent=2, ensure_ascii=False)
+                tmp.write(blob)
                 tmp.flush()
                 os.fsync(tmp.fileno())
                 tmp_path = tmp.name
             os.replace(tmp_path, self._path)
         except Exception as e:
             print(f"[Settings] Save failed: {e} (path={self._path})")
-            # Clean up orphaned temp file if os.replace failed
             try:
                 if tmp_path and os.path.exists(tmp_path):
                     os.remove(tmp_path)
             except Exception:
                 pass
-            # fallback to direct write
             try:
                 dir_name = os.path.dirname(self._path) or os.getcwd()
                 os.makedirs(dir_name, exist_ok=True)
                 with open(self._path, "w", encoding="utf-8") as handle:
-                    json.dump(self._data, handle, indent=2, ensure_ascii=False)
+                    handle.write(blob)
                     handle.flush()
                     os.fsync(handle.fileno())
             except Exception as e2:
