@@ -75,7 +75,7 @@ def render_button(
         hover: bool = False,
         pressed: bool = False,
         alpha: float = 1.0) -> Optional["Image.Image"]:
-    """Render a high-quality SIZE×SIZE RGBA NerveGear button image."""
+    """Render a SIZE×SIZE RGBA NerveGear button — SAO-style clean disc."""
     if Image is None:
         return None
     colors = _DARK if theme == 'dark' else _LIGHT
@@ -90,70 +90,88 @@ def render_button(
     hover_t = 1.0 if hover else 0.0
     press_t = 1.0 if pressed else 0.0
     glow_wave = 0.5 + 0.5 * math.sin(glow_phase)
-    glow_alpha = int(42 + 34 * glow_wave + 28 * hover_t)
-    outer_pad = S(2.0 - hover_t * 0.8)
-    press_off = S(1.0 if pressed else 0.0)
 
-    # Soft outer aura, drawn from large to small so DWM transparency keeps a
-    # clean antialiased edge instead of the previous jagged Tk-looking disc.
-    for i in range(6):
-        inset = S(i * 1.8)
-        a = int(glow_alpha * (1.0 - i / 6.8))
+    cx, cy = canvas / 2, canvas / 2
+    press_off = S(0.8) * press_t
+
+    # Outer glow ring (pulsing)
+    glow_a = int(30 + 22 * glow_wave + 36 * hover_t)
+    for i in range(5):
+        r_off = S(i * 1.4)
+        a = int(glow_a * (1.0 - i / 5.5))
         draw.ellipse(
-            [outer_pad + inset, outer_pad + inset,
-             canvas - outer_pad - inset - 1, canvas - outer_pad - inset - 1],
+            [S(2) + r_off, S(2) + r_off,
+             canvas - S(2) - r_off, canvas - S(2) - r_off],
             outline=(*colors['glow'], max(0, a)),
-            width=max(1, int(S(1.15))),
+            width=max(1, int(S(0.9))),
         )
 
-    shadow_box = [S(8), S(10), S(SIZE - 8), S(SIZE - 6)]
-    draw.ellipse(shadow_box, fill=(*colors['shadow'], 54 if theme == 'dark' else 34))
-
-    ring = [S(7) + press_off, S(6) + press_off,
-            S(SIZE - 7) + press_off, S(SIZE - 8) + press_off]
-    draw.ellipse(ring, fill=(*colors['border'], 218))
+    # Drop shadow
     draw.ellipse(
-        [ring[0] + S(2.2), ring[1] + S(2.2), ring[2] - S(2.2), ring[3] - S(2.2)],
-        fill=(*colors['border2'], 92 + int(50 * hover_t)),
+        [S(9), S(11) + press_off, S(SIZE - 9), S(SIZE - 5) + press_off],
+        fill=(*colors['shadow'], 50 if theme == 'dark' else 28),
     )
-    inner = [ring[0] + S(4.6), ring[1] + S(4.6), ring[2] - S(4.6), ring[3] - S(4.6)]
+
+    # Main disc — thin cyan border + dark interior
+    disc = [S(8) + press_off, S(7) + press_off,
+            S(SIZE - 8) + press_off, S(SIZE - 9) + press_off]
+    draw.ellipse(disc, fill=(*colors['border'], 200 + int(30 * hover_t)))
+    inner = [disc[0] + S(2), disc[1] + S(2), disc[2] - S(2), disc[3] - S(2)]
     _draw_gradient_disc(
         draw, inner,
-        _mix_rgb(colors['bg1'], colors['border'], 0.08 + 0.06 * hover_t),
-        _mix_rgb(colors['bg0'], colors['shadow'], 0.18 + 0.08 * press_t),
-        236,
+        _mix_rgb(colors['bg1'], colors['border'], 0.05 + 0.08 * hover_t),
+        _mix_rgb(colors['bg0'], colors['shadow'], 0.12),
+        240,
     )
 
-    # Top glass crescent + lower dim arc for a more SAO-Utils-like badge.
+    # Glass highlight arc (top crescent)
     draw.arc(
-        [inner[0] + S(3), inner[1] + S(3), inner[2] - S(3), inner[3] - S(3)],
-        205, 332, fill=(255, 255, 255, 76 + int(28 * hover_t)), width=max(1, int(S(1.4))),
-    )
-    draw.arc(
-        [inner[0] + S(4), inner[1] + S(5), inner[2] - S(4), inner[3] - S(2)],
-        28, 148, fill=(*colors['border'], 68), width=max(1, int(S(1.1))),
+        [inner[0] + S(4), inner[1] + S(3), inner[2] - S(4), inner[3] - S(6)],
+        210, 330, fill=(255, 255, 255, 62 + int(30 * hover_t)),
+        width=max(1, int(S(1.2))),
     )
 
+    # SAO diamond glyph — clean geometric icon
     ic = colors['icon']
-    cx, cy = S(_HALF) + press_off, S(_HALF) + press_off
-    line_w = max(1, int(S(2.2)))
-    # Redesigned NerveGear glyph: ring visor, capsule base, SAO scan line.
-    draw.arc([cx - S(16), cy - S(18), cx + S(16), cy + S(11)],
-             198, 342, fill=(*ic, 236), width=line_w)
-    draw.rounded_rectangle(
-        [cx - S(17), cy - S(3), cx + S(17), cy + S(9)],
-        radius=int(S(4.5)), fill=(*ic, 172))
-    draw.rounded_rectangle(
-        [cx - S(12), cy - S(1), cx + S(12), cy + S(5)],
-        radius=int(S(2.8)), fill=(*colors['bg0'], 92))
-    draw.ellipse([cx - S(4.8), cy - S(13.2), cx + S(4.8), cy - S(3.6)],
-                 fill=(*ic, 250))
-    draw.line([(cx - S(8), cy + S(9)), (cx - S(15), cy + S(17))],
-              fill=(*ic, 150), width=max(1, int(S(1.7))))
-    draw.line([(cx + S(8), cy + S(9)), (cx + S(15), cy + S(17))],
-              fill=(*ic, 150), width=max(1, int(S(1.7))))
-    draw.line([(cx - S(20), cy + S(19)), (cx + S(20), cy + S(19))],
-              fill=(*colors['border2'], 136 + int(42 * hover_t)), width=max(1, int(S(1.2))))
+    gcx = cx + press_off
+    gcy = cy + press_off - S(1)
+
+    # Outer diamond (rotated square)
+    d_sz = S(13)
+    pts_outer = [
+        (gcx, gcy - d_sz),       # top
+        (gcx + d_sz, gcy),       # right
+        (gcx, gcy + d_sz),       # bottom
+        (gcx - d_sz, gcy),       # left
+    ]
+    draw.polygon(pts_outer, fill=(*ic, 0), outline=(*ic, 220),
+                 width=max(1, int(S(1.8))))
+
+    # Inner diamond (smaller, filled)
+    d_in = S(7.5)
+    pts_inner = [
+        (gcx, gcy - d_in),
+        (gcx + d_in, gcy),
+        (gcx, gcy + d_in),
+        (gcx - d_in, gcy),
+    ]
+    draw.polygon(pts_inner, fill=(*colors['border'], 140 + int(60 * hover_t)))
+
+    # Center dot
+    dot_r = S(2.8)
+    draw.ellipse(
+        [gcx - dot_r, gcy - dot_r, gcx + dot_r, gcy + dot_r],
+        fill=(*ic, 250),
+    )
+
+    # Bottom accent line
+    line_y = disc[3] - S(4)
+    line_hw = S(14)
+    draw.line(
+        [(gcx - line_hw, line_y), (gcx + line_hw, line_y)],
+        fill=(*colors['border2'], 120 + int(50 * hover_t)),
+        width=max(1, int(S(1.0))),
+    )
 
     try:
         img = img.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
@@ -242,7 +260,10 @@ class GpuNerveGearButton:
             cursor_leave_fn=self._handle_cursor_leave,
             mouse_button_fn=self._handle_mouse_button,
         )
+        # Don't show or stage frames yet — LinkStart animation controls
+        # visibility via set_alpha / deiconify at the right moment.
         self._stage_frame(force=True)
+        self._win.hide()
 
     def geometry(self, spec: str) -> None:
         if self._destroyed:
