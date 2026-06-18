@@ -430,6 +430,7 @@ class SAOPlayerGUIFloatChromeMixin:
             try:
                 mb_ov = tk.Toplevel(self.root)
                 mb_ov.overrideredirect(True)
+                mb_ov.withdraw()
                 mb_ov.attributes('-topmost', True)
                 mb_ov.attributes('-alpha', 0.0)
                 mb_ov.geometry(f'{sw}x{sh}+0+0')
@@ -500,10 +501,14 @@ class SAOPlayerGUIFloatChromeMixin:
             _fadeout_dur = 0.35
             _peak = 0.72
 
+            _mblur_shown = [False]
             def _mblur_anim():
+                if not _mblur_shown[0]:
+                    _mblur_shown[0] = True
+                    try: mb_ov.deiconify()
+                    except Exception: pass
                 dt = time.time() - _t0
                 if dt < _fadein_dur:
-                    # 渐入阶段
                     a = _peak * (dt / _fadein_dur)
                 elif dt < _fadein_dur + _fadeout_dur:
                     # 渐隐阶段

@@ -21,9 +21,12 @@ from config import (
     DEFAULT_HOTKEYS,
     HOTKEY_FKEY_VK,
     HOTKEY_MOD_ALL_VKS,
+    HOTKEY_MODIFIER_VKS,
     parse_hotkey,
     select_hotkey_match,
 )
+
+_ALL_HOTKEY_VKS = frozenset(HOTKEY_FKEY_VK.values()) | HOTKEY_MOD_ALL_VKS
 
 # ── pynput is an optional runtime dependency. When absent, the hotkey
 # listener silently no-ops so the rest of the GUI still runs. Mirrors
@@ -101,15 +104,41 @@ class SAOHotkeyManager:
         self._start()
 
     def _start(self):
-        if not PYNPUT_HOTKEY_AVAILABLE:
+        self._poll_thread = None
+        if PYNPUT_HOTKEY_AVAILABLE:
+            try:
+                self._listener = pynput_kb.Listener(
+                    on_press=self._on_press, on_release=self._on_release)
+                self._listener.daemon = True
+                self._listener.start()
+            except Exception:
+                pass
+        self._start_gaks_poll()
+
+    def _start_gaks_poll(self):
+        """GetAsyncKeyState polling fallback — works even when pynput hooks
+        fail (admin/UIPI, Python 3.11 ctypes bug)."""
+        if sys.platform != 'win32':
             return
-        try:
-            self._listener = pynput_kb.Listener(
-                on_press=self._on_press, on_release=self._on_release)
-            self._listener.daemon = True
-            self._listener.start()
-        except Exception:
-            pass
+        import threading as _th
+        self._poll_stop = False
+        def _poll():
+            user32 = ctypes.windll.user32
+            prev: set = set()
+            while not self._poll_stop:
+                cur: set = set()
+                for vk in _ALL_HOTKEY_VKS:
+                    if user32.GetAsyncKeyState(vk) & 0x8000:
+                        cur.add(vk)
+                newly = cur - prev
+                if newly:
+                    self._pressed_keys = cur
+                    self._check_combos()
+                prev = cur
+                import time; time.sleep(0.05)
+        t = _th.Thread(target=_poll, daemon=True, name='GAKS-hotkey')
+        t.start()
+        self._poll_thread = t
 
     def _on_press(self, key):
         try:
@@ -172,10 +201,5 @@ class SAOHotkeyManager:
                               if k in HOTKEY_MOD_ALL_VKS}
 
     def cleanup(self):
-        # The listener thread is daemon=True so it auto-exits when the
-        # main thread terminates. We can't call listener.stop() directly
-        # because pynput 1.8.1's stop() can block forever when the
-        # message-loop thread already crashed (see ctypes.ArgumentError
-        # workaround above). Setting the reference to None and trusting
-        # daemon-thread teardown is enough.
+        self._poll_stop = True
         self._listener = None
