@@ -1390,9 +1390,13 @@ def _html_path() -> str:
 def launch(gui_ref: Any = None, blocking: bool = False) -> None:
     """Open the AI Editor in a pywebview window.
 
-    If *blocking* is False (default), opens in a background thread and returns
-    immediately.  Safe to call multiple times — if already open, focuses the
-    existing window.
+    pywebview requires ``webview.start()`` on the main thread. When called from
+    a Tk-hosted SAO instance (main thread occupied by Tk), we spawn a child
+    process so pywebview gets its own main thread. The child process imports
+    this module and calls ``launch(blocking=True)``.
+
+    If *blocking* is True, runs synchronously (used by the child process and
+    CLI ``python -m ai_editor.app``).
     """
     global _running_window, _running_thread
 
@@ -1403,42 +1407,61 @@ def launch(gui_ref: Any = None, blocking: bool = False) -> None:
         except Exception:
             _running_window = None
 
-    api = AIEditorAPI(gui_ref)
-
-    def _run():
-        global _running_window
-        import webview
-        html_file = _html_path()
-        if not os.path.isfile(html_file):
-            print(f"[AIEditor] HTML not found: {html_file}")
-            return
-        url = f"file:///{html_file.replace(os.sep, '/')}"
-        window = webview.create_window(
-            "SAO AI Editor",
-            url=url,
-            width=1200,
-            height=800,
-            min_size=(800, 500),
-            js_api=api,
-            frameless=False,
-            easy_drag=False,
-            text_select=True,
-        )
-        _running_window = window
-        api.set_window(window)
-
-        def _on_closed():
-            global _running_window
-            _running_window = None
-
-        window.events.closed += _on_closed
-        webview.start(debug=False)
-
     if blocking:
-        _run()
-    else:
-        _running_thread = threading.Thread(target=_run, daemon=True)
-        _running_thread.start()
+        _launch_webview_blocking(gui_ref)
+        return
+
+    # Non-blocking: pywebview.start() needs main thread. If a Tk mainloop
+    # already owns the main thread, spawn a subprocess instead.
+    _launch_subprocess()
+
+
+def _launch_subprocess() -> None:
+    """Spawn a separate Python process for the AI Editor pywebview window."""
+    global _running_thread
+    import subprocess as _sp
+    html_file = _html_path()
+    if not os.path.isfile(html_file):
+        print(f"[AIEditor] HTML not found: {html_file}")
+        return
+    cmd = [sys.executable, "-m", "ai_editor.app"]
+    try:
+        proc = _sp.Popen(cmd, cwd=_ROOT)
+        print(f"[AIEditor] subprocess started (pid={proc.pid})")
+    except Exception as exc:
+        print(f"[AIEditor] subprocess failed: {exc}")
+
+
+def _launch_webview_blocking(gui_ref: Any = None) -> None:
+    """Run pywebview in the current thread (must be main thread)."""
+    global _running_window
+    import webview
+    html_file = _html_path()
+    if not os.path.isfile(html_file):
+        print(f"[AIEditor] HTML not found: {html_file}")
+        return
+    api = AIEditorAPI(gui_ref)
+    url = f"file:///{html_file.replace(os.sep, '/')}"
+    window = webview.create_window(
+        "SAO AI Editor",
+        url=url,
+        width=1200,
+        height=800,
+        min_size=(800, 500),
+        js_api=api,
+        frameless=False,
+        easy_drag=False,
+        text_select=True,
+    )
+    _running_window = window
+    api.set_window(window)
+
+    def _on_closed():
+        global _running_window
+        _running_window = None
+
+    window.events.closed += _on_closed
+    webview.start(debug=False)
 
 
 # ---------------------------------------------------------------------------
