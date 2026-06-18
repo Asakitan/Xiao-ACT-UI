@@ -2587,9 +2587,15 @@ def _launch_subprocess() -> None:
         cmd = [sys.executable, '-m', 'ai_editor.app']
     env = dict(os.environ)
     env.setdefault('PYTHONPATH', _ROOT)
+    cwd = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else _ROOT
+    flags = 0
+    if sys.platform == 'win32':
+        BELOW_NORMAL = 0x00004000
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        flags = BELOW_NORMAL | CREATE_NEW_PROCESS_GROUP
     try:
-        proc = _sp.Popen(cmd, cwd=os.path.dirname(sys.executable)
-                         if getattr(sys, 'frozen', False) else _ROOT, env=env)
+        proc = _sp.Popen(cmd, cwd=cwd, env=env, creationflags=flags,
+                         close_fds=True)
         print(f"[AIEditor] subprocess started (pid={proc.pid})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")

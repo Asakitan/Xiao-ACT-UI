@@ -541,7 +541,6 @@ class SAOPlayerGUIMenuMixin:
                 play_sound('menu_close')
             except Exception:
                 pass
-            self._play_motion_blur(closing=True)
             self._sao_menu.close()
             try:
                 from render.overlay_scheduler import get_scheduler as _get_sched

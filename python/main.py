@@ -299,6 +299,7 @@ def main():
     _set_dpi_aware()
     _elevate_process_priority()
     _register_apply_on_exit()
+    _start_update_check()
 
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
@@ -315,7 +316,6 @@ def main():
     elif args.headless:
         run_headless()
     else:
-        _start_update_check()
         run_ui()
 
 
