@@ -1020,20 +1020,9 @@ class SAOPlayerGUIFisheyeMixin:
                 return
             s = _state[0]
 
-            # Push the freshest worker frame (dedup'd by CRC32).
-            # v2.3.15: compare CRC instead of Python `is` — the worker
-            # generates a new bytes object every frame via _bgra_buf.tobytes()
-            # so `is` never matches; every tick uploaded a full frame to GPU.
-            f = _latest_frame[0]
-            if f is not None:
-                try:
-                    _frame_id, _bgra, _fw, _fh = f
-                    if _frame_id != _last_pushed_frame_id[0]:
-                        _last_pushed_frame_id[0] = _frame_id
-                        presenter.set_frame(_bgra, _fw, _fh)
-                        gpu_win.request_redraw()
-                except Exception:
-                    pass
+            # Worker thread now pushes frames directly to the presenter
+            # at full rate (~60 Hz) bypassing Tk scheduling latency.
+            # _tick only drives the state machine and fade control.
 
             # State machine — kicks off pump-driven fades.
             try:
@@ -1091,17 +1080,10 @@ class SAOPlayerGUIFisheyeMixin:
                     _state[0] = 'fadein'
                 # Otherwise the pump fires _on_fadeout_done when alpha hits 0.
 
-            if _latest_frame[0] is not None and s in ('fadein', 'active', 'fadeout'):
-                try:
-                    gpu_win.request_redraw()
-                except Exception:
-                    pass
-
             _perf_gauge('fisheye.tk_tick_ms',
                         (time.perf_counter() - _tick_t0) * 1000.0)
             try:
-                delay = 16 if _latest_frame[0] is not None and s in ('fadein', 'active', 'fadeout') else 32
-                self.root.after(delay, _tick)
+                self.root.after(50, _tick)
             except Exception:
                 pass
 
@@ -1395,6 +1377,11 @@ class SAOPlayerGUIFisheyeMixin:
                         _frame_seq[0] += 1
                         _latest_frame[0] = (
                             _frame_seq[0], _rgb_bytes, _shot_w, _shot_h)
+                        try:
+                            presenter.set_frame(_rgb_bytes, _shot_w, _shot_h)
+                            gpu_win.request_redraw()
+                        except Exception:
+                            pass
                         _elapsed = _time.time() - _t_start
                         _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
                         _sleep = max(0.001, _frame_interval - _elapsed)
@@ -1510,7 +1497,13 @@ class SAOPlayerGUIFisheyeMixin:
                     _np.clip(tmp, 0, 255, out=tmp)
                     _bgra_buf[:] = tmp.astype(_np.uint8)
                 _frame_seq[0] += 1
-                _latest_frame[0] = (_frame_seq[0], _bgra_buf.tobytes(), out_w, out_h)
+                _bgra_bytes = _bgra_buf.tobytes()
+                _latest_frame[0] = (_frame_seq[0], _bgra_bytes, out_w, out_h)
+                try:
+                    presenter.set_frame(_bgra_bytes, out_w, out_h)
+                    gpu_win.request_redraw()
+                except Exception:
+                    pass
                 _elapsed = _time.time() - _t_start
                 _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
                 _sleep = max(0.001, _frame_interval - _elapsed)

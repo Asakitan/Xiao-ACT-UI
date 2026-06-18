@@ -252,7 +252,7 @@ class PluginRecord:
     version: str
     path: str
     entry: str
-    enabled: bool = True
+    enabled: bool = False
     game_ids: tuple[str, ...] = ()
     requires: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
@@ -2064,7 +2064,7 @@ class PluginManager:
             version=str(manifest.get("version") or "0.1.0"),
             path=plug_dir,
             entry=entry,
-            enabled=bool(manifest.get("enabled", True)),
+            enabled=bool(manifest.get("enabled", False)),
             game_ids=tuple(str(x) for x in manifest.get("game_ids", [])),
             requires=tuple(str(x).strip() for x in manifest.get("requires", []) if str(x or "").strip()),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),

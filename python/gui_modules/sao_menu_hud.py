@@ -840,6 +840,30 @@ class MenuCircleButtonRenderer:
             hr = r * 0.40
             draw.ellipse((cx - hr, cy - hr, cx + hr, cy + hr), fill=(255, 255, 255, 0))
             return True
+        # AI Editor: four-pointed star (✦ U+2726)
+        if icon_text == '✦':
+            r = canvas * 0.24
+            ri = r * 0.32
+            pts = []
+            for idx in range(4):
+                ang_o = -math.pi / 2.0 + idx * (math.pi / 2.0)
+                ang_i = ang_o + math.pi / 4.0
+                pts.append((cx + math.cos(ang_o) * r, cy + math.sin(ang_o) * r))
+                pts.append((cx + math.cos(ang_i) * ri, cy + math.sin(ang_i) * ri))
+            draw.polygon(pts, fill=color)
+            return True
+        # Hash / number sign (⌗ U+2317) — "工具" category
+        if icon_text == '⌗':
+            bar = max(scale, 2)
+            span = canvas * 0.18
+            gap = span * 0.45
+            # two vertical bars
+            draw.line((cx - gap, cy - span, cx - gap, cy + span), fill=color, width=bar)
+            draw.line((cx + gap, cy - span, cx + gap, cy + span), fill=color, width=bar)
+            # two horizontal bars (slightly tilted via offset)
+            draw.line((cx - span, cy - gap, cx + span, cy - gap), fill=color, width=bar)
+            draw.line((cx - span, cy + gap, cx + span, cy + gap), fill=color, width=bar)
+            return True
         return False
 
     def _icon_font(self, size: int):
