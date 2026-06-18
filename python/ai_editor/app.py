@@ -2554,43 +2554,30 @@ def launch(gui_ref: Any = None, blocking: bool = False) -> None:
 
 
 def _launch_subprocess() -> None:
-    """Spawn a separate Python process for the AI Editor pywebview window.
+    """Spawn a separate process for the AI Editor pywebview window.
 
-    In frozen (onedir) builds sys.executable is the bundled .exe which
-    does not support ``-m`` module execution. Fall back to an in-process
-    thread-based launch so the editor works in both dev and packaged modes.
+    Dev mode: ``python -m ai_editor.app``
+    Frozen (onedir): ``XiaoACTUI.exe --ai-editor`` (main.py handles the flag)
+
+    Both give pywebview its own main thread without conflicting with Tk.
     """
     global _running_thread
     html_file = _html_path()
     if not os.path.isfile(html_file):
         print(f"[AIEditor] HTML not found: {html_file}")
         return
-    if getattr(sys, 'frozen', False):
-        _launch_inprocess_thread()
-        return
     import subprocess as _sp
-    cmd = [sys.executable, "-m", "ai_editor.app"]
+    if getattr(sys, 'frozen', False):
+        cmd = [sys.executable, '--ai-editor']
+    else:
+        cmd = [sys.executable, '-m', 'ai_editor.app']
     env = dict(os.environ)
-    env.setdefault("PYTHONPATH", _ROOT)
+    env.setdefault('PYTHONPATH', _ROOT)
     try:
         proc = _sp.Popen(cmd, cwd=_ROOT, env=env)
         print(f"[AIEditor] subprocess started (pid={proc.pid})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")
-
-
-def _launch_inprocess_thread() -> None:
-    """Run AI Editor webview in a daemon thread (frozen builds)."""
-    global _running_thread
-    def _run():
-        try:
-            _launch_webview_blocking(None)
-        except Exception as exc:
-            print(f"[AIEditor] in-process thread failed: {exc}")
-    t = threading.Thread(target=_run, daemon=True, name='AIEditor')
-    _running_thread = t
-    t.start()
-    print("[AIEditor] in-process thread started")
 
 
 def _launch_webview_blocking(gui_ref: Any = None) -> None:

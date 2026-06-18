@@ -303,9 +303,13 @@ def main():
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
     parser.add_argument('--headless', action='store_true', help='无 HUD 终端模式')
+    parser.add_argument('--ai-editor', action='store_true', help='启动 AI Editor (独立进程)')
     args = parser.parse_args()
 
-    if args.test:
+    if args.ai_editor:
+        from ai_editor.app import launch
+        launch(blocking=True)
+    elif args.test:
         run_test()
     elif args.headless:
         run_headless()
