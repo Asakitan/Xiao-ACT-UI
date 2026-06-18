@@ -80,9 +80,9 @@ class SAOPlayerGUILinkAnimationMixin:
     def _play_link_start(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        # 目标位置: 上次保存的位置, 否则右下角
-        saved_x = self.settings.get('float_x', None)
-        saved_y = self.settings.get('float_y', None)
+        saved_pos = self.settings.get('nervegear_button_pos', None)
+        saved_x = int(saved_pos[0]) if isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2 else None
+        saved_y = int(saved_pos[1]) if isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2 else None
         # 固定位置: 左下角覆盖整个底部区域 (统一 HUD)
         # 向右偏移 4% 屏宽以避开底部系统 UI
         _offset_pct = 0.04
