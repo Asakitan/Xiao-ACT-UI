@@ -913,6 +913,14 @@ class GpuOverlayWindow:
         self._win = win
         self._created = True
         self._install_input_callbacks()
+        if self._hwnd and self._root:
+            try:
+                gui = getattr(self._root, 'master', self._root)
+                reg = getattr(gui, 'register_wnd_shield', None)
+                if callable(reg):
+                    reg(self._hwnd)
+            except Exception:
+                pass
 
     def show(self, async_create: bool = False) -> None:
         if not self._created:

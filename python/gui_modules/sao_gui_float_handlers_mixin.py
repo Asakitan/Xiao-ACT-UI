@@ -233,7 +233,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
             _disable_native_window_shadow(self._float)
             try:
-                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
+                self.register_wnd_shield(hwnd)
             except Exception:
                 pass
         except Exception:

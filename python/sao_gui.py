@@ -203,6 +203,8 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._ai_editor_panel = None  # AIEditorPanel
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()
+        self._streaming_mode = bool(self.settings.get('streaming_mode', False))
+        self._init_wnd_shield()
         self._set_icon()
         self._create_floating_widget()
         self._setup_hotkeys()
@@ -237,6 +239,31 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default
+
+    def _init_wnd_shield(self):
+        try:
+            from mem_probe.rt_io import WndShield
+            self._wnd_shield = WndShield()
+        except Exception:
+            self._wnd_shield = None
+
+    def _toggle_streaming(self):
+        self._streaming_mode = not self._streaming_mode
+        self.settings.set('streaming_mode', self._streaming_mode)
+        self.settings.save()
+        sh = getattr(self, '_wnd_shield', None)
+        if sh:
+            if self._streaming_mode:
+                while not sh.streaming:
+                    sh.toggle()
+            else:
+                while sh.streaming:
+                    sh.toggle()
+
+    def register_wnd_shield(self, hwnd: int):
+        sh = getattr(self, '_wnd_shield', None)
+        if sh and hwnd:
+            sh.register(hwnd)
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
