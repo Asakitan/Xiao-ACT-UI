@@ -1295,9 +1295,18 @@ function setLang(lang){
     else{el.textContent=t(k)}
   });
   document.querySelectorAll('[data-i18n-title]').forEach(el=>{el.title=t(el.dataset.i18nTitle)});
+  // Refresh welcome if visible
+  const wm=$('chat-welcome-msg');if(wm){wm.remove();renderWelcome()}
+  // Persist
   try{localStorage.setItem('sao-ai-lang',lang)}catch(e){}
+  if(window.pywebview&&window.pywebview.api){try{call('save_config',{language:lang})}catch(e){}}
+  document.title=t('welcome_title');
 }
-function toggleLang(){setLang(_curLang==='en'?'zh':'en')}
+function toggleLang(){
+  const next=_curLang==='en'?'zh':'en';
+  setLang(next);
+  showToast(next==='zh'?'已切换到中文':'Switched to English','info',1500);
+}
 try{const saved=localStorage.getItem('sao-ai-lang');if(saved)_curLang=saved}catch(e){}
 const _SEND_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg>';
 const _STOP_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>';
