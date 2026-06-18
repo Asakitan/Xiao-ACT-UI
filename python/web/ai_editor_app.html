@@ -329,7 +329,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-area { flex-shrink:0; background:var(--bg); padding:4px 12px; max-width:950px;
   margin:0 auto; width:100%; box-sizing:border-box; }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
-  background:var(--bg3); transition:border-color .15s, box-shadow .35s; overflow:hidden; }
+  background:var(--bg3); transition:border-color .15s, box-shadow .35s; overflow:visible; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
 .chat-input-container.working { border-color:transparent; }
 .chat-input-container.working::before { content:''; position:absolute; inset:-1px; border-radius:9px;
@@ -1543,6 +1543,8 @@ function setLang(lang){
   if(window.pywebview&&window.pywebview.api){try{call('save_config',{language:lang})}catch(e){}}
   document.title=t('welcome_title');
   if(typeof updateModeUI==='function')updateModeUI();
+  if(typeof renderChatControlOptions==='function')renderChatControlOptions();
+  if(typeof refreshAgents==='function')refreshAgents();
 }
 function toggleLang(){
   const next=_curLang==='en'?'zh':'en';
@@ -1923,7 +1925,7 @@ function finalizeThinking(){
 
 // ── Tool state rendering ──
 function renderToolCallWithState(container,name,args,callId){
-  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+callId;
+  const el=document.createElement('div');el.className='tool-call';el.id='tc-'+callId;el.dataset.toolName=name;
   const hdr=document.createElement('div');hdr.className='tool-header';
   hdr.innerHTML='<span class="arrow">▸</span> Tool: '+esc(name)+
     '<span class="tool-state"><span class="spinner"></span></span>';
@@ -2025,8 +2027,10 @@ function onToolProgress(d){
 }
 function onToolEnd(d){
   markToolComplete(d.id,!d.error);
+  var tcEl=d.id?document.getElementById('tc-'+d.id):null;
+  var name=d.name||(tcEl&&tcEl.dataset.toolName)||'?';
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
-  if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,d.name||'?',d.result||'')}
+  if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,name,d.result||'')}
 }
 function onTokenWarning(d){
   const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
@@ -2167,12 +2171,12 @@ async function exportChat(){const d=await call('export_chat');if(d){navigator.cl
 window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearChat=clearChat;window.exportChat=exportChat;
 
 // ── Slash commands ──
-const SLASH_CMDS=[
+function getSlashCmds(){return [
   ['/clear',t('slash_clear')],['/new',t('slash_new')],['/export',t('slash_export')],
   ['/settings',t('slash_settings')],['/tools',t('slash_tools')],['/history',t('slash_history')],
   ['/instructions',t('slash_instructions')],['/agents',t('slash_agents')],
   ['/system',t('slash_system')],['/eval',t('slash_eval')],
-];
+];}
 
 async function execSlash(raw){
   const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),arg=parts.slice(1).join(' ');
@@ -2209,7 +2213,7 @@ chatInp.addEventListener('input',function(){
     const v=self.value;
     if(v.startsWith('/')&&!v.includes('\n')){
       const prefix=v.split(/\s/)[0].toLowerCase();
-      const matches=SLASH_CMDS.filter(c=>c[0].startsWith(prefix));
+      const matches=getSlashCmds().filter(c=>c[0].startsWith(prefix));
       if(matches.length){
         slashPopup.innerHTML=matches.map(c=>'<div class="slash-item" onclick="pickSlash(\''+c[0]+'\')"><span class="cmd">'+esc(c[0])+'</span><span class="desc">'+esc(c[1])+'</span></div>').join('');
         slashPopup.classList.add('open');
@@ -2441,7 +2445,7 @@ function promptRunWorkflow(id,name){
     if(r.error){appendSystem('Workflow error: '+r.error);return}
     let out='⚡ Workflow **'+name+'** complete:\n\n';
     if(r.steps)r.steps.forEach((s,i)=>{out+='### Step '+(i+1)+': '+(s.label||'')+(s.error?' ❌':' ✓')+'\n'+s.output+'\n\n'});
-    const el=createMsg('assistant','workflow');el.innerHTML=renderMd(out);
+    const el=createMsg('assistant','workflow');renderMd(el,out);
   });
 }
 function onWorkflowStep(d){setStatus('⚡ '+(d.label||'Step '+(d.step+1))+' ('+d.status+')')}
@@ -3183,7 +3187,7 @@ function toggleModePopup(){
   const popup=$('mode-popup');if(!popup)return;
   popup.classList.toggle('show');
   if(popup.classList.contains('show')){
-    const close=e=>{if(!popup.contains(e.target)&&e.target.id!=='chat-mode-trigger'){popup.classList.remove('show');document.removeEventListener('click',close)}};
+    const close=e=>{if(!popup.contains(e.target)&&!e.target.closest('#chat-mode-trigger')){popup.classList.remove('show');document.removeEventListener('click',close)}};
     setTimeout(()=>document.addEventListener('click',close),0);
   }
 }
@@ -3983,7 +3987,7 @@ function openFileDialog(){/* pywebview file dialog */
 function saveFile(){showToast('Saved','success',1000)}
 
 // Expose to global scope for HTML onclick attributes
-window.tbMenu=tbMenu;window.toggleSidebarVis=toggleSidebarVis;
+window.tbMenu=tbMenu;window.switchSidebar=switchSidebar;window.toggleSidebarVis=toggleSidebarVis;
 window.toggleEditorVis=toggleEditorVis;window.toggleChatVis=toggleChatVis;
 window.toggleTheme=toggleTheme;window.openSettings=openSettings;
 window.openCmdPalette=openCmdPalette;window.addTab=addTab;

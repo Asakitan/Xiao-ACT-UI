@@ -701,7 +701,8 @@ def test_scopes() -> None:
     _check("3 modes", len(MODES) == 3)
 
     ask_perms = effective_permissions("ask")
-    _check("ask: readFile disabled", ask_perms.get("readFile") == "disabled")
+    _check("ask: readFile allowed", ask_perms.get("readFile") == "allowed")
+    _check("ask: editFile disabled", ask_perms.get("editFile") == "disabled")
     _check("ask: engine allowed", ask_perms.get("engine") == "allowed")
 
     plan_perms = effective_permissions("plan")
@@ -717,7 +718,7 @@ def test_scopes() -> None:
 
     # tool_permission helper
     _check("tool_permission ask/readFile",
-           tool_permission("ask", "readFile") == "disabled")
+           tool_permission("ask", "readFile") == "allowed")
     _check("tool_permission plan/readFile",
            tool_permission("plan", "readFile") == "allowed")
     _check("tool_permission unknown tool defaults confirm in plan",

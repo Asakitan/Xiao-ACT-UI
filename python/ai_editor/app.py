@@ -278,7 +278,7 @@ class AIEditorAPI:
         config = self._load_config_obj()
         self._engine = LLMEngine(config)
         self._registry = ToolRegistry()
-        register_engine_tools(self._registry, self._gui_ref or _DummyGui())
+        register_engine_tools(self._registry, self._gui_ref or _DummyGui(), api_ref=self)
         self._install_engine_policy()
 
         # Initialize MCP servers
@@ -1197,6 +1197,10 @@ class AIEditorAPI:
         ctrl.on_tool_end = lambda cid, r, state="": self._emit(
             f"provider_tool_end", {"provider": pid, "id": cid, "result": r, "state": state})
         ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
+        ctrl.on_tool_progress = lambda cid, n, p: self._emit(
+            'provider_tool_progress', {'provider': pid, 'id': cid, 'name': n, 'progress': p})
+        ctrl.on_token_warning = lambda u, l, r: self._emit(
+            'provider_token_warning', {'provider': pid, 'used': u, 'limit': l, 'percent': int(r * 100)})
         ctrl.on_error = lambda e: self._emit(
             f"provider_error", {"provider": pid, "error": e})
         ctrl.on_idle = lambda: self._emit(
@@ -2319,38 +2323,12 @@ class AIEditorAPI:
         if self._controller and self._controller._running:
             return {"error": "Already running"}
         self._ensure_engine()
+        display = text or "What is this image?"
         if self._is_anthropic():
-            content = self._engine.make_image_content_anthropic(text or "What is this image?", image_base64, mime)
+            content = self._engine.make_image_content_anthropic(display, image_base64, mime)
         else:
-            content = self._engine.make_image_content(text or "What is this image?", image_base64, mime)
-        from ai_editor.chat_state import ChatMessage
-        user_msg = ChatMessage(role="user", content=text or "(image)")
-        self._controller.conversation.add_message(user_msg)
-        # Directly call with multimodal content
-        msgs = self._controller.conversation.to_api_messages()
-        msgs[-1]["content"] = content
-        self._controller._running = True
-        import threading as _th
-        def _run():
-            try:
-                tools = self._controller.registry.to_openai_tools() or None
-                self._controller.engine.reset_cancel()
-                resp = self._controller.engine.chat_completion_stream(
-                    messages=msgs, tools=tools,
-                    on_delta=lambda d: (d.content and self._emit("stream_delta", {"content": d.content})),
-                )
-                self._emit("stream_end", {
-                    "content": resp.content, "model": resp.model,
-                    "thinking": resp.thinking,
-                    "usage": resp.usage,
-                    **({"error": resp.error} if resp.error else {}),
-                })
-            finally:
-                self._controller._running = False
-                self._emit("idle", {})
-        t = _th.Thread(target=_run, daemon=True)
-        self._controller._thread = t
-        t.start()
+            content = self._engine.make_image_content(display, image_base64, mime)
+        self._controller.send_multimodal(display, content, agent_mode=(self._mode == "agent"))
         return {"ok": True}
 
     def _is_anthropic(self) -> bool:
@@ -2562,7 +2540,7 @@ class AIEditorAPI:
         return result
 
     def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
-        self._emit("tool_end", {"id": call_id, "result": result, "state": state})
+        self._emit("tool_end", {"id": call_id, "result": result, "state": state, "name": ""})
 
     def _on_tool_progress(self, call_id: str, name: str, progress: float) -> None:
         self._emit("tool_progress", {"id": call_id, "name": name, "progress": progress})

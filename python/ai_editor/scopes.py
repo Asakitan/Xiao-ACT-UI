@@ -124,7 +124,7 @@ MODE_PERMISSIONS: Dict[str, Dict[str, str]] = {
     },
     "ask": {
         **{t: "disabled" for t in MUTATING_TOOLS},
-        **{t: "disabled" for t in READ_TOOLS},
+        **{t: "allowed" for t in READ_TOOLS},
         **{t: "allowed" for t in ALWAYS_TOOLS},
     },
     "plan": {
