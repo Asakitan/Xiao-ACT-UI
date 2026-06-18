@@ -144,6 +144,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             'toggle_topmost': lambda: self.root.after(0, self._toggle_topmost),
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
+            'toggle_float_button': lambda: self.root.after(0, self._toggle_float_button_visibility),
         }, hotkey_provider=self._plugin_hotkey_map)
 
     def _plugin_hotkey_map(self):
@@ -338,9 +339,14 @@ class SAOPlayerGUIFloatHandlersMixin:
         _render_ng()
 
         self._float.withdraw()
+        self._float_button_hidden = False
         self._sync_float_button_geometry(show=False)
         try:
             self.root.after(2500, self._ensure_float_button_visible)
+        except Exception:
+            pass
+        try:
+            self.root.after(3000, self._start_topmost_loop)
         except Exception:
             pass
 
@@ -360,6 +366,33 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._set_float_alpha(0.95)
         self._sync_float_button_geometry(show=True)
 
+    def _start_topmost_loop(self):
+        """Re-assert TOPMOST on the GPU trigger button every 2s."""
+        if getattr(self, '_destroyed', False):
+            return
+        btn = getattr(self, '_float_gpu_button', None)
+        if btn is not None and getattr(btn, '_visible', False):
+            try:
+                btn.raise_topmost()
+            except Exception:
+                pass
+        try:
+            self.root.after(2000, self._start_topmost_loop)
+        except Exception:
+            pass
+
+    def _toggle_float_button_visibility(self):
+        """Insert key: hide/show the floating NerveGear trigger button."""
+        btn = getattr(self, '_float_gpu_button', None)
+        if btn is None:
+            return
+        if getattr(btn, '_visible', False):
+            btn.withdraw()
+            self._float_button_hidden = True
+        else:
+            btn.deiconify()
+            btn.raise_topmost()
+            self._float_button_hidden = False
 
     def _toggle_nervegear_theme(self):
         """Toggle NerveGear button between dark and light theme."""

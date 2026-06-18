@@ -411,6 +411,7 @@ DEFAULT_HOTKEYS = {
     "toggle_topmost": "F9",
     "hide_panels": "F10",
     "show_plugins": "F11",
+    "toggle_float_button": "INSERT",
 }
 
 # ── 快捷键组合解析 (三套监听器共用: SAOHotkeyManager / sao_webview / automation) ──
@@ -419,6 +420,9 @@ HOTKEY_FKEY_VK = {
     "F1": 112, "F2": 113, "F3": 114, "F4": 115,
     "F5": 116, "F6": 117, "F7": 118, "F8": 119,
     "F9": 120, "F10": 121, "F11": 122, "F12": 123,
+    "INSERT": 0x2D, "DELETE": 0x2E,
+    "HOME": 0x24, "END": 0x23,
+    "PAGEUP": 0x21, "PAGEDOWN": 0x22,
 }
 # 修饰键 VK 组: pynput 上报左右具体码 (162/163 等), GetAsyncKeyState
 # 轮询路径用通用码 (17/18/16), 两路都要认。

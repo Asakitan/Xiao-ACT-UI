@@ -308,6 +308,24 @@ class GpuNerveGearButton:
         if self._destroyed:
             return
         self.deiconify()
+        self.raise_topmost()
+
+    def raise_topmost(self) -> None:
+        if self._destroyed:
+            return
+        hwnd = getattr(self._win, '_hwnd', 0)
+        if not hwnd:
+            return
+        try:
+            from render.gpu_overlay_window import (
+                _show_no_activate, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOACTIVATE, _user32,
+            )
+            _user32.SetWindowPos(
+                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
 
     def destroy(self) -> None:
         if self._destroyed:
