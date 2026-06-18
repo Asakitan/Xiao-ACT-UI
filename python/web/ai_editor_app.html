@@ -1181,8 +1181,10 @@ let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
 // ── API ──
 const api=()=>window.pywebview&&window.pywebview.api;
 async function call(method,...args){
-  const a=api(); if(!a||!a[method])return null;
-  try{return await a[method](...args)}catch(e){console.error(method,e);return null}
+  const a=api();
+  if(!a){console.warn('[call] pywebview.api not ready for',method);return null}
+  if(!a[method]){console.warn('[call] method not found:',method);return null}
+  try{return await a[method](...args)}catch(e){console.error('[call]',method,e);return null}
 }
 
 // ── Event handler (called from Python) ──
@@ -1204,7 +1206,9 @@ window._onEditorEvent=function(event,data){
 async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
   syncUI();
-  const t=await call('list_tools'); if(t&&t.tools)renderToolsSidebar(t.tools);
+  let t=await call('list_tools');
+  if(!t||!t.tools||!t.tools.length){await new Promise(r=>setTimeout(r,500));t=await call('list_tools')}
+  if(t&&t.tools)renderToolsSidebar(t.tools);
   refreshRuntimeSupport();
   refreshHistory();await loadMode();await loadChatControls();await renderProviderTabs();
   if(_curLang!=='en')setLang(_curLang);

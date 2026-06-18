@@ -1814,7 +1814,11 @@ class AIEditorAPI:
         return self._controller.export_messages()
 
     def list_tools(self) -> Dict:
-        self._ensure_engine()
+        try:
+            self._ensure_engine()
+        except Exception as exc:
+            print(f"[AIEditor] _ensure_engine failed in list_tools: {exc}")
+            return {"tools": [], "error": str(exc)}
         tools = [
             {"name": t.name, "description": t.description,
              "category": t.category, "requires_confirm": t.requires_confirm,
