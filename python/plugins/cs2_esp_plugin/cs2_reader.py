@@ -471,3 +471,4 @@ def _create_module_snapshot(pid: int) -> int:
         return ctypes.windll.kernel32.CreateToolhelp32Snapshot(flags, int(pid)) or 0
     except Exception:
         return 0
+

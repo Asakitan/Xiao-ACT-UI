@@ -180,3 +180,4 @@ PATTERNS = {
 def default_patterns() -> List[Pattern]:
     """Compiled patterns for the RVAs the scanner knows how to resolve."""
     return [compile_pattern(name, spec) for name, spec in PATTERNS.items()]
+

@@ -122,3 +122,4 @@ def default_config() -> OffsetConfig:
         "scene_node_fields": {name: "0x0" for name in _REQUIRED_SCENE_FIELDS},
         "constants": dict(_DEFAULT_CONSTANTS),
     })
+

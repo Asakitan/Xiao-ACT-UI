@@ -15,3 +15,4 @@
     "greeting": {"type": "string", "default": "你好", "description": "问候语"}
   }
 }
+

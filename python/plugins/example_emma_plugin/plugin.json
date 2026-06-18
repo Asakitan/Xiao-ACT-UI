@@ -16,3 +16,4 @@
     "auto_count": {"type": "boolean", "default": false, "description": "自动计数"}
   }
 }
+

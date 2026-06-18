@@ -341,3 +341,4 @@ def _unregister_alert_kind() -> None:
             fn(ALERT_KIND)
         except Exception:
             pass
+

@@ -203,3 +203,4 @@ def _on_action(action_id, _payload=None):
                     _ctx.notify("AUTO HIDE & SEEK", "启动失败：检查游戏窗口/模板资源",
                                 duration_s=4.0, kind=ALERT_KIND)
     return _render()
+
