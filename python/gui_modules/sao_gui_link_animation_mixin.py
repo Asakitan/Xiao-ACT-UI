@@ -467,13 +467,16 @@ void main() {
             self._cleanup_entry_overlay()
             self._breath_base_x = fx_final
             self._breath_base_y = fy_final
-            # self.root.after(120, self._start_float_breath)  # 禁用浮动
-            # 启动识别循环
-            self.root.after(200, self._start_recognition)
-            self.root.after(600, self._recognition_loop)
-            self.root.after(420, self._toggle_sao_menu)
-            self.root.after(900, self._restore_panels)
-            self.root.after(220, self._mark_update_popup_ready)
+            for delay, name in (
+                (200, '_start_recognition'),
+                (600, '_recognition_loop'),
+                (420, '_toggle_sao_menu'),
+                (900, '_restore_panels'),
+                (220, '_mark_update_popup_ready'),
+            ):
+                fn = getattr(self, name, None)
+                if callable(fn):
+                    self.root.after(delay, fn)
 
         def _tick():
             if self._destroyed:
