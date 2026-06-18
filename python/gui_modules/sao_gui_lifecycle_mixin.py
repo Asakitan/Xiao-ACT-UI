@@ -134,6 +134,11 @@ class SAOPlayerGUILifecycleMixin:
         self._entry_overlay = None
 
     def _hard_exit_process(self) -> None:
+        try:
+            from utils.sao_sound import unload_sao_fonts
+            unload_sao_fonts()
+        except Exception:
+            pass
         os._exit(0)
 
     def _finalize_close(self):

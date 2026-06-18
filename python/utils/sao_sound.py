@@ -466,6 +466,8 @@ class LevelUpEffect:
 # ═══════════════════════════════════════════════
 
 _fonts_loaded = False
+_loaded_font_paths: list = []
+
 
 def load_sao_fonts():
     """加载 SAO-UI 字体 (Windows: AddFontResourceExW)"""
@@ -473,14 +475,31 @@ def load_sao_fonts():
     if _fonts_loaded:
         return
     _fonts_loaded = True
-    
+
     try:
         import ctypes
-        # 使用 0 而非 FR_PRIVATE 以让 tkinter 可见
         for fname in ['SAOUI.ttf', 'ZhuZiAYuanJWD.ttf']:
             fpath = os.path.join(_FONTS, fname)
             if os.path.exists(fpath):
                 ctypes.windll.gdi32.AddFontResourceExW(fpath, 0, 0)
+                _loaded_font_paths.append(fpath)
+        import atexit
+        atexit.register(unload_sao_fonts)
+    except Exception:
+        pass
+
+
+def unload_sao_fonts():
+    """卸载 SAO-UI 字体 (Windows: RemoveFontResourceExW)"""
+    global _fonts_loaded
+    if not _loaded_font_paths:
+        return
+    try:
+        import ctypes
+        for fpath in _loaded_font_paths:
+            ctypes.windll.gdi32.RemoveFontResourceExW(fpath, 0, 0)
+        _loaded_font_paths.clear()
+        _fonts_loaded = False
     except Exception:
         pass
 
