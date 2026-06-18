@@ -65,7 +65,8 @@ def _install_pynput_excepthook() -> None:
         thread_name = getattr(args.thread, 'name', '') if args.thread else ''
         # Match the exact pynput PeekMessage ctypes failure.
         if (exc_type is ctypes.ArgumentError
-                and 'LP__PUMP_MSG' in (str(exc_value) or '')):
+                and ('LP__PUMP_MSG' in (str(exc_value) or '')
+                     or 'LP__MSG' in (str(exc_value) or ''))):
             # Quietly swallow — pynput listener thread is done, but our
             # _start() already has try/except so this is non-fatal.
             return

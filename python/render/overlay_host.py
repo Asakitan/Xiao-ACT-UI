@@ -42,6 +42,7 @@ WS_VISIBLE = 0x10000000
 WS_CLIPSIBLINGS = 0x04000000
 WS_CLIPCHILDREN = 0x02000000
 WS_EX_TOPMOST = 0x00000008
+WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
 WM_NCHITTEST = 0x0084
@@ -398,11 +399,12 @@ class OverlayHost:
                             cy -= 0x10000
                         sx = cx + self.origin_x
                         sy = cy + self.origin_y
+                        # GLFW convention: 0=left, 1=right, 2=middle
                         button = 0
                         if msg in (WM_LBUTTONDOWN, WM_LBUTTONUP):
-                            button = 1
+                            button = 0  # GLFW_MOUSE_BUTTON_LEFT
                         elif msg in (WM_RBUTTONDOWN, WM_RBUTTONUP):
-                            button = 2
+                            button = 1  # GLFW_MOUSE_BUTTON_RIGHT
                         self.mouse_fn(msg, sx, sy, button, 0)
                     if msg == WM_MOUSEMOVE and not self._tracking_leave:
                         self._request_leave_tracking(hwnd)
@@ -431,9 +433,10 @@ class OverlayHost:
             0, 0, 1, 1, None, None, hinst, None,
         )
 
-        # Main overlay — only WS_EX_TOPMOST, nothing else suspicious
+        # Main overlay — TOPMOST + TRANSPARENT. Always click-through;
+        # interactive layers use separate Tk input windows.
         self.hwnd = _user32.CreateWindowExW(
-            WS_EX_TOPMOST,
+            WS_EX_TOPMOST | WS_EX_TRANSPARENT,
             self._class_name,
             '',
             WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -478,6 +481,21 @@ class OverlayHost:
 
         _opengl32.wglMakeCurrent(self.hdc, self.hglrc)
 
+        # Disable vsync on compositor — SwapBuffers must not block 16ms
+        # per frame, as it starves GLFW pump + worker GL contexts.
+        try:
+            _wglGetProcAddress = _opengl32.wglGetProcAddress
+            _wglGetProcAddress.restype = ctypes.c_void_p
+            _wglGetProcAddress.argtypes = [ctypes.c_char_p]
+            _addr = _wglGetProcAddress(b'wglSwapIntervalEXT')
+            if _addr:
+                _PFNWGLSWAPINTERVALEXTPROC = ctypes.CFUNCTYPE(
+                    ctypes.c_int, ctypes.c_int)
+                _swap_fn = _PFNWGLSWAPINTERVALEXTPROC(_addr)
+                _swap_fn(0)  # swap interval 0 = no vsync
+        except Exception:
+            pass
+
         import moderngl
         self.ctx = moderngl.create_context()
         self.ctx.enable(moderngl.BLEND)
@@ -520,6 +538,21 @@ class OverlayHost:
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
 
+    def set_input_passthrough(self, passthrough: bool) -> None:
+        """Toggle WS_EX_TRANSPARENT for cross-process click passthrough.
+
+        WM_NCHITTEST → HTTRANSPARENT only works within the same thread.
+        For clicks to reach other processes (game, desktop), the window
+        must have WS_EX_TRANSPARENT set.
+        """
+        ex = _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
+        if passthrough:
+            new_ex = ex | WS_EX_TRANSPARENT
+        else:
+            new_ex = ex & ~WS_EX_TRANSPARENT
+        if new_ex != ex:
+            _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
+
     def set_capture_mode(self, exclude: bool) -> None:
         """Toggle SetWindowDisplayAffinity for streaming mode.
 
@@ -538,6 +571,10 @@ class OverlayHost:
 
     def make_current(self) -> None:
         _opengl32.wglMakeCurrent(self.hdc, self.hglrc)
+
+    def release_current(self) -> None:
+        """Release WGL context so other threads can use the GPU."""
+        _opengl32.wglMakeCurrent(0, 0)
 
     def process_messages(self) -> None:
         """Drain pending Win32 messages for our overlay HWND only."""

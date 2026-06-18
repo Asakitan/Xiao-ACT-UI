@@ -734,8 +734,27 @@ def _get_unified_overlay(root: Any = None):
         uo = _unified_overlay_instance
     if not uo._running:
         uo.start()
-        uo.wait_ready(timeout=5.0)
+    # Non-blocking: if not ready yet, layers queue up and render
+    # once the host is created. Never block the Tk main thread.
     return uo
+
+
+def prestart_unified_overlay(root: Any = None) -> None:
+    """Pre-initialize the compositor on a background thread.
+
+    Called early in app startup (before LinkStart) so the compositor
+    is ready by the time the first overlay window is created.
+    """
+    if not _UNIFIED_OVERLAY_MODE:
+        return
+    import threading
+    def _init():
+        try:
+            uo = _get_unified_overlay(root)
+            uo.wait_ready(timeout=10.0)
+        except Exception:
+            pass
+    threading.Thread(target=_init, daemon=True).start()
 
 
 # ── GpuOverlayWindow ────────────────────────────────────────────────────────
@@ -763,16 +782,34 @@ class GpuOverlayWindow:
                  title: str = 'sao_overlay',
                  vsync: bool = False):
         # ── Unified overlay delegation ──
-        self._unified = _UNIFIED_OVERLAY_MODE
+        # vsync windows (LinkStart/exit transition) need display-synced
+        # rendering that the compositor can't provide — use GLFW directly.
+        self._unified = _UNIFIED_OVERLAY_MODE and not vsync
         self._delegate = None
         if self._unified:
             root = getattr(pump, '_root', None)
             uo = _get_unified_overlay(root)
             from render.overlay_adapter import CompositorOverlayWindow
+            # Z-order by role
+            _tl = title.lower()
+            if 'fisheye' in _tl:
+                _z = 10
+            elif 'popup' in _tl:
+                _z = 80
+            elif 'menu_bar' in _tl or 'child_bar' in _tl:
+                _z = 85
+            elif 'menu_hud' in _tl or 'left_info' in _tl:
+                _z = 90
+            elif 'nervegear' in _tl or 'float' in _tl:
+                _z = 200
+            elif any(k in _tl for k in ('dps', 'hp', 'boss', 'buff', 'skill', 'player', 'session')):
+                _z = 150
+            else:
+                _z = 100
             self._delegate = CompositorOverlayWindow(
                 uo, w=w, h=h, x=x, y=y,
                 render_fn=render_fn, click_through=click_through,
-                title=title, vsync=vsync,
+                title=title, vsync=vsync, z=_z,
             )
             # Expose compat attributes
             self._pump = pump
@@ -785,6 +822,9 @@ class GpuOverlayWindow:
             self._title = title
             self._visible = False
             self._created = True
+            self._shown = False
+            self._show_pending = False
+            self._dirty = False
             self._hwnd = uo.hwnd
             self._ctx = uo.host.ctx if uo.host else None
             self._win = None
@@ -990,6 +1030,7 @@ class GpuOverlayWindow:
     def show(self, async_create: bool = False) -> None:
         if self._unified:
             self._visible = True
+            self._shown = True
             self._delegate.show(async_create)
             return
         if not self._created:

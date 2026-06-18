@@ -146,8 +146,10 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         try:
             from config import USE_UNIFIED_OVERLAY
             if USE_UNIFIED_OVERLAY:
-                from render.gpu_overlay_window import set_unified_overlay_mode
+                from render.gpu_overlay_window import (
+                    set_unified_overlay_mode, prestart_unified_overlay)
                 set_unified_overlay_mode(True)
+                prestart_unified_overlay(self.root)
         except Exception:
             pass
 

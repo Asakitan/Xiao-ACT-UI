@@ -21,11 +21,53 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import moderngl
 
+import ctypes as _ct
+import ctypes.wintypes as _wt
+
 from render.overlay_host import (
     OverlayHost,
     WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL, WM_MOUSELEAVE,
 )
+
+# MsgWaitForMultipleObjects: sleep while still pumping Win32 messages.
+# Without this, WM_NCHITTEST blocks ALL mouse input during sleep.
+_QS_ALLINPUT = 0x04FF
+_WAIT_OBJECT_0 = 0
+_WAIT_TIMEOUT = 0x00000102
+try:
+    _MsgWait = _ct.windll.user32.MsgWaitForMultipleObjectsEx
+    _MsgWait.restype = _wt.DWORD
+    _MsgWait.argtypes = [
+        _wt.DWORD, _ct.c_void_p, _wt.DWORD, _wt.DWORD, _wt.DWORD,
+    ]
+    _MSG_WAIT_OK = True
+except Exception:
+    _MSG_WAIT_OK = False
+
+
+def _msg_wait_sleep(host: OverlayHost, seconds: float,
+                    stop_evt: threading.Event) -> None:
+    """Sleep for up to `seconds` while remaining responsive to Win32
+    messages. Wakes early if stop_evt is set or a message arrives."""
+    if not _MSG_WAIT_OK:
+        # Fallback: short sleeps with message pumping
+        deadline = time.perf_counter() + seconds
+        while time.perf_counter() < deadline and not stop_evt.is_set():
+            host.process_messages()
+            stop_evt.wait(timeout=0.004)
+        return
+
+    deadline = time.perf_counter() + seconds
+    while not stop_evt.is_set():
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            break
+        ms = max(1, min(int(remaining * 1000), 100))
+        # Wait for message arrival or timeout (no handles, just messages)
+        _MsgWait(0, None, ms, _QS_ALLINPUT, 0)
+        host.process_messages()
+
 
 # ── Shader sources ───────────────────────────────────────────────
 _VERT_SRC = '''
@@ -115,6 +157,9 @@ class CompositorLayer:
         # Dirty flag
         self._dirty = False
 
+        # Tk input proxy (invisible Tk window for mouse events)
+        self._input_proxy = None
+
         # Mouse event callbacks
         self._on_cursor_pos: Optional[
             Callable[[float, float], None]
@@ -193,6 +238,87 @@ class CompositorLayer:
         self._on_cursor_leave = cursor_leave_fn
         self._on_mouse_button = mouse_button_fn
         self._on_scroll = scroll_fn
+
+    # ── Tk input proxy ───────────────────────────────────
+
+    def create_input_proxy(self, root) -> None:
+        """Create an invisible Tk window at this layer's position to
+        receive mouse events. The compositor window is always
+        WS_EX_TRANSPARENT (click-through); interactive layers use
+        these Tk proxies for input instead.
+
+        Must be called from the Tk main thread.
+        """
+        if self.click_through or self._input_proxy is not None:
+            return
+        import tkinter as _tk
+        proxy = _tk.Toplevel(root)
+        proxy.overrideredirect(True)
+        proxy.attributes('-topmost', True)
+        proxy.attributes('-alpha', 0.01)
+        proxy.geometry(f'{self.width}x{self.height}'
+                       f'+{self.x}+{self.y}')
+        proxy.configure(bg='black')
+
+        def _pos(e):
+            if self._on_cursor_pos:
+                self._on_cursor_pos(float(e.x), float(e.y))
+
+        def _leave(e):
+            if self._on_cursor_leave:
+                self._on_cursor_leave()
+
+        def _press(e):
+            if self._on_mouse_button:
+                btn = 0 if e.num == 1 else (1 if e.num == 3 else 2)
+                self._on_mouse_button(btn, 1, 0,
+                                      float(e.x), float(e.y))
+
+        def _release(e):
+            if self._on_mouse_button:
+                btn = 0 if e.num == 1 else (1 if e.num == 3 else 2)
+                self._on_mouse_button(btn, 0, 0,
+                                      float(e.x), float(e.y))
+
+        def _scroll(e):
+            if self._on_scroll:
+                dy = 1.0 if e.delta > 0 else -1.0
+                self._on_scroll(0.0, dy)
+
+        proxy.bind('<Motion>', _pos)
+        proxy.bind('<Leave>', _leave)
+        proxy.bind('<ButtonPress-1>', _press)
+        proxy.bind('<ButtonRelease-1>', _release)
+        proxy.bind('<ButtonPress-3>', _press)
+        proxy.bind('<ButtonRelease-3>', _release)
+        proxy.bind('<MouseWheel>', _scroll)
+        self._input_proxy = proxy
+
+    def sync_input_proxy(self) -> None:
+        """Update the input proxy position/size/visibility."""
+        proxy = self._input_proxy
+        if proxy is None:
+            return
+        try:
+            if self.visible and not self.click_through:
+                proxy.geometry(f'{self.width}x{self.height}'
+                               f'+{self.x}+{self.y}')
+                proxy.deiconify()
+                proxy.attributes('-topmost', True)
+                proxy.lift()
+            else:
+                proxy.withdraw()
+        except Exception:
+            pass
+
+    def destroy_input_proxy(self) -> None:
+        proxy = self._input_proxy
+        self._input_proxy = None
+        if proxy is not None:
+            try:
+                proxy.destroy()
+            except Exception:
+                pass
 
     def request_redraw(self) -> None:
         self._dirty = True
@@ -382,6 +508,17 @@ class UnifiedOverlay:
             self._layers.values(), key=lambda l: l.z_order,
         )
 
+    def lift_all_input_proxies(self) -> None:
+        """Re-lift all input proxies in z-order so higher-z layers
+        receive clicks above lower-z layers (e.g., popup above fisheye)."""
+        for layer in self._z_sorted:
+            if (layer._input_proxy is not None
+                    and layer.visible and not layer.click_through):
+                try:
+                    layer._input_proxy.lift()
+                except Exception:
+                    pass
+
     # ── Lifecycle ────────────────────────────────────────────
 
     def start(self) -> None:
@@ -533,6 +670,9 @@ class UnifiedOverlay:
             self._host.hit_test_fn = self._hit_test
             self._host.mouse_fn = self._on_mouse_event
             self._init_gl()
+            # Keep WGL context current for the entire thread lifetime.
+            # Different threads' WGL contexts are independent — holding
+            # ours doesn't block GLFW pump or render workers.
             self._host.show()
             self._ready.set()
         except Exception as exc:
@@ -564,23 +704,34 @@ class UnifiedOverlay:
                 self._host.raise_topmost()
                 self._last_topmost = now
 
-            # Tick layer fades
+            # Tick layer fades + check if any layer needs rendering
             any_dirty = False
             for layer in self._z_sorted:
                 layer._tick_fade()
                 if layer._dirty or layer._fade_active:
                     any_dirty = True
+                elif layer.visible and layer._render_fn is not None:
+                    any_dirty = True
 
-            # Render frame
             if any_dirty:
-                self._render_frame(now - t0)
-                self._host.swap_buffers()
+                try:
+                    self._render_frame(now - t0)
+                    self._host.swap_buffers()
+                except Exception:
+                    pass
 
-            # Adaptive sleep
+            # Adaptive sleep — idle longer when no layers are visible.
+            # CRITICAL: must pump Win32 messages even while sleeping,
+            # because WM_NCHITTEST is synchronous — Windows blocks ALL
+            # mouse input until our WndProc returns HTTRANSPARENT.
+            # Using Event.wait() would freeze mouse for the entire
+            # sleep duration. Instead, use MsgWaitForMultipleObjects
+            # which wakes on message arrival OR timeout.
+            has_visible = any(l.visible for l in self._z_sorted)
+            interval = self._frame_interval if has_visible else 0.05
             elapsed = time.perf_counter() - frame_start
-            remaining = self._frame_interval - elapsed
-            if remaining > 0.001:
-                self._stop_evt.wait(timeout=remaining)
+            remaining = max(0.001, interval - elapsed)
+            _msg_wait_sleep(self._host, remaining, self._stop_evt)
             if self._stop_evt.is_set():
                 break
 
@@ -604,21 +755,33 @@ class UnifiedOverlay:
 
         # Fullscreen quad vertices: pos(x,y) + uv(s,t)
         import struct
-        verts = struct.pack(
+
+        # BGRA textures are top-down: UV y=0 = top of image
+        verts_bgra = struct.pack(
             '16f',
-            0.0, 0.0, 0.0, 1.0,  # bottom-left (flip Y for top-down)
-            1.0, 0.0, 1.0, 1.0,  # bottom-right
-            0.0, 1.0, 0.0, 0.0,  # top-left
-            1.0, 1.0, 1.0, 0.0,  # top-right
+            0.0, 0.0, 0.0, 1.0,  # GL bottom-left → UV bottom (y=1)
+            1.0, 0.0, 1.0, 1.0,  # GL bottom-right
+            0.0, 1.0, 0.0, 0.0,  # GL top-left → UV top (y=0)
+            1.0, 1.0, 1.0, 0.0,  # GL top-right
         )
-        vbo = ctx.buffer(verts)
+        vbo_bgra = ctx.buffer(verts_bgra)
         self._quad_vao_bgra = ctx.vertex_array(
             self._bgra_prog,
-            [(vbo, '2f 2f', 'in_pos', 'in_uv')],
+            [(vbo_bgra, '2f 2f', 'in_pos', 'in_uv')],
         )
+
+        # FBO textures are bottom-up (GL convention): UV y=0 = bottom
+        verts_fbo = struct.pack(
+            '16f',
+            0.0, 0.0, 0.0, 0.0,  # GL bottom-left → UV bottom-left
+            1.0, 0.0, 1.0, 0.0,  # GL bottom-right
+            0.0, 1.0, 0.0, 1.0,  # GL top-left → UV top-left
+            1.0, 1.0, 1.0, 1.0,  # GL top-right
+        )
+        vbo_fbo = ctx.buffer(verts_fbo)
         self._quad_vao_rgba = ctx.vertex_array(
             self._rgba_prog,
-            [(vbo, '2f 2f', 'in_pos', 'in_uv')],
+            [(vbo_fbo, '2f 2f', 'in_pos', 'in_uv')],
         )
 
     def _render_frame(self, t: float) -> None:

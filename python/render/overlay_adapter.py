@@ -102,16 +102,23 @@ class CompositorOverlayWindow:
     def show(self, async_create: bool = False) -> None:
         self._visible = True
         self._layer.show()
+        self._layer.sync_input_proxy()
+        try:
+            self._compositor.lift_all_input_proxies()
+        except Exception:
+            pass
 
     def hide(self) -> None:
         self._visible = False
         self._layer.hide()
+        self._layer.sync_input_proxy()
 
     def destroy(self) -> None:
         if self._destroyed:
             return
         self._destroyed = True
         self._visible = False
+        self._layer.destroy_input_proxy()
         self._compositor.destroy_layer(self._name)
 
     def prepare_async(self) -> bool:
@@ -125,6 +132,7 @@ class CompositorOverlayWindow:
         self._w = w
         self._h = h
         self._layer.set_geometry(x, y, w, h)
+        self._layer.sync_input_proxy()
 
     def move(self, x: int, y: int) -> None:
         self._x = x
@@ -159,6 +167,14 @@ class CompositorOverlayWindow:
             cursor_pos_fn, cursor_leave_fn,
             mouse_button_fn, scroll_fn,
         )
+        # Create Tk input proxy for interactive layers
+        if not self._layer.click_through and mouse_button_fn:
+            root = self._compositor._root
+            if root is not None:
+                try:
+                    self._layer.create_input_proxy(root)
+                except Exception:
+                    pass
 
     # ── Fade / Alpha ─────────────────────────────────────────
 
