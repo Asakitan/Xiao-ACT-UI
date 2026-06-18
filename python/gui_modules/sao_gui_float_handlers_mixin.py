@@ -199,19 +199,6 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._float_hover = False
         self._ng_drag_start = None
 
-        # Legacy stubs (external code may reference these)
-        self._float_ox = 0
-        self._float_oy = 0
-        self._id_plate_w = 0
-        self._float_shell_normal = None
-        self._float_shell_hover = None
-        self._float_bar_x = 0
-        self._float_bar_y = 0
-        self._float_bar_right = 0
-        self._float_bar_bot_top = 0
-        self._float_bar_bot_full = 0
-        self._float_bar_step_x = 0
-
         saved_pos = self._get_setting('nervegear_button_pos', None)
         if saved_pos and isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2:
             ng_x, ng_y = int(saved_pos[0]), int(saved_pos[1])
@@ -219,10 +206,8 @@ class SAOPlayerGUIFloatHandlersMixin:
             ng_x = _sw - NG_SIZE - 20
             ng_y = _sh - NG_SIZE - 60
 
-        # Compatibility anchor only: dialogs, menu geometry, LinkStart and
-        # existing settings code still expect `self._float` to be a Tk
-        # Toplevel.  It is never used to draw the button; the visible
-        # trigger below is a GLFW/ModernGL overlay.
+        # Tk owner for dialogs, menu geometry and LinkStart animation. The
+        # visible trigger below is a GLFW/ModernGL overlay.
         self._float = tk.Toplevel(self.root)
         self._float.overrideredirect(True)
         self._float.attributes('-topmost', True)

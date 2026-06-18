@@ -65,11 +65,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None, hi: O
 
 
 class SAOPlayerGUIPanelsMixin:
-    """Mixin bundling commander + panel-visibility + settings toggles."""
-
-    def _toggle_commander_panel(self):
-        """Commander 面板 — 游戏插件覆盖。"""
-        pass
+    """Mixin bundling plugin-panel visibility and settings toggles."""
 
     def _toggle_ai_editor_panel(self):
         """启动独立 AI Editor GUI 窗口 (pywebview)."""
@@ -241,10 +237,6 @@ class SAOPlayerGUIPanelsMixin:
             except Exception:
                 pass
 
-    def _push_commander_data(self):
-        """Commander data push — 插件可覆盖。"""
-        pass
-
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
         panels = []
@@ -315,7 +307,7 @@ class SAOPlayerGUIPanelsMixin:
                 pass
 
     def _toggle_recognition_menu(self):
-        """切换识别开关 — SAO Entity UI."""
+        """切换插件识别开关。"""
         with self._recog_lock:
             if not self._recognition_active:
                 if not self._recognition_engine and not self._recognition_engines:

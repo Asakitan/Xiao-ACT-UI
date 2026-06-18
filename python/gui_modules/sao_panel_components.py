@@ -114,43 +114,20 @@ def fmt_signed(delta_ms: Any) -> str:
     return f"{'+' if d > 0 else '-'}{fmt_dur(abs(d))}"
 
 
-# ── 技术术语 → 人话（所有面板共用，JS 侧见 window.PanelText）──
-# 目的：把 topic/kind/source 这些内部字段名，渲染成用户看得懂的中文，而不是
-# "scene / tcp / actor_skill / src" 这种黑话。两边映射必须一致。
-_TOPIC_CN = {
-    "damage": "伤害", "heal": "治疗", "skill": "技能", "actor_skill": "技能",
-    "monster": "怪物", "monster_skill": "怪物技能", "boss": "首领", "boss_state": "首领状态",
-    "boss_mechanic": "首领机制", "boss_mechanic_skill": "首领机制", "dungeon": "地牢",
-    "scene": "场景", "death": "死亡", "buff": "增益", "player_buff": "玩家增益",
-    "factor_buff": "因子增益", "trigger": "触发", "timer": "计时", "target": "目标",
-    "log": "日志", "event": "事件", "shield": "护盾", "mitigation": "减伤",
-    "incoming_damage": "承受伤害", "healing": "治疗", "ultimate_skill": "终极技",
-    "environment_skill": "环境技能", "field_marker": "场地标记",
-    "system": "系统", "plugin_ui_invalidate": "插件重绘", "encounter_finalized": "战斗结束",
-    "encounter_started": "战斗开始", "encounter_reset": "战斗重置",
-}
-_SOURCE_CN = {
-    "tcp": "封包", "packet": "封包", "entity": "实体", "mem": "内存", "memory": "内存",
-    "live": "实时", "hybrid": "混合", "history": "历史",
-    "replay": "回放", "ui": "界面", "offline_import": "离线导入", "plugin": "插件",
-    "unknown": "未知",
-}
-
-
 def topic_cn(value: Any, *, default: str = "事件") -> str:
-    """topic/kind 字段 → 中文标签。未知值原样返回。"""
+    """Return a display label for a generic topic/kind field."""
     text = str(value or "").strip()
     if not text:
         return default
-    return _TOPIC_CN.get(text.lower(), text)
+    return text
 
 
 def source_cn(value: Any, *, default: str = "未知") -> str:
-    """数据来源标识 → 中文。tcp→封包 / entity→实体 / mem→内存 …"""
+    """Return a display label for a generic source field."""
     text = str(value or "").strip()
     if not text:
         return default
-    return _SOURCE_CN.get(text.lower(), text)
+    return text
 
 
 def readable_event_line(row: Mapping[str, Any], *, value_fmt: Optional[Callable[[Any], Any]] = None) -> str:

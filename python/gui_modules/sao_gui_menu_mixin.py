@@ -509,11 +509,18 @@ class SAOPlayerGUIMenuMixin:
             try:
                 self._setup_sao_menu()
             except Exception as exc:
+                msg = f'{type(exc).__name__}: {exc}'
+                cause = getattr(exc, '__cause__', None)
+                if cause is not None:
+                    msg = f'{msg}; cause={type(cause).__name__}: {cause}'
                 print(
-                    f'[SAO] SAO menu setup failed: '
-                    f'{type(exc).__name__}: {exc}',
+                    f'[SAO] SAO menu setup failed: {msg}',
                     flush=True,
                 )
+                try:
+                    self._show_entity_alert('SAO MENU ERROR', msg, display_time=5.0)
+                except Exception:
+                    pass
                 self._sync_float_button_geometry(show=True)
                 return
         if self._sao_menu.visible:
@@ -548,11 +555,18 @@ class SAOPlayerGUIMenuMixin:
             try:
                 self._sao_menu.open()
             except Exception as exc:
+                msg = f'{type(exc).__name__}: {exc}'
+                cause = getattr(exc, '__cause__', None)
+                if cause is not None:
+                    msg = f'{msg}; cause={type(cause).__name__}: {cause}'
                 print(
-                    f'[SAO] SAO menu open failed: '
-                    f'{type(exc).__name__}: {exc}',
+                    f'[SAO] SAO menu open failed: {msg}',
                     flush=True,
                 )
+                try:
+                    self._show_entity_alert('SAO MENU ERROR', msg, display_time=5.0)
+                except Exception:
+                    pass
                 try:
                     self._sao_menu.force_destroy_overlay()
                 except Exception:
@@ -561,6 +575,10 @@ class SAOPlayerGUIMenuMixin:
                 self._sync_float_button_geometry(show=True)
                 return
             try:
+                self.root.after(900, self._verify_sao_menu_presented)
+            except Exception:
+                pass
+            try:
                 from render.overlay_scheduler import get_scheduler as _get_sched
                 _get_sched(self.root).set_menu_open(True)
             except Exception:
@@ -568,6 +586,50 @@ class SAOPlayerGUIMenuMixin:
             # 立即将悬浮按钮浮到 overlay 之上 (避免撕裂)
             self._float.lift()
             self._sync_float_button_geometry(show=True)
+
+    def _verify_sao_menu_presented(self, final: bool = False):
+        menu = getattr(self, '_sao_menu', None)
+        if menu is None or not getattr(menu, 'visible', False):
+            return
+        try:
+            size = tuple(getattr(menu, '_last_presented_size', (0, 0)) or (0, 0))
+        except Exception:
+            size = (0, 0)
+        has_frame = bool(getattr(menu, '_has_presented_frame', False))
+        gpu_win = getattr(menu, '_gpu_win', None)
+        shown = bool(getattr(gpu_win, '_shown', False))
+        if size != (0, 0) and has_frame and shown:
+            return
+        if size == (0, 0) or not has_frame:
+            try:
+                present_sync = getattr(menu, '_present_initial_frame_sync', None)
+                if callable(present_sync) and present_sync():
+                    has_frame = True
+                    size = tuple(getattr(menu, '_last_presented_size', (0, 0)) or (0, 0))
+            except Exception:
+                pass
+        try:
+            if gpu_win is not None:
+                gpu_win.request_redraw()
+        except Exception:
+            pass
+        if not final:
+            try:
+                self.root.after(600, lambda: self._verify_sao_menu_presented(final=True))
+            except Exception:
+                pass
+            return
+        err = str(getattr(menu, '_last_render_error', '') or '')
+        msg = 'GPU popup opened but no frame was presented'
+        if size != (0, 0) and has_frame and not shown:
+            msg = 'GPU popup frame exists but window stayed hidden'
+        if err:
+            msg = f'{msg}: {err}'
+        print(f'[SAO] SAO menu present watchdog: {msg}', flush=True)
+        try:
+            self._show_entity_alert('SAO MENU ERROR', msg, display_time=5.0)
+        except Exception:
+            pass
 
     def _close_sao_menu_from_background(self):
         if self._sao_menu_close_pending or self._exit_animating or self._close_finalized:

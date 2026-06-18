@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""NerveGear button — visible circular entry point for the SAO menu.
-
-The visible path is GPU-presented through ``GpuOverlayWindow``.  The
-legacy UpdateLayeredWindow helper remains as a compatibility utility for
-older callers, but Entity's SAO menu trigger no longer paints a Tk/ULW
-button.
-"""
+"""NerveGear button — visible circular GPU entry point for the SAO menu."""
 
 from __future__ import annotations
 
@@ -20,7 +14,6 @@ except ImportError:
     Image = ImageDraw = ImageFont = None  # type: ignore[assignment]
 
 _user32 = ctypes.windll.user32
-_gdi32 = ctypes.windll.gdi32
 
 
 class _POINT(ctypes.Structure):
@@ -475,80 +468,4 @@ class GpuNerveGearButton:
             try:
                 self._on_click()
             except Exception:
-                pass
-
-
-def apply_layered_window(hwnd: int, img: "Image.Image") -> bool:
-    """Blit an RGBA PIL image onto a layered window via UpdateLayeredWindow."""
-    if img is None:
-        return False
-    try:
-        w, h = img.size
-        raw = img.tobytes('raw', 'BGRA')
-        hdc_screen = _user32.GetDC(None)
-        hdc_mem = _gdi32.CreateCompatibleDC(hdc_screen)
-
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ('biSize', ctypes.c_uint32),
-                ('biWidth', ctypes.c_int32),
-                ('biHeight', ctypes.c_int32),
-                ('biPlanes', ctypes.c_uint16),
-                ('biBitCount', ctypes.c_uint16),
-                ('biCompression', ctypes.c_uint32),
-                ('biSizeImage', ctypes.c_uint32),
-                ('biXPelsPerMeter', ctypes.c_int32),
-                ('biYPelsPerMeter', ctypes.c_int32),
-                ('biClrUsed', ctypes.c_uint32),
-                ('biClrImportant', ctypes.c_uint32),
-            ]
-
-        bmi = BITMAPINFOHEADER()
-        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = w
-        bmi.biHeight = -h
-        bmi.biPlanes = 1
-        bmi.biBitCount = 32
-        bmi.biCompression = 0
-        bmi.biSizeImage = w * h * 4
-
-        ppv = ctypes.c_void_p()
-        hbm = _gdi32.CreateDIBSection(
-            hdc_mem, ctypes.byref(bmi), 0, ctypes.byref(ppv), None, 0)
-        if not hbm:
-            _gdi32.DeleteDC(hdc_mem)
-            _user32.ReleaseDC(None, hdc_screen)
-            return False
-        ctypes.memmove(ppv, raw, len(raw))
-        old = _gdi32.SelectObject(hdc_mem, hbm)
-
-        class POINT(ctypes.Structure):
-            _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
-
-        class SIZE_S(ctypes.Structure):
-            _fields_ = [('cx', ctypes.c_long), ('cy', ctypes.c_long)]
-
-        class BLENDFUNCTION(ctypes.Structure):
-            _fields_ = [
-                ('BlendOp', ctypes.c_byte),
-                ('BlendFlags', ctypes.c_byte),
-                ('SourceConstantAlpha', ctypes.c_byte),
-                ('AlphaFormat', ctypes.c_byte),
-            ]
-
-        pt_src = POINT(0, 0)
-        size = SIZE_S(w, h)
-        bf = BLENDFUNCTION(0, 0, 255, 1)
-
-        _user32.UpdateLayeredWindow(
-            ctypes.c_void_p(hwnd), hdc_screen, None,
-            ctypes.byref(size), hdc_mem, ctypes.byref(pt_src),
-            0, ctypes.byref(bf), 2)
-
-        _gdi32.SelectObject(hdc_mem, old)
-        _gdi32.DeleteObject(hbm)
-        _gdi32.DeleteDC(hdc_mem)
-        _user32.ReleaseDC(None, hdc_screen)
-        return True
-    except Exception:
-        return False
+                return

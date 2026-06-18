@@ -148,8 +148,4 @@ class SAOPlayerGUIDialogsMixin:
             self._sao_menu.close()
         from gui_modules.sao_gui_license import reset_license_dialog_dismissed, show_license_dialog
         reset_license_dialog_dismissed()
-        self.root.after(400, lambda: show_license_dialog(self._float))
-
-    def _edit_profile(self):
-        """Deprecated platform entry point; plugins own their own editors."""
-        return None
+        self.root.after(400, show_license_dialog, self._float)

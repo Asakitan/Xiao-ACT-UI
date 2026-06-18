@@ -87,7 +87,8 @@ def install_entity_menu_bridge(ctx) -> None:
         '_toggle_act_mem_scope_panel',
         '_toggle_act_action_log_panel', '_toggle_act_death_recap_panel',
         '_toggle_act_graph_timeseries_panel', '_toggle_act_combatant_drilldown_panel',
-        '_toggle_act_skill_drilldown_panel', '_plugin_open_action_log_at',
+        '_toggle_act_skill_drilldown_panel', '_toggle_commander_panel',
+        '_push_commander_data', '_plugin_open_action_log_at',
     ):
         _bind(owner, name, getattr(bridge, name))
     _bind_mixin_methods(owner)
@@ -121,6 +122,7 @@ class StarResonanceEntityMenuBridge:
             '_sta_offline_armed': False,
             '_sta_hp': (0, 1),
             '_sta_sta': (0, 1),
+            '_float_progress_pct': 0.0,
             '_player_panel': None,
             '_menu_left_stack': None,
             '_session_players_panel': None,
@@ -251,6 +253,73 @@ class StarResonanceEntityMenuBridge:
         if callable(raise_window):
             try:
                 owner.root.after(120, lambda: raise_window(panel))
+            except Exception:
+                pass
+
+    def _toggle_commander_panel(self) -> None:
+        owner = self.owner
+        dismiss = getattr(owner, '_dismiss_sao_menu_for_panel', None)
+        if callable(dismiss):
+            dismiss()
+        panel = getattr(owner, '_commander_panel', None)
+        if panel is None:
+            from plugins.star_resonance_plugin.panels.sao_gui_commander import CommanderPanel
+            panel = CommanderPanel(owner.root)
+            owner._commander_panel = panel
+        try:
+            visible = bool(panel.is_visible())
+        except Exception:
+            visible = False
+        if visible:
+            try:
+                panel.hide()
+            except Exception:
+                pass
+            return
+        try:
+            panel.show()
+        except Exception:
+            return
+        self._push_commander_data()
+        raise_window = getattr(owner, '_raise_panel_window', None)
+        if callable(raise_window):
+            try:
+                owner.root.after(120, lambda: raise_window(panel))
+            except Exception:
+                pass
+
+    def _push_commander_data(self) -> None:
+        owner = self.owner
+        panel = getattr(owner, '_commander_panel', None)
+        if panel is None:
+            return
+        try:
+            if hasattr(panel, 'is_visible') and not panel.is_visible():
+                return
+        except Exception:
+            return
+        engine = getattr(owner, '_packet_engine', None)
+        data = {'members': [], 'team_id': 0, 'leader_uid': 0, 'dungeon_id': 0, 'status': 'backend_not_ready'}
+        get_data = getattr(engine, 'get_commander_data', None)
+        if callable(get_data):
+            try:
+                candidate = get_data()
+                if isinstance(candidate, dict):
+                    data = candidate
+            except Exception:
+                pass
+        try:
+            from plugins.star_resonance_plugin.panels.sao_gui_commander import commander_data_signature
+            sig = commander_data_signature(data)
+        except Exception:
+            sig = repr(data)
+        if sig == getattr(owner, '_last_commander_push_sig', None):
+            return
+        owner._last_commander_push_sig = sig
+        update = getattr(panel, 'update', None)
+        if callable(update):
+            try:
+                update(data)
             except Exception:
                 pass
 

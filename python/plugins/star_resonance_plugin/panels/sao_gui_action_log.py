@@ -28,16 +28,14 @@ from gui_modules.sao_panel_components import (
     fmt_dur,
     keep_canvas_scroll,
     metric_tile,
-    readable_event_line,
     rounded_panel,
     sao_entry,
     sao_option_menu,
     sao_scrollbar,
     section_card,
-    source_cn,
     status_badge,
-    topic_cn,
 )
+from plugins.star_resonance_plugin.panels.panel_text import readable_event_line, source_cn, topic_cn
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,

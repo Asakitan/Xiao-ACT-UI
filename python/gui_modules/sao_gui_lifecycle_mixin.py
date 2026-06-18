@@ -10,8 +10,6 @@ overlays, hotkeys, and the float button in the right order so
 no Tk after-id leaks past mainloop quit.
 
 Methods:
-    * _destroy_float_alpha_windows (9) — destroys legacy float alpha
-        strip windows (compat path; usually no-op).
   * _restore_panels (13) — on startup, re-open panels that were
     visible last session (respects _panels_hidden flag).
   * _cleanup_entry_overlay (23) — destroys the SAO link-start
@@ -68,15 +66,6 @@ from sao_theme import ease_out, ease_in_out
 
 class SAOPlayerGUILifecycleMixin:
     """Mixin bundling teardown + restore-on-startup helpers."""
-
-    def _destroy_float_alpha_windows(self):
-        for item in getattr(self, '_float_alpha_windows', []):
-            try:
-                item['win'].destroy()
-            except Exception:
-                pass
-        self._float_alpha_windows = []
-        self._float_alpha_photos = []
 
     def _restore_panels(self):
         """Restore platform-owned floating panels only."""
@@ -253,7 +242,6 @@ class SAOPlayerGUILifecycleMixin:
             except Exception:
                 pass
         self._ai_editor_panel = None
-        self._destroy_float_alpha_windows()
         try:
             gpu_btn = getattr(self, '_float_gpu_button', None)
             if gpu_btn is not None:

@@ -28,26 +28,6 @@ class SAOPlayerGUIMiscMixin:
         _apply_window_icon(self.root)
         # icon.ico 应用到 root (所有子窗口自动继承)
 
-    def _create_float_alpha_strip_windows(self):
-        """Legacy layered-float alpha strip placeholder."""
-        self._float_alpha_windows = []
-        self._float_alpha_photos = []
-
-    def _render_float_strip_image(self, *a, **kw):
-        return None
-
-    def _sync_float_alpha_strip_windows(self):
-        """Legacy layered-float sync placeholder."""
-        pass
-
-    def _render_float_shell(self, hover=False, scale=4):
-        """(deprecated) Legacy float shell placeholder."""
-        return None
-
-    def _render_float_dynamic(self):
-        """(deprecated) Legacy float dynamic placeholder."""
-        return None
-
     def _fade_panel_in(self, panel, target=0.92, duration_ms=350):
         """浮动面板淡入 — 平滑 ease-out 动画, 并确保鱼眼叠加层运行"""
         # 面板打开时, 如果鱼眼尚未启动则启动
@@ -116,11 +96,3 @@ class SAOPlayerGUIMiscMixin:
                 self._maybe_stop_fisheye()
 
         _step()
-
-    def _switch_to_old_ui(self):
-        """Old UI 已移除 — no-op"""
-        pass
-
-    def _show_leaderboard(self):
-        """排行榜已移除 — no-op"""
-        pass

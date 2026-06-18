@@ -17,10 +17,6 @@ import time
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
-# Round 77 of sao_gui split refactor: PIL / numpy / render_capture_sync
-# imports were all used by methods that have moved to mixins (or by the
-# deleted legacy PIL font helpers). The mixins carry their own
-# imports; sao_gui.py no longer needs them.
 try:
     from render.gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
 except Exception:
@@ -45,29 +41,18 @@ from sao_theme import (
 )
 from utils.sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
-# Panel UI helpers (constants + builders) extracted in round 49 of the
-# sao_gui split refactor. Re-import the names that the rest of sao_gui.py
-# still uses at the module level — the helpers themselves now live in
-# gui_modules.sao_panel_ui.
 from gui_modules.sao_panel_ui import (
     _apply_panel_style, _hex_rgba, _make_panel_close_button,
     _sao_panel_header, _bind_panel_drag, _sao_panel_body,
     _sao_panel_hud_canvas, _sao_row, _sao_pill,
-    # Round 59: 4 Win32 helpers moved out of sao_gui.py into sao_panel_ui.
     _get_icon_path, _apply_window_icon, _set_clickthrough_style,
     _disable_native_window_shadow,
-    # Round 71: _set_process_app_id (Win32 taskbar AppUserModelID) moved
-    # alongside the other Win32 helpers; was duplicated here + in
-    # sao_webview.py before.
     _set_process_app_id,
     _SAO_PANEL_BG, _SAO_PANEL_HEADER_BG, _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_BORDER, _SAO_PANEL_ACCENT, _SAO_PANEL_GOLD,
     _SAO_PANEL_SEP, _SAO_PANEL_BODY_BG, _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
 )
-# Round 77: perf_probe (_probe / _phase_trace / _perf_gauge) and
-# _sao_cy_uihelpers (_CY_UI) imports were used by methods now in mixins.
-# Each mixin imports what it needs; sao_gui.py is import-clean.
 
 
 try:
@@ -81,15 +66,7 @@ except Exception:
     PYNPUT_HOTKEY_AVAILABLE = False
 
 
-# ModernColors + SmoothButton classes purged in round 30 (sao_gui split
-# refactor): both were defined here but never used anywhere in the repo
-# (repo-wide grep confirmed no callers in .py / .cs / .spec / .bat / .json).
-# Likely leftovers from an earlier UI iteration.
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
-
-# pyglet Link Start 渲染器 (已弃用, 保留文件但不再使用)
-# OpenGL 上下文要求主线程, 与 tkinter 冲突, 改用 Canvas SAO-UI 隧道模型
-HAS_PYGLET = False
 
 # ── 全局快捷键检测 (复用 gui.py 逻辑) ──
 def _is_admin():
@@ -123,57 +100,16 @@ except ImportError:
 GLOBAL_HOTKEY_AVAILABLE = PYNPUT_HOTKEY_AVAILABLE or KEYBOARD_HOTKEY_AVAILABLE
 
 
-# SettingsManager 已迁移到 gui_modules/settings_manager.py
-# (round 29 of the sao_gui split refactor — re-exported here so the rest
-# of this module and external callers like main.py can still do
-# `from sao_gui import SettingsManager`).
 from gui_modules.settings_manager import SettingsManager  # noqa: E402
 
-
-_user32 = ctypes.windll.user32
-_gdi32 = ctypes.windll.gdi32
-for _fn, _res, _args in [
-    (_user32.GetDC, ctypes.c_void_p, [ctypes.c_void_p]),
-    (_user32.ReleaseDC, ctypes.c_int, [ctypes.c_void_p, ctypes.c_void_p]),
-    (_user32.GetParent, ctypes.c_void_p, [ctypes.c_void_p]),
-    (_user32.GetWindowLongW, ctypes.c_long, [ctypes.c_void_p, ctypes.c_int]),
-    (_user32.SetWindowLongW, ctypes.c_long, [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]),
-    (_user32.UpdateLayeredWindow, ctypes.c_int,
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-         ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong]),
-    (_gdi32.CreateCompatibleDC, ctypes.c_void_p, [ctypes.c_void_p]),
-    (_gdi32.CreateDIBSection, ctypes.c_void_p,
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
-         ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint]),
-    (_gdi32.SelectObject, ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_void_p]),
-    (_gdi32.DeleteObject, ctypes.c_int, [ctypes.c_void_p]),
-    (_gdi32.DeleteDC, ctypes.c_int, [ctypes.c_void_p]),
-]:
-    _fn.restype = _res
-    _fn.argtypes = _args
-del _fn, _res, _args
-
-
-
-# SAOHotkeyManager 已迁移到 gui_modules/sao_hotkey_manager.py
-# (round 25 of the sao_gui split refactor — keep the original name
-# importable so external callers and the rest of this module continue
-# to work without changes).
 from gui_modules.sao_hotkey_manager import SAOHotkeyManager  # noqa: E402
 
 
 # ══════════════════════════════════════════════════════════
 #  SAO Player GUI — 纯悬浮 SAO Menu 架构
 # ══════════════════════════════════════════════════════════
-# v3.2.2 rounds 31-32: SAOPlayerGUI is split across mixins so this
-# 7000+ line class can shrink. Mixins extracted so far:
-#   - SAOPlayerGUISessionMixin (round 31) — SAO menu's in-session
-#     player-roster helpers (8 methods, 208 lines).
-#   - SAOPlayerGUIStateMixin   (round 32) — _recognition_loop +
-#     _push_packet_overlays + _apply_fast_state_update +
-#     _on_game_state_update (730 lines). Heart of the combat-lag work.
-# More platform mixins can be extracted in later rounds.
-# Plugin-owned mixins are injected at runtime.
+# SAOPlayerGUI is split across platform mixins. Plugin-owned behavior is
+# injected at runtime through the plugin SDK.
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin  # noqa: E402
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin  # noqa: E402
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin  # noqa: E402
@@ -239,11 +175,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
         self._lift_loop_active = False
         self._skip_canvas_click = False
-        self._float_progress_pct = 0.0
-        self._float_alpha_windows = []
-        self._float_alpha_photos = []
-        self._float_hud_ids = []
-        self._float_hud_text = []
         self._destroyed = False  # hot-switch 守卫: 阻止 after() 回调在 root 销毁后执行
         self._exit_animating = False
         self._close_finalized = False

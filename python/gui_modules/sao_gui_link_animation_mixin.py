@@ -468,7 +468,6 @@ void main() {
             self._breath_base_x = fx_final
             self._breath_base_y = fy_final
             # self.root.after(120, self._start_float_breath)  # 禁用浮动
-            self.root.after(160, self._animate_float_hud)
             # 启动识别循环
             self.root.after(200, self._start_recognition)
             self.root.after(600, self._recognition_loop)
@@ -991,5 +990,4 @@ void main() {
             _add(win, 'panel', order=idx)
         _add(getattr(getattr(self, '_sao_menu', None), '_overlay', None), 'menu')
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
-        # Legacy alpha-strip windows are obsolete (ULW renders internally).
         return wins

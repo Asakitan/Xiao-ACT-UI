@@ -33,11 +33,9 @@ from gui_modules.sao_panel_components import (
     sao_option_menu,
     sao_scrollbar,
     section_card,
-    source_badges,
-    source_cn,
     status_badge,
-    topic_cn,
 )
+from plugins.star_resonance_plugin.panels.panel_text import source_badges, source_cn, topic_cn
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,

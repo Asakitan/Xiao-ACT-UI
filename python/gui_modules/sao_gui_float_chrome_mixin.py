@@ -8,17 +8,13 @@ The two clusters bundled together because they're both peripheral chrome around
 the platform float button and menu animations. Game-specific overlay handlers
 are installed by plugins.
 
-Float button + breath + animation (14 methods, ~345 lines):
-  * _build_float_hud_items / _animate_float_hud — small HUD items
-    on the float button itself
+Float button + breath + animation:
   * _set_float_alpha — Win32 SetLayeredWindowAttributes wrapper
   * _start_float_breath / _breath_step / _stop_float_breath —
     idle-state ~2 Hz vertical sine wobble
   * _attach_panel_float / _panel_float_shared_tick — wire a
     panel into the shared 30 fps panel-float scheduler
-  * _update_float_display / _update_float_status /
-    _update_float_fname / _update_float_title — small label
-    refresh helpers
+    * _update_float_display / _update_float_status — trigger refresh helpers
   * _animate_float_to — drag-end snap animation
   * _play_motion_blur (146 lines — biggest in this cluster) —
     radial blur effect on SAO menu open/close (background-threaded
@@ -49,10 +45,6 @@ from sao_theme import ease_out
 
 class SAOPlayerGUIFloatChromeMixin:
     """Mixin bundling float button, breath, motion blur and panel-float animations."""
-
-    def _build_float_hud_items(self):
-        """(ULW 模式下 HUD 已统一由 PIL 渲染, 此方法保留接口兼容)"""
-        pass
 
     def _refresh_float_layered(self):
         """Refresh the GPU-presented NerveGear trigger, if attached."""
@@ -94,10 +86,6 @@ class SAOPlayerGUIFloatChromeMixin:
                 gpu_btn.set_alpha(alpha)
             except Exception:
                 pass
-
-    def _animate_float_hud(self):
-        """(deprecated) Legacy float HUD redraw loop placeholder."""
-        return
 
     # Round-64 note: the _sao_fx_panels + _sao_fx_after_id class attrs
     # were relocated to gui_modules.sao_gui_panel_fx_mixin alongside
@@ -238,15 +226,11 @@ class SAOPlayerGUIFloatChromeMixin:
                 self._panel_float_after_id = None
 
     def _update_float_display(self):
-        """Refresh the platform float display placeholder."""
+        """Refresh the platform float display."""
         self._refresh_float_layered()
 
     def _update_float_status(self):
         self._update_float_display()
-
-    def _update_float_fname(self, name=''):
-        """Float component style: no filename display; compatibility hook."""
-        pass
 
     def _animate_float_to(self, x0, y0, x1, y1, ms=700):
         """将悬浮窗口从 (x0,y0) 平滑动画到 (x1,y1)"""

@@ -23,8 +23,8 @@ from gui_modules.sao_panel_components import (
     sao_scrollbar,
     section_card,
     status_badge,
-    topic_cn,
 )
+from plugins.star_resonance_plugin.panels.panel_text import topic_cn
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,

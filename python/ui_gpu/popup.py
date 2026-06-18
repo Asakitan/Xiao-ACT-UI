@@ -79,6 +79,8 @@ class SAOPopUpMenu:
         self._presenter: Optional[_gow.BgraPresenter] = None
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
         self._last_presented_size: Tuple[int, int] = (0, 0)
+        self._last_render_error: Optional[str] = None
+        self._has_presented_frame = False
         self._hit = HitTester()
 
         self._shell: Optional[tk.Toplevel] = None
@@ -227,6 +229,9 @@ class SAOPopUpMenu:
         self._state.open_t0 = self._fade_t0
         self._state.row_anim_t0 = self._fade_t0
         self._last_tick_t = self._fade_t0
+        self._last_render_error = None
+        self._has_presented_frame = False
+        self._last_presented_size = (0, 0)
         self._state.fade_alpha = 0.0
         self._state.child_fade_t = 1.0
         self._state.child_phase = 'idle'
@@ -471,6 +476,7 @@ class SAOPopUpMenu:
             scroll_fn=self._on_scroll_gpu,
         )
         self._gpu_win.show()
+        self._present_initial_frame_sync()
 
         # Register tick with overlay_scheduler so we get smooth animation
         try:
@@ -638,16 +644,20 @@ class SAOPopUpMenu:
         fb = None
         try:
             fb = self._render_worker.take_result(allow_during_capture=True)
-        except Exception:
+        except Exception as exc:
+            self._last_render_error = f'take_result {type(exc).__name__}: {exc}'
             fb = None
         presented = False
         if fb is not None:
             try:
                 self._last_presented_size = (fb.width, fb.height)
                 self._presenter.set_frame(fb.bgra_bytes, fb.width, fb.height)
+                self._has_presented_frame = True
+                self._last_render_error = None
                 presented = True
                 _perf_gauge('ui.popup.presented', 1)
-            except Exception:
+            except Exception as exc:
+                self._last_render_error = f'present {type(exc).__name__}: {exc}'
                 pass
         else:
             _perf_gauge('ui.popup.presented', 0)
@@ -666,10 +676,49 @@ class SAOPopUpMenu:
             )
             self._render_worker.submit(self._compose_framebuffer, payload, 0, 0, 0)
             _perf_gauge('ui.popup.submitted', 1)
-        except Exception:
+        except Exception as exc:
+            self._last_render_error = f'submit {type(exc).__name__}: {exc}'
             _perf_gauge('ui.popup.submitted', 0)
         if presented:
             self._gpu_win.request_redraw()
+
+    def _present_initial_frame_sync(self) -> bool:
+        """Compose one popup frame on the Tk thread so hidden-first GLFW
+        windows have a real frame to show even if the async lane is late.
+        """
+        if self._gpu_win is None or self._presenter is None:
+            return False
+        try:
+            reserved_rows = int(getattr(self, '_reserved_rows', 0) or 0)
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            fb = self._compose_framebuffer((
+                self._snapshot_state(),
+                float(self._state.hud_phase),
+                int(sw),
+                int(sh),
+                reserved_rows,
+            ))
+            self._last_presented_size = (fb.width, fb.height)
+            self._presenter.set_frame(fb.bgra_bytes, fb.width, fb.height)
+            self._has_presented_frame = True
+            self._last_render_error = None
+            self._hit.update(self._state, reserved_rows)
+            self._gpu_win.request_redraw()
+            return True
+        except Exception as exc:
+            try:
+                self._last_render_error = (
+                    f'initial {type(exc).__name__}: {exc}'
+                )
+                print(
+                    f'[Popup] initial GPU frame failed: '
+                    f'{type(exc).__name__}: {exc}',
+                    flush=True,
+                )
+            except Exception:
+                pass
+            return False
 
     # ── input callbacks (called on Tk main thread by GLFW pump) ───
 

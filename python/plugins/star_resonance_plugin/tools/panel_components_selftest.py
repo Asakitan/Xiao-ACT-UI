@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared SAO panel components."""
+"""Regression tests for Star Resonance panel text helpers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import _bootstrap  # noqa: F401
 import unittest
 from unittest import mock
 
-from gui_modules import sao_panel_components
+from plugins.star_resonance_plugin.panels import panel_text
 
 
 class _Widget:
@@ -25,15 +25,15 @@ class PanelComponentTests(unittest.TestCase):
             return _Widget()
 
         with (
-            mock.patch("gui_modules.sao_panel_components.tk.Frame", return_value=_Widget()),
-            mock.patch("gui_modules.sao_panel_components.status_badge", side_effect=_badge),
+            mock.patch("plugins.star_resonance_plugin.panels.panel_text.tk.Frame", return_value=_Widget()),
+            mock.patch("plugins.star_resonance_plugin.panels.panel_text.status_badge", side_effect=_badge),
         ):
-            sao_panel_components.source_badges(object(), [
+            panel_text.source_badges(object(), [
                 {"source": "packet", "count": "bad"},
                 {"source": "memory", "count": float("nan")},
             ])
 
-        self.assertEqual(labels, ["packet · 0", "内存 · 0"])
+        self.assertEqual(labels, ["封包 · 0", "内存 · 0"])
 
 
 if __name__ == "__main__":

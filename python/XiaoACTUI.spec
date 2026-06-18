@@ -15,6 +15,10 @@ block_cipher = None
 
 # ── 项目根目录 ──
 HERE = os.path.dirname(os.path.abspath(SPECPATH))
+PLUGIN_CYTHON_PATHS = sorted({
+    os.path.dirname(path)
+    for path in glob(os.path.join(HERE, 'plugins', '*', 'cython', '_sao_cy*.pyd'))
+})
 
 
 def collect_plugins():
@@ -53,6 +57,9 @@ LOCAL_HIDDENIMPORTS = [
     'sao_webview',
     'sao_web_panel_common',
     '_sao_cy_memscan',
+    '_sao_cy_pixels',
+    '_sao_cy_packet',
+    '_sao_cy_sr_uihelpers',
     '_sao_cy_uihelpers',
 ]
 
@@ -104,7 +111,7 @@ GPU_RENDER_DATAS = (
 
 a = Analysis(
     ['main.py'],
-    pathex=[HERE],
+    pathex=[HERE, *PLUGIN_CYTHON_PATHS],
     binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES,
     datas=[
         # Modular runtime data lifted to exe top level by build_release/dev_publish.

@@ -543,11 +543,14 @@ void main() {
             return
 
         if _HAS_MODERNGL:
-            print('[LinkStart] GPU present unavailable after retry; skip Tk/Canvas fallback to avoid CPU startup path')
-            self._finish()
-            return
+            print('[LinkStart] GPU present unavailable after retry; falling back to Tk/Canvas path')
+            self._color_particles = self._gen_tunnel(
+                self._COLORS_8, self._NUM_PARTICLES_CANVAS)
+            self._blue_particles = self._gen_tunnel(
+                self._BLUES_8, self._NUM_PARTICLES_CANVAS)
 
-        # ── 仅在没有 ModernGL 的旧环境才预热 Canvas sprite；正常启动动画不走 Tk/Canvas。 ──
+        # ── 预热 Canvas sprite；GPU 直出失败时也允许回退到 Tk/Canvas，
+        # 避免 dev 环境 GLFW/驱动异常时开场动画直接消失。 ──
         self._prewarm_linkstart_p2_sprites()
 
         # ── 创建全屏顶层窗口 ──

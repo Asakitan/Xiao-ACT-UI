@@ -9,7 +9,7 @@ from unittest import mock
 import _bootstrap  # noqa: F401
 
 from plugins.star_resonance_plugin.panels.sao_gui_commander import CommanderPanel
-from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin
+from plugins.star_resonance_plugin.entity_menu_bridge import StarResonanceEntityMenuBridge
 
 
 def _bad_commander_data() -> dict:
@@ -83,13 +83,15 @@ class CommanderPanelTests(unittest.TestCase):
         self.assertNotIn("inf", repr(first).lower())
 
     def test_push_commander_data_does_not_drop_bad_numeric_payloads(self) -> None:
-        owner = SAOPlayerGUIPanelsMixin.__new__(SAOPlayerGUIPanelsMixin)
+        owner = type("Owner", (), {})()
         owner._commander_panel = _FakeCommanderPanel()
         owner._packet_engine = _FakePacketEngine(_bad_commander_data())
         owner._last_commander_push_sig = None
+        bridge = StarResonanceEntityMenuBridge.__new__(StarResonanceEntityMenuBridge)
+        bridge.owner = owner
 
-        owner._push_commander_data()
-        owner._push_commander_data()
+        bridge._push_commander_data()
+        bridge._push_commander_data()
 
         self.assertEqual(len(owner._commander_panel.updates), 1)
         self.assertEqual(owner._commander_panel.updates[0]["members"][0]["name"], "Alice")

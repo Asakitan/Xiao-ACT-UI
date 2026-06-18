@@ -34,9 +34,13 @@ except Exception:
 # in-tree GPU helpers win over stale installed copies while BASE_DIR
 # remains the highest-priority source root.
 try:
-    _plugins_dir = os.path.join(BASE_DIR, 'plugins')
-    if os.path.isdir(_plugins_dir):
-        _insert_at = (sys.path.index(BASE_DIR) + 1) if BASE_DIR in sys.path else 0
+    _plugin_roots = []
+    for _base in (BASE_DIR, BUNDLE_DIR):
+        _plugins_dir = os.path.join(_base, 'plugins')
+        if _plugins_dir not in _plugin_roots and os.path.isdir(_plugins_dir):
+            _plugin_roots.append(_plugins_dir)
+    _insert_at = (sys.path.index(BASE_DIR) + 1) if BASE_DIR in sys.path else 0
+    for _plugins_dir in _plugin_roots:
         for _plugin_name in sorted(os.listdir(_plugins_dir)):
             _cython_dir = os.path.join(_plugins_dir, _plugin_name, 'cython')
             if not os.path.isdir(_cython_dir):

@@ -258,10 +258,6 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
     def _stop_recognition_engines(self) -> None:
         self.order.append("recognition.stop")
 
-    def _destroy_float_alpha_windows(self) -> None:
-        self.order.append("float_alpha_strips.destroy")
-
-
 class EntityTransitionGpuDestroyTests(unittest.TestCase):
     def test_shader_points_flip_top_left_screen_y_to_bottom_left_gl_y(self) -> None:
         overlay = EntityTransitionGpuOverlay(
