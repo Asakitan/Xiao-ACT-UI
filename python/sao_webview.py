@@ -1062,6 +1062,13 @@ class SAOWebViewGUI:
                 win.show()
         except Exception:
             pass
+        try:
+            from render.webview_proxy import get_webview_proxy
+            proxy = get_webview_proxy(surface)
+            if proxy:
+                proxy.show()
+        except Exception:
+            pass
 
     def _hide_plugin_surface(self, surface: str):
         try:
@@ -1070,8 +1077,20 @@ class SAOWebViewGUI:
                 win.hide()
         except Exception:
             pass
+        try:
+            from render.webview_proxy import get_webview_proxy
+            proxy = get_webview_proxy(surface)
+            if proxy:
+                proxy.hide()
+        except Exception:
+            pass
 
     def _destroy_plugin_surfaces(self):
+        try:
+            from render.webview_proxy import stop_all_proxies
+            stop_all_proxies()
+        except Exception:
+            pass
         surfaces = getattr(self, '_plugin_surfaces', None)
         meta = getattr(self, '_plugin_surface_meta', None)
         order = getattr(self, '_plugin_surface_order', None)
@@ -1179,6 +1198,71 @@ class SAOWebViewGUI:
             if bool(meta.get('click_through', False)):
                 self._set_plugin_surface_click_through(
                     surface, enabled=True, ensure_on_top=bool(meta.get('on_top', False)))
+
+    def _proxy_surfaces_to_compositor(self) -> None:
+        """In unified overlay mode, proxy all webview windows through
+        the compositor. Each window is moved off-screen and captured
+        via PrintWindow; content is presented as a compositor layer.
+        """
+        try:
+            from render.gpu_overlay_window import get_unified_overlay_mode
+            if not get_unified_overlay_mode():
+                return
+        except Exception:
+            return
+
+        from render.webview_proxy import register_webview_proxy
+
+        for surface, _win in list(self._plugin_surface_items()):
+            meta = self._plugin_surface_meta.get(surface, {}) or {}
+            hwnd = self._plugin_surface_hwnd(surface)
+            if not hwnd:
+                continue
+            ct = bool(meta.get('click_through', False))
+            w = int(meta.get('width', 0) or 400)
+            h = int(meta.get('height', 0) or 300)
+            x = int(meta.get('x', 0) or 0)
+            y = int(meta.get('y', 0) or 0)
+            z = 150 if ct else 250
+            fps = 15.0 if ct else 10.0
+            proxy = register_webview_proxy(
+                hwnd, surface, w, h, x, y,
+                z=z, click_through=ct, capture_fps=fps,
+            )
+            proxy.start()
+            visible_attr = meta.get('visible_attr', '')
+            if visible_attr and getattr(self, visible_attr, False):
+                proxy.show()
+
+        # Also proxy the menu and plugin manager
+        for title_attr, name, z in [
+            ('menu_win', 'sao_menu', 160),
+            ('plugin_manager_win', 'plugin_manager', 260),
+        ]:
+            win = getattr(self, title_attr, None)
+            if win is None:
+                continue
+            meta = {}
+            try:
+                title = str(getattr(win, 'title', name))
+                hwnd = ctypes.windll.user32.FindWindowW(None, title)
+            except Exception:
+                hwnd = 0
+            if not hwnd:
+                continue
+            try:
+                rect = wt.RECT()
+                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                w = rect.right - rect.left
+                h = rect.bottom - rect.top
+                x, y = rect.left, rect.top
+            except Exception:
+                continue
+            proxy = register_webview_proxy(
+                hwnd, name, w, h, x, y,
+                z=z, click_through=False, capture_fps=10.0,
+            )
+            proxy.start()
 
     # ── WebView extension hooks ──
 
@@ -2456,6 +2540,11 @@ class SAOWebViewGUI:
             self._eval_hp('if (window.HP && HP.retriggerEntryBlur) HP.retriggerEntryBlur()')
             # HP 窗口入场动画: 从中央滑到固定位置
             self._animate_hp_entry()
+            # Unified overlay: proxy webview windows through compositor
+            try:
+                self._proxy_surfaces_to_compositor()
+            except Exception:
+                pass
             # 启动识别引擎
             self._start_recognition()
         threading.Timer(0.5, _init).start()
