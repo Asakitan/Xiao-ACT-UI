@@ -55,12 +55,45 @@ class SAOPlayerGUIFloatChromeMixin:
         pass
 
     def _refresh_float_layered(self):
-        """(deprecated) Legacy layered float refresh placeholder."""
-        return
+        """Refresh the GPU-presented NerveGear trigger, if attached."""
+        render_fn = getattr(self, '_render_ng', None)
+        if callable(render_fn):
+            try:
+                render_fn()
+            except Exception:
+                pass
+
+    def _sync_float_button_geometry(self, show: Optional[bool] = None) -> None:
+        """Mirror the hidden Tk anchor's position onto the GPU button."""
+        gpu_btn = getattr(self, '_float_gpu_button', None)
+        anchor = getattr(self, '_float', None)
+        if gpu_btn is None or anchor is None:
+            return
+        try:
+            x = int(anchor.winfo_x())
+            y = int(anchor.winfo_y())
+            w = int(getattr(self, '_fw', 0) or anchor.winfo_width() or 1)
+            h = int(getattr(self, '_fh', 0) or anchor.winfo_height() or 1)
+            gpu_btn.geometry(f'{w}x{h}+{x}+{y}')
+        except Exception:
+            pass
+        try:
+            if show is True:
+                gpu_btn.deiconify()
+            elif show is False:
+                gpu_btn.withdraw()
+        except Exception:
+            pass
 
     def _set_float_alpha(self, alpha):
-        """(deprecated) _float 现为全透明点击锚点, 不再需要 alpha。"""
+        """Set visible GPU trigger alpha; hidden Tk anchor stays invisible."""
         self._float_alpha = alpha
+        gpu_btn = getattr(self, '_float_gpu_button', None)
+        if gpu_btn is not None:
+            try:
+                gpu_btn.set_alpha(alpha)
+            except Exception:
+                pass
 
     def _animate_float_hud(self):
         """(deprecated) Legacy float HUD redraw loop placeholder."""
@@ -95,6 +128,7 @@ class SAOPlayerGUIFloatChromeMixin:
             fy = self._breath_base_y + new_dy
             if self._float and self._float.winfo_exists():
                 self._float.geometry(f'+{fx}+{fy}')
+                self._sync_float_button_geometry(show=True)
             self.root.after(16, self._breath_step)
         except Exception:
             pass
@@ -104,6 +138,7 @@ class SAOPlayerGUIFloatChromeMixin:
         try:
             if self._float and self._float.winfo_exists():
                 self._float.geometry(f'+{self._breath_base_x}+{self._breath_base_y}')
+                self._sync_float_button_geometry(show=True)
         except Exception:
             pass
 
@@ -228,6 +263,7 @@ class SAOPlayerGUIFloatChromeMixin:
             x = int(x0 + (x1 - x0) * et)
             y = int(y0 + (y1 - y0) * et)
             self._float.geometry(f'+{x}+{y}')
+            self._sync_float_button_geometry(show=True)
             try:
                 self._refresh_float_layered()
             except Exception:

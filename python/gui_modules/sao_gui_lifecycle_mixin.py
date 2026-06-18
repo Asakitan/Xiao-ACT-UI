@@ -255,6 +255,13 @@ class SAOPlayerGUILifecycleMixin:
         self._ai_editor_panel = None
         self._destroy_float_alpha_windows()
         try:
+            gpu_btn = getattr(self, '_float_gpu_button', None)
+            if gpu_btn is not None:
+                gpu_btn.destroy()
+                self._float_gpu_button = None
+        except Exception:
+            pass
+        try:
             if self._float and self._float.winfo_exists():
                 self._float.destroy()
         except Exception:
@@ -380,6 +387,8 @@ class SAOPlayerGUILifecycleMixin:
                                 dy -= int(6 * hold)
                             try:
                                 win.geometry(f'+{item["x"] + dx}+{item["y"] + dy}')
+                                if item.get('role') == 'float':
+                                    self._sync_float_button_geometry(show=True)
                             except Exception:
                                 pass
                     else:
@@ -394,6 +403,8 @@ class SAOPlayerGUILifecycleMixin:
                                 dy -= int(14 + 18 * fade)
                             try:
                                 win.geometry(f'+{item["x"] + dx}+{item["y"] + dy}')
+                                if item.get('role') == 'float':
+                                    self._sync_float_button_geometry(show=True)
                             except Exception:
                                 pass
                     if item.get('ulw'):

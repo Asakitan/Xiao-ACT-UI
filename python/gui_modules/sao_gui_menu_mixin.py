@@ -506,7 +506,16 @@ class SAOPlayerGUIMenuMixin:
     def _toggle_sao_menu(self, allow_close: bool = False):
         # Lazy-init: build menu on first toggle (deferred from __init__)
         if self._sao_menu is None:
-            self._setup_sao_menu()
+            try:
+                self._setup_sao_menu()
+            except Exception as exc:
+                print(
+                    f'[SAO] SAO menu setup failed: '
+                    f'{type(exc).__name__}: {exc}',
+                    flush=True,
+                )
+                self._sync_float_button_geometry(show=True)
+                return
         if self._sao_menu.visible:
             if not allow_close:
                 return
@@ -536,7 +545,21 @@ class SAOPlayerGUIMenuMixin:
                 pass
             self._play_motion_blur(closing=False)
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
-            self._sao_menu.open()
+            try:
+                self._sao_menu.open()
+            except Exception as exc:
+                print(
+                    f'[SAO] SAO menu open failed: '
+                    f'{type(exc).__name__}: {exc}',
+                    flush=True,
+                )
+                try:
+                    self._sao_menu.force_destroy_overlay()
+                except Exception:
+                    pass
+                self._sao_menu = None
+                self._sync_float_button_geometry(show=True)
+                return
             try:
                 from render.overlay_scheduler import get_scheduler as _get_sched
                 _get_sched(self.root).set_menu_open(True)
@@ -544,6 +567,7 @@ class SAOPlayerGUIMenuMixin:
                 pass
             # 立即将悬浮按钮浮到 overlay 之上 (避免撕裂)
             self._float.lift()
+            self._sync_float_button_geometry(show=True)
 
     def _close_sao_menu_from_background(self):
         if self._sao_menu_close_pending or self._exit_animating or self._close_finalized:
@@ -586,8 +610,12 @@ class SAOPlayerGUIMenuMixin:
         # 不启动 _lift_float_loop (tkinter .lift() 会引起闪烁);
         # z-order 完全由 _start_fisheye_overlay 内的 Win32 SetWindowPos 管理
         self._lift_loop_active = False
-        # 延迟启动鱼眼叠加 (等菜单渲染完再截图), 带重试确保首次也能生效
-        self._start_fisheye_with_retry(retries=5, delay=80)
+        # 延迟启动鱼眼叠加 (等菜单 GPU 首帧渲染完再截图/创建全屏层),
+        # 带更长重试确保首次 GPU compose 较慢时也能生效。
+        try:
+            self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
+        except Exception:
+            self._start_fisheye_with_retry(retries=12, delay=100)
         self._notify_plugin_menu_surfaces('on_open')
         try:
             self.root.after(90, self._restore_entity_menu_state)

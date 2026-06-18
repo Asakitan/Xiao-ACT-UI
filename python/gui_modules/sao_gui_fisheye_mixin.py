@@ -217,6 +217,25 @@ class SAOPlayerGUIFisheyeMixin:
             )
         except Exception:
             pass
+        if not enabled:
+            self._raise_entity_surfaces_above_fisheye()
+
+    def _raise_entity_surfaces_above_fisheye(self) -> None:
+        """Keep the GPU menu/trigger above the transparent fisheye hit layer."""
+        menu = getattr(self, '_sao_menu', None)
+        try:
+            if menu is not None and getattr(menu, 'visible', False):
+                raise_to_top = getattr(menu, '_raise_to_top', None)
+                if callable(raise_to_top):
+                    raise_to_top()
+        except Exception:
+            pass
+        try:
+            sync_btn = getattr(self, '_sync_float_button_geometry', None)
+            if callable(sync_btn):
+                sync_btn(show=True)
+        except Exception:
+            pass
 
     def _prepare_fisheye_backdrop_for_panels(self) -> None:
         # Keep the transparent hit layer interactive while panels are open:
@@ -265,15 +284,27 @@ class SAOPlayerGUIFisheyeMixin:
         if self._destroyed:
             return
         if self._fisheye_close_suppressed():
+            if retries > 0:
+                try:
+                    self.root.after(delay, lambda: self._start_fisheye_with_retry(retries - 1, delay))
+                except Exception:
+                    pass
             return
         menu_visible = bool(self._sao_menu is not None and self._sao_menu.visible)
         if self._fisheye_ov is not None:
             self._set_fisheye_hit_layer_clickthrough(False)
+            self._raise_entity_surfaces_above_fisheye()
             return  # 已在运行
         if retries <= 0:
             return
         if menu_visible or self._any_panel_open():
             self._start_fisheye_overlay()
+            self._raise_entity_surfaces_above_fisheye()
+            for _delay in (80, 220, 420):
+                try:
+                    self.root.after(_delay, self._raise_entity_surfaces_above_fisheye)
+                except Exception:
+                    pass
         else:
             try:
                 self.root.after(delay, lambda: self._start_fisheye_with_retry(retries - 1, delay))
@@ -329,6 +360,7 @@ class SAOPlayerGUIFisheyeMixin:
             and not self._fisheye_close_suppressed())
         if menu_visible:
             self._set_fisheye_hit_layer_clickthrough(False)
+            self._raise_entity_surfaces_above_fisheye()
             return
         if self._any_panel_open():
             self._prepare_fisheye_backdrop_for_panels()
@@ -621,6 +653,10 @@ class SAOPlayerGUIFisheyeMixin:
                         raise_to_top()
                 except Exception:
                     pass
+                try:
+                    self._raise_entity_surfaces_above_fisheye()
+                except Exception:
+                    pass
             except Exception:
                 self._fisheye_hit_layer = None
 
@@ -897,7 +933,7 @@ class SAOPlayerGUIFisheyeMixin:
             _SWP_NOSIZE = 0x0001
             _SWP_NOACTIVATE = 0x0010
             _SWP_NOOWNERZORDER = 0x0200
-            _demote_count = [8]  # finite demotions
+            _demote_count = [12]  # finite demotions across slow first-frame drivers
 
             def _demote_fisheye():
                 if self._fisheye_ov is None or _demote_count[0] <= 0:
@@ -920,6 +956,10 @@ class SAOPlayerGUIFisheyeMixin:
                         self.root.after(250, _demote_fisheye)
                     except Exception:
                         pass
+                try:
+                    self._raise_entity_surfaces_above_fisheye()
+                except Exception:
+                    pass
 
             # 第一次延迟 50ms,等 GLFW 完成首次 _show_no_activate 之后再降级。
             self.root.after(50, _demote_fisheye)

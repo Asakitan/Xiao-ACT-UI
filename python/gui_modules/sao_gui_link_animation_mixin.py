@@ -137,6 +137,7 @@ class SAOPlayerGUILinkAnimationMixin:
             self._float.geometry(f'{self._fw}x{self._fh}+{fx_start}+{fy_start}')
             self._float.deiconify()
             self._float.lift()
+            self._sync_float_button_geometry(show=True)
             self._play_motion_blur(closing=False)
             self._run_entry_animation(fx_start, fy_start, fx_final, fy_final)
 
@@ -144,9 +145,17 @@ class SAOPlayerGUILinkAnimationMixin:
         try:
             ls = SAOLinkStart(self.root, on_done=on_done)
             ls.play()
-        except Exception:
+        except Exception as exc:
             _resume_overlay_creation()
-            raise
+            print(
+                f'[SAO] LinkStart failed; continuing Entity startup: '
+                f'{type(exc).__name__}: {exc}',
+                flush=True,
+            )
+            try:
+                self.root.after_idle(on_done)
+            except Exception:
+                on_done()
 
     def _init_entry_boot_gl(self, width, height):
         try:
@@ -497,6 +506,7 @@ void main() {
             fx = int(lerp(fx_start, fx_final, deploy_e))
             fy = int(lerp(fy_start, fy_final, deploy_e))
             self._float.geometry(f'+{fx}+{fy}')
+            self._sync_float_button_geometry(show=True)
             self._set_float_alpha(0.95 * ease_in_out(deploy))
 
             if elapsed < total:
@@ -506,6 +516,7 @@ void main() {
                     self._cleanup_entry_overlay()
             else:
                 self._float.geometry(f'+{fx_final}+{fy_final}')
+                self._sync_float_button_geometry(show=True)
                 self._set_float_alpha(0.95)
                 _done()
 

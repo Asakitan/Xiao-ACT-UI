@@ -200,6 +200,18 @@ import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 import _sao_cy_sr_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from utils.perf_probe import probe as _probe
 
+try:
+    from plugins.star_resonance_plugin.engines.break_time_lookup import get_break_recovery_time
+except Exception:  # pragma: no cover - defensive for stripped plugin builds
+    def get_break_recovery_time(_template_id: int) -> float:  # type: ignore[no-redef]
+        return 0.0
+
+try:
+    from plugins.star_resonance_plugin.engines.combat_analytics import mem_boss_break_override
+except Exception:  # pragma: no cover - defensive for stripped plugin builds
+    def mem_boss_break_override(_bridge):  # type: ignore[no-redef]
+        return None
+
 
 class SAOPlayerGUIStateMixin:
     """State-pull + overlay-push helpers (recognition_loop + push_packet_overlays + fast-state).

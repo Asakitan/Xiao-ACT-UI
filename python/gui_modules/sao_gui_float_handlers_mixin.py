@@ -98,6 +98,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         try:
             if self._float.winfo_exists():
                 self._float.lift()
+                self._sync_float_button_geometry(show=True)
         except Exception:
             pass
         try:
@@ -177,13 +178,13 @@ class SAOPlayerGUIFloatHandlersMixin:
         return out
 
     def _create_floating_widget(self):
-        """NerveGear 按钮 — SAO 菜单可见入口 (64px 圆形, dark/light 主题).
+        """NerveGear 按钮 — SAO 菜单可见入口 (GPU 绘制).
 
         左键打开 SAO 菜单, 右键迷你上下文菜单 (主题切换/关于/退出).
         位置: 屏幕右下角, 可拖动, 位置持久化到 settings.
         空闲时有呼吸辉光动画.
         """
-        from gui_modules.sao_gui_nervegear_button import SIZE as NG_SIZE, render_button, apply_layered_window
+        from gui_modules.sao_gui_nervegear_button import SIZE as NG_SIZE, GpuNerveGearButton
 
         try:
             _sw = self.root.winfo_screenwidth()
@@ -218,24 +219,31 @@ class SAOPlayerGUIFloatHandlersMixin:
             ng_x = _sw - NG_SIZE - 20
             ng_y = _sh - NG_SIZE - 60
 
+        # Compatibility anchor only: dialogs, menu geometry, LinkStart and
+        # existing settings code still expect `self._float` to be a Tk
+        # Toplevel.  It is never used to draw the button; the visible
+        # trigger below is a GLFW/ModernGL overlay.
         self._float = tk.Toplevel(self.root)
         self._float.overrideredirect(True)
         self._float.attributes('-topmost', True)
+        self._float.attributes('-alpha', 0.0)
         self._float.geometry(f'{FW}x{FH}+{ng_x}+{ng_y}')
-        self._float.configure(bg='#000000')
+        self._float.configure(bg='#010101')
         _apply_window_icon(self._float)
 
         self._float_hwnd = 0
         try:
             self._float.update_idletasks()
             GWL_EXSTYLE = -20
-            WS_EX_APPWINDOW = 0x00040000
             WS_EX_TOOLWINDOW = 0x00000080
             WS_EX_LAYERED = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_NOACTIVATE = 0x08000000
             hwnd = int(_user32.GetParent(ctypes.c_void_p(self._float.winfo_id())))
             self._float_hwnd = hwnd
             style = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
-            style = (style | WS_EX_APPWINDOW | WS_EX_LAYERED) & ~WS_EX_TOOLWINDOW
+            style = (style | WS_EX_LAYERED | WS_EX_TRANSPARENT
+                     | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
             _disable_native_window_shadow(self._float)
             try:
@@ -251,51 +259,8 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._ng_glow_phase = 0.0
         self._ng_breath_after = None
 
-        def _render_ng():
-            if self._float_hwnd:
-                img = render_button(self._ng_theme, self._ng_glow_phase)
-                if img:
-                    apply_layered_window(self._float_hwnd, img)
-
-        self._render_ng = _render_ng
-
-        # ── 拖动支持 ──
-        def _start_drag(e):
-            self._ng_drag_start = (e.x_root, e.y_root,
-                                   self._float.winfo_x(), self._float.winfo_y())
-
-        def _do_drag(e):
-            if self._ng_drag_start is None:
-                return
-            sx, sy, wx, wy = self._ng_drag_start
-            dx, dy = e.x_root - sx, e.y_root - sy
-            if abs(dx) < 5 and abs(dy) < 5:
-                return
-            self._float.geometry(f'+{wx + dx}+{wy + dy}')
-
-        def _end_drag(e):
-            if self._ng_drag_start is None:
-                return
-            sx, sy, _, _ = self._ng_drag_start
-            dx, dy = e.x_root - sx, e.y_root - sy
-            self._ng_drag_start = None
-            if abs(dx) < 5 and abs(dy) < 5:
-                self._toggle_sao_menu()
-            else:
-                try:
-                    self._set_setting('nervegear_button_pos',
-                                      [self._float.winfo_x(), self._float.winfo_y()])
-                except Exception:
-                    pass
-
-        self._float.bind('<ButtonPress-1>', _start_drag)
-        self._float.bind('<B1-Motion>', _do_drag)
-        self._float.bind('<ButtonRelease-1>', _end_drag)
-        self._float.bind('<Enter>', self._float_enter)
-        self._float.bind('<Leave>', self._float_leave)
-
         # ── 右键菜单 (精简: 平台操作) ──
-        self._float_ctx = tk.Menu(self._float, tearoff=0,
+        self._float_ctx = tk.Menu(self.root, tearoff=0,
                                   bg='#0f121a', fg='#d0e8f0',
                                   activebackground='#f3af12',
                                   activeforeground='#ffffff',
@@ -309,22 +274,106 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._float_ctx.add_command(label='◇ WebView UI', command=self._switch_to_webview_ui)
         self._float_ctx.add_command(label='◇ 关于', command=self._show_about)
         self._float_ctx.add_command(label='✕ 退出', command=self._on_close)
-        def _show_ctx_menu(e):
+        def _show_ctx_menu_at(x_root: int, y_root: int):
             self._ctx_menu_open = True
             try:
                 menu_h = 140
-                popup_x = e.x_root
-                popup_y = max(0, e.y_root - menu_h)
+                popup_x = int(x_root)
+                popup_y = max(0, int(y_root) - menu_h)
                 self._float_ctx.tk_popup(popup_x, popup_y)
             except Exception:
-                self._float_ctx.tk_popup(e.x_root, e.y_root)
+                self._float_ctx.tk_popup(int(x_root), int(y_root))
             finally:
                 self._ctx_menu_open = False
+
+        def _show_ctx_menu(e):
+            _show_ctx_menu_at(e.x_root, e.y_root)
+
         self._float.bind('<Button-3>', _show_ctx_menu)
 
+        def _on_gpu_hover(active: bool):
+            self._float_hover = bool(active)
+            self._float_alpha = 1.0
+
+        def _on_gpu_move_end(x: int, y: int):
+            try:
+                self._float.geometry(f'{FW}x{FH}+{int(x)}+{int(y)}')
+                self._set_setting('nervegear_button_pos', [int(x), int(y)])
+            except Exception:
+                pass
+
+        def _on_gpu_click():
+            def _open_menu():
+                try:
+                    self._toggle_sao_menu()
+                except Exception as exc:
+                    print(
+                        f'[SAO] GPU NerveGear click failed to open SAO menu: '
+                        f'{type(exc).__name__}: {exc}',
+                        flush=True,
+                    )
+            try:
+                self.root.after_idle(_open_menu)
+            except Exception:
+                _open_menu()
+
+        try:
+            self._float_gpu_button = GpuNerveGearButton(
+                self.root,
+                ng_x,
+                ng_y,
+                theme=self._ng_theme,
+                on_click=_on_gpu_click,
+                on_right_click=_show_ctx_menu_at,
+                on_move_end=_on_gpu_move_end,
+                on_hover=_on_gpu_hover,
+            )
+        except Exception as exc:
+            self._float_gpu_button = None
+            print(
+                f'[SAO] GPU NerveGear button unavailable: '
+                f'{type(exc).__name__}: {exc}',
+                flush=True,
+            )
+            raise
+
+        def _render_ng():
+            btn = getattr(self, '_float_gpu_button', None)
+            if btn is None:
+                return
+            try:
+                btn.set_theme(self._ng_theme)
+                btn.set_hover(bool(getattr(self, '_float_hover', False)))
+                btn.set_alpha(float(getattr(self, '_float_alpha', 1.0) or 0.0))
+                btn.render(self._ng_glow_phase)
+            except Exception:
+                pass
+
+        self._render_ng = _render_ng
         _render_ng()
 
         self._float.withdraw()
+        self._sync_float_button_geometry(show=False)
+        try:
+            self.root.after(2500, self._ensure_float_button_visible)
+        except Exception:
+            pass
+
+    def _ensure_float_button_visible(self):
+        """Fail-safe: show the GPU trigger if startup animation stalls."""
+        if getattr(self, '_destroyed', False):
+            return
+        btn = getattr(self, '_float_gpu_button', None)
+        if btn is None or getattr(btn, '_visible', False):
+            return
+        try:
+            if self._float and self._float.winfo_exists():
+                self._float.deiconify()
+                self._float.lift()
+        except Exception:
+            pass
+        self._set_float_alpha(0.95)
+        self._sync_float_button_geometry(show=True)
 
 
     def _toggle_nervegear_theme(self):

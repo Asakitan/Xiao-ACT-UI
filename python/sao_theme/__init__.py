@@ -79,12 +79,22 @@ from sao_theme.widgets import (
 try:
     from ui_gpu import SAOPopUpMenu  # type: ignore[assignment]  # noqa: F811
 except Exception as _e:
-    import warnings as _warnings
-    _warnings.warn(
-        f'ui_gpu.SAOPopUpMenu unavailable, falling back to legacy: {_e}',
-        RuntimeWarning,
-        stacklevel=2,
-    )
+    _UI_GPU_POPUP_IMPORT_ERROR = _e
+
+    class SAOPopUpMenu:  # type: ignore[no-redef]
+        def __new__(cls, *args, **kwargs):
+            try:
+                from ui_gpu import SAOPopUpMenu as _GpuSAOPopUpMenu
+            except Exception as _late_exc:
+                raise RuntimeError(
+                    'GPU-native SAOPopUpMenu is required; legacy Tk menu '
+                    'button fallback is disabled') from _late_exc
+            return _GpuSAOPopUpMenu(*args, **kwargs)
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                'GPU-native SAOPopUpMenu is required; legacy Tk menu '
+                'button fallback is disabled') from _UI_GPU_POPUP_IMPORT_ERROR
 
 
 __all__ = [

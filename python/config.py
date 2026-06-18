@@ -27,6 +27,29 @@ try:
 except Exception:
     pass
 
+# Dev layout: plugin Cython accelerators are built in-place under
+# plugins/<id>/cython/ but several hot UI modules import selected
+# accelerators as top-level modules (for example _sao_cy_pixels).
+# Add those accelerator directories immediately after BASE_DIR so the
+# in-tree GPU helpers win over stale installed copies while BASE_DIR
+# remains the highest-priority source root.
+try:
+    _plugins_dir = os.path.join(BASE_DIR, 'plugins')
+    if os.path.isdir(_plugins_dir):
+        _insert_at = (sys.path.index(BASE_DIR) + 1) if BASE_DIR in sys.path else 0
+        for _plugin_name in sorted(os.listdir(_plugins_dir)):
+            _cython_dir = os.path.join(_plugins_dir, _plugin_name, 'cython')
+            if not os.path.isdir(_cython_dir):
+                continue
+            try:
+                sys.path.remove(_cython_dir)
+            except ValueError:
+                pass
+            sys.path.insert(_insert_at, _cython_dir)
+            _insert_at += 1
+except Exception:
+    pass
+
 
 def _files_are_identical(left: str, right: str) -> bool:
     """Return True only when two files are byte-for-byte identical."""
