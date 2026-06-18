@@ -264,6 +264,13 @@ class SAOPlayerGUIMenuMixin:
             '插件': plugin_items,
             '皮肤': skin_items,
             '关于': [
+                {'icon': '─', 'label': '── 快捷键 ──'},
+                {'icon': '⌂', 'label': f'打开/关闭菜单{_k("toggle_sao_menu")}'},
+                {'icon': '⎀', 'label': f'隐藏/显示按钮{_k("toggle_float_button")}'},
+                {'icon': '◈', 'label': f'隐藏/显示面板{_k("hide_panels")}'},
+                {'icon': '⚡', 'label': f'引擎启停{_k("toggle_recognition")}'},
+                {'icon': '⬆', 'label': f'窗口置顶{_k("toggle_topmost")}'},
+                {'icon': '─', 'label': '──────────'},
                 {'icon': '🔑', 'label': '授权管理', 'command': self._show_license_panel_from_menu},
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},

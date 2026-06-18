@@ -137,10 +137,18 @@ class SAOPlayerGUIDialogsMixin:
                 extra = f"\n\n[{tag}] 新版本 v{st.latest_version}"
         except Exception:
             extra = ''
+        hk = self.settings.get('hotkeys', {}) or {}
+        from config import DEFAULT_HOTKEYS
+        def _k(key_id):
+            return hk.get(key_id, DEFAULT_HOTKEYS.get(key_id, ''))
         self.root.after(600, lambda: SAODialog.showinfo(
             self._float, "关于",
             f"SAO Auto — Platform UI\n{APP_VERSION_LABEL}{extra}\n\n"
-            "Alt+A 打开 SAO 菜单\n"
+            f"[{_k('toggle_sao_menu')}]  打开/关闭菜单\n"
+            f"[{_k('toggle_float_button')}]  隐藏/显示按钮\n"
+            f"[{_k('hide_panels')}]  隐藏/显示面板\n"
+            f"[{_k('toggle_recognition')}]  引擎启停\n"
+            f"[{_k('toggle_topmost')}]  窗口置顶\n\n"
             "右键悬浮按钮查看更多选项"))
 
     def _show_license_panel_from_menu(self):
