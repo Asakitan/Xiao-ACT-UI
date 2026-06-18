@@ -2521,7 +2521,16 @@ _running_thread = None
 
 
 def _html_path() -> str:
-    return os.path.join(_ROOT, "web", "ai_editor_app.html")
+    # onedir: build_release.bat lifts web/ to BASE_DIR (exe top level);
+    # _ROOT resolves to runtime/ which no longer contains web/.
+    try:
+        from config import BASE_DIR
+        p = os.path.join(BASE_DIR, 'web', 'ai_editor_app.html')
+        if os.path.isfile(p):
+            return p
+    except Exception:
+        pass
+    return os.path.join(_ROOT, 'web', 'ai_editor_app.html')
 
 
 def launch(gui_ref: Any = None, blocking: bool = False) -> None:
@@ -2556,17 +2565,14 @@ def launch(gui_ref: Any = None, blocking: bool = False) -> None:
 def _launch_subprocess() -> None:
     """Spawn a separate process for the AI Editor pywebview window.
 
-    Dev mode: ``python -m ai_editor.app``
-    Frozen (onedir): ``XiaoACTUI.exe --ai-editor`` (main.py handles the flag)
-
-    Both give pywebview its own main thread without conflicting with Tk.
+    Dev:    ``python -m ai_editor.app``
+    Frozen: ``XiaoACTUI.exe --ai-editor``  (main.py handles the flag)
     """
-    global _running_thread
+    import subprocess as _sp
     html_file = _html_path()
     if not os.path.isfile(html_file):
         print(f"[AIEditor] HTML not found: {html_file}")
         return
-    import subprocess as _sp
     if getattr(sys, 'frozen', False):
         cmd = [sys.executable, '--ai-editor']
     else:
@@ -2574,7 +2580,8 @@ def _launch_subprocess() -> None:
     env = dict(os.environ)
     env.setdefault('PYTHONPATH', _ROOT)
     try:
-        proc = _sp.Popen(cmd, cwd=_ROOT, env=env)
+        proc = _sp.Popen(cmd, cwd=os.path.dirname(sys.executable)
+                         if getattr(sys, 'frozen', False) else _ROOT, env=env)
         print(f"[AIEditor] subprocess started (pid={proc.pid})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")

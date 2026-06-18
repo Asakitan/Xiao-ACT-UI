@@ -303,7 +303,8 @@ def main():
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
     parser.add_argument('--headless', action='store_true', help='无 HUD 终端模式')
-    parser.add_argument('--ai-editor', action='store_true', help='启动 AI Editor (独立进程)')
+    parser.add_argument('--ai-editor', action='store_true',
+                        help='启动 AI Editor 独立窗口 (pywebview, 不进入主 UI)')
     args = parser.parse_args()
 
     if args.ai_editor:
