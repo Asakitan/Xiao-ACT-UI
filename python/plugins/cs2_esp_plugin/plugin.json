@@ -1,0 +1,16 @@
+{
+  "id": "cs2_esp_plugin",
+  "name": "CS2 ESP (Read-only)",
+  "version": "0.1.0",
+  "entry": "plugin.py",
+  "description": "只读 ESP 覆盖层插件。使用平台引擎 A (ENGINE_READONLY) 读取目标进程内存，解析实体列表与视图矩阵，通过平台 overlay 通道画框。仅授权/离线/bot/自建服务器场景使用。不调用写入或输入控制 API，不绕过反作弊。",
+  "enabled": false,
+  "requires": [],
+  "subscriptions": [],
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "CS2 ESP control", "actions": ["start", "stop", "reload", "clear"]},
+    {"id": "automation", "title": "Read-only entity overlay"}
+  ],
+  "permissions": ["engine_access"]
+}
