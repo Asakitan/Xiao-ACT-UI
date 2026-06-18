@@ -732,6 +732,7 @@ class GpuOverlayWindow:
                  title: str = 'sao_overlay',
                  vsync: bool = False):
         self._pump = pump
+        self._root = getattr(pump, '_root', None)
         self._w = max(1, int(w))
         self._h = max(1, int(h))
         self._x = int(x)
