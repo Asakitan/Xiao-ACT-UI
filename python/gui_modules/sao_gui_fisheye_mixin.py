@@ -1350,6 +1350,15 @@ class SAOPlayerGUIFisheyeMixin:
             # bgra_buf 既是工作区也是最终输出。
             _bgra_buf = _np.empty((out_h, out_w, 4), dtype=_np.uint8)
             _bgra_buf[..., 3] = 255  # 全不透明
+            _hud_tmp = _np.empty((out_h, out_w, 4), dtype=_np.uint16)
+
+            _timer_res = None
+            try:
+                from render.overlay_scheduler import _WinTimerResolution
+                _timer_res = _WinTimerResolution()
+                _timer_res.acquire()
+            except Exception:
+                pass
 
             _fisheye_diag_logged = [False]
             while _running[0]:
@@ -1487,15 +1496,12 @@ class SAOPlayerGUIFisheyeMixin:
                 # alpha 通道初始化时已设为 255；HUD 合成不会改它
                 if (_hud_bgra_premult is not None
                         and _hud_inv_a_u16 is not None):
-                    # over: out = src + dst * (255 - src.a) / 255
-                    # 用 uint16 整数乘法 + // 255 替代 float32，
-                    # 避免每帧 3 个 (h,w,4) float32 临时数组。
-                    tmp = _bgra_buf.astype(_np.uint16)
-                    tmp *= _hud_inv_a_u16          # 广播到 (h,w,4)
-                    tmp //= 255
-                    tmp += _hud_bgra_premult       # uint16 + uint8 → uint16
-                    _np.clip(tmp, 0, 255, out=tmp)
-                    _bgra_buf[:] = tmp.astype(_np.uint8)
+                    _np.copyto(_hud_tmp, _bgra_buf, casting='unsafe')
+                    _hud_tmp *= _hud_inv_a_u16
+                    _hud_tmp //= 255
+                    _hud_tmp += _hud_bgra_premult
+                    _np.clip(_hud_tmp, 0, 255, out=_hud_tmp)
+                    _np.copyto(_bgra_buf, _hud_tmp, casting='unsafe')
                 _frame_seq[0] += 1
                 _bgra_bytes = _bgra_buf.tobytes()
                 _latest_frame[0] = (_frame_seq[0], _bgra_bytes, out_w, out_h)
@@ -1511,6 +1517,9 @@ class SAOPlayerGUIFisheyeMixin:
 
             if _ctx:
                 try: _ctx.release()
+                except Exception: pass
+            if _timer_res:
+                try: _timer_res.release()
                 except Exception: pass
 
         import threading as _th
