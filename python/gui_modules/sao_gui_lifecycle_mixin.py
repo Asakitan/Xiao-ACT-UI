@@ -274,10 +274,6 @@ class SAOPlayerGUILifecycleMixin:
         except Exception:
             pass
         try:
-            self._play_motion_blur(closing=True)
-        except Exception:
-            pass
-        try:
             if self._sao_menu is not None and self._sao_menu.visible:
                 self._sao_menu.prepare_external_fade()
         except Exception:
