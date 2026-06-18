@@ -145,6 +145,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
             'toggle_float_button': lambda: self.root.after(0, self._toggle_float_button_visibility),
+            'toggle_sao_menu': lambda: self.root.after(0, lambda: self._toggle_sao_menu(allow_close=True)),
         }, hotkey_provider=self._plugin_hotkey_map)
 
     def _plugin_hotkey_map(self):

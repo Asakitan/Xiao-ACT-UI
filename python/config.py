@@ -370,7 +370,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "5.0.2"
+APP_VERSION = "5.0.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -412,6 +412,7 @@ DEFAULT_HOTKEYS = {
     "hide_panels": "F10",
     "show_plugins": "F11",
     "toggle_float_button": "INSERT",
+    "toggle_sao_menu": "HOME",
 }
 
 # ── 快捷键组合解析 (三套监听器共用: SAOHotkeyManager / sao_webview / automation) ──
