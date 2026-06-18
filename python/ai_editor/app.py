@@ -328,7 +328,7 @@ class AIEditorAPI:
 
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
-        self._confirmation_timeout = 60.0
+        self._confirmation_timeout = 30.0
 
         # Load mode from settings
         ai_cfg = _normalize_ai_editor_config(
@@ -775,6 +775,10 @@ class AIEditorAPI:
         return ""
 
     def cancel(self) -> Dict:
+        for call_id in list(self._pending_confirm):
+            evt = self._pending_confirm.pop(call_id, None)
+            if evt:
+                evt.set()
         if self._controller:
             self._controller.cancel()
         return {"ok": True}
@@ -2312,6 +2316,8 @@ class AIEditorAPI:
         """Send a message with an attached image (vision)."""
         if not image_base64:
             return {"error": "No image data"}
+        if self._controller and self._controller._running:
+            return {"error": "Already running"}
         self._ensure_engine()
         if self._is_anthropic():
             content = self._engine.make_image_content_anthropic(text or "What is this image?", image_base64, mime)
@@ -2342,7 +2348,9 @@ class AIEditorAPI:
             finally:
                 self._controller._running = False
                 self._emit("idle", {})
-        _th.Thread(target=_run, daemon=True).start()
+        t = _th.Thread(target=_run, daemon=True)
+        self._controller._thread = t
+        t.start()
         return {"ok": True}
 
     def _is_anthropic(self) -> bool:
@@ -2536,7 +2544,15 @@ class AIEditorAPI:
         self._confirm_results[call_id] = False
         self._emit(event, payload)
         timeout = float(getattr(self, "_confirmation_timeout", 30.0))
-        evt.wait(timeout=timeout)
+        deadline = time.monotonic() + timeout
+        while not evt.is_set():
+            ctrl = self._controller
+            if ctrl is not None and not ctrl._running:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            evt.wait(timeout=min(0.5, remaining))
         self._pending_confirm.pop(call_id, None)
         result = self._confirm_results.pop(call_id, False)
         if not result and not evt.is_set():
@@ -2731,6 +2747,10 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
             pass
         _running_window = None
 
+    def _on_closing():
+        api.cancel()
+
+    window.events.closing += _on_closing
     window.events.closed += _on_closed
     webview.start(debug=False)
 

@@ -239,14 +239,12 @@ class ChatController:
     def cancel(self) -> None:
         self._running = False
         self.engine.cancel()
-        # Wake any blocked confirmation wait
-        for evt in list(getattr(self, '_confirm_events', {}).values()):
-            try:
+        with self._confirm_lock:
+            evt = self._confirm_event
+            if evt is not None:
                 evt.set()
-            except Exception:
-                pass
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 self._thread = None
 
@@ -283,7 +281,8 @@ class ChatController:
         if total_tokens < threshold:
             return
 
-        msgs = self.conversation.messages
+        with self.conversation._lock:
+            msgs = list(self.conversation.messages)
         if len(msgs) <= self.KEEP_RECENT_MIN * 2:
             return
 
@@ -371,9 +370,9 @@ class ChatController:
                     if delta.thinking and self.on_thinking_delta:
                         self.on_thinking_delta(_msg, delta.thinking)
 
+                self.engine.reset_cancel()
                 if not self._running:
                     break
-                self.engine.reset_cancel()
                 try:
                     resp = self.engine.chat_completion_stream(
                         messages=messages,

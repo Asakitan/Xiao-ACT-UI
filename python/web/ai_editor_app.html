@@ -2089,10 +2089,10 @@ async function uploadImage(){
         const text=prompt('Describe what to ask about this image:','What is in this image?');
         if(text===null)return;
         createMsg('user').innerHTML=esc(text)+'<br><span style="color:var(--fg-dim);font-size:12px">📷 '+esc(result.name||'image')+'</span>';
-        streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';
+        streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';_setSendIcon(true);
         setStatus('Analyzing image...');
         currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
-        await call('send_image_message',text,result.base64,result.mime||'image/png');
+        try{await call('send_image_message',text,result.base64,result.mime||'image/png')}catch(e){onIdle();appendSystem('Image upload failed: '+e)}
         return;
       }
     }catch(e){console.log('pywebview file dialog fallback:',e)}
@@ -2110,10 +2110,10 @@ async function uploadImage(){
       const text=prompt('Describe what to ask about this image:','What is in this image?');
       if(text===null)return;
       createMsg('user').innerHTML=esc(text)+'<br><img src="'+reader.result+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
-      streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';
+      streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';_setSendIcon(true);
       setStatus('Analyzing image...');
       currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
-      await call('send_image_message',text,base64,mime);
+      try{await call('send_image_message',text,base64,mime)}catch(e){onIdle();appendSystem('Image upload failed: '+e)}
     };
     reader.readAsDataURL(file);
   };

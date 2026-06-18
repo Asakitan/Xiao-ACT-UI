@@ -70,7 +70,7 @@ class McpStdioClient:
                 [self.config.command, *self.config.args],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
                 env=env,
                 bufsize=8192,
             )
@@ -113,6 +113,8 @@ class McpStdioClient:
         return rid
 
     def _call(self, method: str, params: Any = None, timeout: float = 30.0) -> Any:
+        if not self._alive:
+            return None
         evt = threading.Event()
         rid = self._send(method, params)
         self._pending[rid] = evt
@@ -135,6 +137,8 @@ class McpStdioClient:
             except Exception:
                 break
         self._alive = False
+        for evt in self._pending.values():
+            evt.set()
 
     def _initialize(self) -> None:
         result = self._call("initialize", {

@@ -297,7 +297,6 @@ class LLMEngine:
 
         Returns the fully-assembled LLMResponse when the stream ends.
         """
-        self._cancel.clear()
         cfg = config_override or self.config
 
         if self._is_anthropic_native(cfg):
