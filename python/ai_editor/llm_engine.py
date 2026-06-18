@@ -243,6 +243,12 @@ class LLMEngine:
 
     def cancel(self) -> None:
         self._cancel.set()
+        try:
+            if self._http:
+                self._http.close()
+                self._http = None
+        except Exception:
+            pass
 
     def reset_cancel(self) -> None:
         self._cancel.clear()

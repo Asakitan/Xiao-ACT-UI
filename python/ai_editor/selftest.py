@@ -441,19 +441,21 @@ def test_phase1_ai_editor_regressions() -> None:
         and agent_preview.get("defaults", {}).get("customPhaseTool") == "allowed"
         and ask_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
     custom_api._confirmation_timeout = 0.0
+    custom_api._mode = "plan"
     confirm_events = []
     custom_api._emit = lambda event, data: confirm_events.append((event, data))
     denied = custom_api._on_tool_confirm("phase-call", "customPhaseTool", "{}")
     stale = custom_api.confirm_tool("phase-call", True)
     provider_denied = custom_api._on_provider_tool_confirm(
      "codex", "provider-phase-call", "customPhaseTool", "{}")
+    confirm_only = [e for e in confirm_events if e[0].endswith("_confirm")]
     _check("tool confirmation defaults fail closed and provider-scoped",
         denied is False
         and provider_denied is False
         and stale.get("error") == "No pending confirmation"
-        and confirm_events[0][0] == "tool_confirm"
-        and confirm_events[-1][0] == "provider_tool_confirm"
-        and confirm_events[-1][1].get("provider") == "codex")
+        and confirm_only[0][0] == "tool_confirm"
+        and confirm_only[-1][0] == "provider_tool_confirm"
+        and confirm_only[-1][1].get("provider") == "codex")
     custom_api.set_tool_permission("customPhaseTool", "allowed")
     custom_allowed = json.loads(custom_api.execute_tool("customPhaseTool", "{}"))
     _check("custom tool override allowed runs",

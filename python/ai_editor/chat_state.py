@@ -237,10 +237,18 @@ class ChatController:
         return self._AT_RE.sub(_replace, text)
 
     def cancel(self) -> None:
-        self.engine.cancel()
         self._running = False
+        self.engine.cancel()
+        # Wake any blocked confirmation wait
+        for evt in list(getattr(self, '_confirm_events', {}).values()):
+            try:
+                evt.set()
+            except Exception:
+                pass
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                self._thread = None
 
     MAX_AGENT_ROUNDS = 25
     KEEP_RECENT_MIN = 6
@@ -363,12 +371,19 @@ class ChatController:
                     if delta.thinking and self.on_thinking_delta:
                         self.on_thinking_delta(_msg, delta.thinking)
 
+                if not self._running:
+                    break
                 self.engine.reset_cancel()
-                resp = self.engine.chat_completion_stream(
-                    messages=messages,
-                    tools=tools,
-                    on_delta=_on_delta,
-                )
+                try:
+                    resp = self.engine.chat_completion_stream(
+                        messages=messages,
+                        tools=tools,
+                        on_delta=_on_delta,
+                    )
+                except Exception as exc:
+                    if not self._running:
+                        break
+                    raise
 
                 assistant_msg.content = resp.content
                 assistant_msg.thinking = resp.thinking

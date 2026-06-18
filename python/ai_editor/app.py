@@ -2529,13 +2529,21 @@ class AIEditorAPI:
         engine_action = self._engine_action_from_arguments(args) if name == "engine" else ""
         if name == "engine" and engine_action not in _DANGEROUS_ENGINE_ACTIONS:
             return True
+        if self._mode == "agent":
+            return True
         evt = threading.Event()
         self._pending_confirm[call_id] = evt
         self._confirm_results[call_id] = False
         self._emit(event, payload)
-        evt.wait(timeout=float(getattr(self, "_confirmation_timeout", 60.0)))
+        timeout = float(getattr(self, "_confirmation_timeout", 30.0))
+        evt.wait(timeout=timeout)
         self._pending_confirm.pop(call_id, None)
-        return self._confirm_results.pop(call_id, False)
+        result = self._confirm_results.pop(call_id, False)
+        if not result and not evt.is_set():
+            self._emit("tool_end", {"id": call_id,
+                                     "result": '{"error":"confirmation timeout"}',
+                                     "state": "cancelled"})
+        return result
 
     def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
         self._emit("tool_end", {"id": call_id, "result": result, "state": state})

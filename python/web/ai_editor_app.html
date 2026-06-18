@@ -2152,7 +2152,13 @@ async function doSend(){
   await call('send_message',text,{provider:config.provider,model:config.model});
 }
 
-async function doStop(){await call('cancel');onIdle()}
+async function doStop(){
+  try{await call('cancel')}catch(e){}
+  onIdle();
+  // Force-clear any pending confirm bars
+  document.querySelectorAll('.confirm-bar').forEach(el=>{el.remove()});
+  setStatus(t('ready'));
+}
 async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
   updateContextUsage(0);
   appendSystem(t('new_chat'))}
