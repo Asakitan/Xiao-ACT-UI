@@ -29,7 +29,10 @@ def _get_http_client():
     global _http_client
     if _http_client is None:
         import httpx
-        _http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+        _http_client = httpx.Client(
+            timeout=15.0, follow_redirects=True,
+            verify=False,
+        )
     return _http_client
 
 

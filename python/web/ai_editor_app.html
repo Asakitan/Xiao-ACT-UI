@@ -20,7 +20,7 @@
   --btn: #0e639c; --btn-hover: #1177bb;
   --scrollbar: #424242; --scrollbar-hover: #4f4f4f;
   --selection: #264f78; --line-highlight: #ffffff0a;
-  --statusbar-bg: #007acc;
+  --statusbar-bg: #181818; --statusbar-fg: #cccccc;
   --radius: 4px;
   --mono: 'Cascadia Code','Fira Code','Consolas','Courier New',monospace;
   --sans: 'Segoe UI',system-ui,-apple-system,sans-serif;
@@ -41,7 +41,7 @@
   --btn: #0e639c; --btn-hover: #1177bb;
   --scrollbar: #c0c0c0; --scrollbar-hover: #a0a0a0;
   --selection: #add6ff; --line-highlight: #00000008;
-  --statusbar-bg: #007acc;
+  --statusbar-bg: #f0f0f0; --statusbar-fg: #3b3a3c;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
@@ -52,15 +52,36 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 ::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-hover); }
 ::selection { background:var(--selection); }
 
-/* ── Title bar ── */
+/* ── Title bar (VSCode-style custom chrome) ── */
 .titlebar { display:flex; align-items:center; height:30px; background:var(--bg2);
-  padding:0 8px; -webkit-app-region:drag; user-select:none; font-size:12px; }
-.titlebar .title { color:var(--fg-dim); flex:1; text-align:center; }
+  -webkit-app-region:drag; user-select:none; font-size:12px; flex-shrink:0; }
+.tb-menu-bar { display:flex; align-items:center; -webkit-app-region:no-drag; flex-shrink:0; }
+.tb-menu-item { padding:0 8px; height:30px; display:flex; align-items:center;
+  color:var(--fg-dim); cursor:pointer; font-size:12px; font-family:var(--sans); }
+.tb-menu-item:hover { background:var(--bg-hover); color:var(--fg); }
+.tb-menu-item.app-icon { padding:0 10px; font-size:16px; color:var(--fg-accent); }
+.titlebar .title { color:var(--fg-dim); flex:1; text-align:center; font-size:12px; }
 .titlebar .title b { color:var(--fg-accent); }
-.tb-btn { -webkit-app-region:no-drag; width:46px; height:30px; display:flex;
+.tb-actions { display:flex; align-items:center; -webkit-app-region:no-drag; margin-right:4px; gap:2px; }
+.tb-actions .tb-act { width:28px; height:22px; display:flex; align-items:center; justify-content:center;
+  color:var(--fg-dim); cursor:pointer; border-radius:3px; font-size:14px; }
+.tb-actions .tb-act:hover { background:var(--bg-hover); color:var(--fg); }
+.tb-actions .tb-act.active { color:var(--fg-accent); }
+.tb-chrome { display:flex; -webkit-app-region:no-drag; }
+.tb-btn { width:46px; height:30px; display:flex;
   align-items:center; justify-content:center; color:var(--fg-dim); cursor:pointer; }
 .tb-btn:hover { background:var(--bg-hover); color:var(--fg); }
 .tb-btn.close:hover { background:#c42b1c; color:#fff; }
+/* ── Menu dropdown ── */
+.tb-dropdown { position:absolute; top:30px; left:0; min-width:220px; background:var(--bg2);
+  border:1px solid var(--border); border-radius:4px; box-shadow:0 4px 16px #00000060;
+  z-index:500; display:none; padding:4px 0; }
+.tb-dropdown.open { display:block; }
+.tb-dropdown .dd-item { padding:4px 24px 4px 12px; font-size:12px; color:var(--fg);
+  cursor:pointer; display:flex; align-items:center; gap:8px; white-space:nowrap; font-family:var(--sans); }
+.tb-dropdown .dd-item:hover { background:var(--bg-hover); }
+.tb-dropdown .dd-item .shortcut { margin-left:auto; color:var(--fg-dim); font-size:11px; font-family:var(--mono); }
+.tb-dropdown .dd-sep { height:1px; background:var(--border); margin:4px 0; }
 
 /* ── Main layout ── */
 .main { display:flex; flex:1; overflow:hidden; }
@@ -343,10 +364,11 @@ pre.code-block code .type { color:var(--fg-type); }
 
 /* ── Status bar ── */
 .statusbar { display:flex; align-items:center; height:22px; background:var(--statusbar-bg);
-  padding:0 8px; font-size:11px; color:#ffffffcc; flex-shrink:0; }
+  padding:0 8px; font-size:11px; color:var(--statusbar-fg); flex-shrink:0;
+  border-top:1px solid var(--border); }
 .statusbar .spacer { flex:1; }
 .sb-item { padding:0 6px; cursor:default; display:flex; align-items:center; gap:3px; height:22px; }
-.sb-item:hover { background:#ffffff15; }
+.sb-item:hover { background:var(--bg-hover); }
 
 /* ── Settings modal ── */
 .modal-bg { position:fixed; inset:0; background:#00000060; display:none;
@@ -508,9 +530,92 @@ pre.code-block { overflow:visible; }
 </head>
 <body>
 
-<!-- Title bar -->
-<div class="titlebar">
-  <div class="title"><b>✦</b> SAO AI Editor</div>
+<!-- Title bar (VSCode-style custom chrome) -->
+<div class="titlebar" id="titlebar">
+  <!-- Menu bar -->
+  <div class="tb-menu-bar">
+    <div class="tb-menu-item app-icon">✦</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'file')">File</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'edit')">Edit</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'selection')">Selection</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'view')">View</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'go')">Go</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'run')">Run</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'terminal')">Terminal</div>
+    <div class="tb-menu-item" onclick="tbMenu(this,'help')">Help</div>
+  </div>
+  <!-- Window title -->
+  <div class="title">SAO AI Editor</div>
+  <!-- Panel toggle actions -->
+  <div class="tb-actions">
+    <div class="tb-act" id="tb-toggle-sidebar" onclick="toggleSidebarVis()" title="Toggle Sidebar">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h4v12H2V2zm5 0h7v12H7V2z" opacity=".6"/><path d="M2 2h4v12H2V2z"/></svg>
+    </div>
+    <div class="tb-act" id="tb-toggle-editor" onclick="toggleEditorVis()" title="Toggle Editor">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3h14v10H1V3zm1 1v8h12V4H2z"/><path d="M2 8h12v1H2z" opacity=".4"/></svg>
+    </div>
+    <div class="tb-act active" id="tb-toggle-chat" onclick="toggleChatVis()" title="Toggle Chat Panel">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10 2h4v12h-4V2zm-1 0H2v12h7V2z" opacity=".6"/><path d="M10 2h4v12h-4V2z"/></svg>
+    </div>
+  </div>
+  <!-- Window control buttons -->
+  <div class="tb-chrome">
+    <div class="tb-btn" onclick="pywebview.api.win_minimize()" title="Minimize">
+      <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+    </div>
+    <div class="tb-btn" onclick="pywebview.api.win_maximize()" title="Maximize">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor"/></svg>
+    </div>
+    <div class="tb-btn close" onclick="pywebview.api.win_close()" title="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2"/></svg>
+    </div>
+  </div>
+</div>
+<!-- Menu dropdowns (positioned absolute, toggled by tbMenu) -->
+<div class="tb-dropdown" id="dd-file">
+  <div class="dd-item" onclick="addTab()">New File <span class="shortcut">Ctrl+N</span></div>
+  <div class="dd-item" onclick="openFileDialog()">Open File... <span class="shortcut">Ctrl+O</span></div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="saveFile()">Save <span class="shortcut">Ctrl+S</span></div>
+  <div class="dd-item" onclick="exportChat()">Export Chat...</div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="openSettings()">Preferences</div>
+</div>
+<div class="tb-dropdown" id="dd-edit">
+  <div class="dd-item" onclick="document.execCommand('undo')">Undo <span class="shortcut">Ctrl+Z</span></div>
+  <div class="dd-item" onclick="document.execCommand('redo')">Redo <span class="shortcut">Ctrl+Y</span></div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="document.execCommand('cut')">Cut <span class="shortcut">Ctrl+X</span></div>
+  <div class="dd-item" onclick="document.execCommand('copy')">Copy <span class="shortcut">Ctrl+C</span></div>
+  <div class="dd-item" onclick="document.execCommand('paste')">Paste <span class="shortcut">Ctrl+V</span></div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="toggleFind()">Find <span class="shortcut">Ctrl+F</span></div>
+  <div class="dd-item" onclick="toggleReplace()">Replace <span class="shortcut">Ctrl+H</span></div>
+</div>
+<div class="tb-dropdown" id="dd-selection">
+  <div class="dd-item" onclick="document.execCommand('selectAll')">Select All <span class="shortcut">Ctrl+A</span></div>
+</div>
+<div class="tb-dropdown" id="dd-view">
+  <div class="dd-item" onclick="openCmdPalette()">Command Palette <span class="shortcut">Ctrl+Shift+P</span></div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="toggleSidebarVis()">Toggle Sidebar <span class="shortcut">Ctrl+B</span></div>
+  <div class="dd-item" onclick="toggleEditorVis()">Toggle Editor</div>
+  <div class="dd-item" onclick="toggleChatVis()">Toggle Chat Panel</div>
+  <div class="dd-sep"></div>
+  <div class="dd-item" onclick="toggleTheme()">Toggle Theme</div>
+</div>
+<div class="tb-dropdown" id="dd-go">
+  <div class="dd-item" onclick="goToLineDialog()">Go to Line... <span class="shortcut">Ctrl+G</span></div>
+</div>
+<div class="tb-dropdown" id="dd-run">
+  <div class="dd-item" onclick="execSlash('/eval')">Run Selection</div>
+</div>
+<div class="tb-dropdown" id="dd-terminal">
+  <div class="dd-item" onclick="focusTerminal()">New Terminal</div>
+</div>
+<div class="tb-dropdown" id="dd-help">
+  <div class="dd-item" onclick="execSlash('/system')">System Info</div>
+  <div class="dd-item" onclick="showAbout()">About</div>
 </div>
 
 <!-- Main -->
@@ -2516,6 +2621,63 @@ onStreamEnd=function(d){
   }
 };
 window.onStreamEnd=onStreamEnd;
+
+// ── Title bar menus ──
+let _activeMenu=null;
+function tbMenu(el,name){
+  const dd=$('dd-'+name);if(!dd)return;
+  document.querySelectorAll('.tb-dropdown.open').forEach(d=>d.classList.remove('open'));
+  if(_activeMenu===name){_activeMenu=null;return}
+  const rect=el.getBoundingClientRect();
+  dd.style.left=rect.left+'px';dd.style.top=rect.bottom+'px';
+  dd.classList.add('open');_activeMenu=name;
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.tb-menu-item')&&!e.target.closest('.tb-dropdown')){
+    document.querySelectorAll('.tb-dropdown.open').forEach(d=>d.classList.remove('open'));
+    _activeMenu=null;
+  }
+});
+document.querySelectorAll('.dd-item').forEach(item=>{
+  item.addEventListener('click',()=>{
+    document.querySelectorAll('.tb-dropdown.open').forEach(d=>d.classList.remove('open'));
+    _activeMenu=null;
+  });
+});
+
+// ── Panel visibility toggles ──
+let _sidebarVis=true, _editorVis=false, _chatVis=true;
+function toggleSidebarVis(){
+  _sidebarVis=!_sidebarVis;
+  $('sidebar').style.display=_sidebarVis?'':'none';
+  $('tb-toggle-sidebar').classList.toggle('active',_sidebarVis);
+}
+function toggleEditorVis(){
+  _editorVis=!_editorVis;
+  if(_editorVis){showEditorArea()}else{hideEditorArea()}
+  $('tb-toggle-editor').classList.toggle('active',_editorVis);
+}
+function toggleChatVis(){
+  _chatVis=!_chatVis;
+  $('right-sidebar').style.display=_chatVis?'':'none';
+  $('rsplitter').style.display=(_chatVis&&_editorVis)?'':'none';
+  $('tb-toggle-chat').classList.toggle('active',_chatVis);
+}
+function focusTerminal(){/* placeholder */}
+function goToLineDialog(){
+  const ln=prompt('Go to line:');if(ln){const n=parseInt(ln);if(n>0){showEditorArea();
+  const ed=$('editor-text');if(ed){const lines=ed.value.split('\\n');let pos=0;
+  for(let i=0;i<Math.min(n-1,lines.length-1);i++)pos+=lines[i].length+1;
+  ed.selectionStart=ed.selectionEnd=pos;ed.focus()}}}
+}
+function showAbout(){showToast('SAO AI Editor — Multi-model LLM IDE','info',3000)}
+function openFileDialog(){/* pywebview file dialog */
+  if(window.pywebview&&window.pywebview.api){
+    // placeholder — real implementation needs pywebview file dialog
+    showToast('Use Ctrl+O or drag & drop a file','info',2000);
+  }
+}
+function saveFile(){showToast('Saved','success',1000)}
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();

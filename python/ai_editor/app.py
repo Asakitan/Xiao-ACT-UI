@@ -30,6 +30,175 @@ from ai_editor.chat_state import ChatController, Conversation, ChatMessage
 
 
 # ---------------------------------------------------------------------------
+# Settings helpers
+# ---------------------------------------------------------------------------
+
+_PROVIDER_CONFIG_KEYS = {
+    "provider", "api_key", "base_url", "model", "temperature", "max_tokens",
+    "system_prompt", "top_p", "frequency_penalty", "presence_penalty", "stop",
+    "max_input_tokens", "max_output_tokens", "timeout", "extra_headers", "extra_body",
+}
+
+_TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
+
+_AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "claude_code": {
+        "cli_path": "",
+        "cli_args": [],
+        "prefer_cli": False,
+        "allow_dangerously_skip_permissions": False,
+        "model": "claude-sonnet-4-20250514",
+    },
+    "codex": {
+        "cli_path": "",
+        "cli_args": [],
+        "transport": "chat_completions",
+        "model": "codex-mini-latest",
+    },
+    "mcp": {
+        "access": "prompt",
+        "autostart": False,
+        "discovery_enabled": True,
+        "collision_behavior": "first",
+        "server_sampling": False,
+    },
+    "terminal": {
+        "profile": "PowerShell 7 (No Profile)",
+        "shell_path": "",
+        "shell_args": [],
+        "timeout": 30,
+        "output_limit": 8000,
+        "auto_approve": {},
+    },
+    "extensions": {
+        "confirm_install": True,
+        "allowed_publishers": [],
+        "blocked_publishers": [],
+        "enabled_contributions": ["chatParticipants", "languageModelTools", "commands"],
+    },
+    "customization": {
+        "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
+        "agent_locations": [".sao/agents"],
+        "workflow_locations": [".sao/workflows"],
+        "skill_locations": [".agents/skills/.local", ".claude/skills/.local"],
+        "use_agent_md": True,
+        "use_claude_md": False,
+    },
+}
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> List[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _as_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_stop(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(part) for part in value if str(part)]
+    return []
+
+
+def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
+    """Return a backward-compatible AI Editor config dict.
+
+    The user settings file can contain older or partially written values. Keep
+    unknown keys for forward compatibility, but normalize values consumed by the
+    runtime and UI so saving endpoint settings does not corrupt sibling fields.
+    """
+    cfg = dict(raw) if isinstance(raw, dict) else {}
+    cfg["provider"] = str(cfg.get("provider") or "openai")
+    cfg["api_key"] = str(cfg.get("api_key") or "")
+    cfg["base_url"] = str(cfg.get("base_url") or "")
+    cfg["model"] = str(cfg.get("model") or "")
+    cfg["temperature"] = _as_float(cfg.get("temperature"), 0.7)
+    cfg["max_tokens"] = _as_int(cfg.get("max_tokens"), 4096)
+    cfg["system_prompt"] = str(cfg.get("system_prompt") or "")
+    cfg["top_p"] = _as_float(cfg.get("top_p"), 1.0)
+    cfg["frequency_penalty"] = _as_float(cfg.get("frequency_penalty"), 0.0)
+    cfg["presence_penalty"] = _as_float(cfg.get("presence_penalty"), 0.0)
+    cfg["stop"] = _normalize_stop(cfg.get("stop"))
+    cfg["max_input_tokens"] = _as_int(cfg.get("max_input_tokens"), 0)
+    cfg["max_output_tokens"] = _as_int(cfg.get("max_output_tokens"), 0)
+    cfg["timeout"] = _as_int(cfg.get("timeout"), 180)
+    cfg["extra_headers"] = _as_dict(cfg.get("extra_headers"))
+    cfg["extra_body"] = _as_dict(cfg.get("extra_body"))
+    cfg["provider_keys"] = _as_dict(cfg.get("provider_keys"))
+    cfg["custom_models"] = _as_dict(cfg.get("custom_models"))
+    cfg["permissions"] = _as_dict(cfg.get("permissions"))
+    for section, defaults in _AI_EDITOR_SECTION_DEFAULTS.items():
+        current = _as_dict(cfg.get(section))
+        merged = dict(defaults)
+        merged.update(current)
+        cfg[section] = merged
+    return cfg
+
+
+def _merge_ai_editor_config(existing: Any, incoming: Any) -> Dict[str, Any]:
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    if isinstance(incoming, dict):
+        for key, value in incoming.items():
+            if key in _TRANSIENT_CONFIG_KEYS:
+                if key == "_provider_keys" and "provider_keys" not in incoming:
+                    merged["provider_keys"] = _as_dict(value)
+                continue
+            merged[key] = value
+    return _normalize_ai_editor_config(merged)
+
+
+def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
+    """Shared helper: build a ProviderConfig from settings.
+
+    Used by both ``AIEditorAPI`` (pywebview) and ``AIEditorBridge``
+    (C# webview) to avoid duplicated config-parsing logic.
+    """
+    settings = getattr(gui_ref, 'settings', None) if gui_ref else None
+    if not settings:
+        return ProviderConfig()
+    raw = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
+    custom_models = raw.get("custom_models", {})
+    if custom_models:
+        from ai_editor.llm_engine import set_custom_models
+        set_custom_models(custom_models)
+    return ProviderConfig(
+        provider=raw["provider"],
+        api_key=raw["api_key"],
+        base_url=raw["base_url"],
+        model=raw["model"],
+        temperature=raw["temperature"],
+        max_tokens=raw["max_tokens"],
+        system_prompt=raw["system_prompt"],
+        top_p=raw["top_p"],
+        frequency_penalty=raw["frequency_penalty"],
+        presence_penalty=raw["presence_penalty"],
+        stop=raw["stop"],
+        max_input_tokens=raw["max_input_tokens"],
+        max_output_tokens=raw["max_output_tokens"],
+        timeout=raw["timeout"],
+        extra_headers=raw["extra_headers"],
+        extra_body=raw["extra_body"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # JS API exposed to the webview window
 # ---------------------------------------------------------------------------
 
@@ -110,7 +279,8 @@ class AIEditorAPI:
         self._confirm_results: Dict[str, bool] = {}
 
         # Load mode from settings
-        ai_cfg = (self._settings_getter("ai_editor", {}) or {})
+        ai_cfg = _normalize_ai_editor_config(
+            self._settings_getter("ai_editor", {}) or {})
         if isinstance(ai_cfg, dict):
             self._mode = ai_cfg.get("mode", "edit")
             self._perm_overrides = ai_cfg.get("permissions", {})
@@ -169,41 +339,6 @@ class AIEditorAPI:
     def _load_config_obj(self) -> ProviderConfig:
         return load_provider_config(self._gui_ref)
 
-
-def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
-    """Shared helper: build a ProviderConfig from settings.
-
-    Used by both ``AIEditorAPI`` (pywebview) and ``AIEditorBridge``
-    (C# webview) to avoid duplicated config-parsing logic.
-    """
-    settings = getattr(gui_ref, 'settings', None) if gui_ref else None
-    if not settings:
-        return ProviderConfig()
-    raw = settings.get("ai_editor", {}) or {}
-    # Load user-defined custom models into the engine
-    custom_models = raw.get("custom_models", {})
-    if isinstance(custom_models, dict) and custom_models:
-        from ai_editor.llm_engine import set_custom_models
-        set_custom_models(custom_models)
-    return ProviderConfig(
-        provider=raw.get("provider", "openai"),
-        api_key=raw.get("api_key", ""),
-        base_url=raw.get("base_url", ""),
-        model=raw.get("model", ""),
-        temperature=raw.get("temperature", 0.7),
-        max_tokens=raw.get("max_tokens", 4096),
-        system_prompt=raw.get("system_prompt", ""),
-        top_p=raw.get("top_p", 1.0),
-        frequency_penalty=raw.get("frequency_penalty", 0.0),
-        presence_penalty=raw.get("presence_penalty", 0.0),
-        stop=raw.get("stop", []),
-        max_input_tokens=raw.get("max_input_tokens", 0),
-        max_output_tokens=raw.get("max_output_tokens", 0),
-        timeout=raw.get("timeout", 180),
-        extra_headers=raw.get("extra_headers", {}),
-        extra_body=raw.get("extra_body", {}),
-    )
-
     # ── JS-callable methods (window.pywebview.api.*) ──
 
     def load_config(self) -> Dict:
@@ -211,41 +346,64 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
         # Load theme from ACT panel_themes or ai_editor config
         theme = "dark"
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        ai_cfg = {}
         if settings:
-            ai_cfg = settings.get("ai_editor", {}) or {}
+            ai_cfg = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
             theme = ai_cfg.get("theme", "")
             if not theme:
                 themes = settings.get("panel_themes", {}) or {}
                 theme = themes.get("act", "dark")
-        pkeys = {}
-        if settings:
-            ai_cfg2 = settings.get("ai_editor", {}) or {}
-            pkeys = ai_cfg2.get("provider_keys", {}) if isinstance(ai_cfg2, dict) else {}
-        from ai_editor.llm_engine import get_model_context
+        pkeys = ai_cfg.get("provider_keys", {}) if isinstance(ai_cfg, dict) else {}
         model_name = cfg.model or cfg.effective_model
-        ctx = get_model_context(model_name)
+        ctx = cfg.effective_context
         return {
             "provider": cfg.provider, "api_key": cfg.api_key,
             "base_url": cfg.base_url, "model": model_name,
             "temperature": cfg.temperature, "max_tokens": cfg.max_tokens,
+            "top_p": cfg.top_p,
+            "frequency_penalty": cfg.frequency_penalty,
+            "presence_penalty": cfg.presence_penalty,
+            "stop": cfg.stop,
+            "max_input_tokens": cfg.max_input_tokens,
+            "max_output_tokens": cfg.max_output_tokens,
+            "timeout": cfg.timeout,
+            "extra_headers": cfg.extra_headers,
+            "extra_body": cfg.extra_body,
             "system_prompt": cfg.system_prompt,
             "theme": theme,
             "_provider_keys": pkeys,
+            "provider_keys": pkeys,
+            "custom_models": ai_cfg.get("custom_models", {}),
+            "mode": ai_cfg.get("mode", self._mode),
+            "permissions": ai_cfg.get("permissions", self._perm_overrides),
+            "claude_code": ai_cfg.get("claude_code", _AI_EDITOR_SECTION_DEFAULTS["claude_code"]),
+            "codex": ai_cfg.get("codex", _AI_EDITOR_SECTION_DEFAULTS["codex"]),
+            "mcp": ai_cfg.get("mcp", _AI_EDITOR_SECTION_DEFAULTS["mcp"]),
+            "terminal": ai_cfg.get("terminal", _AI_EDITOR_SECTION_DEFAULTS["terminal"]),
+            "extensions": ai_cfg.get("extensions", _AI_EDITOR_SECTION_DEFAULTS["extensions"]),
+            "customization": ai_cfg.get("customization", _AI_EDITOR_SECTION_DEFAULTS["customization"]),
             "context_window": ctx,
         }
 
     def save_config(self, data: Dict) -> Dict:
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        merged = _merge_ai_editor_config({}, data)
         if settings:
-            settings.set("ai_editor", data)
+            merged = _merge_ai_editor_config(settings.get("ai_editor", {}) or {}, data)
+            settings.set("ai_editor", merged)
             try:
                 settings.save()
             except Exception:
                 pass
         if self._engine:
-            for k, v in data.items():
-                if hasattr(self._engine.config, k):
+            for k, v in merged.items():
+                if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
                     setattr(self._engine.config, k, v)
+        if isinstance(merged.get("mode"), str):
+            self._mode = merged.get("mode") or self._mode
+        if isinstance(merged.get("permissions"), dict):
+            self._perm_overrides = dict(merged.get("permissions") or {})
+        self._apply_mode_permissions()
         return {"ok": True}
 
     def send_message(self, text: str, config: Optional[Dict] = None, agent_mode: bool = False) -> Dict:
@@ -299,6 +457,25 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
         if self._controller:
             self._controller.cancel()
         return {"ok": True}
+
+    # ── Window chrome (frameless) ──
+
+    def win_minimize(self) -> None:
+        if self._window:
+            self._window.minimize()
+
+    def win_maximize(self) -> None:
+        if self._window:
+            if getattr(self, '_maximized', False):
+                self._window.restore()
+                self._maximized = False
+            else:
+                self._window.maximize()
+                self._maximized = True
+
+    def win_close(self) -> None:
+        if self._window:
+            self._window.destroy()
 
     def new_chat(self) -> Dict:
         if self._controller:
@@ -1425,8 +1602,10 @@ def _launch_subprocess() -> None:
         print(f"[AIEditor] HTML not found: {html_file}")
         return
     cmd = [sys.executable, "-m", "ai_editor.app"]
+    env = dict(os.environ)
+    env.setdefault("PYTHONPATH", _ROOT)
     try:
-        proc = _sp.Popen(cmd, cwd=_ROOT)
+        proc = _sp.Popen(cmd, cwd=_ROOT, env=env)
         print(f"[AIEditor] subprocess started (pid={proc.pid})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")
@@ -1449,7 +1628,7 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
         height=800,
         min_size=(800, 500),
         js_api=api,
-        frameless=False,
+        frameless=True,
         easy_drag=False,
         text_select=True,
     )
