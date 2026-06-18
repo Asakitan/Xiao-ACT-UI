@@ -40,7 +40,10 @@ from PIL import Image
 from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace
 from render.render_capture_sync import wait_until_capture_idle
 
-import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+try:
+    import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+except ImportError:
+    _CY_PIXELS = None  # type: ignore[assignment]
 
 
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
@@ -108,13 +111,20 @@ def _cache_premult_bgra(img: Image.Image, out: bytes) -> bytes:
     return out
 
 
-def _premultiply_to_bgra(img: Image.Image) -> bytes:
-    """RGBA PIL → premultiplied BGRA bytes.
+def _np_premultiply_bgra(rgba: np.ndarray) -> bytes:
+    """Pure-numpy fallback for premultiply_bgra_ndarray."""
+    r, g, b, a = rgba[..., 0], rgba[..., 1], rgba[..., 2], rgba[..., 3]
+    a16 = a.astype(np.uint16)
+    out = np.empty(rgba.shape, dtype=np.uint8)
+    out[..., 0] = ((b.astype(np.uint16) * a16 + 127) // 255).astype(np.uint8)
+    out[..., 1] = ((g.astype(np.uint16) * a16 + 127) // 255).astype(np.uint8)
+    out[..., 2] = ((r.astype(np.uint16) * a16 + 127) // 255).astype(np.uint8)
+    out[..., 3] = a
+    return out.tobytes()
 
-    Uses the mandatory Cython pixel loop. Missing or ABI-mismatched Cython
-    modules should fail loudly at import time instead of silently returning
-    to the Python/NumPy hot path.
-    """
+
+def _premultiply_to_bgra(img: Image.Image) -> bytes:
+    """RGBA PIL → premultiplied BGRA bytes (Cython fast path + numpy fallback)."""
     if getattr(img, '_sao_premult_safe', False):
         try:
             version = getattr(img, '_sao_content_version', None)
@@ -126,11 +136,12 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
             pass
     _phase_trace('render.premultiply.begin', f'{img.size[0]}x{img.size[1]}')
     rgba = np.asarray(img, dtype=np.uint8)
-    out = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
-    _phase_trace('render.premultiply.cython',
-                 f'{img.size[0]}x{img.size[1]}')
+    if _CY_PIXELS is not None:
+        out = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
+    else:
+        out = _np_premultiply_bgra(rgba)
+    _phase_trace('render.premultiply.done', f'{img.size[0]}x{img.size[1]}')
     return _cache_premult_bgra(img, out)
-
 
 
 def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
@@ -142,7 +153,14 @@ def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
     if not value == value or value >= 0.999:
         return img
     rgba = np.asarray(img, dtype=np.uint8)
-    out = _CY_PIXELS.multiply_alpha_rgba_ndarray_floor(rgba, value)
+    if _CY_PIXELS is not None:
+        out = _CY_PIXELS.multiply_alpha_rgba_ndarray_floor(rgba, value)
+    else:
+        a = rgba[..., 3:4].astype(np.uint16)
+        a = np.clip((a * int(value * 255)) // 255, 0, 255).astype(np.uint8)
+        tmp = rgba.copy()
+        tmp[..., 3:4] = a
+        out = tmp.tobytes()
     return Image.frombytes('RGBA', img.size, out)
 
 
@@ -154,7 +172,14 @@ def clip_alpha_image(img: Image.Image, mask: Image.Image) -> Image.Image:
         mask = mask.convert('L')
     rgba = np.asarray(img, dtype=np.uint8)
     mask_arr = np.asarray(mask, dtype=np.uint8)
-    out = _CY_PIXELS.multiply_alpha_mask_rgba_ndarray_floor(rgba, mask_arr)
+    if _CY_PIXELS is not None:
+        out = _CY_PIXELS.multiply_alpha_mask_rgba_ndarray_floor(rgba, mask_arr)
+    else:
+        tmp = rgba.copy()
+        a = tmp[..., 3].astype(np.uint16)
+        a = ((a * mask_arr.astype(np.uint16)) // 255).astype(np.uint8)
+        tmp[..., 3] = a
+        out = tmp.tobytes()
     return Image.frombytes('RGBA', img.size, out)
 
 

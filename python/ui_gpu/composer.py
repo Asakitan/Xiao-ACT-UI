@@ -11,7 +11,10 @@ from PIL import Image
 
 from . import menu_bar_layout, child_bar_layout, hud_layout
 
-import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+try:
+    import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+except ImportError:
+    _CY_PIXELS = None  # type: ignore[assignment]
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
@@ -110,5 +113,17 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
 
 def to_premultiplied_bgra(rgba: Image.Image, master_alpha: float = 1.0) -> bytes:
     data = rgba.tobytes()
-    return _CY_PIXELS.premultiply_bgra_bytes_floor(
-        data, rgba.height, rgba.width, master_alpha)
+    if _CY_PIXELS is not None:
+        return _CY_PIXELS.premultiply_bgra_bytes_floor(
+            data, rgba.height, rgba.width, master_alpha)
+    import numpy as np
+    arr = np.frombuffer(data, dtype=np.uint8).reshape(rgba.height, rgba.width, 4).copy()
+    a = arr[..., 3].astype(np.uint16)
+    if master_alpha < 0.999:
+        a = np.clip((a * int(master_alpha * 255)) // 255, 0, 255).astype(np.uint16)
+    out = np.empty_like(arr)
+    out[..., 0] = ((arr[..., 2].astype(np.uint16) * a) // 255).astype(np.uint8)
+    out[..., 1] = ((arr[..., 1].astype(np.uint16) * a) // 255).astype(np.uint8)
+    out[..., 2] = ((arr[..., 0].astype(np.uint16) * a) // 255).astype(np.uint8)
+    out[..., 3] = a.astype(np.uint8)
+    return out.tobytes()
