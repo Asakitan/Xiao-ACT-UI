@@ -52,22 +52,22 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 ::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-hover); }
 ::selection { background:var(--selection); }
 
-/* ── Title bar (VSCode-style custom chrome) ── */
+/* ── Menu bar ── */
 .titlebar { display:flex; align-items:center; height:30px; background:var(--bg2);
-  -webkit-app-region:drag; user-select:none; font-size:12px; flex-shrink:0; }
-.tb-menu-bar { display:flex; align-items:center; -webkit-app-region:no-drag; flex-shrink:0; }
+  user-select:none; font-size:12px; flex-shrink:0; }
+.tb-menu-bar { display:flex; align-items:center; flex-shrink:0; }
 .tb-menu-item { padding:0 8px; height:30px; display:flex; align-items:center;
   color:var(--fg-dim); cursor:pointer; font-size:12px; font-family:var(--sans); }
 .tb-menu-item:hover { background:var(--bg-hover); color:var(--fg); }
 .tb-menu-item.app-icon { padding:0 10px; font-size:16px; color:var(--fg-accent); }
 .titlebar .title { color:var(--fg-dim); flex:1; text-align:center; font-size:12px; }
 .titlebar .title b { color:var(--fg-accent); }
-.tb-actions { display:flex; align-items:center; -webkit-app-region:no-drag; margin-right:4px; gap:2px; }
+.tb-actions { display:flex; align-items:center; margin-right:4px; gap:2px; }
 .tb-actions .tb-act { width:28px; height:22px; display:flex; align-items:center; justify-content:center;
   color:var(--fg-dim); cursor:pointer; border-radius:3px; font-size:14px; }
 .tb-actions .tb-act:hover { background:var(--bg-hover); color:var(--fg); }
 .tb-actions .tb-act.active { color:var(--fg-accent); }
-.tb-chrome { display:flex; -webkit-app-region:no-drag; }
+.tb-chrome { display:flex; }
 .tb-btn { width:46px; height:30px; display:flex;
   align-items:center; justify-content:center; color:var(--fg-dim); cursor:pointer; }
 .tb-btn:hover { background:var(--bg-hover); color:var(--fg); }
