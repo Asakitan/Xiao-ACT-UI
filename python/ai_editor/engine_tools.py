@@ -829,24 +829,21 @@ def _select_process(g: Any, name: str = "", pid: int = 0) -> Dict:
     try:
         import config
         from mem_probe.process import set_game_process_names
-        if name:
-            config.GAME_PROCESS_NAMES = [name]
-            set_game_process_names([name])
-        if pid:
-            from mem_probe.process import _find_pid_by_name_wide, _iter_process_entries_wide
-            if not name:
-                for exe, p in _iter_process_entries_wide():
-                    if p == pid:
-                        name = os.path.basename(exe)
-                        break
-            if name:
-                config.GAME_PROCESS_NAMES = [name]
-                set_game_process_names([name])
+        if pid and not name:
+            from mem_probe.process import _iter_process_entries_wide
+            for exe, p in _iter_process_entries_wide():
+                if p == int(pid):
+                    name = os.path.basename(exe)
+                    break
+        if not name:
+            return {"error": f"Process pid={pid} not found"}
+        config.GAME_PROCESS_NAMES = [name]
+        set_game_process_names([name])
         s = getattr(g, 'settings', None)
         if s:
             s.set("attached_process_name", name)
-            s.set("attached_process_pid", int(pid))
+            s.set("attached_process_pid", int(pid or 0))
             s.save()
-        return {"ok": True, "attached": name, "pid": int(pid)}
+        return {"ok": True, "attached": name, "pid": int(pid or 0)}
     except Exception as exc:
         return {"error": str(exc)}

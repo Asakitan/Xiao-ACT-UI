@@ -119,14 +119,29 @@ class ProcessSelectorPanel:
         self._processes: List[dict] = []
         self._filtered: List[dict] = []
         self._selected_pid: int = 0
-        self._module_mode: str = MODULE_PRIMARY
+        self._module_mode: str = self._load_module_mode()
         self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._apply_filter())
+        self._filter_after_id: Optional[str] = None
+        self._search_var.trace_add("write", lambda *_: self._schedule_filter())
         self._row_frames: List[tk.Frame] = []
         self._scroll_canvas: Optional[tk.Canvas] = None
         self._inner_frame: Optional[tk.Frame] = None
         self._attached_label: Optional[tk.Label] = None
+        self._count_label: Optional[tk.Label] = None
         self._build()
+
+    def _load_module_mode(self) -> str:
+        try:
+            m = self.owner.settings.get("process_module_mode", MODULE_PRIMARY)
+            return m if m in (MODULE_NONE, MODULE_PRIMARY, MODULE_SELECTED, MODULE_ALL) else MODULE_PRIMARY
+        except Exception:
+            return MODULE_PRIMARY
+
+    def _exists(self) -> bool:
+        try:
+            return bool(self._win and self._win.winfo_exists())
+        except Exception:
+            return False
 
     def _build(self):
         win = tk.Toplevel(self.root)
@@ -208,9 +223,13 @@ class ProcessSelectorPanel:
         footer = tk.Frame(body, bg=_BG)
         footer.pack(fill=tk.X, padx=8, pady=(2, 8))
 
+        self._count_label = tk.Label(footer, text="", bg=_BG, fg=_FG_DIM,
+                                     font=_sao_font(7), anchor="w")
+        self._count_label.pack(side=tk.LEFT, padx=(4, 0))
+
         self._attached_label = tk.Label(footer, text="Not attached", bg=_BG,
                                         fg=_FG_DIM, font=_sao_font(8), anchor="w")
-        self._attached_label.pack(side=tk.LEFT, padx=(4, 0))
+        self._attached_label.pack(side=tk.LEFT, padx=(4, 0), fill=tk.X, expand=True)
 
         btn_attach = action_button(footer, "Attach", self._do_attach)
         btn_attach.pack(side=tk.RIGHT, padx=(4, 0))
@@ -237,21 +256,35 @@ class ProcessSelectorPanel:
             else:
                 btn.configure(bg=_BG_HEADER, fg=_FG)
 
+    def _schedule_filter(self):
+        if self._filter_after_id is not None:
+            try:
+                self.root.after_cancel(self._filter_after_id)
+            except Exception:
+                pass
+        self._filter_after_id = self.root.after(150, self._apply_filter)
+
     # ── Process list ──
     def _do_refresh(self):
         def _bg():
             procs = list_processes()
             for p in procs:
                 p["mem_mb"] = _get_working_set_mb(p["pid"])
-            self.root.after(0, lambda: self._set_processes(procs))
+            if self._exists():
+                self.root.after(0, lambda: self._set_processes(procs))
 
         threading.Thread(target=_bg, daemon=True, name="proc-enum").start()
 
     def _set_processes(self, procs: List[dict]):
+        if not self._exists():
+            return
         self._processes = procs
         self._apply_filter()
 
     def _apply_filter(self):
+        self._filter_after_id = None
+        if not self._exists():
+            return
         query = self._search_var.get().strip().lower()
         if query:
             self._filtered = [p for p in self._processes
@@ -259,6 +292,11 @@ class ProcessSelectorPanel:
         else:
             self._filtered = list(self._processes)
         self._rebuild_rows()
+        if self._count_label:
+            total = len(self._processes)
+            shown = len(self._filtered)
+            self._count_label.configure(
+                text=f"{shown}/{total}" if shown != total else str(total))
 
     def _rebuild_rows(self):
         inner = self._inner_frame
@@ -355,11 +393,14 @@ class ProcessSelectorPanel:
 
     # ── Lifecycle ──
     def show(self):
-        if self._win is None:
+        if not self._exists():
+            self._win = None
             self._build()
         self._win.deiconify()
         self._win.lift()
-        # Position near center
+        if not self._win.geometry().startswith("1x1"):
+            self._do_refresh()
+            return
         try:
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
@@ -378,9 +419,10 @@ class ProcessSelectorPanel:
                 pass
 
     def is_visible(self) -> bool:
+        if not self._exists():
+            return False
         try:
-            return bool(self._win and self._win.winfo_exists()
-                        and self._win.state() != "withdrawn")
+            return self._win.state() != "withdrawn"
         except Exception:
             return False
 
