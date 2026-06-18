@@ -52,17 +52,17 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 ::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-hover); }
 ::selection { background:var(--selection); }
 
-/* ── Menu bar ── */
+/* ── Menu bar (frameless window — title area is draggable) ── */
 .titlebar { display:flex; align-items:center; height:30px; background:var(--bg2);
-  user-select:none; font-size:12px; flex-shrink:0; }
-.tb-menu-bar { display:flex; align-items:center; flex-shrink:0; }
+  -webkit-app-region:drag; user-select:none; font-size:12px; flex-shrink:0; }
+.tb-menu-bar { display:flex; align-items:center; flex-shrink:0; -webkit-app-region:no-drag; }
 .tb-menu-item { padding:0 8px; height:30px; display:flex; align-items:center;
   color:var(--fg-dim); cursor:pointer; font-size:12px; font-family:var(--sans); }
 .tb-menu-item:hover { background:var(--bg-hover); color:var(--fg); }
 .tb-menu-item.app-icon { padding:0 10px; font-size:16px; color:var(--fg-accent); }
 .titlebar .title { color:var(--fg-dim); flex:1; text-align:center; font-size:12px; }
 .titlebar .title b { color:var(--fg-accent); }
-.tb-actions { display:flex; align-items:center; margin-right:4px; gap:2px; }
+.tb-actions { display:flex; align-items:center; margin-right:4px; gap:2px; -webkit-app-region:no-drag; }
 .tb-actions .tb-act { width:28px; height:22px; display:flex; align-items:center; justify-content:center;
   color:var(--fg-dim); cursor:pointer; border-radius:3px; font-size:14px; }
 .tb-actions .tb-act:hover { background:var(--bg-hover); color:var(--fg); }
@@ -104,6 +104,7 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 .sidebar { width:var(--sidebar-w); background:var(--bg-sidebar); border-right:1px solid var(--border);
   display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
 .sidebar.hidden { display:none; }
+.sb-view { flex-direction:column; flex:1; overflow:hidden; }
 .sb-header { padding:8px 16px 6px; font-size:11px; font-weight:600; text-transform:uppercase;
   letter-spacing:1px; color:var(--fg-dim); display:flex; align-items:center; height:35px; box-sizing:border-box; }
 .sb-header .spacer { flex:1; }
@@ -637,6 +638,18 @@ pre.code-block { overflow:visible; }
     </div>
     <div class="tb-act active" id="tb-toggle-chat" onclick="toggleChatVis()" title="Toggle Chat Panel">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10 2h4v12h-4V2zm-1 0H2v12h7V2z" opacity=".6"/><path d="M10 2h4v12h-4V2z"/></svg>
+    </div>
+  </div>
+  <!-- Window chrome (frameless) -->
+  <div class="tb-chrome" style="-webkit-app-region:no-drag">
+    <div class="tb-btn" onclick="pywebview.api.win_minimize()" title="Minimize">
+      <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+    </div>
+    <div class="tb-btn" onclick="pywebview.api.win_maximize()" title="Maximize">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor"/></svg>
+    </div>
+    <div class="tb-btn close" onclick="pywebview.api.win_close()" title="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2"/></svg>
     </div>
   </div>
 </div>
@@ -1966,7 +1979,7 @@ function logTerminal(text){$('terminal-output').textContent+='> '+text+'\n';$('t
 function switchSidebar(panel){
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
-  const view=$('sb-'+panel);if(view)view.style.display='';
+  const view=$('sb-'+panel);if(view)view.style.display='flex';
   if(panel==='settings'){openSettings();return}
   if(panel==='tools'&&!$('tools-list').children.length){
     call('list_tools').then(t=>{if(t&&t.tools)renderToolsSidebar(t.tools)});

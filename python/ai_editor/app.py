@@ -2677,7 +2677,7 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
         y=y,
         min_size=(600, 400),
         js_api=api,
-        frameless=False,
+        frameless=True,
         easy_drag=False,
         text_select=True,
     )
