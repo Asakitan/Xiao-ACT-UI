@@ -376,6 +376,37 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
 .chat-select-chip.mode { color:var(--fg-accent); border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
+/* Mode popup menu (VSCode-style) */
+.mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
+  font:11px var(--sans); cursor:pointer; position:relative; user-select:none; white-space:nowrap;
+  border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
+.mode-trigger:hover { border-color:var(--border-focus); }
+.mode-trigger .mode-icon { font-size:12px; }
+.mode-trigger .mode-arrow { font-size:8px; opacity:.6; margin-left:2px; }
+.mode-popup { position:absolute; bottom:calc(100% + 6px); left:0; min-width:240px;
+  background:var(--bg2); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 4px 16px rgba(0,0,0,.35); z-index:9999; padding:4px 0; display:none; }
+.mode-popup.show { display:block; }
+.mode-popup-item { display:flex; align-items:flex-start; gap:8px; padding:6px 12px;
+  cursor:pointer; font-size:12px; color:var(--fg); }
+.mode-popup-item:hover { background:var(--bg-hover); }
+.mode-popup-item.active { background:color-mix(in srgb, var(--fg-accent) 12%, transparent); }
+.mode-popup-item .mp-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; margin-top:1px; }
+.mode-popup-item .mp-body { flex:1; min-width:0; }
+.mode-popup-item .mp-label { font-weight:600; white-space:nowrap; }
+.mode-popup-item .mp-kbd { color:var(--fg-dim); font-size:10px; margin-left:auto; font-family:var(--mono); padding-left:12px; }
+.mode-popup-item .mp-desc { color:var(--fg-dim); font-size:11px; margin-top:1px; }
+.mode-popup-sep { height:1px; background:var(--border); margin:4px 0; }
+.mode-popup-toggle { display:flex; align-items:center; gap:8px; padding:6px 12px;
+  cursor:pointer; font-size:12px; color:var(--fg); }
+.mode-popup-toggle:hover { background:var(--bg-hover); }
+.mode-popup-toggle .mp-switch { width:28px; height:16px; border-radius:8px;
+  background:var(--bg3); border:1px solid var(--border); position:relative; transition:all .2s; flex-shrink:0; }
+.mode-popup-toggle .mp-switch::after { content:''; width:12px; height:12px; border-radius:50%;
+  background:var(--fg-dim); position:absolute; top:1px; left:1px; transition:all .2s; }
+.mode-popup-toggle.on .mp-switch { background:var(--fg-accent); border-color:var(--fg-accent); }
+.mode-popup-toggle.on .mp-switch::after { left:13px; background:#fff; }
 .chat-select-chip.workflow { max-width:156px; }
 .chat-run-chip { color:var(--fg-accent); background:color-mix(in srgb, var(--border-focus) 12%, var(--bg3)); }
 .chat-run-chip:disabled { opacity:0.45; cursor:default; color:var(--fg-dim); }
@@ -911,19 +942,50 @@ pre.code-block { overflow:visible; }
                     <select class="chat-select-chip agent muted" id="chat-agent-sel" title="Active agent">
                       <option value="">Agent: Default</option>
                     </select>
-                    <select class="chat-select-chip mode" id="chat-mode-sel" title="Mode">
-                      <option value="chat">Mode: Chat</option>
-                      <option value="edit">Mode: Edit</option>
-                      <option value="agent">Mode: Agent</option>
-                    </select>
+                    <div class="mode-trigger" id="chat-mode-trigger" onclick="toggleModePopup()" title="Mode">
+                      <span class="mode-icon" id="mode-trigger-icon">⊕</span>
+                      <span id="mode-trigger-label">Agent</span>
+                      <span class="mode-arrow">▾</span>
+                      <div class="mode-popup" id="mode-popup">
+                        <div class="mode-popup-item" data-mode="agent" onclick="selectMode(event,'agent')">
+                          <span class="mp-icon">⊕</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="mode_agent">Agent</div><div class="mp-desc" data-i18n="mode_agent_desc">Full autonomous — reads, writes, runs commands</div></div>
+                          <span class="mp-kbd">Ctrl+Shift+I</span>
+                        </div>
+                        <div class="mode-popup-item" data-mode="ask" onclick="selectMode(event,'ask')">
+                          <span class="mp-icon">💬</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="mode_ask">Ask</div><div class="mp-desc" data-i18n="mode_ask_desc">Read-only Q&A — no file changes or commands</div></div>
+                        </div>
+                        <div class="mode-popup-item" data-mode="plan" onclick="selectMode(event,'plan')">
+                          <span class="mp-icon">☰</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="mode_plan">Plan</div><div class="mp-desc" data-i18n="mode_plan_desc">Reads files, confirms before writing</div></div>
+                        </div>
+                        <div class="mode-popup-sep"></div>
+                        <div class="mode-popup-item" data-approval="default" onclick="selectApproval(event,'default')">
+                          <span class="mp-icon">◎</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="approval_default">Default Approvals</div><div class="mp-desc" data-i18n="approval_default_desc">Uses your configured settings</div></div>
+                        </div>
+                        <div class="mode-popup-item" data-approval="bypass" onclick="selectApproval(event,'bypass')">
+                          <span class="mp-icon">⚡</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="approval_bypass">Bypass Approvals</div><div class="mp-desc" data-i18n="approval_bypass_desc">All tool calls are auto-approved</div></div>
+                        </div>
+                        <div class="mode-popup-item" data-approval="autopilot" onclick="selectApproval(event,'autopilot')">
+                          <span class="mp-icon">✦</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="approval_autopilot">Autopilot (Preview)</div><div class="mp-desc" data-i18n="approval_autopilot_desc">Autonomously iterates from start to finish</div></div>
+                        </div>
+                        <div class="mode-popup-sep"></div>
+                        <div class="mode-popup-item" onclick="switchSidebar('agents');closeModePopup()">
+                          <span class="mp-icon">⚙</span>
+                          <div class="mp-body"><div class="mp-label" data-i18n="configure_agents">Configure Custom Agents...</div></div>
+                        </div>
+                      </div>
+                    </div>
                     <select class="chat-select-chip workflow muted" id="chat-workflow-sel" title="Workflow">
                       <option value="">Workflow</option>
                     </select>
                     <button class="chat-run-chip" id="chat-workflow-run" onclick="runToolbarWorkflow()" title="Run selected workflow">▶</button>
                   </div>
-                  <label class="chat-chip muted" title="Use autonomous tool loop for this message">
-                    <input type="checkbox" id="agent-mode-cb" style="accent-color:var(--btn)"> Tools
-                  </label>
+                  <!-- Tools checkbox removed — mode controls tool access -->
                   <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■</span>
                   <span class="toolbar-btn" onclick="uploadImage()" title="Attach image">📎</span>
                   <span class="spacer"></span>
@@ -953,7 +1015,8 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-encoding">UTF-8</span>
   <span class="sb-item" id="status-eol">LF</span>
   <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
-  <span class="sb-item" id="status-mode" title="Editor Mode (Chat/Edit/Agent)" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Edit</span>
+  <span class="sb-item" id="status-mode" title="Mode" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Agent</span>
+  <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tokens</span>
 </div>
@@ -1026,7 +1089,7 @@ pre.code-block { overflow:visible; }
     <div class="sb-group" style="padding:0;margin-top:12px">Chat</div>
     <label>System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
     <label>Mode</label>
-    <select id="s-mode" style="width:100%"><option value="chat">Chat (no tools)</option><option value="edit" selected>Edit (confirm writes)</option><option value="agent">Agent (autonomous)</option></select>
+    <select id="s-mode" style="width:100%"><option value="ask">Ask (no tools)</option><option value="plan">Plan (confirm writes)</option><option value="agent" selected>Agent (autonomous)</option></select>
     <div id="s-perms" style="margin-top:6px;font-size:11px"></div>
 
     <div class="settings-section">
@@ -1060,6 +1123,16 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b>Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
       <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b>Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
       <div class="settings-help" id="mcp-runtime-status">MCP status not loaded.</div>
+      <div class="sb-group" style="padding:0;margin-top:10px">MCP Servers</div>
+      <div id="mcp-server-list" style="font-size:12px;margin-bottom:6px"></div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <input id="s-mcp-new-id" placeholder="Server ID" style="flex:1;min-width:80px;font-size:12px;padding:3px 6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
+        <select id="s-mcp-new-transport" style="font-size:12px;padding:3px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
+          <option value="stdio">stdio</option><option value="sse">SSE</option><option value="streamable_http">HTTP</option>
+        </select>
+        <input id="s-mcp-new-cmd" placeholder="Command or URL" style="flex:2;min-width:120px;font-size:12px;padding:3px 6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
+        <button onclick="addMcpServer()" style="font-size:11px;padding:3px 10px;background:var(--btn);color:#fff;border:none;border-radius:3px;cursor:pointer">+ Add</button>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -1171,7 +1244,7 @@ const SETTINGS_SECTION_DEFAULTS={
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'edit',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -1263,7 +1336,101 @@ en:{
   installed:'INSTALLED',marketplace:'MARKETPLACE',search_ext:'Search Extensions in Marketplace',
   user_instructions:'User Instructions',inst_placeholder:'Add custom instructions that apply to every conversation...',
   new_chat:'New conversation started.',
-  mode_chat:'Chat',mode_edit:'Edit',mode_agent:'Agent',
+  mode_agent:'Agent',mode_ask:'Ask',mode_plan:'Plan',
+  mode_agent_desc:'Full autonomous — reads, writes, runs commands',
+  mode_ask_desc:'Read-only Q&A — no file changes or commands',
+  mode_plan_desc:'Reads files, confirms before writing',
+  configure_agents:'Configure Custom Agents...',
+  plan_ready_msg:'Plan ready. Click Implement to execute.',implement:'▶ Implement',
+  approval_default:'Default Approvals',approval_default_desc:'Uses your configured settings',
+  approval_bypass:'Bypass Approvals',approval_bypass_desc:'All tool calls are auto-approved',
+  approval_autopilot:'Autopilot (Preview)',approval_autopilot_desc:'Autonomously iterates from start to finish',
+  // titlebar
+  minimize:'Minimize',maximize:'Maximize',close:'Close',
+  // sidebar headers & actions
+  new_chat_action:'New Chat',refresh:'Refresh',premium:'Premium',loading:'Loading...',
+  runtime_support:'Runtime Support',runtime_desc:'Manifest/API compatibility',
+  project_instructions:'Project Instructions',new_file_action:'New file',
+  inst_dir_desc:'.sao/instructions/ directory',preview:'Preview',
+  // status bar
+  tokens_suffix:' tokens',approval_level:'Approval level',
+  // chat roles
+  role_you:'You',role_copilot:'Copilot',role_system:'System',role_tool:'Tool',
+  // tool confirm
+  requires_confirmation:'requires confirmation',allow:'✓ Allow',deny:'✗ Deny',
+  // tool sidebar
+  no_history:'No history',untitled:'Untitled',
+  // code block actions
+  copy_code:'Copy',insert_code:'Insert',run_code:'Run',new_file_code:'New File',copied:'Copied',
+  // thinking
+  thinking_words:'Thinking ($1 words)',
+  // slash commands
+  slash_clear:'Clear chat',slash_new:'New conversation',slash_export:'Export to clipboard',
+  slash_settings:'Open settings',slash_tools:'Show tools sidebar',slash_history:'Show history',
+  slash_instructions:'Custom instructions',slash_agents:'Agents & Workflows',
+  slash_system:'System info',slash_eval:'Eval Python (usage: /eval expr)',
+  // agent/workflow UI
+  active_prefix:'Active: ',steps_suffix:' steps',agent_activated:'Agent activated: ',
+  agent_deactivated:'Agent deactivated',delete_confirm:'Delete "$1"?',
+  wf_input_prompt:'Input for workflow "$1":',wf_running:'Running workflow: ',
+  wf_error:'Workflow error: ',wf_complete:'Workflow complete: ',step_prefix:'Step ',
+  // agent/workflow modal
+  id_slug:'ID (slug)',name_label:'Name',icon_label:'Icon',description_label:'Description',
+  system_prompt_label:'System Prompt',when_to_use:'When to Use',scope_label:'Scope',
+  scope_workspace:'Workspace',scope_system:'System (global)',cancel:'Cancel',
+  steps_json:'Steps (JSON array)',invalid_json:'Invalid JSON',failed_to_load:'Failed to load',
+  // instructions
+  no_inst_files:'No instruction files',empty_file:'(empty)',saved:'✓ Saved',
+  save_failed:'✗ Failed',inst_name_prompt:'Instruction file name (without .md):',
+  edit_prefix:'Edit: ',delete_inst_confirm:'Delete instruction file "$1"?',
+  // extensions
+  license_required:'License required.',no_data:'No data.',no_ext_found:'No extensions found',
+  install_btn:'Install',installing:'Installing...',installed_btn:'✓ Installed',
+  uninstall_confirm:'Uninstall extension?',
+  // mcp
+  no_mcp_servers:'No MCP servers configured.',mcp_id_cmd_required:'Server ID and command/URL required',
+  mcp_added:'MCP server added',mcp_add_failed:'Failed to add server',mcp_status_prefix:'MCP status not loaded.',
+  // settings
+  s_settings:'Settings',s_endpoint:'Endpoint',s_provider:'Provider',s_api_key:'API Key (active provider)',
+  s_base_url:'Base URL (empty = default)',s_provider_keys:'Provider Keys',s_model:'Model',
+  s_model_name:'Model Name',s_temperature:'Temperature',s_max_tokens:'Max Output Tokens',
+  s_chat:'Chat',s_system_prompt:'System Prompt',s_mode:'Mode',
+  s_ask_mode:'Ask (no tools)',s_plan_mode:'Plan (confirm writes)',s_agent_mode:'Agent (autonomous)',
+  s_claude_code:'Claude Code',s_cli_cmd:'CLI Command',s_cli_args:'CLI Args (one per line)',
+  s_prefer_cli:'Prefer Claude Code CLI',s_skip_perms:'Skip permissions',
+  s_codex:'Codex',s_transport:'Transport',
+  s_mcp_policy:'MCP Policy',s_tool_access:'Tool Access',s_name_collisions:'Name Collisions',
+  s_discover_mcp:'Discover configured MCP servers',s_autostart_mcp:'Autostart MCP servers',
+  s_mcp_sampling:'Allow MCP server sampling',s_mcp_servers:'MCP Servers',s_add:'+ Add',
+  s_terminal:'Terminal Profile',s_profile_name:'Profile Name',s_shell_cmd:'Shell Command',
+  s_timeout:'Timeout (sec)',s_output_limit:'Output Limit',s_shell_args:'Shell Args (one per line)',
+  s_ext_trust:'Extension Trust',s_confirm_install:'Confirm extension installs',
+  s_allowed_pubs:'Allowed Publishers',s_blocked_pubs:'Blocked Publishers',s_enabled_contribs:'Enabled Contributions',
+  s_customization:'Customization Discovery',s_read_agents:'Read AGENTS.md',s_read_claude:'Read CLAUDE.md',
+  s_inst_locations:'Instructions Locations',s_agent_locations:'Agent Locations',
+  s_wf_locations:'Workflow Locations',s_skill_locations:'Skill Locations',
+  s_advanced:'Advanced Sampling & Connection',s_custom_models:'Custom Models',
+  s_test:'Test',s_save:'Save',
+  // provider
+  provider_unavailable:'Provider is unavailable.',
+  // follow-ups
+  fu_explain:'Explain this code',fu_fix:'How do I fix this?',fu_full:'Show me the full file',fu_continue:'Continue',
+  // context menu
+  cm_copy:'Copy Message',cm_markdown:'Copy as Markdown',cm_insert:'Insert into Editor',
+  cm_run:'Run in Terminal',cm_delete:'Delete Message',
+  // feedback
+  helpful:'Helpful',not_helpful:'Not helpful',copy_response:'Copy response',retry:'Retry',
+  feedback_saved:'Feedback saved',
+  // misc
+  implementing:'Implementing...',exported:'Exported to clipboard',
+  about_text:'SAO AI Editor — Multi-model LLM IDE',
+  file_dialog_hint:'Use Ctrl+O or drag & drop a file',
+  drop_files:'Drop files to attach',type_command:'Type a command...',
+  no_results:'No results',all_replaced:'All replaced',results_suffix:' results',
+  context_warning:'Context warning: ',
+  theme_changed:'Theme: ',testing:'Testing...',test_failed:'Failed',
+  no_models_hint:'No models defined. Add models below to configure context window and capabilities.',
+  custom_model_hint:'Custom model — default 128K context.',
 },
 zh:{
   file:'文件',edit:'编辑',selection:'选择',view:'视图',go:'转到',run:'运行',terminal:'终端',help:'帮助',
@@ -1283,7 +1450,81 @@ zh:{
   installed:'已安装',marketplace:'应用市场',search_ext:'在应用市场搜索扩展',
   user_instructions:'用户指令',inst_placeholder:'添加适用于所有对话的自定义指令...',
   new_chat:'新对话已开始。',
-  mode_chat:'聊天',mode_edit:'编辑',mode_agent:'代理',
+  mode_agent:'代理',mode_ask:'问答',mode_plan:'规划',
+  mode_agent_desc:'全自动 — 读写文件、执行命令',
+  mode_ask_desc:'只读问答 — 不修改文件或执行命令',
+  mode_plan_desc:'可读文件，写入前需确认',
+  configure_agents:'配置自定义代理...',
+  plan_ready_msg:'规划就绪，点击执行开始实施。',implement:'▶ 执行',
+  approval_default:'默认审批',approval_default_desc:'使用你配置的权限',
+  approval_bypass:'跳过审批',approval_bypass_desc:'所有工具调用自动批准',
+  approval_autopilot:'自动驾驶 (预览)',approval_autopilot_desc:'全自动从头执行到完成',
+  minimize:'最小化',maximize:'最大化',close:'关闭',
+  new_chat_action:'新对话',refresh:'刷新',premium:'高级版',loading:'加载中...',
+  runtime_support:'运行时支持',runtime_desc:'Manifest/API 兼容性',
+  project_instructions:'项目指令',new_file_action:'新建文件',
+  inst_dir_desc:'.sao/instructions/ 目录',preview:'预览',
+  tokens_suffix:' tokens',approval_level:'权限等级',
+  role_you:'你',role_copilot:'助手',role_system:'系统',role_tool:'工具',
+  requires_confirmation:'需要确认',allow:'✓ 允许',deny:'✗ 拒绝',
+  no_history:'无历史记录',untitled:'未命名',
+  copy_code:'复制',insert_code:'插入',run_code:'运行',new_file_code:'新建文件',copied:'已复制',
+  thinking_words:'思考中 ($1 词)',
+  slash_clear:'清除聊天',slash_new:'新对话',slash_export:'导出到剪贴板',
+  slash_settings:'打开设置',slash_tools:'显示工具侧栏',slash_history:'显示历史',
+  slash_instructions:'自定义指令',slash_agents:'代理 & 工作流',
+  slash_system:'系统信息',slash_eval:'执行 Python (用法: /eval expr)',
+  active_prefix:'活跃: ',steps_suffix:' 步骤',agent_activated:'代理已激活: ',
+  agent_deactivated:'代理已停用',delete_confirm:'删除「$1」？',
+  wf_input_prompt:'工作流「$1」的输入:',wf_running:'运行工作流: ',
+  wf_error:'工作流错误: ',wf_complete:'工作流完成: ',step_prefix:'步骤 ',
+  id_slug:'ID (短标识)',name_label:'名称',icon_label:'图标',description_label:'描述',
+  system_prompt_label:'系统提示词',when_to_use:'使用场景',scope_label:'范围',
+  scope_workspace:'工作区',scope_system:'系统 (全局)',cancel:'取消',
+  steps_json:'步骤 (JSON 数组)',invalid_json:'无效 JSON',failed_to_load:'加载失败',
+  no_inst_files:'无指令文件',empty_file:'(空)',saved:'✓ 已保存',
+  save_failed:'✗ 保存失败',inst_name_prompt:'指令文件名 (不含 .md):',
+  edit_prefix:'编辑: ',delete_inst_confirm:'删除指令文件「$1」？',
+  license_required:'需要许可证。',no_data:'无数据。',no_ext_found:'未找到扩展',
+  install_btn:'安装',installing:'安装中...',installed_btn:'✓ 已安装',
+  uninstall_confirm:'卸载此扩展？',
+  no_mcp_servers:'未配置 MCP 服务器。',mcp_id_cmd_required:'服务器 ID 和命令/URL 必填',
+  mcp_added:'MCP 服务器已添加',mcp_add_failed:'添加服务器失败',mcp_status_prefix:'MCP 状态未加载。',
+  s_settings:'设置',s_endpoint:'端点',s_provider:'提供商',s_api_key:'API Key (当前提供商)',
+  s_base_url:'Base URL (留空 = 默认)',s_provider_keys:'提供商密钥',s_model:'模型',
+  s_model_name:'模型名称',s_temperature:'温度',s_max_tokens:'最大输出 Token',
+  s_chat:'聊天',s_system_prompt:'系统提示词',s_mode:'模式',
+  s_ask_mode:'问答 (无工具)',s_plan_mode:'规划 (确认写入)',s_agent_mode:'代理 (全自动)',
+  s_claude_code:'Claude Code',s_cli_cmd:'CLI 命令',s_cli_args:'CLI 参数 (每行一个)',
+  s_prefer_cli:'优先使用 Claude Code CLI',s_skip_perms:'跳过权限',
+  s_codex:'Codex',s_transport:'传输方式',
+  s_mcp_policy:'MCP 策略',s_tool_access:'工具访问',s_name_collisions:'名称冲突',
+  s_discover_mcp:'发现已配置的 MCP 服务器',s_autostart_mcp:'自动启动 MCP 服务器',
+  s_mcp_sampling:'允许 MCP 服务器采样',s_mcp_servers:'MCP 服务器',s_add:'+ 添加',
+  s_terminal:'终端配置',s_profile_name:'配置名',s_shell_cmd:'Shell 命令',
+  s_timeout:'超时 (秒)',s_output_limit:'输出限制',s_shell_args:'Shell 参数 (每行一个)',
+  s_ext_trust:'扩展信任',s_confirm_install:'安装扩展前确认',
+  s_allowed_pubs:'允许的发布者',s_blocked_pubs:'屏蔽的发布者',s_enabled_contribs:'启用的贡献',
+  s_customization:'自定义发现',s_read_agents:'读取 AGENTS.md',s_read_claude:'读取 CLAUDE.md',
+  s_inst_locations:'指令位置',s_agent_locations:'代理位置',
+  s_wf_locations:'工作流位置',s_skill_locations:'技能位置',
+  s_advanced:'高级采样 & 连接',s_custom_models:'自定义模型',
+  s_test:'测试',s_save:'保存',
+  provider_unavailable:'提供商不可用。',
+  fu_explain:'解释这段代码',fu_fix:'如何修复这个问题？',fu_full:'显示完整文件',fu_continue:'继续',
+  cm_copy:'复制消息',cm_markdown:'复制为 Markdown',cm_insert:'插入到编辑器',
+  cm_run:'在终端运行',cm_delete:'删除消息',
+  helpful:'有帮助',not_helpful:'没帮助',copy_response:'复制回复',retry:'重试',
+  feedback_saved:'反馈已保存',
+  implementing:'执行中...',exported:'已导出到剪贴板',
+  about_text:'SAO AI Editor — 多模型 LLM IDE',
+  file_dialog_hint:'使用 Ctrl+O 或拖放文件',
+  drop_files:'拖放文件以附加',type_command:'输入命令...',
+  no_results:'无结果',all_replaced:'全部替换完成',results_suffix:' 个结果',
+  context_warning:'上下文警告: ',
+  theme_changed:'主题: ',testing:'测试中...',test_failed:'失败',
+  no_models_hint:'未定义模型。在下方添加模型来配置上下文窗口和能力。',
+  custom_model_hint:'自定义模型 — 默认 128K 上下文。',
 }};
 let _curLang='en';
 function t(key){return (_LANG[_curLang]||_LANG.en)[key]||(_LANG.en[key]||key)}
@@ -1301,13 +1542,14 @@ function setLang(lang){
   try{localStorage.setItem('sao-ai-lang',lang)}catch(e){}
   if(window.pywebview&&window.pywebview.api){try{call('save_config',{language:lang})}catch(e){}}
   document.title=t('welcome_title');
+  if(typeof updateModeUI==='function')updateModeUI();
 }
 function toggleLang(){
   const next=_curLang==='en'?'zh':'en';
   setLang(next);
   showToast(next==='zh'?'已切换到中文':'Switched to English','info',1500);
 }
-try{const saved=localStorage.getItem('sao-ai-lang');if(saved)_curLang=saved}catch(e){}
+try{const saved=localStorage.getItem('sao-ai-lang');if(saved&&saved!=='en'){_curLang=saved;setTimeout(()=>setLang(saved),0)}}catch(e){}
 const _SEND_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg>';
 const _STOP_SVG='<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>';
 function _setSendIcon(streaming){$('send-btn').innerHTML=streaming?_STOP_SVG:_SEND_SVG}
@@ -1320,7 +1562,7 @@ function createMsg(role,model){
   av.textContent=avatarIcons[role]||'●';
   hdr.appendChild(av);
   const r=document.createElement('span');r.className='msg-role '+role;
-  r.textContent={user:'You',assistant:'Copilot',system:'System',tool:'Tool'}[role]||role;
+  r.textContent={user:t('role_you'),assistant:t('role_copilot'),system:t('role_system'),tool:t('role_tool')}[role]||role;
   hdr.appendChild(r);
   if(model){const m=document.createElement('span');m.className='msg-model';m.textContent=model;hdr.appendChild(m)}
   el.appendChild(hdr);
@@ -1352,10 +1594,10 @@ function renderMd(container,text){
       // VSCode-style code block toolbar
       const toolbar=document.createElement('div');toolbar.className='cb-toolbar';
       const _code=inner,_lang=lang;
-      [{t:'Copy',icon:'📋',fn:()=>{navigator.clipboard.writeText(_code);showToast('Copied','success',1500)}},
-       {t:'Insert',icon:'📥',fn:()=>openInEditor(_code,_lang)},
-       {t:'Run',icon:'▶',fn:()=>execTerminalCmd(_code)},
-       {t:'New File',icon:'📄',fn:()=>addTab(_lang||'code',_code,_lang)}
+      [{t:t('copy_code'),icon:'📋',fn:()=>{navigator.clipboard.writeText(_code);showToast(t('copied'),'success',1500)}},
+       {t:t('insert_code'),icon:'📥',fn:()=>openInEditor(_code,_lang)},
+       {t:t('run_code'),icon:'▶',fn:()=>execTerminalCmd(_code)},
+       {t:t('new_file_code'),icon:'📄',fn:()=>addTab(_lang||'code',_code,_lang)}
       ].forEach(a=>{
         const b=document.createElement('span');b.className='cb-btn';b.textContent=a.icon;b.title=a.t;
         b.onclick=a.fn;toolbar.appendChild(b);
@@ -1812,9 +2054,9 @@ function renderConfirmBar(container,d,scrollEl,statusPrefix){
   const bar=document.createElement('div');bar.className='confirm-bar';
   if(d.id)bar.id='confirm-'+providerDomKey(d.id);
   const msg=document.createElement('span');msg.className='msg';
-  msg.innerHTML='⚠ <b>'+esc(d.name||'tool')+'</b> requires confirmation';
-  const allow=document.createElement('span');allow.className='confirm-btn confirm-allow';allow.textContent='✓ Allow';
-  const deny=document.createElement('span');deny.className='confirm-btn confirm-deny';deny.textContent='✗ Deny';
+  msg.innerHTML='⚠ <b>'+esc(d.name||'tool')+'</b> '+esc(t('requires_confirmation'));
+  const allow=document.createElement('span');allow.className='confirm-btn confirm-allow';allow.textContent=t('allow');
+  const deny=document.createElement('span');deny.className='confirm-btn confirm-deny';deny.textContent=t('deny');
   allow.onclick=()=>confirmTool(d.id,true,allow);
   deny.onclick=()=>confirmTool(d.id,false,deny);
   bar.appendChild(msg);bar.appendChild(allow);bar.appendChild(deny);container.appendChild(bar);
@@ -1823,6 +2065,9 @@ function renderConfirmBar(container,d,scrollEl,statusPrefix){
   return bar;
 }
 function onToolConfirm(d){
+  if(currentApproval==='bypass'||currentApproval==='autopilot'){
+    call('confirm_tool',d.id,true);return;
+  }
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
   let body=last?last.querySelector('.msg-body'):null;
   if(!body){body=createMsg('system');body.style.color='var(--fg-dim)'}
@@ -1910,17 +2155,17 @@ async function doSend(){
 async function doStop(){await call('cancel');onIdle()}
 async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
   updateContextUsage(0);
-  appendSystem('New conversation started.')}
+  appendSystem(t('new_chat'))}
 async function clearChat(){newChat()}
-async function exportChat(){const d=await call('export_chat');if(d){navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus('Exported to clipboard')}}
+async function exportChat(){const d=await call('export_chat');if(d){navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus(t('exported'))}}
 window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearChat=clearChat;window.exportChat=exportChat;
 
 // ── Slash commands ──
 const SLASH_CMDS=[
-  ['/clear','Clear chat'],['/new','New conversation'],['/export','Export to clipboard'],
-  ['/settings','Open settings'],['/tools','Show tools sidebar'],['/history','Show history'],
-  ['/instructions','Custom instructions'],['/agents','Agents & Workflows'],
-  ['/system','System info'],['/eval','Eval Python (usage: /eval expr)'],
+  ['/clear',t('slash_clear')],['/new',t('slash_new')],['/export',t('slash_export')],
+  ['/settings',t('slash_settings')],['/tools',t('slash_tools')],['/history',t('slash_history')],
+  ['/instructions',t('slash_instructions')],['/agents',t('slash_agents')],
+  ['/system',t('slash_system')],['/eval',t('slash_eval')],
 ];
 
 async function execSlash(raw){
@@ -2010,8 +2255,8 @@ async function loadPremiumGuide(){
   const el=$('premium-content');
   try{
     const r=await call('get_premium_guide');
-    if(!r||!r.paid){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px;padding:8px 0">License required.</div>';return}
-    if(!r.content){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px">No data.</div>';return}
+    if(!r||!r.paid){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px;padding:8px 0">'+esc(t('license_required'))+'</div>';return}
+    if(!r.content){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px">'+esc(t('no_data'))+'</div>';return}
     const lines=r.content.split('\n');let html='';
     let inCode=false,inTable=false;
     for(const ln of lines){
@@ -2039,22 +2284,24 @@ async function loadPremiumGuide(){
 
 function renderToolsSidebar(tools){
   const list=$('tools-list');list.innerHTML='';let lastCat='';
+  const isAgent=currentMode==='agent';
   tools.forEach(t=>{
     if(t.category!==lastCat){lastCat=t.category;const g=document.createElement('div');g.className='sb-group';g.textContent='▸ '+lastCat;list.appendChild(g)}
     const item=document.createElement('div');item.className='sb-item';
-    item.innerHTML='<span style="color:var(--fg-tool);font-family:var(--mono);font-size:11px">'+esc(t.name)+'</span>'+(t.requires_confirm?' ⚠':'');
+    const badge=(!isAgent&&t.requires_confirm)?' <span style="color:var(--fg-warning)" title="Requires confirmation">⚠</span>':'';
+    item.innerHTML='<span style="color:var(--fg-tool);font-family:var(--mono);font-size:11px">'+esc(t.name)+'</span>'+badge;
     item.title=t.description;
-    item.onclick=()=>{chatInp.value='Tell me about the '+t.name+' tool and show me an example';chatInp.focus()};
+    item.onclick=()=>{const inp=$('chat-input');const cur=inp.value;const prefix=cur&&!cur.endsWith(' ')?cur+' ':cur;inp.value=prefix+'#'+t.name+' ';inp.focus()};
     list.appendChild(item);
   });
 }
 
 async function refreshHistory(){
   const r=await call('list_history');const list=$('history-list');list.innerHTML='';
-  if(!r||!r.entries||!r.entries.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)">No history</div>';return}
+  if(!r||!r.entries||!r.entries.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)">'+esc(t('no_history'))+'</div>';return}
   r.entries.forEach(e=>{
     const item=document.createElement('div');item.className='sb-item';
-    item.innerHTML=esc((e.title||'Untitled').slice(0,28))+'<span class="meta">'+e.message_count+'msg</span>';
+    item.innerHTML=esc((e.title||t('untitled')).slice(0,28))+'<span class="meta">'+e.message_count+'msg</span>';
     item.onclick=()=>loadHistoryConv(e.id);
     list.appendChild(item);
   });
@@ -2624,7 +2871,7 @@ function openSettings(){
   $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
   $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
   $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
-  $('s-mode').value=currentMode||config.mode||'edit';renderPermissions();showModelInfo();
+  $('s-mode').value=normalizeMode(currentMode||config.mode||'agent');renderPermissions();showModelInfo();
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -2660,6 +2907,7 @@ function openSettings(){
   setInputValue('s-cust-workflows',listToText(cust.workflow_locations));setInputValue('s-cust-skills',listToText(cust.skill_locations));
   refreshRuntimeSupport();
   renderCustomModels();
+  renderMcpServers();
   $('settings-modal').classList.add('open');
 }
 function closeSettings(){$('settings-modal').classList.remove('open')}
@@ -2729,7 +2977,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
-  const newMode=$('s-mode').value;
+  const newMode=normalizeMode($('s-mode').value);
   config.mode=newMode;
   if(newMode!==currentMode){await call('set_mode',newMode);currentMode=newMode;updateModeUI()}
   syncUI();await call('save_config',config);closeSettings();
@@ -2822,8 +3070,7 @@ function renderChatControlOptions(){
     agentSel.classList.toggle('muted',!activeAgentId);
     agentSel.title=activeAgentId?'Active agent: '+activeAgentId:'Active agent: Default';
   }
-  const modeSel=$('chat-mode-sel');
-  if(modeSel)modeSel.value=currentMode||config.mode||'edit';
+  updateModeUI();
   const wfSel=$('chat-workflow-sel');
   if(wfSel){
     const selected=wfSel.value;
@@ -2844,7 +3091,7 @@ async function loadChatControls(){
     if(controls.config)Object.assign(config,withSettingsDefaults({...config,...controls.config}));
     if(controls.provider)config.provider=controls.provider;
     if(controls.model!==undefined)config.model=controls.model;
-    if(controls.mode)currentMode=controls.mode;
+    if(controls.mode)currentMode=normalizeMode(controls.mode);
     activeAgentId=controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'';
     chatControlState.agents=normalizeControlList(controls.agents,'agents');
     chatControlState.workflows=normalizeControlList(controls.workflows,'workflows');
@@ -2872,7 +3119,6 @@ function bindChatToolbarControls(){
     model.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();model.blur()}else if(e.key==='Escape'){model.value=config.model||'';model.blur()}};
   }
   const agent=$('chat-agent-sel');if(agent)agent.onchange=e=>setToolbarAgent(e.target.value);
-  const mode=$('chat-mode-sel');if(mode)mode.onchange=e=>setToolbarMode(e.target.value);
   const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=updateToolbarWorkflowButton;
 }
 async function setToolbarAgent(agentId){
@@ -2884,6 +3130,7 @@ async function setToolbarAgent(agentId){
   }else{renderChatControlOptions();setStatus((r&&r.error)||'Failed to change agent')}
 }
 async function setToolbarMode(mode){
+  mode=normalizeMode(mode);
   if(!MODE_ORDER.includes(mode)){renderChatControlOptions();return}
   let r=await call('set_chat_controls',{mode:mode});
   if(!(r&&r.ok))r=await call('set_active_mode',mode);
@@ -2908,13 +3155,61 @@ window.runToolbarWorkflow=runToolbarWorkflow;
 function setStatus(t){$('status-text').textContent=t}
 
 // ── Mode & Permissions ──
-let currentMode='edit';
-const MODE_LABELS={chat:'💬 Chat',edit:'✏️ Edit',agent:'🤖 Agent'};
-const MODE_ORDER=['chat','edit','agent'];
+let currentMode='agent';
+let currentApproval='default';
+const MODE_LABELS={agent:'⊕ Agent',ask:'💬 Ask',plan:'☰ Plan'};
+const MODE_ICONS={agent:'⊕',ask:'💬',plan:'☰'};
+const APPROVAL_LABELS={default:'◎',bypass:'⚡',autopilot:'✦'};
+const MODE_ORDER=['agent','ask','plan'];
+const APPROVAL_ORDER=['default','bypass','autopilot'];
+const MODE_ALIAS={chat:'ask',edit:'plan'};
+function normalizeMode(m){return MODE_ALIAS[m]||m}
 function updateModeUI(){
-  $('status-mode').textContent=MODE_LABELS[currentMode]||currentMode;
-  const modeSel=$('chat-mode-sel');if(modeSel)modeSel.value=currentMode||'edit';
+  const m=normalizeMode(currentMode);currentMode=m;
+  $('status-mode').textContent=MODE_LABELS[m]||m;
+  const trig=$('mode-trigger-icon');if(trig)trig.textContent=MODE_ICONS[m]||'⊕';
+  const lbl=$('mode-trigger-label');if(lbl)lbl.textContent=t('mode_'+m)||m.charAt(0).toUpperCase()+m.slice(1);
+  document.querySelectorAll('.mode-popup-item[data-mode]').forEach(el=>{el.classList.toggle('active',el.dataset.mode===m)});
+  document.querySelectorAll('.mode-popup-item[data-approval]').forEach(el=>{el.classList.toggle('active',el.dataset.approval===currentApproval)});
+  const sa=$('status-approval');
+  if(sa){sa.textContent=(APPROVAL_LABELS[currentApproval]||'◎')+' '+(t('approval_'+currentApproval)||currentApproval)}
 }
+function toggleModePopup(){
+  const popup=$('mode-popup');if(!popup)return;
+  popup.classList.toggle('show');
+  if(popup.classList.contains('show')){
+    const close=e=>{if(!popup.contains(e.target)&&e.target.id!=='chat-mode-trigger'){popup.classList.remove('show');document.removeEventListener('click',close)}};
+    setTimeout(()=>document.addEventListener('click',close),0);
+  }
+}
+function closeModePopup(){const p=$('mode-popup');if(p)p.classList.remove('show')}
+window.toggleModePopup=toggleModePopup;window.closeModePopup=closeModePopup;
+async function selectMode(e,mode){
+  e.stopPropagation();closeModePopup();
+  if(!MODE_ORDER.includes(mode))return;
+  let r=await call('set_chat_controls',{mode:mode});
+  if(!(r&&r.ok))r=await call('set_active_mode',mode);
+  if(!(r&&r.ok))r=await call('set_mode',mode);
+  if((r&&r.ok)||!api()){currentMode=mode;config.mode=mode;updateModeUI();renderChatControlOptions();setStatus('Mode: '+mode)}
+}
+window.selectMode=selectMode;
+function selectApproval(e,level){
+  e.stopPropagation();closeModePopup();
+  if(!APPROVAL_ORDER.includes(level))return;
+  currentApproval=level;updateModeUI();
+  if(level==='autopilot'&&currentMode!=='agent'){selectMode(e,'agent')}
+  if(level==='bypass'||level==='autopilot'){
+    call('set_mode','agent').then(()=>{});
+  }
+  setStatus(t('approval_'+level)||level);
+}
+window.selectApproval=selectApproval;
+function cycleApproval(){
+  const idx=(APPROVAL_ORDER.indexOf(currentApproval)+1)%APPROVAL_ORDER.length;
+  currentApproval=APPROVAL_ORDER[idx];updateModeUI();
+  setStatus(t('approval_'+currentApproval)||currentApproval);
+}
+window.cycleApproval=cycleApproval;
 async function cycleMode(){
   const idx=(MODE_ORDER.indexOf(currentMode)+1)%MODE_ORDER.length;
   const next=MODE_ORDER[idx];
@@ -2923,7 +3218,7 @@ async function cycleMode(){
 }
 window.cycleMode=cycleMode;
 async function loadMode(){
-  const r=await call('get_mode');if(r){currentMode=r.mode||'edit';updateModeUI()}
+  const r=await call('get_mode');if(r){currentMode=normalizeMode(r.mode||'agent');updateModeUI()}
 }
 function renderPermissions(){
   const el=$('s-perms');if(!el)return;
@@ -2993,6 +3288,35 @@ async function addCustomModel(){
 async function delModel(name){await call('delete_custom_model',name);renderCustomModels();showModelInfo()}
 window.delModel=delModel;
 window.addCustomModel=addCustomModel;
+
+// ── MCP Server management ──
+async function renderMcpServers(){
+  const r=await call('list_mcp_servers');const el=$('mcp-server-list');if(!el)return;
+  if(!r||!r.servers||!r.servers.length){el.innerHTML='<div style="color:var(--fg-dim);padding:2px 0">'+esc(t('no_mcp_servers'))+'</div>';return}
+  el.innerHTML='';
+  r.servers.forEach(s=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)';
+    const dot=s.connected?'🟢':'⚪';
+    const info=document.createElement('span');info.style.cssText='flex:1;font-family:var(--mono)';
+    info.textContent=dot+' '+s.id+' ('+s.transport+') — '+(s.command||s.url||'');
+    const del=document.createElement('span');del.style.cssText='cursor:pointer;color:var(--fg-error);padding:0 4px';
+    del.textContent='✕';del.title='Remove server';
+    del.onclick=async()=>{await call('remove_mcp_server',s.id);renderMcpServers()};
+    row.appendChild(info);row.appendChild(del);el.appendChild(row);
+  });
+}
+async function addMcpServer(){
+  const id=$('s-mcp-new-id').value.trim();const transport=$('s-mcp-new-transport').value;
+  const cmd=$('s-mcp-new-cmd').value.trim();
+  if(!id||!cmd){showToast(t('mcp_id_cmd_required'),'warning');return}
+  const cfg={id:id,transport:transport};
+  if(transport==='stdio')cfg.command=cmd;else cfg.url=cmd;
+  const r=await call('add_mcp_server',cfg);
+  if(r&&r.ok){$('s-mcp-new-id').value='';$('s-mcp-new-cmd').value='';renderMcpServers();showToast(t('mcp_added'),'info')}
+  else showToast((r&&r.error)||t('mcp_add_failed'),'warning');
+}
+window.addMcpServer=addMcpServer;
 
 $('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings()};
 
@@ -3257,7 +3581,7 @@ doSend=async function(){
   {const ic=$('chat-input-container');if(ic)ic.classList.add('working')}
   setStatus('Thinking...');
   currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
-  const agentMode=$('agent-mode-cb')&&$('agent-mode-cb').checked;
+  const agentMode=currentMode==='agent'||currentApproval==='autopilot'||currentApproval==='bypass';
   await call('send_message',text,{provider:config.provider,model:config.model},agentMode);
 };
 window.doSend=doSend;
@@ -3386,12 +3710,12 @@ window.doFind=doFind;
 function addMessageFooter(msgEl,role){
   if(role!=='assistant')return;
   const footer=document.createElement('div');footer.className='msg-footer';
-  [{icon:'👍',title:'Helpful',cls:'rate-up',fn:function(){this.classList.toggle('active');showToast('Feedback saved','success',1500)}},
-   {icon:'👎',title:'Not helpful',cls:'rate-down',fn:function(){this.classList.toggle('active')}},
-   {icon:'📋',title:'Copy response',fn:function(){
+  [{icon:'👍',title:t('helpful'),cls:'rate-up',fn:function(){this.classList.toggle('active');showToast(t('feedback_saved'),'success',1500)}},
+   {icon:'👎',title:t('not_helpful'),cls:'rate-down',fn:function(){this.classList.toggle('active')}},
+   {icon:'📋',title:t('copy_response'),fn:function(){
      const body=msgEl.querySelector('.msg-body');
-     if(body)navigator.clipboard.writeText(body.textContent);showToast('Copied','success',1500)}},
-   {icon:'🔄',title:'Retry',fn:function(){
+     if(body)navigator.clipboard.writeText(body.textContent);showToast(t('copied'),'success',1500)}},
+   {icon:'🔄',title:t('retry'),fn:function(){
      const msgs=$('chat-messages').children;
      // Find the user message before this assistant message
      for(let i=msgs.length-1;i>=0;i--){
@@ -3422,10 +3746,10 @@ function showFollowups(container,suggestions){
 function generateFollowups(content){
   if(!content||content.length<50)return[];
   const suggestions=[];
-  if(content.includes('```'))suggestions.push('Explain this code');
-  if(content.includes('error')||content.includes('Error'))suggestions.push('How do I fix this?');
-  if(content.includes('file')||content.includes('File'))suggestions.push('Show me the full file');
-  suggestions.push('Continue');
+  if(content.includes('```'))suggestions.push(t('fu_explain'));
+  if(content.includes('error')||content.includes('Error'))suggestions.push(t('fu_fix'));
+  if(content.includes('file')||content.includes('File'))suggestions.push(t('fu_full'));
+  suggestions.push(t('fu_continue'));
   return suggestions.slice(0,3);
 }
 
@@ -3445,14 +3769,14 @@ $('chat-messages').addEventListener('contextmenu',function(e){
   const menu=$('ctx-menu');menu.innerHTML='';
   const body=msgEl.querySelector('.msg-body');
   const text=body?body.textContent:'';
-  [{label:'Copy Message',fn:()=>{navigator.clipboard.writeText(text);showToast('Copied','success',1500)}},
-   {label:'Copy as Markdown',fn:()=>{navigator.clipboard.writeText(text);showToast('Copied','success',1500)}},
+  [{label:t('cm_copy'),fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
+   {label:t('cm_markdown'),fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
    {sep:true},
-   {label:'Insert into Editor',fn:()=>{if(text)openInEditor(text,'')}},
-   {label:'Run in Terminal',fn:()=>{if(text.includes('`')){
+   {label:t('cm_insert'),fn:()=>{if(text)openInEditor(text,'')}},
+   {label:t('cm_run'),fn:()=>{if(text.includes('`')){
      const m=text.match(/```[\s\S]*?\n([\s\S]*?)```/);if(m)execTerminalCmd(m[1])}}},
    {sep:true},
-   {label:'Delete Message',fn:()=>msgEl.remove()},
+   {label:t('cm_delete'),fn:()=>msgEl.remove()},
   ].forEach(it=>{
     if(it.sep){const s=document.createElement('div');s.className='ctx-sep';menu.appendChild(s);return}
     const d=document.createElement('div');d.className='ctx-item';d.textContent=it.label;
@@ -3520,17 +3844,36 @@ doSend=async function(){
 };
 window.doSend=doSend;
 
-// ── Patch onStreamEnd to show followups ──
+// ── Patch onStreamEnd to show followups + plan implement button ──
 const _origOnStreamEnd=onStreamEnd;
 onStreamEnd=function(d){
   _origOnStreamEnd(d);
-  // Show follow-up suggestions
   const msgs=$('chat-messages');const last=msgs.lastElementChild;
   if(last&&d.content){
     const body=last.querySelector('.msg-body');
     if(body){
-      const suggestions=generateFollowups(d.content);
-      showFollowups(body,suggestions);
+      // Plan mode: detect plan_ready marker and show Implement button
+      if(currentMode==='plan'&&d.content.includes('<!-- plan_ready -->')){
+        const planBar=document.createElement('div');
+        planBar.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 12px;background:color-mix(in srgb, var(--fg-accent) 8%, var(--bg3));border:1px solid color-mix(in srgb, var(--fg-accent) 30%, var(--border));border-radius:6px';
+        const planIcon=document.createElement('span');planIcon.textContent='☰';planIcon.style.fontSize='16px';
+        const planText=document.createElement('span');planText.style.cssText='flex:1;font-size:12px;color:var(--fg)';
+        planText.textContent=t('plan_ready_msg')||'Plan ready. Click Implement to execute.';
+        const implBtn=document.createElement('button');
+        implBtn.style.cssText='padding:5px 16px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;background:var(--btn);color:#fff;border:none';
+        implBtn.textContent=t('implement')||'▶ Implement';
+        implBtn.onclick=async()=>{
+          implBtn.disabled=true;implBtn.textContent=t('implementing');
+          planBar.style.opacity='0.6';
+          await call('implement_plan');
+          currentMode='agent';config.mode='agent';updateModeUI();
+        };
+        planBar.appendChild(planIcon);planBar.appendChild(planText);planBar.appendChild(implBtn);
+        body.appendChild(planBar);
+      }else{
+        const suggestions=generateFollowups(d.content);
+        showFollowups(body,suggestions);
+      }
     }
   }
 };

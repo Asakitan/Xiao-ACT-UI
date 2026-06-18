@@ -270,7 +270,7 @@ def test_app_settings_parity() -> None:
            and loaded_bad.get("timeout") == 180
            and loaded_bad.get("stop") == ["A", "B"]
            and loaded_bad.get("extra_headers") == {}
-           and loaded_bad.get("mode") == "edit"
+           and loaded_bad.get("mode") == "agent"
            and loaded_bad.get("permissions") == {}
            and loaded_bad.get("terminal", {}).get("profile"))
 
@@ -290,17 +290,17 @@ def test_app_settings_parity() -> None:
     _check("unsupported CLI transport rejected",
            "CLI transport" in provider_api._unsupported_provider_transport(codex))
 
-    mode_data = {"ai_editor": {"mode": "chat", "permissions": {"readFile": "allowed"}}}
+    mode_data = {"ai_editor": {"mode": "ask", "permissions": {"readFile": "allowed"}}}
     mode_api = AIEditorAPI(_SettingsGui(mode_data))
     mode_api._ensure_engine()
-    mode = mode_api.get_mode("edit")
+    mode = mode_api.get_mode("plan")
     _check("get_mode returns defaults and overrides",
-           mode.get("mode") == "chat"
-           and mode.get("selected_mode") == "edit"
+           mode.get("mode") == "ask"
+           and mode.get("selected_mode") == "plan"
            and mode.get("defaults", {}).get("runTerminal") == "confirm"
            and mode.get("overrides", {}).get("readFile") == "allowed")
 
-    mode_api.set_mode("edit")
+    mode_api.set_mode("plan")
     direct_result = json.loads(mode_api.execute_tool(
         "runTerminal", json.dumps({"command": "echo ok"})))
     _check("direct mutating tool requires confirmation",
@@ -332,7 +332,7 @@ def test_app_settings_parity() -> None:
         "model": "gpt-4o",
         "provider_keys": {"anthropic": "old-claude"},
         "custom_models": {"toolbar-model": {"max_input": 321, "max_output": 45}},
-        "mode": "edit",
+        "mode": "plan",
         "permissions": {"readFile": "allowed"},
         "future_section": {"enabled": True},
     }})
@@ -341,7 +341,7 @@ def test_app_settings_parity() -> None:
     _check("get_chat_controls payload includes selectors",
            controls.get("provider") == "openai"
            and controls.get("model") == "gpt-4o"
-           and controls.get("mode") == "edit"
+           and controls.get("mode") == "plan"
            and isinstance(controls.get("providers"), list)
            and any(m.get("id") == "toolbar-model" for m in controls.get("models", []))
            and isinstance(controls.get("agents"), list)
@@ -373,14 +373,14 @@ def test_app_settings_parity() -> None:
            and chat_provider_result.get("controls", {}).get("active_chat_provider") == "chat")
 
     aggregate_result = controls_api.set_chat_controls({
-        "provider": "openai", "model": "gpt-4o-mini", "mode": "edit",
+        "provider": "openai", "model": "gpt-4o-mini", "mode": "plan",
         "agent_id": "code-reviewer", "active_chat_provider": "chat",
     })
     _check("set_chat_controls aggregate setter updates state",
            aggregate_result.get("ok") is True
            and aggregate_result.get("controls", {}).get("provider") == "openai"
            and aggregate_result.get("controls", {}).get("model") == "gpt-4o-mini"
-           and aggregate_result.get("controls", {}).get("mode") == "edit"
+           and aggregate_result.get("controls", {}).get("mode") == "plan"
            and aggregate_result.get("controls", {}).get("active_agent_id") == "code-reviewer")
 
     provider_model_result = controls_api.set_provider_model("anthropic", "claude-test")
@@ -398,15 +398,15 @@ def test_phase1_ai_editor_regressions() -> None:
 
     eval_args = json.dumps({"action": "eval", "expression": "2 + 2"})
 
-    chat_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "chat"}}))
+    chat_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "ask"}}))
     chat_eval = json.loads(chat_api.execute_tool("engine", eval_args, confirmed=True))
-    _check("chat mode blocks direct engine(eval)",
+    _check("ask mode blocks direct engine(eval)",
            "Engine action disabled" in chat_eval.get("error", ""))
 
-    edit_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "edit"}}))
-    edit_eval = json.loads(edit_api.execute_tool("engine", eval_args))
-    _check("edit mode requires confirmation for direct engine(eval)",
-           edit_eval.get("requires_confirmation") is True)
+    plan_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "plan"}}))
+    plan_eval = json.loads(plan_api.execute_tool("engine", eval_args))
+    _check("plan mode requires confirmation for direct engine(eval)",
+           plan_eval.get("requires_confirmation") is True)
 
     agent_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "agent"}}))
     agent_eval = json.loads(agent_api.execute_tool("engine", eval_args, confirmed=True))
@@ -414,12 +414,12 @@ def test_phase1_ai_editor_regressions() -> None:
            agent_eval.get("result") == 4)
 
     _check("unknown tool default permissions by mode",
-           tool_permission("chat", "customPhaseTool") == "disabled"
-           and tool_permission("edit", "customPhaseTool") == "confirm"
-           and tool_permission("agent", "customPhaseTool") == "confirm")
+           tool_permission("ask", "customPhaseTool") == "disabled"
+           and tool_permission("plan", "customPhaseTool") == "confirm"
+           and tool_permission("agent", "customPhaseTool") == "allowed")
     _check("unknown tool explicit overrides honored",
-           tool_permission("chat", "customPhaseTool", {"customPhaseTool": "allowed"}) == "allowed"
-           and tool_permission("edit", "customPhaseTool", {"customPhaseTool": "disabled"}) == "disabled"
+           tool_permission("ask", "customPhaseTool", {"customPhaseTool": "allowed"}) == "allowed"
+           and tool_permission("plan", "customPhaseTool", {"customPhaseTool": "disabled"}) == "disabled"
            and tool_permission("agent", "customPhaseTool", {"customPhaseTool": "allowed"}) == "allowed")
 
     custom_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "agent"}}))
@@ -430,16 +430,16 @@ def test_phase1_ai_editor_regressions() -> None:
     custom_api._apply_mode_permissions()
     custom_tool = custom_api._registry.get("customPhaseTool")
     custom_default = json.loads(custom_api.execute_tool("customPhaseTool", "{}"))
-    _check("custom tool defaults to confirm in agent mode",
+    _check("custom tool auto-allowed in agent mode",
            custom_tool is not None
-           and custom_tool.requires_confirm is True
-           and custom_default.get("requires_confirmation") is True)
+           and custom_tool.requires_confirm is False
+           and custom_default.get("ok") is True)
     agent_preview = custom_api.get_mode("agent")
-    chat_preview = custom_api.get_mode("chat")
+    ask_preview = custom_api.get_mode("ask")
     _check("get_mode returns computed dynamic tool permissions",
-        agent_preview.get("permissions", {}).get("customPhaseTool") == "confirm"
-        and agent_preview.get("defaults", {}).get("customPhaseTool") == "confirm"
-        and chat_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
+        agent_preview.get("permissions", {}).get("customPhaseTool") == "allowed"
+        and agent_preview.get("defaults", {}).get("customPhaseTool") == "allowed"
+        and ask_preview.get("permissions", {}).get("customPhaseTool") == "disabled")
     custom_api._confirmation_timeout = 0.0
     confirm_events = []
     custom_api._emit = lambda event, data: confirm_events.append((event, data))
@@ -698,28 +698,35 @@ def test_scopes() -> None:
     # Mode permissions
     _check("3 modes", len(MODES) == 3)
 
-    chat_perms = effective_permissions("chat")
-    _check("chat: readFile disabled", chat_perms.get("readFile") == "disabled")
-    _check("chat: engine allowed", chat_perms.get("engine") == "allowed")
+    ask_perms = effective_permissions("ask")
+    _check("ask: readFile disabled", ask_perms.get("readFile") == "disabled")
+    _check("ask: engine allowed", ask_perms.get("engine") == "allowed")
 
-    edit_perms = effective_permissions("edit")
-    _check("edit: readFile allowed", edit_perms.get("readFile") == "allowed")
-    _check("edit: editFile confirm", edit_perms.get("editFile") == "confirm")
+    plan_perms = effective_permissions("plan")
+    _check("plan: readFile allowed", plan_perms.get("readFile") == "allowed")
+    _check("plan: editFile confirm", plan_perms.get("editFile") == "confirm")
 
     agent_perms = effective_permissions("agent")
     _check("agent: editFile allowed", agent_perms.get("editFile") == "allowed")
 
     # Overrides
-    custom = effective_permissions("edit", {"readFile": "disabled"})
+    custom = effective_permissions("plan", {"readFile": "disabled"})
     _check("override readFile", custom["readFile"] == "disabled")
 
     # tool_permission helper
-    _check("tool_permission chat/readFile",
-           tool_permission("chat", "readFile") == "disabled")
-    _check("tool_permission edit/readFile",
-           tool_permission("edit", "readFile") == "allowed")
-    _check("tool_permission unknown tool defaults confirm",
-           tool_permission("edit", "some_unknown_tool") == "confirm")
+    _check("tool_permission ask/readFile",
+           tool_permission("ask", "readFile") == "disabled")
+    _check("tool_permission plan/readFile",
+           tool_permission("plan", "readFile") == "allowed")
+    _check("tool_permission unknown tool defaults confirm in plan",
+           tool_permission("plan", "some_unknown_tool") == "confirm")
+    _check("tool_permission unknown tool defaults allowed in agent",
+           tool_permission("agent", "some_unknown_tool") == "allowed")
+    # Backward compat aliases
+    from ai_editor.scopes import normalize_mode
+    _check("normalize_mode chat->ask", normalize_mode("chat") == "ask")
+    _check("normalize_mode edit->plan", normalize_mode("edit") == "plan")
+    _check("normalize_mode agent stays", normalize_mode("agent") == "agent")
 
 
 def test_extension_host() -> None:

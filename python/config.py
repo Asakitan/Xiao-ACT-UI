@@ -370,7 +370,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "5.0.13"
+APP_VERSION = "5.1.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -378,6 +378,7 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 不要用环境变量门控; 后端不可用或窗口创建失败时自动回退到 ULW/CPU 路径。
 USE_GPU_MENU_HUD = True
 USE_GPU_OVERLAY = True
+USE_UNIFIED_OVERLAY = True
 
 DEFAULT_PANEL_THEMES: Dict[str, str] = {"act": "dark"}
 

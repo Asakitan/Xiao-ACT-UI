@@ -427,6 +427,18 @@ class SAOPlayerGUIFloatChromeMixin:
 
         def _display(pil_img):
             """主线程: 显示模糊图 + 350ms ease-out 渐隐."""
+            # ── Unified overlay path ──
+            try:
+                from render.gpu_overlay_window import get_unified_overlay_mode
+                _unified = get_unified_overlay_mode()
+            except Exception:
+                _unified = False
+
+            if _unified:
+                _display_unified(pil_img)
+                return
+
+            # ── Legacy Tk Toplevel path ──
             try:
                 mb_ov = tk.Toplevel(self.root)
                 mb_ov.overrideredirect(True)
@@ -441,7 +453,6 @@ class SAOPlayerGUIFloatChromeMixin:
                 cv.create_image(0, 0, image=photo, anchor='nw')
                 cv._photo = photo
 
-                # WDA_EXCLUDEFROMCAPTURE: 鱼眼截屏不会捕获到此 overlay
                 try:
                     import ctypes as _ct
                     _u32 = _ct.windll.user32
@@ -473,10 +484,6 @@ class SAOPlayerGUIFloatChromeMixin:
                 except Exception:
                     pass
                 if not closing:
-                    # This full-screen topmost blur appears after
-                    # SAOPopUpMenu.open() because the image is built on a
-                    # worker. Re-raise the popup so it does not flash-hidden
-                    # until the blur fades out.
                     self._raise_sao_menu_above_motion_blur()
                     try:
                         self.root.after(32, self._raise_sao_menu_above_motion_blur)
@@ -495,7 +502,6 @@ class SAOPlayerGUIFloatChromeMixin:
                 _clear_blur()
                 return
 
-            # 快速渐入 (50ms) → 缓慢渐隐 (350ms), 消除突然出现的闪烁感
             _t0 = time.time()
             _fadein_dur = 0.05
             _fadeout_dur = 0.35
@@ -511,7 +517,6 @@ class SAOPlayerGUIFloatChromeMixin:
                 if dt < _fadein_dur:
                     a = _peak * (dt / _fadein_dur)
                 elif dt < _fadein_dur + _fadeout_dur:
-                    # 渐隐阶段
                     t = (dt - _fadein_dur) / _fadeout_dur
                     a = _peak * (1.0 - t ** 0.6)
                 else:
@@ -525,6 +530,55 @@ class SAOPlayerGUIFloatChromeMixin:
                 except Exception: _clear_blur()
 
             mb_ov.after(1, _mblur_anim)
+
+        def _display_unified(pil_img):
+            """Unified overlay: display blur as a compositor layer."""
+            import numpy as np
+            from render.gpu_overlay_window import _get_unified_overlay
+
+            uo = _get_unified_overlay(self.root)
+            rgb = np.array(pil_img)
+            h, w = rgb.shape[:2]
+            bgra = np.empty((h, w, 4), dtype=np.uint8)
+            bgra[..., 0] = rgb[..., 2]
+            bgra[..., 1] = rgb[..., 1]
+            bgra[..., 2] = rgb[..., 0]
+            bgra[..., 3] = 255
+            bgra_bytes = bgra.tobytes()
+
+            layer = uo.create_layer(
+                '_motion_blur', width=w, height=h, x=0, y=0,
+                z=50, click_through=True,
+            )
+            layer.upload_bgra(bgra_bytes, w, h)
+            layer.alpha = 0.0
+            layer.show()
+
+            _t0 = time.time()
+            _fadein_dur = 0.05
+            _fadeout_dur = 0.35
+            _peak = 0.72
+
+            def _anim():
+                dt = time.time() - _t0
+                if dt < _fadein_dur:
+                    a = _peak * (dt / _fadein_dur)
+                elif dt < _fadein_dur + _fadeout_dur:
+                    t = (dt - _fadein_dur) / _fadeout_dur
+                    a = _peak * (1.0 - t ** 0.6)
+                else:
+                    uo.destroy_layer('_motion_blur')
+                    _clear_blur()
+                    return
+                layer.alpha = max(0.0, a)
+                layer.request_redraw()
+                try:
+                    self.root.after(16, _anim)
+                except Exception:
+                    uo.destroy_layer('_motion_blur')
+                    _clear_blur()
+
+            self.root.after(1, _anim)
 
         import threading as _th
         _th.Thread(target=_build_and_show, daemon=True).start()

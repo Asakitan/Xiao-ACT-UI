@@ -260,6 +260,14 @@ class SAOPlayerGUILifecycleMixin:
         except Exception:
             pass
         self._cleanup_exit_overlay()
+        # Stop unified overlay compositor
+        try:
+            from render.gpu_overlay_window import (
+                get_unified_overlay_mode, _unified_overlay_instance)
+            if get_unified_overlay_mode() and _unified_overlay_instance:
+                _unified_overlay_instance.stop()
+        except Exception:
+            pass
         try:
             self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
         except Exception:

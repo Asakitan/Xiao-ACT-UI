@@ -2540,6 +2540,15 @@ class HpOverlay:
         enabled = bool(enabled)
         if enabled == self._input_passthrough_enabled:
             return
+        if self._gpu_managed and self._gpu_window is not None:
+            fn = getattr(self._gpu_window, 'set_click_through', None)
+            if callable(fn):
+                try:
+                    fn(enabled)
+                    self._input_passthrough_enabled = enabled
+                    return
+                except Exception:
+                    pass
         hwnd = self._input_hwnd()
         if not hwnd:
             return

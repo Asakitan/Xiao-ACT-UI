@@ -97,7 +97,9 @@ def scope_subdirs(subdir: str) -> List[Dict[str, Any]]:
 
 # ── Modes ──
 
-MODES = ("chat", "edit", "agent")
+MODES = ("agent", "ask", "plan")
+
+_MODE_ALIASES: Dict[str, str] = {"chat": "ask", "edit": "plan"}
 
 MUTATING_TOOLS = frozenset({
     "editFile", "runTerminal", "editor_setContent",
@@ -115,29 +117,35 @@ ALWAYS_TOOLS = frozenset({
 })
 
 MODE_PERMISSIONS: Dict[str, Dict[str, str]] = {
-    "chat": {
-        **{t: "disabled" for t in MUTATING_TOOLS},
-        **{t: "disabled" for t in READ_TOOLS},
-        **{t: "allowed" for t in ALWAYS_TOOLS},
-    },
-    "edit": {
-        **{t: "allowed" for t in READ_TOOLS},
-        **{t: "confirm" for t in MUTATING_TOOLS},
-        **{t: "allowed" for t in ALWAYS_TOOLS},
-    },
     "agent": {
         **{t: "allowed" for t in READ_TOOLS},
         **{t: "allowed" for t in MUTATING_TOOLS},
         **{t: "allowed" for t in ALWAYS_TOOLS},
     },
+    "ask": {
+        **{t: "disabled" for t in MUTATING_TOOLS},
+        **{t: "disabled" for t in READ_TOOLS},
+        **{t: "allowed" for t in ALWAYS_TOOLS},
+    },
+    "plan": {
+        **{t: "allowed" for t in READ_TOOLS},
+        **{t: "confirm" for t in MUTATING_TOOLS},
+        **{t: "allowed" for t in ALWAYS_TOOLS},
+    },
 }
+
+
+def normalize_mode(mode: str) -> str:
+    """Map legacy mode names to current ones."""
+    return _MODE_ALIASES.get(mode, mode) if mode not in MODES else mode
 
 
 def effective_permissions(mode: str,
                           overrides: Optional[Dict[str, str]] = None,
                           ) -> Dict[str, str]:
     """Merge mode defaults with user overrides."""
-    base = dict(MODE_PERMISSIONS.get(mode, MODE_PERMISSIONS["edit"]))
+    mode = normalize_mode(mode)
+    base = dict(MODE_PERMISSIONS.get(mode, MODE_PERMISSIONS["agent"]))
     if overrides:
         base.update(overrides)
     return base
@@ -147,14 +155,17 @@ def tool_permission(mode: str, tool_name: str,
                     overrides: Optional[Dict[str, str]] = None,
                     read_only: Optional[bool] = None,
                     category: str = "") -> str:
+    mode = normalize_mode(mode)
     perms = effective_permissions(mode, overrides)
     explicit = perms.get(tool_name)
     if explicit in {"allowed", "confirm", "disabled"}:
         return explicit
 
-    selected_mode = mode if mode in MODES else "edit"
-    if selected_mode == "chat":
+    selected_mode = mode if mode in MODES else "agent"
+    if selected_mode == "ask":
         return "disabled"
+    if selected_mode == "agent":
+        return "allowed"
 
     normalized_category = (category or "").strip().lower()
     if normalized_category.startswith("ext:") or normalized_category.startswith("mcp:"):

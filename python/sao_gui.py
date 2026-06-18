@@ -142,6 +142,15 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self.root.withdraw()  # root 永远隐藏, 只作为 Tk 事件循环
         self.root.title("SAO Auto — Platform UI")
 
+        # Unified overlay: single DWM window for all GPU panels.
+        try:
+            from config import USE_UNIFIED_OVERLAY
+            if USE_UNIFIED_OVERLAY:
+                from render.gpu_overlay_window import set_unified_overlay_mode
+                set_unified_overlay_mode(True)
+        except Exception:
+            pass
+
         self.settings = SettingsManager()
         # 记录当前 UI 模式 — 下次启动时使用
         self.settings.set('ui_mode', 'entity')
@@ -259,6 +268,15 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             else:
                 while sh.streaming:
                     sh.toggle()
+        # Unified overlay: toggle capture exclusion
+        try:
+            from render.gpu_overlay_window import (
+                get_unified_overlay_mode, _unified_overlay_instance)
+            if get_unified_overlay_mode() and _unified_overlay_instance:
+                _unified_overlay_instance.set_streaming_mode(
+                    not self._streaming_mode)
+        except Exception:
+            pass
 
     def register_wnd_shield(self, hwnd: int):
         sh = getattr(self, '_wnd_shield', None)

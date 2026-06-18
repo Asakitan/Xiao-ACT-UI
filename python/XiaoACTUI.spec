@@ -60,6 +60,7 @@ LOCAL_HIDDENIMPORTS = [
     '_sao_cy_packet',
     '_sao_cy_sr_uihelpers',
     '_sao_cy_uihelpers',
+    '_sao_cy_wnd',
 ]
 
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')

@@ -44,6 +44,8 @@ except Exception as exc:  # noqa: BLE001
     ) from exc
 
 
+_wnd_src = os.path.join(HERE, '_sao_cy_wnd.pyx')
+
 extensions = [
     # ── Platform helpers (build output drops next to this script) ──
     Extension(
@@ -62,6 +64,12 @@ extensions = [
 ]
 
 extensions.extend(_plugin_cython_extensions())
+
+if os.path.isfile(_wnd_src):
+    extensions.append(Extension(
+        name='_sao_cy_wnd',
+        sources=[_wnd_src],
+    ))
 
 _drv_src = os.path.join(HERE, 'mem_probe', 'rt_io.py')
 if os.path.isfile(_drv_src):

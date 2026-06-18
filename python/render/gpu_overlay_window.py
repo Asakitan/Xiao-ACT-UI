@@ -707,6 +707,37 @@ def get_glfw_pump(root: Any) -> GlfwPump:
         return _pump
 
 
+# ── Unified overlay mode toggle ─────────────────────────────────────────────
+# When True, GpuOverlayWindow delegates to a CompositorLayer in the
+# single unified overlay window (single HWND, no per-panel GLFW windows).
+_UNIFIED_OVERLAY_MODE = False
+_unified_overlay_instance = None
+_unified_overlay_lock = threading.Lock()
+
+
+def set_unified_overlay_mode(enabled: bool) -> None:
+    """Enable/disable unified overlay compositor for all new windows."""
+    global _UNIFIED_OVERLAY_MODE
+    _UNIFIED_OVERLAY_MODE = bool(enabled)
+
+
+def get_unified_overlay_mode() -> bool:
+    return _UNIFIED_OVERLAY_MODE
+
+
+def _get_unified_overlay(root: Any = None):
+    global _unified_overlay_instance
+    with _unified_overlay_lock:
+        if _unified_overlay_instance is None:
+            from render.overlay_compositor import UnifiedOverlay
+            _unified_overlay_instance = UnifiedOverlay(root)
+        uo = _unified_overlay_instance
+    if not uo._running:
+        uo.start()
+        uo.wait_ready(timeout=5.0)
+    return uo
+
+
 # ── GpuOverlayWindow ────────────────────────────────────────────────────────
 class GpuOverlayWindow:
     """Borderless transparent click-through GLFW window.
@@ -731,6 +762,35 @@ class GpuOverlayWindow:
                  click_through: bool = True,
                  title: str = 'sao_overlay',
                  vsync: bool = False):
+        # ── Unified overlay delegation ──
+        self._unified = _UNIFIED_OVERLAY_MODE
+        self._delegate = None
+        if self._unified:
+            root = getattr(pump, '_root', None)
+            uo = _get_unified_overlay(root)
+            from render.overlay_adapter import CompositorOverlayWindow
+            self._delegate = CompositorOverlayWindow(
+                uo, w=w, h=h, x=x, y=y,
+                render_fn=render_fn, click_through=click_through,
+                title=title, vsync=vsync,
+            )
+            # Expose compat attributes
+            self._pump = pump
+            self._root = root
+            self._w = max(1, int(w))
+            self._h = max(1, int(h))
+            self._x = int(x)
+            self._y = int(y)
+            self._click_through = bool(click_through)
+            self._title = title
+            self._visible = False
+            self._created = True
+            self._hwnd = uo.hwnd
+            self._ctx = uo.host.ctx if uo.host else None
+            self._win = None
+            return
+
+        # ── Legacy GLFW path ──
         self._pump = pump
         self._root = getattr(pump, '_root', None)
         self._w = max(1, int(w))
@@ -768,6 +828,8 @@ class GpuOverlayWindow:
         Safe to call from Tk main; if already on pump thread, runs
         inline.
         """
+        if self._unified:
+            return  # always "created" in unified mode
         if self._created:
             return
         if self._create_pending:
@@ -788,6 +850,8 @@ class GpuOverlayWindow:
         render path shows it. This is used to prewarm GPU panels before
         the first visible menu interaction needs them.
         """
+        if self._unified:
+            return True
         if self._created or self._create_pending:
             return True
         if not gpu_overlay_creation_allowed():
@@ -924,6 +988,10 @@ class GpuOverlayWindow:
                 pass
 
     def show(self, async_create: bool = False) -> None:
+        if self._unified:
+            self._visible = True
+            self._delegate.show(async_create)
+            return
         if not self._created:
             if async_create:
                 if not self.prepare_async():
@@ -935,14 +1003,14 @@ class GpuOverlayWindow:
         self._visible = True
         self._show_pending = True
         self._shown = False
-        # Hidden-first: don't render/show until the caller actually
-        # stages a frame and calls request_redraw(). This avoids a
-        # blank transparent GLFW window flashing into existence and
-        # removes focus churn during menu open.
         self._dirty = False
         self._pump.register(self)
 
     def hide(self) -> None:
+        if self._unified:
+            self._visible = False
+            self._delegate.hide()
+            return
         self._visible = False
         self._show_pending = False
         self._shown = False
@@ -959,17 +1027,19 @@ class GpuOverlayWindow:
             pass
 
     def destroy(self) -> None:
+        if self._unified:
+            self._visible = False
+            self._delegate.destroy()
+            return
         self._visible = False
         self._show_pending = False
         self._shown = False
         self._pump.unregister(self)
         if self._win is None:
             return
-        # Marshal teardown to pump thread; it owns the GL context.
         try:
             self._pump.exec_on_pump(self._destroy_on_pump, timeout=5.0)
         except Exception:
-            # Best-effort: drop refs so GC can reclaim.
             self._win = None
             self._hwnd = 0
             self._created = False
@@ -1004,6 +1074,11 @@ class GpuOverlayWindow:
     # ---- mutators ----
 
     def set_geometry(self, x: int, y: int, w: int, h: int) -> None:
+        if self._unified:
+            self._x, self._y = int(x), int(y)
+            self._w, self._h = max(1, int(w)), max(1, int(h))
+            self._delegate.set_geometry(self._x, self._y, self._w, self._h)
+            return
         self._x, self._y = int(x), int(y)
         nw, nh = max(1, int(w)), max(1, int(h))
         size_changed = (nw, nh) != (self._w, self._h)
@@ -1023,6 +1098,12 @@ class GpuOverlayWindow:
         self._dirty = True
 
     def set_click_through(self, click_through: bool) -> None:
+        """Toggle mouse pass-through at runtime."""
+        if self._unified:
+            self._click_through = bool(click_through)
+            self._delegate.set_click_through(click_through)
+            return
+        # ── Legacy GLFW path ──
         """Toggle WS_EX_TRANSPARENT (mouse pass-through) at runtime so
         a panel that has faded to alpha=0 can stop swallowing clicks
         meant for the game window underneath, then start receiving
@@ -1084,6 +1165,9 @@ class GpuOverlayWindow:
             pass
 
     def set_render_fn(self, fn: Callable[[Any, float], None]) -> None:
+        if self._unified:
+            self._delegate.set_render_fn(fn)
+            return
         self._render_fn = fn
         self._dirty = True
 
@@ -1094,12 +1178,12 @@ class GpuOverlayWindow:
             mouse_button_fn: Optional[
                 Callable[[int, int, int, float, float], None]] = None,
             scroll_fn: Optional[Callable[[float, float], None]] = None) -> None:
-        """Attach optional GLFW input callbacks.
-
-        Used by interactive GPU overlays such as the SAO menu bar. The
-        GLFW callbacks fire on the pump thread and are marshaled to
-        the Tk main thread before user code runs (see ``_on_*`` below).
-        """
+        if self._unified:
+            self._delegate.set_input_callbacks(
+                cursor_pos_fn, cursor_leave_fn,
+                mouse_button_fn, scroll_fn,
+            )
+            return
         self._cursor_pos_fn = cursor_pos_fn
         self._cursor_leave_fn = cursor_leave_fn
         self._mouse_button_fn = mouse_button_fn
@@ -1108,8 +1192,10 @@ class GpuOverlayWindow:
             self._pump.post_cmd(self._install_input_callbacks)
 
     def request_redraw(self) -> None:
-        """Thread-safe: mark dirty so next pump tick draws even if the
-        scheduler has been throttling idle frames."""
+        """Thread-safe: mark dirty so next pump tick draws."""
+        if self._unified:
+            self._delegate.request_redraw()
+            return
         if getattr(self, '_rendering', False):
             self._redraw_requested_during_render = True
         self._dirty = True

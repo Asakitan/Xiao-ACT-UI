@@ -248,6 +248,30 @@ permission for each step — just do it. Only use `askQuestion` when \
 genuinely blocked on a decision the user must make.
 """
 
+PLAN_MODE_ADDITION = """\
+
+## Plan Mode Active
+
+You are in **Plan mode**. Do NOT directly edit files or run commands. Instead:
+
+1. **Analyze** — Read relevant files and understand the codebase.
+2. **Plan** — Output a clear, step-by-step implementation plan.
+
+Format your plan as a numbered list of concrete steps, each with:
+- **What** to change (file path + specific function/section)
+- **How** to change it (brief description of the modification)
+- **Why** (the purpose of this step)
+
+End your response with the exact marker line:
+```
+<!-- plan_ready -->
+```
+
+The user can then click **Implement** to switch to Agent mode and \
+execute your plan automatically. Do NOT make any changes yourself — \
+only describe what should be done.
+"""
+
 
 def _resolve_base_dir() -> str:
     try:
@@ -471,8 +495,8 @@ _workflow_prompt_cache: str = ""
 _workflow_prompt_version: int = -1
 
 
-def get_system_prompt(agent_mode: bool = False, custom: str = "",
-                      settings_getter=None) -> str:
+def get_system_prompt(agent_mode: bool = False, plan_mode: bool = False,
+                      custom: str = "", settings_getter=None) -> str:
     """Build the system prompt for a conversation."""
     global _agent_prompt_cache, _agent_prompt_version
     global _workflow_prompt_cache, _workflow_prompt_version
@@ -510,4 +534,6 @@ def get_system_prompt(agent_mode: bool = False, custom: str = "",
         pass
     if agent_mode:
         prompt += AGENT_MODE_ADDITION
+    elif plan_mode:
+        prompt += PLAN_MODE_ADDITION
     return prompt

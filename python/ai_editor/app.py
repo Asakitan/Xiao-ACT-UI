@@ -42,7 +42,7 @@ _PROVIDER_CONFIG_KEYS = {
 
 _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
 
-_MODE_VALUES = {"chat", "edit", "agent"}
+_MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
 _CODEX_TRANSPORT_VALUES = {"chat_completions", "responses", "cli"}
 _DANGEROUS_ENGINE_ACTIONS = {"settings_set", "eval", "exec"}
@@ -183,7 +183,7 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     cfg["permissions"] = _as_dict(cfg.get("permissions"))
     if "mode" in cfg:
         mode = str(cfg.get("mode") or "edit").strip().lower()
-        cfg["mode"] = mode if mode in _MODE_VALUES else "edit"
+        cfg["mode"] = mode if mode in _MODE_VALUES else "agent"
     if "theme" in cfg:
         cfg["theme"] = str(cfg.get("theme") or "")
     for section, defaults in _AI_EDITOR_SECTION_DEFAULTS.items():
@@ -262,7 +262,7 @@ class AIEditorAPI:
         self._delta_buf: List[str] = []
         self._thinking_buf: List[str] = []
         self._delta_last_flush: float = 0.0
-        self._mode: str = "edit"
+        self._mode: str = "agent"
         self._perm_overrides: Dict[str, str] = {}
         self._mcp = None
 
@@ -334,7 +334,8 @@ class AIEditorAPI:
         ai_cfg = _normalize_ai_editor_config(
             self._settings_getter("ai_editor", {}) or {})
         if isinstance(ai_cfg, dict):
-            self._mode = ai_cfg.get("mode", "edit")
+            from ai_editor.scopes import normalize_mode
+            self._mode = normalize_mode(ai_cfg.get("mode", "agent"))
             self._perm_overrides = ai_cfg.get("permissions", {})
         self._apply_mode_permissions()
 
@@ -382,9 +383,11 @@ class AIEditorAPI:
             return settings.get(key, default)
         return default
 
-    def _default_system_prompt(self, agent_mode: bool = False) -> str:
+    def _default_system_prompt(self, agent_mode: bool = False,
+                               plan_mode: bool = False) -> str:
         from ai_editor.prompts import get_system_prompt
         return get_system_prompt(agent_mode=agent_mode,
+                                 plan_mode=plan_mode,
                                  settings_getter=self._settings_getter)
 
     # ── Config ──
@@ -451,7 +454,8 @@ class AIEditorAPI:
             self._apply_config_to_engine(merged)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
-            self._mode = merged.get("mode") or self._mode
+            from ai_editor.scopes import normalize_mode
+            self._mode = normalize_mode(merged.get("mode")) or self._mode
         if isinstance(merged.get("permissions"), dict):
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
@@ -477,7 +481,8 @@ class AIEditorAPI:
         self._apply_config_to_engine(merged)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
-            self._mode = merged.get("mode") or self._mode
+            from ai_editor.scopes import normalize_mode
+            self._mode = normalize_mode(merged.get("mode")) or self._mode
         if isinstance(merged.get("permissions"), dict):
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
@@ -715,11 +720,36 @@ class AIEditorAPI:
                 self._set_active_agent(agent_id)
                 stripped = rest.strip()
         effective_agent = agent_mode or self._mode == "agent"
+        is_plan = self._mode == "plan" and not effective_agent
         if effective_agent and self._controller.conversation:
             self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
+        elif is_plan and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt(plan_mode=True)
         self._apply_mode_permissions()
+        if self._mode == "agent":
+            for t in self._registry.list_tools():
+                self._controller._session_auto_approve[t.name] = True
         self._controller.send(stripped, agent_mode=effective_agent)
         return {"ok": True}
+
+    def implement_plan(self) -> Dict:
+        """Switch from Plan to Agent mode and execute the last plan."""
+        self._ensure_engine()
+        old_mode = self._mode
+        self._mode = "agent"
+        self._save_mode_to_settings()
+        self._apply_mode_permissions()
+        for t in self._registry.list_tools():
+            self._controller._session_auto_approve[t.name] = True
+        if self._controller.conversation:
+            self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
+        self._controller.send(
+            "Implement the plan above. Execute each step. "
+            "Read files before editing. Run tests after changes. "
+            "Use taskComplete when done.",
+            agent_mode=True,
+        )
+        return {"ok": True, "mode": "agent", "previous_mode": old_mode}
 
     def _resolve_variable(self, name: str) -> str:
         """Resolve @-mention variables by reading editor state."""
@@ -857,10 +887,11 @@ class AIEditorAPI:
     # ── Mode & Permission API ──
 
     def get_mode(self, mode: str = "") -> Dict:
-        from ai_editor.scopes import MODES, MODE_PERMISSIONS, tool_permission
+        from ai_editor.scopes import MODES, MODE_PERMISSIONS, tool_permission, normalize_mode
+        mode = normalize_mode(mode) if mode else ""
         selected = mode if mode in MODES else self._mode
         registry_tools: Dict[str, Any] = {}
-        tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["edit"]).keys())
+        tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["agent"]).keys())
         if self._registry:
             for tool in self._registry.list_tools(include_disabled=True):
                 registry_tools[tool.name] = tool
@@ -912,7 +943,8 @@ class AIEditorAPI:
         }
 
     def set_mode(self, mode: str) -> Dict:
-        from ai_editor.scopes import MODES
+        from ai_editor.scopes import MODES, normalize_mode
+        mode = normalize_mode(mode)
         if mode not in MODES:
             return {"error": f"Invalid mode: {mode}. Valid: {list(MODES)}"}
         self._mode = mode
@@ -1002,7 +1034,7 @@ class AIEditorAPI:
         return ""
 
     def _engine_action_blocked(self, action: str) -> bool:
-        return self._mode == "chat" and action in _DANGEROUS_ENGINE_ACTIONS
+        return self._mode == "ask" and action in _DANGEROUS_ENGINE_ACTIONS
 
     def _engine_action_gate(self, arguments: Any, confirmed: bool) -> Optional[Dict[str, Any]]:
         action = self._engine_action_from_arguments(arguments)
@@ -1020,19 +1052,18 @@ class AIEditorAPI:
         if not self._registry:
             return
         disabled: List[str] = []
+        is_agent = self._mode == "agent"
         for tool in self._registry.list_tools(include_disabled=True):
             p = self._permission_for_tool(tool)
             if p == "disabled":
                 disabled.append(tool.name)
                 tool.enabled = False
-            elif p == "confirm":
+            elif p == "confirm" and not is_agent:
                 tool.enabled = True
                 tool.requires_confirm = True
             else:
                 tool.enabled = True
-                tool.requires_confirm = (
-                    tool.name == "engine" and self._mode == "edit"
-                )
+                tool.requires_confirm = False
         self._registry._openai_cache = None
         if self._controller:
             self._controller._disabled_tools = set(disabled)
@@ -1907,7 +1938,7 @@ class AIEditorAPI:
         return leaf.startswith(("read", "list", "get", "search", "show", "fetch", "query", "find"))
 
     def _mcp_tool_allowed(self, name: str) -> bool:
-        if self._mode == "chat":
+        if self._mode == "ask":
             return False
         override = self._perm_overrides.get(name)
         if override == "disabled":
