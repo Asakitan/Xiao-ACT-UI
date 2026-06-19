@@ -673,6 +673,7 @@ class UnifiedOverlay:
             # Keep WGL context current for the entire thread lifetime.
             # Different threads' WGL contexts are independent — holding
             # ours doesn't block GLFW pump or render workers.
+            self._host.set_capture_mode(True)
             self._host.show()
             self._ready.set()
         except Exception as exc:

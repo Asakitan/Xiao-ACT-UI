@@ -251,13 +251,9 @@ class SAOPlayerGUIMenuMixin:
 
         plugin_items = self._build_plugin_menu_items()
 
-        sm = getattr(self, '_streaming_mode', False)
-        sm_label = 'Streaming: ON' if sm else 'Streaming: OFF'
-
         children = {
             '控制': [
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
-                {'icon': '📡' if sm else '🛡', 'label': sm_label, 'command': self._toggle_streaming},
                 {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],

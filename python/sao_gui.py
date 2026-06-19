@@ -152,7 +152,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
                 prestart_unified_overlay(self.root)
         except Exception:
             pass
-        self._streaming_mode = False
 
         self.settings = SettingsManager()
         # 记录当前 UI 模式 — 下次启动时使用
@@ -215,17 +214,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._ai_editor_panel = None  # AIEditorPanel
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()
-        self._streaming_mode = bool(self.settings.get('streaming_mode', False))
-        # Apply saved streaming state to compositor
-        if self._streaming_mode is not None:
-            try:
-                from render.gpu_overlay_window import (
-                    get_unified_overlay_mode, _get_unified_overlay)
-                if get_unified_overlay_mode():
-                    uo = _get_unified_overlay()
-                    uo.set_streaming_mode(not self._streaming_mode)
-            except Exception:
-                pass
         self._init_wnd_shield()
         self._set_icon()
         self._create_floating_widget()
@@ -268,28 +256,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             self._wnd_shield = WndShield()
         except Exception:
             self._wnd_shield = None
-
-    def _toggle_streaming(self):
-        self._streaming_mode = not self._streaming_mode
-        self.settings.set('streaming_mode', self._streaming_mode)
-        self.settings.save()
-        sh = getattr(self, '_wnd_shield', None)
-        if sh:
-            if self._streaming_mode:
-                while not sh.streaming:
-                    sh.toggle()
-            else:
-                while sh.streaming:
-                    sh.toggle()
-        # Unified overlay: toggle capture exclusion
-        try:
-            from render.gpu_overlay_window import (
-                get_unified_overlay_mode, _unified_overlay_instance)
-            if get_unified_overlay_mode() and _unified_overlay_instance:
-                _unified_overlay_instance.set_streaming_mode(
-                    not self._streaming_mode)
-        except Exception:
-            pass
 
     def register_wnd_shield(self, hwnd: int):
         sh = getattr(self, '_wnd_shield', None)

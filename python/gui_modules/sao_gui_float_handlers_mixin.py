@@ -383,7 +383,23 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _toggle_float_button_visibility(self):
-        """Insert key: hide/show the floating NerveGear trigger button."""
+        """Insert key: hide/show ALL overlay layers (compositor + button)."""
+        try:
+            from render.gpu_overlay_window import (
+                get_unified_overlay_mode, _unified_overlay_instance)
+            if get_unified_overlay_mode() and _unified_overlay_instance:
+                uo = _unified_overlay_instance
+                host = uo.host
+                if host:
+                    if getattr(self, '_overlays_hidden', False):
+                        host.show()
+                        self._overlays_hidden = False
+                    else:
+                        host.hide()
+                        self._overlays_hidden = True
+                    return
+        except Exception:
+            pass
         btn = getattr(self, '_float_gpu_button', None)
         if btn is None:
             return
