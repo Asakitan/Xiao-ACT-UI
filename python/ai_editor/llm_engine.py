@@ -365,7 +365,7 @@ class LLMEngine:
                         if delta.finish_reason:
                             accumulated.finish_reason = delta.finish_reason
                         if delta.usage:
-                            accumulated.usage = delta.usage
+                            accumulated.usage = self._normalize_usage(delta.usage)
                         if delta.refusal:
                             accumulated.refusal = (accumulated.refusal or "") + delta.refusal
 
@@ -422,6 +422,7 @@ class LLMEngine:
         body = self._build_responses_body(cfg, messages, tools, stream=True)
         accumulated = LLMResponse(model=cfg.effective_model)
         tool_call_buffers: Dict[Any, Dict[str, Any]] = {}
+        tool_item_keys: Dict[str, Any] = {}
         completed: Optional[LLMResponse] = None
 
         headers = self._build_headers(cfg)
@@ -433,6 +434,7 @@ class LLMEngine:
                 time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
                 accumulated = LLMResponse(model=cfg.effective_model)
                 tool_call_buffers.clear()
+                tool_item_keys.clear()
                 completed = None
             last_exc = None
             try:
@@ -442,6 +444,30 @@ class LLMEngine:
                         continue
                     resp.raise_for_status()
                     event_type = ""
+
+                    def _remember_tool_key(key: Any, item: Dict[str, Any], data_obj: Dict[str, Any]) -> None:
+                        for value in (
+                            item.get("id"), item.get("call_id"),
+                            data_obj.get("item_id"), data_obj.get("call_id"),
+                        ):
+                            if value:
+                                tool_item_keys[str(value)] = key
+
+                    def _tool_key(data_obj: Dict[str, Any], item: Optional[Dict[str, Any]] = None) -> Any:
+                        for value in (data_obj.get("item_id"), data_obj.get("call_id")):
+                            if value and str(value) in tool_item_keys:
+                                return tool_item_keys[str(value)]
+                        if data_obj.get("output_index") is not None:
+                            return data_obj.get("output_index")
+                        if item:
+                            for value in (item.get("id"), item.get("call_id")):
+                                if value and str(value) in tool_item_keys:
+                                    return tool_item_keys[str(value)]
+                            for value in (item.get("id"), item.get("call_id")):
+                                if value:
+                                    return value
+                        return data_obj.get("item_id") or data_obj.get("call_id") or len(tool_call_buffers)
+
                     for line in resp.iter_lines():
                         if self._cancel.is_set():
                             accumulated.finish_reason = "cancelled"
@@ -485,33 +511,45 @@ class LLMEngine:
                         elif dtype == "response.output_item.added":
                             item = data.get("item", {})
                             if item.get("type") == "function_call":
-                                key = data.get("output_index", item.get("id", len(tool_call_buffers)))
+                                key = _tool_key(data, item)
+                                _remember_tool_key(key, item, data)
                                 tool_call_buffers[key] = {
                                     "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:8]}",
                                     "name": item.get("name", ""),
-                                    "arguments": item.get("arguments", "") or "",
+                                    "arguments": self._coerce_tool_arguments(item.get("arguments", "")),
                                 }
                         elif dtype == "response.function_call_arguments.delta":
-                            key = data.get("output_index", data.get("item_id", 0))
+                            key = _tool_key(data)
+                            _remember_tool_key(key, {}, data)
                             buf = tool_call_buffers.setdefault(key, {
                                 "id": data.get("call_id") or data.get("item_id") or f"call_{uuid.uuid4().hex[:8]}",
                                 "name": data.get("name", ""),
                                 "arguments": "",
                             })
-                            buf["arguments"] += data.get("delta", "") or ""
+                            if data.get("call_id"):
+                                buf["id"] = data.get("call_id")
+                            if data.get("name"):
+                                buf["name"] = data.get("name")
+                            buf["arguments"] += self._coerce_tool_arguments(data.get("delta", ""))
                         elif dtype == "response.function_call_arguments.done":
-                            key = data.get("output_index", data.get("item_id", 0))
+                            key = _tool_key(data)
+                            _remember_tool_key(key, {}, data)
                             buf = tool_call_buffers.setdefault(key, {
                                 "id": data.get("call_id") or data.get("item_id") or f"call_{uuid.uuid4().hex[:8]}",
                                 "name": data.get("name", ""),
                                 "arguments": "",
                             })
+                            if data.get("call_id"):
+                                buf["id"] = data.get("call_id")
+                            if data.get("name"):
+                                buf["name"] = data.get("name")
                             if data.get("arguments") is not None:
-                                buf["arguments"] = data.get("arguments", "") or ""
+                                buf["arguments"] = self._coerce_tool_arguments(data.get("arguments", ""))
                         elif dtype == "response.output_item.done":
                             item = data.get("item", {})
                             if item.get("type") == "function_call":
-                                key = data.get("output_index", item.get("id", len(tool_call_buffers)))
+                                key = _tool_key(data, item)
+                                _remember_tool_key(key, item, data)
                                 buf = tool_call_buffers.setdefault(key, {
                                     "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:8]}",
                                     "name": "",
@@ -519,7 +557,9 @@ class LLMEngine:
                                 })
                                 buf["id"] = item.get("call_id") or item.get("id") or buf["id"]
                                 buf["name"] = item.get("name", buf["name"])
-                                buf["arguments"] = item.get("arguments", buf["arguments"]) or ""
+                                buf["arguments"] = self._coerce_tool_arguments(
+                                    item.get("arguments", buf["arguments"])
+                                )
                         elif dtype == "response.completed":
                             completed = self._parse_responses_response(data.get("response", {}), cfg)
                             break
@@ -553,15 +593,28 @@ class LLMEngine:
             if completed.refusal and not accumulated.refusal:
                 accumulated.refusal = completed.refusal
             accumulated.finish_reason = completed.finish_reason
-            accumulated.usage = completed.usage
-            if not tool_call_buffers:
+            accumulated.usage = self._normalize_usage(completed.usage)
+            if tool_call_buffers:
+                completed_by_id = {tc.id: tc for tc in completed.tool_calls}
+                for buf in tool_call_buffers.values():
+                    matching = completed_by_id.get(buf["id"])
+                    if matching:
+                        if not buf["name"]:
+                            buf["name"] = matching.name
+                        if not buf["arguments"]:
+                            buf["arguments"] = matching.arguments
+            else:
                 accumulated.tool_calls = completed.tool_calls
 
         if tool_call_buffers:
-            accumulated.tool_calls = [
+            tool_calls = [
                 ToolCall(id=buf["id"], name=buf["name"], arguments=buf["arguments"])
                 for buf in tool_call_buffers.values()
             ]
+            if completed:
+                seen = {tc.id for tc in tool_calls}
+                tool_calls.extend(tc for tc in completed.tool_calls if tc.id not in seen)
+            accumulated.tool_calls = tool_calls
 
         return accumulated
 
@@ -622,7 +675,10 @@ class LLMEngine:
                             accumulated.model = msg.get("model", cfg.effective_model)
                             usage = msg.get("usage", {})
                             if usage:
-                                accumulated.usage["input_tokens"] = usage.get("input_tokens", 0)
+                                accumulated.usage = self._normalize_usage({
+                                    **accumulated.usage,
+                                    "input_tokens": usage.get("input_tokens", 0),
+                                })
 
                         elif dtype == "content_block_start":
                             idx = data.get("index", 0)
@@ -663,10 +719,10 @@ class LLMEngine:
                             accumulated.finish_reason = d.get("stop_reason", "")
                             usage = data.get("usage", {})
                             if usage:
-                                accumulated.usage["output_tokens"] = usage.get("output_tokens", 0)
-                                inp = accumulated.usage.get("input_tokens", 0)
-                                out = usage.get("output_tokens", 0)
-                                accumulated.usage["total_tokens"] = inp + out
+                                accumulated.usage = self._normalize_usage({
+                                    **accumulated.usage,
+                                    "output_tokens": usage.get("output_tokens", 0),
+                                })
 
                         elif dtype == "message_stop":
                             break
@@ -836,10 +892,7 @@ class LLMEngine:
                 blocks.append({"type": "text", "text": msg["content"]})
             for tc in msg["tool_calls"]:
                 fn = tc.get("function", {})
-                try:
-                    inp = json.loads(fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    inp = {}
+                inp = LLMEngine._tool_input_from_arguments(fn.get("arguments", ""))
                 blocks.append({
                     "type": "tool_use",
                     "id": tc.get("id", ""),
@@ -890,7 +943,7 @@ class LLMEngine:
                         "type": "function_call",
                         "call_id": tc.get("id", ""),
                         "name": fn.get("name", ""),
-                        "arguments": fn.get("arguments", ""),
+                        "arguments": cls._coerce_tool_arguments(fn.get("arguments", "")),
                     })
                 continue
             item_role = role if role in {"user", "assistant"} else "user"
@@ -954,6 +1007,67 @@ class LLMEngine:
             return ""
         return str(content)
 
+    @staticmethod
+    def _coerce_tool_arguments(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _tool_input_from_arguments(value: Any) -> Dict[str, Any]:
+        raw = LLMEngine._coerce_tool_arguments(value)
+        if not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return {
+                "_raw_arguments": raw,
+                "_argument_parse_error": f"{exc.msg} at char {exc.pos}",
+            }
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+
+    @staticmethod
+    def _normalize_usage(usage: Any) -> Dict[str, Any]:
+        if not isinstance(usage, dict):
+            return {}
+        result = dict(usage)
+
+        def _as_int(value: Any) -> Optional[int]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        input_tokens = _as_int(result.get("input_tokens"))
+        if input_tokens is None:
+            input_tokens = _as_int(result.get("prompt_tokens"))
+        output_tokens = _as_int(result.get("output_tokens"))
+        if output_tokens is None:
+            output_tokens = _as_int(result.get("completion_tokens"))
+        total_tokens = _as_int(result.get("total_tokens"))
+
+        if input_tokens is not None:
+            result["input_tokens"] = input_tokens
+            result.setdefault("prompt_tokens", input_tokens)
+        if output_tokens is not None:
+            result["output_tokens"] = output_tokens
+            result.setdefault("completion_tokens", output_tokens)
+        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+            total_tokens = input_tokens + output_tokens
+        if total_tokens is not None:
+            result["total_tokens"] = total_tokens
+        return result
+
     # -- Response parsing --
 
     @staticmethod
@@ -964,11 +1078,7 @@ class LLMEngine:
             resp.finish_reason = data.get("stop_reason", "")
             usage = data.get("usage", {})
             if usage:
-                resp.usage = {
-                    "input_tokens": usage.get("input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0),
-                    "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-                }
+                resp.usage = LLMEngine._normalize_usage(usage)
             for block in data.get("content", []):
                 btype = block.get("type", "")
                 if btype == "text":
@@ -980,7 +1090,7 @@ class LLMEngine:
                     resp.tool_calls.append(ToolCall(
                         id=block.get("id", ""),
                         name=block.get("name", ""),
-                        arguments=json.dumps(inp, ensure_ascii=False) if isinstance(inp, dict) else str(inp),
+                        arguments=LLMEngine._coerce_tool_arguments(inp),
                     ))
         except (KeyError, TypeError) as exc:
             resp.error = f"Anthropic parse error: {exc}\nRaw: {json.dumps(data, ensure_ascii=False)[:500]}"
@@ -1003,7 +1113,7 @@ class LLMEngine:
                 LLMEngine._merge_responses_output_item(resp, item, include_item_text)
             usage = data.get("usage", {})
             if usage:
-                resp.usage = dict(usage)
+                resp.usage = LLMEngine._normalize_usage(usage)
         except (KeyError, TypeError) as exc:
             resp.error = f"Responses parse error: {exc}\nRaw: {json.dumps(data, ensure_ascii=False)[:500]}"
         return resp
@@ -1030,7 +1140,7 @@ class LLMEngine:
             resp.tool_calls.append(ToolCall(
                 id=item.get("call_id") or item.get("id", ""),
                 name=item.get("name", ""),
-                arguments=item.get("arguments", "") or "",
+                arguments=LLMEngine._coerce_tool_arguments(item.get("arguments", "")),
             ))
         elif itype == "reasoning":
             for part in item.get("summary", []):
@@ -1055,10 +1165,10 @@ class LLMEngine:
                 resp.tool_calls.append(ToolCall(
                     id=tc.get("id", ""),
                     name=fn.get("name", ""),
-                    arguments=fn.get("arguments", ""),
+                    arguments=LLMEngine._coerce_tool_arguments(fn.get("arguments", "")),
                 ))
             if "usage" in data:
-                resp.usage = data["usage"]
+                resp.usage = LLMEngine._normalize_usage(data["usage"])
         except (KeyError, IndexError, TypeError) as exc:
             resp.error = f"Parse error: {exc}\nRaw: {json.dumps(data, ensure_ascii=False)[:500]}"
         return resp
@@ -1080,7 +1190,7 @@ class LLMEngine:
         except (IndexError, TypeError):
             pass
         if "usage" in chunk and chunk["usage"]:
-            delta.usage = chunk["usage"]
+            delta.usage = LLMEngine._normalize_usage(chunk["usage"])
         return delta
 
     # -- Convenience --
@@ -1124,17 +1234,54 @@ class LLMEngine:
         total = 0
         for msg in messages:
             content = msg.get("content", "")
-            if isinstance(content, str):
-                total += self.estimate_tokens(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            total += self.estimate_tokens(part.get("text", ""))
-                        elif part.get("type") == "image_url":
-                            total += 85  # base image token cost
+            total += self._count_content_tokens(content)
+            for key in ("name", "tool_call_id", "call_id", "arguments", "output"):
+                if key in msg:
+                    total += self._count_payload_tokens(msg.get(key))
+            if msg.get("tool_calls"):
+                total += self._count_payload_tokens(msg.get("tool_calls"))
             total += 4  # per-message overhead
         return total
+
+    @classmethod
+    def _count_content_tokens(cls, content: Any) -> int:
+        if isinstance(content, str):
+            return cls.estimate_tokens(content)
+        if isinstance(content, list):
+            total = 0
+            for part in content:
+                if isinstance(part, dict):
+                    ptype = part.get("type")
+                    if ptype in {"text", "input_text", "output_text", "summary_text", "reasoning_text"}:
+                        total += cls.estimate_tokens(str(part.get("text", "")))
+                    elif ptype in {"image_url", "input_image"}:
+                        total += 85
+                    else:
+                        total += cls._count_payload_tokens(part)
+                else:
+                    total += cls._count_payload_tokens(part)
+            return total
+        return cls._count_payload_tokens(content)
+
+    @classmethod
+    def _count_payload_tokens(cls, value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            if value.startswith("data:image/"):
+                return 85
+            return cls.estimate_tokens(value)
+        if isinstance(value, dict):
+            total = 0
+            for key, item in value.items():
+                if key in {"image_url", "url"} and isinstance(item, str) and item.startswith("data:image/"):
+                    total += 85
+                else:
+                    total += cls.estimate_tokens(str(key)) + cls._count_payload_tokens(item)
+            return total
+        if isinstance(value, list):
+            return sum(cls._count_payload_tokens(item) for item in value)
+        return cls.estimate_tokens(str(value))
 
     # -- Image/vision message helpers --
 

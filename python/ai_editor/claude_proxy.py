@@ -204,6 +204,12 @@ class ClaudeProxy:
             return self._server.server_address[1]
         return 0
 
+    @property
+    def model(self) -> str:
+        if self._engine:
+            return self._engine.config.effective_model
+        return "claude-sonnet-4-20250514"
+
     def set_engine(self, engine: Any) -> None:
         self._engine = engine
         if self._server:
@@ -237,6 +243,5 @@ class ClaudeProxy:
         return {
             "ANTHROPIC_BASE_URL": self.base_url + "/v1",
             "ANTHROPIC_API_KEY": self._nonce,
-            "ANTHROPIC_MODEL": (self._engine.config.effective_model
-                                if self._engine else "claude-sonnet-4-20250514"),
+            "ANTHROPIC_MODEL": self.model,
         }

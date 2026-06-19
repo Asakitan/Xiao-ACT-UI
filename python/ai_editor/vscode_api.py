@@ -18,6 +18,7 @@ Implemented namespaces:
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import threading
@@ -266,6 +267,17 @@ class ChatParticipant:
         self._pause_state_emitter = EventEmitter()
         self._disposed = False
 
+    def invoke(self, prompt: str = "", command: str = "",
+               token: Any = None, **request_fields: Any) -> Dict[str, Any]:
+        req = ChatRequest(prompt=prompt, command=command)
+        for key, value in request_fields.items():
+            if hasattr(req, key):
+                setattr(req, key, value)
+        ctx = ChatContext()
+        stream = ChatResponseStream()
+        result = self.request_handler(req, ctx, stream, token)
+        return {"content": stream.get_content(), "result": result}
+
     @property
     def on_did_receive_feedback(self):
         return self._feedback_emitter.event
@@ -306,6 +318,58 @@ class PreparedToolInvocation:
     def __init__(self, confirmation: Dict = None) -> None:
         self.invocation_message: str = ""
         self.confirmation_messages: Dict = confirmation or {}
+
+
+def _coerce_tool_options(value: Any, token: Any = None
+                         ) -> LanguageModelToolInvocationOptions:
+    if isinstance(value, LanguageModelToolInvocationOptions):
+        return LanguageModelToolInvocationOptions(
+            input=value.input, token=token or value.token, model=value.model)
+    option_keys = {"input", "token", "model", "toolInvocationToken"}
+    if isinstance(value, dict) and "input" in value and (
+            set(value).issubset(option_keys) or
+            any(k in value for k in option_keys - {"input"})):
+        return LanguageModelToolInvocationOptions(
+            input=value.get("input"),
+            token=value.get("token") or value.get("toolInvocationToken") or token,
+            model=value.get("model"),
+        )
+    return LanguageModelToolInvocationOptions(input=value, token=token)
+
+
+def _tool_schema(tool: Any) -> Dict:
+    if isinstance(tool, dict):
+        return tool.get("inputSchema") or tool.get("schema") or {}
+    return getattr(tool, "inputSchema", {}) or {}
+
+
+def _unsupported_tool_result(name: str, detail: str) -> LanguageModelToolResult:
+    return LanguageModelToolResult.text(
+        f"unsupported/needsExtensionRuntime: LanguageModelTool '{name}' {detail}")
+
+
+def _call_registered_handler(handler: Callable,
+                             options: LanguageModelToolInvocationOptions,
+                             token: Any) -> Any:
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return handler(options, token)
+    params = list(sig.parameters.values())
+    positional = [
+        p for p in params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    has_varargs = any(p.kind == p.VAR_POSITIONAL for p in params)
+    has_varkw = any(p.kind == p.VAR_KEYWORD for p in params)
+    keyword_only = [p for p in params if p.kind == p.KEYWORD_ONLY]
+    if has_varargs or len(positional) >= 2:
+        return handler(options, token)
+    if len(positional) == 1:
+        return handler(options.input)
+    if (has_varkw or keyword_only) and isinstance(options.input, dict):
+        return handler(**options.input)
+    return handler()
 
 
 # ---------------------------------------------------------------------------
@@ -739,11 +803,15 @@ class VscodeNamespace:
             desc: Dict[str, Any] = {"name": name}
             if isinstance(tool, dict):
                 desc["description"] = tool.get("description", "")
-                desc["inputSchema"] = tool.get("schema", {})
+                desc["inputSchema"] = _tool_schema(tool)
                 desc["tags"] = tool.get("tags", [])
+                if tool.get("needsExtensionRuntime"):
+                    desc["unsupported"] = True
+                    desc["needsExtensionRuntime"] = True
+                    desc["code"] = "needsExtensionRuntime"
             elif hasattr(tool, "description"):
                 desc["description"] = getattr(tool, "description", "")
-                desc["inputSchema"] = getattr(tool, "inputSchema", {})
+                desc["inputSchema"] = _tool_schema(tool)
                 desc["tags"] = getattr(tool, "tags", [])
             result.append(desc)
         return result
@@ -800,8 +868,14 @@ class VscodeNamespace:
         return Disposable(_dispose)
 
     def _register_tool_definition(self, name: str, schema: Dict) -> Disposable:
-        """Register a tool by JSON schema (no handler yet — stub until invokeTool wires it)."""
-        self._lm_tools[name] = {"schema": schema, "stub": True}
+        """Register a schema-only tool definition without pretending it can run."""
+        self._lm_tools[name] = {
+            "schema": schema or {},
+            "unsupported": True,
+            "needsExtensionRuntime": True,
+            "code": "needsExtensionRuntime",
+            "description": "Schema-only tool definition has no invoke handler.",
+        }
         self._tools_change_emitter.fire({"added": name})
         return Disposable(lambda: self._lm_tools.pop(name, None))
 
@@ -840,29 +914,34 @@ class VscodeNamespace:
         tool = self._lm_tools.get(name)
         if not tool:
             raise KeyError(f"Tool not found: {name}")
-        if isinstance(tool, dict) and tool.get("stub"):
-            schema = tool.get("schema", {})
-            if schema and input_data is not None:
-                self._validate_input_schema(name, input_data, schema)
-            return LanguageModelToolResult.text(f"[stub] {name}")
-        # Validate against inputSchema if the tool exposes one
-        if hasattr(tool, "inputSchema") and tool.inputSchema and input_data is not None:
-            self._validate_input_schema(name, input_data, tool.inputSchema)
+        options = _coerce_tool_options(input_data, token)
+        schema = _tool_schema(tool)
+        if schema and options.input is not None:
+            self._validate_input_schema(name, options.input, schema)
+        if isinstance(tool, dict):
+            if tool.get("needsExtensionRuntime") or tool.get("unsupported"):
+                return _unsupported_tool_result(
+                    name, "is schema-only and has no registered invoke handler.")
+            handler = tool.get("invoke") or tool.get("handler") or tool.get("callback")
+            if callable(handler):
+                return _call_registered_handler(handler, options, options.token)
+            return _unsupported_tool_result(
+                name, "is registered without an invoke handler.")
         # prepareInvocation hook
         if hasattr(tool, "prepareInvocation"):
             try:
                 prep = tool.prepareInvocation(
-                    LanguageModelToolInvocationOptions(input=input_data), token)
+                    options, options.token)
                 if isinstance(prep, PreparedToolInvocation) and prep.confirmation_messages:
                     pass  # UI would show confirmation — we auto-approve in shim
             except Exception:
                 pass
         if hasattr(tool, "invoke"):
-            opts = LanguageModelToolInvocationOptions(input=input_data, token=token)
-            return tool.invoke(opts, token)
+            return tool.invoke(options, options.token)
         if callable(tool):
-            return tool(input_data)
-        return LanguageModelToolResult.text(f"[no handler] {name}")
+            return _call_registered_handler(tool, options, options.token)
+        return _unsupported_tool_result(
+            name, "is registered without an invoke handler.")
 
     @staticmethod
     def _validate_input_schema(tool_name: str, input_data: Any,
@@ -957,7 +1036,7 @@ class VscodeNamespace:
 
 
 # ---------------------------------------------------------------------------
-# Helper stubs
+# Helper compatibility classes
 # ---------------------------------------------------------------------------
 
 def _check_json_type(value: Any, expected: str) -> bool:

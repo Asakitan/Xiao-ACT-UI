@@ -140,6 +140,14 @@ def _normalize_stop(value: Any) -> List[str]:
     return []
 
 
+def _normalize_cli_args(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [part.strip() for part in value.splitlines() if part.strip()]
+    if isinstance(value, list):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return []
+
+
 def _normalize_transport(value: Any, default: str = "chat_completions",
                          allowed: Optional[set[str]] = None) -> str:
     allowed_values = allowed or _ENGINE_TRANSPORT_VALUES
@@ -147,6 +155,22 @@ def _normalize_transport(value: Any, default: str = "chat_completions",
     if raw in {"openai_responses", "response"}:
         raw = "responses"
     return raw if raw in allowed_values else default
+
+
+def _normalize_cli_provider_section(section: str,
+                                    value: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = dict(value)
+    cfg["cli_path"] = str(cfg.get("cli_path") or "").strip()
+    cfg["cli_args"] = _normalize_cli_args(cfg.get("cli_args", cfg.get("args", [])))
+    cfg["model"] = str(cfg.get("model") or "").strip()
+    if section == "claude_code":
+        cfg["prefer_cli"] = _as_bool(cfg.get("prefer_cli"), False)
+        cfg["allow_dangerously_skip_permissions"] = _as_bool(
+            cfg.get("allow_dangerously_skip_permissions"), False)
+    if section == "codex":
+        cfg["transport"] = _normalize_transport(
+            cfg.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
+    return cfg
 
 
 def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
@@ -191,9 +215,8 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
             current = _as_dict(cfg.get(section))
             merged = dict(defaults)
             merged.update(current)
-            if section == "codex":
-                merged["transport"] = _normalize_transport(
-                    merged.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
+            if section in {"claude_code", "codex"}:
+                merged = _normalize_cli_provider_section(section, merged)
             cfg[section] = merged
     return cfg
 
@@ -1059,9 +1082,13 @@ class AIEditorAPI:
             return
         disabled: List[str] = []
         is_agent = self._mode == "agent"
+        agent_allowed = self._active_agent_tool_allowlist()
         for tool in self._registry.list_tools(include_disabled=True):
             p = self._permission_for_tool(tool)
-            if p == "disabled":
+            if agent_allowed is not None and tool.name not in agent_allowed:
+                disabled.append(tool.name)
+                tool.enabled = False
+            elif p == "disabled":
                 disabled.append(tool.name)
                 tool.enabled = False
             elif p == "confirm" and not is_agent:
@@ -1076,6 +1103,17 @@ class AIEditorAPI:
             self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
             self._controller.mcp_tool_allowed = self._mcp_tool_allowed
 
+    def _active_agent_tool_allowlist(self) -> Optional[set[str]]:
+        active_agent_id = getattr(self, "_active_agent_id", None)
+        agent_registry = getattr(self, "_agent_registry", None)
+        if not active_agent_id or not agent_registry:
+            return None
+        agent = agent_registry.get(active_agent_id)
+        tools = getattr(agent, "tools", None) if agent else None
+        if tools is None:
+            return None
+        return {str(name).strip() for name in tools if str(name).strip()}
+
     # ── Chat Provider API ──
 
     def list_chat_providers(self) -> Dict:
@@ -1088,9 +1126,13 @@ class AIEditorAPI:
         prov = self._provider_registry.get(provider_id)
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
-        self._active_provider = provider_id
         if provider_id == "chat":
+            self._active_provider = provider_id
             return {"ok": True, "provider": "chat"}
+        unavailable = self._provider_unavailable_reason(prov)
+        if unavailable:
+            return {"error": unavailable, "provider": provider_id, "available": False}
+        self._active_provider = provider_id
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -1105,9 +1147,9 @@ class AIEditorAPI:
         prov = self._provider_registry.get(provider_id)
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
-        unsupported = self._unsupported_provider_transport(prov)
-        if unsupported:
-            return {"error": unsupported}
+        unavailable = self._provider_unavailable_reason(prov)
+        if unavailable:
+            return {"error": unavailable, "provider": provider_id, "available": False}
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -1153,33 +1195,7 @@ class AIEditorAPI:
 
     def _create_provider_controller(self, prov) -> ChatController:
         """Create a ChatController for a non-default provider."""
-        from ai_editor.llm_engine import ProviderConfig
-        key = self._resolve_provider_key(prov.provider_type)
-        provider_settings = self._provider_section_settings(prov.id)
-        base_cfg = self._engine.config if self._engine else ProviderConfig()
-        transport = "chat_completions"
-        if prov.id == "codex":
-            transport = _normalize_transport(
-                provider_settings.get("transport"), "chat_completions", _ENGINE_TRANSPORT_VALUES)
-        cfg = ProviderConfig(
-            provider=prov.provider_type,
-            api_key=key or self._engine.config.api_key,
-            base_url=prov.base_url or "",
-            model=str(provider_settings.get("model") or prov.model),
-            temperature=base_cfg.temperature,
-            max_tokens=base_cfg.max_tokens,
-            system_prompt=prov.system_prompt,
-            transport=transport,
-            top_p=base_cfg.top_p,
-            frequency_penalty=base_cfg.frequency_penalty,
-            presence_penalty=base_cfg.presence_penalty,
-            stop=list(base_cfg.stop),
-            max_input_tokens=base_cfg.max_input_tokens,
-            max_output_tokens=base_cfg.max_output_tokens,
-            timeout=base_cfg.timeout,
-            extra_headers=dict(base_cfg.extra_headers),
-            extra_body=dict(base_cfg.extra_body),
-        )
+        cfg = self._provider_config_for(prov)
         engine = LLMEngine(cfg)
         conv = Conversation(system_prompt=prov.system_prompt)
         ctrl = ChatController(engine, self._registry, conv)
@@ -1212,6 +1228,43 @@ class AIEditorAPI:
         ctrl.mcp_tool_allowed = self._mcp_tool_allowed
         return ctrl
 
+    def _provider_config_for(self, prov) -> ProviderConfig:
+        """Build the exact runtime config for a right-sidebar provider tab."""
+        base_cfg = self._engine.config if self._engine else ProviderConfig()
+        settings = self._provider_section_settings(prov.id)
+        transport = "chat_completions"
+        if prov.id == "codex":
+            transport = _normalize_transport(
+                settings.get("transport"), "chat_completions", _ENGINE_TRANSPORT_VALUES)
+
+        key = str(getattr(prov, "api_key", "") or self._resolve_provider_key(prov.provider_type) or "")
+        if not key and base_cfg.provider == prov.provider_type:
+            key = base_cfg.api_key
+
+        base_url = str(getattr(prov, "base_url", "") or "")
+        if not base_url and base_cfg.provider == prov.provider_type:
+            base_url = base_cfg.base_url
+
+        return ProviderConfig(
+            provider=prov.provider_type,
+            api_key=key,
+            base_url=base_url,
+            model=str(settings.get("model") or prov.model or ""),
+            temperature=base_cfg.temperature,
+            max_tokens=base_cfg.max_tokens,
+            system_prompt=prov.system_prompt,
+            transport=transport,
+            top_p=base_cfg.top_p,
+            frequency_penalty=base_cfg.frequency_penalty,
+            presence_penalty=base_cfg.presence_penalty,
+            stop=list(base_cfg.stop),
+            max_input_tokens=base_cfg.max_input_tokens,
+            max_output_tokens=base_cfg.max_output_tokens,
+            timeout=base_cfg.timeout,
+            extra_headers=dict(base_cfg.extra_headers),
+            extra_body=dict(base_cfg.extra_body),
+        )
+
     def _provider_section_settings(self, provider_id: str) -> Dict[str, Any]:
         ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
         if provider_id == "claude-code":
@@ -1226,20 +1279,61 @@ class AIEditorAPI:
             transport = _normalize_transport(
                 settings.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
             if transport == "cli":
-                return "Codex CLI transport is configured, but chat execution currently supports Chat Completions or Responses only."
+                return self._unsupported_cli_message("Codex", "codex", settings)
         if prov.id == "claude-code" and settings.get("prefer_cli") is True:
-            return "Claude Code CLI preference is configured, but chat execution currently uses the Anthropic API/proxy path."
+            return self._unsupported_cli_message("Claude Code", "claude", settings)
         return ""
 
+    def _unsupported_cli_message(self, label: str, default_command: str,
+                                 settings: Dict[str, Any]) -> str:
+        from ai_editor.chat_providers import _cli_available
+        cli_path = str(settings.get("cli_path") or default_command).strip()
+        args = _normalize_cli_args(settings.get("cli_args", settings.get("args", [])))
+        resolved = _cli_available(cli_path)
+        state = "resolves" if resolved else "does not resolve"
+        proxy_hint = " The local ClaudeProxy can still be started for SDK-compatible clients." if label == "Claude Code" else ""
+        return (
+            f"{label} CLI transport is configured, but this backend does not execute "
+            f"the CLI transport yet. CLI command {state}; {len(args)} CLI arg(s) "
+            f"are saved.{proxy_hint} Use an API transport in this tab until CLI "
+            "execution is wired."
+        )
+
+    def _provider_unavailable_reason(self, prov) -> str:
+        unsupported = self._unsupported_provider_transport(prov)
+        if unsupported:
+            return unsupported
+        return self._missing_provider_key_reason(prov)
+
+    def _missing_provider_key_reason(self, prov) -> str:
+        if prov.id == "claude-code" and not self._provider_has_key(prov):
+            return "Claude Code API/proxy transport requires an Anthropic API key in Provider Keys or as the active Anthropic provider key."
+        if prov.id == "codex" and not self._provider_has_key(prov):
+            return "Codex API transport requires an OpenAI API key in Provider Keys or as the active OpenAI provider key."
+        return ""
+
+    def _provider_has_key(self, prov) -> bool:
+        if getattr(prov, "api_key", ""):
+            return True
+        if self._resolve_provider_key(prov.provider_type):
+            return True
+        cfg = self._engine.config if self._engine else None
+        return bool(cfg and cfg.provider == prov.provider_type and cfg.api_key)
+
     def _resolve_provider_key(self, provider_type: str) -> str:
-        ai = self._settings_getter("ai_editor", {}) or {}
+        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
         if not isinstance(ai, dict):
             return ""
-        if ai.get("provider") == provider_type:
+        if ai.get("provider") == provider_type and ai.get("api_key"):
             return ai.get("api_key", "")
         keys = ai.get("provider_keys", {})
         if isinstance(keys, dict):
-            return keys.get(provider_type, "")
+            key = keys.get(provider_type, "")
+            if key:
+                return key
+        legacy_keys = ai.get("_provider_keys", {})
+        if isinstance(legacy_keys, dict):
+            return legacy_keys.get(provider_type, "")
         return ""
 
     # ── Agent API (JS-callable) ──
@@ -1280,6 +1374,7 @@ class AIEditorAPI:
         self._active_agent_id = None
         if self._controller and self._controller.conversation:
             self._controller.conversation.system_prompt = self._default_system_prompt()
+        self._apply_mode_permissions()
         return {"ok": True}
 
     def get_active_agent(self) -> Dict:
@@ -1296,6 +1391,7 @@ class AIEditorAPI:
                 base + f"\n\n# Active Agent: {agent.name}\n\n"
                 + agent.system_prompt
             )
+        self._apply_mode_permissions()
         return {"ok": True, "agent": agent.to_dict()}
 
     # ── Workflow API (JS-callable) ──
@@ -1364,15 +1460,58 @@ class AIEditorAPI:
             return {"error": f"Agent not found: {agent_id}",
                     "available": [a.id for a in self._agent_registry.list_all()]}
         self._set_active_agent(agent_id)
+        if str(message or "").strip():
+            cfg = self._agent_provider_config(agent)
+            engine = LLMEngine(cfg)
+            try:
+                resp = engine.chat_completion([
+                    {"role": "system", "content": agent.system_prompt},
+                    {"role": "user", "content": str(message)},
+                ], tools=None)
+            finally:
+                engine.close()
+            if resp.error:
+                return {"error": resp.error, "agent": agent.id, "name": agent.name}
+            return {
+                "agent": agent.id,
+                "name": agent.name,
+                "content": resp.content,
+                "thinking": resp.thinking,
+                "usage": resp.usage,
+                "model": resp.model or cfg.effective_model,
+            }
         return {
             "agent": agent.id,
             "name": agent.name,
             "activated": True,
+            "message": message,
             "instruction": (
                 f"Now acting as {agent.name}. "
                 f"Apply this guidance:\n\n{agent.system_prompt}"
             ),
         }
+
+    def _agent_provider_config(self, agent: Any) -> ProviderConfig:
+        base_cfg = self._engine.config if self._engine else ProviderConfig()
+        return ProviderConfig(
+            provider=base_cfg.provider,
+            api_key=base_cfg.api_key,
+            base_url=base_cfg.base_url,
+            model=str(getattr(agent, "model", "") or base_cfg.model),
+            temperature=base_cfg.temperature,
+            max_tokens=base_cfg.max_tokens,
+            system_prompt=getattr(agent, "system_prompt", "") or base_cfg.system_prompt,
+            transport=base_cfg.transport,
+            top_p=base_cfg.top_p,
+            frequency_penalty=base_cfg.frequency_penalty,
+            presence_penalty=base_cfg.presence_penalty,
+            stop=list(base_cfg.stop),
+            max_input_tokens=base_cfg.max_input_tokens,
+            max_output_tokens=base_cfg.max_output_tokens,
+            timeout=base_cfg.timeout,
+            extra_headers=dict(base_cfg.extra_headers),
+            extra_body=dict(base_cfg.extra_body),
+        )
 
     def _eng_list_workflows(self) -> Dict:
         return {"workflows": [
@@ -1455,9 +1594,14 @@ class AIEditorAPI:
                 name=f"ext_{name}",
                 description=tool.get("displayName", name),
                 parameters=schema,
-                handler=lambda _n=name, **kw: {"stub": True, "tool": _n, **kw},
+                handler=lambda _n=name, _tool=tool, **kw: self._invoke_extension_lm_tool(
+                    _n, _tool, kw),
                 category=f"ext:{tool.get('_extensionId', '')}",
-                tags={"extension": True},
+                tags={
+                    "extension": True,
+                    "needsExtensionRuntime": bool(
+                        tool.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
+                },
             )
         for cp in ep.chat_participants:
             if "chatParticipants" not in enabled:
@@ -1476,6 +1620,31 @@ class AIEditorAPI:
             )
             self._provider_registry.register(prov)
         self._apply_mode_permissions()
+
+    def _invoke_extension_lm_tool(self, name: str, manifest_tool: Dict[str, Any],
+                                  arguments: Dict[str, Any]) -> Dict[str, Any]:
+        registered = self._vscode_ns.registered_tools.get(name) if self._vscode_ns else None
+        if registered:
+            result = self.invoke_lm_tool(name, arguments)
+            return result if isinstance(result, dict) else {"result": result}
+        runtime = _as_dict(manifest_tool.get("_runtimeSupport"))
+        if not runtime:
+            runtime = {
+                "ok": False,
+                "unsupported": True,
+                "needsExtensionRuntime": True,
+                "code": "needsExtensionRuntime",
+                "contribution": "languageModelTool",
+                "extensionId": manifest_tool.get("_extensionId", ""),
+                "id": name,
+                "message": (
+                    f"VSCode languageModelTool '{name}' is manifest-only in "
+                    "SAO AI Editor until a real extension runtime handler is registered."
+                ),
+            }
+        payload = dict(runtime)
+        payload["arguments"] = dict(arguments)
+        return payload
 
     def _extension_settings(self) -> Dict[str, Any]:
         ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
@@ -1818,15 +1987,26 @@ class AIEditorAPI:
     def start_claude_proxy(self) -> Dict:
         """Start the local Anthropic-compatible proxy for Claude Code SDK."""
         self._ensure_engine()
+        prov = self._provider_registry.get("claude-code") if self._provider_registry else None
+        if not prov:
+            return {"error": "Claude Code provider is not registered"}
+        missing_key = self._missing_provider_key_reason(prov)
+        if missing_key:
+            return {"error": missing_key, "running": False}
+        proxy_engine = LLMEngine(self._provider_config_for(prov))
         if self._claude_proxy and self._claude_proxy.is_running:
+            self._claude_proxy.set_engine(proxy_engine)
             return {"ok": True, "port": self._claude_proxy.port,
-                    "base_url": self._claude_proxy.base_url}
+                    "base_url": self._claude_proxy.base_url,
+                    "env": self._claude_proxy.get_env(),
+                    "model": proxy_engine.config.effective_model}
         from ai_editor.claude_proxy import ClaudeProxy
-        self._claude_proxy = ClaudeProxy(self._engine)
+        self._claude_proxy = ClaudeProxy(proxy_engine)
         port = self._claude_proxy.start()
         return {"ok": True, "port": port,
                 "base_url": self._claude_proxy.base_url,
-                "env": self._claude_proxy.get_env()}
+                "env": self._claude_proxy.get_env(),
+                "model": proxy_engine.config.effective_model}
 
     def stop_claude_proxy(self) -> Dict:
         if self._claude_proxy:
@@ -1836,7 +2016,8 @@ class AIEditorAPI:
     def get_claude_proxy_status(self) -> Dict:
         if self._claude_proxy and self._claude_proxy.is_running:
             return {"running": True, "port": self._claude_proxy.port,
-                    "base_url": self._claude_proxy.base_url}
+                    "base_url": self._claude_proxy.base_url,
+                    "model": self._claude_proxy.model}
         return {"running": False}
 
     def install_extension_dir(self, ext_dir: str) -> Dict:
@@ -2011,7 +2192,7 @@ class AIEditorAPI:
         server = {
             "id": str(config.get("id", "")).strip(),
             "name": str(config.get("name", config.get("id", ""))).strip(),
-            "transport": str(config.get("transport", "stdio")),
+            "transport": str(config.get("transport", "stdio")).strip().lower(),
             "command": str(config.get("command", "")),
             "args": list(config.get("args", [])) if isinstance(config.get("args", []), list) else [],
             "env": dict(config.get("env", {})) if isinstance(config.get("env", {}), dict) else {},
@@ -2021,6 +2202,13 @@ class AIEditorAPI:
         }
         if not server["id"]:
             return {"error": "MCP server id is required"}
+        if server["transport"] not in {"stdio", "sse"}:
+            return {
+                "error": (
+                    f"Unsupported MCP transport: {server['transport']}. "
+                    "This build supports stdio and SSE; streamable HTTP is not wired yet."
+                )
+            }
         self._upsert_saved_mcp_server(server)
         cfg = McpServerConfig(
             id=server["id"],
@@ -2104,6 +2292,18 @@ class AIEditorAPI:
             base_url=cfg.get("base_url", ""),
             model=cfg.get("model", ""),
             transport=_normalize_transport(cfg.get("transport")),
+            temperature=_as_float(cfg.get("temperature"), 0.7),
+            max_tokens=_as_int(cfg.get("max_tokens"), 4096),
+            top_p=_as_float(cfg.get("top_p"), 1.0),
+            frequency_penalty=_as_float(cfg.get("frequency_penalty"), 0.0),
+            presence_penalty=_as_float(cfg.get("presence_penalty"), 0.0),
+            stop=_normalize_stop(cfg.get("stop")),
+            max_input_tokens=_as_int(cfg.get("max_input_tokens"), 0),
+            max_output_tokens=_as_int(cfg.get("max_output_tokens"), 0),
+            timeout=_as_int(cfg.get("timeout"), 180),
+            extra_headers={str(k): str(v) for k, v in _as_dict(
+                cfg.get("extra_headers")).items()},
+            extra_body=_as_dict(cfg.get("extra_body")),
         )
         ok, msg = self._engine.test_connection(test_cfg)
         return {"ok": ok, "message": msg}

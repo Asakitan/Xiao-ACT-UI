@@ -47,7 +47,7 @@ class ChatMessage:
     tool_name: Optional[str] = None
     timestamp: float = field(default_factory=time.time)
     model: str = ""
-    usage: Dict[str, int] = field(default_factory=dict)
+    usage: Dict[str, Any] = field(default_factory=dict)
     is_streaming: bool = False
     is_error: bool = False
 
@@ -382,6 +382,7 @@ class ChatController:
 
                 _first_token_time = [None]
                 _request_start = time.monotonic()
+                _request_tokens = self.engine.count_message_tokens(messages)
 
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
                     if (delta.content or delta.thinking) and _first_token_time[0] is None:
@@ -408,7 +409,20 @@ class ChatController:
                 assistant_msg.content = resp.content
                 assistant_msg.thinking = resp.thinking
                 assistant_msg.tool_calls = resp.tool_calls
-                assistant_msg.usage = resp.usage or {}
+                assistant_msg.usage = dict(resp.usage or {})
+                if _request_tokens and "context_tokens" not in assistant_msg.usage:
+                    assistant_msg.usage["context_tokens"] = _request_tokens
+                if not assistant_msg.usage.get("total_tokens"):
+                    output_tokens = self.engine.estimate_tokens(
+                        (resp.content or "") + (resp.thinking or ""))
+                    if output_tokens or _request_tokens:
+                        assistant_msg.usage.setdefault("input_tokens", _request_tokens)
+                        assistant_msg.usage.setdefault("output_tokens", output_tokens)
+                        assistant_msg.usage["total_tokens"] = (
+                            int(assistant_msg.usage.get("input_tokens") or 0)
+                            + int(assistant_msg.usage.get("output_tokens") or 0)
+                        )
+                        assistant_msg.usage.setdefault("estimated", True)
                 if _first_token_time[0] is not None:
                     assistant_msg.usage["ttft_ms"] = round(
                         (_first_token_time[0] - _request_start) * 1000, 1)
@@ -624,26 +638,30 @@ class ChatController:
 
 _MIN_COMPRESSIBLE = 1024
 _MAX_COMPRESSED = 3000
+_JSON_PREVIEW_ITEMS = 8
+_JSON_PREVIEW_DEPTH = 3
 
 _READ_ONLY_TOOLS = frozenset({
     "readFile", "listFiles", "searchFiles",
     "editor_getContent", "editor_getSelection", "editor_getLanguage",
 })
 
-_STRUCTURED_PREFIXES = ('{', '[', '---', '<!', '<?xml')
-
-
 def _compress_tool_result(result: str, tool_name: str) -> str:
+    if not isinstance(result, str):
+        result = json.dumps(result, ensure_ascii=False, default=str)
     if not result or len(result) <= _MIN_COMPRESSIBLE:
         return result
     stripped = result.lstrip()
-    if any(stripped.startswith(p) for p in _STRUCTURED_PREFIXES):
+    before = len(result)
+    if stripped.startswith(("{", "[")):
         try:
-            json.loads(result)
-            return result
+            return _compress_json_tool_result(json.loads(result), tool_name, before)
         except (json.JSONDecodeError, ValueError):
             pass
-    before = len(result)
+    return _compress_text_tool_result(result, tool_name, before)
+
+
+def _compress_text_tool_result(result: str, tool_name: str, before: int) -> str:
     lines = result.split("\n")
     if len(lines) > 80:
         head = "\n".join(lines[:30])
@@ -651,7 +669,73 @@ def _compress_tool_result(result: str, tool_name: str) -> str:
         result = (f"{head}\n\n[... {len(lines) - 45} lines omitted, "
                   f"{before} → ~{len(head) + len(tail) + 80} chars. "
                   f"Use readFile for full content ...]\n\n{tail}")
-    elif before > _MAX_COMPRESSED:
-        result = (result[:_MAX_COMPRESSED]
-                  + f"\n\n[Output compressed: {before} → {_MAX_COMPRESSED} chars]")
+    if len(result) > _MAX_COMPRESSED:
+        budget = max(200, _MAX_COMPRESSED - 120)
+        result = (_truncate_middle(result, budget)
+                  + f"\n\n[Output compressed by {tool_name}: {before} → <= {_MAX_COMPRESSED} chars]")
     return result
+
+
+def _compress_json_tool_result(value: Any, tool_name: str, before: int) -> str:
+    preview = _json_preview(value, 0)
+    payload = {
+        "_compressed": True,
+        "tool": tool_name,
+        "original_chars": before,
+        "note": "Large JSON tool result summarized to protect chat context. Re-run a narrower tool call or read the source file for full content.",
+        "preview": preview,
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    if len(text) <= _MAX_COMPRESSED:
+        return text
+    compact = json.dumps(value, ensure_ascii=False, default=str)
+    payload["preview"] = _truncate_middle(compact, max(200, _MAX_COMPRESSED - 450))
+    payload["preview_truncated"] = True
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    if len(text) > _MAX_COMPRESSED:
+        payload["preview"] = _truncate_middle(str(payload["preview"]), max(80, _MAX_COMPRESSED - 650))
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+    return text
+
+
+def _json_preview(value: Any, depth: int) -> Any:
+    if depth >= _JSON_PREVIEW_DEPTH:
+        return _json_leaf(value)
+    if isinstance(value, dict):
+        items = list(value.items())
+        out: Dict[str, Any] = {}
+        for key, item in items[:_JSON_PREVIEW_ITEMS]:
+            out[str(key)] = _json_preview(item, depth + 1)
+        if len(items) > _JSON_PREVIEW_ITEMS:
+            out["_omitted_keys"] = len(items) - _JSON_PREVIEW_ITEMS
+        return out
+    if isinstance(value, list):
+        out = [_json_preview(item, depth + 1) for item in value[:_JSON_PREVIEW_ITEMS]]
+        if len(value) > _JSON_PREVIEW_ITEMS:
+            out.append({"_omitted_items": len(value) - _JSON_PREVIEW_ITEMS})
+        return out
+    return _json_leaf(value)
+
+
+def _json_leaf(value: Any) -> Any:
+    if isinstance(value, str):
+        return _truncate_middle(value, 500)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {"_type": "object", "keys": len(value)}
+    if isinstance(value, list):
+        return {"_type": "array", "items": len(value)}
+    return _truncate_middle(str(value), 500)
+
+
+def _truncate_middle(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    marker = f"... [{len(text) - limit} chars omitted] ..."
+    if limit <= len(marker) + 20:
+        return text[:limit]
+    keep = limit - len(marker)
+    head = keep // 2
+    tail = keep - head
+    return text[:head] + marker + text[-tail:]

@@ -100,9 +100,9 @@ class ChatProviderRegistry:
         """Return providers with availability flag based on supported configuration."""
         result = []
         for p in self._providers.values():
-            avail = self._check_available(p, settings_getter)
+            status = self._provider_status(p, settings_getter)
             d = p.to_dict()
-            d["available"] = avail
+            d.update(status)
             d["builtin"] = p.builtin
             result.append(d)
         return result
@@ -110,22 +110,88 @@ class ChatProviderRegistry:
     @staticmethod
     def _check_available(p: ChatProviderDef,
                          settings_getter: Optional[Callable]) -> bool:
+        return bool(ChatProviderRegistry._provider_status(
+            p, settings_getter).get("available"))
+
+    @staticmethod
+    def _provider_status(p: ChatProviderDef,
+                         settings_getter: Optional[Callable]) -> Dict[str, Any]:
+        status: Dict[str, Any] = {
+            "available": True,
+            "status": "available",
+            "unavailable_reason": "",
+            "api_key_available": True,
+        }
         if p.id == "chat":
-            return True
+            return status
         if p.id == "claude-code":
+            section = _get_provider_section("claude_code", settings_getter)
+            model = _get_provider_option("claude_code", "model", settings_getter)
+            status["model"] = model or p.model
+            status.update(_cli_status("claude_code", "claude", settings_getter))
+            status["api_key_available"] = bool(_get_provider_key("anthropic", settings_getter))
             prefer_cli = _get_provider_bool("claude_code", "prefer_cli", settings_getter)
             if prefer_cli:
-                return False
-            return bool(_get_provider_key("anthropic", settings_getter))
+                return _unavailable(
+                    status,
+                    "Claude Code CLI preference is configured, but this backend "
+                    "does not execute the Claude CLI transport yet. Turn off "
+                    "Prefer CLI to use the Anthropic API/proxy path.",
+                )
+            if not status["api_key_available"]:
+                return _unavailable(
+                    status,
+                    "Anthropic API key is not configured for Claude Code.",
+                )
+            status["prefer_cli"] = bool(section.get("prefer_cli"))
+            return status
         if p.id == "codex":
-            transport = _get_provider_option("codex", "transport", settings_getter).lower()
+            transport = _normalize_transport(
+                _get_provider_option("codex", "transport", settings_getter),
+                "chat_completions",
+                {"chat_completions", "responses", "cli"},
+            )
+            model = _get_provider_option("codex", "model", settings_getter)
+            status["transport"] = transport
+            status["model"] = model or p.model
+            status.update(_cli_status("codex", "codex", settings_getter))
+            status["api_key_available"] = bool(_get_provider_key("openai", settings_getter))
             if transport == "cli":
-                return False
-            return bool(_get_provider_key("openai", settings_getter))
+                return _unavailable(
+                    status,
+                    "Codex CLI transport is configured, but this backend does "
+                    "not execute the Codex CLI transport yet. Select Chat "
+                    "Completions or Responses to use the Codex tab.",
+                )
+            if not status["api_key_available"]:
+                return _unavailable(status, "OpenAI API key is not configured for Codex.")
+            return status
         if p.api_key:
-            return True
+            return status
         key = _get_provider_key(p.provider_type, settings_getter)
-        return bool(key)
+        status["api_key_available"] = bool(key)
+        if not key:
+            return _unavailable(
+                status,
+                f"API key is not configured for provider type {p.provider_type}.",
+            )
+        return status
+
+
+def _unavailable(status: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    updated = dict(status)
+    updated["available"] = False
+    updated["status"] = "unavailable"
+    updated["unavailable_reason"] = reason
+    return updated
+
+
+def _normalize_transport(value: Any, default: str,
+                         allowed: set[str]) -> str:
+    raw = str(value or default).strip().lower().replace("-", "_")
+    if raw in {"openai_responses", "response"}:
+        raw = "responses"
+    return raw if raw in allowed else default
 
 
 def _get_provider_key(provider_type: str,
@@ -142,7 +208,12 @@ def _get_provider_key(provider_type: str,
         return configured_key
     keys = ai.get("provider_keys", {})
     if isinstance(keys, dict):
-        return keys.get(provider_type, "")
+        key = keys.get(provider_type, "")
+        if key:
+            return key
+    legacy_keys = ai.get("_provider_keys", {})
+    if isinstance(legacy_keys, dict):
+        return legacy_keys.get(provider_type, "")
     return ""
 
 
@@ -169,22 +240,48 @@ def _get_provider_cli_path(section_name: str,
     return ""
 
 
-def _get_provider_option(section_name: str, option: str,
-                         settings_getter: Optional[Callable]) -> str:
+def _get_provider_section(section_name: str,
+                          settings_getter: Optional[Callable]) -> Dict[str, Any]:
     ai = _get_ai_editor_settings(settings_getter)
     section = ai.get(section_name, {})
-    if isinstance(section, dict):
-        value = section.get(option, "")
-        if isinstance(value, str):
-            return value.strip()
+    return section if isinstance(section, dict) else {}
+
+
+def _get_provider_option(section_name: str, option: str,
+                         settings_getter: Optional[Callable]) -> str:
+    section = _get_provider_section(section_name, settings_getter)
+    value = section.get(option, "")
+    if isinstance(value, str):
+        return value.strip()
     return ""
 
 
 def _get_provider_bool(section_name: str, option: str,
                        settings_getter: Optional[Callable]) -> bool:
-    ai = _get_ai_editor_settings(settings_getter)
-    section = ai.get(section_name, {})
-    return bool(section.get(option)) if isinstance(section, dict) else False
+    section = _get_provider_section(section_name, settings_getter)
+    return bool(section.get(option))
+
+
+def _get_provider_args_count(section_name: str,
+                             settings_getter: Optional[Callable]) -> int:
+    section = _get_provider_section(section_name, settings_getter)
+    args = section.get("cli_args", section.get("args", []))
+    if isinstance(args, str):
+        return len([part for part in args.splitlines() if part.strip()])
+    if isinstance(args, list):
+        return len([part for part in args if str(part).strip()])
+    return 0
+
+
+def _cli_status(section_name: str, default_command: str,
+                settings_getter: Optional[Callable]) -> Dict[str, Any]:
+    configured_path = _get_provider_cli_path(section_name, settings_getter)
+    candidate = configured_path or default_command
+    return {
+        "cli_configured": bool(configured_path),
+        "cli_available": _cli_available(candidate),
+        "cli_args_count": _get_provider_args_count(section_name, settings_getter),
+    }
 
 
 def _cli_available(cli_path: str) -> bool:

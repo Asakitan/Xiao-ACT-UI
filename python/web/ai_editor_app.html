@@ -1127,7 +1127,7 @@ pre.code-block { overflow:visible; }
       <div style="display:flex;gap:4px;flex-wrap:wrap">
         <input id="s-mcp-new-id" placeholder="Server ID" style="flex:1;min-width:80px;font-size:12px;padding:3px 6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
         <select id="s-mcp-new-transport" style="font-size:12px;padding:3px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
-          <option value="stdio">stdio</option><option value="sse">SSE</option><option value="streamable_http">HTTP</option>
+          <option value="stdio">stdio</option><option value="sse">SSE</option>
         </select>
         <input id="s-mcp-new-cmd" placeholder="Command or URL" style="flex:2;min-width:120px;font-size:12px;padding:3px 6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
         <button onclick="addMcpServer()" style="font-size:11px;padding:3px 10px;background:var(--btn);color:#fff;border:none;border-radius:3px;cursor:pointer">+ Add</button>
@@ -2468,6 +2468,7 @@ function createAgent(){
     +'<label>Icon</label><input id="ag-icon" value="\u{1f916}" style="width:60px">'
     +'<label>Description</label><input id="ag-desc" placeholder="What this agent does">'
     +'<label>System Prompt</label><textarea id="ag-prompt" rows="6" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box"></textarea>'
+    +'<label>Allowed Tools (one per line, empty = all)</label><textarea id="ag-tools" rows="3" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:6px;font:12px var(--mono);resize:vertical;box-sizing:border-box" placeholder="readFile&#10;searchFiles&#10;listFiles"></textarea>'
     +'<label>When to Use</label><input id="ag-when" placeholder="When the user asks to...">'
     +'<label>Scope</label><select id="ag-scope"><option value="workspace">Workspace</option><option value="system">System (global)</option></select>'
     +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span>'
@@ -2481,7 +2482,8 @@ function createAgent(){
   document.getElementById('ag-save').onclick=async()=>{
     const data={id:$('ag-id').value.trim(),name:$('ag-name').value.trim(),icon:$('ag-icon').value,
       description:$('ag-desc').value,system_prompt:$('ag-prompt').value,when_to_use:$('ag-when').value,
-      _scope:$('ag-scope').value};
+      tools:readListValue('ag-tools',true),_scope:$('ag-scope').value};
+    if(data.tools.length===0)delete data.tools;
     if(!data.id||!data.name)return;
     await call('save_agent',data);modal.remove();refreshAgents();
   };
@@ -2965,7 +2967,25 @@ window.fetchProviderModels=fetchProviderModels;
 
 async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
-  const r=await call('test_connection',{provider:$('s-provider').value,api_key:$('s-apikey').value,base_url:$('s-baseurl').value,model:$('s-model').value,transport:$('s-codex-transport')?$('s-codex-transport').value:'chat_completions'});
+  const payload={
+    provider:$('s-provider').value,
+    api_key:$('s-apikey').value,
+    base_url:$('s-baseurl').value,
+    model:$('s-model').value,
+    transport:config.transport||'chat_completions',
+    temperature:readNumberValue('s-temp',0.7,false),
+    max_tokens:readNumberValue('s-maxtok',4096,true),
+    top_p:readNumberValue('s-topp',1.0,false),
+    frequency_penalty:readNumberValue('s-freqp',0,false),
+    presence_penalty:readNumberValue('s-presp',0,false),
+    timeout:readNumberValue('s-timeout',180,true),
+    stop:readListValue('s-stop',true),
+    max_input_tokens:readNumberValue('s-maxinp',0,true),
+    max_output_tokens:readNumberValue('s-maxout',0,true),
+    extra_headers:readJsonObjectValue('s-xheaders',{}),
+    extra_body:readJsonObjectValue('s-xbody',{})
+  };
+  const r=await call('test_connection',payload);
   if(r&&r.ok){s.textContent=r.message;s.style.color='var(--fg-success)'}else{s.textContent=(r&&r.message)||'Failed';s.style.color='var(--fg-error)'}
 }
 window.testConn=testConn;
@@ -3861,7 +3881,26 @@ window.removeAttachment=removeAttachment;
 // Include attachments in send
 const _origDoSend2=doSend;
 doSend=async function(){
-  // If attachments, prepend context
+  const imageAttachments=attachments.filter(a=>a.type==='image');
+  if(imageAttachments.length===1&&attachments.length===1){
+    const img=imageAttachments[0];
+    const inp=$('chat-input');
+    const text=inp.value.trim()||'What is in this image?';
+    const parts=String(img.data||'').split(',');
+    if(parts.length>=2){
+      const header=parts[0]||'';
+      const mimeMatch=header.match(/^data:([^;]+);base64$/);
+      const mime=mimeMatch?mimeMatch[1]:'image/png';
+      inp.value='';attachments=[];renderAttachments();
+      createMsg('user').innerHTML=esc(text)+'<br><img src="'+img.data+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
+      streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';_setSendIcon(true);
+      setStatus('Analyzing image...');
+      currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
+      try{await call('send_image_message',text,parts.slice(1).join(','),mime)}catch(e){onIdle();appendSystem('Image upload failed: '+e)}
+      return;
+    }
+  }
+  // If attachments, prepend text context
   if(attachments.length>0){
     let prefix='';
     attachments.forEach(a=>{

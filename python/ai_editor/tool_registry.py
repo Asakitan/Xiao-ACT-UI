@@ -139,13 +139,10 @@ class ToolRegistry:
         if not desc:
             return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
 
-        if isinstance(arguments, str):
-            try:
-                args = json.loads(arguments) if arguments.strip() else {}
-            except json.JSONDecodeError as exc:
-                return json.dumps({"error": f"Invalid JSON arguments: {exc}"}, ensure_ascii=False)
-        else:
-            args = arguments
+        ok, parsed = self._parse_arguments(desc, arguments)
+        if not ok:
+            return json.dumps({"error": parsed}, ensure_ascii=False)
+        args = parsed
 
         try:
             result = desc.handler(**args) if isinstance(args, dict) else desc.handler(args)
@@ -156,6 +153,41 @@ class ToolRegistry:
             return json.dumps({
                 "error": traceback.format_exc(limit=3),
             }, ensure_ascii=False)
+
+    @staticmethod
+    def _parse_arguments(
+        desc: ToolDescriptor,
+        arguments: str | Dict[str, Any],
+    ) -> tuple[bool, Any]:
+        if isinstance(arguments, str):
+            raw = arguments.strip()
+            if raw:
+                try:
+                    args: Any = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    return False, (
+                        f"Invalid JSON arguments for {desc.name}: "
+                        f"{exc.msg} at char {exc.pos}"
+                    )
+            else:
+                args = {}
+        elif isinstance(arguments, dict):
+            args = dict(arguments)
+        else:
+            args = arguments
+
+        schema = desc.parameters if isinstance(desc.parameters, dict) else {}
+        if schema.get("type", "object") == "object":
+            if not isinstance(args, dict):
+                return False, f"Tool arguments for {desc.name} must be a JSON object"
+            required = [str(k) for k in schema.get("required", []) if str(k)]
+            missing = [key for key in required if key not in args or args[key] is None]
+            if missing:
+                return False, (
+                    f"Missing required argument(s) for {desc.name}: "
+                    + ", ".join(missing)
+                )
+        return True, args
 
     # -- Parameter inference --
 

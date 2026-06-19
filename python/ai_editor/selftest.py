@@ -284,7 +284,46 @@ def test_app_settings_parity() -> None:
     ctrl = provider_api._create_provider_controller(codex)
     _check("codex provider settings applied",
            ctrl.engine.config.model == "codex-test"
-           and ctrl.engine.config.transport == "responses")
+           and ctrl.engine.config.transport == "responses"
+           and ctrl.engine.config.api_key == "test-openai")
+
+    legacy_provider_gui = _SettingsGui({"ai_editor": {
+        "_provider_keys": {"openai": "legacy-openai"},
+        "codex": {"model": "legacy-codex", "transport": "responses"},
+    }})
+    legacy_provider_api = AIEditorAPI(legacy_provider_gui)
+    legacy_provider_api._ensure_engine()
+    legacy_codex = legacy_provider_api._provider_registry.get("codex")
+    legacy_ctrl = legacy_provider_api._create_provider_controller(legacy_codex)
+    _check("legacy provider keys applied to provider controllers",
+           legacy_ctrl.engine.config.api_key == "legacy-openai"
+           and legacy_ctrl.engine.config.model == "legacy-codex")
+
+    wrong_key_gui = _SettingsGui({"ai_editor": {
+        "provider": "anthropic",
+        "api_key": "active-anthropic",
+        "codex": {"transport": "responses"},
+    }})
+    wrong_key_api = AIEditorAPI(wrong_key_gui)
+    wrong_key_api._ensure_engine()
+    wrong_key_codex = wrong_key_api._provider_registry.get("codex")
+    wrong_key_ctrl = wrong_key_api._create_provider_controller(wrong_key_codex)
+    _check("provider controllers do not reuse another provider key",
+           wrong_key_ctrl.engine.config.api_key == "")
+
+    proxy_gui = _SettingsGui({"ai_editor": {
+        "provider_keys": {"anthropic": "test-anthropic"},
+        "claude_code": {"model": "claude-proxy-test"},
+    }})
+    proxy_api = AIEditorAPI(proxy_gui)
+    proxy_result = proxy_api.start_claude_proxy()
+    try:
+        _check("claude proxy uses Claude Code provider settings",
+               proxy_result.get("ok") is True
+               and proxy_result.get("model") == "claude-proxy-test"
+               and proxy_result.get("env", {}).get("ANTHROPIC_MODEL") == "claude-proxy-test")
+    finally:
+        proxy_api.stop_claude_proxy()
 
     provider_gui.settings.data["ai_editor"]["codex"]["transport"] = "cli"
     _check("unsupported CLI transport rejected",
@@ -299,6 +338,26 @@ def test_app_settings_parity() -> None:
            and mode.get("selected_mode") == "plan"
            and mode.get("defaults", {}).get("runTerminal") == "confirm"
            and mode.get("overrides", {}).get("readFile") == "allowed")
+
+    mcp_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _check("unsupported MCP transport rejected explicitly",
+           "Unsupported MCP transport" in mcp_api.add_mcp_server({
+               "id": "http-test",
+               "transport": "streamable_http",
+               "url": "http://localhost:3000/mcp",
+           }).get("error", ""))
+
+    test_cfg = mcp_api.test_connection
+    _check("test_connection API accepts advanced params",
+           callable(test_cfg))
+
+    agent_api = AIEditorAPI(_SettingsGui({"ai_editor": {"mode": "agent"}}))
+    agent_api._ensure_engine()
+    agent_api._set_active_agent("code-reviewer")
+    disabled = agent_api._controller._disabled_tools
+    _check("agent tool allowlist disables excluded tools",
+           "runTerminal" in disabled and "readFile" not in disabled)
+    agent_api.clear_active_agent()
 
     mode_api.set_mode("plan")
     direct_result = json.loads(mode_api.execute_tool(
@@ -477,21 +536,33 @@ def test_phase1_ai_editor_regressions() -> None:
            and registry_cli_flags.get("codex") is False)
 
     api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
-    api_cli_flags = {p["id"]: p["available"]
+    api_cli_items = {p["id"]: p
                      for p in api_cli.list_chat_providers().get("providers", [])}
+    api_cli_flags = {k: v.get("available") for k, v in api_cli_items.items()}
     _check("list_chat_providers reports CLI transports unavailable",
            api_cli_flags.get("claude-code") is False
            and api_cli_flags.get("codex") is False)
+    _check("list_chat_providers reports CLI status reasons",
+           "CLI" in api_cli_items.get("claude-code", {}).get("unavailable_reason", "")
+           and "CLI" in api_cli_items.get("codex", {}).get("unavailable_reason", "")
+           and "cli_available" in api_cli_items.get("codex", {}))
 
     api_key_settings = {"ai_editor": {
         "claude_code": {"prefer_cli": False},
-        "codex": {"transport": "responses"},
+        "codex": {"transport": "responses", "model": "codex-status-test"},
         "provider_keys": {"anthropic": "test-anthropic", "openai": "test-openai"},
     }}
     registry_key_flags = flags(api_key_settings)
     _check("ChatProviderRegistry keeps API-key transports available",
            registry_key_flags.get("claude-code") is True
            and registry_key_flags.get("codex") is True)
+    registry_key_items = {p["id"]: p
+                          for p in ChatProviderRegistry().list_available(
+                              lambda key, default=None: api_key_settings.get(key, default))}
+    _check("ChatProviderRegistry reflects provider model and transport settings",
+           registry_key_items.get("codex", {}).get("model") == "codex-status-test"
+           and registry_key_items.get("codex", {}).get("transport") == "responses"
+           and registry_key_items.get("codex", {}).get("api_key_available") is True)
 
 
 def test_tool_registry() -> None:
@@ -523,6 +594,17 @@ def test_tool_registry() -> None:
     result = reg.execute("engine", json.dumps({"action": "eval", "expression": "2 + 2"}))
     data = json.loads(result)
     _check(f"engine(eval): 2+2={data.get('result')}", data.get("result") == 4)
+
+    result = reg.execute("readFile", "")
+    data = json.loads(result)
+    _check("missing required tool args are explicit",
+           "Missing required argument" in data.get("error", "")
+           and "path" in data.get("error", ""))
+
+    result = reg.execute("readFile", "[]")
+    data = json.loads(result)
+    _check("object-schema tool rejects array args",
+           "must be a JSON object" in data.get("error", ""))
 
     result = reg.execute("nonexistent_tool", "{}")
     data = json.loads(result)
@@ -558,6 +640,58 @@ def test_llm_engine() -> None:
     e4 = LLMEngine(ProviderConfig(provider="ollama"))
     _check("Ollama base_url", "localhost" in e4.config.effective_base_url)
 
+    chat_payload = {
+        "choices": [{"message": {"tool_calls": [{
+            "id": "call_1",
+            "function": {"name": "readFile", "arguments": {"path": "a.py"}},
+        }]}}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 3},
+    }
+    parsed = LLMEngine._parse_response(chat_payload, e.config)
+    _check("ChatCompletions tool args coerced to JSON string",
+           parsed.tool_calls[0].arguments == '{"path": "a.py"}')
+    _check("ChatCompletions usage normalized",
+           parsed.usage.get("input_tokens") == 11
+           and parsed.usage.get("output_tokens") == 3
+           and parsed.usage.get("total_tokens") == 14)
+
+    responses_payload = {
+        "model": "gpt-test",
+        "status": "completed",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "ok"}]},
+            {"type": "function_call", "call_id": "call_2", "name": "searchFiles",
+             "arguments": {"query": "needle"}},
+        ],
+        "usage": {"input_tokens": 9, "output_tokens": 4},
+    }
+    parsed_responses = LLMEngine._parse_responses_response(responses_payload, e.config)
+    _check("Responses function_call parsed",
+           parsed_responses.content == "ok"
+           and parsed_responses.tool_calls[0].name == "searchFiles"
+           and parsed_responses.tool_calls[0].arguments == '{"query": "needle"}')
+    _check("Responses usage total filled",
+           parsed_responses.usage.get("total_tokens") == 13)
+
+    token_msgs = [{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call_3",
+        "type": "function",
+        "function": {
+            "name": "engine",
+            "arguments": json.dumps({"action": "eval", "expression": "x" * 400}),
+        },
+    }]}]
+    _check("token counter includes tool call arguments",
+           e.count_message_tokens(token_msgs) > e.count_message_tokens([{"role": "assistant", "content": ""}]))
+
+    anthropic_tool = LLMEngine._convert_msg_to_anthropic({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "call_bad", "function": {"name": "x", "arguments": "{"}}],
+    })
+    _check("invalid tool args are not silently emptied",
+           "_raw_arguments" in anthropic_tool["content"][0]["input"])
+
 
 def test_conversation() -> None:
     print("── Conversation ──")
@@ -577,6 +711,14 @@ def test_conversation() -> None:
     _check("Tool calls in assistant", "tool_calls" in msgs[2])
     _check("Tool result", msgs[3]["role"] == "tool")
     _check("Title auto-set", conv.title == "Hello")
+
+    from ai_editor.chat_state import _compress_tool_result
+    big_json = json.dumps({"items": [{"name": "item", "body": "x" * 200} for _ in range(80)]})
+    compressed = _compress_tool_result(big_json, "searchFiles")
+    compressed_data = json.loads(compressed)
+    _check("large JSON tool result compressed",
+           compressed_data.get("_compressed") is True
+           and len(compressed) < len(big_json))
 
 
 def test_history() -> None:
@@ -803,8 +945,15 @@ def test_extension_host() -> None:
     _check("EP.chatParticipants", len(ep.chat_participants) == 1)
     _check("EP.lm_tools", len(ep.language_model_tools) == 1)
     _check("EP.commands registered", cmds.has("test.hello"))
+    unsupported_cmd = cmds.execute("test.hello", {"x": 1})
+    _check("EP.command unsupported is explicit",
+           unsupported_cmd.get("needsExtensionRuntime") is True
+           and unsupported_cmd.get("arguments") == [{"x": 1}])
+    _check("EP.lm_tool runtime support marked",
+           ep.language_model_tools[0].get("_runtimeSupport", {}).get("needsExtensionRuntime") is True)
     summary = ep.to_summary()
-    _check("EP.summary", summary["chatParticipants"] == 1)
+    _check("EP.summary", summary["chatParticipants"] == 1
+           and summary.get("needsExtensionRuntime", {}).get("languageModelTools") == 1)
 
     # ExtensionContext
     tmpdir = tempfile.mkdtemp(prefix="sao_ext_test_")
@@ -897,8 +1046,16 @@ def test_vscode_api() -> None:
             return LanguageModelToolResult.text(f"result:{options.input}")
     dispose = api["lm"]["registerTool"]("my_tool", MyTool())
     _check("registerTool", "my_tool" in ns.registered_tools)
+    tool_result = api["lm"]["invokeTool"]("my_tool", {"value": 7})
+    _check("invokeTool passes options input",
+           tool_result.content[0]["text"] == "result:{'value': 7}")
     dispose.dispose()
     _check("tool disposed", "my_tool" not in ns.registered_tools)
+
+    api["lm"]["registerToolDefinition"]("schema_only", {"type": "object"})
+    schema_result = api["lm"]["invokeTool"]("schema_only", {})
+    _check("schema-only tool is explicit unsupported",
+           "needsExtensionRuntime" in schema_result.content[0]["text"])
 
     # Variable
     api["chat"]["registerVariable"]("testvar", "A test variable",

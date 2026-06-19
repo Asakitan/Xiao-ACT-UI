@@ -98,7 +98,7 @@ def _parse_kind(raw: Any) -> str:
 
 
 class _LMAccessInfo:
-    """Stub for ExtensionContext.languageModelAccessInformation."""
+    """Compatibility shim for ExtensionContext.languageModelAccessInformation."""
 
     def __init__(self) -> None:
         self._change_emitter = _LazyEventEmitter()
@@ -137,6 +137,45 @@ class _LazyEventEmitter:
                 fn(data)
             except Exception:
                 pass
+
+
+def _needs_extension_runtime(
+        contribution: str,
+        extension_id: str,
+        identifier: str,
+        **details: Any) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "ok": False,
+        "unsupported": True,
+        "needsExtensionRuntime": True,
+        "code": "needsExtensionRuntime",
+        "contribution": contribution,
+        "extensionId": extension_id,
+        "id": identifier,
+        "message": (
+            f"VSCode {contribution} '{identifier}' from extension "
+            f"'{extension_id}' needs a real extension runtime handler."
+        ),
+    }
+    result.update(details)
+    return result
+
+
+def _unsupported_command_handler(extension_id: str,
+                                 command_id: str) -> Callable:
+    def _handler(*args: Any) -> Dict[str, Any]:
+        return _needs_extension_runtime(
+            "command", extension_id, command_id, arguments=list(args))
+
+    setattr(_handler, "_needs_extension_activation", True)
+    return _handler
+
+
+def _mark_manifest_only(item: Dict[str, Any], contribution: str,
+                        extension_id: str, identifier: str) -> Dict[str, Any]:
+    item["_runtimeSupport"] = _needs_extension_runtime(
+        contribution, extension_id, identifier)
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +317,12 @@ class CommandService:
 
     def __init__(self) -> None:
         self._commands: Dict[str, Callable] = {}
+        self._before_execute: Optional[Callable[[str], None]] = None
         self._lock = threading.Lock()
+
+    def set_before_execute(self,
+                           callback: Optional[Callable[[str], None]]) -> None:
+        self._before_execute = callback
 
     def register(self, command_id: str, handler: Callable) -> Callable:
         with self._lock:
@@ -291,6 +335,11 @@ class CommandService:
 
     def execute(self, command_id: str, *args: Any) -> Any:
         handler = self._commands.get(command_id)
+        if self._before_execute and (
+                handler is None or
+                getattr(handler, "_needs_extension_activation", False)):
+            self._before_execute(command_id)
+            handler = self._commands.get(command_id)
         if not handler:
             raise KeyError(f"Command not found: {command_id}")
         return handler(*args)
@@ -459,18 +508,24 @@ class ExtensionPoints:
                 if not self._commands.has(cmd["command"]):
                     self._commands.register(
                         cmd["command"],
-                        lambda *a, _c=cmd: {"stub": True, "command": _c["command"]})
+                        _unsupported_command_handler(eid, cmd["command"]))
 
         for cp in (c.get("chatParticipants", []) if _enabled("chatParticipants") else []):
             if isinstance(cp, dict):
                 cp = dict(cp)
                 cp["_extensionId"] = eid
+                _mark_manifest_only(
+                    cp, "chatParticipant", eid,
+                    cp.get("id") or cp.get("name", ""))
                 self._chat_participants.append(cp)
 
         for tool in (c.get("languageModelTools", []) if _enabled("languageModelTools") else []):
             if isinstance(tool, dict):
                 tool = dict(tool)
                 tool["_extensionId"] = eid
+                _mark_manifest_only(
+                    tool, "languageModelTool", eid,
+                    tool.get("name", ""))
                 self._lm_tools.append(tool)
 
         for ts in c.get("languageModelToolSets", []):
@@ -656,6 +711,14 @@ class ExtensionPoints:
             "chatParticipants": len(self._chat_participants),
             "languageModelTools": len(self._lm_tools),
             "languageModelToolSets": len(self._lm_tool_sets),
+            "needsExtensionRuntime": {
+                "chatParticipants": sum(
+                    1 for cp in self._chat_participants
+                    if cp.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
+                "languageModelTools": sum(
+                    1 for tool in self._lm_tools
+                    if tool.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
+            },
             "chatSessions": len(self._chat_sessions),
             "languageModelChatProviders": len(self._lm_providers),
             "keybindings": len(self._keybindings),
@@ -869,11 +932,15 @@ class ExtensionHost:
     def __init__(self) -> None:
         self.registry = ExtensionRegistry()
         self.commands = CommandService()
+        self.commands.set_before_execute(self._activate_command_extension)
         self.ext_points = ExtensionPoints(self.commands)
         self.activator = ExtensionActivator(
             self.registry, self.commands, self.ext_points)
         self._started = False
         self._policy: Optional[Callable[[ExtensionDescription], bool]] = None
+
+    def _activate_command_extension(self, command_id: str) -> None:
+        self.activate_event(f"onCommand:{command_id}")
 
     def set_policy(self, policy: Optional[Callable[[ExtensionDescription], bool]] = None,
                    enabled_contributions: Optional[Set[str]] = None) -> None:
