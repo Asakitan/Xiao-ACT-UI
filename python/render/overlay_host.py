@@ -284,6 +284,21 @@ _CLASS_POOL = [
 ]
 
 
+_WDA_SUPPORTED = None
+
+def _wda_exclude_supported() -> bool:
+    """Check if WDA_EXCLUDEFROMCAPTURE is supported (Win10 2004+ / build 19041+)."""
+    global _WDA_SUPPORTED
+    if _WDA_SUPPORTED is not None:
+        return _WDA_SUPPORTED
+    try:
+        ver = sys.getwindowsversion()
+        _WDA_SUPPORTED = (ver.major >= 10 and ver.build >= 19041)
+    except Exception:
+        _WDA_SUPPORTED = False
+    return _WDA_SUPPORTED
+
+
 def _generate_class_name() -> str:
     # Prefer Cython-protected generator (encrypted pool + anti-debug)
     try:
@@ -554,20 +569,23 @@ class OverlayHost:
             _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
 
     def set_capture_mode(self, exclude: bool) -> None:
-        """Toggle SetWindowDisplayAffinity for streaming mode.
+        """Toggle SetWindowDisplayAffinity for capture exclusion.
 
         exclude=True  → overlay invisible to screen capture APIs.
         exclude=False → overlay visible in screenshots / streams.
 
-        WARNING: ACE/EAC may log WDA_EXCLUDEFROMCAPTURE calls.
-        Only enable when user explicitly requests streaming mode.
+        WDA_EXCLUDEFROMCAPTURE (0x11) requires Windows 10 2004+
+        (build 19041). On older builds the value degrades to
+        WDA_MONITOR (0x01) which renders the window as solid black.
         """
+        if exclude and not _wda_exclude_supported():
+            self._capture_excluded = False
+            return
         affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
         ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
-        self._capture_excluded = exclude
-        if not ret:
-            print(f'[Overlay] SetWindowDisplayAffinity({affinity:#x}) '
-                  f'failed: {ctypes.GetLastError()}', flush=True)
+        self._capture_excluded = bool(exclude and ret)
+        if not ret and exclude:
+            _user32.SetWindowDisplayAffinity(self.hwnd, WDA_NONE)
 
     def swap_buffers(self) -> None:
         _gdi32.SwapBuffers(self.hdc)
