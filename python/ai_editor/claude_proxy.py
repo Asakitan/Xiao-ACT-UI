@@ -208,7 +208,7 @@ class ClaudeProxy:
     def model(self) -> str:
         if self._engine:
             return self._engine.config.effective_model
-        return "claude-sonnet-4-20250514"
+        return ""
 
     def set_engine(self, engine: Any) -> None:
         self._engine = engine

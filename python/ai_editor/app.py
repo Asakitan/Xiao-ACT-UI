@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -46,6 +47,28 @@ _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
 _CODEX_TRANSPORT_VALUES = {"chat_completions", "responses", "cli"}
 _DANGEROUS_ENGINE_ACTIONS = {"settings_set", "eval", "exec"}
+_STALE_ANTHROPIC_DEFAULT_MODELS = {"claude-sonnet-4-20250514"}
+_WORKSPACE_TREE_IGNORED_DIRS = {
+    ".git", ".hg", ".svn", ".idea", ".vscode",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".tox", ".nox", ".venv", "venv", "env", "node_modules",
+    "build", "dist", "publish", "out", "tmp", "temp",
+}
+_WORKSPACE_FILE_PREVIEW_BYTES = 1024 * 1024
+_EDITOR_LANGUAGE_BY_EXT = {
+    ".py": "python", ".pyi": "python", ".pyw": "python",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".json": "json", ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "css", ".sass": "css",
+    ".md": "markdown", ".markdown": "markdown",
+    ".yml": "yaml", ".yaml": "yaml",
+    ".xml": "xml", ".sql": "sql",
+    ".sh": "shell", ".ps1": "shell", ".bat": "shell", ".cmd": "shell",
+    ".lua": "lua", ".c": "c", ".cc": "cpp", ".cpp": "cpp",
+    ".cxx": "cpp", ".h": "cpp", ".hpp": "cpp", ".cs": "csharp",
+    ".java": "java", ".go": "go", ".rs": "rust", ".toml": "toml",
+}
 
 _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "claude_code": {
@@ -53,7 +76,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "cli_args": [],
         "prefer_cli": False,
         "allow_dangerously_skip_permissions": False,
-        "model": "claude-sonnet-4-20250514",
+        "model": "",
     },
     "codex": {
         "cli_path": "",
@@ -337,14 +360,7 @@ class AIEditorAPI:
         self._controller.on_error = self._on_error
         self._controller.on_idle = self._on_idle
 
-        # Inject MCP tools into controller
-        if self._mcp:
-            self._controller.extra_tools = self._mcp.to_openai_tools()
-            self._controller.mcp_dispatch = lambda name, args: self._mcp.call_tool(
-                name, json.loads(args) if isinstance(args, str) else args
-            )
-            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
-            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
+        self._configure_controller_tooling(self._controller)
 
         # @-mention variable resolver
         self._controller.resolve_variable = self._resolve_variable
@@ -856,6 +872,95 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def _workspace_root(self) -> str:
+        try:
+            from ai_editor.scopes import _base_dir
+            return os.path.abspath(_base_dir())
+        except Exception:
+            return os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+
+    @staticmethod
+    def _workspace_rel_path(root: str, path: str) -> str:
+        rel = os.path.relpath(path, root).replace("\\", "/")
+        return "" if rel == "." else rel
+
+    def _resolve_workspace_path(self, rel_path: str = "") -> str:
+        root = self._workspace_root()
+        parts: List[str] = []
+        for raw in str(rel_path or "").replace("\\", "/").split("/"):
+            part = raw.strip()
+            if not part or part == ".":
+                continue
+            if part == "..":
+                raise ValueError("Path escapes workspace")
+            parts.append(part)
+        full = os.path.abspath(os.path.join(root, *parts))
+        root_norm = os.path.normcase(root)
+        full_norm = os.path.normcase(full)
+        if os.path.commonpath([root_norm, full_norm]) != root_norm:
+            raise ValueError("Path escapes workspace")
+        return full
+
+    @staticmethod
+    def _editor_language_for_path(path: str) -> str:
+        return _EDITOR_LANGUAGE_BY_EXT.get(os.path.splitext(path)[1].lower(), "plaintext")
+
+    def list_workspace_tree(self, rel_path: str = "") -> Dict:
+        root = self._workspace_root()
+        try:
+            current = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"error": str(exc), "entries": []}
+        if not os.path.isdir(current):
+            return {"error": f"Directory not found: {rel_path}", "entries": []}
+        try:
+            names = os.listdir(current)
+        except Exception as exc:
+            return {"error": str(exc), "entries": []}
+        entries: List[Dict[str, Any]] = []
+        for name in sorted(names, key=lambda item: (
+                not os.path.isdir(os.path.join(current, item)), item.casefold())):
+            full = os.path.join(current, name)
+            is_dir = os.path.isdir(full)
+            if is_dir and name.casefold() in _WORKSPACE_TREE_IGNORED_DIRS:
+                continue
+            entries.append({
+                "name": name,
+                "path": self._workspace_rel_path(root, full),
+                "type": "directory" if is_dir else "file",
+            })
+        return {
+            "root": root,
+            "root_name": os.path.basename(root.rstrip("\\/")) or root,
+            "path": self._workspace_rel_path(root, current),
+            "entries": entries,
+        }
+
+    def open_workspace_file(self, rel_path: str) -> Dict:
+        root = self._workspace_root()
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not os.path.isfile(full):
+            return {"error": f"File not found: {rel_path}"}
+        try:
+            with open(full, "rb") as fh:
+                data = fh.read(_WORKSPACE_FILE_PREVIEW_BYTES + 1)
+        except Exception as exc:
+            return {"error": str(exc)}
+        truncated = len(data) > _WORKSPACE_FILE_PREVIEW_BYTES
+        text = data[:_WORKSPACE_FILE_PREVIEW_BYTES].decode("utf-8", errors="replace")
+        rel = self._workspace_rel_path(root, full)
+        return {
+            "name": os.path.basename(full),
+            "path": rel,
+            "absolute_path": full,
+            "content": text,
+            "language": self._editor_language_for_path(full),
+            "truncated": truncated,
+        }
+
     def new_chat(self) -> Dict:
         if self._controller:
             sp = self._engine.config.system_prompt if self._engine else ""
@@ -921,6 +1026,8 @@ class AIEditorAPI:
         selected = mode if mode in MODES else self._mode
         registry_tools: Dict[str, Any] = {}
         tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["agent"]).keys())
+        if hasattr(self, "_ext_host") and not getattr(self, "_extensions_inited", False):
+            self.init_extensions()
         if self._registry:
             for tool in self._registry.list_tools(include_disabled=True):
                 registry_tools[tool.name] = tool
@@ -928,15 +1035,6 @@ class AIEditorAPI:
         if self._mcp:
             for t in self._mcp.all_tools():
                 tool_names.add(f"mcp_{t.server_id}_{t.name}")
-        try:
-            from ai_editor.extensions import load_all_extension_tools
-            enabled = set(self._enabled_extension_contributions())
-            for et in load_all_extension_tools(enabled):
-                fn = et.get("function", {})
-                if fn.get("name"):
-                    tool_names.add(fn.get("name"))
-        except Exception:
-            pass
 
         permissions: Dict[str, str] = {}
         defaults: Dict[str, str] = {}
@@ -1098,10 +1196,13 @@ class AIEditorAPI:
                 tool.enabled = True
                 tool.requires_confirm = False
         self._registry._openai_cache = None
-        if self._controller:
-            self._controller._disabled_tools = set(disabled)
-            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
-            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
+        controllers = [self._controller] + list(getattr(self, "_provider_controllers", {}).values())
+        for ctrl in controllers:
+            if not ctrl:
+                continue
+            ctrl._disabled_tools = set(disabled)
+            ctrl.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
+            ctrl.mcp_tool_allowed = self._mcp_tool_allowed
 
     def _active_agent_tool_allowlist(self) -> Optional[set[str]]:
         active_agent_id = getattr(self, "_active_agent_id", None)
@@ -1224,9 +1325,27 @@ class AIEditorAPI:
         ctrl.on_idle = lambda: self._emit(
             f"provider_idle", {"provider": pid})
         ctrl.resolve_variable = self._resolve_variable
+        self._configure_controller_tooling(ctrl)
+        return ctrl
+
+    def _controller_extra_tools(self) -> List[Dict[str, Any]]:
+        if not self._mcp:
+            return []
+        return list(self._mcp.to_openai_tools())
+
+    def _controller_mcp_dispatch(self) -> Optional[Callable[[str, Any], str]]:
+        if not self._mcp:
+            return None
+        return lambda name, args: self._mcp.call_tool(
+            name, json.loads(args) if isinstance(args, str) else args)
+
+    def _configure_controller_tooling(self, ctrl: Optional[ChatController]) -> None:
+        if not ctrl:
+            return
+        ctrl.extra_tools = self._controller_extra_tools()
+        ctrl.mcp_dispatch = self._controller_mcp_dispatch()
         ctrl.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
         ctrl.mcp_tool_allowed = self._mcp_tool_allowed
-        return ctrl
 
     def _provider_config_for(self, prov) -> ProviderConfig:
         """Build the exact runtime config for a right-sidebar provider tab."""
@@ -1244,12 +1363,22 @@ class AIEditorAPI:
         base_url = str(getattr(prov, "base_url", "") or "")
         if not base_url and base_cfg.provider == prov.provider_type:
             base_url = base_cfg.base_url
+        if not base_url:
+            base_url = ProviderConfig(provider=prov.provider_type).effective_base_url
+
+        model = str(settings.get("model") or prov.model or "")
+        if prov.provider_type == "anthropic" and key and (
+                not model or model in _STALE_ANTHROPIC_DEFAULT_MODELS):
+            official_model = self._official_default_model_for_provider(
+                prov.provider_type, base_url, key)
+            if official_model:
+                model = official_model
 
         return ProviderConfig(
             provider=prov.provider_type,
             api_key=key,
             base_url=base_url,
-            model=str(settings.get("model") or prov.model or ""),
+            model=model,
             temperature=base_cfg.temperature,
             max_tokens=base_cfg.max_tokens,
             system_prompt=prov.system_prompt,
@@ -1582,23 +1711,30 @@ class AIEditorAPI:
         """Register extension-contributed tools and chat participants."""
         ep = self._ext_host.ext_points
         enabled = set(self._enabled_extension_contributions())
+        runtime_participants = {}
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns:
+            runtime_participants = vscode_ns.chat_participants
         for tool in ep.language_model_tools:
             if "languageModelTools" not in enabled:
                 continue
             name = tool.get("name", "")
             if not name:
                 continue
+            ext_id = str(tool.get("_extensionId", ""))
             schema = tool.get("inputSchema") or tool.get("parametersSchema") or {
                 "type": "object", "properties": {}}
             self._registry.register(
-                name=f"ext_{name}",
+                name=self._extension_tool_wrapper_name(ext_id, name),
                 description=tool.get("displayName", name),
                 parameters=schema,
                 handler=lambda _n=name, _tool=tool, **kw: self._invoke_extension_lm_tool(
                     _n, _tool, kw),
-                category=f"ext:{tool.get('_extensionId', '')}",
+                category=f"ext:{ext_id}",
                 tags={
                     "extension": True,
+                    "extensionId": ext_id,
+                    "sourceName": name,
                     "needsExtensionRuntime": bool(
                         tool.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
                 },
@@ -1608,6 +1744,8 @@ class AIEditorAPI:
                 continue
             pid = cp.get("id") or cp.get("name", "")
             if not pid:
+                continue
+            if pid not in runtime_participants:
                 continue
             from ai_editor.chat_providers import ChatProviderDef
             prov = ChatProviderDef(
@@ -1623,7 +1761,8 @@ class AIEditorAPI:
 
     def _invoke_extension_lm_tool(self, name: str, manifest_tool: Dict[str, Any],
                                   arguments: Dict[str, Any]) -> Dict[str, Any]:
-        registered = self._vscode_ns.registered_tools.get(name) if self._vscode_ns else None
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        registered = vscode_ns.registered_tools.get(name) if vscode_ns else None
         if registered:
             result = self.invoke_lm_tool(name, arguments)
             return result if isinstance(result, dict) else {"result": result}
@@ -1645,6 +1784,19 @@ class AIEditorAPI:
         payload = dict(runtime)
         payload["arguments"] = dict(arguments)
         return payload
+
+    @staticmethod
+    def _extension_tool_wrapper_name(extension_id: str, tool_name: str) -> str:
+        safe_ext = re.sub(r"[^A-Za-z0-9_]+", "_", extension_id or "extension").strip("_")
+        safe_name = re.sub(r"[^A-Za-z0-9_]+", "_", tool_name or "tool").strip("_")
+        return f"ext_{safe_ext}_{safe_name}"
+
+    def _manifest_chat_participant(self, participant_id: str) -> Dict[str, Any]:
+        for participant in self._ext_host.ext_points.chat_participants:
+            pid = participant.get("id") or participant.get("name", "")
+            if pid == participant_id:
+                return dict(participant)
+        return {}
 
     def _extension_settings(self) -> Dict[str, Any]:
         ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
@@ -1934,6 +2086,12 @@ class AIEditorAPI:
             ChatRequest, ChatContext, ChatResponseStream)
         cp = self._vscode_ns.chat_participants.get(participant_id)
         if not cp:
+            manifest = self._manifest_chat_participant(participant_id)
+            runtime = _as_dict(manifest.get("_runtimeSupport"))
+            if runtime:
+                payload = dict(runtime)
+                payload["participantId"] = participant_id
+                return payload
             return {"error": f"Participant not found: {participant_id}"}
         req = ChatRequest(prompt=prompt)
         ctx = ChatContext()
@@ -1949,15 +2107,15 @@ class AIEditorAPI:
     def invoke_lm_tool(self, tool_name: str, input_data: Any = None) -> Dict:
         """Invoke a registered LM tool."""
         self._ensure_engine()
-        from ai_editor.vscode_api import LanguageModelToolInvocationOptions
         tool = self._vscode_ns.registered_tools.get(tool_name)
         if not tool:
             return {"error": f"Tool not found: {tool_name}"}
-        opts = LanguageModelToolInvocationOptions(input=input_data)
         try:
-            result = tool.invoke(opts, None)
+            result = self._vscode_ns._invoke_tool(tool_name, input_data, None)
             if hasattr(result, "content"):
                 return {"ok": True, "content": result.content}
+            if isinstance(result, dict):
+                return {"ok": True, "result": result}
             return {"ok": True, "result": str(result)}
         except Exception as exc:
             return {"error": str(exc)}
@@ -2050,6 +2208,8 @@ class AIEditorAPI:
         except Exception as exc:
             print(f"[AIEditor] _ensure_engine failed in list_tools: {exc}")
             return {"tools": [], "error": str(exc)}
+        if not self._extensions_inited:
+            self.init_extensions()
         tools = [
             {"name": t.name, "description": t.description,
              "category": t.category, "requires_confirm": t.requires_confirm,
@@ -2070,28 +2230,6 @@ class AIEditorAPI:
                     "requires_confirm": self._mcp_tool_requires_confirm(tool_name),
                     "parameters": t.input_schema,
                 })
-        # Add extension-contributed tools
-        try:
-            from ai_editor.extensions import load_all_extension_tools
-            enabled = set(self._enabled_extension_contributions())
-            for et in load_all_extension_tools(enabled):
-                if not self._extension_id_allowed(et.get("extension_id", "")):
-                    continue
-                fn = et.get("function", {})
-                tool_name = fn.get("name", "")
-                perm = self._permission_for_tool(
-                    None, tool_name) if tool_name else "disabled"
-                if perm == "disabled":
-                    continue
-                tools.append({
-                    "name": tool_name,
-                    "description": fn.get("description", ""),
-                    "category": f"ext:{et.get('extension_id','')}",
-                    "requires_confirm": perm == "confirm",
-                    "parameters": fn.get("parameters", {}),
-                })
-        except Exception:
-            pass
         return {"tools": tools}
 
     def execute_tool(self, name: str, arguments: str = "{}", confirmed: bool = False) -> str:
@@ -2157,10 +2295,9 @@ class AIEditorAPI:
         return self._mode == "agent" and access != "allow"
 
     def _refresh_mcp_tools(self) -> None:
-        if self._controller:
-            self._controller.extra_tools = self._mcp.to_openai_tools() if self._mcp else []
-            self._controller.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
-            self._controller.mcp_tool_allowed = self._mcp_tool_allowed
+        self._configure_controller_tooling(self._controller)
+        for ctrl in self._provider_controllers.values():
+            self._configure_controller_tooling(ctrl)
 
     def list_mcp_servers(self) -> Dict:
         self._ensure_engine()
@@ -2280,8 +2417,7 @@ class AIEditorAPI:
             from ai_editor.mcp_client import McpManager
             self._mcp = McpManager()
         provider = self._mcp.register_internal(server_id, tools, handlers)
-        if self._controller:
-            self._controller.extra_tools = self._mcp.to_openai_tools()
+        self._refresh_mcp_tools()
         return {"ok": True, "id": server_id, "tools": len(provider.tools)}
 
     def test_connection(self, cfg: Dict) -> Dict:
@@ -2412,7 +2548,7 @@ class AIEditorAPI:
 
     def list_provider_models(self, provider: str = "", base_url: str = "",
                               api_key: str = "") -> Dict:
-        """Fetch available models from a provider's /models endpoint."""
+        """Fetch available models from a provider's official /models endpoint."""
         self._ensure_engine()
         from ai_editor.llm_engine import _PROVIDER_DEFAULTS
         if not provider:
@@ -2422,8 +2558,25 @@ class AIEditorAPI:
             base_url = defaults.get("base_url", self._engine.config.effective_base_url)
         if not api_key:
             api_key = self._resolve_provider_key(provider) or self._engine.config.api_key
+        return self._fetch_provider_models(provider, base_url, api_key)
+
+    def _official_default_model_for_provider(self, provider: str, base_url: str,
+                                             api_key: str) -> str:
+        result = self._fetch_provider_models(provider, base_url, api_key, timeout=5.0)
+        return str(result.get("default_model") or "")
+
+    def _fetch_provider_models(self, provider: str, base_url: str, api_key: str,
+                               timeout: float = 10.0) -> Dict:
         if not base_url:
             return {"error": "No base_url configured", "models": []}
+        if provider in {"openai", "anthropic", "deepseek"} and not api_key:
+            return {
+                "error": f"{provider} API key is required to fetch official models",
+                "models": [],
+                "provider": provider,
+                "default_model": "",
+                "source": "api",
+            }
         try:
             import httpx
             headers = {"Content-Type": "application/json"}
@@ -2435,24 +2588,32 @@ class AIEditorAPI:
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
                 url = f"{base_url.rstrip('/')}/models"
-            with httpx.Client(timeout=10.0, verify=False) as client:
+            with httpx.Client(timeout=timeout) as client:
                 resp = client.get(url, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
             models = []
             for m in data.get("data", data.get("models", [])):
                 if isinstance(m, dict):
+                    mid = str(m.get("id") or m.get("name") or "").strip()
+                    if not mid:
+                        continue
                     models.append({
-                        "id": m.get("id", ""),
-                        "name": m.get("name", m.get("id", "")),
-                        "created": m.get("created", 0),
+                        "id": mid,
+                        "name": m.get("display_name") or m.get("name") or mid,
+                        "created": m.get("created", m.get("created_at", 0)),
                     })
                 elif isinstance(m, str):
                     models.append({"id": m, "name": m})
-            models.sort(key=lambda x: x.get("id", ""))
-            return {"models": models, "provider": provider}
+            default_model = models[0]["id"] if models else ""
+            return {
+                "models": models,
+                "provider": provider,
+                "default_model": default_model,
+                "source": "api",
+            }
         except Exception as exc:
-            return {"error": str(exc), "models": []}
+            return {"error": str(exc), "models": [], "provider": provider, "default_model": ""}
 
     def save_custom_model(self, model_name: str, max_input: int = 128000,
                           max_output: int = 4096, tools: bool = True,

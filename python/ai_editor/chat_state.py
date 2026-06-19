@@ -56,6 +56,8 @@ class ChatMessage:
         d: Dict[str, Any] = {"role": self.role, "content": self.content}
         if self.role == "tool":
             d["tool_call_id"] = self.tool_call_id or ""
+            if self.tool_name:
+                d["name"] = self.tool_name
         if self.tool_calls:
             d["tool_calls"] = [
                 {

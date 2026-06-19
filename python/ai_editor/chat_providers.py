@@ -61,7 +61,7 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
     ),
     ChatProviderDef(
         id="claude-code", name="Claude Code", icon="✦",
-        provider_type="anthropic", model="claude-sonnet-4-20250514",
+        provider_type="anthropic", model="",
         system_prompt=_CC_SYSTEM, auto_agent=True, builtin=True,
     ),
     ChatProviderDef(

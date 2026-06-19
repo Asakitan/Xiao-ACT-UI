@@ -464,6 +464,7 @@ class ExtensionPoints:
     def __init__(self, commands: CommandService) -> None:
         self._commands = commands
         self.enabled_contributions: Optional[Set[str]] = None
+        self._command_contributions: List[Dict[str, Any]] = []
         self._chat_participants: List[Dict[str, Any]] = []
         self._lm_tools: List[Dict[str, Any]] = []
         self._lm_tool_sets: List[Dict[str, Any]] = []
@@ -504,7 +505,12 @@ class ExtensionPoints:
 
         for cmd in (c.get("commands", []) if _enabled("commands") else []):
             if isinstance(cmd, dict) and cmd.get("command"):
-                cmd["_extensionId"] = eid
+                cmd_record = dict(cmd)
+                cmd_record["_extensionId"] = eid
+                _mark_manifest_only(
+                    cmd_record, "command", eid,
+                    cmd_record.get("command", ""))
+                self._command_contributions.append(cmd_record)
                 if not self._commands.has(cmd["command"]):
                     self._commands.register(
                         cmd["command"],
@@ -698,6 +704,10 @@ class ExtensionPoints:
                             self._menus.setdefault(ctx, []).append(m)
 
     @property
+    def command_contributions(self) -> List[Dict[str, Any]]:
+        return list(self._command_contributions)
+
+    @property
     def chat_participants(self) -> List[Dict[str, Any]]:
         return list(self._chat_participants)
 
@@ -708,10 +718,14 @@ class ExtensionPoints:
     def to_summary(self) -> Dict[str, Any]:
         return {
             "commands": self._commands.list_commands(),
+            "commandsContributed": len(self._command_contributions),
             "chatParticipants": len(self._chat_participants),
             "languageModelTools": len(self._lm_tools),
             "languageModelToolSets": len(self._lm_tool_sets),
             "needsExtensionRuntime": {
+                "commands": sum(
+                    1 for cmd in self._command_contributions
+                    if cmd.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
                 "chatParticipants": sum(
                     1 for cp in self._chat_participants
                     if cp.get("_runtimeSupport", {}).get("needsExtensionRuntime")),

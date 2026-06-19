@@ -600,7 +600,7 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
   // Provider change syncs model
   document.getElementById('provider-select').onchange = (e) => {
     config.provider = e.target.value;
-    const defaults = { openai: 'gpt-4o', anthropic: 'claude-sonnet-4-20250514', deepseek: 'deepseek-chat', ollama: 'llama3.1', custom: '' };
+    const defaults = { openai: 'gpt-4o', anthropic: '', deepseek: 'deepseek-chat', ollama: 'llama3.1', custom: '' };
     if (!config.model) document.getElementById('model-input').value = defaults[config.provider] || '';
   };
   document.getElementById('model-input').onchange = (e) => { config.model = e.target.value; };

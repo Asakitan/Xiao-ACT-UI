@@ -361,13 +361,22 @@ class McpManager:
         """Convenience: create and register an internal provider from a tools list.
 
         Each tool dict: {"name": "...", "description": "...", "inputSchema": {...}}
-        handlers: {"tool_name": callable} — if omitted, tools return stubs.
+        handlers: {"tool_name": callable} — missing handlers return explicit errors.
         """
         provider = InternalMcpProvider(server_id)
         handlers = handlers or {}
         for t in tools:
             name = t.get("name", "")
-            handler = handlers.get(name, lambda **kw: {"note": f"stub for {name}"})
+            handler = handlers.get(name)
+            if handler is None:
+                def _missing_handler(_tool_name=name, **_kw: Any) -> Dict[str, Any]:
+                    return {
+                        "error": (
+                            f"Internal MCP tool '{_tool_name}' has no registered handler; "
+                            "register a callable handler before invoking it."
+                        )
+                    }
+                handler = _missing_handler
             provider.add_tool(
                 name=name,
                 description=t.get("description", ""),

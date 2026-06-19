@@ -9,7 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 
@@ -145,14 +145,61 @@ class ToolRegistry:
         args = parsed
 
         try:
-            result = desc.handler(**args) if isinstance(args, dict) else desc.handler(args)
+            result = self._invoke_handler(desc.handler, args)
             if isinstance(result, str):
                 return result
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return json.dumps(
+                self._normalize_result(result), ensure_ascii=False, default=str)
         except Exception:
             return json.dumps({
                 "error": traceback.format_exc(limit=3),
             }, ensure_ascii=False)
+
+    @staticmethod
+    def _invoke_handler(handler: Callable[..., Any], args: Any) -> Any:
+        if not isinstance(args, dict):
+            return handler(args)
+        try:
+            sig = inspect.signature(handler)
+        except (TypeError, ValueError):
+            return handler(**args)
+
+        params = list(sig.parameters.values())
+        if not params:
+            return handler()
+
+        positional = [
+            p for p in params
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+        has_varkw = any(p.kind == p.VAR_KEYWORD for p in params)
+        keyword_only = [p for p in params if p.kind == p.KEYWORD_ONLY]
+
+        if has_varkw or keyword_only:
+            return handler(**args)
+
+        if len(positional) == 1:
+            param = positional[0]
+            if param.kind == param.POSITIONAL_ONLY:
+                return handler(args)
+            if args and set(args.keys()).issubset({param.name}):
+                return handler(**args)
+            return handler(args)
+
+        return handler(**args)
+
+    @staticmethod
+    def _normalize_result(result: Any) -> Any:
+        if hasattr(result, "to_dict") and callable(getattr(result, "to_dict")):
+            try:
+                return result.to_dict()
+            except Exception:
+                pass
+        if is_dataclass(result):
+            return asdict(result)
+        if hasattr(result, "content") and isinstance(getattr(result, "content"), list):
+            return {"content": getattr(result, "content")}
+        return result
 
     @staticmethod
     def _parse_arguments(

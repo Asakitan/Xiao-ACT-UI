@@ -10,6 +10,7 @@ import json
 import threading
 import time
 import uuid
+from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -36,7 +37,7 @@ _PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
     },
     Provider.ANTHROPIC.value: {
         "base_url": "https://api.anthropic.com/v1",
-        "default_model": "claude-sonnet-4-20250514",
+        "default_model": "",
     },
     Provider.DEEPSEEK.value: {
         "base_url": "https://api.deepseek.com/v1",
@@ -266,13 +267,13 @@ class LLMEngine:
             headers = self._build_headers(cfg)
             if self._is_anthropic_native(cfg):
                 body = self._build_body(cfg, messages, tools, stream=False)
-                url = f"{cfg.effective_base_url}/messages"
+                url = self._resolve_request_url(cfg, "/messages")
             elif self._uses_openai_responses(cfg):
                 body = self._build_responses_body(cfg, messages, tools, stream=False)
-                url = f"{cfg.effective_base_url}/responses"
+                url = self._resolve_request_url(cfg, "/responses")
             else:
                 body = self._build_body(cfg, messages, tools, stream=False)
-                url = f"{cfg.effective_base_url}/chat/completions"
+                url = self._resolve_request_url(cfg, "/chat/completions")
             resp = self._client.post(url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -326,7 +327,7 @@ class LLMEngine:
         _json_buffer: Dict[int, str] = {}  # partial JSON reassembly per tool call index
 
         headers = self._build_headers(cfg)
-        url = f"{cfg.effective_base_url}/chat/completions"
+        url = self._resolve_request_url(cfg, "/chat/completions")
         last_exc: Optional[Exception] = None
 
         for _attempt in range(1 + self._MAX_RETRIES):
@@ -426,7 +427,7 @@ class LLMEngine:
         completed: Optional[LLMResponse] = None
 
         headers = self._build_headers(cfg)
-        url = f"{cfg.effective_base_url}/responses"
+        url = self._resolve_request_url(cfg, "/responses")
         last_exc: Optional[Exception] = None
 
         for _attempt in range(1 + self._MAX_RETRIES):
@@ -635,7 +636,7 @@ class LLMEngine:
         last_exc: Optional[Exception] = None
 
         headers = self._build_headers(cfg)
-        url = f"{cfg.effective_base_url}/messages"
+        url = self._resolve_request_url(cfg, "/messages")
 
         for _attempt in range(1 + self._MAX_RETRIES):
             if _attempt > 0:
@@ -766,6 +767,46 @@ class LLMEngine:
     def _uses_openai_responses(cfg: ProviderConfig) -> bool:
         transport = (cfg.transport or "chat_completions").strip().lower().replace("-", "_")
         return transport in {"responses", "openai_responses", "response"}
+
+    @classmethod
+    def _resolve_request_url(cls, cfg: ProviderConfig, endpoint: str) -> str:
+        endpoint_path = "/" + str(endpoint or "").lstrip("/")
+        base = cls._normalize_request_base_url(cfg)
+        split = urlsplit(base)
+        current_path = split.path.rstrip("/")
+        if current_path.endswith(endpoint_path.rstrip("/")):
+            return base
+        return urljoin(base.rstrip("/") + "/", endpoint_path.lstrip("/"))
+
+    @staticmethod
+    def _normalize_request_base_url(cfg: ProviderConfig) -> str:
+        base = str(cfg.effective_base_url or "").strip()
+        if not base:
+            base = str(_PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url", "") or "").strip()
+        if not base:
+            raise ValueError(
+                f"No base URL configured for provider '{cfg.provider}'."
+            )
+
+        if base.startswith("//"):
+            base = "https:" + base
+        elif "://" not in base and not base.startswith("/"):
+            base = "https://" + base.lstrip("/")
+
+        split = urlsplit(base)
+        if (not split.scheme or not split.netloc) and split.path.startswith("/"):
+            default_base = str(_PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url", "") or "").strip()
+            default_split = urlsplit(default_base)
+            if default_split.scheme and default_split.netloc:
+                root = f"{default_split.scheme}://{default_split.netloc}/"
+                base = urljoin(root, split.path.lstrip("/"))
+                split = urlsplit(base)
+
+        if not split.scheme or not split.netloc:
+            raise ValueError(
+                f"Invalid base URL for provider '{cfg.provider}': {base!r}"
+            )
+        return base.rstrip("/")
 
     # -- Internal helpers --
 

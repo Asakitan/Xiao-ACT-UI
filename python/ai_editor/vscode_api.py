@@ -802,9 +802,13 @@ class VscodeNamespace:
         for name, tool in self._lm_tools.items():
             desc: Dict[str, Any] = {"name": name}
             if isinstance(tool, dict):
-                desc["description"] = tool.get("description", "")
+                nested = tool.get("tool")
+                desc["description"] = (
+                    tool.get("description", "")
+                    or getattr(nested, "description", "")
+                )
                 desc["inputSchema"] = _tool_schema(tool)
-                desc["tags"] = tool.get("tags", [])
+                desc["tags"] = tool.get("tags") or getattr(nested, "tags", [])
                 if tool.get("needsExtensionRuntime"):
                     desc["unsupported"] = True
                     desc["needsExtensionRuntime"] = True
@@ -860,7 +864,8 @@ class VscodeNamespace:
         return models
 
     def _register_lm_tool(self, name: str, tool: Any) -> Disposable:
-        self._lm_tools[name] = tool
+        self._lm_tools[name] = self._merge_registered_tool(
+            self._lm_tools.get(name), tool)
         self._tools_change_emitter.fire({"added": name})
         def _dispose():
             self._lm_tools.pop(name, None)
@@ -869,15 +874,63 @@ class VscodeNamespace:
 
     def _register_tool_definition(self, name: str, schema: Dict) -> Disposable:
         """Register a schema-only tool definition without pretending it can run."""
-        self._lm_tools[name] = {
+        record = self._merge_registered_tool(self._lm_tools.get(name), {
             "schema": schema or {},
-            "unsupported": True,
-            "needsExtensionRuntime": True,
-            "code": "needsExtensionRuntime",
+            "inputSchema": schema or {},
             "description": "Schema-only tool definition has no invoke handler.",
-        }
+        })
+        if not self._tool_has_runtime_handler(record):
+            record["unsupported"] = True
+            record["needsExtensionRuntime"] = True
+            record["code"] = "needsExtensionRuntime"
+        self._lm_tools[name] = record
         self._tools_change_emitter.fire({"added": name})
         return Disposable(lambda: self._lm_tools.pop(name, None))
+
+    @staticmethod
+    def _tool_has_runtime_handler(tool: Any) -> bool:
+        if isinstance(tool, dict):
+            handler = tool.get("invoke") or tool.get("handler") or tool.get("callback")
+            if callable(handler):
+                return True
+            nested = tool.get("tool")
+            return hasattr(nested, "invoke") or callable(nested)
+        return hasattr(tool, "invoke") or callable(tool)
+
+    @staticmethod
+    def _merge_registered_tool(existing: Any, tool: Any) -> Dict[str, Any]:
+        record: Dict[str, Any] = {}
+
+        def _overlay(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, dict):
+                record.update(value)
+                schema = value.get("inputSchema") or value.get("schema")
+                if schema:
+                    record["inputSchema"] = schema
+                return
+            if callable(value) and not hasattr(value, "invoke"):
+                record["handler"] = value
+            else:
+                record["tool"] = value
+            desc = getattr(value, "description", "")
+            if desc and not record.get("description"):
+                record["description"] = desc
+            schema = _tool_schema(value)
+            if schema:
+                record["inputSchema"] = schema
+            tags = getattr(value, "tags", None)
+            if tags and not record.get("tags"):
+                record["tags"] = tags
+
+        _overlay(existing)
+        _overlay(tool)
+        if VscodeNamespace._tool_has_runtime_handler(record):
+            record.pop("unsupported", None)
+            record.pop("needsExtensionRuntime", None)
+            record.pop("code", None)
+        return record
 
     def _register_mcp_provider(self, provider_id: str, provider: Any) -> Disposable:
         """Register an MCP server definition provider (extension-contributed MCP)."""
@@ -919,14 +972,17 @@ class VscodeNamespace:
         if schema and options.input is not None:
             self._validate_input_schema(name, options.input, schema)
         if isinstance(tool, dict):
-            if tool.get("needsExtensionRuntime") or tool.get("unsupported"):
-                return _unsupported_tool_result(
-                    name, "is schema-only and has no registered invoke handler.")
             handler = tool.get("invoke") or tool.get("handler") or tool.get("callback")
             if callable(handler):
                 return _call_registered_handler(handler, options, options.token)
-            return _unsupported_tool_result(
-                name, "is registered without an invoke handler.")
+            nested = tool.get("tool")
+            if nested is None:
+                if tool.get("needsExtensionRuntime") or tool.get("unsupported"):
+                    return _unsupported_tool_result(
+                        name, "is schema-only and has no registered invoke handler.")
+                return _unsupported_tool_result(
+                    name, "is registered without an invoke handler.")
+            tool = nested
         # prepareInvocation hook
         if hasattr(tool, "prepareInvocation"):
             try:

@@ -120,6 +120,18 @@ body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
 .sb-item .meta { font-size:10px; color:var(--fg-dim); margin-left:auto; }
 .sb-group { padding:8px 16px 4px; font-size:11px; font-weight:600; color:var(--fg-dim);
   text-transform:uppercase; letter-spacing:0.5px; }
+.tree-root { padding:4px 0 10px; }
+.tree-node { display:flex; flex-direction:column; }
+.tree-row { display:flex; align-items:center; gap:4px; min-height:24px; padding:0 8px;
+  cursor:pointer; color:var(--fg-dim); user-select:none; }
+.tree-row:hover { background:var(--bg-hover); color:var(--fg); }
+.tree-row.active { background:var(--bg-active); color:var(--fg); }
+.tree-twist { width:12px; text-align:center; font-size:10px; color:var(--fg-dim); flex-shrink:0; }
+.tree-icon { width:16px; text-align:center; flex-shrink:0; }
+.tree-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tree-children { display:none; }
+.tree-node.open > .tree-children { display:block; }
+.tree-note { padding:6px 16px; font-size:11px; color:var(--fg-dim); }
 
 /* ── Content area (editor + bottom terminal) ── */
 .content { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:200px; }
@@ -736,6 +748,7 @@ pre.code-block { overflow:visible; }
 <div class="main">
   <!-- Activity bar -->
   <div class="activity-bar">
+    <div class="ab-icon" data-panel="explorer" data-i18n-title="explorer" title="Explorer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.75 5.25A1.75 1.75 0 014.5 3.5h3.2l1.5 1.5h6.3a1.75 1.75 0 011.75 1.75v7.75A1.75 1.75 0 0115.5 16.25h-11A1.75 1.75 0 012.75 14.5v-9.25z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Chat"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
@@ -750,6 +763,15 @@ pre.code-block { overflow:visible; }
 
   <!-- Sidebar -->
   <div class="sidebar" id="sidebar">
+    <div class="sb-view" id="sb-explorer" style="display:none">
+      <div class="sb-header"><span data-i18n="explorer">Explorer</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshExplorer()" data-i18n-title="refresh" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section">
+        <div class="sb-group" data-i18n="workspace_files">Workspace Files</div>
+        <div id="explorer-tree" class="tree-root"></div>
+      </div>
+    </div>
     <!-- Chat sidebar (default) -->
     <div class="sb-view" id="sb-chat">
       <div class="sb-header"><span data-i18n="chat">Chat</span> <span class="spacer"></span>
@@ -1079,7 +1101,7 @@ pre.code-block { overflow:visible; }
 
     <div class="sb-group" style="padding:0;margin-top:12px">Model</div>
     <label>Model Name <span style="font-weight:400;color:var(--fg-dim)">(type or select)</span></label>
-    <input id="s-model" list="s-model-list" placeholder="gpt-4o / claude-sonnet-4-20250514 / deepseek-chat" autocomplete="off">
+    <input id="s-model" list="s-model-list" placeholder="gpt-4o / select Anthropic model from API / deepseek-chat" autocomplete="off">
     <datalist id="s-model-list"></datalist>
     <div id="s-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
     <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
@@ -1095,7 +1117,7 @@ pre.code-block { overflow:visible; }
       <div class="sb-group" style="padding:0;margin-top:0">Claude Code</div>
       <div class="settings-grid">
         <div><label>CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
-        <div><label>Model</label><input id="s-cc-model" placeholder="claude-sonnet-4-20250514"></div>
+        <div><label>Model</label><input id="s-cc-model" placeholder="Auto from Anthropic /v1/models when empty"></div>
         <div class="full"><label>CLI Args (one per line)</label><textarea id="s-cc-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
       <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Use the configured CLI path when available; otherwise provider discovery can continue to use saved settings.</small></span></label>
@@ -1106,10 +1128,12 @@ pre.code-block { overflow:visible; }
       <div class="sb-group" style="padding:0;margin-top:0">Codex</div>
       <div class="settings-grid">
         <div><label>CLI Command</label><input id="s-codex-cli" placeholder="Leave empty for auto-discovery"></div>
-        <div><label>Model</label><input id="s-codex-model" placeholder="codex-mini-latest"></div>
+        <div><label>Model</label><input id="s-codex-model" list="s-codex-model-list" placeholder="codex-mini-latest / select OpenAI model from API"></div>
         <div><label>Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI (reserved)</option></select></div>
         <div class="full"><label>CLI Args (one per line)</label><textarea id="s-codex-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
+      <datalist id="s-codex-model-list"></datalist>
+      <div id="s-codex-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
     </div>
 
     <div class="settings-section">
@@ -1233,7 +1257,7 @@ pre.code-block { overflow:visible; }
 
 // ── State ──
 const SETTINGS_SECTION_DEFAULTS={
-  claude_code:{cli_path:'',cli_args:[],prefer_cli:false,allow_dangerously_skip_permissions:false,model:'claude-sonnet-4-20250514'},
+  claude_code:{cli_path:'',cli_args:[],prefer_cli:false,allow_dangerously_skip_permissions:false,model:''},
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
@@ -1272,6 +1296,25 @@ function withSettingsDefaults(raw){
 }
 let config=withSettingsDefaults({});
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
+let mainToolNames=Object.create(null);
+
+function rememberMainTool(callId,name){
+  if(!callId)return;
+  const key=String(callId);
+  if(name)mainToolNames[key]=String(name);
+}
+
+function lookupMainTool(callId){
+  return callId?mainToolNames[String(callId)]||'':'';
+}
+
+function ensureAssistantBody(){
+  if(currentMsgBody)return currentMsgBody;
+  const statusModel=$('status-model');
+  const label=statusModel&&statusModel.textContent&&statusModel.textContent!=='-'?statusModel.textContent:(config.model||config.provider);
+  currentMsgBody=createMsg('assistant',label);
+  return currentMsgBody;
+}
 
 // ── API ──
 const api=()=>window.pywebview&&window.pywebview.api;
@@ -1323,7 +1366,7 @@ en:{
   undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
-  chat:'Chat',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
+  chat:'Chat',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ for commands, @ for context)',
   agents:'Agents',workflows:'Workflows',new_agent:'New Agent',new_wf:'New Workflow',
   model:'Model',quick_actions:'Quick Actions',
@@ -1349,7 +1392,7 @@ en:{
   // sidebar headers & actions
   new_chat_action:'New Chat',refresh:'Refresh',premium:'Premium',loading:'Loading...',
   runtime_support:'Runtime Support',runtime_desc:'Manifest/API compatibility',
-  project_instructions:'Project Instructions',new_file_action:'New file',
+  project_instructions:'Project Instructions',workspace_files:'Workspace Files',new_file_action:'New file',
   inst_dir_desc:'.sao/instructions/ directory',preview:'Preview',
   // status bar
   tokens_suffix:' tokens',approval_level:'Approval level',
@@ -1358,7 +1401,7 @@ en:{
   // tool confirm
   requires_confirmation:'requires confirmation',allow:'✓ Allow',deny:'✗ Deny',
   // tool sidebar
-  no_history:'No history',untitled:'Untitled',
+  no_history:'No history',untitled:'Untitled',no_files:'No files to show',workspace_load_failed:'Failed to load workspace files',file_preview_limited:'Opened preview (file truncated)',
   // code block actions
   copy_code:'Copy',insert_code:'Insert',run_code:'Run',new_file_code:'New File',copied:'Copied',
   // thinking
@@ -1437,7 +1480,7 @@ zh:{
   undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
-  chat:'聊天',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
+  chat:'聊天',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文)',
   agents:'代理',workflows:'工作流',new_agent:'新建代理',new_wf:'新建工作流',
   model:'模型',quick_actions:'快捷操作',
@@ -1461,12 +1504,12 @@ zh:{
   minimize:'最小化',maximize:'最大化',close:'关闭',
   new_chat_action:'新对话',refresh:'刷新',premium:'高级版',loading:'加载中...',
   runtime_support:'运行时支持',runtime_desc:'Manifest/API 兼容性',
-  project_instructions:'项目指令',new_file_action:'新建文件',
+  project_instructions:'项目指令',workspace_files:'工作区文件',new_file_action:'新建文件',
   inst_dir_desc:'.sao/instructions/ 目录',preview:'预览',
   tokens_suffix:' tokens',approval_level:'权限等级',
   role_you:'你',role_copilot:'助手',role_system:'系统',role_tool:'工具',
   requires_confirmation:'需要确认',allow:'✓ 允许',deny:'✗ 拒绝',
-  no_history:'无历史记录',untitled:'未命名',
+  no_history:'无历史记录',untitled:'未命名',no_files:'没有可显示的文件',workspace_load_failed:'加载工作区文件失败',file_preview_limited:'已打开预览（文件被截断）',
   copy_code:'复制',insert_code:'插入',run_code:'运行',new_file_code:'新建文件',copied:'已复制',
   thinking_words:'思考中 ($1 词)',
   slash_clear:'清除聊天',slash_new:'新对话',slash_export:'导出到剪贴板',
@@ -1633,8 +1676,9 @@ function renderToolCall(container,name,args){
   el.appendChild(hdr);el.appendChild(body);container.appendChild(el);
 }
 
-function renderToolResult(container,name,result){
+function renderToolResult(container,name,result,callId){
   const el=document.createElement('div');el.className='tool-result';
+  if(callId)el.dataset.callId=providerDomKey(callId);
   const hdr=document.createElement('div');hdr.className='tool-header';
   hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
   const body=document.createElement('div');body.className='tool-body';
@@ -1902,6 +1946,7 @@ let thinkingBuf='', thinkingEl=null;
 
 function onThinkingDelta(d){
   thinkingBuf+=(d.content||'');
+  if(!currentMsgBody&&(d.content||''))ensureAssistantBody();
   if(!thinkingEl&&currentMsgBody){
     thinkingEl=document.createElement('div');thinkingEl.className='thinking-block';
     const hdr=document.createElement('div');hdr.className='thinking-header open';
@@ -1949,6 +1994,7 @@ function markToolComplete(callId,success){
 let streamWordQueue='', streamFlushTimer=null;
 
 function onStreamDelta(d){
+  if(!currentMsgBody&&(d.content||''))ensureAssistantBody();
   if(!currentMsgBody)return;
   const text=d.content||'';
   streamBuf+=text;
@@ -1976,6 +2022,7 @@ function flushStreamWords(){
 
 function onStreamEnd(d){
   finalizeThinking();
+  if(!currentMsgBody&&(d.content||d.thinking||d.error||(d.tool_calls&&d.tool_calls.length)))ensureAssistantBody();
   if(currentMsgBody){
     currentMsgBody.classList.remove('stream-cursor');
     currentMsgBody.textContent='';
@@ -1991,7 +2038,7 @@ function onStreamEnd(d){
     }
     currentMsgBody._rawMarkdown=streamBuf;
     renderMd(currentMsgBody,streamBuf);
-    if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id));
+    if(d.tool_calls)d.tool_calls.forEach(tc=>{rememberMainTool(tc.id,tc.name);renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id)});
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
   }
   if(d.usage){
@@ -2016,6 +2063,7 @@ function onStreamEnd(d){
 }
 
 function onToolStart(d){
+  rememberMainTool(d&&d.id,d&&d.name);
   setStatus('Tool: '+d.name+'...');
 }
 function onToolProgress(d){
@@ -2029,12 +2077,26 @@ function onToolProgress(d){
   setStatus('Tool: '+((d&&d.name)||'running')+' '+pct+'%');
 }
 function onToolEnd(d){
-  markToolComplete(d.id,!d.error);
-  var tcEl=d.id?document.getElementById('tc-'+d.id):null;
-  var name=d.name||(tcEl&&tcEl.dataset.toolName)||'?';
+  var callId=d&&d.id?String(d.id):'';
+  if(d&&d.name)rememberMainTool(callId,d.name);
+  markToolComplete(callId,!d.error);
+  var tcEl=callId?document.getElementById('tc-'+callId):null;
+  var name=(d&&d.name)||lookupMainTool(callId)||(tcEl&&tcEl.dataset.toolName)||'?';
+  if(tcEl&&name&&!tcEl.dataset.toolName)tcEl.dataset.toolName=name;
   var body=tcEl?tcEl.closest('.msg-body'):null;
   if(!body){const msgs=$('chat-messages');const last=msgs.lastElementChild;if(last)body=last.querySelector('.msg-body')}
-  if(body)renderToolResult(body,name,d.result||'');
+  if(body){
+    const resultKey=callId?providerDomKey(callId):'';
+    const existing=resultKey?body.querySelector('.tool-result[data-call-id="'+resultKey+'"]'):null;
+    if(existing){
+      const hdr=existing.querySelector('.tool-header');
+      const tb=existing.querySelector('.tool-body');
+      if(hdr)hdr.innerHTML='<span class="arrow">▸</span> Result: '+esc(name);
+      if(tb){
+        try{tb.textContent=JSON.stringify(JSON.parse(d.result||''),null,2)}catch{tb.textContent=d.result||''}
+      }
+    }else renderToolResult(body,name,d.result||'',callId);
+  }
 }
 function onTokenWarning(d){
   const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
@@ -2168,6 +2230,7 @@ async function doStop(){
   setStatus(t('ready'));
 }
 async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
+  mainToolNames=Object.create(null);
   updateContextUsage(0);
   appendSystem(t('new_chat'))}
 async function clearChat(){newChat()}
@@ -2248,6 +2311,7 @@ function switchSidebar(panel){
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
   const view=$('sb-'+panel);if(view)view.style.display='flex';
   if(panel==='settings'){openSettings();return}
+  if(panel==='explorer')refreshExplorer();
   if(panel==='tools'&&!$('tools-list').children.length){
     call('list_tools').then(t=>{if(t&&t.tools)renderToolsSidebar(t.tools)});
   }
@@ -2327,6 +2391,118 @@ async function refreshHistory(){
   });
 }
 window.refreshHistory=refreshHistory;
+
+// ── Explorer ──
+let explorerRoot='';
+let explorerRootName='workspace';
+let explorerSelectedPath='';
+
+function pathBaseName(path){
+  const parts=String(path||'').split(/[\\/]/).filter(Boolean);
+  return parts.length?parts[parts.length-1]:'workspace';
+}
+
+async function refreshExplorer(relPath=''){
+  const tree=$('explorer-tree');
+  if(!tree)return;
+  tree.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
+  const res=await call('list_workspace_tree',relPath||'');
+  if(!res||res.error){
+    tree.innerHTML='<div class="tree-note">'+esc(t('workspace_load_failed'))+(res&&res.error?': '+esc(res.error):'')+'</div>';
+    return;
+  }
+  explorerRoot=res.root||explorerRoot;
+  explorerRootName=res.root_name||pathBaseName(explorerRoot);
+  const currentPath=res.path||'';
+  tree.innerHTML='';
+  const rootNode=createExplorerNode({name:explorerRootName,path:'',type:'directory'},0,true);
+  tree.appendChild(rootNode);
+  const children=rootNode.querySelector('.tree-children');
+  rootNode.classList.add('open');
+  const rootTwist=rootNode.querySelector('.tree-twist');if(rootTwist)rootTwist.textContent='▾';
+  renderExplorerEntries(children,res.entries||[],1,currentPath);
+}
+
+function renderExplorerEntries(container,entries,depth,activePath){
+  container.innerHTML='';
+  if(!entries.length){
+    container.innerHTML='<div class="tree-note">'+esc(t('no_files'))+'</div>';
+    return;
+  }
+  entries.forEach(entry=>{
+    const node=createExplorerNode(entry,depth,false,activePath);
+    container.appendChild(node);
+  });
+}
+
+function highlightExplorerSelection(){
+  document.querySelectorAll('#explorer-tree .tree-row').forEach(row=>{
+    row.classList.toggle('active',!!row.dataset.filePath&&row.dataset.filePath===explorerSelectedPath);
+  });
+}
+
+function createExplorerNode(entry,depth,isRoot,activePath=''){
+  const node=document.createElement('div');node.className='tree-node';
+  const row=document.createElement('div');row.className='tree-row';
+  row.style.paddingLeft=(8+depth*14)+'px';
+  row.dataset.filePath=entry.type==='file'?(entry.path||''):'';
+  if(entry.type==='file'&&entry.path===explorerSelectedPath)row.classList.add('active');
+  if(activePath&&entry.path===activePath)row.classList.add('active');
+
+  const twist=document.createElement('span');twist.className='tree-twist';
+  twist.textContent=entry.type==='directory'?'▸':'';
+  const icon=document.createElement('span');icon.className='tree-icon';
+  icon.textContent=entry.type==='directory'?(isRoot?'🗂':'📁'):'📄';
+  const label=document.createElement('span');label.className='tree-label';label.textContent=entry.name;
+  row.appendChild(twist);row.appendChild(icon);row.appendChild(label);
+  node.appendChild(row);
+
+  const children=document.createElement('div');children.className='tree-children';
+  node.appendChild(children);
+
+  if(entry.type==='directory'){
+    row.onclick=async()=>{
+      const opening=!node.classList.contains('open');
+      node.classList.toggle('open');
+      twist.textContent=node.classList.contains('open')?'▾':'▸';
+      if(opening&&!node.dataset.loaded){
+        children.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
+        const res=await call('list_workspace_tree',entry.path||'');
+        if(!res||res.error){
+          children.innerHTML='<div class="tree-note">'+esc(t('workspace_load_failed'))+(res&&res.error?': '+esc(res.error):'')+'</div>';
+          return;
+        }
+        renderExplorerEntries(children,res.entries||[],depth+1,activePath);
+        node.dataset.loaded='1';
+      }
+    };
+  }else{
+    row.onclick=()=>openWorkspaceFile(entry.path);
+  }
+  return node;
+}
+
+async function openWorkspaceFile(relPath){
+  const res=await call('open_workspace_file',relPath||'');
+  if(!res||res.error){
+    showToast((res&&res.error)||t('workspace_load_failed'),'error',2500);
+    return;
+  }
+  explorerSelectedPath=res.path||relPath||'';
+  const existing=tabs.find(t=>t.filePath===res.absolute_path);
+  if(existing){
+    existing.name=res.name||existing.name;
+    existing.filePath=res.absolute_path;
+    existing.content=res.content||'';
+    existing.language=res.language||existing.language||'plaintext';
+    switchTab(existing.id);
+    openInEditor(existing.content,existing.language);
+  }else{
+    addTab(res.name||pathBaseName(res.path),res.content||'',res.language||'',{filePath:res.absolute_path});
+  }
+  if(res.truncated)showToast(t('file_preview_limited'),'info',2200);
+  highlightExplorerSelection();
+}
 
 // ── Instructions ──
 async function refreshInstructions(){
@@ -2538,9 +2714,19 @@ document.querySelectorAll('.ptab').forEach(t=>t.addEventListener('click',functio
 let activeProviderId='chat';
 let providerDefs=Object.create(null);
 let providerUiState=Object.create(null);
+let providerToolNames=Object.create(null);
 function providerDomKey(pid){
   const raw=String(pid||'provider');
   return raw.split('').map(ch=>/[a-zA-Z0-9_-]/.test(ch)?ch:'_'+ch.charCodeAt(0).toString(16)+'_').join('')||'provider';
+}
+function rememberProviderTool(pid,callId,name){
+  if(!pid||!callId)return;
+  const pkey=String(pid),ckey=String(callId);
+  (providerToolNames[pkey]||(providerToolNames[pkey]=Object.create(null)))[ckey]=String(name||'');
+}
+function lookupProviderTool(pid,callId){
+  const row=providerToolNames[String(pid)]||{};
+  return callId?row[String(callId)]||'':'';
 }
 function providerElId(prefix,pid){return prefix+'-'+providerDomKey(pid)}
 function providerRefs(pid){
@@ -2687,7 +2873,7 @@ async function providerSend(pid){
   if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,'Error','error')}
 }
 async function providerCancel(pid){updateProviderStatus(pid,'Stopping...','running');await call('provider_cancel',pid);setProviderRunning(pid,false,'Ready','')}
-async function providerNewChat(pid){await call('provider_new_chat',pid);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);setProviderRunning(pid,false,(providerDefs[pid]&&providerDefs[pid].available===false)?'Unavailable':'Ready',(providerDefs[pid]&&providerDefs[pid].available===false)?'error':'');updateProviderEmpty(pid)}
+async function providerNewChat(pid){await call('provider_new_chat',pid);providerToolNames[String(pid)]=Object.create(null);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);setProviderRunning(pid,false,(providerDefs[pid]&&providerDefs[pid].available===false)?'Unavailable':'Ready',(providerDefs[pid]&&providerDefs[pid].available===false)?'error':'');updateProviderEmpty(pid)}
 window.providerSend=providerSend;window.providerCancel=providerCancel;window.providerNewChat=providerNewChat;
 
 // Provider streaming events
@@ -2745,6 +2931,7 @@ function providerToolStateLabel(data,done){
 }
 function renderProviderToolStart(pid,data){
   const name=data.name||'tool',callId=data.id||name,existing=document.getElementById(providerToolElementId(pid,callId));
+  rememberProviderTool(pid,callId,name);
   const args=providerValueToText(data.arguments);
   if(existing){updateProviderToolState(pid,data,false);return existing}
   const body=createProviderMessage(pid,'tool',name);if(!body)return null;
@@ -2766,7 +2953,8 @@ function updateProviderToolState(pid,data,done){
   }
 }
 function renderProviderToolEnd(pid,data){
-  data=data||{};const name=data.name||'tool';
+  data=data||{};const name=data.name||lookupProviderTool(pid,data.id)||'tool';
+  rememberProviderTool(pid,data.id||name,name);
   updateProviderToolState(pid,data,true);
   const el=document.getElementById(providerToolElementId(pid,data.id||name||'last'));if(!el)return;
   const body=el.closest('.msg-body');const result=providerValueToText(data.result!==undefined?data.result:data.error);
@@ -2931,6 +3119,8 @@ function openSettings(){
   setInputValue('s-cust-workflows',listToText(cust.workflow_locations));setInputValue('s-cust-skills',listToText(cust.skill_locations));
   refreshRuntimeSupport();
   renderCustomModels();
+  fetchProviderModels(config.provider,config.base_url,true);
+  fetchCodexModels(true);
   renderMcpServers();
   $('settings-modal').classList.add('open');
 }
@@ -2941,7 +3131,7 @@ if($('s-provider'))$('s-provider').addEventListener('change',function(){
   const p=this.value;
   const presets={
     openai:{base_url:'https://api.openai.com/v1',model:'gpt-4o'},
-    anthropic:{base_url:'https://api.anthropic.com/v1',model:'claude-sonnet-4-20250514'},
+    anthropic:{base_url:'https://api.anthropic.com/v1',model:''},
     deepseek:{base_url:'https://api.deepseek.com/v1',model:'deepseek-chat'},
     ollama:{base_url:'http://localhost:11434/v1',model:'llama3.1'},
     custom:{base_url:'',model:''},
@@ -2951,19 +3141,93 @@ if($('s-provider'))$('s-provider').addEventListener('change',function(){
   if(bu)bu.value=d.base_url;
   if(mo)mo.value=d.model;
   showModelInfo();
-  fetchProviderModels(p,d.base_url);
+  fetchProviderModels(p,d.base_url,true);
+  fetchCodexModels(false);
 });
-async function fetchProviderModels(provider,base_url){
+const staleProviderDefaults=new Set(['claude-sonnet-4-20250514']);
+function providerApiKey(provider){
+  const active=$('s-provider')&&$('s-provider').value===provider?readInputValue('s-apikey'):'';
+  if(provider==='openai')return readInputValue('sk-openai')||active;
+  if(provider==='anthropic')return readInputValue('sk-anthropic')||active;
+  if(provider==='deepseek')return readInputValue('sk-deepseek')||active;
+  return active;
+}
+function setSettingsModelInfo(id,text,isError){
+  const el=$(id);if(!el)return;
+  el.textContent=text||'';
+  el.style.color=isError?'var(--fg-error)':'var(--fg-dim)';
+}
+async function fetchProviderModels(provider,base_url,applyDefault=false){
   const list=$('s-model-list');if(!list)return;
   list.innerHTML='<option value="">Loading models...</option>';
-  const key=$('s-apikey')?$('s-apikey').value:'';
+  setSettingsModelInfo('s-model-info','',false);
+  const key=providerApiKey(provider||'');
   const r=await call('list_provider_models',provider||'',base_url||'',key||'');
   list.innerHTML='';
+  if(r&&r.error){
+    const o=document.createElement('option');o.value='';o.textContent=r.error;list.appendChild(o);
+    setSettingsModelInfo('s-model-info',r.error,true);
+    return r;
+  }
   if(r&&r.models&&r.models.length){
     r.models.forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;list.appendChild(o)});
+    const defaultModel=r.default_model||r.models[0].id;
+    const modelInput=$('s-model');
+    const current=modelInput?modelInput.value.trim():'';
+    if(applyDefault&&modelInput&&defaultModel&&(!current||staleProviderDefaults.has(current))){
+      modelInput.value=defaultModel;config.model=defaultModel;showModelInfo();
+    }
+    const ccModel=$('s-cc-model');
+    if(provider==='anthropic'&&ccModel&&defaultModel){
+      const ccCurrent=ccModel.value.trim();
+      if(!ccCurrent||staleProviderDefaults.has(ccCurrent))ccModel.value=defaultModel;
+    }
+  }else{
+    setSettingsModelInfo('s-model-info','No models returned from the provider API.',false);
   }
+  return r;
 }
 window.fetchProviderModels=fetchProviderModels;
+function codexCliMessage(){
+  return 'Codex CLI transport is configured, but this backend does not execute Codex CLI yet. Use Chat Completions or Responses in this tab.';
+}
+async function fetchCodexModels(applyDefault=false){
+  const list=$('s-codex-model-list');if(!list)return null;
+  const transport=readInputValue('s-codex-transport')||'chat_completions';
+  list.innerHTML='';
+  if(transport==='cli'){
+    setSettingsModelInfo('s-codex-model-info',codexCliMessage(),true);
+    return {error:codexCliMessage(),models:[]};
+  }
+  list.innerHTML='<option value="">Loading models...</option>';
+  setSettingsModelInfo('s-codex-model-info','',false);
+  const key=providerApiKey('openai');
+  const r=await call('list_provider_models','openai','https://api.openai.com/v1',key||'');
+  list.innerHTML='';
+  if(r&&r.error){
+    const o=document.createElement('option');o.value='';o.textContent=r.error;list.appendChild(o);
+    setSettingsModelInfo('s-codex-model-info',r.error,true);
+    return r;
+  }
+  if(r&&r.models&&r.models.length){
+    r.models.forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;list.appendChild(o)});
+    const defaultModel=r.default_model||r.models[0].id;
+    const codexModel=$('s-codex-model');
+    const current=codexModel?codexModel.value.trim():'';
+    if(applyDefault&&codexModel&&defaultModel&&!current){
+      codexModel.value=defaultModel;
+      config.codex={...settingSection('codex'),model:defaultModel};
+    }
+    setSettingsModelInfo('s-codex-model-info','Loaded '+r.models.length+' OpenAI models for Codex.',false);
+    return r;
+  }
+  setSettingsModelInfo('s-codex-model-info','No OpenAI models returned from the provider API.',false);
+  return r;
+}
+window.fetchCodexModels=fetchCodexModels;
+if($('s-codex-transport'))$('s-codex-transport').addEventListener('change',()=>fetchCodexModels(false));
+if($('sk-openai'))$('sk-openai').addEventListener('change',()=>fetchCodexModels(true));
+if($('s-apikey'))$('s-apikey').addEventListener('change',()=>fetchCodexModels(true));
 
 async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
@@ -3057,7 +3321,7 @@ function ensureSelectOption(sel,value,label){
   if(!Array.from(sel.options).some(o=>o.value===value))sel.add(new Option(label||value,value));
 }
 function readProviderModelDefaults(provider){
-  const defs={openai:'gpt-4o',anthropic:'claude-sonnet-4-20250514',deepseek:'deepseek-chat',ollama:'llama3.1',custom:''};
+  const defs={openai:'gpt-4o',anthropic:'',deepseek:'deepseek-chat',ollama:'llama3.1',custom:''};
   return defs[provider]||'';
 }
 function updateProviderModel(provider,model,persist){
@@ -3491,9 +3755,10 @@ window.searchExtensions=searchExtensions;
 let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0}];
 let activeTab=0, nextTabId=1;
 
-function addTab(name,content,lang){
+function addTab(name,content,lang,meta){
   showEditorArea();
-  const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0};
+  const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
+    filePath:meta&&meta.filePath?meta.filePath:''};
   tabs.push(tab);
   renderTabs();
   switchTab(tab.id);
@@ -3514,6 +3779,7 @@ function switchTab(id){
   activeTab=id;
   const tab=tabs.find(t=>t.id===id);
   if(tab){
+    editorFileName=tab.filePath||tab.name||'untitled';
     $('editor-text').value=tab.content;
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
@@ -3548,7 +3814,11 @@ const _origOpenInEditor=openInEditor;
 openInEditor=function(code,lang){
   saveCurrentTab();
   const tab=tabs.find(t=>t.id===activeTab);
-  if(tab){tab.content=code;tab.name=(lang||'code').slice(0,12);tab.language=lang||'plaintext'}
+  if(tab){
+    tab.content=code;
+    tab.language=lang||tab.language||'plaintext';
+    editorFileName=tab.filePath||tab.name||'untitled';
+  }
   _origOpenInEditor(code,lang);
   renderTabs();
 };
@@ -3696,6 +3966,7 @@ const COMMANDS=[
   {label:'New Tab',shortcut:'',action:()=>addTab()},
   {label:'Upload Image',shortcut:'',action:()=>uploadImage()},
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
+  {label:'Explorer',shortcut:'',action:()=>switchSidebar('explorer')},
   {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
   {label:'Chat History',shortcut:'',action:()=>{switchSidebar('history');refreshHistory()}},
   {label:'Custom Instructions',shortcut:'',action:()=>switchSidebar('instructions')},

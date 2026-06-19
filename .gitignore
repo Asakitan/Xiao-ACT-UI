@@ -89,6 +89,8 @@ license.db
 
 # ── AI Editor (user conversation history, local only) ──
 python/ai_editor_history/
+python/.sao/chat_history/
+
 
 # ── Misc ───────────────────────────────────────────
 .github/

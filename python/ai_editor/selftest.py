@@ -1459,6 +1459,13 @@ def test_app_extension_runtime_support() -> None:
         dispatch_data = json.loads(dispatch_result) if isinstance(dispatch_result, str) else dispatch_result
         _check("provider controller plugin tool dispatch works",
                dispatch_data.get("value") == "pong")
+        missing_provider = api._mcp.register_internal(
+            "selftest_missing_handler",
+            [{"name": "needs_handler", "description": "Missing handler"}],
+        )
+        missing_data = json.loads(missing_provider.call_tool("needs_handler", {}))
+        _check("internal MCP missing handler is explicit error",
+               "no registered handler" in missing_data.get("error", ""))
     finally:
         extension_host_module._host = previous_host
 
