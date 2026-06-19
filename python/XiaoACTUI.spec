@@ -86,6 +86,16 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.pointer_chain',
     'mem_probe.scanner',
     'mem_probe.rt_io',
+    'mem_probe.engine',
+    'mem_probe.engine.types',
+    'mem_probe.engine.adapter',
+    'mem_probe.engine.detector',
+    'mem_probe.engine.il2cpp_adapter',
+    'mem_probe.engine.mono_adapter',
+    'mem_probe.engine.unreal_adapter',
+    'mem_probe.engine.native_adapter',
+    'mem_probe.stealth',
+    'mem_probe.stealth.stealth_process',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
