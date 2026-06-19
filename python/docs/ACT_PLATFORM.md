@@ -190,21 +190,20 @@ my_plugin/
 完整的入口示例：
 
 ```python
+_ctx = None
+
 def on_load(ctx):
     """插件加载。ctx 是 PluginContext，提供所有平台能力。"""
-    # 安装第三方依赖（如果有 requirements.txt）
+    global _ctx
+    _ctx = ctx
+
     ctx.ensure_requirements(install=True)
 
-    # 订阅伤害事件，每次有人造成伤害时回调
     ctx.on_damage(handle_damage)
-
-    # 订阅 Boss 状态变化
     ctx.on_boss(handle_boss_state)
 
-    # 注册一个菜单项
     ctx.register_menu_category('我的工具', '🔧', build_my_menu, priority=20)
 
-    # 注册一个 HUD 面板
     ctx.register_ui_panel('my_panel', {
         'title': '自定义面板',
         'width': 300,
@@ -212,37 +211,40 @@ def on_load(ctx):
     }, render=render_panel, on_action=handle_action)
 
 def on_enable():
-    """插件被用户启用。"""
+    pass
 
 def on_disable():
-    """插件被用户禁用。"""
+    pass
 
 def on_unload():
-    """插件卸载，事件订阅和 sys.path 自动清理。"""
+    pass
 
 
 def handle_damage(event):
-    """处理伤害事件。"""
     dmg = event['payload']
     if dmg.get('is_critical') and dmg['damage'] > 100000:
-        print(f"暴击 {dmg['damage']}!")
+        _ctx.log(f"暴击 {dmg['damage']}!")
 
 def handle_boss_state(event):
-    """Boss 状态变化。"""
     boss = event['payload']
     if boss.get('hp_pct', 1.0) < 0.1:
-        ctx.toast("Boss 即将倒下！", level="warning")
+        _ctx.toast("Boss 即将倒下！")
 
-def render_panel(ctx):
-    """返回面板内容，平台在所有 UI 表面上渲染。"""
-    snap = ctx.get_snapshot()
+def render_panel(payload=None):
+    """返回面板内容（UI spec 字典），平台在所有 UI 表面上渲染。"""
+    ui = _ctx.ui
+    snap = _ctx.get_snapshot()
     if not snap:
-        return {"text": "等待数据..."}
-    return {
-        "text": f"DPS: {snap.get('total_dps', 0):,.0f}",
-        "bars": [{"label": e['name'], "value": e['dps']}
-                 for e in snap.get('entities', [])[:5]]
-    }
+        return ui.panel("自定义面板", [ui.text("等待数据...")])
+    rows = [{"name": e['name'], "dps": f"{e['dps']:,.0f}"}
+            for e in snap.get('entities', [])[:5]]
+    return ui.panel("自定义面板", [
+        ui.kv("总 DPS", f"{snap.get('total_dps', 0):,.0f}"),
+        ui.table(
+            columns=[{"key": "name", "title": "角色"}, {"key": "dps", "title": "DPS", "align": "right"}],
+            rows=rows,
+        ),
+    ])
 ```
 
 ### PluginContext API
@@ -285,7 +287,7 @@ ctx.request_redraw('panel_id')
 
 # 通知和 Toast
 ctx.notify("标题", "内容", duration_s=5)
-ctx.toast("操作成功", level="info")  # level: info / warning / error
+ctx.toast("操作成功")
 ```
 
 #### 渲染钩子
@@ -346,7 +348,8 @@ def check_low_hp(event, config):
 
 ```python
 # 注册快捷键（CTRL+组合键，避免与主界面冲突）
-ctx.register_hotkey('ctrl+shift+d', toggle_dps_panel, label='切换 DPS 面板')
+ctx.register_hotkey('toggle_dps', toggle_dps_panel,
+                    default_key='CTRL+SHIFT+D', label='切换 DPS 面板')
 ```
 
 #### 数据源

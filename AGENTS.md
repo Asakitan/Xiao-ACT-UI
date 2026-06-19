@@ -99,7 +99,7 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 
 - VSCode layout: Activity Bar → Left Sidebar → Editor + Terminal → **Right Sidebar (Chat)**
 - Three-scope system: System (`~/.sao/`) → Workspace (`<BASE_DIR>/.sao/`) → Plugin (`plugins/<id>/.sao/`)
-- Three modes: Chat (no tools) / Edit (confirm writes) / Agent (autonomous)
+- Three modes: Agent (autonomous) / Ask (read-only Q&A) / Plan (read + confirm writes)
 - Chat Provider registry: plugins call `register_chat_provider()` to add right-sidebar tabs
 - Model context windows: built-in 20+ model table + user custom overrides in settings
 - Auto-compress: threshold = 90% of model max_input_tokens (VSCode Copilot pattern)
@@ -130,7 +130,7 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 | `mcp_client.py` | MCP server connections (stdio + SSE + internal) |
 | `extensions.py` | VSCode Marketplace API client |
 | `history.py` | Scope-aware conversation persistence |
-| `selftest.py` | 113-item self-test suite |
+| `selftest.py` | 304-item self-test suite |
 
 ## Documentation Hygiene
 

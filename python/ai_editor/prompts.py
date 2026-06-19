@@ -24,23 +24,28 @@ import zlib
 # ---------------------------------------------------------------------------
 
 _ENCRYPTED_ENGINE_GUIDE = (
-    "W<x)BQ2Y3*2F`r?yX*K{p@Pls;Yih`B|qT^?z;&)H3S5+29x+#r;}(T_=9kSfTiO~9B3lNxE^nOKx*"
-    "XuDEORT4LdeTwNj(9(#^^$_--w_GL3Wfl;mXN(H$$~926%ZBnb4%f+&hXgJsHp-Z&)VLzP|i86vk6>"
-    "1*kThME}*sGe3Z{-tHHk2el=&GkL!I60T07ZAaqqH3n$Uyl;AP=*7|4lNQ8`9<5pGW<2T4nooy+<w4"
-    "<`Wm6+xZV&OEV0H?eo4A3#`|Q~?@Vy%{VHY%U;Wi}0-WAxb(g{0FN0VH5QFs)%a(yfoG~5O(;FDP-g"
-    "ctlJ9VT_Y2S-}r~P}@*L)hN?-$)m4;(UL=Z4b^ge(|^-36ZHFA`{i=>Kk$0e<qaFJCKdL_9h4+3okK"
-    "zUv?b4gv31XGO@#T$pZA5FLn;U=}a-e6*Oy?cxHByTZ+jE4a`=DPRd+U`RrztUZz#=@UqH=%ko71>Y"
-    "DUucd;Ii>Qi7s#w5Xem6T$CigQM>A%@lm9T{l>ke@T+-Bu31@GMC5?=mDne&@Kk4o~Vo--~7gpVI!("
-    ">0j%xc%hV(fNq9295COGa;c(<^W4Y7Wru!0z==<`h>Y#jJ}_GBrp4UzDmQUZB`&NU?l^bQ6a-%rI+b"
-    "BE&_2vsL0&z7-=U0jg2DfE+%rQlUBPNToUxZpdGU+fLbI(h5IAq9xn!GO{?8uDomT3|9|-hfov|k3g"
-    "=V0Fg1{7-w_G!%&+SMHV;H^1PrBu)f8YT+3GRiZJWIX?f0@wa^_Jg&-yle9p}!>Y*&PKTftss6|vQ4"
-    "T;=jiXvPi}JIh4Ikd=wZRnv<sv14$L#E!3^Uz9Av`GJX36N44FJ^INc;&h3%`(xtXHQVtx;u{ELc-x"
-    "d>HFvlOM4tH=tf<6}{&We~LqiE&54)7$wz<0|IJ{|N(%8vL^*R`1iJI-us;W%*@0=#A-SVX8R58JSW"
-    "aRzp)ezS)!CPnUI@<Q`d4mDdpioyuOZr{^xg<;>@lU8Zb$m`5mw%)R$>}h<&Gz0AyDMLJUK$Kc@yD#"
-    "JaP+ja-f7RZa$^5-lCz46L|fqjke|>Dl`bg}?i0k3F`YL(8go#`3l@+qc^DIVTC9<l#>7k4D@{f+@_"
-    "@T@?W{N&*j&z4u07`*5cOr#>vGP=$gua-`tGf1zGRjC%~VE{f8wsTquvYlxwk9iVLL-dT3HKvZUGhD"
-    "#hEH0um<bmKwUe6qN;*smrIuVs&!pRa2#07o2!)-|5Qj#YqA%~z8q|}bSBLIvMN50wJubA>Ek^W#$W"
-    "}TcZ(V"
+    "W<%d}RQkcH2F+yhhKuN-YYi)E)o7M_0F4%h=b>N*av}<IhafH_PU9CdE(Hi`Z2f@Le3ck4Y<aMU39h"
+    "FIZ801vp>Hi>kCpf_qum@g0ALE}L07w-%6k-XYmq^NLc0>IRp6QjK*heV#zo1-`zxTjWAQVLIV9AEs"
+    "T?mi+7o7=Z=D2M11{4qygEkKO}FIo_#$QVzY^PSz6YtP$3$ys;2}^#j+s^OwY#x@>JtKcD%iSABjh8"
+    "G{nA{*%=2%;mr`wgcYU`!O2nzciLZ#6JqDZvZ;K-_fnr|~#c+DiuAY~hwX<?Xexi>fxPNhS2-{_cF?"
+    "%F!%i)r*zxkX!X2R(X|98EyQ_Ai@9aWPP1<M<u$fDV$=<MeDF&awByhAV*uwipn$N*$TJmRfY%?A6-"
+    "dw-@UCi?cMa~}HHJLr}3kalHu^Qwk3c87Mh7L?@Nw-G3vmKZmnP#|Rx`G+K0^(;M01(PV)85ssnJV5"
+    "ZHnKR}eVQF3X=*7kPquFnj8c(!lcTut=g4F4fh|{=3465X;QBPR)xlW<qgCpFnszrQb_Qcjc*;;Gey"
+    "nOR=ip;{A#zU+A8V)o(7-kLAfSbBVC44bFVLQ@(Z6dK~>-%?@^0_|o{0F?XJU}&^n#;GvGSl^idgeA"
+    "J$iKQf?lu*j<eSq;o>Ja9L~*!wFw=k}U#*5q;SdKRf-rIcT1~(Yr~U1>L_ZohTS-PY9x37OSz;-5r_"
+    "qcjegdcrnq}~Oixol)(>dNwN-SzCZ1G^Hg{#+s5kL+84W}VZKcvK#QHrd@%%LTPlzt-<YSvbjV5wE;"
+    "APNQ1W5v~&#7jDxPTZE94}x9<vly%XxhD6wzzONqmio0rb0l1wkBQ`}K!0)1Na3w+hCbh(DfXu0;&!"
+    "=b`O+$?m4GI6waAxcpxE6VP#+yrB|^wQ5d@vCJyUWe)|tMT>h-tpFMgA6x}Y+)f|V^6A+Z(|t^wz!d"
+    "!f9RO%{<{VmZQ{^aWtHo&V$A*u8z*mJAjbUTnV{jsW_ii3?$#laI4GZ?iF$TPZ=E5(J8GH2*KnI@nD"
+    "B{#K6g@Wp-QIr=#|f&D$c%W>^uxeAu@KCy?e`sGVoWEQSt_OuDUC8ylZQRbKi?q7m7gETMr4*BKDhQ"
+    "S#KfIqI!N<fv5JbvkayvuF$ty{TIVGg68a7h$p2%=`P&SQOS#c~9ZYC)VaNNwR2(&8{7MuljVic*Nn"
+    "SVXbvoJ^FD2qs`Wg7!w&IYv7^cMT_fK8r>$-1|I%Y;;yHk%tu$OJ(+_$}@<CblmMKj_g`%D)kHSH}z"
+    "w)UL3K~kErb)>$mA|vW(x?TQcmXXqbG;I4>RO4Q$5j;W-RWW=&ks0cd%@bQ5vVGwo?87FI^vDJOysg"
+    "Eq2CmVM(VO3;GcVFhYSkL2R~L8wOx{BKE~(Hkczc+6+eLO#XemMuHq^(2>pRe?Fr+{P<VQ{d;RJ&D0"
+    "oTOU+V@#0d)Tq`c$mjFOJw4{v0We4+2%7$HPT1~3-CXkjt0C!LpYS7WYc=N$_+LV?{pBvvo@ocI|(@"
+    "bRDy!Df$v0uc9s^;D(cJ;y{EM)i8r4%XNua-uBv?{h#^#p%lH@KYvtzMdE>Tr-#H{cNIne&3{k4wE}"
+    ";Esb(N%8gz;95|hN%tx+T<6UEU&fwl&T0TsyrVMd7Qb&>_nskd0{UkE);1#r6<adfOpFr>I}QnVKki"
+    "l*>BcR-9e+sJv`v`hRJVUhx=?@{P8%&DJa*60Vj2e46n`o+iE9`xklq*"
 )
 
 _EG_SEED = b"\x4a\x91\xc3\x7f\x28\xe5\xd6\x0b\x73\xfa\x14\x9d\x55\xa2\x68\xbe"
@@ -219,8 +224,38 @@ sao_auto/python/
 │   └── <plugin_id>/       — Plugin-owned runtime, UI, and data adapters
 ├── web/                   — HTML/CSS/JS for WebView + AI Editor
 ├── ai_editor/             — This AI editor backend
+├── docs/                  — Platform documentation
+│   ├── PLUGIN_SDK.md      — Complete plugin development guide with examples
+│   ├── AI_EDITOR.md       — AI Editor architecture and usage guide
+│   ├── ACT_PLATFORM.md    — Platform overview, events, data flow
+│   └── ...                — Other reference docs
 └── license/               — Auth system
 ```
+
+## Documentation & Plugin Examples
+
+When the user asks about plugin development, platform APIs, or how the \
+system works, **read the relevant docs**:
+
+- `docs/PLUGIN_SDK.md` — Full plugin API reference with 3 complete examples \
+  (DPS monitor, boss helper with sub-panels, engine access patterns). \
+  Covers lifecycle, PluginContext API, UI builder, events, hotkeys, menus, \
+  dependencies, packaging, and troubleshooting.
+- `docs/AI_EDITOR.md` — AI Editor architecture: modes, scopes, agents, \
+  workflows, MCP, chat providers, settings.
+- `docs/ACT_PLATFORM.md` — Platform overview: data modes, event system, \
+  triggers, reports, UI surfaces.
+
+When writing or reviewing plugin code, reference real plugin examples:
+
+- `plugins/star_resonance_plugin/` — The reference game adapter plugin \
+  (TCP packet capture + IL2CPP memory reading, boss mechanics, overlays)
+- `plugins/midi_piano_plugin/` — MIDI piano plugin (external dependency \
+  bootstrapping, vendor/ packaging, input injection)
+- `plugins/hide_seek_plugin/` — Simple game plugin example
+
+Use `listFiles` or `readFile` on these directories to show concrete code \
+patterns. Always prefer showing real working code over generating from scratch.\
 """
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import os
+import tempfile
 import tkinter as tk
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -166,6 +167,7 @@ def test_app_settings_parity() -> None:
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
+        "list_workspace_tree", "open_workspace_file",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
@@ -285,7 +287,8 @@ def test_app_settings_parity() -> None:
     _check("codex provider settings applied",
            ctrl.engine.config.model == "codex-test"
            and ctrl.engine.config.transport == "responses"
-           and ctrl.engine.config.api_key == "test-openai")
+            and ctrl.engine.config.api_key == "test-openai"
+            and ctrl.engine.config.effective_base_url == "https://api.openai.com/v1")
 
     legacy_provider_gui = _SettingsGui({"ai_editor": {
         "_provider_keys": {"openai": "legacy-openai"},
@@ -324,6 +327,33 @@ def test_app_settings_parity() -> None:
                and proxy_result.get("env", {}).get("ANTHROPIC_MODEL") == "claude-proxy-test")
     finally:
         proxy_api.stop_claude_proxy()
+
+        stale_fetch_calls = []
+
+        stale_claude_gui = _SettingsGui({"ai_editor": {
+            "provider_keys": {"anthropic": "test-anthropic"},
+            "claude_code": {"model": "claude-sonnet-4-20250514"},
+        }})
+        stale_claude_api = AIEditorAPI(stale_claude_gui)
+        stale_claude_api._ensure_engine()
+        def _stale_fetch(provider, base_url, api_key, timeout=10.0):
+            stale_fetch_calls.append({
+                "provider": provider,
+                "base_url": base_url,
+                "api_key": api_key,
+                "timeout": timeout,
+            })
+            return {
+                "models": [{"id": "official-claude", "name": "Official Claude"}],
+                "default_model": "official-claude",
+            }
+        stale_claude_api._fetch_provider_models = _stale_fetch
+        stale_claude = stale_claude_api._provider_registry.get("claude-code")
+        stale_ctrl = stale_claude_api._create_provider_controller(stale_claude)
+        _check("stale Claude default model replaced from official models",
+               stale_ctrl.engine.config.model == "official-claude"
+               and stale_fetch_calls
+               and stale_fetch_calls[0].get("base_url") == "https://api.anthropic.com/v1")
 
     provider_gui.settings.data["ai_editor"]["codex"]["transport"] = "cli"
     _check("unsupported CLI transport rejected",
@@ -412,11 +442,50 @@ def test_app_settings_parity() -> None:
     _check("set_active_provider updates engine and preserves settings",
            provider_result.get("ok") is True
            and controls_api._engine.config.provider == "anthropic"
-           and controls_api._engine.config.model == "claude-sonnet-4-20250514"
+           and controls_api._engine.config.model == ""
            and stored_controls.get("provider") == "anthropic"
-           and stored_controls.get("model") == "claude-sonnet-4-20250514"
+           and stored_controls.get("model") == ""
            and stored_controls.get("provider_keys", {}).get("anthropic") == "old-claude"
            and stored_controls.get("future_section") == {"enabled": True})
+
+    no_key_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    missing_key_models = no_key_api.list_provider_models(
+        "anthropic", "https://api.anthropic.com/v1", "")
+    _check("anthropic official model list requires API key",
+           missing_key_models.get("default_model") == ""
+           and "API key" in missing_key_models.get("error", ""))
+
+    missing_openai_models = no_key_api.list_provider_models(
+        "openai", "https://api.openai.com/v1", "")
+    _check("openai official model list requires API key",
+           missing_openai_models.get("default_model") == ""
+           and "API key" in missing_openai_models.get("error", ""))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.makedirs(os.path.join(tmpdir, "src"), exist_ok=True)
+        os.makedirs(os.path.join(tmpdir, "node_modules"), exist_ok=True)
+        os.makedirs(os.path.join(tmpdir, ".git"), exist_ok=True)
+        sample_file = os.path.join(tmpdir, "src", "sample.py")
+        with open(sample_file, "w", encoding="utf-8") as fh:
+            fh.write("print('tree')\n")
+        with open(os.path.join(tmpdir, "README.md"), "w", encoding="utf-8") as fh:
+            fh.write("# hi\n")
+        tree_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        tree_api._workspace_root = lambda: tmpdir
+        tree = tree_api.list_workspace_tree()
+        root_names = {entry.get("name") for entry in tree.get("entries", [])}
+        _check("workspace tree filters ignored directories",
+               "src" in root_names and "README.md" in root_names
+               and "node_modules" not in root_names and ".git" not in root_names)
+        opened = tree_api.open_workspace_file("src/sample.py")
+        _check("open_workspace_file returns content and language",
+               opened.get("path") == "src/sample.py"
+               and opened.get("absolute_path") == sample_file
+               and opened.get("language") == "python"
+               and "print('tree')" in opened.get("content", ""))
+        blocked_path = tree_api.open_workspace_file("../outside.py")
+        _check("workspace file API blocks path traversal",
+               "escapes workspace" in blocked_path.get("error", ""))
 
     model_result = controls_api.set_active_model("toolbar-model")
     mode_result = controls_api.set_active_mode("agent")
@@ -569,6 +638,7 @@ def test_tool_registry() -> None:
     print("── Tool Registry ──")
     from ai_editor.tool_registry import ToolRegistry
     from ai_editor.engine_tools import register_engine_tools
+    from ai_editor.vscode_api import LanguageModelToolResult
 
     reg = ToolRegistry()
     register_engine_tools(reg, _FakeGui())
@@ -606,6 +676,27 @@ def test_tool_registry() -> None:
     _check("object-schema tool rejects array args",
            "must be a JSON object" in data.get("error", ""))
 
+    reg.register(
+        "payloadEcho",
+        "Echo payload dict",
+        {"type": "object", "properties": {"value": {"type": "string"}},
+         "required": ["value"]},
+        lambda payload: {"echo": payload.get("value")},
+    )
+    payload_echo = json.loads(reg.execute("payloadEcho", '{"value":"pong"}'))
+    _check("single-arg dict handler supported",
+           payload_echo.get("echo") == "pong")
+
+    reg.register(
+        "lmResult",
+        "Return LM result object",
+        {"type": "object", "properties": {}},
+        lambda: LanguageModelToolResult.text("done"),
+    )
+    lm_result = json.loads(reg.execute("lmResult", "{}"))
+    _check("LM tool result normalized to JSON",
+           lm_result.get("content", [{}])[0].get("text") == "done")
+
     result = reg.execute("nonexistent_tool", "{}")
     data = json.loads(result)
     _check("unknown tool error", "error" in data)
@@ -639,6 +730,32 @@ def test_llm_engine() -> None:
     # Ollama config
     e4 = LLMEngine(ProviderConfig(provider="ollama"))
     _check("Ollama base_url", "localhost" in e4.config.effective_base_url)
+
+    compat = LLMEngine(ProviderConfig(provider="openai", base_url="api.openai.com/v1"))
+    _check("scheme-less base_url normalized",
+           compat._resolve_request_url(compat.config, "/chat/completions")
+           == "https://api.openai.com/v1/chat/completions")
+
+    relative = LLMEngine(ProviderConfig(provider="openai", base_url="/v1"))
+    _check("relative base_url anchored to provider default host",
+           relative._resolve_request_url(relative.config, "/chat/completions")
+           == "https://api.openai.com/v1/chat/completions")
+
+    direct = LLMEngine(ProviderConfig(
+        provider="custom",
+        base_url="https://proxy.example/v1/chat/completions",
+    ))
+    _check("direct endpoint base_url preserved",
+           direct._resolve_request_url(direct.config, "/chat/completions")
+           == "https://proxy.example/v1/chat/completions")
+
+    try:
+        LLMEngine(ProviderConfig(provider="custom", base_url=""))._resolve_request_url(
+            ProviderConfig(provider="custom", base_url=""), "/chat/completions")
+        invalid_url_ok = False
+    except ValueError as exc:
+        invalid_url_ok = "No base URL configured" in str(exc)
+    _check("missing custom base_url rejected explicitly", invalid_url_ok)
 
     chat_payload = {
         "choices": [{"message": {"tool_calls": [{
@@ -703,13 +820,15 @@ def test_conversation() -> None:
     conv.add_message(ChatMessage(role="assistant", content="Hi", tool_calls=[
         ToolCall(id="tc1", name="get_time", arguments='{"tz":"UTC"}'),
     ]))
-    conv.add_message(ChatMessage(role="tool", content='{"time":"12:00"}', tool_call_id="tc1"))
+    conv.add_message(ChatMessage(role="tool", content='{"time":"12:00"}', tool_call_id="tc1",
+                                 tool_name="get_time"))
 
     msgs = conv.to_api_messages()
     _check(f"API messages count: {len(msgs)}", len(msgs) == 4)  # system + 3
     _check("System message", msgs[0]["role"] == "system")
     _check("Tool calls in assistant", "tool_calls" in msgs[2])
     _check("Tool result", msgs[3]["role"] == "tool")
+    _check("Tool result keeps tool name", msgs[3].get("name") == "get_time")
     _check("Title auto-set", conv.title == "Hello")
 
     from ai_editor.chat_state import _compress_tool_result
@@ -719,6 +838,81 @@ def test_conversation() -> None:
     _check("large JSON tool result compressed",
            compressed_data.get("_compressed") is True
            and len(compressed) < len(big_json))
+
+
+def test_chat_controller_tool_loop() -> None:
+    print("── Chat Controller Tool Loop ──")
+    from ai_editor.chat_state import ChatController, Conversation, ChatMessage
+    from ai_editor.llm_engine import LLMResponse, ProviderConfig, StreamDelta, ToolCall
+    from ai_editor.tool_registry import ToolRegistry
+
+    class _ScriptedEngine:
+        def __init__(self) -> None:
+            self.config = ProviderConfig(provider="openai", model="tool-loop-test")
+            self.requests = []
+            self.responses = [
+                LLMResponse(tool_calls=[ToolCall(
+                    id="call_lookup",
+                    name="lookup",
+                    arguments='{"topic":"boss"}',
+                )]),
+                LLMResponse(content="Resolved after tool."),
+            ]
+
+        def reset_cancel(self) -> None:
+            return None
+
+        def cancel(self) -> None:
+            return None
+
+        def count_message_tokens(self, _messages) -> int:
+            return 0
+
+        def estimate_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4) if text else 0
+
+        def chat_completion_stream(self, messages, tools=None, on_delta=None):
+            self.requests.append({"messages": messages, "tools": tools})
+            resp = self.responses.pop(0)
+            if on_delta and resp.content:
+                on_delta(StreamDelta(content=resp.content))
+            return resp
+
+    reg = ToolRegistry()
+    reg.register(
+        "lookup",
+        "Lookup test data",
+        {
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"],
+        },
+        lambda topic: {"topic": topic, "result": 42},
+        category="tests",
+    )
+
+    engine = _ScriptedEngine()
+    conv = Conversation(system_prompt="loop")
+    conv.add_message(ChatMessage(role="user", content="Need tool help"))
+    ctrl = ChatController(engine, reg, conv)
+    stream_ends = []
+    ctrl.on_stream_end = lambda msg: stream_ends.append({
+        "content": msg.content,
+        "tool_calls": [tc.name for tc in msg.tool_calls],
+    })
+    ctrl._running = True
+    ctrl._run_loop()
+
+    second_request = engine.requests[1]["messages"] if len(engine.requests) > 1 else []
+    tool_messages = [m for m in second_request if m.get("role") == "tool"]
+    _check("tool loop made a second LLM round",
+           len(engine.requests) == 2 and len(stream_ends) == 2)
+    _check("second round includes tool result message",
+           len(tool_messages) == 1
+           and tool_messages[0].get("tool_call_id") == "call_lookup"
+           and tool_messages[0].get("name") == "lookup")
+    _check("tool loop resumes with final assistant content",
+           stream_ends[-1]["content"] == "Resolved after tool.")
 
 
 def test_history() -> None:
@@ -949,11 +1143,16 @@ def test_extension_host() -> None:
     _check("EP.command unsupported is explicit",
            unsupported_cmd.get("needsExtensionRuntime") is True
            and unsupported_cmd.get("arguments") == [{"x": 1}])
+    _check("EP.command runtime support marked",
+           ep.command_contributions[0].get("_runtimeSupport", {}).get("needsExtensionRuntime") is True)
     _check("EP.lm_tool runtime support marked",
            ep.language_model_tools[0].get("_runtimeSupport", {}).get("needsExtensionRuntime") is True)
     summary = ep.to_summary()
     _check("EP.summary", summary["chatParticipants"] == 1
            and summary.get("needsExtensionRuntime", {}).get("languageModelTools") == 1)
+    _check("EP.summary command runtime count",
+           summary.get("commandsContributed") == 1
+           and summary.get("needsExtensionRuntime", {}).get("commands") == 1)
 
     # ExtensionContext
     tmpdir = tempfile.mkdtemp(prefix="sao_ext_test_")
@@ -1056,6 +1255,25 @@ def test_vscode_api() -> None:
     schema_result = api["lm"]["invokeTool"]("schema_only", {})
     _check("schema-only tool is explicit unsupported",
            "needsExtensionRuntime" in schema_result.content[0]["text"])
+
+    api["lm"]["registerToolDefinition"]("merged_tool", {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+    })
+
+    class MergeTool:
+        def invoke(self, options, token):
+            return LanguageModelToolResult.text(options.input.get("value", ""))
+
+    api["lm"]["registerTool"]("merged_tool", MergeTool())
+    merged_meta = {item["name"]: item for item in api["lm"]["getTools"]()}
+    _check("tool definition merged into runtime tool",
+           merged_meta["merged_tool"].get("inputSchema", {}).get("required") == ["value"]
+           and not merged_meta["merged_tool"].get("needsExtensionRuntime"))
+    merged_result = api["lm"]["invokeTool"]("merged_tool", {"value": "merged"})
+    _check("merged runtime tool callable",
+           merged_result.content[0]["text"] == "merged")
 
     # Variable
     api["chat"]["registerVariable"]("testvar", "A test variable",
@@ -1164,6 +1382,85 @@ def test_vscode_api() -> None:
     # window.withProgress
     _check("window.withProgress", callable(api["window"]["withProgress"]))
     _check("window.createWebviewPanel", callable(api["window"]["createWebviewPanel"]))
+
+
+def test_app_extension_runtime_support() -> None:
+    print("── App Extension Runtime Support ──")
+    import ai_editor.extension_host as extension_host_module
+    from ai_editor.app import AIEditorAPI
+    from ai_editor.chat_providers import ChatProviderDef
+    from ai_editor.extension_host import ExtensionDescription, ExtensionHost
+
+    previous_host = extension_host_module._host
+    extension_host_module._host = ExtensionHost()
+    try:
+        api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        api._ensure_engine()
+
+        manifest_desc = ExtensionDescription.from_package_json({
+            "name": "manifest-only",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "contributes": {
+                "chatParticipants": [{
+                    "id": "selftest.manifest.participant",
+                    "name": "ManifestOnly",
+                    "fullName": "Manifest Only Participant",
+                }],
+                "languageModelTools": [{
+                    "name": "manifest_tool",
+                    "displayName": "Manifest Tool",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }],
+            },
+        }, "/tmp/selftest-manifest")
+        api._ext_host.ext_points.process(manifest_desc)
+        api._register_ext_tools()
+
+        manifest_resp = api.invoke_chat_participant(
+            "selftest.manifest.participant", "hello")
+        _check("manifest-only participant explicit runtime need",
+               manifest_resp.get("needsExtensionRuntime") is True
+               and manifest_resp.get("participantId") == "selftest.manifest.participant")
+        provider_ids = {p.get("id") for p in api.list_chat_providers().get("providers", [])}
+        _check("manifest-only participant not exposed as fake provider",
+               "ext-selftest.manifest.participant" not in provider_ids)
+
+        provider = ChatProviderDef(
+            id="selftest-provider",
+            name="Selftest Provider",
+            provider_type="openai",
+            api_key="test-openai",
+            model="gpt-4o",
+        )
+        ctrl = api._create_provider_controller(provider)
+        api._provider_controllers[provider.id] = ctrl
+        api.register_mcp_tools(
+            "selftest_tools",
+            [{
+                "name": "echo",
+                "description": "Echo value",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            }],
+            {"echo": lambda value=None, **kw: {"value": value or kw.get("value")}},
+        )
+        provider_tool_names = [
+            item.get("function", {}).get("name")
+            for item in (ctrl.extra_tools or [])
+        ]
+        _check("provider controller receives plugin tool schema",
+               "mcp_selftest_tools_echo" in provider_tool_names)
+        dispatch_result = ctrl.mcp_dispatch(
+            "mcp_selftest_tools_echo", {"value": "pong"}) if ctrl.mcp_dispatch else ""
+        dispatch_data = json.loads(dispatch_result) if isinstance(dispatch_result, str) else dispatch_result
+        _check("provider controller plugin tool dispatch works",
+               dispatch_data.get("value") == "pong")
+    finally:
+        extension_host_module._host = previous_host
 
 
 def test_auth() -> None:
@@ -1437,6 +1734,7 @@ def main() -> None:
     test_tool_registry()
     test_llm_engine()
     test_conversation()
+    test_chat_controller_tool_loop()
     test_history()
     test_bridge()
     test_app_settings_parity()
@@ -1445,6 +1743,7 @@ def main() -> None:
     test_scopes()
     test_extension_host()
     test_vscode_api()
+    test_app_extension_runtime_support()
     test_auth()
     test_claude_proxy()
     test_agents()
