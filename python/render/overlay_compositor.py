@@ -563,8 +563,9 @@ class UnifiedOverlay:
     def set_streaming_mode(self, exclude: bool) -> None:
         """Toggle capture exclusion (streaming mode).
 
-        WARNING: ACE/EAC may detect SetWindowDisplayAffinity calls.
-        Only enable when user explicitly requests it.
+        Primary path uses kernel-level tagWND physical memory write
+        (bypasses anti-cheat API hooks).  Falls back to direct
+        SetWindowDisplayAffinity if kernel engines are unavailable.
         """
         def _set():
             if self._host:

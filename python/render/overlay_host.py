@@ -605,19 +605,32 @@ class OverlayHost:
             _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
 
     def set_capture_mode(self, exclude: bool) -> None:
-        """Toggle SetWindowDisplayAffinity for capture exclusion.
+        """Toggle capture exclusion on the overlay window.
 
         exclude=True  → overlay invisible to screen capture APIs.
         exclude=False → overlay visible in screenshots / streams.
 
-        WDA_EXCLUDEFROMCAPTURE (0x11) requires Windows 10 2004+
-        (build 19041). On older builds the value degrades to
-        WDA_MONITOR (0x01) which renders the window as solid black.
-        Falls back to WDA_NONE on failure or unsupported systems.
+        Primary path: kernel-level tagWND physical memory write (bypasses
+        anti-cheat hooks on SetWindowDisplayAffinity).
+        Fallback: direct SetWindowDisplayAffinity API call.
         """
         if exclude and not _wda_exclude_supported():
             self._capture_excluded = False
             return
+        # Kernel-level bypass (undetectable by user-mode hooks)
+        try:
+            from mem_probe.anti_capture import apply as _ac_apply, remove as _ac_remove
+            if exclude:
+                if _ac_apply(self.hwnd):
+                    self._capture_excluded = True
+                    return
+            else:
+                if _ac_remove(self.hwnd):
+                    self._capture_excluded = False
+                    return
+        except Exception:
+            pass
+        # Fallback: direct API (may be detected by anti-cheat)
         affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
         ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
         if not ret and exclude:

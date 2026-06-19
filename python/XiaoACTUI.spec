@@ -96,6 +96,7 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.engine.native_adapter',
     'mem_probe.stealth',
     'mem_probe.stealth.stealth_process',
+    'mem_probe.anti_capture',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
