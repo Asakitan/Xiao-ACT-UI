@@ -21,11 +21,14 @@ The proxy accepts Anthropic Messages API format:
 from __future__ import annotations
 
 import json
-import os
+import logging
 import secrets
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):
@@ -103,8 +106,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         "usage": {"input_tokens": 0, "output_tokens": 0}},
         })
 
-        idx = [0]
-
         self._sse("content_block_start", {
             "type": "content_block_start", "index": 0,
             "content_block": {"type": "text", "text": ""},
@@ -118,13 +119,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 })
 
         try:
-            tools_schema = None
-            if tools:
-                tools_schema = [{"type": "function", "function": t}
-                                for t in tools]
             engine.reset_cancel()
             resp = engine.chat_completion_stream(
-                messages=messages, tools=tools_schema, on_delta=on_delta)
+                messages=messages,
+                tools=self._tools_schema(tools),
+                on_delta=on_delta,
+            )
 
             self._sse("content_block_stop", {
                 "type": "content_block_stop", "index": 0})
@@ -144,7 +144,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         try:
             engine.reset_cancel()
             resp = engine.chat_completion_stream(
-                messages=messages, tools=None, on_delta=lambda d: None)
+                messages=messages,
+                tools=self._tools_schema(tools),
+                on_delta=lambda d: None,
+            )
             self._json_response(200, {
                 "id": f"msg_{secrets.token_hex(12)}",
                 "type": "message", "role": "assistant",
@@ -169,8 +172,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: {event}\ndata: {payload}\n\n".encode("utf-8"))
         self.wfile.flush()
 
+    @staticmethod
+    def _tools_schema(tools: Any) -> Optional[list[Dict[str, Any]]]:
+        if not tools:
+            return None
+        return [{"type": "function", "function": t} for t in tools]
+
     def log_message(self, format, *args) -> None:
-        pass
+        logger.debug("ClaudeProxy %s", format % args)
 
 
 class _ProxyServer(HTTPServer):
@@ -225,12 +234,17 @@ class ClaudeProxy:
             target=self._server.serve_forever, daemon=True)
         self._thread.start()
         port = self._server.server_address[1]
-        print(f"[ClaudeProxy] listening on http://127.0.0.1:{port}")
+        logger.info("ClaudeProxy listening on http://127.0.0.1:%s", port)
         return port
 
     def stop(self) -> None:
         if self._server:
-            self._server.shutdown()
+            server = self._server
+            thread = self._thread
+            server.shutdown()
+            server.server_close()
+            if thread and thread.is_alive():
+                thread.join(timeout=1.0)
             self._server = None
             self._thread = None
 

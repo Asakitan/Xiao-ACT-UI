@@ -11,9 +11,13 @@ Each conversation gets its own file: ``{conv_id}.json``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 def _history_dir(scope: str = "workspace") -> str:
@@ -23,7 +27,9 @@ def _history_dir(scope: str = "workspace") -> str:
             d = os.path.join(_home_sao(), "chat_history")
         else:
             d = os.path.join(_base_dir(), ".sao", "chat_history")
-    except Exception:
+    except Exception as exc:
+        logger.debug("Falling back to legacy history root for %s: %s",
+                     scope, exc)
         try:
             from config import BASE_DIR
             d = os.path.join(BASE_DIR, ".sao", "chat_history")
@@ -44,16 +50,16 @@ def _all_history_dirs() -> List[str]:
         ws_d = os.path.join(_base_dir(), ".sao", "chat_history")
         if os.path.isdir(ws_d):
             dirs.append(ws_d)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to resolve scoped history directories: %s", exc)
     # Legacy path
     try:
         from config import BASE_DIR
         legacy = os.path.join(BASE_DIR, "ai_editor_history")
         if os.path.isdir(legacy) and legacy not in dirs:
             dirs.append(legacy)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to inspect legacy history directory: %s", exc)
     if not dirs:
         dirs.append(_history_dir())
     return dirs
@@ -89,7 +95,9 @@ def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to load conversation %s from %s: %s",
+                           conv_id, path, exc)
             continue
     return None
 
@@ -120,7 +128,8 @@ def _parse_header_fast(fpath: str, cid: str) -> Optional[Dict[str, Any]]:
             if m:
                 entry[key] = int(m.group(1))
         return entry
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.debug("Fast header parse failed for %s: %s", fpath, exc)
         return None
 
 
@@ -157,11 +166,12 @@ def list_conversations(limit: int = 50,
 
 
 def delete_conversation(conv_id: str) -> bool:
+    removed = False
     for d in _all_history_dirs():
         path = os.path.join(d, f"{conv_id}.json")
         try:
             os.remove(path)
-            return True
+            removed = True
         except OSError:
             continue
-    return False
+    return removed

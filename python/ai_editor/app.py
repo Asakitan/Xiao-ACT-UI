@@ -29,7 +29,7 @@ from ai_editor.llm_engine import LLMEngine, ProviderConfig, StreamDelta
 from ai_editor.tool_registry import ToolRegistry, normalize_tool_parameters
 from ai_editor.engine_tools import register_engine_tools
 from ai_editor.chat_state import ChatController, Conversation, ChatMessage
-from ai_editor.chat_providers import COPILOT_UNAVAILABLE_REASON
+from ai_editor.chat_providers import build_provider_runtime_config, describe_provider_status
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +396,8 @@ class AIEditorAPI:
         from ai_editor.vscode_api import VscodeNamespace
         self._vscode_ns = VscodeNamespace(
             self._ext_host, self._engine, self._settings_getter)
+        self._ext_host.set_command_fallback_resolver(
+            self._resolve_extension_command_fallback)
 
         # Claude proxy (lazy — started on first CC provider use)
         self._claude_proxy = None
@@ -619,7 +621,7 @@ class AIEditorAPI:
                 active_agent = agent.to_dict()
         agents = self.list_agents().get("agents", [])
         workflows = self.list_workflows().get("workflows", [])
-        chat_providers = self._provider_registry.list_available(self._settings_getter)
+        chat_providers = self.list_chat_providers().get("providers", [])
         context_window = self._current_context_window()
         custom_models = _as_dict(ai_cfg.get("custom_models"))
         return {
@@ -737,7 +739,7 @@ class AIEditorAPI:
         provider_keys = set(_PROVIDER_CONFIG_KEYS) | {"provider_keys", "claude_code", "codex"}
         if not any(k in data for k in provider_keys):
             return
-        for provider_id in ("claude-code", "codex"):
+        for provider_id in ("copilot", "claude-code", "codex"):
             ctrl = self._provider_controllers.pop(provider_id, None)
             if ctrl:
                 try:
@@ -829,22 +831,37 @@ class AIEditorAPI:
 
     # ── Window chrome (frameless) ──
 
-    def win_minimize(self) -> None:
-        if self._window:
+    def win_minimize(self) -> Dict[str, Any]:
+        if not self._window:
+            return {"ok": False, "error": "No window"}
+        try:
             self._window.minimize()
+            return {"ok": True, "action": "minimize"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
-    def win_maximize(self) -> None:
-        if self._window:
+    def win_maximize(self) -> Dict[str, Any]:
+        if not self._window:
+            return {"ok": False, "error": "No window"}
+        try:
             if getattr(self, '_maximized', False):
                 self._window.restore()
                 self._maximized = False
             else:
                 self._window.maximize()
                 self._maximized = True
+            return {"ok": True, "maximized": bool(self._maximized)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
-    def win_close(self) -> None:
-        if self._window:
+    def win_close(self) -> Dict[str, Any]:
+        if not self._window:
+            return {"ok": False, "error": "No window"}
+        try:
             self._window.destroy()
+            return {"ok": True, "action": "close"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def win_resize_by(self, edge: str, dx: int, dy: int) -> Dict[str, Any]:
         if not self._window:
@@ -1303,8 +1320,14 @@ class AIEditorAPI:
 
     def list_chat_providers(self) -> Dict:
         self._ensure_engine()
-        return {"providers": self._provider_registry.list_available(
-            self._settings_getter)}
+        providers = []
+        base_cfg = self._engine.config if self._engine else None
+        for prov in self._provider_registry.list_all():
+            item = prov.to_dict()
+            item.update(describe_provider_status(prov, self._settings_getter, base_cfg))
+            item["builtin"] = prov.builtin
+            providers.append(item)
+        return {"providers": providers}
 
     def switch_provider(self, provider_id: str) -> Dict:
         self._ensure_engine()
@@ -1523,106 +1546,29 @@ class AIEditorAPI:
     def _provider_config_for(self, prov) -> ProviderConfig:
         """Build the exact runtime config for a right-sidebar provider tab."""
         base_cfg = self._engine.config if self._engine else ProviderConfig()
-        settings = self._provider_section_settings(prov.id)
-        transport = "chat_completions"
-        if prov.id == "codex":
-            transport = _normalize_transport(
-                settings.get("transport"), "chat_completions", _ENGINE_TRANSPORT_VALUES)
-
-        key = str(getattr(prov, "api_key", "") or self._resolve_provider_key(prov.provider_type) or "")
-        if not key and base_cfg.provider == prov.provider_type:
-            key = base_cfg.api_key
-
-        base_url = str(getattr(prov, "base_url", "") or "")
-        if not base_url and base_cfg.provider == prov.provider_type:
-            base_url = base_cfg.base_url
-        if not base_url:
-            base_url = ProviderConfig(provider=prov.provider_type).effective_base_url
-
-        model = str(settings.get("model") or prov.model or "")
-        if prov.provider_type == "anthropic" and key and (
-                not model or model in _STALE_ANTHROPIC_DEFAULT_MODELS):
+        runtime_cfg = build_provider_runtime_config(prov, self._settings_getter, base_cfg)
+        if runtime_cfg and runtime_cfg.provider == "anthropic" and runtime_cfg.api_key and (
+                not runtime_cfg.model or runtime_cfg.model in _STALE_ANTHROPIC_DEFAULT_MODELS):
             official_model = self._official_default_model_for_provider(
-                prov.provider_type, base_url, key)
+                runtime_cfg.provider,
+                runtime_cfg.effective_base_url,
+                runtime_cfg.api_key,
+            )
             if official_model:
-                model = official_model
-
-        return ProviderConfig(
-            provider=prov.provider_type,
-            api_key=key,
-            base_url=base_url,
-            model=model,
-            temperature=base_cfg.temperature,
-            max_tokens=base_cfg.max_tokens,
-            system_prompt=prov.system_prompt,
-            transport=transport,
-            top_p=base_cfg.top_p,
-            frequency_penalty=base_cfg.frequency_penalty,
-            presence_penalty=base_cfg.presence_penalty,
-            stop=list(base_cfg.stop),
-            max_input_tokens=base_cfg.max_input_tokens,
-            max_output_tokens=base_cfg.max_output_tokens,
-            timeout=base_cfg.timeout,
-            extra_headers=dict(base_cfg.extra_headers),
-            extra_body=dict(base_cfg.extra_body),
-        )
-
-    def _provider_section_settings(self, provider_id: str) -> Dict[str, Any]:
-        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
-        if provider_id == "claude-code":
-            return _as_dict(ai.get("claude_code"))
-        if provider_id == "codex":
-            return _as_dict(ai.get("codex"))
-        return {}
-
-    def _unsupported_provider_transport(self, prov) -> str:
-        settings = self._provider_section_settings(prov.id)
-        if prov.id == "codex":
-            transport = _normalize_transport(
-                settings.get("transport"), "chat_completions", _CODEX_TRANSPORT_VALUES)
-            if transport == "cli":
-                return self._unsupported_cli_message("Codex", "codex", settings)
-        if prov.id == "claude-code" and settings.get("prefer_cli") is True:
-            return self._unsupported_cli_message("Claude Code", "claude", settings)
-        return ""
-
-    def _unsupported_cli_message(self, label: str, default_command: str,
-                                 settings: Dict[str, Any]) -> str:
-        from ai_editor.chat_providers import _cli_available
-        cli_path = str(settings.get("cli_path") or default_command).strip()
-        args = _normalize_cli_args(settings.get("cli_args", settings.get("args", [])))
-        resolved = _cli_available(cli_path)
-        state = "resolves" if resolved else "does not resolve"
-        proxy_hint = " The local ClaudeProxy can still be started for SDK-compatible clients." if label == "Claude Code" else ""
-        return (
-            f"{label} CLI transport is configured, but this backend does not execute "
-            f"the CLI transport yet. CLI command {state}; {len(args)} CLI arg(s) "
-            f"are saved.{proxy_hint} Use an API transport in this tab until CLI "
-            "execution is wired."
-        )
+                runtime_cfg.model = official_model
+        if runtime_cfg:
+            return runtime_cfg
+        fallback = ProviderConfig(**vars(base_cfg))
+        fallback.system_prompt = prov.system_prompt
+        return fallback
 
     def _provider_unavailable_reason(self, prov) -> str:
-        if prov.id == "copilot":
-            return COPILOT_UNAVAILABLE_REASON
-        unsupported = self._unsupported_provider_transport(prov)
-        if unsupported:
-            return unsupported
-        return self._missing_provider_key_reason(prov)
-
-    def _missing_provider_key_reason(self, prov) -> str:
-        if prov.id == "claude-code" and not self._provider_has_key(prov):
-            return "Claude Code API/proxy transport requires an Anthropic API key in Provider Keys or as the active Anthropic provider key."
-        if prov.id == "codex" and not self._provider_has_key(prov):
-            return "Codex API transport requires an OpenAI API key in Provider Keys or as the active OpenAI provider key."
-        return ""
-
-    def _provider_has_key(self, prov) -> bool:
-        if getattr(prov, "api_key", ""):
-            return True
-        if self._resolve_provider_key(prov.provider_type):
-            return True
-        cfg = self._engine.config if self._engine else None
-        return bool(cfg and cfg.provider == prov.provider_type and cfg.api_key)
+        status = describe_provider_status(
+            prov,
+            self._settings_getter,
+            self._engine.config if self._engine else None,
+        )
+        return str(status.get("unavailable_reason") or "")
 
     def _resolve_provider_key(self, provider_type: str) -> str:
         ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
@@ -2027,7 +1973,7 @@ class AIEditorAPI:
         if not desc:
             desc = str(getattr(runtime_tool, "description", "") or name)
         if needs_runtime:
-            desc = f"{desc} [Requires extension runtime handler before invocation.]"
+            desc = f"{desc} [No runtime callback registered yet.]"
         return desc
 
     @staticmethod
@@ -2037,7 +1983,7 @@ class AIEditorAPI:
             return "Runtime handler registered; tool is invocable."
         return (
             f"VSCode {contribution} '{name}' from extension '{extension_id}' "
-            "is manifest-only and needs a real extension runtime handler."
+            "has metadata but no runtime callback is registered yet."
         )
 
     def _invoke_registered_lm_tool(self, name: str,
@@ -2063,8 +2009,8 @@ class AIEditorAPI:
                 "extensionId": manifest_tool.get("_extensionId", ""),
                 "id": name,
                 "message": (
-                    f"VSCode languageModelTool '{name}' is manifest-only in "
-                    "SAO AI Editor until a real extension runtime handler is registered."
+                    f"VSCode languageModelTool '{name}' has metadata in "
+                    "SAO AI Editor, but no runtime callback is registered yet."
                 ),
             }
         payload = dict(runtime)
@@ -2373,12 +2319,240 @@ class AIEditorAPI:
         }
 
     def get_extension_contributions(self) -> Dict:
-        """Return processed VSCode contribution details without launching runtimes."""
+        """Return processed VSCode contribution details with runtime metadata."""
         self._ensure_engine()
+        self._sync_extension_tools()
+        contributions = self._decorate_extension_contributions(
+            self._ext_host.ext_points.all_contributions)
         return {
             "summary": self._ext_host.get_contributes_summary(),
-            "contributions": self._ext_host.ext_points.all_contributions,
+            "contributions": contributions,
         }
+
+    def _decorate_extension_contributions(
+            self,
+            contributions: Dict[str, Any]) -> Dict[str, Any]:
+        decorated = dict(contributions)
+        decorated["commands"] = [
+            self._decorate_extension_command(item)
+            for item in contributions.get("commands", [])
+        ]
+        decorated["chatParticipants"] = [
+            self._decorate_chat_participant(item)
+            for item in contributions.get("chatParticipants", [])
+        ]
+        decorated["languageModelTools"] = [
+            self._decorate_language_model_tool(item)
+            for item in contributions.get("languageModelTools", [])
+        ]
+        decorated["views"] = {
+            location: [self._decorate_extension_view(item) for item in items]
+            for location, items in contributions.get("views", {}).items()
+        }
+        return decorated
+
+    def _decorate_extension_command(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        command = dict(item)
+        command_id = str(command.get("command", ""))
+        if not command_id:
+            return command
+        meta = self._ext_host.ext_points.describe_manifest_command(command_id)
+        selected = dict(meta.get("selectedFallback") or {})
+        runtime_available = False
+        if selected:
+            kind = str(selected.get("kind", ""))
+            target_id = str(selected.get("id", ""))
+            if kind == "chatParticipant":
+                runtime_available = target_id in self._vscode_ns.chat_participants
+            elif kind == "languageModelTool":
+                runtime_available = self._lm_runtime_tool_available(
+                    self._vscode_ns.registered_tools.get(target_id))
+            elif kind in {"view", "treeView", "webviewView"}:
+                runtime_available = bool(
+                    self._extension_view_snapshot(target_id).get("runtimeAvailable"))
+        command["runtimeAvailable"] = runtime_available
+        command["fallbackAvailable"] = bool(selected)
+        command["fallback"] = selected or None
+        command["availableFallbacks"] = meta.get("availableFallbacks", [])
+        command["activation"] = meta.get("activation", command.get("_activation", {}))
+        command["runtimeMessage"] = meta.get("message", "")
+        return command
+
+    def _decorate_chat_participant(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        participant = dict(item)
+        participant_id = str(participant.get("id") or participant.get("name") or "")
+        participant["runtimeAvailable"] = participant_id in self._vscode_ns.chat_participants
+        participant["runtimeMessage"] = (
+            "Runtime chat participant registered."
+            if participant["runtimeAvailable"] else
+            participant.get("_runtimeSupport", {}).get("message", ""))
+        return participant
+
+    def _decorate_language_model_tool(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        tool = dict(item)
+        tool_name = str(tool.get("name", ""))
+        runtime = self._vscode_ns.registered_tools.get(tool_name)
+        tool["runtimeAvailable"] = self._lm_runtime_tool_available(runtime)
+        tool["runtimeMessage"] = self._extension_tool_runtime_message(
+            "languageModelTool",
+            str(tool.get("_extensionId", "")),
+            tool_name,
+            not tool["runtimeAvailable"],
+        )
+        return tool
+
+    def _decorate_extension_view(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        view = dict(item)
+        snapshot = self._extension_view_snapshot(str(view.get("id") or ""))
+        view.update({
+            "runtimeAvailable": bool(snapshot.get("runtimeAvailable")),
+            "runtimeKind": snapshot.get("kind") or "view",
+            "runtimeMessage": snapshot.get("message", ""),
+        })
+        if snapshot:
+            view["runtimeState"] = snapshot
+        return view
+
+    def _resolve_extension_command_fallback(
+            self,
+            command_record: Dict[str, Any],
+            selected_fallback: Dict[str, Any],
+            arguments: List[Any]) -> Optional[Dict[str, Any]]:
+        fallback_kind = str(selected_fallback.get("kind", ""))
+        fallback_id = str(selected_fallback.get("id", ""))
+        if fallback_kind == "chatParticipant" and fallback_id:
+            prompt = self._coerce_extension_command_prompt(arguments)
+            payload = self.invoke_chat_participant(fallback_id, prompt)
+            payload.setdefault("ok", payload.get("error") is None)
+            payload.update({
+                "handledBy": "runtimeFallback",
+                "fallbackKind": fallback_kind,
+                "participantId": fallback_id,
+                "prompt": prompt,
+            })
+            return payload
+        if fallback_kind == "languageModelTool" and fallback_id:
+            tool_input = self._coerce_extension_command_input(arguments)
+            payload = self.invoke_lm_tool(fallback_id, tool_input)
+            payload.setdefault("ok", payload.get("error") is None)
+            payload.update({
+                "handledBy": "runtimeFallback",
+                "fallbackKind": fallback_kind,
+                "toolName": fallback_id,
+                "input": tool_input,
+            })
+            return payload
+        if fallback_kind in {"view", "treeView", "webviewView"} and fallback_id:
+            snapshot = self._extension_view_snapshot(fallback_id)
+            snapshot.setdefault("ok", bool(snapshot.get("runtimeAvailable")))
+            snapshot.update({
+                "handledBy": "runtimeFallback" if snapshot.get("runtimeAvailable") else "manifestFallback",
+                "fallbackKind": snapshot.get("kind") or fallback_kind,
+                "viewId": fallback_id,
+            })
+            return snapshot
+        return None
+
+    @staticmethod
+    def _coerce_extension_command_prompt(arguments: List[Any]) -> str:
+        if not arguments:
+            return ""
+        first = arguments[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            for key in ("prompt", "message", "input", "text", "query"):
+                value = first.get(key)
+                if value is not None:
+                    return str(value)
+        return str(first)
+
+    @staticmethod
+    def _coerce_extension_command_input(arguments: List[Any]) -> Any:
+        if not arguments:
+            return {}
+        first = arguments[0]
+        if isinstance(first, dict):
+            return dict(first)
+        if len(arguments) == 1:
+            return {"value": first}
+        return {"arguments": list(arguments)}
+
+    def _extension_view_snapshot(self, view_id: str) -> Dict[str, Any]:
+        if not view_id:
+            return {}
+        tree_provider = self._vscode_ns._tree_data_providers.get(view_id)
+        tree_view = self._vscode_ns._tree_views.get(view_id)
+        if tree_provider and tree_view is None:
+            tree_view = self._vscode_ns._create_tree_view(
+                view_id, treeDataProvider=tree_provider)
+        if tree_provider or tree_view:
+            return {
+                "ok": True,
+                "kind": "treeView",
+                "runtimeAvailable": True,
+                "message": "Runtime tree view provider registered.",
+                "title": getattr(tree_view, "title", view_id),
+                "selection": list(getattr(tree_view, "selection", []) or []),
+                "children": self._tree_view_children_preview(tree_provider),
+            }
+        webview_provider = self._vscode_ns._webview_view_providers.get(view_id, {})
+        webview_view = self._vscode_ns._webview_views.get(view_id)
+        if webview_provider or webview_view:
+            if webview_view is None:
+                provider = webview_provider.get("provider")
+                self._vscode_ns._register_webview_view_provider(view_id, provider)
+                webview_view = self._vscode_ns._webview_views.get(view_id)
+            return {
+                "ok": True,
+                "kind": "webviewView",
+                "runtimeAvailable": True,
+                "message": "Runtime webview provider registered.",
+                "title": getattr(webview_view, "title", view_id),
+                "html": getattr(getattr(webview_view, "webview", None), "html", ""),
+                "visible": bool(getattr(webview_view, "visible", False)),
+            }
+        manifest_view = self._manifest_view(view_id)
+        if manifest_view:
+            return {
+                "ok": False,
+                "kind": str(manifest_view.get("type") or "view"),
+                "runtimeAvailable": False,
+                "message": manifest_view.get("_runtimeSupport", {}).get(
+                    "message", "View manifest is present but no runtime provider is registered."),
+                "title": manifest_view.get("name") or view_id,
+                "location": manifest_view.get("_viewLocation", ""),
+            }
+        return {
+            "ok": False,
+            "kind": "view",
+            "runtimeAvailable": False,
+            "message": f"No registered runtime or manifest view found for '{view_id}'.",
+        }
+
+    def _manifest_view(self, view_id: str) -> Dict[str, Any]:
+        for views in self._ext_host.ext_points.all_contributions.get("views", {}).values():
+            for view in views:
+                if str(view.get("id") or "") == view_id:
+                    return dict(view)
+        return {}
+
+    @staticmethod
+    def _tree_view_children_preview(provider: Any) -> List[str]:
+        if provider is None or not hasattr(provider, "getChildren"):
+            return []
+        try:
+            children = provider.getChildren(None)
+        except TypeError:
+            children = provider.getChildren()
+        except Exception:
+            return []
+        if not isinstance(children, list):
+            try:
+                children = list(children)
+            except Exception:
+                return []
+        return [str(child) for child in children[:20]]
 
     def invoke_chat_participant(self, participant_id: str,
                                  prompt: str) -> Dict:
@@ -2473,9 +2647,9 @@ class AIEditorAPI:
         prov = self._provider_registry.get("claude-code") if self._provider_registry else None
         if not prov:
             return {"error": "Claude Code provider is not registered"}
-        missing_key = self._missing_provider_key_reason(prov)
-        if missing_key:
-            return {"error": missing_key, "running": False}
+        unavailable = self._provider_unavailable_reason(prov)
+        if unavailable:
+            return {"error": unavailable, "running": False}
         proxy_engine = LLMEngine(self._provider_config_for(prov))
         if self._claude_proxy and self._claude_proxy.is_running:
             self._claude_proxy.set_engine(proxy_engine)

@@ -91,7 +91,8 @@ class IL2CPPDumper(SDKDumper):
                         self.result.enums.append(cls)
                     else:
                         self.result.classes.append(cls)
-            except Exception:
+            except Exception as exc:
+                self._record_issue(f"IL2CPP class dump failed at {hex(klass_ptr)}", exc)
                 continue
 
         self._progress(1.0, f"Done: {len(self.result.classes)} classes, {len(self.result.enums)} enums")

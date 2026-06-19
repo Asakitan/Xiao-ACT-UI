@@ -36,6 +36,14 @@ def _call_editor_api(api_ref: Any, method_name: str, *args: Any) -> Dict[str, An
     return {"result": result}
 
 
+def _call_live_editor_api(api_ref: Any, method_name: str, *args: Any) -> Dict[str, Any]:
+    if api_ref is None:
+        return {"error": "No editor API available"}
+    if hasattr(api_ref, "_window") and getattr(api_ref, "_window") is None:
+        return {"error": "Editor window is not available"}
+    return _call_editor_api(api_ref, method_name, *args)
+
+
 def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = None) -> None:
     """Register VSCode-aligned tools + engine aggregate."""
 
@@ -196,7 +204,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
         name="editor_getContent",
         description="Get the current content of the active editor tab.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: _call_editor_api(api_ref, "editor_get_content"),
+        handler=lambda: _call_live_editor_api(api_ref, "editor_get_content"),
         category="editor",
         tags={"readOnly": True},
     )
@@ -212,7 +220,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
             },
             "required": ["content"],
         },
-        handler=lambda content, language="": api_ref.editor_set_content(content, language) if api_ref else {"error": "No editor API available"},
+        handler=lambda content, language="": _call_live_editor_api(api_ref, "editor_set_content", content, language),
         category="editor",
         tags={"destructive": True},
     )
@@ -221,7 +229,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
         name="editor_getSelection",
         description="Get the currently selected text in the editor.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: _call_editor_api(api_ref, "editor_get_selection"),
+        handler=lambda: _call_live_editor_api(api_ref, "editor_get_selection"),
         category="editor",
         tags={"readOnly": True},
     )
@@ -376,6 +384,7 @@ def _sdk_dumper_dispatch(action: str = "", pid: int = 0, engine: str = "",
             engine = detect_engine(pid)
             if engine == "unknown":
                 return {"error": f"Could not auto-detect engine for PID {pid}. Specify engine manually."}
+        dumper = None
         try:
             dumper = create_dumper(engine, pid)
             result = dumper.dump()
@@ -396,9 +405,12 @@ def _sdk_dumper_dispatch(action: str = "", pid: int = 0, engine: str = "",
             return {"error": str(exc)}
         finally:
             try:
-                dumper.reader.close()
-            except Exception:
-                pass
+                reader = getattr(dumper, "reader", None)
+                close = getattr(reader, "close", None)
+                if callable(close):
+                    close()
+            except Exception as cleanup_exc:
+                print(f"[SDKDumper] Reader cleanup failed: {cleanup_exc}")
 
     if action == "save":
         if not _last_dump_result:
@@ -705,6 +717,8 @@ def _web_fetch(url: str, method: str = "GET",
 
 def _manage_todo(gui_ref: Any, action: str, text: str = "",
                  index: int = -1) -> Dict[str, Any]:
+    if gui_ref is None:
+        return {"error": "No GUI context available"}
     if not hasattr(gui_ref, '_todo_list'):
         gui_ref._todo_list = []
     todo = gui_ref._todo_list
@@ -717,7 +731,12 @@ def _manage_todo(gui_ref: Any, action: str, text: str = "",
         if index < 0 or index >= len(todo):
             return {"error": f"Invalid index {index}, list has {len(todo)} items"}
         removed = todo.pop(index)
-        return {"ok": True, "removed": removed, "count": len(todo)}
+        return {
+            "ok": True,
+            "removed": removed,
+            "count": len(todo),
+            "items": [{"index": i, "text": t} for i, t in enumerate(todo)],
+        }
     elif action == "list":
         return {"items": [{"index": i, "text": t} for i, t in enumerate(todo)],
                 "count": len(todo)}
@@ -728,7 +747,7 @@ def _manage_todo(gui_ref: Any, action: str, text: str = "",
             return {"error": "text is required for update"}
         old = todo[index]
         todo[index] = text
-        return {"ok": True, "old": old, "new": text}
+        return {"ok": True, "old": old, "new": text, "index": index}
     else:
         return {"error": f"Unknown action: {action}. Use add/remove/list/update"}
 
@@ -773,12 +792,23 @@ def _memory_status(g: Any) -> Dict:
     bridge = getattr(g, '_mem_bridge', None)
     if not bridge:
         pb = getattr(g, '_packet_bridge', None)
-        if pb: bridge = getattr(pb, '_unified_data_source', None)
-    if not bridge: return {"connected": False}
+        if pb:
+            bridge = getattr(pb, '_unified_data_source', None)
+    if not bridge:
+        return {"connected": False}
     fn = getattr(bridge, 'status', None)
     if callable(fn):
-        try: return fn()
-        except: pass
+        try:
+            status = fn()
+            if isinstance(status, dict):
+                return status
+            return {"connected": True, "status": status, "type": type(bridge).__name__}
+        except Exception as exc:
+            return {
+                "connected": True,
+                "type": type(bridge).__name__,
+                "status_error": str(exc),
+            }
     return {"connected": True, "type": type(bridge).__name__}
 
 def _system_info(g: Any) -> Dict:
@@ -801,6 +831,44 @@ def _plugins(g: Any) -> Dict:
     enabled = getattr(pm, '_enabled', None) or {}
     return {"plugins": [{"id": pid, "name": m.get("name", pid), "enabled": enabled.get(pid, False)} for pid, m in manifests.items()]}
 
+
+def _settings_container(settings: Any) -> Optional[Dict[str, Any]]:
+    for attr in ("_data", "data"):
+        value = getattr(settings, attr, None)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _settings_lookup(settings: Any, key: str) -> tuple[bool, Any]:
+    container = _settings_container(settings)
+    if not container or "." not in key:
+        return False, None
+    current: Any = container
+    for part in [segment for segment in key.split(".") if segment]:
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current.get(part)
+    return True, current
+
+
+def _settings_assign(settings: Any, key: str, value: Any) -> bool:
+    container = _settings_container(settings)
+    if not container or "." not in key:
+        return False
+    parts = [segment for segment in key.split(".") if segment]
+    if not parts:
+        return False
+    current = container
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+    return True
+
 def _settings_get(g: Any, key: str) -> Any:
     s = getattr(g, 'settings', None)
     if not s:
@@ -808,16 +876,26 @@ def _settings_get(g: Any, key: str) -> Any:
     if not key:
         return {"error": "key is required"}
     try:
-        return {"key": key, "value": s.get(key)}
+        found, value = _settings_lookup(s, key)
+        if found:
+            return {"key": key, "value": value, "found": True}
+        return {"key": key, "value": s.get(key), "found": False}
     except Exception as exc:
         return {"error": str(exc)}
 
 def _settings_set(g: Any, key: str, value: Any) -> Dict:
     s = getattr(g, 'settings', None)
-    if not s: return {"error": "Settings not available"}
-    if not key: return {"error": "key is required"}
+    if not s:
+        return {"error": "Settings not available"}
+    if not key:
+        return {"error": "key is required"}
+    found, previous = False, None
     try:
-        s.set(key, value)
+        found, previous = _settings_lookup(s, key)
+        if not _settings_assign(s, key, value):
+            previous = s.get(key)
+            found = previous is not None
+            s.set(key, value)
     except Exception as exc:
         return {"error": f"Settings update failed: {exc}"}
     saved = False
@@ -828,7 +906,14 @@ def _settings_set(g: Any, key: str, value: Any) -> Dict:
             saved = True
         except Exception as exc:
             return {"error": f"Settings save failed: {exc}", "key": key}
-    return {"ok": True, "key": key, "saved": saved}
+    return {
+        "ok": True,
+        "key": key,
+        "saved": saved,
+        "previous": previous,
+        "found": found,
+        "updatedNested": "." in key,
+    }
 
 def _eval(g: Any, expression: str) -> Dict:
     try:

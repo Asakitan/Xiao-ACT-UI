@@ -93,8 +93,8 @@ class SourceDumper(SDKDumper):
                     cls = self._dump_recv_table(recv_table, name)
                     if cls:
                         self.result.classes.append(cls)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_issue(f"ClientClass walk failed at {hex(client_class)}", exc)
             client_class = r.read_ptr(client_class + self._CC_NEXT)
             visited += 1
             if visited % 50 == 0:

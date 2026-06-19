@@ -108,7 +108,8 @@ class MonoDumper(SDKDumper):
                             self.result.enums.append(cls)
                         else:
                             self.result.classes.append(cls)
-                except Exception:
+                except Exception as exc:
+                    self._record_issue(f"Mono class dump failed at {hex(klass)}", exc)
                     continue
 
         self._progress(1.0, f"Done: {len(self.result.classes)} classes")

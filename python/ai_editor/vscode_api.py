@@ -22,7 +22,10 @@ import inspect
 import json
 import os
 import fnmatch
+import subprocess
 import threading
+import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -353,7 +356,10 @@ def _tool_schema(tool: Any) -> Dict:
 
 def _unsupported_tool_result(name: str, detail: str) -> LanguageModelToolResult:
     return LanguageModelToolResult.text(
-        f"unsupported/needsExtensionRuntime: LanguageModelTool '{name}' {detail}")
+        "unsupported/needsExtensionRuntime: "
+        f"LanguageModelTool '{name}' {detail} "
+        f"Register a local runtime with vscode.lm.registerTool('{name}', handler) "
+        "or provide an object with invoke(options, token).")
 
 
 def _call_registered_handler(handler: Callable,
@@ -721,12 +727,22 @@ class VscodeNamespace:
         self._webview_views: Dict[str, Any] = {}
         self._task_providers: Dict[str, Any] = {}
         self._debug_providers: Dict[str, Any] = {}
+        self._task_executions: List[_TaskExecution] = []
+        self._debug_sessions: List[_DebugSession] = []
+        self._workspace_watchers: List[_FileSystemWatcher] = []
+        self._tasks_start_emitter = EventEmitter()
+        self._tasks_end_emitter = EventEmitter()
+        self._debug_start_emitter = EventEmitter()
+        self._debug_terminate_emitter = EventEmitter()
+        self._debug_breakpoints_emitter = EventEmitter()
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
         self._window_api: Optional[Dict[str, Any]] = None
         self._workspace_api: Optional[Dict[str, Any]] = None
         self._auth_api: Optional[Dict[str, Any]] = None
+        self._tasks_api: Optional[Dict[str, Any]] = None
+        self._debug_api: Optional[Dict[str, Any]] = None
 
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
@@ -908,7 +924,7 @@ class VscodeNamespace:
                 "workspaceFolders": self._get_workspace_folders(),
                 "rootPath": self._get_root_path(),
                 "name": "SAO Workspace",
-                "fs": _FileSystem(),
+                "fs": _FileSystem(self),
                 "openTextDocument": self._open_text_document,
                 "applyEdit": self._apply_workspace_edit,
                 "findFiles": self._find_files,
@@ -1006,13 +1022,175 @@ class VscodeNamespace:
     def _apply_workspace_edit(self, edit: Any) -> bool:
         if not edit:
             return True
-        if isinstance(edit, WorkspaceEdit) and not edit.entries():
+        entries = self._workspace_edit_entries(edit)
+        if entries == []:
             return True
+        if entries is None:
+            return False
+        try:
+            for entry in entries:
+                if not self._apply_workspace_edit_entry(entry):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    def _workspace_edit_entries(self, edit: Any) -> Optional[List[Dict[str, Any]]]:
+        if isinstance(edit, WorkspaceEdit):
+            return edit.entries()
+        if isinstance(edit, dict):
+            if isinstance(edit.get("edits"), list):
+                entries = edit.get("edits", [])
+                if not all(isinstance(item, dict) for item in entries):
+                    return None
+                return list(entries)
+            if isinstance(edit.get("changes"), dict):
+                entries: List[Dict[str, Any]] = []
+                for uri, text_edits in edit["changes"].items():
+                    if not isinstance(text_edits, list):
+                        return None
+                    entries.append({"kind": "textEdits", "uri": uri, "edits": text_edits})
+                return entries
+            if isinstance(edit.get("documentChanges"), list):
+                entries = []
+                for item in edit["documentChanges"]:
+                    if not isinstance(item, dict):
+                        return None
+                    if item.get("kind"):
+                        entries.append(item)
+                        continue
+                    text_document = item.get("textDocument") or {}
+                    uri = text_document.get("uri") or item.get("uri")
+                    if uri is None or not isinstance(item.get("edits"), list):
+                        return None
+                    entries.append({"kind": "textEdits", "uri": uri, "edits": item.get("edits", [])})
+                return entries
+        return None
+
+    def _apply_workspace_edit_entry(self, entry: Dict[str, Any]) -> bool:
+        kind = str(entry.get("kind") or "")
+        if kind in {"replace", "insert", "delete", "textEdits"}:
+            return self._apply_text_entry(entry)
+        if kind == "createFile":
+            return self._apply_create_file(entry)
+        if kind == "deleteFile":
+            return self._apply_delete_file(entry)
+        if kind == "renameFile":
+            return self._apply_rename_file(entry)
         return False
+
+    def _apply_text_entry(self, entry: Dict[str, Any]) -> bool:
+        uri = _coerce_uri(entry.get("uri"))
+        if uri is None:
+            return False
+        document = self._get_or_open_document(uri)
+        if document is None:
+            return False
+        current = document.getText()
+        if entry.get("kind") == "textEdits":
+            updated = _apply_structured_text_edits(current, entry.get("edits", []))
+        else:
+            updated = _apply_structured_text_edits(current, [entry])
+        if updated is None:
+            return False
+        self._store_document_content(document, updated)
+        return True
+
+    def _apply_create_file(self, entry: Dict[str, Any]) -> bool:
+        uri = _coerce_uri(entry.get("uri"))
+        if uri is None or uri.scheme != "file":
+            return False
+        path = uri.fs_path
+        overwrite = bool((entry.get("options") or {}).get("overwrite"))
+        if os.path.exists(path) and not overwrite:
+            return False
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("")
+        doc = _TextDocument(uri, "", _language_id_for_path(path))
+        self._remember_text_document(doc)
+        self._workspace_create_files_emitter.fire({"files": [uri]})
+        self._notify_workspace_watchers(path, "create")
+        return True
+
+    def _apply_delete_file(self, entry: Dict[str, Any]) -> bool:
+        uri = _coerce_uri(entry.get("uri"))
+        if uri is None or uri.scheme != "file":
+            return False
+        path = uri.fs_path
+        if not os.path.exists(path):
+            return bool((entry.get("options") or {}).get("ignoreIfNotExists"))
+        if os.path.isdir(path):
+            import shutil
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+        self._text_documents = [doc for doc in self._text_documents if self._document_key(doc) != str(uri)]
+        self._sync_workspace_state()
+        self._workspace_delete_files_emitter.fire({"files": [uri]})
+        self._notify_workspace_watchers(path, "delete")
+        return True
+
+    def _apply_rename_file(self, entry: Dict[str, Any]) -> bool:
+        old_uri = _coerce_uri(entry.get("oldUri"))
+        new_uri = _coerce_uri(entry.get("newUri"))
+        if old_uri is None or new_uri is None:
+            return False
+        old_path = old_uri.fs_path
+        new_path = new_uri.fs_path
+        if not os.path.exists(old_path):
+            return False
+        parent = os.path.dirname(new_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.replace(old_path, new_path)
+        for document in self._text_documents:
+            if self._document_key(document) == str(old_uri):
+                document.uri = new_uri
+                document.fileName = new_path
+                document.languageId = _language_id_for_path(new_path)
+        self._sync_workspace_state()
+        self._workspace_rename_files_emitter.fire({"files": [{"oldUri": old_uri, "newUri": new_uri}]})
+        self._notify_workspace_watchers(old_path, "delete")
+        self._notify_workspace_watchers(new_path, "create")
+        return True
+
+    def _get_or_open_document(self, uri: Uri) -> Optional["_TextDocument"]:
+        key = str(uri)
+        for document in self._text_documents:
+            if self._document_key(document) == key:
+                return document
+        if uri.scheme != "file":
+            return self._remember_text_document(_TextDocument(uri, "", "plaintext"))
+        path = uri.fs_path
+        if os.path.exists(path):
+            return self._open_text_document(uri)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return self._remember_text_document(_TextDocument(uri, "", _language_id_for_path(path)))
+
+    def _store_document_content(self, document: "_TextDocument", content: str) -> None:
+        document._content = content
+        document.version += 1
+        if getattr(document.uri, "scheme", "") == "file":
+            parent = os.path.dirname(document.fileName)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(document.fileName, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            document.isDirty = False
+            self._workspace_save_text_document_emitter.fire(document)
+            self._notify_workspace_watchers(document.fileName, "change")
+        else:
+            document.isDirty = True
+        self._workspace_change_text_document_emitter.fire({"document": document})
 
     def _create_file_system_watcher(self, pattern: Any, *args: Any,
                                     **kw: Any) -> Any:
-        watcher = _FileSystemWatcher(pattern)
+        watcher = _FileSystemWatcher(pattern, self._get_root_path)
         if args:
             watcher.ignoreCreateEvents = bool(args[0])
         if len(args) > 1:
@@ -1025,7 +1203,17 @@ class VscodeNamespace:
                 ("ignoreDeleteEvents", "ignoreDeleteEvents")):
             if key in kw:
                 setattr(watcher, attr, bool(kw[key]))
+        self._workspace_watchers.append(watcher)
+        watcher._on_dispose = lambda w=watcher: self._dispose_workspace_watcher(w)
         return watcher
+
+    def _dispose_workspace_watcher(self, watcher: "_FileSystemWatcher") -> None:
+        if watcher in self._workspace_watchers:
+            self._workspace_watchers.remove(watcher)
+
+    def _notify_workspace_watchers(self, path: str, event_kind: str) -> None:
+        for watcher in list(self._workspace_watchers):
+            watcher.notify_path(path, event_kind)
 
     def _as_relative_path(self, path_or_uri: Any,
                           include_workspace_folder: bool = False) -> str:
@@ -1171,30 +1359,172 @@ class VscodeNamespace:
                           if entry in self._language_providers.get(kind, []) else None)
 
     def _build_tasks(self) -> Dict[str, Any]:
-        return {
-            "registerTaskProvider": self._register_task_provider,
-            "fetchTasks": lambda filter=None: [],
-            "executeTask": lambda task: _unsupported_feature(
-                "tasks.executeTask", "Task execution requires a real VSCode task service."),
-            "taskExecutions": [],
-            "onDidStartTask": EventEmitter().event,
-            "onDidEndTask": EventEmitter().event,
-        }
+        if self._tasks_api is None:
+            self._tasks_api = {
+                "registerTaskProvider": self._register_task_provider,
+                "fetchTasks": self._fetch_tasks,
+                "executeTask": self._execute_task,
+                "taskExecutions": [],
+                "onDidStartTask": self._tasks_start_emitter.event,
+                "onDidEndTask": self._tasks_end_emitter.event,
+            }
+        self._sync_tasks_state()
+        return self._tasks_api
 
     def _register_task_provider(self, task_type: str, provider: Any) -> Disposable:
         self._task_providers[task_type] = provider
         return Disposable(lambda: self._task_providers.pop(task_type, None))
 
-    def _build_debug(self) -> Dict[str, Any]:
+    def _sync_tasks_state(self) -> None:
+        if self._tasks_api is None:
+            return
+        self._tasks_api["taskExecutions"] = list(self._task_executions)
+
+    def _fetch_tasks(self, filter: Any = None) -> List[Any]:
+        tasks: List[Any] = []
+        for task_type, provider in list(self._task_providers.items()):
+            provided = self._call_provider_tasks(provider)
+            for task in provided:
+                normalized = self._normalize_task(task, task_type)
+                if self._task_matches_filter(normalized, filter):
+                    tasks.append(normalized)
+        return tasks
+
+    @staticmethod
+    def _call_provider_tasks(provider: Any) -> List[Any]:
+        if hasattr(provider, "provideTasks"):
+            result = provider.provideTasks()
+        elif hasattr(provider, "provide_tasks"):
+            result = provider.provide_tasks()
+        elif callable(provider):
+            result = provider()
+        else:
+            result = []
+        return list(result or [])
+
+    @staticmethod
+    def _normalize_task(task: Any, task_type: str = "") -> Any:
+        if not isinstance(task, dict):
+            return task
+        normalized = dict(task)
+        if task_type and not normalized.get("type"):
+            normalized["type"] = task_type
+        definition = normalized.get("definition")
+        if isinstance(definition, dict) and definition.get("type") and not normalized.get("type"):
+            normalized["type"] = definition.get("type")
+        return normalized
+
+    @staticmethod
+    def _task_matches_filter(task: Any, filter_value: Any) -> bool:
+        if not filter_value or not isinstance(task, dict):
+            return True
+        if isinstance(filter_value, dict):
+            task_type = str(task.get("type") or "")
+            filter_type = str(filter_value.get("type") or "")
+            if filter_type and task_type != filter_type:
+                return False
+        return True
+
+    def _resolve_task(self, task: Any) -> Any:
+        if not isinstance(task, dict):
+            return task
+        task_type = str(task.get("type") or task.get("definition", {}).get("type") or "")
+        provider = self._task_providers.get(task_type)
+        if provider and hasattr(provider, "resolveTask"):
+            resolved = provider.resolveTask(task)
+            if resolved is not None:
+                return self._normalize_task(resolved, task_type)
+        if provider and hasattr(provider, "resolve_task"):
+            resolved = provider.resolve_task(task)
+            if resolved is not None:
+                return self._normalize_task(resolved, task_type)
+        return task
+
+    def _execute_task(self, task: Any) -> Any:
+        resolved = self._resolve_task(task)
+        if isinstance(resolved, dict) and callable(resolved.get("run")):
+            execution = _TaskExecution(
+                task=resolved,
+                name=str(resolved.get("name") or resolved.get("label") or "task"),
+                kind="callable",
+            )
+            self._task_executions.append(execution)
+            self._sync_tasks_state()
+            self._tasks_start_emitter.fire({"execution": execution, "task": resolved})
+            execution.start_callable(
+                resolved["run"],
+                on_finish=lambda e=execution: self._on_task_finished(e),
+            )
+            return execution
+
+        spec = self._task_command_spec(resolved)
+        if not spec:
+            return {
+                "ok": False,
+                "error": "Task has no runnable local command. Provide command/args, execution, or run().",
+            }
+        process = self._spawn_local_process(**spec)
+        execution = _TaskExecution(
+            task=resolved,
+            name=str(spec.get("name") or "task"),
+            kind=str(spec.get("kind") or "process"),
+            process=process,
+        )
+        self._task_executions.append(execution)
+        self._sync_tasks_state()
+        self._tasks_start_emitter.fire({"execution": execution, "task": resolved})
+        execution.start_waiter(on_finish=lambda e=execution: self._on_task_finished(e))
+        return execution
+
+    def _on_task_finished(self, execution: "_TaskExecution") -> None:
+        if execution in self._task_executions:
+            self._task_executions.remove(execution)
+        self._sync_tasks_state()
+        self._tasks_end_emitter.fire({"execution": execution, "task": execution.task})
+
+    def _task_command_spec(self, task: Any) -> Dict[str, Any]:
+        if not isinstance(task, dict):
+            return {}
+        execution = task.get("execution")
+        if isinstance(execution, dict):
+            command = execution.get("command") or execution.get("process")
+            args = execution.get("args") or []
+            shell = bool(execution.get("shell", execution.get("type") == "shell"))
+            cwd = execution.get("cwd") or task.get("cwd")
+        else:
+            shell_command = task.get("shellExecution")
+            command = task.get("command") or task.get("process") or shell_command
+            args = task.get("args") or []
+            if "shell" in task:
+                shell = bool(task.get("shell"))
+            else:
+                shell = bool(shell_command)
+            cwd = task.get("cwd") or task.get("options", {}).get("cwd")
+        if not command:
+            return {}
+        name = str(task.get("name") or task.get("label") or command)
         return {
-            "registerDebugConfigurationProvider": self._register_debug_provider,
-            "startDebugging": lambda folder, name_or_config, parent=None: False,
-            "activeDebugSession": None,
-            "breakpoints": [],
-            "onDidStartDebugSession": EventEmitter().event,
-            "onDidTerminateDebugSession": EventEmitter().event,
-            "onDidChangeBreakpoints": EventEmitter().event,
+            "command": command,
+            "args": args,
+            "shell": shell,
+            "cwd": cwd or self._get_root_path() or None,
+            "name": name,
+            "kind": "shell" if shell else "process",
         }
+
+    def _build_debug(self) -> Dict[str, Any]:
+        if self._debug_api is None:
+            self._debug_api = {
+                "registerDebugConfigurationProvider": self._register_debug_provider,
+                "startDebugging": self._start_debugging,
+                "activeDebugSession": None,
+                "breakpoints": [],
+                "onDidStartDebugSession": self._debug_start_emitter.event,
+                "onDidTerminateDebugSession": self._debug_terminate_emitter.event,
+                "onDidChangeBreakpoints": self._debug_breakpoints_emitter.event,
+            }
+        self._sync_debug_state()
+        return self._debug_api
 
     def _register_debug_provider(self, debug_type: str, provider: Any,
                                  trigger_kind: Any = None) -> Disposable:
@@ -1202,6 +1532,128 @@ class VscodeNamespace:
             "provider": provider, "triggerKind": trigger_kind,
         }
         return Disposable(lambda: self._debug_providers.pop(debug_type, None))
+
+    def _sync_debug_state(self) -> None:
+        if self._debug_api is None:
+            return
+        active = None
+        for session in reversed(self._debug_sessions):
+            if not session.terminated:
+                active = session
+                break
+        self._debug_api["activeDebugSession"] = active
+
+    def _start_debugging(self, folder: Any, name_or_config: Any,
+                         parent: Any = None) -> bool:
+        config = self._resolve_debug_configuration(folder, name_or_config)
+        if not isinstance(config, dict):
+            return False
+        debug_type = str(config.get("type") or "")
+        provider_info = self._debug_providers.get(debug_type, {})
+        provider = provider_info.get("provider")
+        if provider and hasattr(provider, "resolveDebugConfiguration"):
+            resolved = provider.resolveDebugConfiguration(folder, config)
+            if resolved is None:
+                return False
+            config = resolved
+        elif provider and hasattr(provider, "resolve_debug_configuration"):
+            resolved = provider.resolve_debug_configuration(folder, config)
+            if resolved is None:
+                return False
+            config = resolved
+        spec = self._debug_command_spec(config)
+        if not spec:
+            return False
+        process = self._spawn_local_process(**spec)
+        session = _DebugSession(
+            name=str(config.get("name") or spec.get("name") or "debug"),
+            debug_type=str(config.get("type") or "local"),
+            configuration=dict(config),
+            process=process,
+            parent_session=parent,
+        )
+        self._debug_sessions.append(session)
+        self._sync_debug_state()
+        self._debug_start_emitter.fire(session)
+        session.start_waiter(on_finish=lambda s=session: self._on_debug_finished(s))
+        return True
+
+    def _on_debug_finished(self, session: "_DebugSession") -> None:
+        self._sync_debug_state()
+        self._debug_terminate_emitter.fire(session)
+
+    def _resolve_debug_configuration(self, folder: Any,
+                                     name_or_config: Any) -> Any:
+        if isinstance(name_or_config, dict):
+            return dict(name_or_config)
+        if isinstance(folder, dict):
+            for config in folder.get("configurations", []) or []:
+                if isinstance(config, dict) and config.get("name") == name_or_config:
+                    return dict(config)
+        return None
+
+    def _debug_command_spec(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(config, dict):
+            return {}
+        if config.get("command"):
+            return {
+                "command": config.get("command"),
+                "args": config.get("args") or [],
+                "shell": not isinstance(config.get("command"), list),
+                "cwd": config.get("cwd") or self._get_root_path() or None,
+                "name": str(config.get("name") or config.get("command")),
+                "kind": "debug-command",
+            }
+        if config.get("program"):
+            debug_type = str(config.get("type") or "")
+            args = list(config.get("args") or [])
+            if debug_type == "python":
+                command = config.get("python") or config.get("pythonPath") or os.environ.get("PYTHON", "python")
+                return {
+                    "command": command,
+                    "args": [config.get("program")] + args,
+                    "shell": False,
+                    "cwd": config.get("cwd") or self._get_root_path() or None,
+                    "name": str(config.get("name") or config.get("program")),
+                    "kind": "debug-python",
+                }
+            return {
+                "command": config.get("program"),
+                "args": args,
+                "shell": False,
+                "cwd": config.get("cwd") or self._get_root_path() or None,
+                "name": str(config.get("name") or config.get("program")),
+                "kind": "debug-program",
+            }
+        return {}
+
+    @staticmethod
+    def _spawn_local_process(command: Any, args: Any = None,
+                             shell: bool = True, cwd: Optional[str] = None,
+                             name: str = "", kind: str = "process") -> subprocess.Popen:
+        arg_list = [str(item) for item in list(args or [])]
+        if shell:
+            if isinstance(command, list):
+                cmd_value = " ".join(str(item) for item in command + arg_list)
+            else:
+                cmd_value = " ".join([str(command)] + arg_list).strip()
+            return subprocess.Popen(
+                cmd_value,
+                cwd=cwd or None,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        command_value = command if isinstance(command, list) else [str(command)]
+        if not isinstance(command_value, list):
+            command_value = [str(command_value)]
+        return subprocess.Popen(
+            [str(item) for item in command_value] + arg_list,
+            cwd=cwd or None,
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _build_notebooks(self) -> Dict[str, Any]:
         return {"registerNotebookSerializer": lambda *a, **kw: Disposable()}
@@ -1804,31 +2256,32 @@ class _TextEditor:
 class _TextEditorEdit:
     def __init__(self, document: Optional[_TextDocument]) -> None:
         self._document = document
-        self._replacement: Optional[str] = None
+        self._edits: List[Dict[str, Any]] = []
 
     def replace(self, range: Any, text: str) -> None:
-        self._replacement = str(text or "")
+        self._edits.append({"kind": "replace", "range": range, "newText": str(text or "")})
 
     def insert(self, position: Any, text: str) -> None:
-        if self._document is None:
-            self._replacement = str(text or "")
-        else:
-            self._replacement = self._document.getText() + str(text or "")
+        self._edits.append({"kind": "insert", "position": position, "newText": str(text or "")})
 
     def delete(self, range: Any) -> None:
-        self._replacement = ""
+        self._edits.append({"kind": "delete", "range": range})
 
     def apply(self) -> bool:
-        if self._document is None or self._replacement is None:
+        if self._document is None or not self._edits:
             return False
-        self._document._content = self._replacement
+        updated = _apply_structured_text_edits(self._document.getText(), self._edits)
+        if updated is None:
+            return False
+        self._document._content = updated
         self._document.isDirty = True
         self._document.version += 1
         return True
 
 
 class _FileSystemWatcher:
-    def __init__(self, pattern: Any) -> None:
+    def __init__(self, pattern: Any,
+                 root_provider: Callable[[], str]) -> None:
         self.globPattern = pattern
         self.ignoreCreateEvents = False
         self.ignoreChangeEvents = False
@@ -1836,6 +2289,12 @@ class _FileSystemWatcher:
         self._create = EventEmitter()
         self._change = EventEmitter()
         self._delete = EventEmitter()
+        self._root_provider = root_provider
+        self._on_dispose: Optional[Callable[[], None]] = None
+        self._stop = threading.Event()
+        self._known = self._scan_matches()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
 
     @property
     def onDidCreate(self):
@@ -1849,10 +2308,144 @@ class _FileSystemWatcher:
     def onDidDelete(self):
         return self._delete.event
 
+    def notify_path(self, path: str, event_kind: str) -> None:
+        normalized = os.path.normpath(path)
+        if not self._matches(normalized):
+            return
+        uri = Uri.file(normalized)
+        if event_kind == "create":
+            self._known[normalized] = self._stat_signature(normalized)
+            if not self.ignoreCreateEvents:
+                self._create.fire(uri)
+            return
+        if event_kind == "change":
+            self._known[normalized] = self._stat_signature(normalized)
+            if not self.ignoreChangeEvents:
+                self._change.fire(uri)
+            return
+        if event_kind == "delete":
+            self._known.pop(normalized, None)
+            if not self.ignoreDeleteEvents:
+                self._delete.fire(uri)
+
+    def _poll_loop(self) -> None:
+        while not self._stop.wait(0.2):
+            current = self._scan_matches()
+            current_paths = set(current)
+            known_paths = set(self._known)
+            for created in sorted(current_paths - known_paths):
+                if not self.ignoreCreateEvents:
+                    self._create.fire(Uri.file(created))
+            for deleted in sorted(known_paths - current_paths):
+                if not self.ignoreDeleteEvents:
+                    self._delete.fire(Uri.file(deleted))
+            for common in sorted(current_paths & known_paths):
+                if current[common] != self._known[common] and not self.ignoreChangeEvents:
+                    self._change.fire(Uri.file(common))
+            self._known = current
+
+    def _scan_matches(self) -> Dict[str, Any]:
+        root = self._root_provider() if callable(self._root_provider) else ""
+        if not root or not os.path.isdir(root):
+            return {}
+        matches: Dict[str, Any] = {}
+        for current, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules"}]
+            for file_name in files:
+                full = os.path.normpath(os.path.join(current, file_name))
+                if self._matches(full):
+                    matches[full] = self._stat_signature(full)
+        return matches
+
+    def _matches(self, full_path: str) -> bool:
+        pattern = _glob_pattern(self.globPattern)
+        if not pattern:
+            return True
+        normalized = full_path.replace("\\", "/")
+        if os.path.isabs(pattern):
+            return _glob_matches(normalized, pattern)
+        root = self._root_provider() if callable(self._root_provider) else ""
+        try:
+            rel = os.path.relpath(full_path, root).replace("\\", "/")
+        except Exception:
+            rel = normalized
+        return _glob_matches(rel, pattern)
+
+    @staticmethod
+    def _stat_signature(path: str) -> Any:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return (getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)), stat.st_size)
+
     def dispose(self) -> None:
+        self._stop.set()
         self._create._listeners.clear()
         self._change._listeners.clear()
         self._delete._listeners.clear()
+        if self._on_dispose:
+            self._on_dispose()
+
+
+class _TaskExecution:
+    def __init__(self, task: Any, name: str, kind: str,
+                 process: Optional[subprocess.Popen] = None) -> None:
+        self.id = str(uuid.uuid4())
+        self.task = task
+        self.name = name
+        self.kind = kind
+        self.process = process
+        self.processId = getattr(process, "pid", None)
+        self.exitStatus: Optional[Dict[str, Any]] = None
+        self.state = {"isInteractedWith": False}
+
+    def terminate(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+
+    def start_waiter(self, on_finish: Callable[[], None]) -> None:
+        def _wait() -> None:
+            code = self.process.wait() if self.process else 0
+            self.exitStatus = {"code": code}
+            on_finish()
+        threading.Thread(target=_wait, daemon=True).start()
+
+    def start_callable(self, callback: Callable[[], Any],
+                       on_finish: Callable[[], None]) -> None:
+        def _run() -> None:
+            code = 0
+            try:
+                callback()
+            except Exception:
+                code = 1
+            self.exitStatus = {"code": code}
+            on_finish()
+        threading.Thread(target=_run, daemon=True).start()
+
+
+class _DebugSession:
+    def __init__(self, name: str, debug_type: str,
+                 configuration: Dict[str, Any],
+                 process: subprocess.Popen,
+                 parent_session: Any = None) -> None:
+        self.id = str(uuid.uuid4())
+        self.name = name
+        self.type = debug_type
+        self.configuration = configuration
+        self.parentSession = parent_session
+        self.process = process
+        self.processId = getattr(process, "pid", None)
+        self.exitStatus: Optional[Dict[str, Any]] = None
+        self.terminated = False
+
+    def start_waiter(self, on_finish: Callable[[], None]) -> None:
+        def _wait() -> None:
+            code = self.process.wait()
+            self.exitStatus = {"code": code}
+            self.terminated = True
+            on_finish()
+        threading.Thread(target=_wait, daemon=True).start()
 
 
 class _TreeView:
@@ -1945,6 +2538,96 @@ def _glob_matches(path: str, pattern: str) -> bool:
     return False
 
 
+def _coerce_uri(value: Any) -> Optional[Uri]:
+    if isinstance(value, Uri):
+        return value
+    if isinstance(value, str) and value:
+        if os.path.isabs(value) or (len(value) >= 2 and value[1] == ":" and value[0].isalpha()):
+            return Uri.file(value)
+        return Uri.parse(value) if ":" in value else Uri.file(value)
+    if isinstance(value, dict):
+        raw = value.get("uri") or value.get("path")
+        if raw:
+            return _coerce_uri(raw)
+    return None
+
+
+def _coerce_position(value: Any) -> Position:
+    if isinstance(value, Position):
+        return value
+    if isinstance(value, dict):
+        return Position(int(value.get("line", 0)), int(value.get("character", 0)))
+    return Position()
+
+
+def _coerce_range(value: Any) -> Range:
+    if isinstance(value, Range):
+        return value
+    if isinstance(value, dict):
+        return Range(_coerce_position(value.get("start")), _coerce_position(value.get("end")))
+    return Range()
+
+
+def _position_to_offset(text: str, position: Position) -> int:
+    line = max(0, int(getattr(position, "line", 0)))
+    character = max(0, int(getattr(position, "character", 0)))
+    current_line = 0
+    offset = 0
+    lines = text.splitlines(True)
+    for segment in lines:
+        if current_line == line:
+            return min(offset + character, offset + len(segment.rstrip("\r\n")))
+        offset += len(segment)
+        current_line += 1
+    return min(len(text), offset + character)
+
+
+def _apply_structured_text_edits(text: str, edits: Sequence[Dict[str, Any]]) -> Optional[str]:
+    operations: List[Dict[str, Any]] = []
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return None
+        kind = str(edit.get("kind") or "replace")
+        if kind == "insert":
+            position = _coerce_position(edit.get("position"))
+            offset = _position_to_offset(text, position)
+            operations.append({
+                "start": offset,
+                "end": offset,
+                "newText": str(edit.get("newText", "")),
+            })
+            continue
+        if kind in {"replace", "delete"}:
+            range_value = _coerce_range(edit.get("range"))
+            start = _position_to_offset(text, range_value.start)
+            end = _position_to_offset(text, range_value.end)
+            operations.append({
+                "start": min(start, end),
+                "end": max(start, end),
+                "newText": "" if kind == "delete" else str(edit.get("newText", "")),
+            })
+            continue
+        if "range" in edit:
+            range_value = _coerce_range(edit.get("range"))
+            start = _position_to_offset(text, range_value.start)
+            end = _position_to_offset(text, range_value.end)
+            operations.append({
+                "start": min(start, end),
+                "end": max(start, end),
+                "newText": str(edit.get("newText", "")),
+            })
+            continue
+        return None
+    updated = text
+    for operation in sorted(operations, key=lambda item: (item["start"], item["end"]), reverse=True):
+        updated = (
+            updated[:operation["start"]]
+            + operation["newText"]
+            + updated[operation["end"]:]
+        )
+    return updated
+
+
 def _unsupported_feature(api_name: str, message: str) -> Dict[str, Any]:
     return {
         "ok": False,
@@ -1994,14 +2677,22 @@ def _language_id_for_path(path: str) -> str:
 
 
 class _FileSystem:
+    def __init__(self, namespace: VscodeNamespace) -> None:
+        self._namespace = namespace
+
     def readFile(self, uri: Any) -> bytes:
         path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
         with open(path, "rb") as f:
             return f.read()
     def writeFile(self, uri: Any, content: bytes) -> None:
         path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        existed = os.path.exists(path)
         with open(path, "wb") as f:
             f.write(content)
+        self._namespace._notify_workspace_watchers(path, "change" if existed else "create")
     def stat(self, uri: Any) -> Dict:
         path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
         s = os.stat(path)
@@ -2021,3 +2712,13 @@ class _FileSystem:
             shutil.rmtree(path)
         elif os.path.isfile(path):
             os.remove(path)
+        self._namespace._notify_workspace_watchers(path, "delete")
+    def rename(self, old_uri: Any, new_uri: Any, options: Dict = None) -> None:
+        old_path = old_uri.fs_path if hasattr(old_uri, "fs_path") else str(old_uri)
+        new_path = new_uri.fs_path if hasattr(new_uri, "fs_path") else str(new_uri)
+        parent = os.path.dirname(new_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.replace(old_path, new_path)
+        self._namespace._notify_workspace_watchers(old_path, "delete")
+        self._namespace._notify_workspace_watchers(new_path, "create")

@@ -11,6 +11,7 @@ Bridge protocol:
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
@@ -18,6 +19,9 @@ from ai_editor.llm_engine import LLMEngine, ProviderConfig, StreamDelta
 from ai_editor.tool_registry import ToolRegistry
 from ai_editor.engine_tools import register_engine_tools
 from ai_editor.chat_state import ChatController, Conversation, ChatMessage
+
+
+logger = logging.getLogger(__name__)
 
 
 class AIEditorBridge:
@@ -66,6 +70,41 @@ class AIEditorBridge:
     def _default_system_prompt(self) -> str:
         from ai_editor.prompts import get_system_prompt
         return get_system_prompt(settings_getter=self._settings_getter)
+
+    def _current_mode(self) -> str:
+        from ai_editor.scopes import MODES, normalize_mode
+        ai = self._settings_getter("ai_editor", {}) or {}
+        raw_mode = ai.get("mode", "agent") if isinstance(ai, dict) else "agent"
+        mode = normalize_mode(str(raw_mode or "agent"))
+        return mode if mode in MODES else "agent"
+
+    def _mode_system_prompt(self, mode: Optional[str] = None) -> str:
+        from ai_editor.prompts import get_system_prompt
+        selected_mode = mode or self._current_mode()
+        custom = ""
+        if self._engine and self._engine.config.system_prompt:
+            custom = self._engine.config.system_prompt
+        return get_system_prompt(
+            agent_mode=selected_mode == "agent",
+            plan_mode=selected_mode == "plan",
+            custom=custom,
+            settings_getter=self._settings_getter,
+        )
+
+    def _refresh_system_prompt(self, mode: Optional[str] = None) -> None:
+        if self._controller and self._controller.conversation:
+            self._controller.conversation.system_prompt = self._mode_system_prompt(mode)
+
+    def _save_ai_settings_patch(self, patch: Dict[str, Any]) -> Dict[str, Any]:
+        settings = getattr(self._gui_ref, 'settings', None)
+        if not settings:
+            raise RuntimeError("Settings not available")
+        from ai_editor.app import _merge_ai_editor_config
+        current = settings.get("ai_editor", {}) or {}
+        merged = _merge_ai_editor_config(current, patch)
+        settings.set("ai_editor", merged)
+        settings.save()
+        return merged
 
     def _load_config(self) -> ProviderConfig:
         from ai_editor.app import load_provider_config
@@ -120,10 +159,7 @@ class AIEditorBridge:
         }
 
     def _cmd_save_config(self, payload: Dict) -> Dict:
-        settings = getattr(self._gui_ref, 'settings', None)
-        if not settings:
-            return {"error": "Settings not available"}
-        settings.set("ai_editor", {
+        config_patch = {
             "provider": payload.get("provider", "openai"),
             "api_key": payload.get("api_key", ""),
             "base_url": payload.get("base_url", ""),
@@ -131,21 +167,31 @@ class AIEditorBridge:
             "temperature": payload.get("temperature", 0.7),
             "max_tokens": payload.get("max_tokens", 4096),
             "system_prompt": payload.get("system_prompt", ""),
-        })
+        }
+        warning = ""
         try:
-            settings.save()
-        except Exception:
-            pass
+            merged = self._save_ai_settings_patch(config_patch)
+        except Exception as exc:
+            logger.warning("Failed to save AI Editor bridge config: %s", exc)
+            merged = config_patch
+            warning = str(exc)
         if self._engine:
-            self._engine.config = ProviderConfig(**{k: v for k, v in payload.items()
-                                                    if k in ProviderConfig.__dataclass_fields__})
-        return {"ok": True}
+            self._engine.config = ProviderConfig(**{
+                k: v for k, v in merged.items()
+                if k in ProviderConfig.__dataclass_fields__
+            })
+        self._refresh_system_prompt()
+        result = {"ok": True}
+        if warning:
+            result["warning"] = warning
+        return result
 
     def _cmd_send(self, payload: Dict) -> Dict:
         text = payload.get("text", "").strip()
         if not text:
             return {"error": "Empty message"}
         self._ensure_engine()
+        mode = self._current_mode()
 
         config_override = payload.get("config")
         if config_override and isinstance(config_override, dict):
@@ -153,9 +199,12 @@ class AIEditorBridge:
                 self._engine.config.provider = config_override["provider"]
             if config_override.get("model"):
                 self._engine.config.model = config_override["model"]
+            if config_override.get("system_prompt"):
+                self._engine.config.system_prompt = config_override["system_prompt"]
 
-        self._controller.send(text)
-        return {"ok": True}
+        self._refresh_system_prompt(mode)
+        self._controller.send(text, agent_mode=mode == "agent")
+        return {"ok": True, "mode": mode}
 
     def _cmd_cancel(self, payload: Dict) -> Dict:
         if self._controller:
@@ -164,8 +213,8 @@ class AIEditorBridge:
 
     def _cmd_new_chat(self, payload: Dict) -> Dict:
         if self._controller:
-            sp = self._engine.config.system_prompt if self._engine else ""
-            self._controller.new_conversation(sp or self._default_system_prompt())
+            mode = self._current_mode()
+            self._controller.new_conversation(self._mode_system_prompt(mode))
         return {"ok": True}
 
     def _cmd_export(self, payload: Dict) -> Any:
@@ -266,10 +315,10 @@ class AIEditorBridge:
         settings.set("ai_editor", ai)
         try:
             settings.save()
-        except Exception:
-            pass
-        if self._controller and self._controller.conversation:
-            self._controller.conversation.system_prompt = self._default_system_prompt()
+        except Exception as exc:
+            logger.warning("Failed to save user instructions: %s", exc)
+            return {"error": str(exc)}
+        self._refresh_system_prompt()
         return {"ok": True}
 
     def _cmd_get_instruction_files(self, payload: Dict) -> Dict:
@@ -280,15 +329,15 @@ class AIEditorBridge:
         from ai_editor.prompts import save_instruction_file
         result = save_instruction_file(payload.get("name", ""),
                                        payload.get("content", ""))
-        if result.get("ok") and self._controller and self._controller.conversation:
-            self._controller.conversation.system_prompt = self._default_system_prompt()
+        if result.get("ok"):
+            self._refresh_system_prompt()
         return result
 
     def _cmd_delete_instruction_file(self, payload: Dict) -> Dict:
         from ai_editor.prompts import delete_instruction_file
         result = delete_instruction_file(payload.get("name", ""))
-        if result.get("ok") and self._controller and self._controller.conversation:
-            self._controller.conversation.system_prompt = self._default_system_prompt()
+        if result.get("ok"):
+            self._refresh_system_prompt()
         return result
 
     # ── Token / Model / Mode bridge commands ──
@@ -309,11 +358,59 @@ class AIEditorBridge:
                 "compact_at": compaction_threshold(model)}
 
     def _cmd_get_mode(self, payload: Dict) -> Dict:
-        from ai_editor.scopes import MODES, effective_permissions
-        return {"mode": "edit", "modes": list(MODES)}
+        self._ensure_engine()
+        from ai_editor.scopes import MODES, MODE_PERMISSIONS, normalize_mode, tool_permission
+        ai = self._settings_getter("ai_editor", {}) or {}
+        overrides = ai.get("permissions", {}) if isinstance(ai, dict) else {}
+        requested = normalize_mode(str(payload.get("mode") or "")) if isinstance(payload, dict) else ""
+        selected = requested if requested in MODES else self._current_mode()
+        tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["agent"]).keys())
+        registry_tools = {}
+        if self._registry:
+            for tool in self._registry.list_tools(include_disabled=True):
+                registry_tools[tool.name] = tool
+                tool_names.add(tool.name)
+        permissions: Dict[str, str] = {}
+        defaults: Dict[str, str] = {}
+        for tool_name in sorted(tool_names):
+            tool = registry_tools.get(tool_name)
+            read_only = None
+            category = ""
+            if tool is not None:
+                category = getattr(tool, "category", "")
+                tags = getattr(tool, "tags", {}) or {}
+                if isinstance(tags, dict) and isinstance(tags.get("readOnly"), bool):
+                    read_only = tags.get("readOnly")
+            permissions[tool_name] = tool_permission(
+                selected, tool_name, overrides,
+                read_only=read_only, category=category,
+            )
+            defaults[tool_name] = tool_permission(
+                selected, tool_name, {},
+                read_only=read_only, category=category,
+            )
+        return {
+            "mode": self._current_mode(),
+            "selected_mode": selected,
+            "modes": list(MODES),
+            "permissions": permissions,
+            "defaults": defaults,
+            "overrides": dict(overrides) if isinstance(overrides, dict) else {},
+            "tools": sorted(tool_names),
+        }
 
     def _cmd_set_mode(self, payload: Dict) -> Dict:
-        return {"ok": True, "mode": payload.get("mode", "edit")}
+        from ai_editor.scopes import MODES, normalize_mode
+        requested = normalize_mode(str(payload.get("mode") or ""))
+        if requested not in MODES:
+            return {"error": f"Invalid mode: {requested}. Valid: {list(MODES)}"}
+        try:
+            self._save_ai_settings_patch({"mode": requested})
+        except Exception as exc:
+            logger.warning("Failed to save AI Editor mode: %s", exc)
+            return {"error": str(exc)}
+        self._refresh_system_prompt(requested)
+        return {"ok": True, "mode": requested}
 
     # ── Event emitters (called from background thread) ──
 

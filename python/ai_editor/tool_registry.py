@@ -216,10 +216,13 @@ class ToolRegistry:
     @staticmethod
     def _normalize_result(result: Any) -> Any:
         if hasattr(result, "to_dict") and callable(getattr(result, "to_dict")):
+            converted = None
             try:
-                return result.to_dict()
+                converted = result.to_dict()
             except Exception:
-                pass
+                converted = None
+            if converted is not None:
+                return converted
         if is_dataclass(result):
             return asdict(result)
         if hasattr(result, "content") and isinstance(getattr(result, "content"), list):

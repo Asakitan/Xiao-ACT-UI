@@ -12,12 +12,16 @@ which routes through this service.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ai_editor.extension_host import EventEmitter, Disposable
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,18 +86,13 @@ class AuthService:
             try:
                 raw = prov.create_session(scopes or [], {})
                 if raw:
-                    session = AuthSession(
-                        id=raw.id if hasattr(raw, "id") else str(id(raw)),
-                        access_token=getattr(raw, "access_token", ""),
-                        account_id=getattr(raw, "account_id", ""),
-                        account_label=getattr(raw, "account_label", ""),
-                        scopes=list(scopes or []),
-                        provider_id=provider_id,
-                    )
+                    session = self._normalize_session(
+                        provider_id, raw, scopes or [])
                     self._add_session(session)
                     return session
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to create auth session for %s: %s",
+                               provider_id, exc)
         return None
 
     def create_session_from_token(self, provider_id: str, token: str,
@@ -143,9 +142,43 @@ class AuthService:
         os.makedirs(self._storage, exist_ok=True)
         return os.path.join(self._storage, "sessions.json")
 
+    @staticmethod
+    def _normalize_session(provider_id: str, raw: Any,
+                           scopes: List[str]) -> AuthSession:
+        if isinstance(raw, AuthSession):
+            raw.provider_id = raw.provider_id or provider_id
+            raw.scopes = list(raw.scopes or scopes)
+            return raw
+        if isinstance(raw, dict):
+            account = raw.get("account", {})
+            return AuthSession(
+                id=str(raw.get("id") or raw.get("session_id") or ""),
+                access_token=str(raw.get("accessToken") or raw.get("access_token") or raw.get("token") or ""),
+                account_id=str(raw.get("account_id") or account.get("id") or provider_id),
+                account_label=str(raw.get("account_label") or account.get("label") or raw.get("label") or provider_id),
+                scopes=list(raw.get("scopes") or scopes),
+                provider_id=str(raw.get("provider_id") or provider_id),
+            )
+        return AuthSession(
+            id=getattr(raw, "id", "") or str(id(raw)),
+            access_token=(getattr(raw, "access_token", "")
+                          or getattr(raw, "accessToken", "")
+                          or getattr(raw, "token", "")),
+            account_id=(getattr(raw, "account_id", "")
+                        or getattr(raw, "accountId", "")
+                        or provider_id),
+            account_label=(getattr(raw, "account_label", "")
+                           or getattr(raw, "accountLabel", "")
+                           or getattr(raw, "label", "")
+                           or provider_id),
+            scopes=list(getattr(raw, "scopes", None) or scopes),
+            provider_id=getattr(raw, "provider_id", "") or provider_id,
+        )
+
     def _load(self) -> None:
+        path = self._storage_file()
         try:
-            with open(self._storage_file(), "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for pid, sessions_raw in data.items():
                 for sr in sessions_raw:
@@ -158,18 +191,23 @@ class AuthService:
                         provider_id=pid,
                     )
                     self._sessions.setdefault(pid, []).append(s)
-        except Exception:
-            pass
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            logger.warning("Failed to load auth sessions from %s: %s",
+                           path, exc)
 
     def _save(self) -> None:
+        path = self._storage_file()
         try:
             data = {}
             for pid, sessions in self._sessions.items():
                 data[pid] = [s.to_dict() for s in sessions]
-            with open(self._storage_file(), "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=1)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to save auth sessions to %s: %s",
+                           path, exc)
 
 
 _singleton: Optional[AuthService] = None

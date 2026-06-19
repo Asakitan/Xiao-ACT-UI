@@ -14,12 +14,16 @@ import shutil
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
+from ai_editor.llm_engine import ProviderConfig
+
 
 BUILTIN_PROVIDER_ORDER = ("chat", "copilot", "claude-code", "codex")
 COPILOT_UNAVAILABLE_REASON = (
-    "Copilot is registered as an explicit backend capability surface, but "
-    "direct GitHub Copilot chat transport is not available in this runtime yet."
+    "Copilot mirrors the active editor backend in this runtime. Configure any "
+    "runnable provider in Settings to activate the Copilot surface."
 )
+_KEY_REQUIRED_PROVIDERS = {"openai", "anthropic", "deepseek"}
+_COPILOT_BACKEND_PRIORITY = ("openai", "anthropic", "deepseek", "ollama", "custom")
 
 
 @dataclass
@@ -117,10 +121,10 @@ class ChatProviderRegistry:
     def list_available(self,
                        settings_getter: Optional[Callable] = None,
                        ) -> List[Dict[str, Any]]:
-        """Return providers with availability flag based on supported configuration."""
+        """Return providers with availability and runtime surface metadata."""
         result = []
         for p in self.list_all():
-            status = self._provider_status(p, settings_getter)
+            status = describe_provider_status(p, settings_getter)
             d = p.to_dict()
             d.update(status)
             d["builtin"] = p.builtin
@@ -130,82 +134,7 @@ class ChatProviderRegistry:
     @staticmethod
     def _check_available(p: ChatProviderDef,
                          settings_getter: Optional[Callable]) -> bool:
-        return bool(ChatProviderRegistry._provider_status(
-            p, settings_getter).get("available"))
-
-    @staticmethod
-    def _provider_status(p: ChatProviderDef,
-                         settings_getter: Optional[Callable]) -> Dict[str, Any]:
-        status: Dict[str, Any] = {
-            "available": True,
-            "status": "available",
-            "unavailable_reason": "",
-            "api_key_available": True,
-        }
-        if p.id == "chat":
-            return status
-        if p.id == "copilot":
-            status["api_key_available"] = _has_copilot_auth(settings_getter)
-            status["transport"] = "copilot-chat"
-            status["model"] = p.model
-            status["direct_transport_available"] = False
-            status["capability"] = "github-copilot-chat"
-            return _unavailable(
-                status,
-                COPILOT_UNAVAILABLE_REASON,
-            )
-        if p.id == "claude-code":
-            section = _get_provider_section("claude_code", settings_getter)
-            model = _get_provider_option("claude_code", "model", settings_getter)
-            status["model"] = model or p.model
-            status.update(_cli_status("claude_code", "claude", settings_getter))
-            status["api_key_available"] = bool(_get_provider_key("anthropic", settings_getter))
-            prefer_cli = _get_provider_bool("claude_code", "prefer_cli", settings_getter)
-            if prefer_cli:
-                return _unavailable(
-                    status,
-                    "Claude Code CLI preference is configured, but this backend "
-                    "does not execute the Claude CLI transport yet. Turn off "
-                    "Prefer CLI to use the Anthropic API/proxy path.",
-                )
-            if not status["api_key_available"]:
-                return _unavailable(
-                    status,
-                    "Anthropic API key is not configured for Claude Code.",
-                )
-            status["prefer_cli"] = bool(section.get("prefer_cli"))
-            return status
-        if p.id == "codex":
-            transport = _normalize_transport(
-                _get_provider_option("codex", "transport", settings_getter),
-                "chat_completions",
-                {"chat_completions", "responses", "cli"},
-            )
-            model = _get_provider_option("codex", "model", settings_getter)
-            status["transport"] = transport
-            status["model"] = model or p.model
-            status.update(_cli_status("codex", "codex", settings_getter))
-            status["api_key_available"] = bool(_get_provider_key("openai", settings_getter))
-            if transport == "cli":
-                return _unavailable(
-                    status,
-                    "Codex CLI transport is configured, but this backend does "
-                    "not execute the Codex CLI transport yet. Select Chat "
-                    "Completions or Responses to use the Codex tab.",
-                )
-            if not status["api_key_available"]:
-                return _unavailable(status, "OpenAI API key is not configured for Codex.")
-            return status
-        if p.api_key:
-            return status
-        key = _get_provider_key(p.provider_type, settings_getter)
-        status["api_key_available"] = bool(key)
-        if not key:
-            return _unavailable(
-                status,
-                f"API key is not configured for provider type {p.provider_type}.",
-            )
-        return status
+        return bool(describe_provider_status(p, settings_getter).get("available"))
 
 
 def _unavailable(status: Dict[str, Any], reason: str) -> Dict[str, Any]:
@@ -214,6 +143,253 @@ def _unavailable(status: Dict[str, Any], reason: str) -> Dict[str, Any]:
     updated["status"] = "unavailable"
     updated["unavailable_reason"] = reason
     return updated
+
+
+def _base_config_from_settings(
+        settings_getter: Optional[Callable],
+        base_config: Optional[ProviderConfig] = None) -> ProviderConfig:
+    if isinstance(base_config, ProviderConfig):
+        return base_config
+    ai = _get_ai_editor_settings(settings_getter)
+    return ProviderConfig(
+        provider=str(ai.get("provider") or ProviderConfig().provider),
+        api_key=str(ai.get("api_key") or ""),
+        base_url=str(ai.get("base_url") or ""),
+        model=str(ai.get("model") or ""),
+        transport=_normalize_transport(
+            ai.get("transport"), "chat_completions", {"chat_completions", "responses"}),
+    )
+
+
+def _compose_runtime_config(
+        provider_type: str,
+        settings_getter: Optional[Callable],
+        base_config: Optional[ProviderConfig] = None,
+        *,
+        explicit_model: str = "",
+        explicit_base_url: str = "",
+        explicit_api_key: str = "",
+        explicit_transport: str = "",
+        system_prompt: str = "",
+) -> ProviderConfig:
+    base = _base_config_from_settings(settings_getter, base_config)
+    defaults = ProviderConfig(provider=provider_type)
+    api_key = str(explicit_api_key or "")
+    if not api_key:
+        api_key = _get_provider_key(provider_type, settings_getter)
+    if not api_key and base.provider == provider_type:
+        api_key = base.api_key
+    base_url = str(explicit_base_url or "")
+    if not base_url and base.provider == provider_type and base.base_url:
+        base_url = base.base_url
+    if not base_url:
+        base_url = defaults.effective_base_url
+    model = str(explicit_model or "")
+    if not model and base.provider == provider_type and base.model:
+        model = base.model
+    if not model:
+        model = defaults.effective_model
+    transport = str(explicit_transport or "")
+    if not transport:
+        transport = base.transport if base.provider == provider_type else "chat_completions"
+    transport = _normalize_transport(
+        transport, "chat_completions", {"chat_completions", "responses"})
+    return ProviderConfig(
+        provider=provider_type,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        temperature=base.temperature,
+        max_tokens=base.max_tokens,
+        system_prompt=system_prompt,
+        transport=transport,
+        top_p=base.top_p,
+        frequency_penalty=base.frequency_penalty,
+        presence_penalty=base.presence_penalty,
+        stop=list(base.stop),
+        max_input_tokens=base.max_input_tokens,
+        max_output_tokens=base.max_output_tokens,
+        timeout=base.timeout,
+        extra_headers=dict(base.extra_headers),
+        extra_body=dict(base.extra_body),
+    )
+
+
+def _config_is_runnable(cfg: Optional[ProviderConfig]) -> bool:
+    if cfg is None:
+        return False
+    if not cfg.effective_base_url:
+        return False
+    if cfg.provider in _KEY_REQUIRED_PROVIDERS and not cfg.api_key:
+        return False
+    return True
+
+
+def _copilot_runtime_config(
+        provider: ChatProviderDef,
+        settings_getter: Optional[Callable],
+        base_config: Optional[ProviderConfig] = None) -> Optional[ProviderConfig]:
+    base = _base_config_from_settings(settings_getter, base_config)
+    candidates: List[str] = []
+    for name in (base.provider, *_COPILOT_BACKEND_PRIORITY):
+        normalized = str(name or "").strip().lower()
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    for provider_type in candidates:
+        cfg = _compose_runtime_config(
+            provider_type,
+            settings_getter,
+            base,
+            system_prompt=provider.system_prompt,
+        )
+        if _config_is_runnable(cfg):
+            return cfg
+    return None
+
+
+def build_provider_runtime_config(
+        provider: ChatProviderDef,
+        settings_getter: Optional[Callable],
+        base_config: Optional[ProviderConfig] = None) -> Optional[ProviderConfig]:
+    if provider.id == "chat":
+        return _base_config_from_settings(settings_getter, base_config)
+    if provider.id == "copilot":
+        return _copilot_runtime_config(provider, settings_getter, base_config)
+    if provider.id == "claude-code":
+        return _compose_runtime_config(
+            "anthropic",
+            settings_getter,
+            base_config,
+            explicit_model=_get_provider_option("claude_code", "model", settings_getter),
+            system_prompt=provider.system_prompt,
+        )
+    if provider.id == "codex":
+        requested = _normalize_transport(
+            _get_provider_option("codex", "transport", settings_getter),
+            "chat_completions",
+            {"chat_completions", "responses", "cli"},
+        )
+        resolved = "responses" if requested == "cli" else requested
+        return _compose_runtime_config(
+            "openai",
+            settings_getter,
+            base_config,
+            explicit_model=_get_provider_option("codex", "model", settings_getter) or provider.model,
+            explicit_transport=resolved,
+            system_prompt=provider.system_prompt,
+        )
+    return _compose_runtime_config(
+        provider.provider_type,
+        settings_getter,
+        base_config,
+        explicit_model=provider.model,
+        explicit_base_url=provider.base_url,
+        explicit_api_key=provider.api_key,
+        system_prompt=provider.system_prompt,
+    )
+
+
+def describe_provider_status(
+        provider: ChatProviderDef,
+        settings_getter: Optional[Callable],
+        base_config: Optional[ProviderConfig] = None) -> Dict[str, Any]:
+    status: Dict[str, Any] = {
+        "available": True,
+        "status": "available",
+        "unavailable_reason": "",
+        "api_key_available": True,
+        "requested_transport": "",
+        "resolved_transport": "",
+        "runtime_mode": "direct",
+        "backend_provider": "",
+        "transport": "",
+        "model": provider.model,
+    }
+    if provider.id == "chat":
+        return status
+
+    if provider.id == "copilot":
+        cfg = _copilot_runtime_config(provider, settings_getter, base_config)
+        status.update({
+            "requested_transport": "copilot-chat",
+            "runtime_mode": "backend-fallback",
+            "api_key_available": _has_copilot_auth(settings_getter),
+            "direct_transport_available": False,
+            "capability": "github-copilot-chat",
+        })
+        if not _config_is_runnable(cfg):
+            return _unavailable(status, COPILOT_UNAVAILABLE_REASON)
+        status.update({
+            "backend_provider": cfg.provider,
+            "resolved_transport": cfg.transport,
+            "transport": cfg.transport,
+            "model": cfg.effective_model or provider.model,
+        })
+        return status
+
+    if provider.id == "claude-code":
+        section = _get_provider_section("claude_code", settings_getter)
+        prefer_cli = bool(section.get("prefer_cli"))
+        cfg = build_provider_runtime_config(provider, settings_getter, base_config)
+        status.update(_cli_status("claude_code", "claude", settings_getter))
+        status.update({
+            "requested_transport": "cli" if prefer_cli else "chat_completions",
+            "resolved_transport": "chat_completions",
+            "transport": "chat_completions",
+            "runtime_mode": "cli-fallback" if prefer_cli else "direct",
+            "backend_provider": "anthropic",
+            "api_key_available": bool(_get_provider_key("anthropic", settings_getter)),
+            "prefer_cli": prefer_cli,
+            "model": cfg.effective_model if cfg else provider.model,
+        })
+        if not _config_is_runnable(cfg):
+            return _unavailable(
+                status,
+                "Claude Code needs an Anthropic API key in Provider Keys or as the active Anthropic provider.",
+            )
+        return status
+
+    if provider.id == "codex":
+        requested = _normalize_transport(
+            _get_provider_option("codex", "transport", settings_getter),
+            "chat_completions",
+            {"chat_completions", "responses", "cli"},
+        )
+        resolved = "responses" if requested == "cli" else requested
+        cfg = build_provider_runtime_config(provider, settings_getter, base_config)
+        status.update(_cli_status("codex", "codex", settings_getter))
+        status.update({
+            "requested_transport": requested,
+            "resolved_transport": resolved,
+            "transport": resolved,
+            "runtime_mode": "cli-fallback" if requested == "cli" else "direct",
+            "backend_provider": "openai",
+            "api_key_available": bool(_get_provider_key("openai", settings_getter)),
+            "model": cfg.effective_model if cfg else provider.model,
+        })
+        if not _config_is_runnable(cfg):
+            return _unavailable(
+                status,
+                "Codex needs an OpenAI API key in Provider Keys or as the active OpenAI provider.",
+            )
+        return status
+
+    cfg = build_provider_runtime_config(provider, settings_getter, base_config)
+    status.update({
+        "backend_provider": provider.provider_type,
+        "resolved_transport": cfg.transport if cfg else "chat_completions",
+        "transport": cfg.transport if cfg else "chat_completions",
+        "model": cfg.effective_model if cfg else provider.model,
+        "api_key_available": bool(provider.api_key or _get_provider_key(provider.provider_type, settings_getter)),
+    })
+    if not _config_is_runnable(cfg):
+        if provider.provider_type in _KEY_REQUIRED_PROVIDERS:
+            return _unavailable(
+                status,
+                f"API key is not configured for provider type {provider.provider_type}.",
+            )
+        return _unavailable(status, "Configure this provider in Settings.")
+    return status
 
 
 def _provider_sort_key(provider: ChatProviderDef) -> tuple[int, int, str]:

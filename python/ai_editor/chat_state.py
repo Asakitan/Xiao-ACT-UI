@@ -456,13 +456,28 @@ class ChatController:
                 if not resp.tool_calls:
                     if not self._agent_mode:
                         break
-                    # Agent mode: continue if the response ends with a continuation signal
                     content_lower = (resp.content or "").strip().lower()
-                    continues = content_lower.endswith("...") or "[continue]" in content_lower
+                    continues = resp.finish_reason in {"length", "max_tokens"}
+                    if not continues:
+                        continues = any(marker in content_lower for marker in (
+                            "[continue]",
+                            "<continue>",
+                            "<continue/>",
+                            "continue with the next step",
+                            "continue from here",
+                            "继续",
+                        ))
+                    if not continues:
+                        continues = content_lower.endswith(("...", "…"))
                     if not continues:
                         break
-                    # Auto-inject continuation prompt
-                    cont_msg = ChatMessage(role="user", content="Continue with the next step.")
+                    cont_msg = ChatMessage(
+                        role="user",
+                        content=(
+                            "Continue from the previous step without repeating finished work. "
+                            "Use tools again if they are still needed."
+                        ),
+                    )
                     self.conversation.add_message(cont_msg)
                     if self.on_message_added:
                         self.on_message_added(cont_msg)

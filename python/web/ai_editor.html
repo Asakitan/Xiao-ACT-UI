@@ -161,7 +161,7 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
     <option value="ollama">Ollama</option>
     <option value="custom">Custom</option>
   </select>
-  <input id="model-input" placeholder="Model name" style="width:160px">
+  <input id="model-input" placeholder="Model" style="width:160px">
   <span class="spacer"></span>
   <span class="header-btn" id="btn-new" title="New Chat">✚ New</span>
   <span class="header-btn" id="btn-tools" title="Tools">🔧</span>
@@ -181,7 +181,7 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
 <div class="input-area">
   <div class="input-hints">Enter 发送 · Shift+Enter 换行 · Ctrl+L 清屏</div>
   <div class="input-wrap">
-    <textarea id="input-editor" rows="3" placeholder="Ask anything..."></textarea>
+    <textarea id="input-editor" rows="3" placeholder="Ask anything... (/ for tools)"></textarea>
   </div>
   <div class="btn-bar">
     <span class="btn btn-primary" id="btn-send">▶ Send</span>
@@ -281,9 +281,9 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
 
     appendSystemMessage(
       '✦ SAO AI Editor\n' +
-      '多模型LLM编辑器, 支持 OpenAI / Claude / DeepSeek / Ollama\n' +
-      '平台工具已就绪: 文件 · 运行时查询 · 设置 · Python执行\n\n' +
-      '先在 ⚙ Settings 中配置 API Key, 然后开始对话。'
+      '多模型 LLM 编辑器, 支持 OpenAI / Claude / DeepSeek / Ollama\n' +
+      '平台工具已就绪: 文件 · 运行时查询 · 设置 · Python 执行\n\n' +
+      '先在 ⚙ Settings 中配置 API Key、本地 Ollama 或兼容端点，然后开始对话。'
     );
   }
 
@@ -455,7 +455,7 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
     inputEditor.style.height = 'auto';
 
     if (!config.api_key && config.provider !== 'ollama') {
-      appendSystemMessage('⚠ 请先在 ⚙ Settings 中配置 API Key');
+      appendSystemMessage('⚠ 请先在 ⚙ Settings 中配置 API Key、本地 Ollama 或兼容端点');
       return;
     }
 

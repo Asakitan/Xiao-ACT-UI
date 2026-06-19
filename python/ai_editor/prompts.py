@@ -4,7 +4,7 @@ Architecture follows VSCode Copilot's prompt composition:
   1. Role identity + capabilities
   2. Tool rules (per-tool, conditional)
   3. Domain knowledge (mem_probe, engine, plugin SDK)
-  4. Safety guardrails
+    4. Working conventions
   5. Project structure
 
 Update this file whenever tools or project scope change.
@@ -15,8 +15,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import zlib
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +69,8 @@ def _check_paid() -> bool:
     try:
         from license import get_license_manager
         return get_license_manager().is_paid
-    except Exception:
+    except Exception as exc:
+        logger.debug("License manager unavailable while building prompt: %s", exc)
         return False
 
 
@@ -188,7 +193,7 @@ Plugins may register domain-specific memory bridges at load time. Platform \
 code does not import those bridges directly.\
 """
 
-_SAFETY = """\
+_WORKING_STYLE = """\
 
 ## Working Style
 
@@ -201,7 +206,7 @@ _SAFETY = """\
 - Platform code is **game-agnostic**. Plugin code stays inside its \
   own `plugins/<name>/` directory.
 - Do not expose internal tool names to the user.
-- If you're unsure about a destructive operation, use `getConfirmation`.
+- Use `getConfirmation` before destructive file or settings changes.
 - Memory scanning requires admin. If process attach fails, suggest \
   the user run as administrator.\
 """
@@ -262,9 +267,7 @@ patterns. Always prefer showing real working code over generating from scratch.\
 # Compose
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = _IDENTITY + _TOOL_RULES + _MEM_PROBE_GUIDE + _SAFETY + _PROJECT_STRUCTURE
-
-# Kept as named constant for AGENTS.md reference; no "Safety" section.
+SYSTEM_PROMPT = _IDENTITY + _TOOL_RULES + _MEM_PROBE_GUIDE + _WORKING_STYLE + _PROJECT_STRUCTURE
 
 AGENT_MODE_ADDITION = """\
 
@@ -312,7 +315,8 @@ def _resolve_base_dir() -> str:
     try:
         from config import BASE_DIR
         return BASE_DIR
-    except Exception:
+    except Exception as exc:
+        logger.debug("Falling back to prompt base dir: %s", exc)
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -326,8 +330,9 @@ def _load_instructions_from_dir(base: str, label: str = "") -> list[str]:
                 body = f.read().strip()
             if body:
                 parts.append(body)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to read instruction file %s: %s",
+                           proj_file, exc)
     inst_dir = os.path.join(base, "instructions")
     if os.path.isdir(inst_dir):
         for fname in sorted(os.listdir(inst_dir)):
@@ -341,8 +346,9 @@ def _load_instructions_from_dir(base: str, label: str = "") -> list[str]:
                     body = f.read().strip()
                 if body:
                     parts.append(f"### {fname[:-3]}\n\n{body}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to read instruction file %s: %s",
+                               fpath, exc)
     return parts
 
 
@@ -353,8 +359,8 @@ def _read_markdown_file(path: str, heading: str = "") -> list[str]:
                 body = f.read().strip()
             if body:
                 return [f"### {heading}\n\n{body}" if heading else body]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read markdown file %s: %s", path, exc)
     return []
 
 
@@ -376,7 +382,8 @@ def _customization_settings(settings_getter=None) -> dict:
         return {}
     try:
         ai = settings_getter("ai_editor", {}) or {}
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to read customization settings: %s", exc)
         return {}
     customization = ai.get("customization", {}) if isinstance(ai, dict) else {}
     return customization if isinstance(customization, dict) else {}
@@ -436,7 +443,9 @@ def load_instructions(settings_getter=None, workspace_root: str = "") -> str:
                 if scope_parts:
                     parts.append(f"<!-- scope: {entry.get('label','')} -->")
                     parts.extend(scope_parts)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to resolve scoped instruction sources: %s",
+                           exc)
             root = _resolve_base_dir()
             parts.extend(_load_instructions_from_dir(
                 os.path.join(root, ".sao")))
@@ -486,7 +495,8 @@ def list_instruction_files(workspace_root: str = "") -> list[dict]:
         for entry in resolve_scopes():
             files.extend(_list_files_in_scope(
                 entry["path"], entry.get("label", entry["scope"])))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to list scoped instruction files: %s", exc)
         root = _resolve_base_dir()
         files.extend(_list_files_in_scope(
             os.path.join(root, ".sao"), "workspace"))
@@ -542,8 +552,8 @@ def get_system_prompt(agent_mode: bool = False, plan_mode: bool = False,
     if _check_paid():
         try:
             prompt += _decrypt_engine_guide()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to decrypt premium engine guide: %s", exc)
     inst = load_instructions(settings_getter=settings_getter)
     if inst:
         prompt += "\n" + inst
@@ -555,8 +565,8 @@ def get_system_prompt(agent_mode: bool = False, plan_mode: bool = False,
             _agent_prompt_cache = reg.to_prompt_section()
             _agent_prompt_version = ver
         prompt += _agent_prompt_cache
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to append agent prompt section: %s", exc)
     try:
         from ai_editor.workflows import get_workflow_registry
         reg = get_workflow_registry()
@@ -565,8 +575,8 @@ def get_system_prompt(agent_mode: bool = False, plan_mode: bool = False,
             _workflow_prompt_cache = reg.to_prompt_section()
             _workflow_prompt_version = ver
         prompt += _workflow_prompt_cache
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to append workflow prompt section: %s", exc)
     if agent_mode:
         prompt += AGENT_MODE_ADDITION
     elif plan_mode:

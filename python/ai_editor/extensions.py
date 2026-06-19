@@ -11,10 +11,11 @@ No hardcoded extension list — everything comes from the marketplace.
 from __future__ import annotations
 
 import json
+import logging
 import os
-import threading
+import shutil
+import time
 import zipfile
-import io
 from typing import Any, Dict, List, Optional, Tuple
 
 _MARKETPLACE_URL = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery"
@@ -24,6 +25,8 @@ _API_VERSION = "6.1-preview.1"
 #        IncludeStatistics | IncludeLatestVersionOnly | ExcludeNonValidated
 _QUERY_FLAGS = 0x200 | 0x2 | 0x20 | 0x80 | 0x100 | 0x10  # 914
 _http_client = None
+
+logger = logging.getLogger(__name__)
 
 def _get_http_client():
     global _http_client
@@ -93,7 +96,9 @@ def get_extension_detail(publisher: str, name: str) -> Optional[Dict[str, Any]]:
     """Fetch a single extension by publisher.name."""
     try:
         data = _marketplace_query(extension_name=f"{publisher}.{name}")
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to fetch extension detail for %s.%s: %s",
+                       publisher, name, exc)
         return None
     results = _parse_extensions(data)
     return results[0] if results else None
@@ -106,7 +111,9 @@ def _parse_extensions(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         for ext in result.get("extensions", []):
             try:
                 results.append(_parse_one_extension(ext))
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to parse extension payload for %s: %s",
+                               ext.get("extensionName", "<unknown>"), exc)
                 continue
     return results
 
@@ -216,33 +223,44 @@ def install_extension(ext_id: str, vsix_url: str = "") -> Dict[str, Any]:
         ext_dir = os.path.join(_extensions_dir(), ext_id)
         manifest: Dict[str, Any] = {}
 
-        if vsix_url:
-            vsix_path = download_vsix(vsix_url, ext_id)
-            manifest = extract_vsix_manifest(vsix_path)
-            if not manifest:
-                try:
-                    os.remove(vsix_path)
-                except OSError:
-                    pass
-                return {"error": "Downloaded VSIX did not contain a package.json manifest"}
-            manifest_id = f"{manifest.get('publisher', '')}.{manifest.get('name', '')}".strip(".")
-            if manifest_id and manifest_id.lower() != ext_id.lower():
-                try:
-                    os.remove(vsix_path)
-                except OSError:
-                    pass
-                return {"error": f"VSIX manifest id mismatch: expected {ext_id}, got {manifest_id}"}
-            _extract_vsix_to_dir(vsix_path, ext_dir)
+        if not vsix_url:
+            if "." not in ext_id:
+                return {"error": f"Extension id must be publisher.name: {ext_id}"}
+            publisher, name = ext_id.split(".", 1)
+            detail = get_extension_detail(publisher, name)
+            if not detail or not detail.get("vsixUrl"):
+                return {"error": f"Marketplace did not return a VSIX URL for {ext_id}"}
+            vsix_url = detail["vsixUrl"]
+
+        vsix_path = download_vsix(vsix_url, ext_id)
+        manifest = extract_vsix_manifest(vsix_path)
+        if not manifest:
             try:
                 os.remove(vsix_path)
             except OSError:
-                pass
+                logger.debug("Failed to remove temporary VSIX %s", vsix_path,
+                             exc_info=True)
+            return {"error": "Downloaded VSIX did not contain a package.json manifest"}
+        manifest_id = f"{manifest.get('publisher', '')}.{manifest.get('name', '')}".strip(".")
+        if manifest_id and manifest_id.lower() != ext_id.lower():
+            try:
+                os.remove(vsix_path)
+            except OSError:
+                logger.debug("Failed to remove temporary VSIX %s", vsix_path,
+                             exc_info=True)
+            return {"error": f"VSIX manifest id mismatch: expected {ext_id}, got {manifest_id}"}
+        _extract_vsix_to_dir(vsix_path, ext_dir)
+        try:
+            os.remove(vsix_path)
+        except OSError:
+            logger.debug("Failed to remove temporary VSIX %s", vsix_path,
+                         exc_info=True)
 
         # Save install state
         state_path = os.path.join(_extensions_dir(), f"{ext_id}.json")
         state = {
             "id": ext_id,
-            "installed_at": __import__("time").time(),
+            "installed_at": time.time(),
             "manifest": manifest,
             "ext_dir": ext_dir,
         }
@@ -281,13 +299,31 @@ def _extract_vsix_to_dir(vsix_path: str, dest_dir: str) -> None:
 def uninstall_extension(ext_id: str) -> Dict[str, Any]:
     """Remove an installed extension."""
     d = _extensions_dir()
+    state_path = os.path.join(d, f"{ext_id}.json")
+    removed: List[str] = []
+    ext_dir = ""
+    if os.path.isfile(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            ext_dir = str(state.get("ext_dir") or "")
+        except Exception as exc:
+            logger.warning("Failed to read extension state %s: %s",
+                           state_path, exc)
     for suffix in (".json", ".vsix"):
         p = os.path.join(d, f"{ext_id}{suffix}")
         try:
             os.remove(p)
+            removed.append(p)
         except OSError:
-            pass
-    return {"ok": True, "id": ext_id}
+            continue
+    if ext_dir and os.path.isdir(ext_dir):
+        try:
+            shutil.rmtree(ext_dir)
+            removed.append(ext_dir)
+        except OSError as exc:
+            return {"ok": False, "id": ext_id, "error": str(exc)}
+    return {"ok": True, "id": ext_id, "removed": removed}
 
 
 def list_installed() -> List[Dict[str, Any]]:
@@ -307,7 +343,9 @@ def list_installed() -> List[Dict[str, Any]]:
                 "installed_at": data.get("installed_at", 0),
                 "has_manifest": bool(data.get("manifest")),
             })
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to read installed extension state %s: %s",
+                           os.path.join(d, fname), exc)
             continue
     return result
 
@@ -392,7 +430,9 @@ def load_extension_tools(ext_id: str,
             })
 
         return tools
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load extension tools for %s: %s",
+                       ext_id, exc)
         return []
 
 

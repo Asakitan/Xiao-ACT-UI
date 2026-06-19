@@ -12,9 +12,9 @@ Implements P0 of VSCode extension alignment:
   - Loading Pipeline      scan -> register -> process contributes -> activate
 
 Extensions are loaded in-process (Python): package.json is parsed for
-contributes. Full Node.js extension activation is NOT implemented — we provide
-a compatibility shim that maps VSCode contributes to our native API and marks
-runtime-only behavior explicitly.
+contributes. Full Node.js extension activation is not implemented yet, but the
+host keeps manifest contributions executable where deterministic fallbacks exist
+and reports runtime requirements with contribution metadata.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def _parse_kind(raw: Any) -> str:
 
 
 class _LMAccessInfo:
-    """Compatibility shim for ExtensionContext.languageModelAccessInformation."""
+    """Compatibility object for ExtensionContext.languageModelAccessInformation."""
 
     def __init__(self) -> None:
         self._change_emitter = _LazyEventEmitter()
@@ -155,27 +155,62 @@ def _needs_extension_runtime(
         "id": identifier,
         "message": (
             f"VSCode {contribution} '{identifier}' from extension "
-            f"'{extension_id}' needs a real extension runtime handler."
+            f"'{extension_id}' has no registered runtime callback yet."
         ),
     }
     result.update(details)
     return result
 
 
-def _unsupported_command_handler(extension_id: str,
-                                 command_id: str) -> Callable:
+def _activation_metadata(ext: ExtensionDescription,
+                         contribution: str,
+                         identifier: str) -> Dict[str, Any]:
+    declared_events = [
+        str(event).strip()
+        for event in ext.activation_events
+        if str(event or "").strip()
+    ]
+    implicit_events = ExtensionRegistry._implicit_events(ext)
+    matching_events: List[str] = []
+    if contribution == "command" and identifier:
+        matching_events.append(f"onCommand:{identifier}")
+    elif contribution == "view" and identifier:
+        matching_events.append(f"onView:{identifier}")
+    elif contribution == "language" and identifier:
+        matching_events.append(f"onLanguage:{identifier}")
+    elif contribution in {
+            "chatParticipant", "languageModelTool", "authentication"}:
+        matching_events.append("*")
+    active_events = declared_events or implicit_events
+    effective_matches = [
+        event for event in active_events
+        if not matching_events or event == "*" or event in matching_events
+    ]
+    if not effective_matches and matching_events:
+        effective_matches = list(matching_events)
+    return {
+        "declaredEvents": declared_events,
+        "implicitEvents": implicit_events,
+        "effectiveEvents": effective_matches,
+        "usesImplicitEvents": not bool(declared_events),
+        "startup": "*" in active_events or "onStartupFinished" in active_events,
+    }
+
+
+def _manifest_command_handler(command_id: str,
+                              resolver: Callable[[str, List[Any]], Dict[str, Any]]) -> Callable:
     def _handler(*args: Any) -> Dict[str, Any]:
-        return _needs_extension_runtime(
-            "command", extension_id, command_id, arguments=list(args))
+        return resolver(command_id, list(args))
 
     setattr(_handler, "_needs_extension_activation", True)
     return _handler
 
 
 def _mark_manifest_only(item: Dict[str, Any], contribution: str,
-                        extension_id: str, identifier: str) -> Dict[str, Any]:
+                        ext: ExtensionDescription, identifier: str) -> Dict[str, Any]:
     item["_runtimeSupport"] = _needs_extension_runtime(
-        contribution, extension_id, identifier)
+        contribution, ext.id, identifier)
+    item["_activation"] = _activation_metadata(ext, contribution, identifier)
     return item
 
 
@@ -465,6 +500,9 @@ class ExtensionPoints:
     def __init__(self, commands: CommandService) -> None:
         self._commands = commands
         self.enabled_contributions: Optional[Set[str]] = None
+        self._command_fallback_resolver: Optional[
+            Callable[[Dict[str, Any], Dict[str, Any], List[Any]], Optional[Dict[str, Any]]]
+        ] = None
         self._command_contributions: List[Dict[str, Any]] = []
         self._chat_participants: List[Dict[str, Any]] = []
         self._lm_tools: List[Dict[str, Any]] = []
@@ -507,6 +545,127 @@ class ExtensionPoints:
         self._debuggers: List[Dict[str, Any]] = []
         self._notebooks: List[Dict[str, Any]] = []
         self._task_definitions: List[Dict[str, Any]] = []
+        self._command_index: Dict[str, Dict[str, Any]] = {}
+        self._contributions_by_extension: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+    def set_command_fallback_resolver(
+            self,
+            resolver: Optional[
+                Callable[[Dict[str, Any], Dict[str, Any], List[Any]], Optional[Dict[str, Any]]]
+            ]) -> None:
+        self._command_fallback_resolver = resolver
+
+    def _bucket(self, extension_id: str, key: str) -> List[Dict[str, Any]]:
+        ext_bucket = self._contributions_by_extension.setdefault(extension_id, {})
+        return ext_bucket.setdefault(key, [])
+
+    def _command_fallback_targets(self, extension_id: str) -> List[Dict[str, Any]]:
+        bucket = self._contributions_by_extension.get(extension_id, {})
+        targets: List[Dict[str, Any]] = []
+        for participant in bucket.get("chatParticipants", []):
+            participant_id = participant.get("id") or participant.get("name", "")
+            if participant_id:
+                targets.append({
+                    "kind": "chatParticipant",
+                    "id": participant_id,
+                    "label": participant.get("fullName") or participant.get("name") or participant_id,
+                })
+        for tool in bucket.get("languageModelTools", []):
+            tool_name = tool.get("name", "")
+            if tool_name:
+                targets.append({
+                    "kind": "languageModelTool",
+                    "id": tool_name,
+                    "label": tool.get("displayName") or tool.get("name") or tool_name,
+                })
+        for view in bucket.get("views", []):
+            view_id = view.get("id", "")
+            if view_id:
+                view_kind = "view"
+                if str(view.get("type") or "").lower() == "webview":
+                    view_kind = "webviewView"
+                targets.append({
+                    "kind": view_kind,
+                    "id": view_id,
+                    "label": view.get("name") or view_id,
+                    "location": view.get("_viewLocation", ""),
+                })
+        return targets
+
+    def _build_manifest_command_result(
+            self,
+            command_id: str,
+            arguments: List[Any],
+            resolve_runtime: bool = True) -> Dict[str, Any]:
+        command_record = self._command_index.get(command_id)
+        if not command_record:
+            return {
+                "ok": False,
+                "code": "commandNotFound",
+                "command": command_id,
+                "arguments": list(arguments),
+                "message": f"Command not found: {command_id}",
+            }
+        extension_id = str(command_record.get("_extensionId", ""))
+        fallbacks = self._command_fallback_targets(extension_id)
+        selected = dict(fallbacks[0]) if len(fallbacks) == 1 else {}
+        payload: Dict[str, Any] = {
+            "ok": bool(selected),
+            "handledBy": "manifestFallback",
+            "contribution": "command",
+            "extensionId": extension_id,
+            "id": command_id,
+            "command": dict(command_record),
+            "activation": dict(command_record.get("_activation", {})),
+            "arguments": list(arguments),
+            "availableFallbacks": fallbacks,
+            "selectedFallback": selected,
+            "needsExtensionRuntime": not bool(selected),
+            "code": "manifestCommandFallback" if selected else "needsExtensionRuntime",
+            "message": (
+                f"Command '{command_id}' resolved to a deterministic manifest fallback."
+                if selected else
+                f"Command '{command_id}' has no deterministic manifest fallback."
+            ),
+        }
+        if selected and resolve_runtime and self._command_fallback_resolver:
+            resolved = self._command_fallback_resolver(
+                dict(command_record), dict(selected), list(arguments))
+            if isinstance(resolved, dict):
+                merged = dict(payload)
+                merged.update(resolved)
+                merged.setdefault("ok", True)
+                merged.setdefault("handledBy", "runtimeFallback")
+                merged.setdefault("selectedFallback", selected)
+                merged.setdefault("availableFallbacks", fallbacks)
+                merged.setdefault("command", dict(command_record))
+                merged.setdefault("activation", dict(command_record.get("_activation", {})))
+                merged.setdefault("arguments", list(arguments))
+                merged.setdefault("extensionId", extension_id)
+                merged.setdefault("id", command_id)
+                return merged
+        if not selected:
+            payload.update(_needs_extension_runtime(
+                "command", extension_id, command_id,
+                availableFallbacks=fallbacks,
+                arguments=list(arguments),
+                activation=dict(command_record.get("_activation", {})),
+                command=dict(command_record),
+            ))
+            payload["handledBy"] = "manifestFallback"
+        return payload
+
+    def resolve_manifest_command(self, command_id: str,
+                                 arguments: List[Any]) -> Dict[str, Any]:
+        return self._build_manifest_command_result(
+            command_id, arguments, resolve_runtime=True)
+
+    def describe_manifest_command(self, command_id: str) -> Dict[str, Any]:
+        return self._build_manifest_command_result(
+            command_id, [], resolve_runtime=False)
+
+    def get_command_contribution(self, command_id: str) -> Dict[str, Any]:
+        return dict(self._command_index.get(command_id, {}))
 
     @staticmethod
     def _as_contribution_items(raw: Any) -> List[Dict[str, Any]]:
@@ -536,31 +695,36 @@ class ExtensionPoints:
                 cmd_record = dict(cmd)
                 cmd_record["_extensionId"] = eid
                 _mark_manifest_only(
-                    cmd_record, "command", eid,
+                    cmd_record, "command", ext,
                     cmd_record.get("command", ""))
                 self._command_contributions.append(cmd_record)
+                self._command_index[str(cmd_record.get("command", ""))] = cmd_record
+                self._bucket(eid, "commands").append(cmd_record)
                 if not self._commands.has(cmd["command"]):
                     self._commands.register(
                         cmd["command"],
-                        _unsupported_command_handler(eid, cmd["command"]))
+                        _manifest_command_handler(
+                            cmd["command"], self.resolve_manifest_command))
 
         for cp in (c.get("chatParticipants", []) if _enabled("chatParticipants") else []):
             if isinstance(cp, dict):
                 cp = dict(cp)
                 cp["_extensionId"] = eid
                 _mark_manifest_only(
-                    cp, "chatParticipant", eid,
+                    cp, "chatParticipant", ext,
                     cp.get("id") or cp.get("name", ""))
                 self._chat_participants.append(cp)
+                self._bucket(eid, "chatParticipants").append(cp)
 
         for tool in (c.get("languageModelTools", []) if _enabled("languageModelTools") else []):
             if isinstance(tool, dict):
                 tool = dict(tool)
                 tool["_extensionId"] = eid
                 _mark_manifest_only(
-                    tool, "languageModelTool", eid,
+                    tool, "languageModelTool", ext,
                     tool.get("name", ""))
                 self._lm_tools.append(tool)
+                self._bucket(eid, "languageModelTools").append(tool)
 
         for ts in c.get("languageModelToolSets", []):
             if isinstance(ts, dict):
@@ -592,7 +756,12 @@ class ExtensionPoints:
                     if isinstance(v, dict):
                         v = dict(v)
                         v["_extensionId"] = eid
+                        v["_viewLocation"] = loc
+                        _mark_manifest_only(
+                            v, "view", ext,
+                            v.get("id") or v.get("name", ""))
                         self._views.setdefault(loc, []).append(v)
+                        self._bucket(eid, "views").append(v)
 
         for cs in c.get("chatSessions", []):
             if isinstance(cs, dict):
@@ -795,9 +964,14 @@ class ExtensionPoints:
         }
 
     def to_summary(self) -> Dict[str, Any]:
+        manifest_fallbacks = sum(
+            1 for command_id in self._command_index
+            if bool(self.describe_manifest_command(command_id).get("selectedFallback"))
+        )
         return {
             "commands": self._commands.list_commands(),
             "commandsContributed": len(self._command_contributions),
+            "manifestCommandFallbacks": manifest_fallbacks,
             "chatParticipants": len(self._chat_participants),
             "languageModelTools": len(self._lm_tools),
             "languageModelToolSets": len(self._lm_tool_sets),
@@ -811,6 +985,9 @@ class ExtensionPoints:
                 "languageModelTools": sum(
                     1 for tool in self._lm_tools
                     if tool.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
+                "views": sum(
+                    1 for views in self._views.values() for view in views
+                    if view.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
             },
             "chatSessions": len(self._chat_sessions),
             "languageModelChatProviders": len(self._lm_providers),
@@ -1080,6 +1257,13 @@ class ExtensionHost:
                    enabled_contributions: Optional[Set[str]] = None) -> None:
         self._policy = policy
         self.ext_points.enabled_contributions = enabled_contributions
+
+    def set_command_fallback_resolver(
+            self,
+            resolver: Optional[
+                Callable[[Dict[str, Any], Dict[str, Any], List[Any]], Optional[Dict[str, Any]]]
+            ]) -> None:
+        self.ext_points.set_command_fallback_resolver(resolver)
 
     def _allowed_by_policy(self, ext: ExtensionDescription) -> bool:
         return True if self._policy is None else bool(self._policy(ext))

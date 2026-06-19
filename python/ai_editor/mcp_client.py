@@ -19,6 +19,7 @@ Internal (plugin) MCP:
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 from ai_editor.tool_registry import normalize_tool_parameters
 
@@ -51,6 +53,121 @@ class McpServerConfig:
     enabled: bool = True
 
 
+def _rpc_error_result(message: str, code: int = -32000,
+                      data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"message": str(message), "code": code}
+    if data:
+        payload["data"] = data
+    return {"_rpc_error": payload}
+
+
+def _extract_tool_call_result(result: Any) -> str:
+    if isinstance(result, dict):
+        content = result.get("content", [])
+        texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+        if texts:
+            return "\n".join(texts)
+        return json.dumps(result, ensure_ascii=False)
+    return str(result)
+
+
+def _read_rpc_message_from_stream(stream: Any) -> Optional[bytes]:
+    first_line = stream.readline()
+    if not first_line:
+        return None
+    stripped = first_line.strip()
+    if not stripped:
+        return b""
+    if stripped.lower().startswith(b"content-length:"):
+        try:
+            length = int(stripped.split(b":", 1)[1].strip())
+        except (IndexError, ValueError):
+            return b""
+        while True:
+            header_line = stream.readline()
+            if not header_line:
+                return None
+            if header_line in {b"\r\n", b"\n", b""}:
+                break
+        if length <= 0:
+            return b""
+        payload = stream.read(length)
+        if not payload or len(payload) < length:
+            return None
+        return payload
+    return first_line
+
+
+def _parse_sse_event_payloads(raw_text: str) -> List[str]:
+    payloads: List[str] = []
+    data_lines: List[str] = []
+    for line in str(raw_text or "").replace("\r\n", "\n").split("\n"):
+        if not line:
+            if data_lines:
+                payloads.append("\n".join(data_lines).strip())
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if data_lines:
+        payloads.append("\n".join(data_lines).strip())
+    return [payload for payload in payloads if payload]
+
+
+def _resolve_sse_session_url(base_url: str, raw_text: str) -> str:
+    raw_text = str(raw_text or "").strip()
+    if not raw_text:
+        return ""
+    candidates = _parse_sse_event_payloads(raw_text) or [raw_text]
+    for payload in candidates:
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(decoded, dict):
+            continue
+        for key in ("sessionUrl", "session_url", "url"):
+            value = decoded.get(key)
+            if isinstance(value, str) and value.strip():
+                return urljoin(base_url, value.strip())
+    return ""
+
+
+def _invoke_handler(handler: Callable[..., Any], arguments: Any) -> Any:
+    if not isinstance(arguments, dict):
+        return handler(arguments)
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return handler(**arguments)
+
+    parameters = list(signature.parameters.values())
+    if not parameters:
+        return handler()
+
+    positional = [
+        p for p in parameters
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    has_varkw = any(p.kind == p.VAR_KEYWORD for p in parameters)
+    keyword_only = [p for p in parameters if p.kind == p.KEYWORD_ONLY]
+
+    if has_varkw or keyword_only:
+        return handler(**arguments)
+
+    if len(positional) == 1:
+        param = positional[0]
+        if param.kind == param.POSITIONAL_ONLY:
+            return handler(arguments)
+        if arguments and set(arguments.keys()).issubset({param.name}):
+            return handler(**arguments)
+        return handler(arguments)
+
+    return handler(**arguments)
+
+
 class McpStdioClient:
     """JSON-RPC over stdin/stdout for a single MCP server."""
 
@@ -64,6 +181,7 @@ class McpStdioClient:
         self._reader_thread: Optional[threading.Thread] = None
         self.tools: List[McpToolDef] = []
         self._alive = False
+        self._last_error = ""
 
     def start(self) -> bool:
         try:
@@ -92,78 +210,139 @@ class McpStdioClient:
 
     def stop(self) -> None:
         self._alive = False
-        if self._proc:
+        proc = self._proc
+        self._proc = None
+        if proc:
             try:
-                self._proc.stdin.close()
-                self._proc.terminate()
-                self._proc.wait(timeout=5)
+                if proc.stdin:
+                    proc.stdin.close()
+            except Exception:
+                self._last_error = "Failed to close MCP stdin"
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
             except Exception:
                 try:
-                    self._proc.kill()
+                    proc.kill()
                 except Exception:
-                    pass
-            self._proc = None
+                    self._last_error = "Failed to terminate MCP process"
+            for stream_name in ("stdout", "stderr"):
+                stream = getattr(proc, stream_name, None)
+                if not stream:
+                    continue
+                try:
+                    stream.close()
+                except Exception:
+                    self._last_error = f"Failed to close MCP {stream_name}"
+        self._fail_pending(self._last_error or f"MCP server '{self.config.id}' stopped")
+        reader = self._reader_thread
+        if reader and reader.is_alive() and reader is not threading.current_thread():
+            reader.join(timeout=1.0)
+        self._reader_thread = None
 
-    def _send(self, method: str, params: Any = None) -> int:
+    def _next_request_id(self) -> int:
         with self._lock:
             self._req_id += 1
-            rid = self._req_id
-        msg = {"jsonrpc": "2.0", "id": rid, "method": method}
-        if params is not None:
-            msg["params"] = params
-        raw = json.dumps(msg) + "\n"
-        try:
-            self._proc.stdin.write(raw.encode("utf-8"))
-            self._proc.stdin.flush()
-        except Exception:
-            pass
-        return rid
+            return self._req_id
 
-    def _notify(self, method: str, params: Any = None) -> None:
+    def _write_message(self, msg: Dict[str, Any]) -> None:
+        proc = self._proc
+        if not proc or not proc.stdin:
+            raise RuntimeError("MCP stdio transport is not connected")
+        raw = (json.dumps(msg) + "\n").encode("utf-8")
+        proc.stdin.write(raw)
+        proc.stdin.flush()
+
+    def _notify(self, method: str, params: Any = None) -> bool:
         msg = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             msg["params"] = params
-        raw = json.dumps(msg) + "\n"
         try:
-            self._proc.stdin.write(raw.encode("utf-8"))
-            self._proc.stdin.flush()
-        except Exception:
-            pass
+            self._write_message(msg)
+            return True
+        except Exception as exc:
+            self._last_error = f"Failed to send MCP notification '{method}': {exc}"
+            return False
+
+    def _fail_pending(self, message: str) -> None:
+        with self._lock:
+            pending = list(self._pending.items())
+            for rid, evt in pending:
+                self._results[rid] = _rpc_error_result(message)
+                evt.set()
 
     def _call(self, method: str, params: Any = None, timeout: float = 30.0) -> Any:
         if not self._alive:
-            return None
+            return _rpc_error_result(f"MCP server '{self.config.id}' is not connected")
         evt = threading.Event()
-        rid = self._send(method, params)
-        self._pending[rid] = evt
+        rid = self._next_request_id()
+        with self._lock:
+            self._pending[rid] = evt
+        msg = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            msg["params"] = params
+        try:
+            self._write_message(msg)
+        except Exception as exc:
+            with self._lock:
+                self._pending.pop(rid, None)
+            return _rpc_error_result(
+                f"Failed to send MCP request '{method}': {exc}",
+                data={"method": method, "serverId": self.config.id},
+            )
         completed = evt.wait(timeout=timeout)
-        self._pending.pop(rid, None)
+        with self._lock:
+            self._pending.pop(rid, None)
+            result = self._results.pop(rid, None)
         if not completed:
-            self._results.pop(rid, None)
-            return None
-        return self._results.pop(rid, None)
+            return _rpc_error_result(
+                f"MCP call timeout after {timeout:.1f}s",
+                data={"method": method, "serverId": self.config.id},
+            )
+        if result is None:
+            return _rpc_error_result(
+                "MCP server disconnected before replying",
+                data={"method": method, "serverId": self.config.id},
+            )
+        return result
+
+    def _handle_message(self, data: Dict[str, Any]) -> None:
+        rid = data.get("id")
+        if rid is None:
+            return
+        with self._lock:
+            evt = self._pending.get(rid)
+            if evt is None:
+                return
+            if "error" in data:
+                self._results[rid] = {"_rpc_error": data.get("error")}
+            else:
+                self._results[rid] = data.get("result")
+            evt.set()
 
     def _read_loop(self) -> None:
         while self._alive and self._proc and self._proc.stdout:
             try:
-                line = self._proc.stdout.readline()
-                if not line:
+                raw = _read_rpc_message_from_stream(self._proc.stdout)
+                if raw is None:
                     break
-                data = json.loads(line.decode("utf-8", errors="replace"))
-                rid = data.get("id")
-                if rid is not None and rid in self._pending:
-                    if "error" in data:
-                        self._results[rid] = {"_rpc_error": data.get("error")}
-                    else:
-                        self._results[rid] = data.get("result")
-                    self._pending.pop(rid).set()
+                if not raw:
+                    continue
+                decoded = raw.decode("utf-8", errors="replace").strip()
+                if not decoded:
+                    continue
+                data = json.loads(decoded)
+                if isinstance(data, dict):
+                    self._handle_message(data)
             except json.JSONDecodeError:
+                self._last_error = "Received non-JSON data on MCP stdout"
                 continue
-            except Exception:
+            except Exception as exc:
+                self._last_error = f"MCP stdout reader failed: {exc}"
                 break
         self._alive = False
-        for evt in self._pending.values():
-            evt.set()
+        self._fail_pending(self._last_error or f"MCP server '{self.config.id}' disconnected")
 
     def _initialize(self) -> bool:
         result = self._call("initialize", {
@@ -194,20 +373,12 @@ class McpStdioClient:
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         result = self._call("tools/call", {"name": name, "arguments": arguments})
-        if result is None:
-            return json.dumps({"error": "MCP call timeout"})
         if _is_rpc_error(result):
             return json.dumps({
                 "error": f"MCP call failed: {_rpc_error_message(result)}",
                 "rpc_error": result.get("_rpc_error"),
             }, ensure_ascii=False)
-        if isinstance(result, dict):
-            content = result.get("content", [])
-            texts = [c.get("text", "") for c in content if c.get("type") == "text"]
-            if texts:
-                return "\n".join(texts)
-            return json.dumps(result, ensure_ascii=False)
-        return str(result)
+        return _extract_tool_call_result(result)
 
     def read_resource(self, uri: str) -> str:
         result = self._call("resources/read", {"uri": uri})
@@ -230,6 +401,7 @@ class McpSseClient:
         self.tools: List[McpToolDef] = []
         self._session_url: str = ""
         self._http: Any = None
+        self._alive = False
 
     def _client(self):
         if self._http is None:
@@ -241,29 +413,31 @@ class McpSseClient:
         try:
             resp = self._client().get(self.config.url, headers=self.config.headers)
             resp.raise_for_status()
-            for line in resp.text.split("\n"):
-                if line.startswith("data:"):
-                    data = json.loads(line[5:].strip())
-                    if "sessionUrl" in data:
-                        self._session_url = data["sessionUrl"]
-                        break
+            self._session_url = _resolve_sse_session_url(self.config.url, resp.text)
             if not self._session_url:
                 self._session_url = self.config.url
+            self._alive = True
             self._discover_tools()
             return True
         except Exception as exc:
             print(f"[MCP/SSE] Failed to connect {self.config.id}: {exc}")
+            self.stop()
             return False
 
     def stop(self) -> None:
+        self._alive = False
         if self._http:
             try:
                 self._http.close()
             except Exception:
-                pass
+                self.tools = []
             self._http = None
+        self._session_url = ""
+        self.tools = []
 
     def _rpc(self, method: str, params: Any = None) -> Any:
+        if not self._alive:
+            return _rpc_error_result(f"MCP SSE server '{self.config.id}' is not connected")
         body = {"jsonrpc": "2.0", "id": 1, "method": method}
         if params:
             body["params"] = params
@@ -292,24 +466,16 @@ class McpSseClient:
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
-        if result is None:
-            return json.dumps({"error": "MCP call failed"})
         if _is_rpc_error(result):
             return json.dumps({
                 "error": f"MCP call failed: {_rpc_error_message(result)}",
                 "rpc_error": result.get("_rpc_error"),
             }, ensure_ascii=False)
-        if isinstance(result, dict):
-            content = result.get("content", [])
-            texts = [c.get("text", "") for c in content if c.get("type") == "text"]
-            if texts:
-                return "\n".join(texts)
-            return json.dumps(result, ensure_ascii=False)
-        return str(result)
+        return _extract_tool_call_result(result)
 
     @property
     def is_alive(self) -> bool:
-        return bool(self._session_url or self.config.url)
+        return self._alive
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +497,7 @@ class InternalMcpProvider:
         self.config = McpServerConfig(id=server_id, name=name or server_id, transport="internal")
         self.tools: List[McpToolDef] = []
         self._handlers: Dict[str, Callable] = {}
+        self._alive = True
 
     def add_tool(
         self,
@@ -348,17 +515,20 @@ class InternalMcpProvider:
         self._handlers[name] = handler
 
     def start(self) -> bool:
+        self._alive = True
         return True
 
     def stop(self) -> None:
-        pass
+        self._alive = False
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+        if not self._alive:
+            return json.dumps({"error": f"MCP server '{self.config.id}' is not connected"}, ensure_ascii=False)
         handler = self._handlers.get(name)
         if not handler:
             return json.dumps({"error": f"Tool not found: {name}"})
         try:
-            result = handler(**arguments) if isinstance(arguments, dict) else handler(arguments)
+            result = _invoke_handler(handler, arguments)
             if isinstance(result, str):
                 return result
             return json.dumps(result, ensure_ascii=False, default=str)
@@ -367,7 +537,7 @@ class InternalMcpProvider:
 
     @property
     def is_alive(self) -> bool:
-        return True
+        return self._alive
 
 
 class McpManager:
@@ -538,7 +708,7 @@ class McpManager:
             try:
                 c.stop()
             except Exception:
-                pass
+                continue
         self._clients.clear()
 
 
@@ -592,7 +762,7 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                 servers = data.get("mcpServers") or data.get("servers") or {}
                 _append_server_configs(configs, seen_ids, servers, collision_behavior)
             except Exception:
-                pass
+                continue
 
     # From user home ~/.sao/mcp.json
     try:
@@ -602,8 +772,8 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                 data = json.load(f)
             servers = data.get("mcpServers") or data.get("servers") or {}
             _append_server_configs(configs, seen_ids, servers, collision_behavior)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[MCP] Failed to load user mcp.json: {exc}")
 
     # From plugin manifests (plugins/*/plugin.json → mcpServers)
     try:

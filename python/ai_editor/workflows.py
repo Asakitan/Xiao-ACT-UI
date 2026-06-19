@@ -10,9 +10,13 @@ Claude-style multi-step workflows:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -180,8 +184,9 @@ class WorkflowRegistry:
                 wf._plugin_id = plugin_id      # type: ignore[attr-defined]
                 self._workflows[wf.id] = wf
                 self._bump_version()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load workflow definition %s: %s",
+                               os.path.join(wf_dir, fname), exc)
 
     def get(self, wf_id: str) -> Optional[WorkflowDef]:
         return self._workflows.get(wf_id)
@@ -192,6 +197,10 @@ class WorkflowRegistry:
     def save_custom(self, wf: WorkflowDef,
                     workspace_root: str = "",
                     scope: str = "workspace") -> Dict[str, Any]:
+        if not str(wf.id).strip():
+            return {"ok": False, "error": "Workflow id is required"}
+        if not str(wf.name).strip():
+            return {"ok": False, "error": "Workflow name is required"}
         target_dir = self._scope_dir(scope, workspace_root)
         os.makedirs(target_dir, exist_ok=True)
         fpath = os.path.join(target_dir, f"{wf.id}.json")
@@ -205,6 +214,8 @@ class WorkflowRegistry:
 
     def delete_custom(self, wf_id: str,
                       workspace_root: str = "") -> Dict[str, Any]:
+        if not str(wf_id).strip():
+            return {"ok": False, "error": "Workflow id is required"}
         w = self._workflows.get(wf_id)
         if w and w.builtin:
             return {"ok": False, "error": "Cannot delete built-in workflow"}
@@ -213,10 +224,16 @@ class WorkflowRegistry:
             dirs = [{"path": os.path.join(workspace_root, ".sao", "workflows")}]
         else:
             dirs = scope_subdirs("workflows")
+        delete_errors: List[str] = []
         for entry in dirs:
             fpath = os.path.join(entry["path"], f"{wf_id}.json")
             if os.path.isfile(fpath):
-                os.remove(fpath)
+                try:
+                    os.remove(fpath)
+                except OSError as exc:
+                    delete_errors.append(f"{fpath}: {exc}")
+        if delete_errors:
+            return {"ok": False, "error": "; ".join(delete_errors)}
         if self._workflows.pop(wf_id, None) is not None:
             self._bump_version()
         return {"ok": True}

@@ -120,7 +120,8 @@ class UnrealDumper(SDKDumper):
                 cls = self._dump_uclass(cls_addr, cls_name)
                 if cls:
                     self.result.classes.append(cls)
-            except Exception:
+            except Exception as exc:
+                self._record_issue(f"Unreal class dump failed for {cls_name} at {hex(cls_addr)}", exc)
                 continue
 
         self._progress(1.0, f"Done: {len(self.result.classes)} classes")
@@ -144,8 +145,8 @@ class UnrealDumper(SDKDumper):
                         return (mod["base"], mod["size"], mod["name"])
                     if mod.get("size", 0) > 50_000_000:
                         return (mod["base"], mod["size"], mod["name"])
-        except Exception:
-            pass
+        except Exception as exc:
+            self._record_issue("Failed to enumerate modules for Unreal detection", exc)
         return None
 
     def _find_gobjects(self, base: int, size: int) -> int:
@@ -307,5 +308,5 @@ class UnrealDumper(SDKDumper):
                     if m.get("name", "").lower().endswith(".exe") and m.get("size", 0) > 100_000_000:
                         return True
         except Exception:
-            pass
+            return False
         return False

@@ -1149,8 +1149,8 @@ pre.code-block { overflow:visible; }
         <div><label>Model</label><input id="s-cc-model" placeholder="Auto from Anthropic /v1/models when empty"></div>
         <div class="full"><label>CLI Args (one per line)</label><textarea id="s-cc-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
-      <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Use the configured CLI path when available; otherwise provider discovery can continue to use saved settings.</small></span></label>
-      <label class="settings-check settings-danger"><input id="s-cc-skip-permissions" type="checkbox"><span><b>Opt in to dangerous Claude skip permissions</b><small>Disabled by default. Check only if you explicitly want permission prompts bypassed for this local workspace.</small></span></label>
+      <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Keep the local CLI path ready for external launches; the embedded Claude Code tab continues to use the Anthropic/API path inside the editor.</small></span></label>
+      <label class="settings-check settings-danger"><input id="s-cc-skip-permissions" type="checkbox"><span><b>Allow Claude skip permissions flag</b><small>Off by default. Enable only if you want external Claude CLI launches from this workspace to include the skip-permissions flag.</small></span></label>
     </div>
 
     <div class="settings-section">
@@ -1158,7 +1158,7 @@ pre.code-block { overflow:visible; }
       <div class="settings-grid">
         <div><label>CLI Command</label><input id="s-codex-cli" placeholder="Leave empty for auto-discovery"></div>
         <div><label>Model</label><input id="s-codex-model" list="s-codex-model-list" placeholder="codex-mini-latest / select OpenAI model from API"></div>
-        <div><label>Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI (reserved)</option></select></div>
+        <div><label>Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI preference (editor uses Responses)</option></select></div>
         <div class="full"><label>CLI Args (one per line)</label><textarea id="s-codex-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
       <datalist id="s-codex-model-list"></datalist>
@@ -1508,11 +1508,14 @@ en:{
   provider_copilot_label:'Copilot',provider_claude_code_label:'Claude Code',provider_codex_label:'Codex',
   provider_default_model:'Default model',provider_start_chat:'Start a $1 chat',provider_unavailable_title:'$1 is unavailable',
   provider_focus_prompt:'Focus prompt',provider_new_chat:'New chat',provider_shares_context:'shares editor context and tools',
-  provider_mode_copilot:'Built-in provider tab',provider_mode_agent:'Agent mode',provider_mode_chat:'Chat mode',
-  provider_unavailable_copilot:'Copilot is registered as an explicit backend capability surface, but direct GitHub Copilot chat transport is not available in this runtime yet.',
-  provider_unavailable_codex:'Configure an OpenAI key and use Chat Completions or Responses transport.',
-  provider_unavailable_claude:'Configure an Anthropic key and disable CLI-only preference.',
+  provider_mode_copilot:'Copilot surface',provider_mode_agent:'Agent mode',provider_mode_chat:'Chat mode',
+  provider_unavailable_copilot:'Configure any runnable provider in Settings and the Copilot tab will mirror it here.',
+  provider_unavailable_codex:'Add an OpenAI key to Provider Keys to activate Codex.',
+  provider_unavailable_claude:'Add an Anthropic key to Provider Keys to activate Claude Code.',
   provider_unavailable_generic:'Configure this provider in Settings.',
+  provider_runtime_backend:'runs on $1',provider_runtime_cli_fallback:'CLI preference saved · embedded chat uses $1',provider_runtime_direct:'transport: $1',
+  provider_backend_openai:'OpenAI',provider_backend_anthropic:'Anthropic',provider_backend_deepseek:'DeepSeek',provider_backend_ollama:'Ollama',provider_backend_custom:'Custom',provider_backend_github_copilot:'GitHub Copilot',
+  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI preference',provider_transport_copilot_chat:'Copilot chat',
   provider_status_unavailable:'Unavailable',provider_status_ready:'Ready',provider_status_thinking:'Thinking...',
   provider_status_streaming:'Streaming...',provider_status_stopping:'Stopping...',provider_status_waiting_confirm:'Waiting for confirmation',
   provider_status_tool_running:'Tool: $1',provider_status_tool_progress:'Tool: $1 · $2',provider_status_tool_complete:'Tool complete',provider_status_error:'Error',
@@ -1623,11 +1626,14 @@ zh:{
   provider_copilot_label:'Copilot',provider_claude_code_label:'Claude Code',provider_codex_label:'Codex',
   provider_default_model:'默认模型',provider_start_chat:'开始 $1 对话',provider_unavailable_title:'$1 不可用',
   provider_focus_prompt:'聚焦输入框',provider_new_chat:'新对话',provider_shares_context:'共享编辑器上下文和工具',
-  provider_mode_copilot:'内置提供商标签',provider_mode_agent:'代理模式',provider_mode_chat:'聊天模式',
-  provider_unavailable_copilot:'Copilot 已作为明确的后端能力入口注册，但当前运行时尚未提供直接 GitHub Copilot 聊天传输。',
-  provider_unavailable_codex:'请配置 OpenAI Key，并使用 Chat Completions 或 Responses 传输。',
-  provider_unavailable_claude:'请配置 Anthropic Key，并关闭仅 CLI 优先。',
+  provider_mode_copilot:'Copilot 工作面',provider_mode_agent:'代理模式',provider_mode_chat:'聊天模式',
+  provider_unavailable_copilot:'在设置中配置任意可运行提供商后，Copilot 标签页就会在这里镜像它。',
+  provider_unavailable_codex:'在 Provider Keys 中加入 OpenAI Key 即可启用 Codex。',
+  provider_unavailable_claude:'在 Provider Keys 中加入 Anthropic Key 即可启用 Claude Code。',
   provider_unavailable_generic:'请在设置中配置此提供商。',
+  provider_runtime_backend:'运行后端: $1',provider_runtime_cli_fallback:'已保存 CLI 偏好 · 内嵌聊天使用 $1',provider_runtime_direct:'传输方式: $1',
+  provider_backend_openai:'OpenAI',provider_backend_anthropic:'Anthropic',provider_backend_deepseek:'DeepSeek',provider_backend_ollama:'Ollama',provider_backend_custom:'自定义',provider_backend_github_copilot:'GitHub Copilot',
+  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI 偏好',provider_transport_copilot_chat:'Copilot 聊天',
   provider_status_unavailable:'不可用',provider_status_ready:'就绪',provider_status_thinking:'思考中...',
   provider_status_streaming:'流式输出中...',provider_status_stopping:'停止中...',provider_status_waiting_confirm:'等待确认',
   provider_status_tool_running:'工具: $1',provider_status_tool_progress:'工具: $1 · $2',provider_status_tool_complete:'工具完成',provider_status_error:'错误',
@@ -2860,7 +2866,19 @@ function providerTabLabel(p){return t(PROVIDER_TAB_LABEL_KEYS[p.id]||'')||p.shor
 function providerTabTitle(p){return providerDisplayName(p.id)+(p.available===false?' — '+providerUnavailableText(p):'')}
 function providerModelLabel(pid){const p=providerDefs[pid]||{};return p.model||p.provider_type||''}
 function providerModeHint(p){return p&&p.id==='copilot'?t('provider_mode_copilot'):((p&&p.auto_agent)?t('provider_mode_agent'):t('provider_mode_chat'))}
-function providerFooterHint(p){return providerDisplayName(p.id)+' · '+(p.available===false?t('provider_status_unavailable'):providerModeHint(p))+' · '+(p.model||p.provider_type||t('provider_default_model'))}
+function providerBackendLabel(raw){return t('provider_backend_'+String(raw||'').replace(/-/g,'_'))||raw||''}
+function providerTransportLabel(raw){return t('provider_transport_'+String(raw||'').replace(/-/g,'_'))||raw||''}
+function providerRuntimeHint(p){
+  if(!p||p.available===false)return '';
+  if(p.runtime_mode==='backend-fallback')return tf('provider_runtime_backend',providerBackendLabel(p.backend_provider||p.provider_type||''));
+  if(p.runtime_mode==='cli-fallback')return tf('provider_runtime_cli_fallback',providerTransportLabel(p.resolved_transport||p.transport||'responses'));
+  if(p.resolved_transport)return tf('provider_runtime_direct',providerTransportLabel(p.resolved_transport));
+  return '';
+}
+function providerFooterHint(p){
+  const runtime=providerRuntimeHint(p);
+  return providerDisplayName(p.id)+' · '+(p.available===false?t('provider_status_unavailable'):providerModeHint(p))+' · '+(p.model||p.provider_type||t('provider_default_model'))+(runtime?' · '+runtime:'');
+}
 function providerStatusLabel(key,...args){return tf(key,...args)}
 function providerUnavailableText(p){
   if(!p)return t('provider_unavailable');
@@ -2880,7 +2898,8 @@ function createProviderEmpty(pid){
   const title=document.createElement('div');title.className='provider-empty-title';
   title.textContent=p.available===false?tf('provider_unavailable_title',providerDisplayName(pid)):tf('provider_start_chat',providerDisplayName(pid));
   const subtitle=document.createElement('div');subtitle.className='provider-empty-subtitle';
-  subtitle.textContent=p.available===false?providerUnavailableText(p):(providerModeHint(p)+' · '+(providerModelLabel(pid)||t('provider_default_model'))+' · '+t('provider_shares_context')+'.');
+  const runtimeHint=providerRuntimeHint(p);
+  subtitle.textContent=p.available===false?providerUnavailableText(p):(providerModeHint(p)+' · '+(providerModelLabel(pid)||t('provider_default_model'))+' · '+t('provider_shares_context')+(runtimeHint?' · '+runtimeHint:'')+'.');
   const actions=document.createElement('div');actions.className='provider-actions';
   const primary=document.createElement('button');primary.type='button';primary.className='provider-action';
   primary.textContent=p.available===false?t('open_settings'):t('provider_focus_prompt');
@@ -3392,18 +3411,17 @@ async function fetchProviderModels(provider,base_url,applyDefault=false){
 }
 window.fetchProviderModels=fetchProviderModels;
 function codexCliMessage(){
-  return 'Codex CLI transport is configured, but this backend does not execute Codex CLI yet. Use Chat Completions or Responses in this tab.';
+  return _curLang==='zh'
+    ? 'Codex CLI 偏好已保存。内嵌 Codex 标签页会继续通过编辑器内的 OpenAI Responses 运行。'
+    : 'Codex CLI preference is saved. The embedded Codex tab keeps running through OpenAI Responses inside the editor.';
 }
 async function fetchCodexModels(applyDefault=false){
   const list=$('s-codex-model-list');if(!list)return null;
   const transport=readInputValue('s-codex-transport')||'chat_completions';
+  const cliPreferred=transport==='cli';
   list.innerHTML='';
-  if(transport==='cli'){
-    setSettingsModelInfo('s-codex-model-info',codexCliMessage(),true);
-    return {error:codexCliMessage(),models:[]};
-  }
   list.innerHTML='<option value="">Loading models...</option>';
-  setSettingsModelInfo('s-codex-model-info','',false);
+  setSettingsModelInfo('s-codex-model-info',cliPreferred?codexCliMessage():'',false);
   const key=providerApiKey('openai');
   const r=await call('list_provider_models','openai','https://api.openai.com/v1',key||'');
   list.innerHTML='';
@@ -3421,10 +3439,10 @@ async function fetchCodexModels(applyDefault=false){
       codexModel.value=defaultModel;
       config.codex={...settingSection('codex'),model:defaultModel};
     }
-    setSettingsModelInfo('s-codex-model-info','Loaded '+r.models.length+' OpenAI models for Codex.',false);
+    setSettingsModelInfo('s-codex-model-info',cliPreferred?(codexCliMessage()+' Loaded '+r.models.length+' OpenAI models for selection.'):'Loaded '+r.models.length+' OpenAI models for Codex.',false);
     return r;
   }
-  setSettingsModelInfo('s-codex-model-info','No OpenAI models returned from the provider API.',false);
+  setSettingsModelInfo('s-codex-model-info',cliPreferred?(codexCliMessage()+' No OpenAI models were returned from the provider API.'):'No OpenAI models returned from the provider API.',false);
   return r;
 }
 window.fetchCodexModels=fetchCodexModels;

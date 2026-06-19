@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import os
 import struct
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +96,7 @@ class MemoryReader(ABC):
         return (0, 0)
 
     def close(self):
-        pass
+        return None
 
 
 class ProcessReader(MemoryReader):
@@ -122,7 +126,9 @@ class ProcessReader(MemoryReader):
         self._ensure_attached()
         try:
             return self._drv.read(addr, size)
-        except Exception:
+        except Exception as exc:
+            logger.debug("ProcessReader.read failed at %s size=%s: %s",
+                         hex(addr), size, exc)
             return b""
 
     def get_module_base(self, name: str) -> Tuple[int, int]:
@@ -136,15 +142,18 @@ class ProcessReader(MemoryReader):
                 mod_name = mod.get("name", "").lower()
                 self._module_cache[mod_name] = (mod["base"], mod["size"])
             return self._module_cache.get(name_lower, (0, 0))
-        except Exception:
+        except Exception as exc:
+            logger.debug("ProcessReader.get_module_base failed for %s: %s",
+                         name, exc)
             return (0, 0)
 
     def close(self):
         if self._attached and self._drv:
             try:
                 self._drv.detach()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ProcessReader.detach failed for pid %s: %s",
+                             self.pid, exc)
         self._attached = False
 
 
@@ -305,6 +314,12 @@ class SDKDumper(ABC):
         if self._progress_cb:
             self._progress_cb(pct, msg)
 
+    def _record_issue(self, message: str, exc: Optional[Exception] = None) -> None:
+        detail = f"{message}: {exc}" if exc else message
+        if detail not in self.result.errors:
+            self.result.errors.append(detail)
+        logger.debug("SDK dumper issue [%s]: %s", self.ENGINE, detail)
+
     @abstractmethod
     def dump(self) -> SDKResult:
         ...
@@ -338,7 +353,9 @@ def detect_engine(pid: int) -> str:
             try:
                 if cls.detect(reader):
                     return name
-            except Exception:
+            except Exception as exc:
+                logger.debug("SDK engine detection failed for %s on pid %s: %s",
+                             name, pid, exc)
                 continue
     finally:
         reader.close()
@@ -357,19 +374,19 @@ def create_dumper(engine: str, pid: int) -> SDKDumper:
 def _load_engines():
     try:
         from ai_editor.sdk_dumper import il2cpp
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load IL2CPP SDK dumper: %s", exc)
     try:
         from ai_editor.sdk_dumper import mono
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load Mono SDK dumper: %s", exc)
     try:
         from ai_editor.sdk_dumper import unreal
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load Unreal SDK dumper: %s", exc)
     try:
         from ai_editor.sdk_dumper import source
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load Source SDK dumper: %s", exc)
 
 _load_engines()

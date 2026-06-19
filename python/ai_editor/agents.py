@@ -10,9 +10,13 @@ Architecture follows Claude Code / VSCode Copilot agent patterns:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -171,8 +175,9 @@ class AgentRegistry:
                 agent._plugin_id = plugin_id      # type: ignore[attr-defined]
                 self._agents[agent.id] = agent
                 self._bump_version()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load agent definition %s: %s",
+                               os.path.join(agents_dir, fname), exc)
 
     def get(self, agent_id: str) -> Optional[AgentDef]:
         return self._agents.get(agent_id)
@@ -184,6 +189,10 @@ class AgentRegistry:
                     workspace_root: str = "",
                     scope: str = "workspace") -> Dict[str, Any]:
         """Save agent to the specified scope (system/workspace/plugin:<id>)."""
+        if not str(agent.id).strip():
+            return {"ok": False, "error": "Agent id is required"}
+        if not str(agent.name).strip():
+            return {"ok": False, "error": "Agent name is required"}
         target_dir = self._scope_dir(scope, workspace_root)
         os.makedirs(target_dir, exist_ok=True)
         fpath = os.path.join(target_dir, f"{agent.id}.json")
@@ -197,6 +206,8 @@ class AgentRegistry:
 
     def delete_custom(self, agent_id: str,
                       workspace_root: str = "") -> Dict[str, Any]:
+        if not str(agent_id).strip():
+            return {"ok": False, "error": "Agent id is required"}
         a = self._agents.get(agent_id)
         if a and a.builtin:
             return {"ok": False, "error": "Cannot delete built-in agent"}
@@ -206,10 +217,16 @@ class AgentRegistry:
             dirs = [{"path": os.path.join(workspace_root, ".sao", "agents")}]
         else:
             dirs = scope_subdirs("agents")
+        delete_errors: List[str] = []
         for entry in dirs:
             fpath = os.path.join(entry["path"], f"{agent_id}.json")
             if os.path.isfile(fpath):
-                os.remove(fpath)
+                try:
+                    os.remove(fpath)
+                except OSError as exc:
+                    delete_errors.append(f"{fpath}: {exc}")
+        if delete_errors:
+            return {"ok": False, "error": "; ".join(delete_errors)}
         if self._agents.pop(agent_id, None) is not None:
             self._bump_version()
         return {"ok": True}

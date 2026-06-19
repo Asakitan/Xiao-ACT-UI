@@ -69,6 +69,7 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 ## Validation
 
 - `python -m py_compile <changed .py files>` for syntax.
+- Final AI Editor `selftest` must be run by the top-level/main agent; Goal Autopilot or other subagents may run focused checks, but their runs do not replace the final main-agent `python -m ai_editor.selftest`.
 - `git diff --check -- <changed files>` for whitespace.
 - For UI/performance: code checks verify correctness, not behavior. Note when live validation is needed.
 
