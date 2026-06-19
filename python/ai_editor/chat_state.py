@@ -157,6 +157,7 @@ class ChatController:
         self._disabled_tools: set = set()
         self._tool_result_cache: Dict[str, str] = {}
         self._tool_result_cache_keys: List[str] = []
+        self._multimodal_override: Optional[Any] = None
 
         # Session-level auto-approve (tool name → always allow for this session)
         self._session_auto_approve: Dict[str, bool] = {}
@@ -206,6 +207,20 @@ class ChatController:
         self.conversation.add_message(user_msg)
         if self.on_message_added:
             self.on_message_added(user_msg)
+        self._running = True
+        self._agent_mode = agent_mode
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+    def send_multimodal(self, display_text: str, multimodal_content: Any,
+                        agent_mode: bool = False) -> None:
+        if self._running:
+            return
+        user_msg = ChatMessage(role="user", content=display_text)
+        self.conversation.add_message(user_msg)
+        if self.on_message_added:
+            self.on_message_added(user_msg)
+        self._multimodal_override = multimodal_content
         self._running = True
         self._agent_mode = agent_mode
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -350,6 +365,12 @@ class ChatController:
                     self.on_message_added(assistant_msg)
 
                 messages = self.conversation.to_api_messages()
+                if self._multimodal_override is not None:
+                    for i in range(len(messages) - 1, -1, -1):
+                        if messages[i].get("role") == "user":
+                            messages[i]["content"] = self._multimodal_override
+                            break
+                    self._multimodal_override = None
                 tools = self.registry.to_openai_tools()
                 if self.extra_tools:
                     tools = (tools or []) + self.extra_tools

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from ai_editor.tool_registry import ToolRegistry
 
 
-def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
+def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = None) -> None:
     """Register VSCode-aligned tools + engine aggregate."""
 
     # ==================================================================
@@ -181,7 +181,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         name="editor_getContent",
         description="Get the current content of the active editor tab.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: {"note": "Resolved via JS bridge — returns editor text + language"},
+        handler=lambda: api_ref.editor_get_content() if api_ref else {"content": "", "language": "plaintext"},
         category="editor",
         tags={"readOnly": True},
     )
@@ -197,7 +197,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
             },
             "required": ["content"],
         },
-        handler=lambda content, language="": {"note": "Dispatched via JS bridge", "length": len(content)},
+        handler=lambda content, language="": api_ref.editor_set_content(content, language) if api_ref else {"error": "No editor API available"},
         category="editor",
         tags={"destructive": True},
     )
@@ -206,7 +206,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any) -> None:
         name="editor_getSelection",
         description="Get the currently selected text in the editor.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: {"note": "Resolved via JS bridge"},
+        handler=lambda: api_ref.editor_get_selection() if api_ref else {"selection": "", "start": 0, "end": 0},
         category="editor",
         tags={"readOnly": True},
     )

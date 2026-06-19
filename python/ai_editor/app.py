@@ -412,6 +412,7 @@ class AIEditorAPI:
         pkeys = ai_cfg.get("provider_keys", {}) if isinstance(ai_cfg, dict) else {}
         model_name = cfg.model or cfg.effective_model
         ctx = cfg.effective_context
+        language = ai_cfg.get("language", "") if isinstance(ai_cfg, dict) else ""
         result = {
             "provider": cfg.provider, "api_key": cfg.api_key,
             "base_url": cfg.base_url, "model": model_name,
@@ -428,6 +429,7 @@ class AIEditorAPI:
             "extra_body": cfg.extra_body,
             "system_prompt": cfg.system_prompt,
             "theme": theme,
+            "language": language,
             "_provider_keys": pkeys,
             "provider_keys": pkeys,
             "custom_models": ai_cfg.get("custom_models", {}),
@@ -2322,14 +2324,18 @@ class AIEditorAPI:
             return {"error": "No image data"}
         if self._controller and self._controller._running:
             return {"error": "Already running"}
-        self._ensure_engine()
-        display = text or "What is this image?"
-        if self._is_anthropic():
-            content = self._engine.make_image_content_anthropic(display, image_base64, mime)
-        else:
-            content = self._engine.make_image_content(display, image_base64, mime)
-        self._controller.send_multimodal(display, content, agent_mode=(self._mode == "agent"))
-        return {"ok": True}
+        try:
+            self._ensure_engine()
+            display = text or "What is this image?"
+            if self._is_anthropic():
+                content = self._engine.make_image_content_anthropic(display, image_base64, mime)
+            else:
+                content = self._engine.make_image_content(display, image_base64, mime)
+            self._controller.send_multimodal(display, content, agent_mode=(self._mode == "agent"))
+            return {"ok": True}
+        except Exception as exc:
+            self._emit("error", {"error": str(exc)})
+            return {"error": str(exc)}
 
     def _is_anthropic(self) -> bool:
         return self._engine and self._engine._is_anthropic_native(self._engine.config)

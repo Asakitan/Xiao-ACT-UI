@@ -604,8 +604,7 @@ pre.code-block { overflow:visible; }
 #ctx-menu .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
 
 /* ── Find bar ── */
-#find-bar { display:flex !important; }
-#find-bar[style*="display:none"] { display:none !important; }
+#find-bar[style*="display: flex"], #find-bar[style*="display:flex"] { display:flex !important; }
 
 /* ── Extension cards (VSCode marketplace style) ── */
 .ext-card { display:flex; gap:10px; padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--border); }
@@ -1023,7 +1022,7 @@ pre.code-block { overflow:visible; }
 
 <!-- Find/Replace bar (hidden by default) -->
 <div id="find-bar" style="display:none;position:absolute;top:36px;right:20px;background:var(--bg2);
-  border:1px solid var(--border);border-radius:4px;padding:6px 10px;z-index:150;display:none;
+  border:1px solid var(--border);border-radius:4px;padding:6px 10px;z-index:150;
   box-shadow:0 4px 12px #00000040;gap:6px;align-items:center">
   <input id="find-input" placeholder="Find" style="background:var(--bg-input);color:var(--fg);
     border:1px solid var(--border);border-radius:3px;padding:3px 8px;font:12px var(--mono);
@@ -1781,6 +1780,9 @@ function openFindBar(showReplace){
   $('find-input').focus();$('find-input').select();
 }
 function closeFindBar(){$('find-bar').style.display='none';ed.focus()}
+function toggleFind(){var bar=$('find-bar');if(bar.style.display==='flex')closeFindBar();else openFindBar(false)}
+function toggleReplace(){var bar=$('find-bar');if(bar.style.display==='flex'&&$('replace-input').style.display!=='none')closeFindBar();else openFindBar(true)}
+window.toggleFind=toggleFind;window.toggleReplace=toggleReplace;
 function doFind(){
   const q=$('find-input').value;if(!q)return;
   const val=ed.value,start=ed.selectionEnd;
@@ -1987,6 +1989,7 @@ function onStreamEnd(d){
       hdr.onclick=()=>{hdr.classList.toggle('open');body.classList.toggle('open')};
       tb.appendChild(hdr);tb.appendChild(body);currentMsgBody.appendChild(tb);
     }
+    currentMsgBody._rawMarkdown=streamBuf;
     renderMd(currentMsgBody,streamBuf);
     if(d.tool_calls)d.tool_calls.forEach(tc=>renderToolCallWithState(currentMsgBody,tc.name,tc.arguments,tc.id));
     if(d.error){const e=document.createElement('div');e.className='error-text';e.textContent='⚠ '+d.error;currentMsgBody.appendChild(e)}
@@ -2029,8 +2032,9 @@ function onToolEnd(d){
   markToolComplete(d.id,!d.error);
   var tcEl=d.id?document.getElementById('tc-'+d.id):null;
   var name=d.name||(tcEl&&tcEl.dataset.toolName)||'?';
-  const msgs=$('chat-messages');const last=msgs.lastElementChild;
-  if(last){const body=last.querySelector('.msg-body');if(body)renderToolResult(body,name,d.result||'')}
+  var body=tcEl?tcEl.closest('.msg-body'):null;
+  if(!body){const msgs=$('chat-messages');const last=msgs.lastElementChild;if(last)body=last.querySelector('.msg-body')}
+  if(body)renderToolResult(body,name,d.result||'');
 }
 function onTokenWarning(d){
   const used=Number(d&&d.used)||0, limit=Number(d&&d.limit)||0;
@@ -2090,8 +2094,8 @@ async function uploadImage(){
     try{
       const result=await window.pywebview.api.open_file_dialog();
       if(result&&result.path){
-        const text=prompt('Describe what to ask about this image:','What is in this image?');
-        if(text===null)return;
+        const text=($('chat-input').value.trim())||'What is in this image?';
+        $('chat-input').value='';
         createMsg('user').innerHTML=esc(text)+'<br><span style="color:var(--fg-dim);font-size:12px">📷 '+esc(result.name||'image')+'</span>';
         streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';_setSendIcon(true);
         setStatus('Analyzing image...');
@@ -2111,8 +2115,8 @@ async function uploadImage(){
     reader.onload=async()=>{
       const base64=reader.result.split(',')[1];
       const mime=file.type||'image/png';
-      const text=prompt('Describe what to ask about this image:','What is in this image?');
-      if(text===null)return;
+      const text=($('chat-input').value.trim())||'What is in this image?';
+      $('chat-input').value='';
       createMsg('user').innerHTML=esc(text)+'<br><img src="'+reader.result+'" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px">';
       streaming=true;$('send-btn').disabled=true;$('stop-btn').style.display='';_setSendIcon(true);
       setStatus('Analyzing image...');
@@ -2310,7 +2314,14 @@ async function refreshHistory(){
   if(!r||!r.entries||!r.entries.length){list.innerHTML='<div class="sb-item" style="color:var(--fg-dim)">'+esc(t('no_history'))+'</div>';return}
   r.entries.forEach(e=>{
     const item=document.createElement('div');item.className='sb-item';
-    item.innerHTML=esc((e.title||t('untitled')).slice(0,28))+'<span class="meta">'+e.message_count+'msg</span>';
+    item.style.cssText='display:flex;align-items:center;gap:4px';
+    const label=document.createElement('span');label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    label.textContent=(e.title||t('untitled')).slice(0,28);label.title=e.title||'';
+    const meta=document.createElement('span');meta.className='meta';meta.textContent=e.message_count+'msg';
+    const del=document.createElement('span');del.textContent='✕';del.title='Delete';
+    del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44);flex-shrink:0';
+    del.onclick=ev=>{ev.stopPropagation();call('delete_history',e.id).then(()=>refreshHistory())};
+    item.appendChild(label);item.appendChild(meta);item.appendChild(del);
     item.onclick=()=>loadHistoryConv(e.id);
     list.appendChild(item);
   });
@@ -2797,6 +2808,8 @@ window._onEditorEvent=function(event,data){
       setProviderRunning(pid,true,'Tool: '+(data.name||'running')+' '+providerToolStateLabel(data,false),'running');updateProviderToolState(pid,data,false);
     }else if(event==='provider_tool_end'){
       renderProviderToolEnd(pid,data);updateProviderStatus(pid,'Tool complete','');
+    }else if(event==='provider_token_warning'){
+      onTokenWarning(data);
     }else if(event==='provider_error'){
       appendProviderError(pid,data.error||'Error');setProviderRunning(pid,false,'Error','error');
     }else if(event==='provider_idle'){
@@ -3206,7 +3219,7 @@ function selectApproval(e,level){
   e.stopPropagation();closeModePopup();
   if(!APPROVAL_ORDER.includes(level))return;
   currentApproval=level;updateModeUI();
-  if(level==='autopilot'&&currentMode!=='agent'){selectMode(e,'agent')}
+  if(level==='autopilot'&&currentMode!=='agent'){setToolbarMode('agent')}
   if(level==='bypass'||level==='autopilot'){
     call('set_mode','agent').then(()=>{});
   }
@@ -3362,12 +3375,13 @@ async function refreshRuntimeSupport(){
   if(r&&!r.error)renderRuntimeSupport(r);
 }
 
-async function searchExtensions(query){
+async function searchExtensions(query,page){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
   if(!query) query='ai chat model';
+  if(!page) page=1;
   $('ext-loading').style.display='block';
   $('ext-marketplace-list').innerHTML='';
-  const r=await call('search_extensions',query);
+  const r=await call('search_extensions',query,page);
   $('ext-loading').style.display='none';
   if(!r||r.error){$('ext-marketplace-list').innerHTML='<div style="padding:12px 16px;color:var(--fg-error);font-size:12px">'+esc(r?r.error:'Failed')+'</div>';return}
   extCache=r.extensions||[];
@@ -3520,11 +3534,13 @@ openInEditor=function(code,lang){
 };
 
 // ── Terminal execution ──
-async function execTerminalCmd(cmd){
+async function execTerminalCmd(cmd,skipConfirm){
   if(!cmd)return;
   const out=$('terminal-output');
   out.textContent+='$ '+cmd+'\n';
-  if(!confirm('Run terminal command?\n\n'+cmd)){out.textContent+='Cancelled\n\n';return}
+  if(!skipConfirm&&currentMode!=='agent'&&currentApproval!=='bypass'&&currentApproval!=='autopilot'){
+    if(!confirm('Run terminal command?\n\n'+cmd)){out.textContent+='Cancelled\n\n';return}
+  }
   const r=await call('execute_tool','runTerminal',JSON.stringify({command:cmd}),true);
   try{const d=JSON.parse(r);if(d.stdout)out.textContent+=d.stdout;if(d.stderr)out.textContent+=d.stderr;if(d.error)out.textContent+=d.error+'\n'}
   catch{out.textContent+=r+'\n'}
@@ -3541,7 +3557,7 @@ termOut.insertAdjacentHTML('afterend',
   '<input id="term-input" style="flex:1;background:transparent;color:var(--fg);border:none;outline:none;font:12px var(--mono)" placeholder="Enter command...">'+
   '</div>');
 $('term-input')&&$('term-input').addEventListener('keydown',function(e){
-  if(e.key==='Enter'){const cmd=this.value.trim();this.value='';if(cmd)execTerminalCmd(cmd)}
+  if(e.key==='Enter'){const cmd=this.value.trim();this.value='';if(cmd)execTerminalCmd(cmd,true)}
 });
 
 // ── @-mention popup ──
@@ -3579,19 +3595,24 @@ window.pickAtVar=function(v){$('at-popup').classList.remove('open');
 // ── Agent Mode in doSend ──
 const _origDoSend=doSend;
 doSend=async function(){
-  const inp=$('chat-input'),text=inp.value.trim();
+  const inp=$('chat-input');let text=inp.value.trim();
   if(!text||streaming)return;
   inp.value='';inp.style.height='auto';
   $('at-popup').classList.remove('open');
   if(text.startsWith('/')){execSlash(text);return}
   if(!config.api_key&&config.provider!=='ollama'){appendApiKeyError();return}
-  createMsg('user').textContent=text;
+  // Strip #toolName prefix — LLM understands tool hints naturally
+  let toolHint='';
+  const toolMatch=text.match(/^#(\w+)\s+/);
+  if(toolMatch){toolHint=toolMatch[1];text=text.slice(toolMatch[0].length)}
+  createMsg('user').textContent=(toolHint?'#'+toolHint+' ':'')+text;
   streaming=true;$('send-btn').disabled=true;_setSendIcon(true);$('stop-btn').style.display='';
   {const ic=$('chat-input-container');if(ic)ic.classList.add('working')}
   setStatus('Thinking...');
   currentMsgBody=createMsg('assistant',config.model||config.provider);streamBuf='';
   const agentMode=currentMode==='agent'||currentApproval==='autopilot'||currentApproval==='bypass';
-  await call('send_message',text,{provider:config.provider,model:config.model},agentMode);
+  const sendText=toolHint?'Use the '+toolHint+' tool: '+text:text;
+  await call('send_message',sendText,{provider:config.provider,model:config.model},agentMode);
 };
 window.doSend=doSend;
 
@@ -3611,11 +3632,12 @@ function applyTheme(theme){
 }
 
 // Load theme from config on init
+let _initDone=false;
 const _origInit=init;
 init=async function(){
+  if(_initDone)return;_initDone=true;
   await _origInit();
-  const c=await call('load_config');
-  if(c&&c.theme)applyTheme(c.theme);
+  if(config.theme)applyTheme(config.theme);
 };
 window.toggleTheme=toggleTheme;
 
@@ -3719,8 +3741,9 @@ window.doFind=doFind;
 function addMessageFooter(msgEl,role){
   if(role!=='assistant')return;
   const footer=document.createElement('div');footer.className='msg-footer';
-  [{icon:'👍',title:t('helpful'),cls:'rate-up',fn:function(){this.classList.toggle('active');showToast(t('feedback_saved'),'success',1500)}},
-   {icon:'👎',title:t('not_helpful'),cls:'rate-down',fn:function(){this.classList.toggle('active')}},
+  const msgId='msg-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  [{icon:'👍',title:t('helpful'),cls:'rate-up',fn:function(){this.classList.toggle('active');const rating=this.classList.contains('active')?'up':'none';try{localStorage.setItem('fb-'+msgId,rating)}catch(e){}call('save_feedback',msgId,rating);showToast(t('feedback_saved'),'success',1500)}},
+   {icon:'👎',title:t('not_helpful'),cls:'rate-down',fn:function(){this.classList.toggle('active');const rating=this.classList.contains('active')?'down':'none';try{localStorage.setItem('fb-'+msgId,rating)}catch(e){}call('save_feedback',msgId,rating)}},
    {icon:'📋',title:t('copy_response'),fn:function(){
      const body=msgEl.querySelector('.msg-body');
      if(body)navigator.clipboard.writeText(body.textContent);showToast(t('copied'),'success',1500)}},
@@ -3779,7 +3802,7 @@ $('chat-messages').addEventListener('contextmenu',function(e){
   const body=msgEl.querySelector('.msg-body');
   const text=body?body.textContent:'';
   [{label:t('cm_copy'),fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
-   {label:t('cm_markdown'),fn:()=>{navigator.clipboard.writeText(text);showToast(t('copied'),'success',1500)}},
+   {label:t('cm_markdown'),fn:()=>{const raw=(body&&body._rawMarkdown)||text;navigator.clipboard.writeText(raw);showToast(t('copied'),'success',1500)}},
    {sep:true},
    {label:t('cm_insert'),fn:()=>{if(text)openInEditor(text,'')}},
    {label:t('cm_run'),fn:()=>{if(text.includes('`')){
@@ -3861,8 +3884,8 @@ onStreamEnd=function(d){
   if(last&&d.content){
     const body=last.querySelector('.msg-body');
     if(body){
-      // Plan mode: detect plan_ready marker and show Implement button
-      if(currentMode==='plan'&&d.content.includes('<!-- plan_ready -->')){
+      // Plan mode: show Implement button when plan response ends
+      if(currentMode==='plan'){
         const planBar=document.createElement('div');
         planBar.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 12px;background:color-mix(in srgb, var(--fg-accent) 8%, var(--bg3));border:1px solid color-mix(in srgb, var(--fg-accent) 30%, var(--border));border-radius:6px';
         const planIcon=document.createElement('span');planIcon.textContent='☰';planIcon.style.fontSize='16px';
@@ -3978,19 +4001,40 @@ function goToLineDialog(){
   ed.selectionStart=ed.selectionEnd=pos;ed.focus()}}}
 }
 function showAbout(){showToast('SAO AI Editor — Multi-model LLM IDE','info',3000)}
-function openFileDialog(){/* pywebview file dialog */
-  if(window.pywebview&&window.pywebview.api){
-    // placeholder — real implementation needs pywebview file dialog
-    showToast('Use Ctrl+O or drag & drop a file','info',2000);
+async function openFileDialog(){
+  if(window.pywebview&&window.pywebview.api&&window.pywebview.api.open_text_file){
+    try{
+      const result=await window.pywebview.api.open_text_file();
+      if(result&&result.content!=null){addTab(result.name||'file',result.content,result.language||'');return}
+    }catch(e){console.log('open_text_file fallback:',e)}
+  }
+  const input=document.createElement('input');input.type='file';input.accept='*/*';
+  input.style.position='fixed';input.style.left='-9999px';document.body.appendChild(input);
+  input.onchange=()=>{
+    const file=input.files[0];document.body.removeChild(input);if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{addTab(file.name,reader.result,'');detectLanguage(reader.result,file.name)};
+    reader.readAsText(file);
+  };input.click();
+}
+async function saveFile(){
+  const tab=tabs.find(t=>t.id===activeTab);
+  const content=$('editor-text').value;
+  if(tab&&tab.filePath){
+    const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
+    if(r){try{const d=JSON.parse(r);if(d.error){showToast('Save failed: '+d.error,'error');return}}catch(e){}}
+    editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
+    showToast('Saved: '+tab.filePath,'success',1500);
+  }else{
+    try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard (no file path)','info',2000)}catch(e){showToast('No file path to save to','warning',2000)}
   }
 }
-function saveFile(){showToast('Saved','success',1000)}
 
 // Expose to global scope for HTML onclick attributes
 window.tbMenu=tbMenu;window.switchSidebar=switchSidebar;window.toggleSidebarVis=toggleSidebarVis;
 window.toggleEditorVis=toggleEditorVis;window.toggleChatVis=toggleChatVis;
 window.toggleTheme=toggleTheme;window.openSettings=openSettings;
-window.openCmdPalette=openCmdPalette;window.addTab=addTab;
+window.openCmdPalette=openCommandPalette;window.addTab=addTab;
 window.focusTerminal=focusTerminal;window.goToLineDialog=goToLineDialog;
 window.showAbout=showAbout;window.openFileDialog=openFileDialog;
 window.saveFile=saveFile;window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
