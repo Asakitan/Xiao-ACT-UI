@@ -1,7 +1,9 @@
-"""CLI subprocess controller for provider tabs.
+"""CLI controller for provider tabs.
 
-Wraps external CLI tools (claude, codex, gh copilot) as chat providers.
-Instead of using our LLMEngine, spawns the real CLI process and streams output.
+Two modes:
+  CliChatController — pipes messages through the CLI in our chat panel
+                      (claude -p / codex --quiet / gh copilot explain)
+  CliLauncher       — opens CLI in its own terminal window (fallback)
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -27,10 +29,10 @@ class CliMessage:
 
 
 class CliChatController:
-    """Drives a CLI subprocess (claude/codex/gh copilot) as a chat provider.
+    """Pipes messages through a CLI tool, streaming output to our chat panel.
 
-    Provides the same callback interface as ChatController so
-    ``_create_provider_controller`` can return either transparently.
+    Same callback interface as ChatController so app.py can use either.
+    Each send() spawns the CLI in pipe mode for one exchange.
     """
 
     def __init__(self, cli_path: str, provider_id: str,
@@ -43,7 +45,6 @@ class CliChatController:
         self._proc: Optional[subprocess.Popen] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._history: List[Dict[str, str]] = []
 
         self.on_stream_delta: Optional[Callable] = None
         self.on_thinking_delta: Optional[Callable] = None
@@ -55,7 +56,6 @@ class CliChatController:
         self.on_token_warning: Optional[Callable] = None
         self.on_error: Optional[Callable] = None
         self.on_idle: Optional[Callable] = None
-
         self.resolve_variable: Optional[Callable] = None
 
     @property
@@ -65,7 +65,6 @@ class CliChatController:
     def send(self, text: str, agent_mode: bool = False) -> None:
         if self._running:
             return
-        self._history.append({"role": "user", "content": text})
         self._running = True
         self._thread = threading.Thread(
             target=self._run, args=(text,), daemon=True)
@@ -87,68 +86,46 @@ class CliChatController:
 
     def new_conversation(self, system_prompt: str = "") -> Any:
         self.cancel()
-        self._history.clear()
         return None
 
     def _run(self, text: str) -> None:
         try:
             cmd = self._build_command(text)
             env = self._build_env()
-
             self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                cwd=self._cwd,
-                env=env,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL, cwd=self._cwd, env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-
             content_parts: List[str] = []
             thinking_parts: List[str] = []
-            model_name = self._provider_id
 
             if self._provider_id == "claude-code":
                 self._stream_claude(content_parts, thinking_parts)
-                model_name = "claude"
-            elif self._provider_id == "codex":
-                self._stream_plain(content_parts)
-                model_name = "codex"
-            elif self._provider_id == "copilot":
-                self._stream_plain(content_parts)
-                model_name = "copilot"
             else:
                 self._stream_plain(content_parts)
 
-            self._proc.wait(timeout=5)
+            self._proc.wait(timeout=10)
             stderr_out = ""
             if self._proc.stderr:
                 try:
-                    stderr_out = self._proc.stderr.read().decode("utf-8", errors="replace").strip()
+                    stderr_out = self._proc.stderr.read().decode(
+                        "utf-8", errors="replace").strip()
                 except Exception:
                     pass
 
             full_content = "".join(content_parts)
-            full_thinking = "".join(thinking_parts)
-
+            is_error = False
             if self._proc.returncode != 0 and not full_content:
                 full_content = stderr_out or f"CLI exited with code {self._proc.returncode}"
                 is_error = True
-            else:
-                is_error = False
-
-            self._history.append({"role": "assistant", "content": full_content})
 
             msg = CliMessage(
-                content=full_content,
-                model=model_name,
-                thinking=full_thinking,
-                is_error=is_error,
+                content=full_content, model=self._provider_id,
+                thinking="".join(thinking_parts), is_error=is_error,
             )
             if self.on_stream_end:
                 self.on_stream_end(msg)
-
         except Exception as exc:
             if self.on_error:
                 self.on_error(str(exc))
@@ -158,14 +135,12 @@ class CliChatController:
             if self.on_idle:
                 self.on_idle()
 
-    def _stream_claude(self, content_parts: List[str],
-                       thinking_parts: List[str]) -> None:
-        """Stream claude CLI output in stream-json format."""
+    def _stream_claude(self, content_parts, thinking_parts):
         assert self._proc and self._proc.stdout
-        for raw_line in self._proc.stdout:
+        for raw in self._proc.stdout:
             if not self._running:
                 break
-            line = raw_line.decode("utf-8", errors="replace").rstrip()
+            line = raw.decode("utf-8", errors="replace").rstrip()
             if not line:
                 continue
             try:
@@ -175,87 +150,71 @@ class CliChatController:
                     self.on_stream_delta(None, line + "\n")
                 content_parts.append(line + "\n")
                 continue
-
-            msg_type = obj.get("type", "")
-
-            if msg_type == "assistant" and "message" in obj:
-                text = obj["message"]
-                if self.on_stream_delta:
-                    self.on_stream_delta(None, text)
-                content_parts.append(text)
-
-            elif msg_type == "content_block_delta":
-                delta = obj.get("delta", {})
-                delta_type = delta.get("type", "")
-                if delta_type == "text_delta":
-                    text = delta.get("text", "")
+            t = obj.get("type", "")
+            if t == "assistant":
+                text = obj.get("message", "")
+                if text:
+                    if self.on_stream_delta:
+                        self.on_stream_delta(None, text)
+                    content_parts.append(text)
+            elif t == "content_block_delta":
+                d = obj.get("delta", {})
+                if d.get("type") == "text_delta":
+                    text = d.get("text", "")
                     if text and self.on_stream_delta:
                         self.on_stream_delta(None, text)
                     content_parts.append(text)
-                elif delta_type == "thinking_delta":
-                    text = delta.get("thinking", "")
+                elif d.get("type") == "thinking_delta":
+                    text = d.get("thinking", "")
                     if text and self.on_thinking_delta:
                         self.on_thinking_delta(None, text)
                     thinking_parts.append(text)
-
-            elif msg_type == "result":
+            elif t == "result":
                 text = obj.get("result", "")
                 if text:
                     if self.on_stream_delta:
                         self.on_stream_delta(None, text)
                     content_parts.append(text)
-
-            elif msg_type == "tool_use":
-                tool_name = obj.get("name", obj.get("tool", ""))
-                tool_input = obj.get("input", obj.get("arguments", {}))
-                call_id = obj.get("id", f"cli_{time.monotonic()}")
+            elif t == "tool_use":
+                name = obj.get("name", obj.get("tool", ""))
+                inp = obj.get("input", obj.get("arguments", {}))
+                cid = obj.get("id", f"cli_{time.monotonic()}")
                 if self.on_tool_start:
-                    self.on_tool_start(call_id, tool_name,
-                                      json.dumps(tool_input, ensure_ascii=False))
+                    self.on_tool_start(cid, name,
+                                      json.dumps(inp, ensure_ascii=False))
                 if self.on_tool_end:
-                    self.on_tool_end(call_id, tool_name, "", "complete")
-
-            elif msg_type in ("text", ""):
-                text = obj.get("text", obj.get("content", ""))
+                    self.on_tool_end(cid, name, "", "complete")
+            else:
+                text = obj.get("text", obj.get("content", obj.get("message", "")))
                 if text:
                     if self.on_stream_delta:
                         self.on_stream_delta(None, text)
                     content_parts.append(text)
 
-    def _stream_plain(self, content_parts: List[str]) -> None:
-        """Stream plain text output line by line."""
+    def _stream_plain(self, content_parts):
         assert self._proc and self._proc.stdout
-        for raw_line in self._proc.stdout:
+        for raw in self._proc.stdout:
             if not self._running:
                 break
-            line = raw_line.decode("utf-8", errors="replace")
+            line = raw.decode("utf-8", errors="replace")
             if self.on_stream_delta:
                 self.on_stream_delta(None, line)
             content_parts.append(line)
 
     def _build_command(self, text: str) -> List[str]:
         if self._provider_id == "claude-code":
-            cmd = [self._cli_path, "-p", "--output-format", "stream-json"]
-            cmd.extend(self._cli_args)
-            cmd.append(text)
-            return cmd
-
+            return [self._cli_path, "-p", "--output-format", "stream-json",
+                    *self._cli_args, text]
         if self._provider_id == "codex":
-            cmd = [self._cli_path, "--quiet"]
-            cmd.extend(self._cli_args)
-            cmd.append(text)
-            return cmd
-
+            return [self._cli_path, "--quiet", *self._cli_args, text]
         if self._provider_id == "copilot":
-            cmd = [self._cli_path, "copilot", "explain"]
-            cmd.extend(self._cli_args)
-            cmd.append(text)
-            return cmd
-
-        cmd = [self._cli_path]
-        cmd.extend(self._cli_args)
-        cmd.append(text)
-        return cmd
+            base = os.path.basename(self._cli_path).lower().replace(".exe", "")
+            if base in ("code", "code-insiders"):
+                return [self._cli_path, "--command",
+                        "workbench.action.chat.open", *self._cli_args]
+            return [self._cli_path, "copilot", "explain",
+                    *self._cli_args, text]
+        return [self._cli_path, *self._cli_args, text]
 
     def _build_env(self) -> Dict[str, str]:
         env = dict(os.environ)
@@ -266,33 +225,115 @@ class CliChatController:
         return env
 
 
-def find_cli(provider_id: str, settings_getter: Optional[Callable] = None) -> Optional[str]:
-    """Find the CLI executable for a provider. Returns path or None."""
+class CliLauncher:
+    """Opens a CLI tool in its own terminal window (external)."""
+
+    def __init__(self, cli_path: str, provider_id: str,
+                 cli_args: Optional[List[str]] = None,
+                 cwd: Optional[str] = None) -> None:
+        self._cli_path = cli_path
+        self._provider_id = provider_id
+        self._cli_args = list(cli_args or [])
+        self._cwd = cwd
+        self._proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        with self._lock:
+            if self._proc is None:
+                return False
+            if self._proc.poll() is not None:
+                self._proc = None
+                return False
+            return True
+
+    @property
+    def pid(self) -> Optional[int]:
+        with self._lock:
+            return self._proc.pid if self._proc and self._proc.poll() is None else None
+
+    def launch(self) -> Dict[str, Any]:
+        with self._lock:
+            if self._proc and self._proc.poll() is None:
+                return {"ok": True, "already_running": True, "pid": self._proc.pid}
+            cmd = self._build_command()
+            try:
+                flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+                self._proc = subprocess.Popen(
+                    cmd, cwd=self._cwd, env=self._build_env(),
+                    creationflags=flags)
+                return {"ok": True, "pid": self._proc.pid}
+            except Exception as exc:
+                self._proc = None
+                return {"error": str(exc)}
+
+    def stop(self) -> Dict[str, Any]:
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                self._proc = None
+                return {"ok": True, "was_running": False}
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+            return {"ok": True, "was_running": True}
+
+    def status(self) -> Dict[str, Any]:
+        return {"running": self.is_running, "pid": self.pid,
+                "provider": self._provider_id}
+
+    def _build_command(self) -> List[str]:
+        if self._provider_id == "copilot":
+            base = os.path.basename(self._cli_path).lower().replace(".exe", "")
+            if base in ("code", "code-insiders"):
+                return [self._cli_path, "--command",
+                        "workbench.action.chat.open", *self._cli_args]
+            return [self._cli_path, "copilot", *self._cli_args]
+        return [self._cli_path, *self._cli_args]
+
+    def _build_env(self) -> Dict[str, str]:
+        env = dict(os.environ)
+        if self._provider_id == "claude-code":
+            env["CLAUDE_CODE_ENTRYPOINT"] = "sao-ai-editor"
+        return env
+
+
+def find_cli(provider_id: str,
+             settings_getter: Optional[Callable] = None) -> Optional[str]:
+    """Find the CLI executable for a provider."""
     from ai_editor.chat_providers import (
         _get_provider_cli_path, _cli_available,
     )
-
-    cli_names = {
-        "claude-code": "claude",
-        "codex": "codex",
-        "copilot": "gh",
-    }
     section_names = {
         "claude-code": "claude_code",
         "codex": "codex",
         "copilot": "copilot",
     }
+    cli_names = {
+        "claude-code": "claude",
+        "codex": "codex",
+    }
 
     section = section_names.get(provider_id, provider_id)
-    default_name = cli_names.get(provider_id, "")
-
     configured = _get_provider_cli_path(section, settings_getter)
     if configured and _cli_available(configured):
         return configured
 
+    if provider_id == "copilot":
+        for cmd in ("code-insiders", "code", "gh"):
+            if _cli_available(cmd):
+                return shutil.which(cmd) or cmd
+        return None
+
+    default_name = cli_names.get(provider_id, "")
     if default_name and _cli_available(default_name):
         return shutil.which(default_name) or default_name
-
     return None
 
 

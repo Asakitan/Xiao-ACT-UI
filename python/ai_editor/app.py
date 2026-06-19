@@ -1573,7 +1573,7 @@ class AIEditorAPI:
         return ctrl
 
     def _try_create_cli_controller(self, prov):
-        """Return a CliChatController if the provider's CLI is installed."""
+        """Return a CliChatController that pipes messages through the real CLI."""
         try:
             from ai_editor.cli_controller import (
                 CliChatController, find_cli, get_cli_args,
@@ -1588,6 +1588,42 @@ class AIEditorAPI:
         ctrl = CliChatController(cli_path, prov.id, cli_args, cwd)
         self._wire_provider_callbacks(ctrl, prov.id)
         return ctrl
+
+    # ── CLI launcher (real terminal window) ──
+
+    _cli_launchers: Dict[str, Any] = {}
+
+    def launch_provider_cli(self, provider_id: str) -> Dict:
+        """Launch a CLI provider in its own interactive terminal window."""
+        from ai_editor.cli_controller import CliLauncher, find_cli, get_cli_args
+        cli_path = find_cli(provider_id, self._settings_getter)
+        if not cli_path:
+            return {"error": f"CLI not found for {provider_id}"}
+        launcher = self._cli_launchers.get(provider_id)
+        if launcher and launcher.is_running:
+            return {"ok": True, "already_running": True, "pid": launcher.pid}
+        cli_args = get_cli_args(provider_id, self._settings_getter)
+        cwd = self._workspace_root() or None
+        launcher = CliLauncher(cli_path, provider_id, cli_args, cwd)
+        self._cli_launchers[provider_id] = launcher
+        return launcher.launch()
+
+    def stop_provider_cli(self, provider_id: str) -> Dict:
+        """Stop a running CLI provider."""
+        launcher = self._cli_launchers.get(provider_id)
+        if not launcher:
+            return {"ok": True, "was_running": False}
+        return launcher.stop()
+
+    def provider_cli_status(self, provider_id: str) -> Dict:
+        """Get status of a CLI provider."""
+        launcher = self._cli_launchers.get(provider_id)
+        if not launcher:
+            from ai_editor.cli_controller import find_cli
+            cli_path = find_cli(provider_id, self._settings_getter)
+            return {"running": False, "cli_available": cli_path is not None,
+                    "provider": provider_id}
+        return launcher.status()
 
     def _wire_provider_callbacks(self, ctrl, pid: str) -> None:
         """Attach event callbacks that emit to the webview."""
