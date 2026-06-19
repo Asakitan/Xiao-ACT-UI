@@ -26,8 +26,9 @@ import subprocess
 import threading
 import time
 import uuid
+import webbrowser
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, runtime_checkable
 
 from ai_editor.extension_host import (
     CommandService, ExtensionHost, ExtensionDescription,
@@ -675,6 +676,49 @@ class WorkspaceEdit:
 
 
 # ---------------------------------------------------------------------------
+# UIBridge protocol — connects vscode API shims to the HTML webview
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class UIBridge(Protocol):
+    """Protocol for pushing vscode API state changes to the HTML UI.
+
+    Implementations live outside this module (e.g. AIEditorAPI) and own the
+    actual ``_emit`` / ``_eval_js`` calls.  Every method MUST be safe to call
+    from any thread.  All methods are optional — a partial implementation is
+    fine; callers guard with ``hasattr`` / ``getattr``.
+    """
+
+    # -- Output channel --
+    def show_output(self, channel_name: str, content: str) -> None: ...
+    def clear_output(self, channel_name: str) -> None: ...
+    def dispose_output(self, channel_name: str) -> None: ...
+
+    # -- Terminal --
+    def show_terminal(self, name: str) -> None: ...
+    def hide_terminal(self, name: str) -> None: ...
+    def run_terminal_command(self, name: str, text: str) -> Optional[str]: ...
+
+    # -- Messages / toasts --
+    def show_message(self, level: str, message: str) -> None: ...
+
+    # -- Progress --
+    def show_progress(self, message: Optional[str],
+                      increment: Optional[float]) -> None: ...
+
+    # -- Status bar --
+    def show_status_bar_item(self, item_id: str, text: str,
+                             tooltip: str, command: str) -> None: ...
+    def hide_status_bar_item(self, item_id: str) -> None: ...
+    def dispose_status_bar_item(self, item_id: str) -> None: ...
+
+    # -- Pickers / dialogs --
+    def show_quick_pick(self, items: List[Any],
+                        options: Dict[str, Any]) -> Any: ...
+    def show_input_box(self, options: Dict[str, Any]) -> Optional[str]: ...
+
+
+# ---------------------------------------------------------------------------
 # VscodeNamespace — the main vscode.* API object
 # ---------------------------------------------------------------------------
 
@@ -694,6 +738,7 @@ class VscodeNamespace:
         self._host = host
         self._engine = engine
         self._settings_getter = settings_getter
+        self._ui_bridge: Optional[UIBridge] = None
         self._clipboard_text = ""
         self._active_text_editor: Optional[_TextEditor] = None
         self._visible_text_editors: List[_TextEditor] = []
@@ -743,6 +788,15 @@ class VscodeNamespace:
         self._auth_api: Optional[Dict[str, Any]] = None
         self._tasks_api: Optional[Dict[str, Any]] = None
         self._debug_api: Optional[Dict[str, Any]] = None
+
+    def set_ui_bridge(self, bridge: UIBridge) -> None:
+        """Connect this namespace to a live HTML UI bridge (e.g. AIEditorAPI).
+
+        Must be called after construction but before any extension activation
+        so that created OutputChannels / StatusBarItems / Terminals can push
+        state changes to the webview.
+        """
+        self._ui_bridge = bridge
 
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
@@ -828,17 +882,17 @@ class VscodeNamespace:
                 "showInformationMessage": lambda msg, *items: self._show_message("info", msg, items),
                 "showWarningMessage": lambda msg, *items: self._show_message("warn", msg, items),
                 "showErrorMessage": lambda msg, *items: self._show_message("error", msg, items),
-                "showQuickPick": lambda items, **kw: items[0] if items else None,
-                "showInputBox": lambda **kw: kw.get("value", ""),
-                "createOutputChannel": lambda name, **kw: _OutputChannel(name),
-                "createStatusBarItem": lambda *a, **kw: _StatusBarItem(),
+                "showQuickPick": self._show_quick_pick,
+                "showInputBox": self._show_input_box,
+                "createOutputChannel": lambda name, **kw: _OutputChannel(name, self._ui_bridge),
+                "createStatusBarItem": lambda *a, **kw: _StatusBarItem(self._ui_bridge),
                 "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title),
                 "showTextDocument": self._show_text_document,
                 "createTreeView": self._create_tree_view,
                 "registerTreeDataProvider": self._register_tree_data_provider,
                 "registerWebviewViewProvider": self._register_webview_view_provider,
                 "createTerminal": self._create_terminal,
-                "withProgress": lambda opts, task: task(_DummyProgress(), CancellationToken.NONE),
+                "withProgress": lambda opts, task: task(_UIProgress(self._ui_bridge), CancellationToken.NONE),
                 "activeTextEditor": None,
                 "visibleTextEditors": [],
                 "terminals": [],
@@ -863,8 +917,39 @@ class VscodeNamespace:
 
     def _show_message(self, level: str, message: Any,
                       items: Sequence[Any]) -> Any:
-        print(f"[{level}] {message}")
+        if self._ui_bridge is not None:
+            try:
+                self._ui_bridge.show_message(level, str(message))
+            except Exception:
+                print(f"[{level}] {message}")
+        else:
+            print(f"[{level}] {message}")
         return items[0] if items else None
+
+    def _show_quick_pick(self, items: Any, **kw: Any) -> Any:
+        """Show a quick-pick selection UI or fall back to first item."""
+        if self._ui_bridge is not None:
+            try:
+                result = self._ui_bridge.show_quick_pick(
+                    list(items) if items else [], kw)
+                if result is not None:
+                    return result
+            except Exception:
+                pass
+        # Fallback: return first item
+        return items[0] if items else None
+
+    def _show_input_box(self, **kw: Any) -> Any:
+        """Show an input box UI or fall back to default value."""
+        if self._ui_bridge is not None:
+            try:
+                result = self._ui_bridge.show_input_box(kw)
+                if result is not None:
+                    return result
+            except Exception:
+                pass
+        # Fallback: return default value
+        return kw.get("value", "")
 
     def _create_tree_view(self, view_id: str, **kw: Any) -> Any:
         view = _TreeView(view_id, kw.get("treeDataProvider"))
@@ -901,7 +986,7 @@ class VscodeNamespace:
         elif args and isinstance(args[0], dict):
             name = str(args[0].get("name", ""))
         name = str(kw.get("name") or name or "SAO Terminal")
-        terminal = _Terminal(name)
+        terminal = _Terminal(name, self._ui_bridge)
         terminal._on_dispose = lambda t=terminal: self._on_terminal_disposed(t)
         self._terminals.append(terminal)
         self._sync_window_state()
@@ -1283,7 +1368,20 @@ class VscodeNamespace:
         self._clipboard_text = str(text or "")
 
     def _open_external(self, uri: Any) -> bool:
-        return False
+        """Open a URI in the system default browser / handler."""
+        try:
+            uri_str = str(uri)
+            if hasattr(uri, "toString"):
+                uri_str = uri.toString()
+            elif hasattr(uri, "fsPath"):
+                uri_str = uri.fsPath
+            if os.name == "nt":
+                os.startfile(uri_str)
+            else:
+                webbrowser.open(uri_str)
+            return True
+        except Exception:
+            return False
 
     def _show_text_document(self, doc: Any, **kw: Any) -> "_TextEditor":
         document = doc if isinstance(doc, _TextDocument) else self._open_text_document(doc)
@@ -2057,56 +2155,118 @@ def _lm_message(role: int, content: str) -> Dict:
 
 
 class _OutputChannel:
-    def __init__(self, name: str = "") -> None:
+    def __init__(self, name: str = "",
+                 bridge: Optional[UIBridge] = None) -> None:
         self.name = name
         self._value = ""
+        self._bridge = bridge
+
     def append(self, value: str) -> None:
         self._value += str(value)
+
     def appendLine(self, value: str) -> None:
         self._value += str(value) + "\n"
         print(f"[{self.name}] {value}")
+
     def clear(self) -> None:
         self._value = ""
+        if self._bridge is not None:
+            try:
+                self._bridge.clear_output(self.name)
+            except Exception:
+                pass
+
     def show(self, **kw) -> None:
-        pass
+        if self._bridge is not None:
+            try:
+                self._bridge.show_output(self.name, self._value)
+            except Exception:
+                pass
+
     def dispose(self) -> None:
-        pass
+        self._value = ""
+        if self._bridge is not None:
+            try:
+                self._bridge.dispose_output(self.name)
+            except Exception:
+                pass
 
 
 class _StatusBarItem:
-    def __init__(self) -> None:
+    _counter = 0
+
+    def __init__(self, bridge: Optional[UIBridge] = None) -> None:
+        _StatusBarItem._counter += 1
+        self._id = f"sbi-{_StatusBarItem._counter}"
         self.text = ""
         self.tooltip = ""
         self.command = ""
         self.visible = False
+        self._bridge = bridge
+
     def show(self) -> None:
         self.visible = True
+        if self._bridge is not None:
+            try:
+                self._bridge.show_status_bar_item(
+                    self._id, self.text, self.tooltip, self.command)
+            except Exception:
+                pass
+
     def hide(self) -> None:
         self.visible = False
+        if self._bridge is not None:
+            try:
+                self._bridge.hide_status_bar_item(self._id)
+            except Exception:
+                pass
+
     def dispose(self) -> None:
-        pass
+        self.visible = False
+        if self._bridge is not None:
+            try:
+                self._bridge.dispose_status_bar_item(self._id)
+            except Exception:
+                pass
 
 
 class _Terminal:
-    def __init__(self, name: str = "") -> None:
+    def __init__(self, name: str = "",
+                 bridge: Optional[UIBridge] = None) -> None:
         self.name = name
         self.processId = None
         self.creationOptions = {}
         self.exitStatus = None
         self.state = {"isInteractedWith": False}
         self._disposed = False
+        self._bridge = bridge
         self._on_dispose: Optional[Callable[[], None]] = None
 
     def sendText(self, text: str, addNewLine: bool = True) -> None:
         self.state["isInteractedWith"] = True
-        suffix = "\n" if addNewLine else ""
-        print(f"[terminal:{self.name}] {text}{suffix}", end="")
+        if self._bridge is not None:
+            try:
+                self._bridge.run_terminal_command(self.name, text)
+            except Exception:
+                suffix = "\n" if addNewLine else ""
+                print(f"[terminal:{self.name}] {text}{suffix}", end="")
+        else:
+            suffix = "\n" if addNewLine else ""
+            print(f"[terminal:{self.name}] {text}{suffix}", end="")
 
     def show(self, preserveFocus: bool = False) -> None:
-        pass
+        if self._bridge is not None:
+            try:
+                self._bridge.show_terminal(self.name)
+            except Exception:
+                pass
 
     def hide(self) -> None:
-        pass
+        if self._bridge is not None:
+            try:
+                self._bridge.hide_terminal(self.name)
+            except Exception:
+                pass
 
     def dispose(self) -> None:
         self._disposed = True
@@ -2117,9 +2277,27 @@ class _Terminal:
                 pass
 
 
-class _DummyProgress:
+class _UIProgress:
+    """Progress reporter that pushes updates to the HTML UI via the bridge.
+
+    Falls back to no-op when no bridge is connected (same behavior as the
+    old ``_DummyProgress``).
+    """
+
+    def __init__(self, bridge: Optional[UIBridge] = None) -> None:
+        self._bridge = bridge
+
     def report(self, value: Any = None) -> None:
-        pass
+        if self._bridge is not None and value is not None:
+            message = None
+            increment = None
+            if isinstance(value, dict):
+                message = value.get("message")
+                increment = value.get("increment")
+            try:
+                self._bridge.show_progress(message, increment)
+            except Exception:
+                pass
 
 
 class _WebviewPanel:

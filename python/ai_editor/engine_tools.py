@@ -299,6 +299,8 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
             "  settings_get — read a setting (pass 'key')\n"
             "  settings_set — write a setting (pass 'key' and 'value')\n"
             "  memory_status — memory data source health\n"
+            "  list_processes — list running processes\n"
+            "  select_process — attach to a process by name or pid\n"
             "  eval — evaluate a Python expression (pass 'expression')\n"
             "  exec — execute Python code block (pass 'code')\n"
             "\n"
@@ -322,36 +324,43 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
     )
 
     # ==================================================================
-    # SDK Dumper
+    # SDK Dumper (only registered when the backend module is available)
     # ==================================================================
 
-    registry.register(
-        name="sdkDumper",
-        description=(
-            "Dump game engine SDK from a running process using memory reading.\n"
-            "Supports: il2cpp (Unity IL2CPP), mono (Unity Mono), unreal (UE4/5), source (Valve Source).\n\n"
-            "Actions:\n"
-            "  detect — auto-detect game engine for a PID\n"
-            "  dump — extract classes/fields/methods from process memory\n"
-            "  list_engines — show supported engines\n"
-            "  save — save dump result to file (json or header format)\n"
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "description": "detect | dump | list_engines | save",
-                           "enum": ["detect", "dump", "list_engines", "save"]},
-                "pid": {"type": "integer", "description": "Target process ID"},
-                "engine": {"type": "string", "description": "Engine type (il2cpp/mono/unreal/source). Auto-detected if omitted."},
-                "output": {"type": "string", "description": "Output file path (for save action)"},
-                "format": {"type": "string", "description": "Output format: json or header", "default": "json"},
+    try:
+        from ai_editor import sdk_dumper as _sdk_mod  # noqa: F401
+        _has_sdk_dumper = True
+    except ImportError:
+        _has_sdk_dumper = False
+
+    if _has_sdk_dumper:
+        registry.register(
+            name="sdkDumper",
+            description=(
+                "Dump game engine SDK from a running process using memory reading.\n"
+                "Supports: il2cpp (Unity IL2CPP), mono (Unity Mono), unreal (UE4/5), source (Valve Source).\n\n"
+                "Actions:\n"
+                "  detect — auto-detect game engine for a PID\n"
+                "  dump — extract classes/fields/methods from process memory\n"
+                "  list_engines — show supported engines\n"
+                "  save — save dump result to file (json or header format)\n"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "detect | dump | list_engines | save",
+                               "enum": ["detect", "dump", "list_engines", "save"]},
+                    "pid": {"type": "integer", "description": "Target process ID"},
+                    "engine": {"type": "string", "description": "Engine type (il2cpp/mono/unreal/source). Auto-detected if omitted."},
+                    "output": {"type": "string", "description": "Output file path (for save action)"},
+                    "format": {"type": "string", "description": "Output format: json or header", "default": "json"},
+                },
+                "required": ["action"],
             },
-            "required": ["action"],
-        },
-        handler=lambda **kw: _sdk_dumper_dispatch(**kw),
-        category="engine",
-        tags={"readOnly": True},
-    )
+            handler=lambda **kw: _sdk_dumper_dispatch(**kw),
+            category="engine",
+            tags={"readOnly": True},
+        )
 
 
 # ======================================================================
