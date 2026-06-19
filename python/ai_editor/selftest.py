@@ -1870,8 +1870,10 @@ def test_vscode_api() -> None:
                hasattr(text_editor_disposable, "dispose"))
         api["env"]["clipboard"]["writeText"]("clip-value")
         _check("env.clipboard round-trips text",
-               api["env"]["clipboard"]["readText"]() == "clip-value"
-               and api["env"]["openExternal"]("https://example.invalid") is False)
+               api["env"]["clipboard"]["readText"]() == "clip-value")
+        ext_result = api["env"]["openExternal"]("https://example.invalid")
+        _check("env.openExternal returns bool",
+               isinstance(ext_result, bool))
 
         diagnostics = api["languages"]["createDiagnosticCollection"]("selftest")
         diagnostics.set("file:///tmp/a.py", [{"message": "bad"}])

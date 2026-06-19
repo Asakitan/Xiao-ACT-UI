@@ -737,8 +737,8 @@ pre.code-block { overflow:visible; }
   <div class="dd-item" onclick="toggleLang()">🌐 中文 / English</div>
 </div>
 <div class="tb-dropdown" id="dd-edit">
-  <div class="dd-item" onclick="document.execCommand('undo')"><span data-i18n="undo">Undo</span> <span class="shortcut">Ctrl+Z</span></div>
-  <div class="dd-item" onclick="document.execCommand('redo')"><span data-i18n="redo">Redo</span> <span class="shortcut">Ctrl+Y</span></div>
+  <div class="dd-item" onclick="editorUndo()"><span data-i18n="undo">Undo</span> <span class="shortcut">Ctrl+Z</span></div>
+  <div class="dd-item" onclick="editorRedo()"><span data-i18n="redo">Redo</span> <span class="shortcut">Ctrl+Y</span></div>
   <div class="dd-sep"></div>
   <div class="dd-item" onclick="document.execCommand('cut')"><span data-i18n="cut">Cut</span> <span class="shortcut">Ctrl+X</span></div>
   <div class="dd-item" onclick="document.execCommand('copy')"><span data-i18n="copy">Copy</span> <span class="shortcut">Ctrl+C</span></div>
@@ -1367,6 +1367,37 @@ window._onEditorEvent=function(event,data){
   else if(event==='workflow_step') onWorkflowStep(data);
   else if(event==='error') onError(data);
   else if(event==='idle') onIdle();
+  else if(event==='show_output'){
+    const oc=$('output-content');if(oc)oc.textContent=data.content||'';
+    document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='output'));
+    const tp=$('terminal-panel'),op=$('output-panel');
+    if(tp){tp.style.display='none';tp.classList.remove('active')}
+    if(op){op.style.display='flex';op.classList.add('active')}
+  }
+  else if(event==='clear_output'){
+    const oc=$('output-content');if(oc)oc.textContent='';
+  }
+  else if(event==='dispose_output'){
+    const oc=$('output-content');if(oc)oc.textContent='';
+    const activeOut=document.querySelector('.ptab.active');
+    if(activeOut&&activeOut.dataset.ptab==='output'){
+      document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));
+      const tp=$('terminal-panel'),op=$('output-panel');
+      if(tp){tp.style.display='flex';tp.classList.add('active')}
+      if(op){op.style.display='none';op.classList.remove('active')}
+    }
+  }
+  else if(event==='show_message'){
+    showToast(data.message||'',data.level||'info',4000);
+  }
+  else if(event==='show_progress'){
+    const msg=data.message||'';const inc=data.increment;
+    const label=inc!=null?msg+' ('+Math.round(inc)+'%)':msg;
+    setStatus(label||'Working...');
+  }
+  else if(event==='dispose_status_bar_item'){/* no-op — status bar is static */}
+  else if(event==='show_status_bar_item'){setStatus(data.text||'')}
+  else if(event==='hide_status_bar_item'){/* no-op */}
 };
 
 // ── Init ──
@@ -1787,6 +1818,7 @@ function openInEditor(code,lang){
   $('editor-welcome').style.display='none';
   $('editor-container').style.display='flex';
   $('editor-text').value=code;
+  _undoStack.length=0;_redoStack.length=0;_undoPush(true);
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -1841,14 +1873,55 @@ function setEditorLanguage(lang){
   $('status-language').textContent=(icons[lang]||'{}')+' '+lang.charAt(0).toUpperCase()+lang.slice(1);
 }
 
+// ── Undo / Redo stack for textarea editor ──
+const _undoStack=[],_redoStack=[];
+let _undoTimer=null,_undoLastPush=0;
+const _UNDO_MAX=200,_UNDO_DEBOUNCE=400;
+function _undoPush(force){
+  const ta=$('editor-text');if(!ta)return;
+  const now=Date.now();
+  if(!force&&now-_undoLastPush<_UNDO_DEBOUNCE)return;
+  const snap={content:ta.value,cursor:ta.selectionStart};
+  const top=_undoStack.length?_undoStack[_undoStack.length-1]:null;
+  if(top&&top.content===snap.content)return;
+  _undoStack.push(snap);_redoStack.length=0;
+  if(_undoStack.length>_UNDO_MAX)_undoStack.shift();
+  _undoLastPush=now;
+}
+function editorUndo(){
+  const ta=$('editor-text');if(!ta||!_undoStack.length)return;
+  _redoStack.push({content:ta.value,cursor:ta.selectionStart});
+  const snap=_undoStack.pop();
+  ta.value=snap.content;ta.selectionStart=ta.selectionEnd=snap.cursor;
+  updateLineNums();updateCursorPos();
+}
+function editorRedo(){
+  const ta=$('editor-text');if(!ta||!_redoStack.length)return;
+  _undoStack.push({content:ta.value,cursor:ta.selectionStart});
+  const snap=_redoStack.pop();
+  ta.value=snap.content;ta.selectionStart=ta.selectionEnd=snap.cursor;
+  updateLineNums();updateCursorPos();
+}
+function _editorInputWithUndo(){
+  updateLineNums();updateCursorPos();editorDirty=true;
+  clearTimeout(_undoTimer);
+  _undoTimer=setTimeout(()=>_undoPush(false),_UNDO_DEBOUNCE);
+}
+
 const ed=$('editor-text');
-ed.addEventListener('input',function(){updateLineNums();updateCursorPos();editorDirty=true});
+// Seed initial undo state
+_undoPush(true);
+ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',updateCursorPos);
 ed.addEventListener('keyup',updateCursorPos);
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop});
 ed.addEventListener('keydown',function(e){
+  // Ctrl+Z → Undo
+  if(e.key==='z'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();editorUndo();return}
+  // Ctrl+Y or Ctrl+Shift+Z → Redo
+  if((e.key==='y'&&e.ctrlKey)||(e.key==='z'&&e.ctrlKey&&e.shiftKey)){e.preventDefault();editorRedo();return}
   // Tab → indent
-  if(e.key==='Tab'&&!e.ctrlKey){e.preventDefault();const s=this.selectionStart,end=this.selectionEnd;
+  if(e.key==='Tab'&&!e.ctrlKey){e.preventDefault();_undoPush(true);const s=this.selectionStart,end=this.selectionEnd;
     this.value=this.value.substring(0,s)+'    '+this.value.substring(end);
     this.selectionStart=this.selectionEnd=s+4;updateLineNums();return}
   // Ctrl+F → Find
@@ -1858,13 +1931,14 @@ ed.addEventListener('keydown',function(e){
   // Ctrl+G → Go to line
   if(e.key==='g'&&e.ctrlKey){e.preventDefault();goToLinePrompt();return}
   // Ctrl+/ → Toggle comment
-  if(e.key==='/'&&e.ctrlKey){e.preventDefault();toggleComment();return}
+  if(e.key==='/'&&e.ctrlKey){e.preventDefault();_undoPush(true);toggleComment();return}
   // Ctrl+D → Duplicate line
-  if(e.key==='d'&&e.ctrlKey){e.preventDefault();duplicateLine();return}
+  if(e.key==='d'&&e.ctrlKey){e.preventDefault();_undoPush(true);duplicateLine();return}
   // Ctrl+Shift+K → Delete line
-  if(e.key==='K'&&e.ctrlKey&&e.shiftKey){e.preventDefault();deleteLine();return}
+  if(e.key==='K'&&e.ctrlKey&&e.shiftKey){e.preventDefault();_undoPush(true);deleteLine();return}
   // Enter → Auto-indent
   if(e.key==='Enter'&&!e.ctrlKey){
+    _undoPush(true);
     const pos=this.selectionStart,before=this.value.substring(0,pos);
     const line=before.split('\n').pop();
     const indent=line.match(/^(\s*)/)[1];
@@ -2802,7 +2876,7 @@ function createWorkflow(){
   })});
   document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
   document.getElementById('wf-save').onclick=async()=>{
-    let steps;try{steps=JSON.parse($('wf-steps').value)}catch{alert('Invalid JSON');return}
+    let steps;try{steps=JSON.parse($('wf-steps').value)}catch{showToast('Invalid JSON','error');return}
     const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
       description:$('wf-desc').value,steps:steps,_scope:$('wf-scope').value};
     if(!data.id||!data.name)return;
@@ -4006,6 +4080,7 @@ function switchTab(id){
     $('editor-text').value=tab.content;
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
+    _undoStack.length=0;_redoStack.length=0;_undoPush(true);
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
   }
@@ -4559,7 +4634,15 @@ async function saveFile(){
     editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     showToast('Saved: '+tab.filePath,'success',1500);
   }else{
-    try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard (no file path)','info',2000)}catch(e){showToast('No file path to save to','warning',2000)}
+    const r=await call('save_file_as',content,editorFileName||'untitled.txt');
+    if(r&&r.ok){
+      if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang}
+      editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
+      if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
+      showToast('Saved: '+r.path,'success',1500);
+    }else if(r&&r.cancelled){/* user cancelled dialog */}
+    else if(r&&r.error){showToast('Save failed: '+r.error,'error')}
+    else{try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard','info',2000)}catch(e2){showToast('No file path to save to','warning',2000)}}
   }
 }
 
@@ -4570,7 +4653,8 @@ window.toggleTheme=toggleTheme;window.openSettings=openSettings;
 window.openCmdPalette=openCommandPalette;window.addTab=addTab;
 window.focusTerminal=focusTerminal;window.goToLineDialog=goToLineDialog;
 window.showAbout=showAbout;window.openFileDialog=openFileDialog;
-window.saveFile=saveFile;window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
+window.saveFile=saveFile;window.editorUndo=editorUndo;window.editorRedo=editorRedo;
+window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
 window.toggleLang=toggleLang;window.setLang=setLang;
 window.newChat=newChat;window.doSend=doSend;window.doStop=doStop;
 window.clearChat=clearChat;window.uploadImage=uploadImage;

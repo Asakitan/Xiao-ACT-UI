@@ -294,6 +294,78 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
 
 
 # ---------------------------------------------------------------------------
+# UIBridge implementation — delegates vscode API UI calls to the webview
+# ---------------------------------------------------------------------------
+
+class _AIEditorUIBridge:
+    """Concrete UIBridge that delegates to AIEditorAPI._emit / _eval_js.
+
+    Created with a *forward reference* to the API so it can be constructed
+    during ``AIEditorAPI.__init__`` before ``_emit`` / ``_eval_js`` are usable
+    (they become usable once ``set_window`` is called).
+    """
+
+    def __init__(self, api: "AIEditorAPI") -> None:
+        self._api = api
+
+    # -- Output channel --
+    def show_output(self, channel_name: str, content: str) -> None:
+        self._api._emit("show_output", {"name": channel_name, "content": content})
+
+    def clear_output(self, channel_name: str) -> None:
+        self._api._emit("clear_output", {"name": channel_name})
+
+    def dispose_output(self, channel_name: str) -> None:
+        self._api._emit("dispose_output", {"name": channel_name})
+
+    # -- Terminal --
+    def show_terminal(self, name: str) -> None:
+        self._api._eval_js(
+            "document.querySelectorAll('.ptab').forEach(p=>p.classList.toggle('active',p.dataset.ptab==='terminal'));"
+            "var tp=document.getElementById('terminal-panel');if(tp){tp.style.display='flex';tp.classList.add('active')}"
+        )
+
+    def hide_terminal(self, name: str) -> None:
+        self._api._eval_js(
+            "var tp=document.getElementById('terminal-panel');if(tp){tp.style.display='none';tp.classList.remove('active')}"
+        )
+
+    def run_terminal_command(self, name: str, text: str) -> Optional[str]:
+        result = self._api.execute_tool(
+            "runTerminal", json.dumps({"command": text}), True)
+        return result
+
+    # -- Messages / toasts --
+    def show_message(self, level: str, message: str) -> None:
+        self._api._emit("show_message", {"level": level, "message": message})
+
+    # -- Progress --
+    def show_progress(self, message: Optional[str],
+                      increment: Optional[float]) -> None:
+        self._api._emit("show_progress", {"message": message, "increment": increment})
+
+    # -- Status bar --
+    def show_status_bar_item(self, item_id: str, text: str,
+                             tooltip: str, command: str) -> None:
+        self._api._emit("show_status_bar_item", {
+            "id": item_id, "text": text, "tooltip": tooltip, "command": command})
+
+    def hide_status_bar_item(self, item_id: str) -> None:
+        self._api._emit("hide_status_bar_item", {"id": item_id})
+
+    def dispose_status_bar_item(self, item_id: str) -> None:
+        self._api._emit("dispose_status_bar_item", {"id": item_id})
+
+    # -- Pickers / dialogs --
+    def show_quick_pick(self, items: List[Any],
+                        options: Dict[str, Any]) -> Any:
+        return items[0] if items else None
+
+    def show_input_box(self, options: Dict[str, Any]) -> Optional[str]:
+        return options.get("value", "")
+
+
+# ---------------------------------------------------------------------------
 # JS API exposed to the webview window
 # ---------------------------------------------------------------------------
 
@@ -396,6 +468,7 @@ class AIEditorAPI:
         from ai_editor.vscode_api import VscodeNamespace
         self._vscode_ns = VscodeNamespace(
             self._ext_host, self._engine, self._settings_getter)
+        self._vscode_ns.set_ui_bridge(_AIEditorUIBridge(self))
         self._ext_host.set_command_fallback_resolver(
             self._resolve_extension_command_fallback)
 
@@ -955,6 +1028,34 @@ class AIEditorAPI:
                 "content": content,
                 "language": self._editor_language_for_path(path),
                 "truncated": truncated,
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def save_file_as(self, content: str, suggested_name: str = "") -> Dict:
+        """Show a native Save-As dialog, write *content* to the chosen path."""
+        if not self._window:
+            return {"error": "No window"}
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=20,  # SAVE_DIALOG
+                save_filename=suggested_name or "untitled.txt",
+                file_types=(
+                    'Text Files (*.txt;*.md;*.py;*.js;*.ts;*.json;*.html;*.css;*.cs)',
+                    'All Files (*.*)',
+                ),
+            )
+            if not result:
+                return {"cancelled": True}
+            path = result if isinstance(result, str) else (
+                result[0] if isinstance(result, (list, tuple)) else str(result))
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            return {
+                "ok": True,
+                "path": path,
+                "name": os.path.basename(path),
+                "language": self._editor_language_for_path(path),
             }
         except Exception as exc:
             return {"error": str(exc)}
