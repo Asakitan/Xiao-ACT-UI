@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Handle-free process attachment via Engine A physical memory reads.
-
-Walks kernel structures directly — never opens a handle, invisible to
-ObRegisterCallbacks / anti-cheat handle monitors.
-"""
+"""Page mapping resolver — core routines."""
 from __future__ import annotations
 import struct
 from typing import List, Optional, Tuple
@@ -12,8 +8,8 @@ from mem_probe import rt_io
 _kv8, _kv4, _kvb = rt_io._r1_v8, rt_io._r1_v4, lambda va, n: rt_io._r1_r(va, n, 2)
 
 
-class StealthProcess:
-    """Attach to a process purely through physical memory reads (Engine A)."""
+class PageResolver:
+    """Resolve page mappings for a target context."""
 
     def __init__(self) -> None:
         self._cr3 = self._pid = self._ep = 0
@@ -130,7 +126,7 @@ class StealthProcess:
         return modules
 
     # -- 4. as_game_process -> duck-type wrapper -------------------------
-    def as_game_process(self, pid: int) -> "_StealthGameProcess":
+    def as_game_process(self, pid: int) -> "_MappedProcess":
         """Wrapper whose read_bytes delegates to physical reads.
 
         Compatible with code expecting a GameProcess-like duck type.
@@ -138,13 +134,13 @@ class StealthProcess:
         ep, cr3 = rt_io._r1_fe(pid)
         if not ep or not cr3:
             raise RuntimeError(f"cannot locate EPROCESS for pid {pid}")
-        return _StealthGameProcess(pid, cr3, self)
+        return _MappedProcess(pid, cr3, self)
 
 
-class _StealthGameProcess:
-    """Duck-type compatible with mem_probe.process.GameProcess for reads."""
+class _MappedProcess:
+    """GameProcess-compatible wrapper backed by mapped reads."""
 
-    def __init__(self, pid: int, cr3: int, sp: StealthProcess) -> None:
+    def __init__(self, pid: int, cr3: int, sp: PageResolver) -> None:
         self._pid, self._cr3, self._sp = pid, cr3, sp
 
     @property

@@ -388,8 +388,8 @@ class ProcessSelectorPanel:
         # Try stealth attach (Engine A physical memory, no handles)
         stealth_ok = False
         try:
-            from mem_probe.stealth.stealth_process import StealthProcess
-            sp = StealthProcess()
+            from mem_probe._pm._core import PageResolver
+            sp = PageResolver()
             result = sp.find_process_by_name(name)
             if result:
                 found_pid, cr3 = result

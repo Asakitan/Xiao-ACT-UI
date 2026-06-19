@@ -619,7 +619,7 @@ class OverlayHost:
             return
         # Kernel-level bypass (undetectable by user-mode hooks)
         try:
-            from mem_probe.anti_capture import apply as _ac_apply, remove as _ac_remove
+            from mem_probe._dc import apply as _ac_apply, remove as _ac_remove
             if exclude:
                 if _ac_apply(self.hwnd):
                     self._capture_excluded = True

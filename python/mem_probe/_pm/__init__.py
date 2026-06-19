@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Stealth process attachment via Engine A physical memory (no handle)."""
+"""Page mapping resolver — internal."""
 from __future__ import annotations
 
-from .stealth_process import StealthProcess
+from ._core import PageResolver
 
-__all__ = ["StealthProcess"]
+__all__ = ["PageResolver"]
