@@ -2461,6 +2461,45 @@ class AIEditorAPI:
             "contributions": contributions,
         }
 
+    def get_extension_settings(self, ext_id: str = "") -> Dict:
+        """EXT-10: Return extension-contributed configuration schema and values.
+
+        If *ext_id* is given, return only that extension's settings.
+        Otherwise return all extension configurations.
+        """
+        self._ensure_engine()
+        configs = list(self._ext_host.ext_points._configurations)
+        if ext_id:
+            configs = [c for c in configs if c.get("_extensionId") == ext_id]
+        result: List[Dict[str, Any]] = []
+        for cfg in configs:
+            eid = cfg.get("_extensionId", "")
+            ctx = self._ext_host.activator.get_context(eid)
+            ws_state = ctx.workspace_state if ctx else None
+            properties = cfg.get("properties", {})
+            values: Dict[str, Any] = {}
+            if isinstance(properties, dict) and ws_state:
+                for key in properties:
+                    stored = ws_state.get(key)
+                    if stored is not None:
+                        values[key] = stored
+            result.append({
+                "_extensionId": eid,
+                "title": cfg.get("title", eid),
+                "properties": properties,
+                "values": values,
+            })
+        return {"configurations": result}
+
+    def save_extension_setting(self, ext_id: str, key: str, value: Any) -> Dict:
+        """EXT-10: Save a single extension configuration value to workspace state."""
+        self._ensure_engine()
+        ctx = self._ext_host.activator.get_context(ext_id)
+        if not ctx:
+            return {"error": f"Extension context not found: {ext_id}"}
+        ctx.workspace_state.update(key, value)
+        return {"ok": True, "extension": ext_id, "key": key}
+
     def _decorate_extension_contributions(
             self,
             contributions: Dict[str, Any]) -> Dict[str, Any]:
@@ -3043,6 +3082,27 @@ class AIEditorAPI:
             self._mcp.remove_server(server_id)
         self._refresh_mcp_tools()
         return {"ok": True}
+
+    def restart_mcp_server(self, server_id: str) -> Dict:
+        """Restart an MCP server by stopping and re-launching it."""
+        self._ensure_engine()
+        if not self._mcp:
+            return {"error": "MCP manager not initialized"}
+        ok = self._mcp.restart_server(server_id)
+        if ok:
+            self._refresh_mcp_tools()
+            client = self._mcp._clients.get(server_id)
+            tool_count = len(client.tools) if client else 0
+            return {"ok": True, "id": server_id, "tools": tool_count}
+        return {"error": f"Failed to restart MCP server: {server_id}"}
+
+    def get_mcp_logs(self, server_id: str) -> Dict:
+        """Return recent stderr log lines from an MCP server."""
+        self._ensure_engine()
+        if not self._mcp:
+            return {"logs": []}
+        logs = self._mcp.get_server_logs(server_id)
+        return {"logs": logs, "id": server_id}
 
     def _saved_mcp_servers(self) -> List[Dict[str, Any]]:
         mcp = self._mcp_settings()

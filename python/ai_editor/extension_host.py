@@ -1125,6 +1125,11 @@ class ExtensionActivator:
     def list_activated(self) -> List[ActivatedExtension]:
         return list(self._activated.values())
 
+    def get_context(self, ext_id: str) -> Optional[ExtensionContext]:
+        """Return the ExtensionContext for an activated extension, or None."""
+        act = self._activated.get(ext_id)
+        return act.context if act else None
+
 
 # ---------------------------------------------------------------------------
 # VscodeTypes — minimal type exports for compatibility

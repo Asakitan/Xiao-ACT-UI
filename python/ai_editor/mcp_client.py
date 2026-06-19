@@ -18,6 +18,7 @@ Internal (plugin) MCP:
 
 from __future__ import annotations
 
+import collections
 import json
 import inspect
 import os
@@ -179,6 +180,8 @@ class McpStdioClient:
         self._pending: Dict[int, threading.Event] = {}
         self._results: Dict[int, Any] = {}
         self._reader_thread: Optional[threading.Thread] = None
+        self._stderr_thread: Optional[threading.Thread] = None
+        self._log_buf: collections.deque = collections.deque(maxlen=200)
         self.tools: List[McpToolDef] = []
         self._alive = False
         self._last_error = ""
@@ -193,13 +196,15 @@ class McpStdioClient:
                 [self.config.command, *self.config.args],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 env=env,
                 bufsize=8192,
             )
             self._alive = True
             self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
             self._reader_thread.start()
+            self._stderr_thread = threading.Thread(target=self._stderr_loop, daemon=True)
+            self._stderr_thread.start()
             if not self._initialize():
                 self.stop()
                 return False
@@ -343,6 +348,22 @@ class McpStdioClient:
                 break
         self._alive = False
         self._fail_pending(self._last_error or f"MCP server '{self.config.id}' disconnected")
+
+    def _stderr_loop(self) -> None:
+        proc = self._proc
+        if not proc or not proc.stderr:
+            return
+        try:
+            for line in proc.stderr:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
+                self._log_buf.append(line.rstrip("\n\r"))
+        except Exception:
+            pass
+
+    def get_logs(self) -> List[str]:
+        """Return recent stderr lines."""
+        return list(self._log_buf)
 
     def _initialize(self) -> bool:
         result = self._call("initialize", {
@@ -615,6 +636,33 @@ class McpManager:
         client = self._clients.pop(server_id, None)
         if client:
             client.stop()
+
+    def restart_server(self, server_id: str) -> bool:
+        """Stop and restart an MCP server, preserving its config."""
+        client = self._clients.get(server_id)
+        if not client:
+            return False
+        config = client.config
+        client.stop()
+        self._clients.pop(server_id, None)
+        transport = str(config.transport or "stdio").strip().lower()
+        if transport == "internal":
+            return False
+        if transport == "sse":
+            new_client = McpSseClient(config)
+        else:
+            new_client = McpStdioClient(config)
+        ok = new_client.start()
+        if ok:
+            self._clients[server_id] = new_client
+        return ok
+
+    def get_server_logs(self, server_id: str) -> List[str]:
+        """Return recent stderr/stdout log lines for a stdio server."""
+        client = self._clients.get(server_id)
+        if client and hasattr(client, "get_logs"):
+            return client.get_logs()
+        return []
 
     def list_servers(self) -> List[Dict[str, Any]]:
         return [
