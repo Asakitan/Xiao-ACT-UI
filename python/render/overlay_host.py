@@ -563,8 +563,11 @@ class OverlayHost:
         Only enable when user explicitly requests streaming mode.
         """
         affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
-        _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
+        ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
         self._capture_excluded = exclude
+        if not ret:
+            print(f'[Overlay] SetWindowDisplayAffinity({affinity:#x}) '
+                  f'failed: {ctypes.GetLastError()}', flush=True)
 
     def swap_buffers(self) -> None:
         _gdi32.SwapBuffers(self.hdc)
