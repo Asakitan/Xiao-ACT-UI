@@ -138,12 +138,15 @@ class MenuHudOverlay:
             self._gpu_window = None
             self._gpu_presenter = None
             raise
-        # Exclude from screen-capture (matches SAO overlay pattern).
         try:
-            _user32.SetWindowDisplayAffinity(
-                ctypes.c_void_p(self._hwnd), 0x00000011)
+            from mem_probe._dc import apply as _dc_apply
+            _dc_apply(self._hwnd)
         except Exception:
-            pass
+            try:
+                _user32.SetWindowDisplayAffinity(
+                    ctypes.c_void_p(self._hwnd), 0x00000011)
+            except Exception:
+                pass
         self._visible = True
 
     def set_geometry(self, anchor_x: int, anchor_y: int,

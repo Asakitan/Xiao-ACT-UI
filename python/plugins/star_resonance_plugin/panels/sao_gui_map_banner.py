@@ -136,11 +136,14 @@ class MapBannerOverlay:
                 ctypes.windll.user32.SetClassLongW(hwnd, _GCL_STYLE, _cls & ~_CS_DS)
         except Exception:
             pass
-        # 防止被游戏/录屏捕获遮挡 (与 alert 一致)
         try:
-            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
+            from mem_probe._dc import apply as _dc_apply
+            _dc_apply(hwnd)
         except Exception:
-            pass
+            try:
+                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
+            except Exception:
+                pass
 
         entry = {
             'win': win, 'hwnd': hwnd, 'base_img': base_img,

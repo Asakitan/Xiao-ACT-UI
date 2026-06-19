@@ -480,7 +480,11 @@ class SAOPlayerGUIFloatChromeMixin:
                         _SWP_NOMOVE | _SWP_NOSIZE
                         | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
                     )
-                    _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
+                    try:
+                        from mem_probe._dc import apply as _dc_apply
+                        _dc_apply(hwnd)
+                    except Exception:
+                        _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
                 except Exception:
                     pass
                 if not closing:

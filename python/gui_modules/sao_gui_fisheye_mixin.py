@@ -909,23 +909,29 @@ class SAOPlayerGUIFisheyeMixin:
         _fisheye_capture_excluded = [False]
 
         def _set_fisheye_capture_excluded(exclude: bool):
-            # Only exclude the fisheye window from capture when the capture
-            # source is the desktop itself. The preferred game-window DXGI
-            # source does not capture this overlay, so leaving affinity off
-            # lets normal screenshots include the visible Saomenu backdrop.
             try:
-                import ctypes as _ct
-                _u32 = _ct.windll.user32
-                _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
-                _u32.SetWindowDisplayAffinity.restype = _ct.c_int
                 _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
                 if not _hwnd:
                     return
-                flag = 0x00000011 if exclude else 0x00000000
-                _u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag)
+                from mem_probe._dc import apply as _dc_apply, remove as _dc_remove
+                if exclude:
+                    _dc_apply(_hwnd)
+                else:
+                    _dc_remove(_hwnd)
                 _fisheye_capture_excluded[0] = bool(exclude)
             except Exception:
-                pass
+                try:
+                    import ctypes as _ct
+                    _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                    if _hwnd:
+                        _u32 = _ct.windll.user32
+                        _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
+                        _u32.SetWindowDisplayAffinity.restype = _ct.c_int
+                        flag = 0x00000011 if exclude else 0x00000000
+                        _u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag)
+                        _fisheye_capture_excluded[0] = bool(exclude)
+                except Exception:
+                    pass
 
         # v2.3.x+: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级 (有限次)。
         # GpuOverlayWindow 默认是 WS_EX_TOPMOST，并且在首次实际渲染时
