@@ -1550,39 +1550,70 @@ class AIEditorAPI:
         self._provider_registry.unregister(provider_id)
         return {"ok": True}
 
-    def _create_provider_controller(self, prov) -> ChatController:
-        """Create a ChatController for a non-default provider."""
+    def _create_provider_controller(self, prov):
+        """Create a controller for a non-default provider.
+
+        For claude-code / codex / copilot: prefer the real CLI if installed.
+        Falls back to our LLMEngine-based ChatController otherwise.
+        """
+        pid = prov.id
+
+        if pid in ("claude-code", "codex", "copilot"):
+            cli_ctrl = self._try_create_cli_controller(prov)
+            if cli_ctrl is not None:
+                return cli_ctrl
+
         cfg = self._provider_config_for(prov)
         engine = LLMEngine(cfg)
         conv = Conversation(system_prompt=prov.system_prompt)
         ctrl = ChatController(engine, self._registry, conv)
-        pid = prov.id
-        ctrl.on_stream_delta = lambda msg, t: self._emit(
-            f"provider_stream_delta", {"provider": pid, "content": t})
-        ctrl.on_thinking_delta = lambda msg, t: self._emit(
-            f"provider_thinking_delta", {"provider": pid, "content": t})
-        ctrl.on_stream_end = lambda msg: self._emit(
-            f"provider_stream_end", {"provider": pid,
-             "content": msg.content, "model": msg.model,
-             "thinking": msg.thinking,
-             **({"error": msg.content} if msg.is_error else {}),
-             **({"usage": msg.usage} if msg.usage else {})})
-        ctrl.on_tool_start = lambda cid, n, a, state="": self._emit(
-            f"provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a, "state": state})
-        ctrl.on_tool_end = lambda cid, n, r, state="": self._emit(
-            f"provider_tool_end", {"provider": pid, "id": cid, "name": n, "result": r, "state": state})
-        ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
-        ctrl.on_tool_progress = lambda cid, n, p: self._emit(
-            'provider_tool_progress', {'provider': pid, 'id': cid, 'name': n, 'progress': p})
-        ctrl.on_token_warning = lambda u, l, r: self._emit(
-            'provider_token_warning', {'provider': pid, 'used': u, 'limit': l, 'percent': int(r * 100)})
-        ctrl.on_error = lambda e: self._emit(
-            f"provider_error", {"provider": pid, "error": e})
-        ctrl.on_idle = lambda: self._emit(
-            f"provider_idle", {"provider": pid})
+        self._wire_provider_callbacks(ctrl, pid)
         ctrl.resolve_variable = self._resolve_variable
         self._configure_controller_tooling(ctrl)
         return ctrl
+
+    def _try_create_cli_controller(self, prov):
+        """Return a CliChatController if the provider's CLI is installed."""
+        try:
+            from ai_editor.cli_controller import (
+                CliChatController, find_cli, get_cli_args,
+            )
+        except ImportError:
+            return None
+        cli_path = find_cli(prov.id, self._settings_getter)
+        if not cli_path:
+            return None
+        cli_args = get_cli_args(prov.id, self._settings_getter)
+        cwd = self._workspace_root() or None
+        ctrl = CliChatController(cli_path, prov.id, cli_args, cwd)
+        self._wire_provider_callbacks(ctrl, prov.id)
+        return ctrl
+
+    def _wire_provider_callbacks(self, ctrl, pid: str) -> None:
+        """Attach event callbacks that emit to the webview."""
+        ctrl.on_stream_delta = lambda msg, t: self._emit(
+            "provider_stream_delta", {"provider": pid, "content": t})
+        ctrl.on_thinking_delta = lambda msg, t: self._emit(
+            "provider_thinking_delta", {"provider": pid, "content": t})
+        ctrl.on_stream_end = lambda msg: self._emit(
+            "provider_stream_end", {"provider": pid,
+             "content": msg.content, "model": msg.model,
+             "thinking": getattr(msg, "thinking", ""),
+             **({"error": msg.content} if msg.is_error else {}),
+             **({"usage": msg.usage} if msg.usage else {})})
+        ctrl.on_tool_start = lambda cid, n, a, state="": self._emit(
+            "provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a, "state": state})
+        ctrl.on_tool_end = lambda cid, n, r, state="": self._emit(
+            "provider_tool_end", {"provider": pid, "id": cid, "name": n, "result": r, "state": state})
+        ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
+        ctrl.on_tool_progress = lambda cid, n, p: self._emit(
+            "provider_tool_progress", {"provider": pid, "id": cid, "name": n, "progress": p})
+        ctrl.on_token_warning = lambda u, l, r: self._emit(
+            "provider_token_warning", {"provider": pid, "used": u, "limit": l, "percent": int(r * 100)})
+        ctrl.on_error = lambda e: self._emit(
+            "provider_error", {"provider": pid, "error": e})
+        ctrl.on_idle = lambda: self._emit(
+            "provider_idle", {"provider": pid})
 
     def _controller_extra_tools(self) -> List[Dict[str, Any]]:
         if not self._mcp:

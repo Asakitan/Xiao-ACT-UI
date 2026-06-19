@@ -309,16 +309,28 @@ def describe_provider_status(
         return status
 
     if provider.id == "copilot":
+        cli_info = _cli_status("copilot", "gh", settings_getter)
+        cli_ok = cli_info.get("cli_available", False)
         cfg = _copilot_runtime_config(provider, settings_getter, base_config)
+        status.update(cli_info)
         status.update({
-            "requested_transport": "copilot-chat",
-            "runtime_mode": "backend-fallback",
+            "requested_transport": "cli" if cli_ok else "copilot-chat",
+            "runtime_mode": "cli" if cli_ok else "backend-fallback",
             "api_key_available": _has_copilot_auth(settings_getter),
-            "direct_transport_available": False,
             "capability": "github-copilot-chat",
         })
+        if cli_ok:
+            status.update({
+                "resolved_transport": "cli",
+                "transport": "cli",
+                "model": "copilot (CLI)",
+            })
+            return status
         if not _config_is_runnable(cfg):
-            return _unavailable(status, COPILOT_UNAVAILABLE_REASON)
+            return _unavailable(
+                status,
+                "Install the GitHub CLI ('gh') with Copilot extension, or configure a provider API key.",
+            )
         status.update({
             "backend_provider": cfg.provider,
             "resolved_transport": cfg.transport,
@@ -328,50 +340,35 @@ def describe_provider_status(
         return status
 
     if provider.id == "claude-code":
-        section = _get_provider_section("claude_code", settings_getter)
-        prefer_cli = bool(section.get("prefer_cli"))
-        cfg = build_provider_runtime_config(provider, settings_getter, base_config)
-        status.update(_cli_status("claude_code", "claude", settings_getter))
+        cli_info = _cli_status("claude_code", "claude", settings_getter)
+        cli_ok = cli_info.get("cli_available", False)
+        status.update(cli_info)
         status.update({
-            "requested_transport": "cli" if prefer_cli else "chat_completions",
-            "resolved_transport": "chat_completions",
-            "transport": "chat_completions",
-            "runtime_mode": "cli-fallback" if prefer_cli else "direct",
-            "backend_provider": "anthropic",
-            "api_key_available": bool(_get_provider_key("anthropic", settings_getter)),
-            "prefer_cli": prefer_cli,
-            "model": cfg.effective_model if cfg else provider.model,
+            "requested_transport": "cli",
+            "resolved_transport": "cli",
+            "transport": "cli",
+            "runtime_mode": "cli",
+            "backend_provider": "cli",
+            "model": "claude (CLI)",
         })
-        if not _config_is_runnable(cfg):
-            return _unavailable(
-                status,
-                "Claude Code needs an Anthropic API key in Provider Keys or as the active Anthropic provider.",
-            )
+        if not cli_ok:
+            return _unavailable(status, "Install the 'claude' CLI to enable this tab.")
         return status
 
     if provider.id == "codex":
-        requested = _normalize_transport(
-            _get_provider_option("codex", "transport", settings_getter),
-            "chat_completions",
-            {"chat_completions", "responses", "cli"},
-        )
-        resolved = "responses" if requested == "cli" else requested
-        cfg = build_provider_runtime_config(provider, settings_getter, base_config)
-        status.update(_cli_status("codex", "codex", settings_getter))
+        cli_info = _cli_status("codex", "codex", settings_getter)
+        cli_ok = cli_info.get("cli_available", False)
+        status.update(cli_info)
         status.update({
-            "requested_transport": requested,
-            "resolved_transport": resolved,
-            "transport": resolved,
-            "runtime_mode": "cli-fallback" if requested == "cli" else "direct",
-            "backend_provider": "openai",
-            "api_key_available": bool(_get_provider_key("openai", settings_getter)),
-            "model": cfg.effective_model if cfg else provider.model,
+            "requested_transport": "cli",
+            "resolved_transport": "cli",
+            "transport": "cli",
+            "runtime_mode": "cli",
+            "backend_provider": "cli",
+            "model": "codex (CLI)",
         })
-        if not _config_is_runnable(cfg):
-            return _unavailable(
-                status,
-                "Codex needs an OpenAI API key in Provider Keys or as the active OpenAI provider.",
-            )
+        if not cli_ok:
+            return _unavailable(status, "Install the 'codex' CLI to enable this tab.")
         return status
 
     cfg = build_provider_runtime_config(provider, settings_getter, base_config)

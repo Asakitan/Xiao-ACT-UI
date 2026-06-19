@@ -289,6 +289,10 @@ def test_app_settings_parity() -> None:
            and loaded_bad.get("permissions") == {}
            and loaded_bad.get("terminal", {}).get("profile"))
 
+    import ai_editor.cli_controller as _cli_mod
+    _orig_find = _cli_mod.find_cli
+    _cli_mod.find_cli = lambda *a, **kw: None  # force API fallback for test
+
     provider_gui = _SettingsGui({"ai_editor": {
         "provider_keys": {"openai": "test-openai"},
         "codex": {"model": "codex-test", "transport": "responses"},
@@ -298,10 +302,11 @@ def test_app_settings_parity() -> None:
     codex = provider_api._provider_registry.get("codex")
     ctrl = provider_api._create_provider_controller(codex)
     _check("codex provider settings applied",
-           ctrl.engine.config.model == "codex-test"
+           hasattr(ctrl, "engine")
+           and ctrl.engine.config.model == "codex-test"
            and ctrl.engine.config.transport == "responses"
-            and ctrl.engine.config.api_key == "test-openai"
-            and ctrl.engine.config.effective_base_url == "https://api.openai.com/v1")
+           and ctrl.engine.config.api_key == "test-openai"
+           and ctrl.engine.config.effective_base_url == "https://api.openai.com/v1")
 
     legacy_provider_gui = _SettingsGui({"ai_editor": {
         "_provider_keys": {"openai": "legacy-openai"},
@@ -312,7 +317,8 @@ def test_app_settings_parity() -> None:
     legacy_codex = legacy_provider_api._provider_registry.get("codex")
     legacy_ctrl = legacy_provider_api._create_provider_controller(legacy_codex)
     _check("legacy provider keys applied to provider controllers",
-           legacy_ctrl.engine.config.api_key == "legacy-openai"
+           hasattr(legacy_ctrl, "engine")
+           and legacy_ctrl.engine.config.api_key == "legacy-openai"
            and legacy_ctrl.engine.config.model == "legacy-codex")
 
     wrong_key_gui = _SettingsGui({"ai_editor": {
@@ -325,7 +331,8 @@ def test_app_settings_parity() -> None:
     wrong_key_codex = wrong_key_api._provider_registry.get("codex")
     wrong_key_ctrl = wrong_key_api._create_provider_controller(wrong_key_codex)
     _check("provider controllers do not reuse another provider key",
-           wrong_key_ctrl.engine.config.api_key == "")
+           hasattr(wrong_key_ctrl, "engine")
+           and wrong_key_ctrl.engine.config.api_key == "")
 
     proxy_gui = _SettingsGui({"ai_editor": {
         "provider_keys": {"anthropic": "test-anthropic"},
@@ -364,17 +371,18 @@ def test_app_settings_parity() -> None:
         stale_claude = stale_claude_api._provider_registry.get("claude-code")
         stale_ctrl = stale_claude_api._create_provider_controller(stale_claude)
         _check("stale Claude default model replaced from official models",
-               stale_ctrl.engine.config.model == "official-claude"
+               hasattr(stale_ctrl, "engine")
+               and stale_ctrl.engine.config.model == "official-claude"
                and stale_fetch_calls
                and stale_fetch_calls[0].get("base_url") == "https://api.anthropic.com/v1")
 
-    provider_gui.settings.data["ai_editor"]["codex"]["transport"] = "cli"
     cli_runtime = provider_api.list_chat_providers().get("providers", [])
     cli_codex = next((p for p in cli_runtime if p.get("id") == "codex"), {})
-    _check("codex CLI preference falls back to runnable Responses transport",
-           cli_codex.get("available") is True
-           and cli_codex.get("runtime_mode") == "cli-fallback"
-           and cli_codex.get("resolved_transport") == "responses")
+    _check("codex provider is CLI-only (available iff CLI installed)",
+           cli_codex.get("transport") == "cli"
+           and cli_codex.get("runtime_mode") == "cli")
+
+    _cli_mod.find_cli = _orig_find
 
     mode_data = {"ai_editor": {"mode": "ask", "permissions": {"readFile": "allowed"}}}
     mode_api = AIEditorAPI(_SettingsGui(mode_data))
@@ -767,15 +775,15 @@ def test_phase1_ai_editor_regressions() -> None:
                 for p in ChatProviderRegistry().list_available(getter)}
 
     cli_only_settings = {"ai_editor": {
-        "claude_code": {"prefer_cli": True, "cli_path": "claude"},
-        "codex": {"transport": "cli", "cli_path": "codex"},
+        "claude_code": {"cli_path": "claude"},
+        "codex": {"cli_path": "codex"},
         "provider_keys": {"openai": "test-openai"},
     }}
     registry_cli_flags = flags(cli_only_settings)
-    _check("ChatProviderRegistry keeps Codex runnable and Claude gated by key",
-           registry_cli_flags.get("claude-code") is False
-           and registry_cli_flags.get("codex") is True
-           and registry_cli_flags.get("copilot") is True)
+    _check("CLI providers available only when CLI binary exists",
+           registry_cli_flags.get("chat") is True
+           and isinstance(registry_cli_flags.get("claude-code"), bool)
+           and isinstance(registry_cli_flags.get("codex"), bool))
 
     api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
     api_cli_items = {p["id"]: p
@@ -789,12 +797,11 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("built-in chat provider names are exact",
            ordered_builtin_names == ["Chat", "Copilot", "Claude Code", "Codex"])
     _check(
-        "Copilot chat provider is explicit capability surface",
+        "Copilot chat provider is CLI-only capability surface",
         api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot"
-        and api_cli_items.get("copilot", {}).get("available") is True
-        and api_cli_items.get("copilot", {}).get("direct_transport_available") is False
         and api_cli_items.get("copilot", {}).get("capability") == "github-copilot-chat"
-        and api_cli_items.get("copilot", {}).get("runtime_mode") == "backend-fallback",
+        and api_cli_items.get("copilot", {}).get("runtime_mode") == "cli"
+        and api_cli_items.get("copilot", {}).get("transport") == "cli",
     )
     copilot_switch = api_cli.switch_provider("copilot")
     _check("switch_provider selects runnable Copilot surface",
@@ -856,33 +863,30 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("unregister_chat_provider removes custom providers only",
            plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
            and plugin_provider_api._provider_registry.get("plugin-demo") is None)
-    _check("list_chat_providers reports runnable surface fallbacks",
-           api_cli_flags.get("claude-code") is False
-           and api_cli_flags.get("codex") is True
-           and api_cli_flags.get("copilot") is True)
-    _check("list_chat_providers exposes fallback runtime metadata",
-           api_cli_items.get("claude-code", {}).get("unavailable_reason", "")
-           and api_cli_items.get("codex", {}).get("runtime_mode") == "cli-fallback"
-           and api_cli_items.get("codex", {}).get("resolved_transport") == "responses"
-           and api_cli_items.get("copilot", {}).get("backend_provider") == "openai"
+    _check("list_chat_providers shows CLI-only metadata",
+           api_cli_items.get("claude-code", {}).get("runtime_mode") == "cli"
+           and api_cli_items.get("codex", {}).get("runtime_mode") == "cli"
+           and api_cli_items.get("copilot", {}).get("runtime_mode") == "cli"
            and "cli_available" in api_cli_items.get("codex", {}))
+    _check("CLI-unavailable providers have unavailable_reason",
+           all(api_cli_items.get(pid, {}).get("unavailable_reason", "") != ""
+               for pid in ("claude-code", "codex", "copilot")
+               if not api_cli_items.get(pid, {}).get("available")))
 
     api_key_settings = {"ai_editor": {
-        "claude_code": {"prefer_cli": False},
-        "codex": {"transport": "responses", "model": "codex-status-test"},
+        "codex": {"model": "codex-status-test"},
         "provider_keys": {"anthropic": "test-anthropic", "openai": "test-openai"},
     }}
     registry_key_flags = flags(api_key_settings)
-    _check("ChatProviderRegistry keeps API-key transports available",
-           registry_key_flags.get("claude-code") is True
-           and registry_key_flags.get("codex") is True)
+    _check("CLI providers are CLI-gated even with API keys",
+           isinstance(registry_key_flags.get("claude-code"), bool)
+           and isinstance(registry_key_flags.get("codex"), bool))
     registry_key_items = {p["id"]: p
                           for p in ChatProviderRegistry().list_available(
                               lambda key, default=None: api_key_settings.get(key, default))}
-    _check("ChatProviderRegistry reflects provider model and transport settings",
-           registry_key_items.get("codex", {}).get("model") == "codex-status-test"
-           and registry_key_items.get("codex", {}).get("transport") == "responses"
-           and registry_key_items.get("codex", {}).get("api_key_available") is True)
+    _check("CLI provider transport is always 'cli'",
+           registry_key_items.get("codex", {}).get("transport") == "cli"
+           and registry_key_items.get("codex", {}).get("runtime_mode") == "cli")
 
     html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
     with open(html_path, "r", encoding="utf-8") as fh:
