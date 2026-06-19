@@ -96,6 +96,11 @@ class SAOPlayerGUIPanelsMixin:
         if self._process_selector_panel.is_visible():
             self._process_selector_panel.hide()
         else:
+            # Process selector and fisheye are mutually exclusive
+            try:
+                self._stop_fisheye_overlay()
+            except Exception:
+                pass
             self._process_selector_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._process_selector_panel))
 

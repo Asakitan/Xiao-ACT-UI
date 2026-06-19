@@ -92,6 +92,19 @@ MODULE_PRIMARY = "primary"
 MODULE_SELECTED = "selected"
 MODULE_ALL = "all"
 
+_cached_sp_v1 = None
+_cached_gp_v1 = None
+
+
+def _set_cached_result(sp, gp):
+    global _cached_sp_v1, _cached_gp_v1
+    _cached_sp_v1, _cached_gp_v1 = sp, gp
+
+
+def _get_cached_game_process():
+    return _cached_gp_v1
+
+
 _BG = "#1a1d23"
 _BG_HEADER = "#22262e"
 _BG_ROW = "#1e2128"
@@ -231,6 +244,9 @@ class ProcessSelectorPanel:
                                         fg=_FG_DIM, font=_sao_font(8), anchor="w")
         self._attached_label.pack(side=tk.LEFT, padx=(4, 0), fill=tk.X, expand=True)
 
+        btn_close = action_button(footer, "Close", self.hide)
+        btn_close.pack(side=tk.RIGHT, padx=(4, 0))
+
         btn_attach = action_button(footer, "Attach", self._do_attach)
         btn_attach.pack(side=tk.RIGHT, padx=(4, 0))
 
@@ -368,11 +384,28 @@ class ProcessSelectorPanel:
             config.GAME_PROCESS_NAMES = [name]
         except Exception:
             pass
+
+        # Try stealth attach (Engine A physical memory, no handles)
+        stealth_ok = False
         try:
-            from mem_probe.process import set_game_process_names
-            set_game_process_names([name])
+            from mem_probe.stealth.stealth_process import StealthProcess
+            sp = StealthProcess()
+            result = sp.find_process_by_name(name)
+            if result:
+                found_pid, cr3 = result
+                gp = sp.as_game_process(found_pid)
+                _set_cached_result(sp, gp)
+                pid = found_pid
+                stealth_ok = True
         except Exception:
             pass
+
+        if not stealth_ok:
+            try:
+                from mem_probe.process import set_game_process_names
+                set_game_process_names([name])
+            except Exception:
+                pass
 
         # Store in settings
         try:
@@ -383,8 +416,9 @@ class ProcessSelectorPanel:
         except Exception:
             pass
 
+        mode = "Stealth" if stealth_ok else "Attached"
         if self._attached_label:
-            self._attached_label.configure(text=f"✓ Attached: {name} ({pid})", fg=_ACCENT)
+            self._attached_label.configure(text=f"✓ {mode}: {name} ({pid})", fg=_ACCENT)
 
         try:
             play_sound("alert_close")

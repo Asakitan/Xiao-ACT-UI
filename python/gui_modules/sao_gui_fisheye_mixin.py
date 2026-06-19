@@ -311,11 +311,13 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception:
                 pass
 
+    _FISHEYE_EXCLUDE_PANELS = frozenset({'_process_selector_panel'})
+
     def _iter_fisheye_panels(self):
         seen = set()
         attrs = tuple(getattr(self, '_PLATFORM_PANEL_ATTRS', ()) or ())
         for attr in self._detect_panel_attrs(self) + tuple(attrs):
-            if attr in seen:
+            if attr in seen or attr in self._FISHEYE_EXCLUDE_PANELS:
                 continue
             seen.add(attr)
             yield getattr(self, attr, None)
@@ -404,6 +406,13 @@ class SAOPlayerGUIFisheyeMixin:
         self._stop_fisheye_overlay()
         if not (self._sao_menu is not None and self._sao_menu.visible) and not self._any_panel_open():
             return
+        # Process selector is mutually exclusive with fisheye
+        ps = getattr(self, '_process_selector_panel', None)
+        if ps is not None:
+            try:
+                ps.hide()
+            except Exception:
+                pass
         self._lift_loop_active = False
 
         try:
