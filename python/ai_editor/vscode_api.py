@@ -36,23 +36,9 @@ from ai_editor.extension_host import (
 )
 
 
-# ---------------------------------------------------------------------------
-# UIBridge — protocol for pushing UI events to the webview
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class UIBridge(Protocol):
-    def show_output(self, channel_name: str, content: str) -> None: ...
-    def clear_output(self, channel_name: str) -> None: ...
-    def dispose_output(self, channel_name: str) -> None: ...
-    def show_terminal(self, name: str) -> None: ...
-    def hide_terminal(self, name: str) -> None: ...
-    def run_terminal_command(self, name: str, text: str) -> Optional[str]: ...
-    def show_message(self, level: str, message: str) -> None: ...
-    def show_progress(self, message: Optional[str], increment: Optional[float]) -> None: ...
-    def show_status_bar_item(self, item_id: str, text: str, tooltip: str, command: str) -> None: ...
-    def hide_status_bar_item(self, item_id: str) -> None: ...
-    def dispose_status_bar_item(self, item_id: str) -> None: ...
+# NOTE: UIBridge Protocol is defined once below (after WorkspaceEdit) with
+# the complete method set including show_quick_pick, show_input_box, and
+# webview panel methods.  Do NOT add a duplicate here.
 
 
 # ---------------------------------------------------------------------------
@@ -736,6 +722,11 @@ class UIBridge(Protocol):
                         options: Dict[str, Any]) -> Any: ...
     def show_input_box(self, options: Dict[str, Any]) -> Optional[str]: ...
 
+    # -- Webview panels --
+    def render_webview_panel(self, view_id: str, html: str) -> None: ...
+    def post_webview_message(self, view_id: str, message: Any) -> None: ...
+    def receive_webview_message(self, view_id: str, message: Any) -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # VscodeNamespace — the main vscode.* API object
@@ -794,6 +785,7 @@ class VscodeNamespace:
         self._task_executions: List[_TaskExecution] = []
         self._debug_sessions: List[_DebugSession] = []
         self._workspace_watchers: List[_FileSystemWatcher] = []
+        self._ignored_file_providers: List[Any] = []
         self._tasks_start_emitter = EventEmitter()
         self._tasks_end_emitter = EventEmitter()
         self._debug_start_emitter = EventEmitter()
@@ -905,7 +897,7 @@ class VscodeNamespace:
                 "showInputBox": self._show_input_box,
                 "createOutputChannel": lambda name, **kw: _OutputChannel(name, self._ui_bridge),
                 "createStatusBarItem": lambda *a, **kw: _StatusBarItem(self._ui_bridge),
-                "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title),
+                "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title, bridge=self._ui_bridge),
                 "showTextDocument": self._show_text_document,
                 "createTreeView": self._create_tree_view,
                 "registerTreeDataProvider": self._register_tree_data_provider,
@@ -988,7 +980,7 @@ class VscodeNamespace:
             "provider": provider,
             "options": dict(options or {}),
         }
-        view = _WebviewView(view_id)
+        view = _WebviewView(view_id, bridge=self._ui_bridge)
         self._webview_views[view_id] = view
         if hasattr(provider, "resolveWebviewView"):
             try:
@@ -1960,15 +1952,33 @@ class VscodeNamespace:
     def _file_is_ignored(self, uri: Any, token: Any = None) -> bool:
         """Check if a file should be ignored (.gitignore/.copilotignore)."""
         path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        # Use path-component matching instead of substring to avoid false
+        # positives (e.g. 'my.environment.py' matching '.env').
+        parts = set(path.replace("\\", "/").split("/"))
         ignore_patterns = [".git", "__pycache__", "node_modules", ".env"]
         for pat in ignore_patterns:
-            if pat in path:
+            if pat in parts:
                 return True
+        # Consult extension-registered ignore providers
+        for prov in list(self._ignored_file_providers):
+            try:
+                if hasattr(prov, "isFileIgnored") and prov.isFileIgnored(uri):
+                    return True
+                elif callable(prov) and prov(uri):
+                    return True
+            except Exception:
+                pass
         return False
 
     def _register_ignored_file_provider(self, provider: Any) -> Disposable:
         """Register a file-ignore provider."""
-        return Disposable()
+        self._ignored_file_providers.append(provider)
+        def _dispose():
+            try:
+                self._ignored_file_providers.remove(provider)
+            except ValueError:
+                pass
+        return Disposable(_dispose)
 
     def _register_lm_provider(self, provider_id: str, provider: Any,
                                metadata: Dict = None) -> Disposable:
@@ -2129,6 +2139,33 @@ class VscodeNamespace:
             if external_disposable:
                 external_disposable.dispose()
         return Disposable(_dispose)
+
+    # ── Webview message routing (frontend -> extension) ──
+
+    def deliver_webview_message(self, view_id: str, message: Any) -> bool:
+        """Route a message from the webview HTML back to extension listeners.
+
+        Called by the app layer when the frontend iframe executes
+        ``acquireVsCodeApi().postMessage(data)``.  Finds the matching
+        ``_WebviewView`` or ``_WebviewPanel`` and fires its
+        ``onDidReceiveMessage`` emitter so extension code runs.
+        """
+        view = self._webview_views.get(view_id)
+        if view is not None:
+            view.webview.receive_message_from_webview(message)
+            return True
+        return False
+
+    def get_webview_html(self, view_id: str) -> Optional[str]:
+        """Return the current HTML for a webview view, or None."""
+        view = self._webview_views.get(view_id)
+        if view is not None:
+            return view.webview.html or None
+        return None
+
+    def list_webview_view_ids(self) -> List[str]:
+        """Return all registered webview view IDs."""
+        return list(self._webview_views.keys())
 
     # ── Accessors for host integration ──
 
@@ -2320,15 +2357,38 @@ class _UIProgress:
 
 
 class _WebviewPanel:
-    def __init__(self, view_type: str = "", title: str = "") -> None:
-        self.view_type = view_type
+    def __init__(self, view_type: str = "", title: str = "",
+                 bridge: Optional[UIBridge] = None) -> None:
+        self.viewType = view_type          # camelCase (VSCode canonical)
+        self.view_type = view_type         # snake_case alias (backward compat)
         self.title = title
         self.viewColumn = 1
         self.options: Dict[str, Any] = {}
+        self.iconPath = None
         self.webview = _Webview()
         self.visible = True
         self.active = True
+        self._bridge = bridge
         self._dispose_emitter = EventEmitter()
+        self._view_state_emitter = EventEmitter()
+
+        # Wire html change -> bridge
+        self.webview._on_html_changed = self._push_html
+        self.webview._on_post_message = self._push_message
+
+    def _push_html(self, html: str) -> None:
+        if self._bridge is not None:
+            try:
+                self._bridge.render_webview_panel(self.view_type, html)
+            except Exception:
+                pass
+
+    def _push_message(self, message: Any) -> None:
+        if self._bridge is not None:
+            try:
+                self._bridge.post_webview_message(self.view_type, message)
+            except Exception:
+                pass
 
     @property
     def on_did_dispose(self):
@@ -2338,21 +2398,63 @@ class _WebviewPanel:
     def onDidDispose(self):
         return self._dispose_emitter.event
 
+    @property
+    def onDidChangeViewState(self):
+        return self._view_state_emitter.event
+
     def reveal(self, *a, **kw) -> None:
         self.visible = True
         self.active = True
+        self._view_state_emitter.fire({"webviewPanel": self})
 
     def dispose(self) -> None:
         self.visible = False
         self.active = False
+        self._view_state_emitter.fire({"webviewPanel": self})
         self._dispose_emitter.fire()
 
 
 class _Webview:
+    """Webview that mirrors VSCode's Webview API.
+
+    When ``_on_html_changed`` is set (by the owning panel/view), every
+    assignment to ``.html`` pushes the new content to the UI bridge so
+    the frontend can render it.
+
+    Bidirectional messaging:
+      Extension -> Webview:  ``webview.postMessage(data)``
+        Calls ``_on_post_message`` (set by the owner) which relays
+        through UIBridge so the frontend iframe receives the data.
+      Webview -> Extension:  ``acquireVsCodeApi().postMessage(data)``
+        The frontend calls UIBridge, which invokes
+        ``webview.receive_message_from_webview(data)`` -- this fires the
+        ``onDidReceiveMessage`` emitter so extension listeners run.
+    """
+
     def __init__(self) -> None:
-        self.html = ""
-        self.options = {}
+        self._html = ""
+        self.options: Dict[str, Any] = {}
         self._message_emitter = EventEmitter()
+        # Callbacks set by the owning _WebviewView / _WebviewPanel
+        self._on_html_changed: Optional[Callable[[str], None]] = None
+        self._on_post_message: Optional[Callable[[Any], None]] = None
+
+    # -- html property with change notification --
+
+    @property
+    def html(self) -> str:
+        return self._html
+
+    @html.setter
+    def html(self, value: str) -> None:
+        self._html = value
+        if self._on_html_changed is not None:
+            try:
+                self._on_html_changed(value)
+            except Exception:
+                pass
+
+    # -- onDidReceiveMessage (webview -> extension) --
 
     @property
     def on_did_receive_message(self):
@@ -2362,12 +2464,32 @@ class _Webview:
     def onDidReceiveMessage(self):
         return self._message_emitter.event
 
+    def receive_message_from_webview(self, message: Any) -> None:
+        """Called by the bridge when the webview HTML posts a message back."""
+        self._message_emitter.fire(message)
+
+    # -- postMessage (extension -> webview) --
+
     def post_message(self, message: Any) -> bool:
+        """Send *message* to the webview HTML (extension -> webview direction).
+
+        In the embedded environment (no real iframe), the message is also
+        echoed to the ``onDidReceiveMessage`` emitter so extension listeners
+        can observe it without a round-trip through a real webview.
+        """
+        if self._on_post_message is not None:
+            try:
+                self._on_post_message(message)
+            except Exception:
+                pass
+        # Loopback: echo to message emitter for embedded use
         self._message_emitter.fire(message)
         return True
 
     def postMessage(self, message: Any) -> bool:
         return self.post_message(message)
+
+    # -- URI / CSP helpers --
 
     @property
     def csp_source(self) -> str:
@@ -2385,24 +2507,55 @@ class _Webview:
 
 
 class _WebviewView:
-    def __init__(self, view_id: str) -> None:
+    def __init__(self, view_id: str,
+                 bridge: Optional[UIBridge] = None) -> None:
         self.viewType = view_id
         self.title = view_id
         self.description = ""
         self.badge = None
         self.visible = True
         self.webview = _Webview()
+        self._bridge = bridge
         self._dispose_emitter = EventEmitter()
+        self._visibility_emitter = EventEmitter()
+
+        # Wire html change -> bridge
+        self.webview._on_html_changed = self._push_html
+        self.webview._on_post_message = self._push_message
+
+    def _push_html(self, html: str) -> None:
+        if self._bridge is not None:
+            try:
+                self._bridge.render_webview_panel(self.viewType, html)
+            except Exception:
+                pass
+
+    def _push_message(self, message: Any) -> None:
+        if self._bridge is not None:
+            try:
+                self._bridge.post_webview_message(self.viewType, message)
+            except Exception:
+                pass
 
     @property
     def onDidDispose(self):
         return self._dispose_emitter.event
 
+    @property
+    def onDidChangeVisibility(self):
+        return self._visibility_emitter.event
+
     def show(self, preserveFocus: bool = False) -> None:
+        was_visible = self.visible
         self.visible = True
+        if not was_visible:
+            self._visibility_emitter.fire()
 
     def dispose(self) -> None:
+        was_visible = self.visible
         self.visible = False
+        if was_visible:
+            self._visibility_emitter.fire()
         self._dispose_emitter.fire()
 
 
@@ -2578,9 +2731,9 @@ class _FileSystemWatcher:
 
     def dispose(self) -> None:
         self._stop.set()
-        self._create._listeners.clear()
-        self._change._listeners.clear()
-        self._delete._listeners.clear()
+        self._create.clear()
+        self._change.clear()
+        self._delete.clear()
         if self._on_dispose:
             self._on_dispose()
 

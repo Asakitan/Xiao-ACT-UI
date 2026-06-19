@@ -1227,6 +1227,10 @@ class EventEmitter:
             except Exception:
                 pass
 
+    def clear(self) -> None:
+        """Remove all listeners."""
+        self._listeners.clear()
+
 
 # ---------------------------------------------------------------------------
 # ExtensionHost — top-level orchestrator (Loading Pipeline)

@@ -356,6 +356,19 @@ class _AIEditorUIBridge:
     def dispose_status_bar_item(self, item_id: str) -> None:
         self._api._emit("dispose_status_bar_item", {"id": item_id})
 
+    # -- Webview panels --
+    def render_webview_panel(self, view_id: str, html: str) -> None:
+        """Push HTML content for a webview panel to the frontend."""
+        self._api._emit("render_webview_panel", {"view_id": view_id, "html": html})
+
+    def post_webview_message(self, view_id: str, message: Any) -> None:
+        """Relay a message from the extension to the webview iframe."""
+        self._api._emit("webview_message", {"view_id": view_id, "message": message})
+
+    def receive_webview_message(self, view_id: str, message: Any) -> None:
+        """Relay a message from the webview back to the extension."""
+        self._api.webview_post_message(view_id, message)
+
     # -- Pickers / dialogs --
     def show_quick_pick(self, items: List[Any],
                         options: Dict[str, Any]) -> Any:
@@ -474,6 +487,9 @@ class AIEditorAPI:
 
         # Claude proxy (lazy — started on first CC provider use)
         self._claude_proxy = None
+
+        # Register webview views for CLI providers (claude-code, codex, copilot)
+        self._register_cli_provider_views()
 
         # Agent & Workflow registries
         from ai_editor.agents import get_agent_registry
@@ -766,6 +782,38 @@ class AIEditorAPI:
         if result.get("ok"):
             result["controls"] = self.get_chat_controls()
         return result
+
+    def webview_post_message(self, view_id: str, message: Any) -> Dict:
+        """Relay a message FROM the webview HTML TO the extension.
+
+        Finds the _WebviewView for *view_id* in the vscode namespace and
+        fires its webview message emitter so that any onDidReceiveMessage
+        listener sees the message.
+        """
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not vscode_ns:
+            return {"error": "vscode namespace not initialized"}
+        webview_view = vscode_ns._webview_views.get(view_id)
+        if not webview_view:
+            return {"error": f"No webview view found for: {view_id}"}
+        webview = getattr(webview_view, "webview", None)
+        if not webview or not hasattr(webview, "_message_emitter"):
+            return {"error": f"Webview has no message emitter: {view_id}"}
+        webview._message_emitter.fire(message)
+        return {"ok": True, "view_id": view_id}
+
+    def get_provider_webview(self, provider_id: str) -> Dict:
+        """Return the webview HTML content if a provider has a registered webview view."""
+        view_id = f"provider.{provider_id}"
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not vscode_ns:
+            return {"html": "", "view_id": view_id, "available": False}
+        webview_view = vscode_ns._webview_views.get(view_id)
+        if not webview_view:
+            return {"html": "", "view_id": view_id, "available": False}
+        webview = getattr(webview_view, "webview", None)
+        html = getattr(webview, "html", "") if webview else ""
+        return {"html": html, "view_id": view_id, "available": bool(html)}
 
     def set_chat_controls(self, data: Optional[Dict[str, Any]] = None) -> Dict:
         """Apply one or more chat toolbar selector updates in a single call."""
@@ -1587,7 +1635,255 @@ class AIEditorAPI:
         cwd = self._workspace_root() or None
         ctrl = CliChatController(cli_path, prov.id, cli_args, cwd)
         self._wire_provider_callbacks(ctrl, prov.id)
+        # If a webview view is registered for this provider, wire streaming
+        # events to push into the webview via postMessage.
+        view_id = f"provider.{prov.id}"
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns:
+            wv_view = vscode_ns._webview_views.get(view_id)
+            if wv_view:
+                self._wire_cli_webview_relay(ctrl, prov.id, wv_view)
         return ctrl
+
+    # ── CLI provider webview views ──
+
+    _CLI_PROVIDER_BRANDING: Dict[str, Dict[str, str]] = {
+        "claude-code": {"color": "#7c3aed", "icon": "✦", "name": "Claude Code"},
+        "copilot": {"color": "#2563eb", "icon": "◉", "name": "Copilot"},
+        "codex": {"color": "#16a34a", "icon": "\U0001f52e", "name": "Codex"},
+    }
+
+    def _register_cli_provider_views(self) -> None:
+        """Register webview view providers for each available CLI provider.
+
+        Called once during init. For each CLI provider (claude-code, codex,
+        copilot) that has ``find_cli()`` returning a path, this registers a
+        webview view with id ``provider.<provider_id>`` whose HTML is a
+        self-contained chat panel. The onDidReceiveMessage handler pipes
+        messages through the CliChatController.
+        """
+        try:
+            from ai_editor.cli_controller import find_cli
+        except ImportError:
+            return
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not vscode_ns:
+            return
+        for provider_id in ("claude-code", "codex", "copilot"):
+            cli_path = find_cli(provider_id, self._settings_getter)
+            if not cli_path:
+                continue
+            view_id = f"provider.{provider_id}"
+            # Skip if already registered
+            if view_id in vscode_ns._webview_views:
+                continue
+            branding = self._CLI_PROVIDER_BRANDING.get(provider_id, {
+                "color": "#6b7280", "icon": "●", "name": provider_id,
+            })
+            html = self._cli_provider_chat_html(provider_id, branding)
+
+            class _CliWebviewViewProvider:
+                """Minimal webview view provider for a CLI chat panel."""
+                def __init__(self, panel_html: str):
+                    self._html = panel_html
+                def resolveWebviewView(self, webview_view, context, token):
+                    webview_view.webview.html = self._html
+
+            provider = _CliWebviewViewProvider(html)
+            vscode_ns._register_webview_view_provider(view_id, provider)
+            # Wire onDidReceiveMessage to pipe into the CLI controller
+            wv_view = vscode_ns._webview_views.get(view_id)
+            if wv_view and wv_view.webview:
+                wv_view.webview.onDidReceiveMessage(
+                    lambda msg, _pid=provider_id: self._on_cli_webview_message(_pid, msg)
+                )
+
+    @staticmethod
+    def _cli_provider_chat_html(provider_id: str, branding: Dict[str, str]) -> str:
+        """Return a self-contained chat panel HTML for a CLI provider."""
+        color = branding.get("color", "#6b7280")
+        icon = branding.get("icon", "●")
+        name = branding.get("name", provider_id)
+        # The panel uses acquireVsCodeApi().postMessage() to send messages
+        # and listens for messages from the extension for streaming deltas.
+        return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:#1e1e2e;color:#cdd6f4;display:flex;flex-direction:column;height:100vh}}
+.header{{padding:10px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:8px}}
+.header .icon{{font-size:18px;color:{color}}}
+.header .title{{font-size:13px;font-weight:600;color:#cdd6f4}}
+.messages{{flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px}}
+.msg{{padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word}}
+.msg.user{{background:#313244;align-self:flex-end;max-width:85%}}
+.msg.assistant{{background:#181825;align-self:flex-start;max-width:90%;border:1px solid #313244}}
+.msg.error{{background:#45243e;color:#f38ba8;border:1px solid #6c3050}}
+.input-area{{padding:10px 14px;border-top:1px solid #313244;display:flex;gap:8px}}
+.input-area textarea{{flex:1;background:#313244;color:#cdd6f4;border:1px solid #45475a;
+  border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;
+  min-height:36px;max-height:120px;outline:none}}
+.input-area textarea:focus{{border-color:{color}}}
+.input-area button{{background:{color};color:#fff;border:none;border-radius:6px;
+  padding:0 14px;font-size:13px;cursor:pointer;white-space:nowrap}}
+.input-area button:hover{{opacity:0.9}}
+.input-area button:disabled{{opacity:0.5;cursor:not-allowed}}
+.streaming-indicator{{display:none;padding:4px 14px;font-size:11px;color:#6c7086}}
+.streaming-indicator.active{{display:block}}
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="icon">{icon}</span>
+  <span class="title">{name}</span>
+</div>
+<div class="messages" id="messages"></div>
+<div class="streaming-indicator" id="streaming">Generating...</div>
+<div class="input-area">
+  <textarea id="input" rows="1" placeholder="Message {name}..."
+    onkeydown="if(event.key==='Enter'&&!event.shiftKey){{event.preventDefault();doSend()}}"></textarea>
+  <button id="sendBtn" onclick="doSend()">Send</button>
+</div>
+<script>
+(function(){{
+  var vscode;
+  try{{ vscode=acquireVsCodeApi(); }}catch(e){{ vscode=null; }}
+  var msgEl=document.getElementById('messages');
+  var inputEl=document.getElementById('input');
+  var sendBtn=document.getElementById('sendBtn');
+  var streamEl=document.getElementById('streaming');
+  var currentAssistant=null;
+  var isStreaming=false;
+
+  function addMsg(role,text){{
+    var d=document.createElement('div');
+    d.className='msg '+role;
+    d.textContent=text;
+    msgEl.appendChild(d);
+    msgEl.scrollTop=msgEl.scrollHeight;
+    return d;
+  }}
+
+  function setStreaming(v){{
+    isStreaming=v;
+    streamEl.classList.toggle('active',v);
+    sendBtn.disabled=v;
+    inputEl.disabled=v;
+  }}
+
+  window.doSend=function(){{
+    var text=inputEl.value.trim();
+    if(!text||isStreaming) return;
+    addMsg('user',text);
+    inputEl.value='';
+    setStreaming(true);
+    currentAssistant=null;
+    if(vscode){{
+      vscode.postMessage({{type:'send',text:text}});
+    }}else if(window.pywebview&&window.pywebview.api){{
+      window.pywebview.api.webview_post_message('{f"provider.{provider_id}"}',
+        {{type:'send',text:text}});
+    }}
+  }};
+
+  function onMessage(ev){{
+    var msg=ev.data||ev;
+    if(!msg||typeof msg!=='object') return;
+    // Unwrap webview-extension-message envelope from host
+    if(msg.type==='webview-extension-message'&&msg.message){{msg=msg.message}}
+    if(msg.type==='delta'){{
+      if(!currentAssistant){{
+        currentAssistant=addMsg('assistant','');
+      }}
+      currentAssistant.textContent+=msg.content||'';
+      msgEl.scrollTop=msgEl.scrollHeight;
+    }}else if(msg.type==='end'){{
+      if(!currentAssistant&&msg.content){{
+        addMsg('assistant',msg.content);
+      }}else if(currentAssistant&&msg.content&&!currentAssistant.textContent){{
+        currentAssistant.textContent=msg.content;
+      }}
+      currentAssistant=null;
+      setStreaming(false);
+    }}else if(msg.type==='error'){{
+      addMsg('error',msg.error||'An error occurred');
+      currentAssistant=null;
+      setStreaming(false);
+    }}else if(msg.type==='thinking'){{
+      // Optionally display thinking deltas
+    }}
+  }}
+  window.addEventListener('message',onMessage);
+}})();
+</script>
+</body>
+</html>'''
+
+    def _on_cli_webview_message(self, provider_id: str, message: Any) -> None:
+        """Handle messages from a CLI provider webview panel."""
+        if not isinstance(message, dict):
+            return
+        msg_type = str(message.get("type", ""))
+        if msg_type == "send":
+            text = str(message.get("text", "")).strip()
+            if text:
+                self.provider_send(provider_id, text)
+
+    def _wire_cli_webview_relay(self, ctrl: Any, provider_id: str,
+                                webview_view: Any) -> None:
+        """Overlay the controller's stream callbacks to also push into the webview."""
+        webview = getattr(webview_view, "webview", None)
+        if not webview:
+            return
+        # Save original callbacks set by _wire_provider_callbacks
+        orig_delta = ctrl.on_stream_delta
+        orig_thinking = ctrl.on_thinking_delta
+        orig_end = ctrl.on_stream_end
+        orig_error = ctrl.on_error
+
+        def _relay_delta(msg, text):
+            if orig_delta:
+                orig_delta(msg, text)
+            try:
+                webview.postMessage({"type": "delta", "content": text})
+            except Exception:
+                pass
+
+        def _relay_thinking(msg, text):
+            if orig_thinking:
+                orig_thinking(msg, text)
+            try:
+                webview.postMessage({"type": "thinking", "content": text})
+            except Exception:
+                pass
+
+        def _relay_end(msg):
+            if orig_end:
+                orig_end(msg)
+            try:
+                payload = {"type": "end", "content": getattr(msg, "content", "")}
+                if getattr(msg, "is_error", False):
+                    payload["type"] = "error"
+                    payload["error"] = getattr(msg, "content", "")
+                webview.postMessage(payload)
+            except Exception:
+                pass
+
+        def _relay_error(err):
+            if orig_error:
+                orig_error(err)
+            try:
+                webview.postMessage({"type": "error", "error": str(err)})
+            except Exception:
+                pass
+
+        ctrl.on_stream_delta = _relay_delta
+        ctrl.on_thinking_delta = _relay_thinking
+        ctrl.on_stream_end = _relay_end
+        ctrl.on_error = _relay_error
 
     # ── CLI launcher (real terminal window) ──
 

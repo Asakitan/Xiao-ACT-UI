@@ -3508,47 +3508,6 @@ function localizeProviderUi(){
     else if(!state.running&&refs.status&&(refs.status.textContent==='Ready'||refs.status.textContent==='就绪'))updateProviderStatus(pid,t('provider_status_ready'),state.kind||'');
   });
 }
-// ── CLI launcher panel (native terminal window) ──
-function _buildCliLauncherPanel(panel,p){
-  const pid=p.id;
-  const wrap=document.createElement('div');wrap.style.cssText='display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;padding:24px;text-align:center';
-  const icon=document.createElement('div');icon.style.cssText='font-size:36px;opacity:0.7';
-  icon.textContent={copilot:'◉','claude-code':'✦',codex:'🔮'}[pid]||'⚡';
-  const title=document.createElement('div');title.style.cssText='font-size:16px;font-weight:600;color:var(--fg)';
-  title.textContent=providerDisplayName(pid);
-  const desc=document.createElement('div');desc.style.cssText='font-size:12px;color:var(--fg-dim);max-width:280px;line-height:1.5';
-  desc.textContent={
-    copilot:'Launch GitHub Copilot (gh copilot) in its own terminal window.',
-    'claude-code':'Launch Claude Code CLI in its own interactive terminal.',
-    codex:'Launch Codex CLI in its own interactive terminal.',
-  }[pid]||'Launch CLI in terminal.';
-  const statusEl=document.createElement('div');statusEl.id=providerElId('cli-status',pid);
-  statusEl.style.cssText='font-size:11px;color:var(--fg-dim);height:18px';
-  const launchBtn=document.createElement('button');launchBtn.style.cssText='padding:8px 24px;font-size:13px;font-weight:500;border:none;border-radius:6px;cursor:pointer;background:var(--fg-accent);color:#fff';
-  launchBtn.textContent=p.available===false?'CLI Not Installed':'Launch';
-  launchBtn.disabled=p.available===false;
-  launchBtn.onclick=async()=>{
-    launchBtn.textContent='Launching...';launchBtn.disabled=true;
-    const r=await call('launch_provider_cli',pid);
-    if(r&&r.ok){
-      statusEl.textContent=r.already_running?'Already running (PID '+r.pid+')':'Running (PID '+r.pid+')';
-      statusEl.style.color='var(--fg-ok)';
-      launchBtn.textContent='Running';
-      setTimeout(()=>{launchBtn.textContent='Relaunch';launchBtn.disabled=false},2000);
-    }else{
-      statusEl.textContent='Error: '+(r&&r.error||'unknown');statusEl.style.color='var(--fg-error)';
-      launchBtn.textContent='Launch';launchBtn.disabled=false;
-    }
-  };
-  const stopBtn=document.createElement('button');stopBtn.style.cssText='padding:4px 16px;font-size:11px;border:1px solid var(--border);border-radius:4px;cursor:pointer;background:transparent;color:var(--fg-dim);margin-top:4px';
-  stopBtn.textContent='Stop';stopBtn.onclick=async()=>{await call('stop_provider_cli',pid);statusEl.textContent='Stopped';statusEl.style.color='var(--fg-dim)';launchBtn.textContent='Launch';launchBtn.disabled=false};
-  if(p.available===false){
-    desc.textContent=p.unavailable_reason||('Install the CLI to use '+providerDisplayName(pid));
-    statusEl.textContent='CLI not found';statusEl.style.color='var(--fg-error)';
-  }
-  wrap.appendChild(icon);wrap.appendChild(title);wrap.appendChild(desc);wrap.appendChild(launchBtn);wrap.appendChild(statusEl);wrap.appendChild(stopBtn);
-  panel.appendChild(wrap);
-}
 function _buildChatProviderPanel(panel,p){
   const pid=p.id;
   const chatPanel=document.createElement('div');chatPanel.className='chat-panel';
@@ -3575,6 +3534,38 @@ function _buildChatProviderPanel(panel,p){
   updateProviderEmpty(pid);updateProviderContext(pid,0);updateProviderStatus(pid,p.available===false?t('provider_status_unavailable'):t('provider_status_ready'),p.available===false?'error':'');
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(pid)}});
 }
+// ── Webview panel injection (plugin-provided panels) ──
+function _injectWebviewHtml(container,viewId,html){
+  // Clear existing content
+  container.innerHTML='';
+  // Create sandboxed iframe for the webview content
+  const iframe=document.createElement('iframe');
+  iframe.className='provider-webview-frame';
+  iframe.id='webview-frame-'+providerDomKey(viewId);
+  iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
+  iframe.setAttribute('sandbox','allow-scripts allow-same-origin');
+  container.appendChild(iframe);
+  // Build bridge script that defines acquireVsCodeApi for the extension
+  const bridgeScript='<script>'
+    +'(function(){'
+    +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',message:msg},"*")}catch(e){}},'
+    +'setState:function(s){try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',state:s},"*")}catch(e){}},'
+    +'getState:function(){return undefined}};'
+    +'window.acquireVsCodeApi=function(){return _vscodeApi};'
+    +'})();'
+    +'<\/script>';
+  // Inject bridge + extension HTML into the iframe
+  const doc=iframe.contentDocument||iframe.contentWindow.document;
+  doc.open();doc.write(bridgeScript+html);doc.close();
+}
+// Listen for postMessage from webview iframes
+window.addEventListener('message',function(e){
+  if(!e.data||e.data.type!=='webview-message')return;
+  const viewId=e.data.viewId,msg=e.data.message;
+  if(viewId&&msg&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
+    window.pywebview.api.webview_post_message(viewId,msg);
+  }
+});
 async function renderProviderTabs(){
   const r=await call('list_chat_providers');
   const listedProviders=r&&Array.isArray(r.providers)?r.providers:[];
@@ -3599,8 +3590,24 @@ async function renderProviderTabs(){
     tab.onclick=()=>switchRightTab(p.id);
     tabs.appendChild(tab);
     const panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panel.dataset.providerId=p.id;
-    _buildChatProviderPanel(panel,p);
-    panels.appendChild(panel);
+    const isCli=p.runtime_mode==='cli'||p.transport==='cli';
+    if(isCli){
+      // CLI providers get webview panels from extensions; request it async
+      const placeholder=document.createElement('div');placeholder.className='rp-placeholder';
+      placeholder.style.cssText='display:flex;align-items:center;justify-content:center;flex:1;color:var(--fg-dim)';
+      placeholder.textContent='Loading...';
+      panel.appendChild(placeholder);
+      panels.appendChild(panel);
+      // Request the extension-provided webview HTML
+      (async()=>{
+        const wv=await call('get_provider_webview',p.id);
+        if(wv&&wv.html){_injectWebviewHtml(panel,p.id,wv.html)}
+        else{_buildChatProviderPanel(panel,p);placeholder.remove()}
+      })();
+    }else{
+      _buildChatProviderPanel(panel,p);
+      panels.appendChild(panel);
+    }
   });
   if(activeProviderId!=='chat'&&!providerDefs[activeProviderId])activeProviderId='chat';
   document.querySelectorAll('.rtab').forEach(t=>t.classList.toggle('active',t.dataset.rtab===activeProviderId));
@@ -3725,6 +3732,26 @@ function renderProviderToolConfirm(pid,data){
   if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');
 }
 window._onEditorEvent=function(event,data){
+  // ── render_webview_panel: extension pushes its webview HTML ──
+  if(event==='render_webview_panel'){
+    const viewId=data&&data.view_id,html=data&&data.html;
+    if(!viewId||!html)return;
+    // Find the provider panel div for this view_id
+    const panelEl=$(providerElId('rp',viewId));
+    if(panelEl){_injectWebviewHtml(panelEl,viewId,html)}
+    return;
+  }
+  // ── webview_message: relay message from Python to webview iframe ──
+  if(event==='webview_message'){
+    const viewId=data&&data.view_id,msg=data&&data.message;
+    if(!viewId)return;
+    const frameId='webview-frame-'+providerDomKey(viewId);
+    const iframe=document.getElementById(frameId);
+    if(iframe&&iframe.contentWindow){
+      iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*');
+    }
+    return;
+  }
   if(event&&event.startsWith('provider_')){
     const pid=data&&data.provider;if(!pid)return;
     const mc=providerRefs(pid).messages;if(!mc)return;

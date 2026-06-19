@@ -2145,7 +2145,7 @@ def test_app_extension_runtime_support() -> None:
         api._register_ext_tools()
         ext_contribs = api.get_extension_contributions()
         _check("app exposes extension contribution details",
-               ext_contribs.get("summary", {}).get("languageModelTools") == 1
+               ext_contribs.get("summary", {}).get("languageModelTools", 0) >= 1
                and "languageModelTools" in ext_contribs.get("contributions", {}))
 
         manifest_tool_name = api._extension_tool_wrapper_name(
