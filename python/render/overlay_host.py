@@ -263,6 +263,14 @@ _dwmapi.DwmExtendFrameIntoClientArea.argtypes = [
 ]
 _dwmapi.DwmExtendFrameIntoClientArea.restype = ctypes.c_long
 
+_dwmapi.DwmEnableBlurBehindWindow.argtypes = [wt.HWND, ctypes.c_void_p]
+_dwmapi.DwmEnableBlurBehindWindow.restype = ctypes.c_long
+
+_gdi32.CreateRectRgn.argtypes = [
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+]
+_gdi32.CreateRectRgn.restype = wt.HANDLE
+
 _kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
 _kernel32.GetModuleHandleW.restype = wt.HINSTANCE
 
@@ -518,9 +526,37 @@ class OverlayHost:
                                moderngl.ONE_MINUS_SRC_ALPHA)
 
     def _setup_dwm(self) -> None:
-        """Enable DWM glass for per-pixel alpha transparency."""
+        """Enable DWM glass for per-pixel alpha transparency.
+
+        Some GPU drivers need BOTH DwmExtendFrameIntoClientArea AND
+        DwmEnableBlurBehindWindow for OpenGL per-pixel alpha to work.
+        Without blur-behind, the window renders as opaque black on
+        affected systems (Intel iGPU, some AMD, VM/RDP).
+        """
         margins = _MARGINS(-1, -1, -1, -1)
         _dwmapi.DwmExtendFrameIntoClientArea(self.hwnd, byref(margins))
+
+        # DWM blur-behind with full-window region — required on some
+        # drivers for OpenGL alpha compositing to actually work.
+        try:
+            class _DWM_BLURBEHIND(ctypes.Structure):
+                _fields_ = [
+                    ('dwFlags', wt.DWORD),
+                    ('fEnable', wt.BOOL),
+                    ('hRgnBlur', wt.HANDLE),
+                    ('fTransitionOnMaximized', wt.BOOL),
+                ]
+            DWM_BB_ENABLE = 0x01
+            DWM_BB_BLURREGION = 0x02
+            bb = _DWM_BLURBEHIND()
+            bb.dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION
+            bb.fEnable = True
+            bb.hRgnBlur = _gdi32.CreateRectRgn(0, 0, -1, -1)
+            _dwmapi.DwmEnableBlurBehindWindow(self.hwnd, byref(bb))
+            if bb.hRgnBlur:
+                _gdi32.DeleteObject(bb.hRgnBlur)
+        except Exception:
+            pass
 
     # ── public API ───────────────────────────────────────────────
 
@@ -577,15 +613,18 @@ class OverlayHost:
         WDA_EXCLUDEFROMCAPTURE (0x11) requires Windows 10 2004+
         (build 19041). On older builds the value degrades to
         WDA_MONITOR (0x01) which renders the window as solid black.
+        Falls back to WDA_NONE on failure or unsupported systems.
         """
         if exclude and not _wda_exclude_supported():
             self._capture_excluded = False
             return
         affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
         ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
-        self._capture_excluded = bool(exclude and ret)
         if not ret and exclude:
+            self._capture_excluded = False
             _user32.SetWindowDisplayAffinity(self.hwnd, WDA_NONE)
+            return
+        self._capture_excluded = bool(exclude)
 
     def swap_buffers(self) -> None:
         _gdi32.SwapBuffers(self.hdc)
