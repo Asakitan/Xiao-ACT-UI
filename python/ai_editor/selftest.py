@@ -6,6 +6,7 @@ Run:  python -m ai_editor.selftest
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import os
 import tempfile
@@ -171,6 +172,7 @@ def test_app_settings_parity() -> None:
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
+        "get_extension_contributions",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "get_model_info", "test_connection", "set_mode", "save_config",
@@ -178,6 +180,7 @@ def test_app_settings_parity() -> None:
         "delete_custom_model", "search_extensions",
         "list_installed_extensions", "uninstall_extension",
         "install_extension", "win_minimize", "win_maximize", "win_close",
+        "open_text_file", "save_feedback",
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
@@ -377,6 +380,101 @@ def test_app_settings_parity() -> None:
                "url": "http://localhost:3000/mcp",
            }).get("error", ""))
 
+    no_window_editor = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _check("editor mutating API does not fake success without window",
+           "not available" in no_window_editor.editor_set_content("x").get("error", "")
+           and "not available" in no_window_editor.editor_insert_text("x").get("error", "")
+           and "not available" in no_window_editor.editor_go_to_line(1).get("error", "")
+           and "not available" in no_window_editor.editor_find_replace("x", "y").get("error", ""))
+    _check("open_text_file reports missing window explicitly",
+           "No window" in no_window_editor.open_text_file().get("error", ""))
+
+    feedback_gui = _SettingsGui({"ai_editor": {}})
+    feedback_api = AIEditorAPI(feedback_gui)
+    feedback_result = feedback_api.save_feedback("msg-1", "up")
+    _check("save_feedback persists allowed rating",
+           feedback_result.get("ok") is True
+           and feedback_gui.settings.data.get("ai_editor", {}).get("feedback", {}).get("msg-1", {}).get("rating") == "up")
+    _check("save_feedback rejects invalid rating",
+           "rating" in feedback_api.save_feedback("msg-1", "maybe").get("error", ""))
+
+    class _FakeWindowChrome:
+        def __init__(self) -> None:
+            self.x = 100
+            self.y = 200
+            self.width = 900
+            self.height = 700
+            self.calls = []
+
+        def move(self, x: int, y: int) -> None:
+            self.calls.append(("move", x, y))
+            self.x = x
+            self.y = y
+
+        def resize(self, width: int, height: int) -> None:
+            self.calls.append(("resize", width, height))
+            self.width = width
+            self.height = height
+
+        def minimize(self) -> None:
+            self.calls.append(("minimize",))
+
+        def maximize(self) -> None:
+            self.calls.append(("maximize",))
+
+        def restore(self) -> None:
+            self.calls.append(("restore",))
+
+    window_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    fake_window = _FakeWindowChrome()
+    window_api.set_window(fake_window)
+    east_resize = window_api.win_resize_by("e", 50, 0)
+    west_clamp = window_api.win_resize_by("w", 500, 0)
+    window_api.win_minimize()
+    window_api.win_maximize()
+    blocked_resize = window_api.win_resize_by("se", 10, 10)
+    window_api.win_maximize()
+    _check("window chrome resize clamps and tracks fake pywebview window",
+           east_resize.get("ok") is True
+           and east_resize.get("width") == 950
+           and west_clamp.get("ok") is True
+           and west_clamp.get("x") == 450
+           and west_clamp.get("width") == 600
+           and ("move", 450, 200) in fake_window.calls
+           and ("resize", 600, 700) in fake_window.calls)
+    _check("window chrome minimize maximize and resize lock work",
+           fake_window.calls[-3:] == [("minimize",), ("maximize",), ("restore",)]
+           and blocked_resize.get("ok") is False
+           and "maximized" in blocked_resize.get("error", ""))
+
+    with tempfile.TemporaryDirectory() as text_tmp:
+        text_path = os.path.join(text_tmp, "picked.py")
+        with open(text_path, "w", encoding="utf-8") as fh:
+            fh.write("print('picked')\n")
+
+        class _TextDialogWindow:
+            def create_file_dialog(self, **kw):
+                return [text_path]
+
+        picker_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        picker_api.set_window(_TextDialogWindow())
+        picked = picker_api.open_text_file()
+        _check("open_text_file reads selected text file",
+               picked.get("ok") is True
+               and picked.get("language") == "python"
+               and "print('picked')" in picked.get("content", ""))
+
+    unsupported_tool_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    unsupported_tool_api._ensure_engine()
+    unsupported_tool_api._vscode_ns._register_tool_definition(
+        "schema_only_api", {"type": "object"})
+    unsupported_tool = unsupported_tool_api.invoke_lm_tool("schema_only_api", {})
+    _check("API invoke_lm_tool reports schema-only unsupported as error",
+           unsupported_tool.get("unsupported") is True
+           and unsupported_tool.get("needsExtensionRuntime") is True
+           and "error" in unsupported_tool
+           and unsupported_tool.get("ok") is not True)
+
     test_cfg = mcp_api.test_connection
     _check("test_connection API accepts advanced params",
            callable(test_cfg))
@@ -406,6 +504,40 @@ def test_app_settings_parity() -> None:
            [c.id for c in load_mcp_configs(getter)] == ["local"])
     mcp_payload["ai_editor"]["mcp"]["access"] = "disabled"
     _check("mcp disabled blocks configs", load_mcp_configs(getter) == [])
+
+    mcp_policy_api = AIEditorAPI(_SettingsGui({"ai_editor": {
+        "mode": "agent",
+        "mcp": {"access": "read_only"},
+    }}))
+    mcp_policy_api._ensure_engine()
+    mcp_policy_api.register_mcp_tools(
+        "selftest_tools",
+        [
+            {"name": "read_info", "description": "Read info", "inputSchema": {}},
+            {"name": "write_info", "description": "Write info", "inputSchema": {}},
+        ],
+        {
+            "read_info": lambda **kw: {"ok": True, "read": True},
+            "write_info": lambda **kw: {"ok": True, "write": True},
+        },
+    )
+    mcp_tool_names = [
+        item.get("function", {}).get("name")
+        for item in (mcp_policy_api._controller.extra_tools or [])
+    ]
+    mcp_list_items = {t.get("name"): t for t in mcp_policy_api.list_tools().get("tools", [])}
+    _check("MCP read_only exposes only read-like controller tools",
+           "mcp_selftest_tools_read_info" in mcp_tool_names
+           and "mcp_selftest_tools_write_info" not in mcp_tool_names)
+    _check("MCP tool list includes UI metadata and normalized schema",
+           mcp_list_items.get("mcp_selftest_tools_read_info", {}).get("serverId") == "selftest_tools"
+           and mcp_list_items.get("mcp_selftest_tools_read_info", {}).get("sourceName") == "read_info"
+           and mcp_list_items.get("mcp_selftest_tools_read_info", {}).get("parameters", {}).get("type") == "object"
+           and mcp_list_items.get("mcp_selftest_tools_read_info", {}).get("requires_confirm") is False)
+    bad_mcp_args = mcp_policy_api._controller.mcp_dispatch(
+        "mcp_selftest_tools_read_info", "[]") if mcp_policy_api._controller.mcp_dispatch else "{}"
+    _check("MCP dispatch rejects non-object arguments explicitly",
+           "must be a JSON object" in json.loads(bad_mcp_args).get("error", ""))
 
     ext_api = AIEditorAPI(_SettingsGui({"ai_editor": {
         "extensions": {"confirm_install": True, "blocked_publishers": ["blocked"]}
@@ -477,6 +609,9 @@ def test_app_settings_parity() -> None:
         _check("workspace tree filters ignored directories",
                "src" in root_names and "README.md" in root_names
                and "node_modules" not in root_names and ".git" not in root_names)
+        _check("workspace tree keeps directories before files",
+               tree.get("entries", [{}])[0].get("type") == "directory"
+               and tree.get("entries", [{}])[0].get("name") == "src")
         opened = tree_api.open_workspace_file("src/sample.py")
         _check("open_workspace_file returns content and language",
                opened.get("path") == "src/sample.py"
@@ -486,6 +621,29 @@ def test_app_settings_parity() -> None:
         blocked_path = tree_api.open_workspace_file("../outside.py")
         _check("workspace file API blocks path traversal",
                "escapes workspace" in blocked_path.get("error", ""))
+        outside_dir = tempfile.mkdtemp()
+        try:
+            outside_file = os.path.join(outside_dir, "outside.txt")
+            with open(outside_file, "w", encoding="utf-8") as fh:
+                fh.write("outside")
+            _check("workspace path safety rejects outside real paths",
+                   tree_api._is_workspace_safe_path(tmpdir, outside_file) is False)
+
+            link_path = os.path.join(tmpdir, "outside-link.txt")
+            try:
+                os.symlink(outside_file, link_path)
+            except (OSError, NotImplementedError):
+                link_path = ""
+            if link_path:
+                tree = tree_api.list_workspace_tree()
+                root_names = {entry.get("name") for entry in tree.get("entries", [])}
+                _check("workspace tree hides escaping symlinks",
+                       "outside-link.txt" not in root_names)
+                blocked_link = tree_api.open_workspace_file("outside-link.txt")
+                _check("workspace file API blocks escaping symlinks",
+                       "escapes workspace" in blocked_link.get("error", ""))
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
 
     model_result = controls_api.set_active_model("toolbar-model")
     mode_result = controls_api.set_active_mode("agent")
@@ -608,6 +766,61 @@ def test_phase1_ai_editor_regressions() -> None:
     api_cli_items = {p["id"]: p
                      for p in api_cli.list_chat_providers().get("providers", [])}
     api_cli_flags = {k: v.get("available") for k, v in api_cli_items.items()}
+    api_cli_provider_rows = api_cli.list_chat_providers().get("providers", [])
+    ordered_builtin_ids = [p.get("id") for p in api_cli_provider_rows[:4]]
+    ordered_builtin_names = [p.get("name") for p in api_cli_provider_rows[:4]]
+    _check("built-in chat providers include Copilot in order",
+           ordered_builtin_ids == ["chat", "copilot", "claude-code", "codex"])
+    _check("built-in chat provider names are exact",
+           ordered_builtin_names == ["Chat", "Copilot", "Claude Code", "Codex"])
+    _check("Copilot chat provider is explicit capability surface",
+           api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot"
+           and api_cli_items.get("copilot", {}).get("available") is False
+           and api_cli_items.get("copilot", {}).get("direct_transport_available") is False
+           and api_cli_items.get("copilot", {}).get("capability") == "github-copilot-chat"
+           and "GitHub Copilot" in api_cli_items.get("copilot", {}).get("unavailable_reason", ""))
+    copilot_switch = api_cli.switch_provider("copilot")
+    _check("switch_provider selects unavailable Copilot clearly",
+           copilot_switch.get("ok") is True
+           and copilot_switch.get("available") is False
+           and api_cli.get_chat_controls().get("active_chat_provider") == "copilot")
+    copilot_send = api_cli.provider_send("copilot", "hello")
+    _check("provider_send blocks unavailable Copilot transport",
+           copilot_send.get("available") is False
+           and "GitHub Copilot" in copilot_send.get("error", ""))
+    copilot_new = api_cli.provider_new_chat("copilot")
+    _check("provider_new_chat reports unavailable Copilot without fake transport",
+           copilot_new.get("ok") is True
+           and copilot_new.get("available") is False
+           and "GitHub Copilot" in copilot_new.get("unavailable_reason", ""))
+    _check("provider_cancel rejects unknown provider ids explicitly",
+           "Unknown provider" in api_cli.provider_cancel("missing-provider").get("error", ""))
+    _check("built-in provider surfaces cannot be overridden or unregistered",
+           "built-in provider" in api_cli.register_chat_provider({
+               "id": "copilot", "name": "Override", "provider_type": "openai"
+           }).get("error", "")
+           and "built-in provider" in api_cli.unregister_chat_provider("copilot").get("error", ""))
+
+    plugin_provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    plugin_provider_api.register_chat_provider({
+        "id": "plugin-demo",
+        "name": "Plugin Demo",
+        "provider_type": "openai",
+        "api_key": "local-test-key",
+        "model": "plugin-model",
+    })
+    plugin_new_chat = plugin_provider_api.provider_new_chat("plugin-demo")
+    plugin_new_chat_again = plugin_provider_api.provider_new_chat("plugin-demo")
+    _check("provider_new_chat creates provider controller on first use",
+           plugin_new_chat.get("ok") is True
+           and plugin_new_chat.get("created_controller") is True
+           and "plugin-demo" in plugin_provider_api._provider_controllers
+           and plugin_new_chat_again.get("created_controller") is False)
+    _check("provider_send rejects empty provider message payloads",
+           plugin_provider_api.provider_send("plugin-demo", "   ").get("error") == "Empty message")
+    _check("unregister_chat_provider removes custom providers only",
+           plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
+           and plugin_provider_api._provider_registry.get("plugin-demo") is None)
     _check("list_chat_providers reports CLI transports unavailable",
            api_cli_flags.get("claude-code") is False
            and api_cli_flags.get("codex") is False)
@@ -633,6 +846,26 @@ def test_phase1_ai_editor_regressions() -> None:
            and registry_key_items.get("codex", {}).get("transport") == "responses"
            and registry_key_items.get("codex", {}).get("api_key_available") is True)
 
+    html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
+    with open(html_path, "r", encoding="utf-8") as fh:
+        html = fh.read()
+    _check("right-sidebar tabs use exact built-in labels",
+           "tab_chat:'Chat'" in html
+           and "provider_copilot_label:'Copilot'" in html
+           and "provider_claude_code_label:'Claude Code'" in html
+           and "provider_codex_label:'Codex'" in html)
+    _check("frontend does not synthesize fake built-in providers",
+           "SYNTHETIC_PROVIDERS" not in html)
+    _check("frontend ships frameless resize handles and bridge call",
+           html.count('data-resize-edge="') == 8
+           and "querySelectorAll('[data-resize-edge]')" in html
+           and "call('win_resize_by',state.edge,dx,dy)" in html)
+    _check("frontend Explorer calls workspace tree and file APIs",
+           "call('list_workspace_tree',relPath||'')" in html
+           and "call('list_workspace_tree',entry.path||'')" in html
+           and "openWorkspaceFile(entry.path)" in html
+           and "call('open_workspace_file',relPath||'')" in html)
+
 
 def test_tool_registry() -> None:
     print("── Tool Registry ──")
@@ -652,6 +885,18 @@ def test_tool_registry() -> None:
     schemas = reg.to_openai_tools()
     _check(f"OpenAI schemas: {len(schemas)}", len(schemas) == len(tools))
 
+    reg.register("emptySchema", "Empty schema", {}, lambda **kw: {"ok": True})
+    empty_schema = reg.get("emptySchema").to_openai_schema()["function"]["parameters"]
+    _check("empty tool schema normalized for LLM tools",
+           empty_schema.get("type") == "object"
+           and isinstance(empty_schema.get("properties"), dict))
+
+    direct_desc = reg.get("emptySchema")
+    _check("tool descriptor input_schema stays normalized",
+           direct_desc is not None
+           and direct_desc.input_schema.get("type") == "object"
+           and isinstance(direct_desc.input_schema.get("properties"), dict))
+
     # Execute engine aggregate tool
     result = reg.execute("engine", json.dumps({"action": "sample_state"}))
     data = json.loads(result)
@@ -665,6 +910,11 @@ def test_tool_registry() -> None:
     data = json.loads(result)
     _check(f"engine(eval): 2+2={data.get('result')}", data.get("result") == 4)
 
+    result = reg.execute("engine", json.dumps({"action": "settings_get", "key": "missing"}))
+    data = json.loads(result)
+    _check("engine(settings_get) no settings is explicit error",
+           "Settings not available" in data.get("error", ""))
+
     result = reg.execute("readFile", "")
     data = json.loads(result)
     _check("missing required tool args are explicit",
@@ -675,6 +925,12 @@ def test_tool_registry() -> None:
     data = json.loads(result)
     _check("object-schema tool rejects array args",
            "must be a JSON object" in data.get("error", ""))
+
+    editor_content = json.loads(reg.execute("editor_getContent", "{}"))
+    editor_selection = json.loads(reg.execute("editor_getSelection", "{}"))
+    _check("editor read tools report missing API explicitly",
+           "No editor API available" in editor_content.get("error", "")
+           and "No editor API available" in editor_selection.get("error", ""))
 
     reg.register(
         "payloadEcho",
@@ -700,6 +956,45 @@ def test_tool_registry() -> None:
     result = reg.execute("nonexistent_tool", "{}")
     data = json.loads(result)
     _check("unknown tool error", "error" in data)
+
+
+def test_mcp_client() -> None:
+    print("── MCP Client ──")
+    from ai_editor.mcp_client import McpManager
+
+    manager = McpManager()
+    manager.register_internal(
+        "alpha",
+        [{"name": "echo", "description": "Alpha echo", "inputSchema": {}}],
+        {"echo": lambda **kw: {"server": "alpha", "args": kw}},
+    )
+    manager.register_internal(
+        "alpha_beta",
+        [{"name": "echo", "description": "Alpha beta echo", "inputSchema": {}}],
+        {"echo": lambda **kw: {"server": "alpha_beta", "args": kw}},
+    )
+
+    tool_map = {
+        item["function"]["name"]: item["function"]["parameters"]
+        for item in manager.to_openai_tools()
+    }
+    _check("MCP OpenAI schemas normalize empty inputSchema",
+           tool_map.get("mcp_alpha_echo", {}).get("type") == "object"
+           and isinstance(tool_map.get("mcp_alpha_echo", {}).get("properties"), dict))
+
+    resolved = json.loads(manager.call_tool("mcp_alpha_beta_echo", {"value": "pong"}))
+    _check("MCP tool resolution prefers exact longest server id",
+           resolved.get("server") == "alpha_beta"
+           and resolved.get("args", {}).get("value") == "pong")
+
+    bad_args = json.loads(manager.call_tool("mcp_alpha_echo", []))
+    _check("MCP manager rejects non-object arguments explicitly",
+           "must be a JSON object" in bad_args.get("error", ""))
+
+    missing = json.loads(manager.call_tool("mcp_alpha_missing", {}))
+    _check("MCP missing tool error is explicit",
+           "Available:" in missing.get("error", "")
+           and "echo" in missing.get("error", ""))
 
 
 def test_llm_engine() -> None:
@@ -896,9 +1191,16 @@ def test_chat_controller_tool_loop() -> None:
     conv.add_message(ChatMessage(role="user", content="Need tool help"))
     ctrl = ChatController(engine, reg, conv)
     stream_ends = []
+    tool_ends = []
     ctrl.on_stream_end = lambda msg: stream_ends.append({
         "content": msg.content,
         "tool_calls": [tc.name for tc in msg.tool_calls],
+    })
+    ctrl.on_tool_end = lambda cid, name, result, state: tool_ends.append({
+        "id": cid,
+        "name": name,
+        "result": result,
+        "state": state,
     })
     ctrl._running = True
     ctrl._run_loop()
@@ -911,6 +1213,12 @@ def test_chat_controller_tool_loop() -> None:
            len(tool_messages) == 1
            and tool_messages[0].get("tool_call_id") == "call_lookup"
            and tool_messages[0].get("name") == "lookup")
+    _check("tool end callback includes id name result and state",
+           len(tool_ends) == 1
+           and tool_ends[0].get("id") == "call_lookup"
+           and tool_ends[0].get("name") == "lookup"
+           and "result" in json.loads(tool_ends[0].get("result", "{}"))
+           and tool_ends[0].get("state") == "completed")
     _check("tool loop resumes with final assistant content",
            stream_ends[-1]["content"] == "Resolved after tool.")
 
@@ -1087,6 +1395,8 @@ def test_extension_host() -> None:
     _check("Uri.file", uri.scheme == "file" and "test" in uri.path)
     uri2 = Uri.parse("https://example.com/api")
     _check("Uri.parse", uri2.scheme == "https")
+    uri3 = Uri.parse("untitled:Untitled-1")
+    _check("Uri.parse untitled", uri3.scheme == "untitled" and str(uri3) == "untitled:Untitled-1")
     d = Disposable(lambda: None)
     d.dispose()
     _check("Disposable", True)
@@ -1107,6 +1417,11 @@ def test_extension_host() -> None:
                                   "fullName": "Test Chat Bot"}],
             "languageModelTools": [{"name": "test_tool",
                                     "displayName": "Test Tool"}],
+            "jsonValidation": [{"fileMatch": "test.json", "url": "./schema.json"}],
+            "viewsWelcome": [{"view": "test.view", "contents": "Welcome"}],
+            "submenus": [{"id": "test.submenu", "label": "Submenu"}],
+            "problemMatchers": [{"name": "testMatcher", "pattern": "test"}],
+            "breakpoints": [{"language": "python"}],
         },
     }
     desc = ExtensionDescription.from_package_json(pkg, "/fake/path")
@@ -1153,6 +1468,13 @@ def test_extension_host() -> None:
     _check("EP.summary command runtime count",
            summary.get("commandsContributed") == 1
            and summary.get("needsExtensionRuntime", {}).get("commands") == 1)
+    contrib_details = ep.all_contributions
+    _check("EP.extra contribution details retained",
+           len(contrib_details.get("jsonValidation", [])) == 1
+           and len(contrib_details.get("viewsWelcome", [])) == 1
+           and len(contrib_details.get("submenus", [])) == 1
+           and len(contrib_details.get("problemMatchers", [])) == 1
+           and len(contrib_details.get("breakpoints", [])) == 1)
 
     # ExtensionContext
     tmpdir = tempfile.mkdtemp(prefix="sao_ext_test_")
@@ -1196,6 +1518,8 @@ def test_vscode_api() -> None:
         VscodeNamespace, LanguageModelChat, ChatParticipant,
         ChatRequest, ChatContext, ChatResponseStream, ChatResult,
         WorkspaceConfiguration, LanguageModelToolResult,
+        AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
+        Position, Range,
     )
 
     host = ExtensionHost()
@@ -1207,9 +1531,17 @@ def test_vscode_api() -> None:
     _check("api.window", "showInformationMessage" in api["window"])
     _check("api.workspace", "getConfiguration" in api["workspace"])
     _check("api.env", api["env"]["appName"] == "SAO AI Editor")
+    _check("api.languages", "createDiagnosticCollection" in api["languages"])
+    _check("api.tasks", "registerTaskProvider" in api["tasks"])
+    _check("api.debug", "registerDebugConfigurationProvider" in api["debug"])
     _check("api.lm", "selectChatModels" in api["lm"])
     _check("api.chat", "createChatParticipant" in api["chat"])
     _check("api.authentication", "getSession" in api["authentication"])
+    auth_base = AuthenticationProviderBase()
+    _check("AuthenticationProviderBase has explicit empty behavior",
+           auth_base.get_sessions() == []
+           and auth_base.create_session() is None
+           and auth_base.remove_session("missing") is False)
 
     # Types
     _check("api.Position", api["Position"] is not None)
@@ -1218,9 +1550,10 @@ def test_vscode_api() -> None:
 
     # Commands via namespace
     box = []
-    api["commands"]["registerCommand"]("test.api", lambda: box.append(1) or "ok")
+    command_disposable = api["commands"]["registerCommand"]("test.api", lambda: box.append(1) or "ok")
     r = api["commands"]["executeCommand"]("test.api")
     _check("ns.commands.execute", r == "ok" and box == [1])
+    _check("registerCommand returns Disposable", hasattr(command_disposable, "dispose"))
 
     # Chat participant
     handler_calls = []
@@ -1238,6 +1571,8 @@ def test_vscode_api() -> None:
     cp.request_handler(req, ctx, stream, None)
     _check("participant.handler called", handler_calls == ["Hi there"])
     _check("stream.content", stream.get_content() == "**Hello**")
+    cp.dispose()
+    _check("participant dispose removes registry entry", "test-bot" not in ns.chat_participants)
 
     # LM tool
     class MyTool:
@@ -1279,6 +1614,119 @@ def test_vscode_api() -> None:
     api["chat"]["registerVariable"]("testvar", "A test variable",
                                      lambda: "var_value")
     _check("registerVariable", "testvar" in ns.variables)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ns._get_root_path = lambda: tmpdir
+        sample = os.path.join(tmpdir, "sample.py")
+        with open(sample, "w", encoding="utf-8") as fh:
+            fh.write("print('vscode')\n")
+        doc = api["workspace"]["openTextDocument"](sample)
+        found = api["workspace"]["findFiles"]("*.py")
+        found_recursive = api["workspace"]["findFiles"]("**/*.py")
+        opened_docs = []
+        api["workspace"]["onDidOpenTextDocument"](
+            lambda opened: opened_docs.append(opened.fileName))
+        untitled = api["workspace"]["openTextDocument"](
+            {"content": "hello", "language": "markdown"})
+        _check("workspace.openTextDocument reads real files",
+               doc.getText() == "print('vscode')\n"
+               and doc.languageId == "python")
+        _check("workspace tracks open text documents",
+               sample in [item.fileName for item in api["workspace"]["textDocuments"]]
+               and untitled.isUntitled is True
+               and untitled.languageId == "markdown"
+               and untitled.fileName == "untitled:Untitled-1")
+        _check("workspace open event fires for new documents",
+               "untitled:Untitled-1" in opened_docs)
+        _check("workspace.findFiles returns real matches",
+               len(found) == 1 and found[0].fs_path == sample
+               and len(found_recursive) == 1)
+        _check("workspace.applyEdit non-empty unsupported does not fake success",
+               api["workspace"]["applyEdit"]({"edits": [1]}) is False)
+        _check("workspace.applyEdit empty WorkspaceEdit succeeds",
+               api["workspace"]["applyEdit"](WorkspaceEdit()) is True)
+        watcher = api["workspace"]["createFileSystemWatcher"]("*.py", True)
+        watcher_events = []
+        watcher.onDidCreate(lambda uri: watcher_events.append(uri))
+        watcher._create.fire("sample.py")
+        _check("workspace.createFileSystemWatcher exposes events",
+               watcher_events == ["sample.py"] and watcher.ignoreCreateEvents is True)
+        _check("workspace.asRelativePath",
+               api["workspace"]["asRelativePath"](sample) == "sample.py")
+        active_events = []
+        visible_events = []
+        api["window"]["onDidChangeActiveTextEditor"](
+            lambda active: active_events.append(active.document.fileName if active else ""))
+        api["window"]["onDidChangeVisibleTextEditors"](
+            lambda editors: visible_events.append(len(editors)))
+        editor = api["window"]["showTextDocument"](doc)
+        _check("window.showTextDocument returns an editor",
+               editor.document is doc and editor.viewColumn == 1)
+        _check("window active editor state stays live",
+               api["window"]["activeTextEditor"] is editor
+               and api["window"]["visibleTextEditors"] == [editor]
+               and active_events == [sample]
+               and visible_events == [1])
+        editor_hits = []
+        text_editor_disposable = api["commands"]["registerTextEditorCommand"](
+            "test.editor", lambda active, edit: editor_hits.append(active.document.fileName))
+        api["commands"]["executeCommand"]("test.editor")
+        _check("registerTextEditorCommand receives active editor",
+               editor_hits == [sample])
+        _check("registerTextEditorCommand returns Disposable",
+               hasattr(text_editor_disposable, "dispose"))
+        api["env"]["clipboard"]["writeText"]("clip-value")
+        _check("env.clipboard round-trips text",
+               api["env"]["clipboard"]["readText"]() == "clip-value"
+               and api["env"]["openExternal"]("https://example.invalid") is False)
+
+        diagnostics = api["languages"]["createDiagnosticCollection"]("selftest")
+        diagnostics.set("file:///tmp/a.py", [{"message": "bad"}])
+        _check("languages.createDiagnosticCollection stores diagnostics",
+               diagnostics.get("file:///tmp/a.py")[0].get("message") == "bad")
+        diag = Diagnostic(
+            Range(Position(0, 0), Position(0, 1)), "boom",
+            api["DiagnosticSeverity"]["Error"])
+        diagnostics.set(doc.uri, [diag])
+        _check("languages.getDiagnostics reads collections",
+               api["languages"]["getDiagnostics"](doc.uri)[0].message == "boom")
+        provider_dispose = api["languages"]["registerHoverProvider"]("python", object())
+        _check("languages provider registration disposable", hasattr(provider_dispose, "dispose"))
+        _check("languages.match", api["languages"]["match"]("python", doc) == 10)
+        _check("tasks/debug unsupported surfaces explicit",
+               api["tasks"]["executeTask"]({}).get("unsupported") is True
+               and api["debug"]["startDebugging"](None, {}) is False)
+        diagnostics.clear()
+        _check("languages diagnostics clear", diagnostics.get("file:///tmp/a.py") == [])
+
+    panel = api["window"]["createWebviewPanel"]("test", "Test", 1)
+    webview_messages = []
+    panel.webview.on_did_receive_message(lambda msg: webview_messages.append(msg))
+    posted = panel.webview.post_message({"hello": "webview"})
+    _check("webview.post_message dispatches to listeners",
+           posted is True and webview_messages == [{"hello": "webview"}])
+    webview_messages_2 = []
+    panel.webview.onDidReceiveMessage(lambda msg: webview_messages_2.append(msg))
+    posted_2 = panel.webview.postMessage({"hello": "camel"})
+    _check("webview camelCase aliases work",
+           posted_2 is True and webview_messages_2 == [{"hello": "camel"}])
+    tree_provider = object()
+    tree_view = api["window"]["createTreeView"](
+        "selftest.tree", treeDataProvider=tree_provider)
+    api["window"]["registerTreeDataProvider"]("selftest.tree", tree_provider)
+    tree_view.reveal("node")
+    _check("tree view shim stores provider and selection",
+           tree_view.provider is tree_provider and tree_view.selection == ["node"])
+    resolved_webviews = []
+    class _WebviewViewProvider:
+        def resolveWebviewView(self, view, context=None, token=None):
+            resolved_webviews.append(view.viewType)
+            view.webview.html = "<div>resolved</div>"
+    webview_provider_disposable = api["window"]["registerWebviewViewProvider"](
+        "selftest.webview", _WebviewViewProvider())
+    _check("registerWebviewViewProvider resolves a view",
+           resolved_webviews == ["selftest.webview"]
+           and hasattr(webview_provider_disposable, "dispose"))
 
     # Configuration
     cfg = api["workspace"]["getConfiguration"]("ai_editor")
@@ -1383,6 +1831,37 @@ def test_vscode_api() -> None:
     _check("window.withProgress", callable(api["window"]["withProgress"]))
     _check("window.createWebviewPanel", callable(api["window"]["createWebviewPanel"]))
 
+    import ai_editor.auth as auth_module
+    from ai_editor.auth import AuthService
+    old_auth_singleton = auth_module._singleton
+    tmp_auth = tempfile.mkdtemp(prefix="sao_auth_vscode_test_")
+    try:
+        auth_module._singleton = AuthService(storage_dir=tmp_auth)
+        auth_events = []
+        api["authentication"]["onDidChangeSessions"](
+            lambda evt: auth_events.append(evt))
+        auth_module._singleton.create_session_from_token(
+            "github", "gh-test", "GitHub", scopes=["read:user"])
+        class _AuthProvider(AuthenticationProviderBase):
+            def create_session(self, scopes=None, options=None):
+                return auth_module._singleton.create_session_from_token(
+                    "github-test", "gh-create", "GitHub Test", scopes=scopes or [])
+        api["authentication"]["registerAuthenticationProvider"](
+            "github-test", "GitHub Test", _AuthProvider())
+        created_auth_session = api["authentication"]["getSession"](
+            "github-test", ["repo"], {"createIfNone": True})
+        auth_session = api["authentication"]["getSession"](
+            "github", ["read:user"], {})
+        _check("authentication.getSession reads AuthService sessions",
+               auth_session is not None and auth_session.accessToken == "gh-test")
+        _check("authentication provider createIfNone emits session event",
+               created_auth_session is not None
+               and created_auth_session.accessToken == "gh-create"
+               and auth_events[-1].get("provider") == "github-test")
+    finally:
+        auth_module._singleton = old_auth_singleton
+        shutil.rmtree(tmp_auth, ignore_errors=True)
+
 
 def test_app_extension_runtime_support() -> None:
     print("── App Extension Runtime Support ──")
@@ -1390,6 +1869,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.app import AIEditorAPI
     from ai_editor.chat_providers import ChatProviderDef
     from ai_editor.extension_host import ExtensionDescription, ExtensionHost
+    from ai_editor.vscode_api import LanguageModelToolResult
 
     previous_host = extension_host_module._host
     extension_host_module._host = ExtensionHost()
@@ -1416,6 +1896,22 @@ def test_app_extension_runtime_support() -> None:
         }, "/tmp/selftest-manifest")
         api._ext_host.ext_points.process(manifest_desc)
         api._register_ext_tools()
+        ext_contribs = api.get_extension_contributions()
+        _check("app exposes extension contribution details",
+               ext_contribs.get("summary", {}).get("languageModelTools") == 1
+               and "languageModelTools" in ext_contribs.get("contributions", {}))
+
+        manifest_tool_name = api._extension_tool_wrapper_name(
+            "selftest.manifest-only", "manifest_tool")
+        manifest_tools = {t.get("name"): t for t in api.list_tools().get("tools", [])}
+        _check("manifest language model tool exposed in list_tools",
+               manifest_tools.get(manifest_tool_name, {}).get("needsExtensionRuntime") is True
+               and manifest_tools.get(manifest_tool_name, {}).get("sourceName") == "manifest_tool")
+        manifest_exec = json.loads(api.execute_tool(
+            manifest_tool_name, "{}", confirmed=True))
+        _check("manifest-only language model tool invocation explains runtime need",
+               manifest_exec.get("needsExtensionRuntime") is True
+               and manifest_exec.get("code") == "needsExtensionRuntime")
 
         manifest_resp = api.invoke_chat_participant(
             "selftest.manifest.participant", "hello")
@@ -1425,6 +1921,39 @@ def test_app_extension_runtime_support() -> None:
         provider_ids = {p.get("id") for p in api.list_chat_providers().get("providers", [])}
         _check("manifest-only participant not exposed as fake provider",
                "ext-selftest.manifest.participant" not in provider_ids)
+
+        class RuntimeTool:
+            description = "Runtime echo tool"
+            inputSchema = {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            }
+
+            def invoke(self, options, token):
+                return LanguageModelToolResult.text(
+                    "runtime:" + options.input.get("value", ""))
+
+        vscode_api = api._vscode_ns.build(manifest_desc)
+        vscode_api["lm"]["registerTool"]("manifest_tool", RuntimeTool())
+        vscode_api["lm"]["registerTool"]("runtime_only_tool", RuntimeTool())
+        runtime_tools = {t.get("name"): t for t in api.list_tools().get("tools", [])}
+        runtime_manifest_tool = runtime_tools.get(manifest_tool_name, {})
+        runtime_only_name = api._extension_tool_wrapper_name(
+            "selftest.manifest-only", "runtime_only_tool")
+        _check("runtime-backed manifest tool reports invocable",
+               runtime_manifest_tool.get("runtimeAvailable") is True
+               and not runtime_manifest_tool.get("needsExtensionRuntime"))
+        runtime_manifest_exec = json.loads(api.execute_tool(
+            manifest_tool_name, json.dumps({"value": "pong"}), confirmed=True))
+        _check("runtime-backed manifest tool invokes registered handler",
+               runtime_manifest_exec.get("ok") is True
+               and runtime_manifest_exec.get("content", [{}])[0].get("text") == "runtime:pong")
+        runtime_only_exec = json.loads(api.execute_tool(
+            runtime_only_name, json.dumps({"value": "direct"}), confirmed=True))
+        _check("runtime-only language model tool exposed and invocable",
+               runtime_tools.get(runtime_only_name, {}).get("runtimeAvailable") is True
+               and runtime_only_exec.get("content", [{}])[0].get("text") == "runtime:direct")
 
         provider = ChatProviderDef(
             id="selftest-provider",
@@ -1739,6 +2268,7 @@ def main() -> None:
 
     test_imports()
     test_tool_registry()
+    test_mcp_client()
     test_llm_engine()
     test_conversation()
     test_chat_controller_tool_loop()

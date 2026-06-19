@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import fnmatch
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -251,9 +252,11 @@ class ChatResult:
 
 class ChatParticipant:
     def __init__(self, participant_id: str,
-                 handler: Callable) -> None:
+                 handler: Callable,
+                 on_dispose: Optional[Callable[[], None]] = None) -> None:
         self.id = participant_id
         self.request_handler = handler
+        self._on_dispose = on_dispose
         self.icon_path: Any = None
         self.followup_provider: Any = None
         self.welcome_message_provider: Any = None
@@ -292,6 +295,11 @@ class ChatParticipant:
 
     def dispose(self) -> None:
         self._disposed = True
+        if self._on_dispose:
+            try:
+                self._on_dispose()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +578,10 @@ class AuthenticationSession:
     account: Dict = field(default_factory=lambda: {"id": "", "label": ""})
     scopes: List[str] = field(default_factory=list)
 
+    @property
+    def accessToken(self) -> str:
+        return self.access_token
+
 
 class AuthenticationProviderBase:
     def __init__(self) -> None:
@@ -583,10 +595,10 @@ class AuthenticationProviderBase:
         return []
 
     def create_session(self, scopes=None, options=None):
-        raise NotImplementedError
+        return None
 
     def remove_session(self, session_id: str):
-        pass
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +610,62 @@ class ChatVariableValue:
     level: int = 2  # 1=Short, 2=Medium, 3=Full
     value: str = ""
     description: str = ""
+
+
+@dataclass
+class Location:
+    uri: Uri
+    range: Range = field(default_factory=Range)
+
+
+@dataclass
+class Diagnostic:
+    range: Range
+    message: str = ""
+    severity: int = 0
+    source: str = ""
+    code: Any = None
+    tags: List[int] = field(default_factory=list)
+    related_information: List[Any] = field(default_factory=list)
+
+
+class WorkspaceEdit:
+    """Collect workspace edits without pretending SAO can safely apply them."""
+
+    def __init__(self) -> None:
+        self._edits: List[Dict[str, Any]] = []
+
+    def replace(self, uri: Any, range: Range, new_text: str) -> None:
+        self._edits.append({
+            "kind": "replace", "uri": uri,
+            "range": range, "newText": new_text,
+        })
+
+    def insert(self, uri: Any, position: Position, new_text: str) -> None:
+        self._edits.append({
+            "kind": "insert", "uri": uri,
+            "position": position, "newText": new_text,
+        })
+
+    def delete(self, uri: Any, range: Range) -> None:
+        self._edits.append({"kind": "delete", "uri": uri, "range": range})
+
+    def createFile(self, uri: Any, options: Dict = None) -> None:
+        self._edits.append({"kind": "createFile", "uri": uri,
+                            "options": options or {}})
+
+    def deleteFile(self, uri: Any, options: Dict = None) -> None:
+        self._edits.append({"kind": "deleteFile", "uri": uri,
+                            "options": options or {}})
+
+    def renameFile(self, old_uri: Any, new_uri: Any, options: Dict = None) -> None:
+        self._edits.append({
+            "kind": "renameFile", "oldUri": old_uri,
+            "newUri": new_uri, "options": options or {},
+        })
+
+    def entries(self) -> List[Dict[str, Any]]:
+        return list(self._edits)
 
 
 # ---------------------------------------------------------------------------
@@ -620,18 +688,49 @@ class VscodeNamespace:
         self._host = host
         self._engine = engine
         self._settings_getter = settings_getter
+        self._clipboard_text = ""
+        self._active_text_editor: Optional[_TextEditor] = None
+        self._visible_text_editors: List[_TextEditor] = []
+        self._text_documents: List[_TextDocument] = []
+        self._terminals: List[_Terminal] = []
         self._chat_participants: Dict[str, ChatParticipant] = {}
         self._lm_tools: Dict[str, Any] = {}
         self._auth_providers: Dict[str, Any] = {}
         self._auth_sessions: Dict[str, List[AuthenticationSession]] = {}
         self._variables: Dict[str, Callable] = {}
         self._lm_providers: Dict[str, Any] = {}
+        self._language_providers: Dict[str, List[Any]] = {}
+        self._diagnostic_collections: Dict[str, Any] = {}
+        self._diagnostics_change_emitter = EventEmitter()
+        self._window_active_text_editor_emitter = EventEmitter()
+        self._window_visible_text_editors_emitter = EventEmitter()
+        self._window_open_terminal_emitter = EventEmitter()
+        self._window_close_terminal_emitter = EventEmitter()
+        self._workspace_open_text_document_emitter = EventEmitter()
+        self._workspace_close_text_document_emitter = EventEmitter()
+        self._workspace_change_text_document_emitter = EventEmitter()
+        self._workspace_save_text_document_emitter = EventEmitter()
+        self._workspace_create_files_emitter = EventEmitter()
+        self._workspace_delete_files_emitter = EventEmitter()
+        self._workspace_rename_files_emitter = EventEmitter()
+        self._workspace_folders_change_emitter = EventEmitter()
+        self._auth_sessions_emitter = EventEmitter()
+        self._tree_views: Dict[str, Any] = {}
+        self._tree_data_providers: Dict[str, Any] = {}
+        self._webview_view_providers: Dict[str, Any] = {}
+        self._webview_views: Dict[str, Any] = {}
+        self._task_providers: Dict[str, Any] = {}
+        self._debug_providers: Dict[str, Any] = {}
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
+        self._window_api: Optional[Dict[str, Any]] = None
+        self._workspace_api: Optional[Dict[str, Any]] = None
+        self._auth_api: Optional[Dict[str, Any]] = None
 
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
+        extension_id = ext.id if ext else ""
         return {
             # Namespaces
             "commands": self._build_commands(),
@@ -639,7 +738,11 @@ class VscodeNamespace:
             "workspace": self._build_workspace(),
             "env": self._build_env(),
             "extensions": self._build_extensions(),
-            "lm": self._build_lm(),
+            "languages": self._build_languages(),
+            "tasks": self._build_tasks(),
+            "debug": self._build_debug(),
+            "notebooks": self._build_notebooks(),
+            "lm": self._build_lm(extension_id),
             "chat": self._build_chat(),
             "authentication": self._build_auth(),
             # Types
@@ -657,6 +760,9 @@ class VscodeNamespace:
             "LanguageModelDataPart": LanguageModelDataPart,
             "LanguageModelThinkingPart": LanguageModelThinkingPart,
             "LanguageModelError": LanguageModelError,
+            "Location": Location,
+            "Diagnostic": Diagnostic,
+            "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
             "ChatResponseStream": ChatResponseStream,
             "LanguageModelToolResult": LanguageModelToolResult,
@@ -668,69 +774,185 @@ class VscodeNamespace:
             "ChatLocation": {"Panel": 1, "Terminal": 2, "Notebook": 3, "Editor": 4},
             "ChatSessionStatus": {"Failed": 0, "Completed": 1, "InProgress": 2},
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
+            "DiagnosticSeverity": {"Error": 0, "Warning": 1, "Information": 2, "Hint": 3},
+            "DiagnosticTag": {"Unnecessary": 1, "Deprecated": 2},
+            "FileType": {"Unknown": 0, "File": 1, "Directory": 2, "SymbolicLink": 64},
+            "ProgressLocation": {"SourceControl": 1, "Window": 10, "Notification": 15},
+            "TaskScope": {"Global": 1, "Workspace": 2},
         }
 
     # ── commands ──
 
     def _build_commands(self) -> Dict[str, Callable]:
-        cmds = self._host.commands
         return {
-            "registerCommand": cmds.register,
-            "executeCommand": cmds.execute,
-            "getCommands": lambda filter_internal=False: cmds.list_commands(),
+            "registerCommand": self._register_command,
+            "registerTextEditorCommand": self._register_text_editor_command,
+            "executeCommand": self._host.commands.execute,
+            "getCommands": lambda filter_internal=False: self._host.commands.list_commands(),
         }
+
+    def _register_command(self, command_id: str, callback: Callable) -> Disposable:
+        dispose = self._host.commands.register(command_id, callback)
+        return Disposable(dispose)
+
+    def _register_text_editor_command(self, command_id: str,
+                                      callback: Callable) -> Disposable:
+        def _handler(*args: Any) -> Any:
+            editor = self._active_text_editor
+            edit = _TextEditorEdit(editor.document) if editor else _TextEditorEdit(None)
+            return callback(editor, edit, *args)
+        dispose = self._host.commands.register(command_id, _handler)
+        return Disposable(dispose)
 
     # ── window ──
 
     def _build_window(self) -> Dict[str, Any]:
-        return {
-            "showInformationMessage": lambda msg, *items: print(f"[info] {msg}"),
-            "showWarningMessage": lambda msg, *items: print(f"[warn] {msg}"),
-            "showErrorMessage": lambda msg, *items: print(f"[error] {msg}"),
-            "showQuickPick": lambda items, **kw: items[0] if items else None,
-            "showInputBox": lambda **kw: kw.get("value", ""),
-            "createOutputChannel": lambda name, **kw: _OutputChannel(name),
-            "createStatusBarItem": lambda *a, **kw: _StatusBarItem(),
-            "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title),
-            "showTextDocument": lambda doc, **kw: None,
-            "withProgress": lambda opts, task: task(_DummyProgress(), CancellationToken.NONE),
-            "activeTextEditor": None,
-            "visibleTextEditors": [],
-            "terminals": [],
-            "onDidChangeActiveTextEditor": EventEmitter().event,
-            "onDidChangeVisibleTextEditors": EventEmitter().event,
-            "onDidChangeActiveTerminal": EventEmitter().event,
-            "onDidOpenTerminal": EventEmitter().event,
-            "onDidCloseTerminal": EventEmitter().event,
-            "tabGroups": {"all": [], "activeTabGroup": None,
-                          "onDidChangeTabGroups": EventEmitter().event,
-                          "onDidChangeTabs": EventEmitter().event},
+        if self._window_api is None:
+            self._window_api = {
+                "showInformationMessage": lambda msg, *items: self._show_message("info", msg, items),
+                "showWarningMessage": lambda msg, *items: self._show_message("warn", msg, items),
+                "showErrorMessage": lambda msg, *items: self._show_message("error", msg, items),
+                "showQuickPick": lambda items, **kw: items[0] if items else None,
+                "showInputBox": lambda **kw: kw.get("value", ""),
+                "createOutputChannel": lambda name, **kw: _OutputChannel(name),
+                "createStatusBarItem": lambda *a, **kw: _StatusBarItem(),
+                "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title),
+                "showTextDocument": self._show_text_document,
+                "createTreeView": self._create_tree_view,
+                "registerTreeDataProvider": self._register_tree_data_provider,
+                "registerWebviewViewProvider": self._register_webview_view_provider,
+                "createTerminal": self._create_terminal,
+                "withProgress": lambda opts, task: task(_DummyProgress(), CancellationToken.NONE),
+                "activeTextEditor": None,
+                "visibleTextEditors": [],
+                "terminals": [],
+                "onDidChangeActiveTextEditor": self._window_active_text_editor_emitter.event,
+                "onDidChangeVisibleTextEditors": self._window_visible_text_editors_emitter.event,
+                "onDidChangeActiveTerminal": EventEmitter().event,
+                "onDidOpenTerminal": self._window_open_terminal_emitter.event,
+                "onDidCloseTerminal": self._window_close_terminal_emitter.event,
+                "tabGroups": {"all": [], "activeTabGroup": None,
+                              "onDidChangeTabGroups": EventEmitter().event,
+                              "onDidChangeTabs": EventEmitter().event},
+            }
+        self._sync_window_state()
+        return self._window_api
+
+    def _sync_window_state(self) -> None:
+        if self._window_api is None:
+            return
+        self._window_api["activeTextEditor"] = self._active_text_editor
+        self._window_api["visibleTextEditors"] = list(self._visible_text_editors)
+        self._window_api["terminals"] = list(self._terminals)
+
+    def _show_message(self, level: str, message: Any,
+                      items: Sequence[Any]) -> Any:
+        print(f"[{level}] {message}")
+        return items[0] if items else None
+
+    def _create_tree_view(self, view_id: str, **kw: Any) -> Any:
+        view = _TreeView(view_id, kw.get("treeDataProvider"))
+        self._tree_views[view_id] = view
+        return view
+
+    def _register_tree_data_provider(self, view_id: str,
+                                     provider: Any) -> Disposable:
+        self._tree_data_providers[view_id] = provider
+        if view_id in self._tree_views:
+            self._tree_views[view_id].provider = provider
+        return Disposable(lambda: self._tree_data_providers.pop(view_id, None))
+
+    def _register_webview_view_provider(self, view_id: str, provider: Any,
+                                        options: Dict[str, Any] = None) -> Disposable:
+        self._webview_view_providers[view_id] = {
+            "provider": provider,
+            "options": dict(options or {}),
         }
+        view = _WebviewView(view_id)
+        self._webview_views[view_id] = view
+        if hasattr(provider, "resolveWebviewView"):
+            try:
+                provider.resolveWebviewView(view, None, CancellationToken.NONE)
+            except TypeError:
+                provider.resolveWebviewView(view)
+        return Disposable(lambda: (self._webview_view_providers.pop(view_id, None),
+                                   self._webview_views.pop(view_id, None)))
+
+    def _create_terminal(self, *args: Any, **kw: Any) -> Any:
+        name = ""
+        if args and isinstance(args[0], str):
+            name = args[0]
+        elif args and isinstance(args[0], dict):
+            name = str(args[0].get("name", ""))
+        name = str(kw.get("name") or name or "SAO Terminal")
+        terminal = _Terminal(name)
+        terminal._on_dispose = lambda t=terminal: self._on_terminal_disposed(t)
+        self._terminals.append(terminal)
+        self._sync_window_state()
+        self._window_open_terminal_emitter.fire(terminal)
+        return terminal
+
+    def _on_terminal_disposed(self, terminal: "_Terminal") -> None:
+        if terminal in self._terminals:
+            self._terminals.remove(terminal)
+            self._sync_window_state()
+            self._window_close_terminal_emitter.fire(terminal)
 
     # ── workspace ──
 
     def _build_workspace(self) -> Dict[str, Any]:
-        return {
-            "getConfiguration": self._get_configuration,
-            "onDidChangeConfiguration": self._config_change_emitter.event,
-            "workspaceFolders": self._get_workspace_folders(),
-            "rootPath": self._get_root_path(),
-            "name": "SAO Workspace",
-            "fs": _FileSystem(),
-            "openTextDocument": lambda uri, **kw: None,
-            "applyEdit": lambda edit: True,
-            "findFiles": lambda include, exclude=None, max_results=None, token=None: [],
-            "saveAll": lambda include_untitled=False: True,
-            "onDidOpenTextDocument": EventEmitter().event,
-            "onDidCloseTextDocument": EventEmitter().event,
-            "onDidChangeTextDocument": EventEmitter().event,
-            "onDidSaveTextDocument": EventEmitter().event,
-            "onDidCreateFiles": EventEmitter().event,
-            "onDidDeleteFiles": EventEmitter().event,
-            "onDidRenameFiles": EventEmitter().event,
-            "onDidChangeWorkspaceFolders": EventEmitter().event,
-            "textDocuments": [],
-        }
+        if self._workspace_api is None:
+            self._workspace_api = {
+                "getConfiguration": self._get_configuration,
+                "onDidChangeConfiguration": self._config_change_emitter.event,
+                "workspaceFolders": self._get_workspace_folders(),
+                "rootPath": self._get_root_path(),
+                "name": "SAO Workspace",
+                "fs": _FileSystem(),
+                "openTextDocument": self._open_text_document,
+                "applyEdit": self._apply_workspace_edit,
+                "findFiles": self._find_files,
+                "createFileSystemWatcher": self._create_file_system_watcher,
+                "asRelativePath": self._as_relative_path,
+                "registerFileSystemProvider": self._register_file_system_provider,
+                "saveAll": lambda include_untitled=False: True,
+                "onDidOpenTextDocument": self._workspace_open_text_document_emitter.event,
+                "onDidCloseTextDocument": self._workspace_close_text_document_emitter.event,
+                "onDidChangeTextDocument": self._workspace_change_text_document_emitter.event,
+                "onDidSaveTextDocument": self._workspace_save_text_document_emitter.event,
+                "onDidCreateFiles": self._workspace_create_files_emitter.event,
+                "onDidDeleteFiles": self._workspace_delete_files_emitter.event,
+                "onDidRenameFiles": self._workspace_rename_files_emitter.event,
+                "onDidChangeWorkspaceFolders": self._workspace_folders_change_emitter.event,
+                "textDocuments": [],
+            }
+        self._sync_workspace_state()
+        return self._workspace_api
+
+    def _sync_workspace_state(self) -> None:
+        if self._workspace_api is None:
+            return
+        self._workspace_api["workspaceFolders"] = self._get_workspace_folders()
+        self._workspace_api["rootPath"] = self._get_root_path()
+        self._workspace_api["textDocuments"] = list(self._text_documents)
+
+    @staticmethod
+    def _document_key(document_or_uri: Any) -> str:
+        if isinstance(document_or_uri, _TextDocument):
+            return str(document_or_uri.uri)
+        if hasattr(document_or_uri, "uri"):
+            return str(document_or_uri.uri)
+        return str(document_or_uri)
+
+    def _remember_text_document(self, document: "_TextDocument") -> "_TextDocument":
+        doc_key = self._document_key(document)
+        for existing in self._text_documents:
+            if self._document_key(existing) == doc_key:
+                return existing
+        self._text_documents.append(document)
+        self._sync_workspace_state()
+        self._workspace_open_text_document_emitter.fire(document)
+        return document
 
     def _get_configuration(self, section: str = "") -> WorkspaceConfiguration:
         data = {}
@@ -754,6 +976,100 @@ class VscodeNamespace:
         except Exception:
             return ""
 
+    def _open_text_document(self, uri: Any = None, **kw: Any) -> "_TextDocument":
+        if isinstance(uri, dict):
+            uri_value = uri.get("uri")
+            if uri_value is not None:
+                return self._open_text_document(uri_value, **{k: v for k, v in uri.items() if k != "uri"})
+            content = str(uri.get("content", ""))
+            language = str(uri.get("language", "plaintext"))
+            return self._remember_text_document(
+                _TextDocument(Uri.parse("untitled:Untitled-1"), content, language))
+        if uri is None and kw:
+            content = str(kw.get("content", ""))
+            language = str(kw.get("language", "plaintext"))
+            return self._remember_text_document(
+                _TextDocument(Uri.parse("untitled:Untitled-1"), content, language))
+        raw_uri = uri
+        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri or "")
+        if not path:
+            raise ValueError("openTextDocument requires a file URI/path or content")
+        uri_obj = raw_uri if isinstance(raw_uri, Uri) else Uri.file(path)
+        if isinstance(uri_obj, Uri) and uri_obj.scheme != "file":
+            return self._remember_text_document(
+                _TextDocument(uri_obj, "", str(kw.get("language", "plaintext"))))
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+        return self._remember_text_document(
+            _TextDocument(Uri.file(path), content, _language_id_for_path(path)))
+
+    def _apply_workspace_edit(self, edit: Any) -> bool:
+        if not edit:
+            return True
+        if isinstance(edit, WorkspaceEdit) and not edit.entries():
+            return True
+        return False
+
+    def _create_file_system_watcher(self, pattern: Any, *args: Any,
+                                    **kw: Any) -> Any:
+        watcher = _FileSystemWatcher(pattern)
+        if args:
+            watcher.ignoreCreateEvents = bool(args[0])
+        if len(args) > 1:
+            watcher.ignoreChangeEvents = bool(args[1])
+        if len(args) > 2:
+            watcher.ignoreDeleteEvents = bool(args[2])
+        for key, attr in (
+                ("ignoreCreateEvents", "ignoreCreateEvents"),
+                ("ignoreChangeEvents", "ignoreChangeEvents"),
+                ("ignoreDeleteEvents", "ignoreDeleteEvents")):
+            if key in kw:
+                setattr(watcher, attr, bool(kw[key]))
+        return watcher
+
+    def _as_relative_path(self, path_or_uri: Any,
+                          include_workspace_folder: bool = False) -> str:
+        path = path_or_uri.fs_path if hasattr(path_or_uri, "fs_path") else str(path_or_uri)
+        root = self._get_root_path()
+        try:
+            rel = os.path.relpath(path, root).replace("\\", "/")
+        except Exception:
+            rel = path.replace("\\", "/")
+        if include_workspace_folder:
+            folder = os.path.basename(root.rstrip("\\/")) or "workspace"
+            return f"{folder}/{rel}"
+        return rel
+
+    def _register_file_system_provider(self, scheme: str, provider: Any,
+                                       options: Dict = None) -> Disposable:
+        return Disposable()
+
+    def _find_files(self, include: Any, exclude: Any = None,
+                    max_results: Any = None, token: Any = None) -> List[Uri]:
+        root = self._get_root_path()
+        if not root:
+            return []
+        include_pattern = _glob_pattern(include)
+        exclude_pattern = _glob_pattern(exclude)
+        try:
+            limit = int(max_results) if max_results else 0
+        except (TypeError, ValueError):
+            limit = 0
+        matches: List[Uri] = []
+        for current, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules"}]
+            for file_name in files:
+                full = os.path.join(current, file_name)
+                rel = os.path.relpath(full, root).replace("\\", "/")
+                if include_pattern and not _glob_matches(rel, include_pattern):
+                    continue
+                if exclude_pattern and _glob_matches(rel, exclude_pattern):
+                    continue
+                matches.append(Uri.file(full))
+                if limit and len(matches) >= limit:
+                    return matches
+        return matches
+
     # ── env ──
 
     def _build_env(self) -> Dict[str, Any]:
@@ -762,12 +1078,133 @@ class VscodeNamespace:
             "appRoot": self._get_root_path(),
             "language": "zh-cn",
             "uriScheme": "sao-editor",
-            "clipboard": {"readText": lambda: "", "writeText": lambda t: None},
+            "clipboard": {"readText": self._read_clipboard,
+                          "writeText": self._write_clipboard},
+            "openExternal": self._open_external,
+            "asExternalUri": lambda uri, *a, **kw: uri,
             "machineId": "sao-" + os.environ.get("COMPUTERNAME", "local"),
             "sessionId": "",
             "isNewAppInstall": False,
             "isTelemetryEnabled": False,
         }
+
+    def _read_clipboard(self) -> str:
+        return self._clipboard_text
+
+    def _write_clipboard(self, text: str) -> None:
+        self._clipboard_text = str(text or "")
+
+    def _open_external(self, uri: Any) -> bool:
+        return False
+
+    def _show_text_document(self, doc: Any, **kw: Any) -> "_TextEditor":
+        document = doc if isinstance(doc, _TextDocument) else self._open_text_document(doc)
+        document = self._remember_text_document(document)
+        editor = _TextEditor(document)
+        self._active_text_editor = editor
+        self._visible_text_editors = [editor]
+        self._sync_window_state()
+        self._window_active_text_editor_emitter.fire(editor)
+        self._window_visible_text_editors_emitter.fire(list(self._visible_text_editors))
+        return editor
+
+    def _build_languages(self) -> Dict[str, Any]:
+        return {
+            "createDiagnosticCollection": self._create_diagnostic_collection,
+            "getDiagnostics": self._get_diagnostics,
+            "getLanguages": self._get_languages,
+            "match": self._language_match,
+            "onDidChangeDiagnostics": self._diagnostics_change_emitter.event,
+            "registerHoverProvider": lambda selector, provider: self._register_language_provider("hover", selector, provider),
+            "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
+            "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
+            "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
+            "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),
+            "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
+        }
+
+    def _create_diagnostic_collection(self, name: str = "") -> Any:
+        collection = _DiagnosticCollection(name, self._diagnostics_change_emitter)
+        self._diagnostic_collections[name or "default"] = collection
+        return collection
+
+    def _get_diagnostics(self, resource: Any = None) -> Any:
+        if resource is not None:
+            result = []
+            for collection in self._diagnostic_collections.values():
+                result.extend(collection.get(resource))
+            return result
+        rows = []
+        for collection in self._diagnostic_collections.values():
+            rows.extend(collection.entries())
+        return rows
+
+    def _get_languages(self) -> List[str]:
+        contributed = []
+        try:
+            for item in self._host.ext_points.all_contributions.get("languages", []):
+                language_id = item.get("id")
+                if language_id:
+                    contributed.append(str(language_id))
+        except Exception:
+            pass
+        builtins = ["plaintext", "python", "javascript", "typescript", "json", "markdown"]
+        return sorted(set(builtins + contributed))
+
+    def _language_match(self, selector: Any, document: Any) -> int:
+        language_id = getattr(document, "languageId", "")
+        if isinstance(selector, str):
+            return 10 if selector == language_id else 0
+        if isinstance(selector, list):
+            return max((self._language_match(item, document) for item in selector), default=0)
+        if isinstance(selector, dict):
+            wanted = selector.get("language")
+            return 10 if wanted in (None, language_id) else 0
+        return 0
+
+    def _register_language_provider(self, kind: str, selector: Any,
+                                    provider: Any, metadata: Any = None) -> Disposable:
+        entry = {"kind": kind, "selector": selector,
+                 "provider": provider, "metadata": metadata}
+        self._language_providers.setdefault(kind, []).append(entry)
+        return Disposable(lambda: self._language_providers.get(kind, []).remove(entry)
+                          if entry in self._language_providers.get(kind, []) else None)
+
+    def _build_tasks(self) -> Dict[str, Any]:
+        return {
+            "registerTaskProvider": self._register_task_provider,
+            "fetchTasks": lambda filter=None: [],
+            "executeTask": lambda task: _unsupported_feature(
+                "tasks.executeTask", "Task execution requires a real VSCode task service."),
+            "taskExecutions": [],
+            "onDidStartTask": EventEmitter().event,
+            "onDidEndTask": EventEmitter().event,
+        }
+
+    def _register_task_provider(self, task_type: str, provider: Any) -> Disposable:
+        self._task_providers[task_type] = provider
+        return Disposable(lambda: self._task_providers.pop(task_type, None))
+
+    def _build_debug(self) -> Dict[str, Any]:
+        return {
+            "registerDebugConfigurationProvider": self._register_debug_provider,
+            "startDebugging": lambda folder, name_or_config, parent=None: False,
+            "activeDebugSession": None,
+            "breakpoints": [],
+            "onDidStartDebugSession": EventEmitter().event,
+            "onDidTerminateDebugSession": EventEmitter().event,
+            "onDidChangeBreakpoints": EventEmitter().event,
+        }
+
+    def _register_debug_provider(self, debug_type: str, provider: Any,
+                                 trigger_kind: Any = None) -> Disposable:
+        self._debug_providers[debug_type] = {
+            "provider": provider, "triggerKind": trigger_kind,
+        }
+        return Disposable(lambda: self._debug_providers.pop(debug_type, None))
+
+    def _build_notebooks(self) -> Dict[str, Any]:
+        return {"registerNotebookSerializer": lambda *a, **kw: Disposable()}
 
     # ── extensions ──
 
@@ -780,11 +1217,15 @@ class VscodeNamespace:
 
     # ── lm (Language Model) ──
 
-    def _build_lm(self) -> Dict[str, Any]:
+    def _build_lm(self, extension_id: str = "") -> Dict[str, Any]:
         return {
             "selectChatModels": self._select_chat_models,
-            "registerTool": self._register_lm_tool,
-            "registerToolDefinition": self._register_tool_definition,
+            "registerTool": (
+                lambda name, tool: self._register_lm_tool(
+                    name, tool, extension_id=extension_id)),
+            "registerToolDefinition": (
+                lambda name, schema: self._register_tool_definition(
+                    name, schema, extension_id=extension_id)),
             "registerLanguageModelChatProvider": self._register_lm_provider,
             "registerMcpServerDefinitionProvider": self._register_mcp_provider,
             "fileIsIgnored": self._file_is_ignored,
@@ -803,6 +1244,9 @@ class VscodeNamespace:
             desc: Dict[str, Any] = {"name": name}
             if isinstance(tool, dict):
                 nested = tool.get("tool")
+                extension_id = tool.get("_extensionId") or tool.get("extensionId")
+                if extension_id:
+                    desc["extensionId"] = extension_id
                 desc["description"] = (
                     tool.get("description", "")
                     or getattr(nested, "description", "")
@@ -863,22 +1307,28 @@ class VscodeNamespace:
             models.append(lm)
         return models
 
-    def _register_lm_tool(self, name: str, tool: Any) -> Disposable:
-        self._lm_tools[name] = self._merge_registered_tool(
-            self._lm_tools.get(name), tool)
+    def _register_lm_tool(self, name: str, tool: Any,
+                          extension_id: str = "") -> Disposable:
+        record = self._merge_registered_tool(self._lm_tools.get(name), tool)
+        if extension_id and not record.get("_extensionId"):
+            record["_extensionId"] = extension_id
+        self._lm_tools[name] = record
         self._tools_change_emitter.fire({"added": name})
         def _dispose():
             self._lm_tools.pop(name, None)
             self._tools_change_emitter.fire({"removed": name})
         return Disposable(_dispose)
 
-    def _register_tool_definition(self, name: str, schema: Dict) -> Disposable:
+    def _register_tool_definition(self, name: str, schema: Dict,
+                                  extension_id: str = "") -> Disposable:
         """Register a schema-only tool definition without pretending it can run."""
         record = self._merge_registered_tool(self._lm_tools.get(name), {
             "schema": schema or {},
             "inputSchema": schema or {},
             "description": "Schema-only tool definition has no invoke handler.",
         })
+        if extension_id and not record.get("_extensionId"):
+            record["_extensionId"] = extension_id
         if not self._tool_has_runtime_handler(record):
             record["unsupported"] = True
             record["needsExtensionRuntime"] = True
@@ -1040,7 +1490,11 @@ class VscodeNamespace:
 
     def _create_chat_participant(self, participant_id: str,
                                   handler: Callable) -> ChatParticipant:
-        cp = ChatParticipant(participant_id, handler)
+        cp = ChatParticipant(
+            participant_id,
+            handler,
+            on_dispose=lambda pid=participant_id: self._chat_participants.pop(pid, None),
+        )
         self._chat_participants[participant_id] = cp
         return cp
 
@@ -1052,11 +1506,13 @@ class VscodeNamespace:
     # ── authentication ──
 
     def _build_auth(self) -> Dict[str, Any]:
-        return {
-            "getSession": self._get_auth_session,
-            "registerAuthenticationProvider": self._register_auth_provider,
-            "onDidChangeSessions": EventEmitter().event,
-        }
+        if self._auth_api is None:
+            self._auth_api = {
+                "getSession": self._get_auth_session,
+                "registerAuthenticationProvider": self._register_auth_provider,
+                "onDidChangeSessions": self._auth_sessions_emitter.event,
+            }
+        return self._auth_api
 
     def _get_auth_session(self, provider_id: str, scopes: List[str] = None,
                            options: Dict = None) -> Optional[AuthenticationSession]:
@@ -1067,14 +1523,43 @@ class VscodeNamespace:
             prov = self._auth_providers.get(provider_id)
             if prov and hasattr(prov, "create_session"):
                 session = prov.create_session(scopes or [], options)
-                self._auth_sessions.setdefault(provider_id, []).append(session)
-                return session
+                if session:
+                    auth_session = _coerce_auth_session(
+                        session, provider_id, scopes or [])
+                    self._auth_sessions.setdefault(provider_id, []).append(auth_session)
+                    self._auth_sessions_emitter.fire({
+                        "provider": provider_id,
+                        "added": [auth_session.id],
+                        "removed": [],
+                        "changed": [],
+                    })
+                    return auth_session
+        try:
+            from ai_editor.auth import get_auth_service
+            session = get_auth_service().get_session(
+                provider_id, scopes or [], options or {})
+            if session:
+                return _coerce_auth_session(session, provider_id, scopes or [])
+        except Exception:
+            pass
         return None
 
     def _register_auth_provider(self, provider_id: str, label: str,
                                  provider: Any, options: Dict = None) -> Disposable:
         self._auth_providers[provider_id] = provider
-        return Disposable(lambda: self._auth_providers.pop(provider_id, None))
+        external_disposable = None
+        try:
+            from ai_editor.auth import get_auth_service
+            external_disposable = get_auth_service().register_provider(
+                provider_id, label, provider)
+        except Exception:
+            external_disposable = None
+
+        def _dispose() -> None:
+            self._auth_providers.pop(provider_id, None)
+            if external_disposable:
+                external_disposable.dispose()
+        return Disposable(_dispose)
 
     # ── Accessors for host integration ──
 
@@ -1122,12 +1607,14 @@ def _lm_message(role: int, content: str) -> Dict:
 class _OutputChannel:
     def __init__(self, name: str = "") -> None:
         self.name = name
+        self._value = ""
     def append(self, value: str) -> None:
-        pass
+        self._value += str(value)
     def appendLine(self, value: str) -> None:
+        self._value += str(value) + "\n"
         print(f"[{self.name}] {value}")
     def clear(self) -> None:
-        pass
+        self._value = ""
     def show(self, **kw) -> None:
         pass
     def dispose(self) -> None:
@@ -1139,12 +1626,43 @@ class _StatusBarItem:
         self.text = ""
         self.tooltip = ""
         self.command = ""
+        self.visible = False
     def show(self) -> None:
-        pass
+        self.visible = True
     def hide(self) -> None:
-        pass
+        self.visible = False
     def dispose(self) -> None:
         pass
+
+
+class _Terminal:
+    def __init__(self, name: str = "") -> None:
+        self.name = name
+        self.processId = None
+        self.creationOptions = {}
+        self.exitStatus = None
+        self.state = {"isInteractedWith": False}
+        self._disposed = False
+        self._on_dispose: Optional[Callable[[], None]] = None
+
+    def sendText(self, text: str, addNewLine: bool = True) -> None:
+        self.state["isInteractedWith"] = True
+        suffix = "\n" if addNewLine else ""
+        print(f"[terminal:{self.name}] {text}{suffix}", end="")
+
+    def show(self, preserveFocus: bool = False) -> None:
+        pass
+
+    def hide(self) -> None:
+        pass
+
+    def dispose(self) -> None:
+        self._disposed = True
+        if self._on_dispose:
+            try:
+                self._on_dispose()
+            except Exception:
+                pass
 
 
 class _DummyProgress:
@@ -1156,6 +1674,8 @@ class _WebviewPanel:
     def __init__(self, view_type: str = "", title: str = "") -> None:
         self.view_type = view_type
         self.title = title
+        self.viewColumn = 1
+        self.options: Dict[str, Any] = {}
         self.webview = _Webview()
         self.visible = True
         self.active = True
@@ -1165,11 +1685,17 @@ class _WebviewPanel:
     def on_did_dispose(self):
         return self._dispose_emitter.event
 
+    @property
+    def onDidDispose(self):
+        return self._dispose_emitter.event
+
     def reveal(self, *a, **kw) -> None:
         self.visible = True
+        self.active = True
 
     def dispose(self) -> None:
         self.visible = False
+        self.active = False
         self._dispose_emitter.fire()
 
 
@@ -1183,15 +1709,288 @@ class _Webview:
     def on_did_receive_message(self):
         return self._message_emitter.event
 
+    @property
+    def onDidReceiveMessage(self):
+        return self._message_emitter.event
+
     def post_message(self, message: Any) -> bool:
+        self._message_emitter.fire(message)
         return True
+
+    def postMessage(self, message: Any) -> bool:
+        return self.post_message(message)
 
     @property
     def csp_source(self) -> str:
         return ""
 
+    @property
+    def cspSource(self) -> str:
+        return self.csp_source
+
     def as_webview_uri(self, uri: Any) -> str:
         return str(uri)
+
+    def asWebviewUri(self, uri: Any) -> str:
+        return self.as_webview_uri(uri)
+
+
+class _WebviewView:
+    def __init__(self, view_id: str) -> None:
+        self.viewType = view_id
+        self.title = view_id
+        self.description = ""
+        self.badge = None
+        self.visible = True
+        self.webview = _Webview()
+        self._dispose_emitter = EventEmitter()
+
+    @property
+    def onDidDispose(self):
+        return self._dispose_emitter.event
+
+    def show(self, preserveFocus: bool = False) -> None:
+        self.visible = True
+
+    def dispose(self) -> None:
+        self.visible = False
+        self._dispose_emitter.fire()
+
+
+class _TextDocument:
+    def __init__(self, uri: Uri, content: str, language_id: str = "plaintext") -> None:
+        self.uri = uri
+        self.fileName = uri.fs_path if getattr(uri, "scheme", "") == "file" else str(uri)
+        self.languageId = language_id or "plaintext"
+        self.version = 1
+        self.isDirty = False
+        self.isUntitled = getattr(uri, "scheme", "") == "untitled"
+        self._content = content
+
+    @property
+    def lineCount(self) -> int:
+        return self._content.count("\n") + 1
+
+    def getText(self, range: Any = None) -> str:
+        return self._content
+
+    def save(self) -> bool:
+        if self.isUntitled:
+            return False
+        with open(self.fileName, "w", encoding="utf-8") as fh:
+            fh.write(self._content)
+        self.isDirty = False
+        return True
+
+
+class _TextEditor:
+    def __init__(self, document: _TextDocument) -> None:
+        self.document = document
+        self.selection = Range(Position(0, 0), Position(0, 0))
+        self.selections = [self.selection]
+        self.visibleRanges = []
+        self.options = {}
+        self.viewColumn = 1
+
+    def revealRange(self, range: Any, reveal_type: Any = None) -> None:
+        self.visibleRanges = [range]
+
+    def edit(self, callback: Callable, options: Dict = None) -> bool:
+        builder = _TextEditorEdit(self.document)
+        callback(builder)
+        return builder.apply()
+
+
+class _TextEditorEdit:
+    def __init__(self, document: Optional[_TextDocument]) -> None:
+        self._document = document
+        self._replacement: Optional[str] = None
+
+    def replace(self, range: Any, text: str) -> None:
+        self._replacement = str(text or "")
+
+    def insert(self, position: Any, text: str) -> None:
+        if self._document is None:
+            self._replacement = str(text or "")
+        else:
+            self._replacement = self._document.getText() + str(text or "")
+
+    def delete(self, range: Any) -> None:
+        self._replacement = ""
+
+    def apply(self) -> bool:
+        if self._document is None or self._replacement is None:
+            return False
+        self._document._content = self._replacement
+        self._document.isDirty = True
+        self._document.version += 1
+        return True
+
+
+class _FileSystemWatcher:
+    def __init__(self, pattern: Any) -> None:
+        self.globPattern = pattern
+        self.ignoreCreateEvents = False
+        self.ignoreChangeEvents = False
+        self.ignoreDeleteEvents = False
+        self._create = EventEmitter()
+        self._change = EventEmitter()
+        self._delete = EventEmitter()
+
+    @property
+    def onDidCreate(self):
+        return self._create.event
+
+    @property
+    def onDidChange(self):
+        return self._change.event
+
+    @property
+    def onDidDelete(self):
+        return self._delete.event
+
+    def dispose(self) -> None:
+        self._create._listeners.clear()
+        self._change._listeners.clear()
+        self._delete._listeners.clear()
+
+
+class _TreeView:
+    def __init__(self, view_id: str, provider: Any = None) -> None:
+        self.id = view_id
+        self.provider = provider
+        self.visible = True
+        self.selection = []
+        self.message = ""
+        self.title = view_id
+        self.description = ""
+        self._dispose = EventEmitter()
+
+    @property
+    def onDidDispose(self):
+        return self._dispose.event
+
+    def reveal(self, element: Any, **kw: Any) -> None:
+        self.selection = [element]
+
+    def dispose(self) -> None:
+        self.visible = False
+        self._dispose.fire()
+
+
+class _DiagnosticCollection:
+    def __init__(self, name: str = "", emitter: EventEmitter = None) -> None:
+        self.name = name
+        self._items: Dict[str, Any] = {}
+        self._emitter = emitter
+
+    def set(self, uri: Any, diagnostics: Any = None) -> None:
+        if isinstance(uri, list):
+            for item_uri, item_diags in uri:
+                self.set(item_uri, item_diags)
+            return
+        key = str(uri)
+        self._items[key] = diagnostics or []
+        if self._emitter:
+            self._emitter.fire({"uris": [uri]})
+
+    def get(self, uri: Any) -> Any:
+        return self._items.get(str(uri), [])
+
+    def delete(self, uri: Any) -> None:
+        self._items.pop(str(uri), None)
+        if self._emitter:
+            self._emitter.fire({"uris": [uri]})
+
+    def clear(self) -> None:
+        uris = list(self._items)
+        self._items.clear()
+        if self._emitter and uris:
+            self._emitter.fire({"uris": uris})
+
+    def entries(self) -> List[Any]:
+        return list(self._items.items())
+
+    def dispose(self) -> None:
+        self.clear()
+
+
+def _set_document_language(doc: Any, language_id: str) -> Any:
+    if isinstance(doc, _TextDocument):
+        doc.languageId = str(language_id or "plaintext")
+    return doc
+
+
+def _glob_pattern(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.replace("\\", "/")
+    pattern = getattr(value, "pattern", None)
+    if pattern is not None:
+        return str(pattern).replace("\\", "/")
+    if isinstance(value, dict):
+        raw = value.get("pattern") or value.get("globPattern") or ""
+        return str(raw).replace("\\", "/")
+    return str(value).replace("\\", "/")
+
+
+def _glob_matches(path: str, pattern: str) -> bool:
+    normalized = path.replace("\\", "/")
+    normalized_pattern = pattern.replace("\\", "/")
+    if fnmatch.fnmatch(normalized, normalized_pattern):
+        return True
+    if normalized_pattern.startswith("**/"):
+        return fnmatch.fnmatch(normalized, normalized_pattern[3:])
+    return False
+
+
+def _unsupported_feature(api_name: str, message: str) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "unsupported": True,
+        "code": "unsupportedRuntimeFeature",
+        "api": api_name,
+        "message": message,
+    }
+
+
+def _coerce_auth_session(raw: Any, provider_id: str,
+                         scopes: List[str]) -> AuthenticationSession:
+    if isinstance(raw, AuthenticationSession):
+        return raw
+    account = getattr(raw, "account", None)
+    if not isinstance(account, dict):
+        account = {
+            "id": getattr(raw, "account_id", provider_id),
+            "label": getattr(raw, "account_label", provider_id),
+        }
+    token = getattr(raw, "access_token", "") or getattr(raw, "accessToken", "")
+    return AuthenticationSession(
+        id=str(getattr(raw, "id", "") or id(raw)),
+        access_token=str(token or ""),
+        account=account,
+        scopes=list(getattr(raw, "scopes", scopes) or scopes),
+    )
+
+
+def _language_id_for_path(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    return {
+        ".py": "python",
+        ".js": "javascript",
+        ".jsx": "javascriptreact",
+        ".ts": "typescript",
+        ".tsx": "typescriptreact",
+        ".json": "json",
+        ".md": "markdown",
+        ".html": "html",
+        ".css": "css",
+        ".cs": "csharp",
+        ".xml": "xml",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+    }.get(ext, "plaintext")
 
 
 class _FileSystem:

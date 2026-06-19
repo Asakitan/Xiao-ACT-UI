@@ -21,6 +21,21 @@ from typing import Any, Dict, List, Optional
 from ai_editor.tool_registry import ToolRegistry
 
 
+def _call_editor_api(api_ref: Any, method_name: str, *args: Any) -> Dict[str, Any]:
+    if api_ref is None:
+        return {"error": "No editor API available"}
+    fn = getattr(api_ref, method_name, None)
+    if not callable(fn):
+        return {"error": f"Editor API method unavailable: {method_name}"}
+    try:
+        result = fn(*args)
+    except Exception as exc:
+        return {"error": str(exc)}
+    if isinstance(result, dict):
+        return result
+    return {"result": result}
+
+
 def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = None) -> None:
     """Register VSCode-aligned tools + engine aggregate."""
 
@@ -181,7 +196,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
         name="editor_getContent",
         description="Get the current content of the active editor tab.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: api_ref.editor_get_content() if api_ref else {"content": "", "language": "plaintext"},
+        handler=lambda: _call_editor_api(api_ref, "editor_get_content"),
         category="editor",
         tags={"readOnly": True},
     )
@@ -206,7 +221,7 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
         name="editor_getSelection",
         description="Get the currently selected text in the editor.",
         parameters={"type": "object", "properties": {}},
-        handler=lambda: api_ref.editor_get_selection() if api_ref else {"selection": "", "start": 0, "end": 0},
+        handler=lambda: _call_editor_api(api_ref, "editor_get_selection"),
         category="editor",
         tags={"readOnly": True},
     )
@@ -788,15 +803,32 @@ def _plugins(g: Any) -> Dict:
 
 def _settings_get(g: Any, key: str) -> Any:
     s = getattr(g, 'settings', None)
-    return {"key": key, "value": s.get(key) if s else None}
+    if not s:
+        return {"error": "Settings not available"}
+    if not key:
+        return {"error": "key is required"}
+    try:
+        return {"key": key, "value": s.get(key)}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 def _settings_set(g: Any, key: str, value: Any) -> Dict:
     s = getattr(g, 'settings', None)
     if not s: return {"error": "Settings not available"}
-    s.set(key, value)
-    try: s.save()
-    except: pass
-    return {"ok": True, "key": key}
+    if not key: return {"error": "key is required"}
+    try:
+        s.set(key, value)
+    except Exception as exc:
+        return {"error": f"Settings update failed: {exc}"}
+    saved = False
+    save_fn = getattr(s, "save", None)
+    if callable(save_fn):
+        try:
+            save_fn()
+            saved = True
+        except Exception as exc:
+            return {"error": f"Settings save failed: {exc}", "key": key}
+    return {"ok": True, "key": key, "saved": saved}
 
 def _eval(g: Any, expression: str) -> Dict:
     try:

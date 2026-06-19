@@ -14,6 +14,27 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 
 # ---------------------------------------------------------------------------
+# Schema helpers
+# ---------------------------------------------------------------------------
+
+def normalize_tool_parameters(parameters: Any) -> Dict[str, Any]:
+    """Return a JSON object schema suitable for LLM tool/function inputs."""
+    if not isinstance(parameters, dict):
+        return {"type": "object", "properties": {}}
+    normalized = dict(parameters)
+    if not normalized.get("type"):
+        normalized["type"] = "object"
+    if normalized.get("type") == "object":
+        props = normalized.get("properties")
+        if not isinstance(props, dict):
+            normalized["properties"] = {}
+        required = normalized.get("required")
+        if required is not None and not isinstance(required, list):
+            normalized.pop("required", None)
+    return normalized
+
+
+# ---------------------------------------------------------------------------
 # Descriptor
 # ---------------------------------------------------------------------------
 
@@ -28,9 +49,12 @@ class ToolDescriptor:
     tags: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
 
+    def __post_init__(self) -> None:
+        self.parameters = normalize_tool_parameters(self.parameters)
+
     @property
     def input_schema(self) -> Dict[str, Any]:
-        return self.parameters
+        return normalize_tool_parameters(self.parameters)
 
     def to_openai_schema(self) -> Dict[str, Any]:
         return {
@@ -38,7 +62,7 @@ class ToolDescriptor:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": normalize_tool_parameters(self.parameters),
             },
         }
 
@@ -69,7 +93,7 @@ class ToolRegistry:
         self._tools[name] = ToolDescriptor(
             name=name,
             description=description,
-            parameters=parameters,
+            parameters=normalize_tool_parameters(parameters),
             handler=handler,
             category=category,
             requires_confirm=requires_confirm,
@@ -78,6 +102,7 @@ class ToolRegistry:
         self._openai_cache = None
 
     def register_tool(self, desc: ToolDescriptor) -> None:
+        desc.parameters = normalize_tool_parameters(desc.parameters)
         self._tools[desc.name] = desc
         self._openai_cache = None
 
@@ -223,7 +248,7 @@ class ToolRegistry:
         else:
             args = arguments
 
-        schema = desc.parameters if isinstance(desc.parameters, dict) else {}
+        schema = normalize_tool_parameters(desc.parameters)
         if schema.get("type", "object") == "object":
             if not isinstance(args, dict):
                 return False, f"Tool arguments for {desc.name} must be a JSON object"

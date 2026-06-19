@@ -1,6 +1,6 @@
 """Right-sidebar chat provider registry.
 
-Providers are tabs in the right sidebar (CHAT / CLAUDE CODE / CODEX / plugin).
+Providers are tabs in the right sidebar (Chat / Copilot / Claude Code / Codex / plugin).
 Each provider wraps a conversation with its own model config and system prompt.
 
 Built-in providers auto-detect availability from supported settings.
@@ -13,6 +13,13 @@ import os
 import shutil
 from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
+
+
+BUILTIN_PROVIDER_ORDER = ("chat", "copilot", "claude-code", "codex")
+COPILOT_UNAVAILABLE_REASON = (
+    "Copilot is registered as an explicit backend capability surface, but "
+    "direct GitHub Copilot chat transport is not available in this runtime yet."
+)
 
 
 @dataclass
@@ -53,11 +60,21 @@ _CODEX_SYSTEM = (
     "runtime. Help the user with coding tasks efficiently and verify changes."
 )
 
+_COPILOT_SYSTEM = (
+    "You are GitHub Copilot Chat inside the SAO AI Editor. Use editor context "
+    "and available tools to help with coding tasks."
+)
+
 
 BUILTIN_PROVIDERS: List[ChatProviderDef] = [
     ChatProviderDef(
         id="chat", name="Chat", icon="\U0001f4ac",
         builtin=True, auto_agent=False,
+    ),
+    ChatProviderDef(
+        id="copilot", name="Copilot", icon="◉",
+        provider_type="github-copilot", model="GitHub Copilot Chat",
+        system_prompt=_COPILOT_SYSTEM, auto_agent=False, builtin=True,
     ),
     ChatProviderDef(
         id="claude-code", name="Claude Code", icon="✦",
@@ -80,6 +97,9 @@ class ChatProviderRegistry:
             self._providers[p.id] = p
 
     def register(self, provider: ChatProviderDef) -> None:
+        existing = self._providers.get(provider.id)
+        if existing and existing.builtin and not provider.builtin:
+            raise ValueError(f"Cannot override built-in provider: {provider.id}")
         self._providers[provider.id] = provider
 
     def unregister(self, provider_id: str) -> bool:
@@ -92,14 +112,14 @@ class ChatProviderRegistry:
         return self._providers.get(provider_id)
 
     def list_all(self) -> List[ChatProviderDef]:
-        return list(self._providers.values())
+        return sorted(self._providers.values(), key=_provider_sort_key)
 
     def list_available(self,
                        settings_getter: Optional[Callable] = None,
                        ) -> List[Dict[str, Any]]:
         """Return providers with availability flag based on supported configuration."""
         result = []
-        for p in self._providers.values():
+        for p in self.list_all():
             status = self._provider_status(p, settings_getter)
             d = p.to_dict()
             d.update(status)
@@ -124,6 +144,16 @@ class ChatProviderRegistry:
         }
         if p.id == "chat":
             return status
+        if p.id == "copilot":
+            status["api_key_available"] = _has_copilot_auth(settings_getter)
+            status["transport"] = "copilot-chat"
+            status["model"] = p.model
+            status["direct_transport_available"] = False
+            status["capability"] = "github-copilot-chat"
+            return _unavailable(
+                status,
+                COPILOT_UNAVAILABLE_REASON,
+            )
         if p.id == "claude-code":
             section = _get_provider_section("claude_code", settings_getter)
             model = _get_provider_option("claude_code", "model", settings_getter)
@@ -186,6 +216,14 @@ def _unavailable(status: Dict[str, Any], reason: str) -> Dict[str, Any]:
     return updated
 
 
+def _provider_sort_key(provider: ChatProviderDef) -> tuple[int, int, str]:
+    try:
+        builtin_index = BUILTIN_PROVIDER_ORDER.index(provider.id)
+    except ValueError:
+        builtin_index = len(BUILTIN_PROVIDER_ORDER)
+    return (0 if provider.builtin else 1, builtin_index, provider.name.casefold())
+
+
 def _normalize_transport(value: Any, default: str,
                          allowed: set[str]) -> str:
     raw = str(value or default).strip().lower().replace("-", "_")
@@ -215,6 +253,22 @@ def _get_provider_key(provider_type: str,
     if isinstance(legacy_keys, dict):
         return legacy_keys.get(provider_type, "")
     return ""
+
+
+def _has_copilot_auth(settings_getter: Optional[Callable]) -> bool:
+    ai = _get_ai_editor_settings(settings_getter)
+    auth = ai.get("auth", {})
+    if isinstance(auth, dict):
+        for key in ("github", "github-copilot", "copilot"):
+            value = auth.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, dict) and any(
+                    str(value.get(field, "")).strip()
+                    for field in ("access_token", "accessToken", "token")):
+                return True
+    return bool(_get_provider_key("github-copilot", settings_getter)
+                or _get_provider_key("copilot", settings_getter))
 
 
 def _get_ai_editor_settings(settings_getter: Optional[Callable]) -> Dict[str, Any]:

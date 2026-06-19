@@ -7,6 +7,7 @@ import json
 import os
 import struct
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,11 +16,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # Memory reader interface
 # ---------------------------------------------------------------------------
 
-class MemoryReader:
+class MemoryReader(ABC):
     """Abstract memory reader. Subclass for different backends."""
 
+    @abstractmethod
     def read(self, addr: int, size: int) -> bytes:
-        raise NotImplementedError
+        ...
 
     def read_ptr(self, addr: int) -> int:
         d = self.read(addr, 8)
@@ -288,7 +290,7 @@ class SDKResult:
 # Dumper base class
 # ---------------------------------------------------------------------------
 
-class SDKDumper:
+class SDKDumper(ABC):
     ENGINE = "unknown"
 
     def __init__(self, reader: MemoryReader) -> None:
@@ -303,12 +305,14 @@ class SDKDumper:
         if self._progress_cb:
             self._progress_cb(pct, msg)
 
+    @abstractmethod
     def dump(self) -> SDKResult:
-        raise NotImplementedError
+        ...
 
     @staticmethod
+    @abstractmethod
     def detect(reader: MemoryReader) -> bool:
-        raise NotImplementedError
+        ...
 
 
 # ---------------------------------------------------------------------------

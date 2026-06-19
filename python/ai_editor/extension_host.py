@@ -12,9 +12,9 @@ Implements P0 of VSCode extension alignment:
   - Loading Pipeline      scan -> register -> process contributes -> activate
 
 Extensions are loaded in-process (Python): package.json is parsed for
-contributes, and Python/JS entry points are called if present. Full
-Node.js extension host is NOT implemented — we provide a compatibility
-shim that maps VSCode contributes to our native API.
+contributes. Full Node.js extension activation is NOT implemented — we provide
+a compatibility shim that maps VSCode contributes to our native API and marks
+runtime-only behavior explicitly.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import os
 import threading
 import time
 import uuid
+from urllib.parse import unquote, urlparse
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -487,11 +488,38 @@ class ExtensionPoints:
         self._grammars: List[Dict[str, Any]] = []
         self._themes: List[Dict[str, Any]] = []
         self._snippets: List[Dict[str, Any]] = []
+        self._json_validation: List[Dict[str, Any]] = []
+        self._yaml_validation: List[Dict[str, Any]] = []
+        self._views_welcome: List[Dict[str, Any]] = []
+        self._submenus: List[Dict[str, Any]] = []
+        self._breakpoints: List[Dict[str, Any]] = []
+        self._problem_matchers: List[Dict[str, Any]] = []
+        self._problem_patterns: List[Dict[str, Any]] = []
+        self._icons: List[Dict[str, Any]] = []
+        self._semantic_token_types: List[Dict[str, Any]] = []
+        self._semantic_token_modifiers: List[Dict[str, Any]] = []
+        self._semantic_token_scopes: List[Dict[str, Any]] = []
+        self._resource_label_formatters: List[Dict[str, Any]] = []
+        self._typescript_server_plugins: List[Dict[str, Any]] = []
+        self._capabilities: List[Dict[str, Any]] = []
         self._custom_editors: List[Dict[str, Any]] = []
         self._walkthroughs: List[Dict[str, Any]] = []
         self._debuggers: List[Dict[str, Any]] = []
         self._notebooks: List[Dict[str, Any]] = []
         self._task_definitions: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _as_contribution_items(raw: Any) -> List[Dict[str, Any]]:
+        items = raw if isinstance(raw, list) else [raw]
+        return [dict(item) for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _tag_items(raw: Any, extension_id: str) -> List[Dict[str, Any]]:
+        result = []
+        for item in ExtensionPoints._as_contribution_items(raw):
+            item["_extensionId"] = extension_id
+            result.append(item)
+        return result
 
     def process(self, ext: ExtensionDescription) -> None:
         c = ext.contributes
@@ -548,12 +576,7 @@ class ExtensionPoints:
 
         cfg = c.get("configuration")
         if cfg:
-            items = cfg if isinstance(cfg, list) else [cfg]
-            for item in items:
-                if isinstance(item, dict):
-                    item = dict(item)
-                    item["_extensionId"] = eid
-                    self._configurations.append(item)
+            self._configurations.extend(self._tag_items(cfg, eid))
 
         for loc, vcs in c.get("viewsContainers", {}).items():
             if isinstance(vcs, list):
@@ -609,12 +632,22 @@ class ExtensionPoints:
 
         cfg_defaults = c.get("configurationDefaults")
         if cfg_defaults:
-            items = cfg_defaults if isinstance(cfg_defaults, list) else [cfg_defaults]
-            for item in items:
-                if isinstance(item, dict):
-                    item = dict(item)
-                    item["_extensionId"] = eid
-                    self._config_defaults.append(item)
+            self._config_defaults.extend(self._tag_items(cfg_defaults, eid))
+
+        self._json_validation.extend(self._tag_items(c.get("jsonValidation", []), eid))
+        self._yaml_validation.extend(self._tag_items(c.get("yamlValidation", []), eid))
+        self._views_welcome.extend(self._tag_items(c.get("viewsWelcome", []), eid))
+        self._submenus.extend(self._tag_items(c.get("submenus", []), eid))
+        self._breakpoints.extend(self._tag_items(c.get("breakpoints", []), eid))
+        self._problem_matchers.extend(self._tag_items(c.get("problemMatchers", []), eid))
+        self._problem_patterns.extend(self._tag_items(c.get("problemPatterns", []), eid))
+        self._icons.extend(self._tag_items(c.get("icons", []), eid))
+        self._semantic_token_types.extend(self._tag_items(c.get("semanticTokenTypes", []), eid))
+        self._semantic_token_modifiers.extend(self._tag_items(c.get("semanticTokenModifiers", []), eid))
+        self._semantic_token_scopes.extend(self._tag_items(c.get("semanticTokenScopes", []), eid))
+        self._resource_label_formatters.extend(self._tag_items(c.get("resourceLabelFormatters", []), eid))
+        self._typescript_server_plugins.extend(self._tag_items(c.get("typescriptServerPlugins", []), eid))
+        self._capabilities.extend(self._tag_items(c.get("capabilities", []), eid))
 
         for cw in c.get("chatViewsWelcome", []):
             if isinstance(cw, dict):
@@ -715,6 +748,52 @@ class ExtensionPoints:
     def language_model_tools(self) -> List[Dict[str, Any]]:
         return list(self._lm_tools)
 
+    @property
+    def all_contributions(self) -> Dict[str, Any]:
+        return {
+            "commands": list(self._command_contributions),
+            "chatParticipants": list(self._chat_participants),
+            "languageModelTools": list(self._lm_tools),
+            "languageModelToolSets": list(self._lm_tool_sets),
+            "menus": {k: list(v) for k, v in self._menus.items()},
+            "keybindings": list(self._keybindings),
+            "configuration": list(self._configurations),
+            "configurationDefaults": list(self._config_defaults),
+            "views": {k: list(v) for k, v in self._views.items()},
+            "viewsContainers": {k: list(v) for k, v in self._view_containers.items()},
+            "viewsWelcome": list(self._views_welcome),
+            "submenus": list(self._submenus),
+            "chatSessions": list(self._chat_sessions),
+            "languageModelChatProviders": list(self._lm_providers),
+            "chatPromptFiles": list(self._chat_prompt_files),
+            "chatSkills": list(self._chat_skills),
+            "mcpServerDefinitionProviders": list(self._mcp_providers),
+            "terminal": list(self._terminal_profiles),
+            "interactiveSession": list(self._interactive_sessions),
+            "authentication": list(self._authentication),
+            "languages": list(self._languages),
+            "grammars": list(self._grammars),
+            "themes": list(self._themes),
+            "snippets": list(self._snippets),
+            "jsonValidation": list(self._json_validation),
+            "yamlValidation": list(self._yaml_validation),
+            "breakpoints": list(self._breakpoints),
+            "problemMatchers": list(self._problem_matchers),
+            "problemPatterns": list(self._problem_patterns),
+            "icons": list(self._icons),
+            "semanticTokenTypes": list(self._semantic_token_types),
+            "semanticTokenModifiers": list(self._semantic_token_modifiers),
+            "semanticTokenScopes": list(self._semantic_token_scopes),
+            "resourceLabelFormatters": list(self._resource_label_formatters),
+            "typescriptServerPlugins": list(self._typescript_server_plugins),
+            "capabilities": list(self._capabilities),
+            "customEditors": list(self._custom_editors),
+            "walkthroughs": list(self._walkthroughs),
+            "debuggers": list(self._debuggers),
+            "notebooks": list(self._notebooks),
+            "taskDefinitions": list(self._task_definitions),
+        }
+
     def to_summary(self) -> Dict[str, Any]:
         return {
             "commands": self._commands.list_commands(),
@@ -746,12 +825,26 @@ class ExtensionPoints:
             "terminalProfiles": len(self._terminal_profiles),
             "configurationDefaults": len(self._config_defaults),
             "chatViewsWelcome": len(self._chat_welcome),
+            "viewsWelcome": len(self._views_welcome),
+            "submenus": len(self._submenus),
             "interactiveSessions": len(self._interactive_sessions),
             "authentication": len(self._authentication),
             "languages": len(self._languages),
             "grammars": len(self._grammars),
             "themes": len(self._themes),
             "snippets": len(self._snippets),
+            "jsonValidation": len(self._json_validation),
+            "yamlValidation": len(self._yaml_validation),
+            "breakpoints": len(self._breakpoints),
+            "problemMatchers": len(self._problem_matchers),
+            "problemPatterns": len(self._problem_patterns),
+            "icons": len(self._icons),
+            "semanticTokenTypes": len(self._semantic_token_types),
+            "semanticTokenModifiers": len(self._semantic_token_modifiers),
+            "semanticTokenScopes": len(self._semantic_token_scopes),
+            "resourceLabelFormatters": len(self._resource_label_formatters),
+            "typescriptServerPlugins": len(self._typescript_server_plugins),
+            "capabilities": len(self._capabilities),
             "customEditors": len(self._custom_editors),
             "walkthroughs": len(self._walkthroughs),
             "debuggers": len(self._debuggers),
@@ -888,13 +981,40 @@ class Uri:
 
     @staticmethod
     def parse(value: str) -> "Uri":
-        if "://" in value:
-            scheme, rest = value.split("://", 1)
-            return Uri(scheme=scheme, path=rest)
+        parsed = urlparse(value)
+        if parsed.scheme:
+            path = unquote(parsed.path or parsed.netloc or "")
+            authority = parsed.netloc if parsed.path else ""
+            if parsed.scheme == "file" and path.startswith("/") and len(path) >= 3 and path[2] == ":":
+                path = path[1:]
+            return Uri(
+                scheme=parsed.scheme,
+                authority=authority,
+                path=path,
+                query=parsed.query,
+                fragment=parsed.fragment,
+            )
         return Uri.file(value)
 
     def to_string(self) -> str:
+        if self.scheme == "file":
+            path = self.path or ""
+            if path and not path.startswith("/"):
+                path = "/" + path
+            return f"file://{self.authority}{path}"
+        if self.authority:
+            return f"{self.scheme}://{self.authority}{self.path}"
+        if self.path:
+            suffix = self.path
+            if self.query:
+                suffix += f"?{self.query}"
+            if self.fragment:
+                suffix += f"#{self.fragment}"
+            return f"{self.scheme}:{suffix}"
         return f"{self.scheme}://{self.authority}{self.path}"
+
+    def __str__(self) -> str:
+        return self.to_string()
 
     @property
     def fs_path(self) -> str:

@@ -553,6 +553,13 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
     const list = document.getElementById('tools-list');
     list.innerHTML = '';
     let lastCat = '';
+    if (!tools || !tools.length) {
+      const empty = document.createElement('div');
+      empty.className = 'tool-item';
+      empty.textContent = 'No tools available';
+      list.appendChild(empty);
+      return;
+    }
     tools.forEach(t => {
       if (t.category !== lastCat) {
         lastCat = t.category;
@@ -563,9 +570,13 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
       }
       const item = document.createElement('div');
       item.className = 'tool-item';
+      const runtimeBadge = t.needsExtensionRuntime ?
+        ' <span class="tool-confirm" title="Requires extension runtime handler">runtime</span>' : '';
       item.innerHTML = '<span class="tool-name">' + escHtml(t.name) + '</span>' +
-        (t.requires_confirm ? ' <span class="tool-confirm">⚠</span>' : '') +
+        (t.requires_confirm ? ' <span class="tool-confirm" title="Requires confirmation">⚠</span>' : '') +
+        runtimeBadge +
         '<div class="tool-desc">' + escHtml(t.description) + '</div>';
+      item.title = [t.description, t.runtimeMessage].filter(Boolean).join('\n');
       list.appendChild(item);
     });
   }

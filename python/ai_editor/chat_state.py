@@ -175,7 +175,7 @@ class ChatController:
         self.on_token_warning: Optional[Callable[[int, int, float], None]] = None  # used, limit, ratio
         self.on_stream_end: Optional[Callable[[ChatMessage], None]] = None
         self.on_tool_start: Optional[Callable[[str, str, str, str], None]] = None  # call_id, name, args, state
-        self.on_tool_end: Optional[Callable[[str, str, str], None]] = None  # call_id, result, state
+        self.on_tool_end: Optional[Callable[[str, str, str, str], None]] = None  # call_id, name, result, state
         self.on_tool_confirm: Optional[Callable[[str, str, str], Any]] = None  # call_id, name, args → bool|"always_approve"
         self.on_tool_progress: Optional[Callable[[str, str, float], None]] = None  # call_id, name, progress 0-1
         self.on_error: Optional[Callable[[str], None]] = None
@@ -200,6 +200,16 @@ class ChatController:
         """Query current state of a tool invocation."""
         with self._tool_states_lock:
             return self._tool_states.get(call_id)
+
+    def _notify_tool_end(self, call_id: str, name: str, result: str,
+                         state: ToolInvocationState) -> None:
+        if not self.on_tool_end:
+            return
+        state_value = state.value
+        try:
+            self.on_tool_end(call_id, name, result, state_value)
+        except TypeError:
+            self.on_tool_end(call_id, result, state_value)  # type: ignore[misc]
 
     def send(self, text: str, agent_mode: bool = False) -> None:
         if self._running:
@@ -481,8 +491,8 @@ class ChatController:
                                                tool_call_id=tc.id, tool_name=tc.name)
                         self.conversation.add_message(tool_msg)
                         if self.on_tool_end:
-                            self.on_tool_end(tc.id, result,
-                                             ToolInvocationState.CANCELLED.value)
+                            self._notify_tool_end(
+                                tc.id, tc.name, result, ToolInvocationState.CANCELLED)
                         continue
                     needs_confirm = bool(desc and desc.requires_confirm)
                     if tc.name.startswith("mcp_") and self.mcp_tool_requires_confirm:
@@ -503,8 +513,8 @@ class ChatController:
                                                    tool_call_id=tc.id, tool_name=tc.name)
                             self.conversation.add_message(tool_msg)
                             if self.on_tool_end:
-                                self.on_tool_end(tc.id, result,
-                                                 ToolInvocationState.CANCELLED.value)
+                                self._notify_tool_end(
+                                    tc.id, tc.name, result, ToolInvocationState.CANCELLED)
                             continue
 
                     self._set_tool_state(tc.id, ToolInvocationState.CONFIRMED)
@@ -550,8 +560,8 @@ class ChatController:
                     if self.on_message_added:
                         self.on_message_added(tool_msg)
                     if self.on_tool_end:
-                        self.on_tool_end(tc.id, result,
-                                         ToolInvocationState.COMPLETED.value)
+                        self._notify_tool_end(
+                            tc.id, tc.name, result, ToolInvocationState.COMPLETED)
 
         except Exception as exc:
             if self.on_error:

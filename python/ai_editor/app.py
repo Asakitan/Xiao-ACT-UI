@@ -26,9 +26,10 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from ai_editor.llm_engine import LLMEngine, ProviderConfig, StreamDelta
-from ai_editor.tool_registry import ToolRegistry
+from ai_editor.tool_registry import ToolRegistry, normalize_tool_parameters
 from ai_editor.engine_tools import register_engine_tools
 from ai_editor.chat_state import ChatController, Conversation, ChatMessage
+from ai_editor.chat_providers import COPILOT_UNAVAILABLE_REASON
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ _PROVIDER_CONFIG_KEYS = {
 }
 
 _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
+_AI_EDITOR_MIN_SIZE = (600, 400)
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
@@ -760,6 +762,7 @@ class AIEditorAPI:
             if self._agent_registry and self._agent_registry.get(agent_id):
                 self._set_active_agent(agent_id)
                 stripped = rest.strip()
+        self._sync_extension_tools()
         effective_agent = agent_mode or self._mode == "agent"
         is_plan = self._mode == "plan" and not effective_agent
         if effective_agent and self._controller.conversation:
@@ -843,6 +846,42 @@ class AIEditorAPI:
         if self._window:
             self._window.destroy()
 
+    def win_resize_by(self, edge: str, dx: int, dy: int) -> Dict[str, Any]:
+        if not self._window:
+            return {"ok": False, "error": "No window"}
+        if getattr(self, '_maximized', False):
+            return {"ok": False, "error": "Window is maximized"}
+        try:
+            edge = str(edge or "").lower()
+            delta_x = int(dx or 0)
+            delta_y = int(dy or 0)
+            min_w, min_h = _AI_EDITOR_MIN_SIZE
+            x = int(getattr(self._window, "x", 0) or 0)
+            y = int(getattr(self._window, "y", 0) or 0)
+            width = int(getattr(self._window, "width", min_w) or min_w)
+            height = int(getattr(self._window, "height", min_h) or min_h)
+
+            new_x, new_y = x, y
+            new_w, new_h = width, height
+            if "e" in edge:
+                new_w = max(min_w, width + delta_x)
+            if "s" in edge:
+                new_h = max(min_h, height + delta_y)
+            if "w" in edge:
+                new_w = max(min_w, width - delta_x)
+                new_x = x + (width - new_w)
+            if "n" in edge:
+                new_h = max(min_h, height - delta_y)
+                new_y = y + (height - new_h)
+
+            if new_x != x or new_y != y:
+                self._window.move(new_x, new_y)
+            if new_w != width or new_h != height:
+                self._window.resize(new_w, new_h)
+            return {"ok": True, "x": new_x, "y": new_y, "width": new_w, "height": new_h}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def open_file_dialog(self) -> Dict:
         """Open a native file dialog to pick an image, return base64."""
         if not self._window:
@@ -872,6 +911,37 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def open_text_file(self) -> Dict:
+        """Open a native file dialog and return a UTF-8 text preview."""
+        if not self._window:
+            return {"error": "No window"}
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=10,  # OPEN_DIALOG
+                allow_multiple=False,
+                file_types=(
+                    'Text Files (*.txt;*.md;*.py;*.js;*.ts;*.json;*.html;*.css;*.cs;*.xml;*.yaml;*.yml)',
+                    'All Files (*.*)',
+                ),
+            )
+            if not result:
+                return {"cancelled": True}
+            path = result[0] if isinstance(result, (list, tuple)) else str(result)
+            with open(path, "rb") as fh:
+                data = fh.read(_WORKSPACE_FILE_PREVIEW_BYTES + 1)
+            truncated = len(data) > _WORKSPACE_FILE_PREVIEW_BYTES
+            content = data[:_WORKSPACE_FILE_PREVIEW_BYTES].decode("utf-8", errors="replace")
+            return {
+                "ok": True,
+                "path": path,
+                "name": os.path.basename(path),
+                "content": content,
+                "language": self._editor_language_for_path(path),
+                "truncated": truncated,
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def _workspace_root(self) -> str:
         try:
             from ai_editor.scopes import _base_dir
@@ -884,6 +954,17 @@ class AIEditorAPI:
         rel = os.path.relpath(path, root).replace("\\", "/")
         return "" if rel == "." else rel
 
+    @staticmethod
+    def _is_workspace_safe_path(root: str, path: str) -> bool:
+        try:
+            root_real = os.path.realpath(os.path.abspath(root))
+            path_real = os.path.realpath(os.path.abspath(path))
+            root_norm = os.path.normcase(root_real)
+            path_norm = os.path.normcase(path_real)
+            return os.path.commonpath([root_norm, path_norm]) == root_norm
+        except (OSError, ValueError):
+            return False
+
     def _resolve_workspace_path(self, rel_path: str = "") -> str:
         root = self._workspace_root()
         parts: List[str] = []
@@ -895,9 +976,7 @@ class AIEditorAPI:
                 raise ValueError("Path escapes workspace")
             parts.append(part)
         full = os.path.abspath(os.path.join(root, *parts))
-        root_norm = os.path.normcase(root)
-        full_norm = os.path.normcase(full)
-        if os.path.commonpath([root_norm, full_norm]) != root_norm:
+        if not self._is_workspace_safe_path(root, full):
             raise ValueError("Path escapes workspace")
         return full
 
@@ -918,9 +997,10 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc), "entries": []}
         entries: List[Dict[str, Any]] = []
-        for name in sorted(names, key=lambda item: (
-                not os.path.isdir(os.path.join(current, item)), item.casefold())):
+        for name in names:
             full = os.path.join(current, name)
+            if not self._is_workspace_safe_path(root, full):
+                continue
             is_dir = os.path.isdir(full)
             if is_dir and name.casefold() in _WORKSPACE_TREE_IGNORED_DIRS:
                 continue
@@ -929,6 +1009,8 @@ class AIEditorAPI:
                 "path": self._workspace_rel_path(root, full),
                 "type": "directory" if is_dir else "file",
             })
+        entries.sort(key=lambda entry: (
+            entry.get("type") != "directory", str(entry.get("name", "")).casefold()))
         return {
             "root": root,
             "root_name": os.path.basename(root.rstrip("\\/")) or root,
@@ -1026,8 +1108,7 @@ class AIEditorAPI:
         selected = mode if mode in MODES else self._mode
         registry_tools: Dict[str, Any] = {}
         tool_names = set(MODE_PERMISSIONS.get(selected, MODE_PERMISSIONS["agent"]).keys())
-        if hasattr(self, "_ext_host") and not getattr(self, "_extensions_inited", False):
-            self.init_extensions()
+        self._sync_extension_tools()
         if self._registry:
             for tool in self._registry.list_tools(include_disabled=True):
                 registry_tools[tool.name] = tool
@@ -1044,7 +1125,8 @@ class AIEditorAPI:
             read_only = self._tool_read_only(tool) if tool is not None else None
             if tool_name.startswith("mcp_"):
                 category = category or "mcp"
-                read_only = self._is_probably_read_only_mcp_tool(tool_name)
+                read_only = self._is_probably_read_only_mcp_tool(
+                    self._mcp_tool_source_name(tool_name))
             permissions[tool_name] = tool_permission(
                 selected,
                 tool_name,
@@ -1201,6 +1283,8 @@ class AIEditorAPI:
             if not ctrl:
                 continue
             ctrl._disabled_tools = set(disabled)
+            ctrl.extra_tools = self._controller_extra_tools()
+            ctrl.mcp_dispatch = self._controller_mcp_dispatch()
             ctrl.mcp_tool_requires_confirm = self._mcp_tool_requires_confirm
             ctrl.mcp_tool_allowed = self._mcp_tool_allowed
 
@@ -1227,13 +1311,18 @@ class AIEditorAPI:
         prov = self._provider_registry.get(provider_id)
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
+        self._active_provider = provider_id
         if provider_id == "chat":
-            self._active_provider = provider_id
             return {"ok": True, "provider": "chat"}
         unavailable = self._provider_unavailable_reason(prov)
         if unavailable:
-            return {"error": unavailable, "provider": provider_id, "available": False}
-        self._active_provider = provider_id
+            return {
+                "ok": True,
+                "provider": provider_id,
+                "available": False,
+                "status": "unavailable",
+                "unavailable_reason": unavailable,
+            }
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -1245,6 +1334,9 @@ class AIEditorAPI:
         self._ensure_engine()
         if provider_id == "chat":
             return self.send_message(text)
+        message = str(text or "").strip()
+        if not message:
+            return {"error": "Empty message", "provider": provider_id}
         prov = self._provider_registry.get(provider_id)
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
@@ -1257,37 +1349,77 @@ class AIEditorAPI:
             self._provider_controllers[provider_id] = ctrl
         if ctrl.is_running:
             return {"error": "Already running"}
-        ctrl.send(text.strip(), agent_mode=prov.auto_agent)
+        self._sync_extension_tools()
+        ctrl.send(message, agent_mode=prov.auto_agent)
         return {"ok": True}
 
     def provider_cancel(self, provider_id: str) -> Dict:
         if provider_id == "chat":
             return self.cancel()
+        prov = self._provider_registry.get(provider_id)
+        if not prov:
+            return {"error": f"Unknown provider: {provider_id}"}
         ctrl = self._provider_controllers.get(provider_id)
         if ctrl:
             ctrl.cancel()
-        return {"ok": True}
+            return {"ok": True, "provider": provider_id, "cancelled": True}
+        return {"ok": True, "provider": provider_id, "cancelled": False}
 
     def provider_new_chat(self, provider_id: str) -> Dict:
+        self._ensure_engine()
         if provider_id == "chat":
             return self.new_chat()
+        prov = self._provider_registry.get(provider_id)
+        if not prov:
+            return {"error": f"Unknown provider: {provider_id}"}
+        unavailable = self._provider_unavailable_reason(prov)
+        if unavailable:
+            ctrl = self._provider_controllers.pop(provider_id, None)
+            if ctrl:
+                ctrl.cancel()
+            return {
+                "ok": True,
+                "provider": provider_id,
+                "available": False,
+                "status": "unavailable",
+                "unavailable_reason": unavailable,
+            }
         ctrl = self._provider_controllers.get(provider_id)
-        if ctrl:
-            prov = self._provider_registry.get(provider_id)
-            sp = prov.system_prompt if prov else ""
-            ctrl.new_conversation(sp)
-        return {"ok": True}
+        created_controller = False
+        if not ctrl:
+            ctrl = self._create_provider_controller(prov)
+            self._provider_controllers[provider_id] = ctrl
+            created_controller = True
+        ctrl.new_conversation(prov.system_prompt)
+        return {"ok": True, "provider": provider_id,
+                "created_controller": created_controller}
 
     def register_chat_provider(self, data: Dict) -> Dict:
         """Plugin API: register a custom chat provider tab."""
         self._ensure_engine()
         from ai_editor.chat_providers import ChatProviderDef
-        prov = ChatProviderDef.from_dict(data)
-        self._provider_registry.register(prov)
+        try:
+            prov = ChatProviderDef.from_dict(data)
+        except TypeError as exc:
+            return {"error": str(exc)}
+        previous = self._provider_registry.get(prov.id)
+        try:
+            self._provider_registry.register(prov)
+        except ValueError as exc:
+            return {"error": str(exc), "id": prov.id}
+        if previous and not previous.builtin:
+            ctrl = self._provider_controllers.pop(prov.id, None)
+            if ctrl:
+                ctrl.cancel()
         return {"ok": True, "id": prov.id}
 
     def unregister_chat_provider(self, provider_id: str) -> Dict:
         self._ensure_engine()
+        prov = self._provider_registry.get(provider_id)
+        if not prov:
+            return {"error": f"Unknown provider: {provider_id}"}
+        if prov.builtin:
+            return {"error": f"Cannot unregister built-in provider: {provider_id}"}
         ctrl = self._provider_controllers.pop(provider_id, None)
         if ctrl:
             ctrl.cancel()
@@ -1313,8 +1445,8 @@ class AIEditorAPI:
              **({"usage": msg.usage} if msg.usage else {})})
         ctrl.on_tool_start = lambda cid, n, a, state="": self._emit(
             f"provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a, "state": state})
-        ctrl.on_tool_end = lambda cid, r, state="": self._emit(
-            f"provider_tool_end", {"provider": pid, "id": cid, "result": r, "state": state})
+        ctrl.on_tool_end = lambda cid, n, r, state="": self._emit(
+            f"provider_tool_end", {"provider": pid, "id": cid, "name": n, "result": r, "state": state})
         ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
         ctrl.on_tool_progress = lambda cid, n, p: self._emit(
             'provider_tool_progress', {'provider': pid, 'id': cid, 'name': n, 'progress': p})
@@ -1331,13 +1463,54 @@ class AIEditorAPI:
     def _controller_extra_tools(self) -> List[Dict[str, Any]]:
         if not self._mcp:
             return []
-        return list(self._mcp.to_openai_tools())
+        tools: List[Dict[str, Any]] = []
+        for tool in self._mcp.all_tools():
+            tool_name = self._mcp_tool_name(tool)
+            if not self._mcp_tool_allowed(tool_name):
+                continue
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": f"[MCP:{tool.server_id}] {tool.description}",
+                    "parameters": normalize_tool_parameters(tool.input_schema),
+                },
+            })
+        return tools
 
     def _controller_mcp_dispatch(self) -> Optional[Callable[[str, Any], str]]:
         if not self._mcp:
             return None
-        return lambda name, args: self._mcp.call_tool(
-            name, json.loads(args) if isinstance(args, str) else args)
+        def _dispatch(name: str, args: Any) -> str:
+            ok, parsed = self._parse_mcp_arguments(name, args)
+            if not ok:
+                return json.dumps({"error": parsed}, ensure_ascii=False)
+            if not self._mcp_tool_allowed(name):
+                return json.dumps({"error": f"MCP tool disabled by policy: {name}"}, ensure_ascii=False)
+            return self._mcp.call_tool(name, parsed)
+        return _dispatch
+
+    @staticmethod
+    def _parse_mcp_arguments(name: str, args: Any) -> tuple[bool, Any]:
+        if isinstance(args, str):
+            raw = args.strip()
+            if not raw:
+                parsed: Any = {}
+            else:
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    return False, (
+                        f"Invalid JSON arguments for {name}: "
+                        f"{exc.msg} at char {exc.pos}"
+                    )
+        else:
+            parsed = args
+        if parsed is None:
+            parsed = {}
+        if not isinstance(parsed, dict):
+            return False, f"MCP tool arguments for {name} must be a JSON object"
+        return True, parsed
 
     def _configure_controller_tooling(self, ctrl: Optional[ChatController]) -> None:
         if not ctrl:
@@ -1429,6 +1602,8 @@ class AIEditorAPI:
         )
 
     def _provider_unavailable_reason(self, prov) -> str:
+        if prov.id == "copilot":
+            return COPILOT_UNAVAILABLE_REASON
         unsupported = self._unsupported_provider_transport(prov)
         if unsupported:
             return unsupported
@@ -1713,20 +1888,33 @@ class AIEditorAPI:
         enabled = set(self._enabled_extension_contributions())
         runtime_participants = {}
         vscode_ns = getattr(self, "_vscode_ns", None)
+        runtime_tools: Dict[str, Any] = {}
         if vscode_ns:
             runtime_participants = vscode_ns.chat_participants
+            runtime_tools = vscode_ns.registered_tools
+        manifest_tool_names: set[str] = set()
         for tool in ep.language_model_tools:
             if "languageModelTools" not in enabled:
                 continue
             name = tool.get("name", "")
             if not name:
                 continue
+            manifest_tool_names.add(name)
             ext_id = str(tool.get("_extensionId", ""))
-            schema = tool.get("inputSchema") or tool.get("parametersSchema") or {
+            runtime_tool = runtime_tools.get(name)
+            runtime_available = self._lm_runtime_tool_available(runtime_tool)
+            needs_runtime = not runtime_available and bool(
+                tool.get("_runtimeSupport", {}).get("needsExtensionRuntime"))
+            schema = (tool.get("inputSchema") or tool.get("parametersSchema")
+                      or self._lm_runtime_tool_schema(runtime_tool) or {
                 "type": "object", "properties": {}}
+                      )
+            runtime_message = self._extension_tool_runtime_message(
+                "languageModelTool", ext_id, name, needs_runtime)
             self._registry.register(
                 name=self._extension_tool_wrapper_name(ext_id, name),
-                description=tool.get("displayName", name),
+                description=self._extension_tool_description(
+                    name, tool, runtime_tool, needs_runtime),
                 parameters=schema,
                 handler=lambda _n=name, _tool=tool, **kw: self._invoke_extension_lm_tool(
                     _n, _tool, kw),
@@ -1735,10 +1923,13 @@ class AIEditorAPI:
                     "extension": True,
                     "extensionId": ext_id,
                     "sourceName": name,
-                    "needsExtensionRuntime": bool(
-                        tool.get("_runtimeSupport", {}).get("needsExtensionRuntime")),
+                    "runtimeAvailable": runtime_available,
+                    "needsExtensionRuntime": needs_runtime,
+                    "runtimeMessage": runtime_message,
                 },
             )
+        if "languageModelTools" in enabled:
+            self._register_runtime_lm_tools(runtime_tools, manifest_tool_names)
         for cp in ep.chat_participants:
             if "chatParticipants" not in enabled:
                 continue
@@ -1758,6 +1949,101 @@ class AIEditorAPI:
             )
             self._provider_registry.register(prov)
         self._apply_mode_permissions()
+
+    def _register_runtime_lm_tools(self, runtime_tools: Dict[str, Any],
+                                   manifest_names: set[str]) -> None:
+        for name, tool in runtime_tools.items():
+            if not name or name in manifest_names:
+                continue
+            ext_id = str(self._lm_runtime_tool_extension_id(tool) or "runtime")
+            runtime_available = self._lm_runtime_tool_available(tool)
+            needs_runtime = not runtime_available
+            runtime_message = self._extension_tool_runtime_message(
+                "languageModelTool", ext_id, name, needs_runtime)
+            self._registry.register(
+                name=self._extension_tool_wrapper_name(ext_id, name),
+                description=self._extension_tool_description(
+                    name, None, tool, needs_runtime),
+                parameters=self._lm_runtime_tool_schema(tool),
+                handler=lambda _n=name, **kw: self._invoke_registered_lm_tool(_n, kw),
+                category=f"ext:{ext_id}",
+                tags={
+                    "extension": True,
+                    "extensionId": ext_id,
+                    "sourceName": name,
+                    "runtimeAvailable": runtime_available,
+                    "needsExtensionRuntime": needs_runtime,
+                    "runtimeMessage": runtime_message,
+                },
+            )
+
+    @staticmethod
+    def _lm_runtime_tool_extension_id(tool: Any) -> str:
+        if isinstance(tool, dict):
+            return str(tool.get("_extensionId") or tool.get("extensionId") or "")
+        return ""
+
+    @staticmethod
+    def _lm_runtime_tool_schema(tool: Any) -> Dict[str, Any]:
+        if isinstance(tool, dict):
+            schema = tool.get("inputSchema") or tool.get("schema")
+            if isinstance(schema, dict):
+                return schema
+            nested = tool.get("tool")
+            nested_schema = getattr(nested, "inputSchema", None)
+            if isinstance(nested_schema, dict):
+                return nested_schema
+        schema = getattr(tool, "inputSchema", None)
+        if isinstance(schema, dict):
+            return schema
+        return {"type": "object", "properties": {}}
+
+    @staticmethod
+    def _lm_runtime_tool_available(tool: Any) -> bool:
+        if tool is None:
+            return False
+        if isinstance(tool, dict):
+            handler = tool.get("invoke") or tool.get("handler") or tool.get("callback")
+            if callable(handler):
+                return True
+            nested = tool.get("tool")
+            return hasattr(nested, "invoke") or callable(nested)
+        return hasattr(tool, "invoke") or callable(tool)
+
+    @staticmethod
+    def _extension_tool_description(name: str, manifest_tool: Optional[Dict[str, Any]],
+                                    runtime_tool: Any, needs_runtime: bool) -> str:
+        desc = ""
+        if manifest_tool:
+            desc = str(
+                manifest_tool.get("modelDescription")
+                or manifest_tool.get("description")
+                or manifest_tool.get("displayName")
+                or name
+            )
+        if not desc and isinstance(runtime_tool, dict):
+            nested = runtime_tool.get("tool")
+            desc = str(runtime_tool.get("description") or getattr(nested, "description", "") or name)
+        if not desc:
+            desc = str(getattr(runtime_tool, "description", "") or name)
+        if needs_runtime:
+            desc = f"{desc} [Requires extension runtime handler before invocation.]"
+        return desc
+
+    @staticmethod
+    def _extension_tool_runtime_message(contribution: str, extension_id: str,
+                                        name: str, needs_runtime: bool) -> str:
+        if not needs_runtime:
+            return "Runtime handler registered; tool is invocable."
+        return (
+            f"VSCode {contribution} '{name}' from extension '{extension_id}' "
+            "is manifest-only and needs a real extension runtime handler."
+        )
+
+    def _invoke_registered_lm_tool(self, name: str,
+                                   arguments: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.invoke_lm_tool(name, arguments)
+        return result if isinstance(result, dict) else {"result": result}
 
     def _invoke_extension_lm_tool(self, name: str, manifest_tool: Dict[str, Any],
                                   arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -1784,6 +2070,13 @@ class AIEditorAPI:
         payload = dict(runtime)
         payload["arguments"] = dict(arguments)
         return payload
+
+    def _sync_extension_tools(self) -> None:
+        if not hasattr(self, "_ext_host"):
+            return
+        if not getattr(self, "_extensions_inited", False):
+            self.init_extensions()
+        self._register_ext_tools()
 
     @staticmethod
     def _extension_tool_wrapper_name(extension_id: str, tool_name: str) -> str:
@@ -2076,6 +2369,15 @@ class AIEditorAPI:
             "lm_tools": list(self._vscode_ns.registered_tools.keys()),
             "variables": list(self._vscode_ns.variables.keys()),
             "commands": self._ext_host.commands.list_commands(),
+            "contributes": self._ext_host.get_contributes_summary(),
+        }
+
+    def get_extension_contributions(self) -> Dict:
+        """Return processed VSCode contribution details without launching runtimes."""
+        self._ensure_engine()
+        return {
+            "summary": self._ext_host.get_contributes_summary(),
+            "contributions": self._ext_host.ext_points.all_contributions,
         }
 
     def invoke_chat_participant(self, participant_id: str,
@@ -2113,12 +2415,35 @@ class AIEditorAPI:
         try:
             result = self._vscode_ns._invoke_tool(tool_name, input_data, None)
             if hasattr(result, "content"):
+                unsupported = self._unsupported_lm_tool_result(result.content)
+                if unsupported:
+                    return unsupported
                 return {"ok": True, "content": result.content}
             if isinstance(result, dict):
+                if result.get("unsupported") or result.get("needsExtensionRuntime"):
+                    payload = dict(result)
+                    payload.setdefault("error", payload.get("message") or "Tool is unsupported")
+                    return payload
                 return {"ok": True, "result": result}
             return {"ok": True, "result": str(result)}
         except Exception as exc:
             return {"error": str(exc)}
+
+    @staticmethod
+    def _unsupported_lm_tool_result(content: Any) -> Dict[str, Any]:
+        if not isinstance(content, list):
+            return {}
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = str(part.get("text", ""))
+            if text.startswith("unsupported/") or "needsExtensionRuntime" in text:
+                return {
+                    "error": text,
+                    "unsupported": True,
+                    "needsExtensionRuntime": "needsExtensionRuntime" in text,
+                }
+        return {}
 
     # ── Authentication ──
 
@@ -2208,19 +2533,15 @@ class AIEditorAPI:
         except Exception as exc:
             print(f"[AIEditor] _ensure_engine failed in list_tools: {exc}")
             return {"tools": [], "error": str(exc)}
-        if not self._extensions_inited:
-            self.init_extensions()
+        self._sync_extension_tools()
         tools = [
-            {"name": t.name, "description": t.description,
-             "category": t.category, "requires_confirm": t.requires_confirm,
-             "parameters": t.parameters}
+            self._tool_list_item(t)
             for t in self._registry.list_tools()
         ]
         # Add MCP tools
         if self._mcp:
-            mcp_access = self._mcp_access()
             for t in self._mcp.all_tools():
-                tool_name = f"mcp_{t.server_id}_{t.name}"
+                tool_name = self._mcp_tool_name(t)
                 if not self._mcp_tool_allowed(tool_name):
                     continue
                 tools.append({
@@ -2228,18 +2549,44 @@ class AIEditorAPI:
                     "description": f"[MCP:{t.server_id}] {t.description}",
                     "category": f"mcp:{t.server_id}",
                     "requires_confirm": self._mcp_tool_requires_confirm(tool_name),
-                    "parameters": t.input_schema,
+                    "parameters": normalize_tool_parameters(t.input_schema),
+                    "tags": {"mcp": True, "serverId": t.server_id, "sourceName": t.name},
+                    "serverId": t.server_id,
+                    "sourceName": t.name,
+                    "runtimeAvailable": True,
                 })
         return {"tools": tools}
 
+    @staticmethod
+    def _tool_list_item(t: Any) -> Dict[str, Any]:
+        tags = dict(getattr(t, "tags", {}) or {})
+        item = {
+            "name": t.name,
+            "description": t.description,
+            "category": t.category,
+            "requires_confirm": t.requires_confirm,
+            "parameters": t.parameters,
+        }
+        if tags:
+            item["tags"] = tags
+        for key in (
+                "extensionId", "sourceName", "runtimeAvailable",
+                "needsExtensionRuntime", "runtimeMessage"):
+            if key in tags:
+                item[key] = tags[key]
+        return item
+
     def execute_tool(self, name: str, arguments: str = "{}", confirmed: bool = False) -> str:
         self._ensure_engine()
+        self._sync_extension_tools()
         if name.startswith("mcp_") and self._mcp:
             if not self._mcp_tool_allowed(name):
                 return json.dumps({"error": f"MCP tool disabled by policy: {name}"}, ensure_ascii=False)
             if self._mcp_tool_requires_confirm(name) and not confirmed:
                 return json.dumps({"error": "Tool execution requires confirmation", "requires_confirmation": True}, ensure_ascii=False)
-            args = json.loads(arguments) if isinstance(arguments, str) else arguments
+            ok, args = self._parse_mcp_arguments(name, arguments)
+            if not ok:
+                return json.dumps({"error": args}, ensure_ascii=False)
             return self._mcp.call_tool(name, args)
         tool = self._registry.get(name) if self._registry else None
         perm = self._permission_for_tool(tool, name)
@@ -2262,9 +2609,23 @@ class AIEditorAPI:
         return access if access in {"prompt", "read_only", "allow", "disabled"} else "prompt"
 
     @staticmethod
+    def _mcp_tool_name(tool: Any) -> str:
+        return f"mcp_{tool.server_id}_{tool.name}"
+
+    def _mcp_tool_source_name(self, name: str) -> str:
+        if self._mcp:
+            for tool in self._mcp.all_tools():
+                if self._mcp_tool_name(tool) == name:
+                    return str(tool.name)
+        return name[4:] if name.startswith("mcp_") else name
+
+    @staticmethod
     def _is_probably_read_only_mcp_tool(name: str) -> bool:
-        leaf = name.rsplit("_", 1)[-1].lower()
-        return leaf.startswith(("read", "list", "get", "search", "show", "fetch", "query", "find"))
+        lowered = str(name or "").lower()
+        parts = [part for part in re.split(r"[_\-.:]+", lowered) if part]
+        return any(part.startswith((
+            "read", "list", "get", "search", "show", "fetch", "query", "find"
+        )) for part in parts)
 
     def _mcp_tool_allowed(self, name: str) -> bool:
         if self._mode == "ask":
@@ -2278,7 +2639,8 @@ class AIEditorAPI:
         if access == "disabled":
             return False
         if access == "read_only":
-            return self._is_probably_read_only_mcp_tool(name)
+            return self._is_probably_read_only_mcp_tool(
+                self._mcp_tool_source_name(name))
         return True
 
     def _mcp_tool_requires_confirm(self, name: str) -> bool:
@@ -2292,6 +2654,8 @@ class AIEditorAPI:
         access = self._mcp_access()
         if access == "prompt":
             return True
+        if access == "read_only":
+            return False
         return self._mode == "agent" and access != "allow"
 
     def _refresh_mcp_tools(self) -> None:
@@ -2463,6 +2827,39 @@ class AIEditorAPI:
         try:
             from ai_editor.history import delete_conversation
             return {"ok": delete_conversation(conv_id)}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def save_feedback(self, message_id: str, rating: str) -> Dict:
+        """Persist lightweight local feedback for a rendered chat message."""
+        msg_id = str(message_id or "").strip()
+        value = str(rating or "").strip().lower()
+        if not msg_id:
+            return {"error": "message_id is required"}
+        if value not in {"up", "down", "none"}:
+            return {"error": "rating must be up, down, or none"}
+        record = {"rating": value, "updated_at": time.time()}
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            feedback = getattr(self, "_feedback", {})
+            if not isinstance(feedback, dict):
+                feedback = {}
+            feedback[msg_id] = record
+            self._feedback = feedback
+            return {"ok": True, "message_id": msg_id, "rating": value, "stored": "memory"}
+        try:
+            ai = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
+            feedback = ai.get("feedback", {})
+            if not isinstance(feedback, dict):
+                feedback = {}
+            feedback[msg_id] = record
+            ai["feedback"] = feedback
+            settings.set("ai_editor", ai)
+            try:
+                settings.save()
+            except Exception as exc:
+                return {"error": f"Feedback save failed: {exc}", "message_id": msg_id}
+            return {"ok": True, "message_id": msg_id, "rating": value, "stored": "settings"}
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -2729,21 +3126,24 @@ class AIEditorAPI:
     def editor_set_content(self, content: str, language: str = "", filename: str = "") -> Dict:
         """Set editor content."""
         js = json.dumps(content)
-        self._eval_js(f"openInEditor({js},{json.dumps(language or '')})")
+        if not self._eval_js(f"openInEditor({js},{json.dumps(language or '')})"):
+            return {"error": "Editor window is not available"}
         if filename:
-            self._eval_js(f"editorFileName={json.dumps(filename)}")
+            if not self._eval_js(f"editorFileName={json.dumps(filename)}"):
+                return {"error": "Editor filename update failed"}
         return {"ok": True, "length": len(content)}
 
     def editor_insert_text(self, text: str) -> Dict:
         """Insert text at cursor position."""
         js = json.dumps(text)
-        self._eval_js(f"""(function(){{
+        if not self._eval_js(f"""(function(){{
             var ed=document.getElementById('editor-text');
             var s=ed.selectionStart;
             ed.value=ed.value.substring(0,s)+{js}+ed.value.substring(ed.selectionEnd);
             ed.selectionStart=ed.selectionEnd=s+{len(text)};
             updateLineNums();updateCursorPos();
-        }})()""")
+        }})()"""):
+            return {"error": "Editor window is not available"}
         return {"ok": True}
 
     def editor_get_selection(self) -> Dict:
@@ -2766,13 +3166,14 @@ class AIEditorAPI:
 
     def editor_go_to_line(self, line: int) -> Dict:
         """Navigate editor to a specific line."""
-        self._eval_js(f"""(function(){{
+        if not self._eval_js(f"""(function(){{
             var ed=document.getElementById('editor-text');
             var lines=ed.value.split('\\n');
             var pos=0;for(var i=0;i<Math.min({line}-1,lines.length-1);i++)pos+=lines[i].length+1;
             ed.selectionStart=ed.selectionEnd=pos;ed.focus();
             updateCursorPos();ed.scrollTop=Math.max(0,({line}-10)*18);
-        }})()""")
+        }})()"""):
+            return {"error": "Editor window is not available"}
         return {"ok": True, "line": line}
 
     def editor_find_replace(self, find: str, replace: str, replace_all: bool = False) -> Dict:
@@ -2780,12 +3181,12 @@ class AIEditorAPI:
         f = json.dumps(find)
         r = json.dumps(replace)
         if replace_all:
-            self._eval_js(f"""(function(){{
+            ok = self._eval_js(f"""(function(){{
                 var ed=document.getElementById('editor-text');
                 ed.value=ed.value.split({f}).join({r});updateLineNums();
             }})()""")
         else:
-            self._eval_js(f"""(function(){{
+            ok = self._eval_js(f"""(function(){{
                 var ed=document.getElementById('editor-text');
                 var idx=ed.value.indexOf({f},ed.selectionEnd);
                 if(idx===-1)idx=ed.value.indexOf({f});
@@ -2795,6 +3196,8 @@ class AIEditorAPI:
                     updateLineNums();
                 }}
             }})()""")
+        if not ok:
+            return {"error": "Editor window is not available"}
         return {"ok": True}
 
     def editor_get_language(self) -> Dict:
@@ -2809,12 +3212,14 @@ class AIEditorAPI:
 
     # ── Events pushed to JS ──
 
-    def _eval_js(self, js: str) -> None:
+    def _eval_js(self, js: str) -> bool:
         if self._window:
             try:
                 self._window.evaluate_js(js)
+                return True
             except Exception:
-                pass
+                return False
+        return False
 
     def _emit(self, event: str, data: Any) -> None:
         payload = json.dumps(data, ensure_ascii=False, default=str)
@@ -2902,12 +3307,13 @@ class AIEditorAPI:
         result = self._confirm_results.pop(call_id, False)
         if not result and not evt.is_set():
             self._emit("tool_end", {"id": call_id,
+                                     "name": name,
                                      "result": '{"error":"confirmation timeout"}',
                                      "state": "cancelled"})
         return result
 
-    def _on_tool_end(self, call_id: str, result: str, state: str = "") -> None:
-        self._emit("tool_end", {"id": call_id, "result": result, "state": state, "name": ""})
+    def _on_tool_end(self, call_id: str, name: str, result: str, state: str = "") -> None:
+        self._emit("tool_end", {"id": call_id, "name": name, "result": result, "state": state})
 
     def _on_tool_progress(self, call_id: str, name: str, progress: float) -> None:
         self._emit("tool_progress", {"id": call_id, "name": name, "progress": progress})
@@ -3075,7 +3481,8 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
         height=h,
         x=x,
         y=y,
-        min_size=(600, 400),
+        min_size=_AI_EDITOR_MIN_SIZE,
+        resizable=True,
         js_api=api,
         frameless=True,
         easy_drag=False,

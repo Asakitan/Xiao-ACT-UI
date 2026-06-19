@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ai_editor.tool_registry import normalize_tool_parameters
+
 
 @dataclass
 class McpToolDef:
@@ -65,6 +67,9 @@ class McpStdioClient:
 
     def start(self) -> bool:
         try:
+            if not self.config.command:
+                print(f"[MCP] Missing stdio command for {self.config.id}")
+                return False
             env = {**os.environ, **self.config.env}
             self._proc = subprocess.Popen(
                 [self.config.command, *self.config.args],
@@ -77,7 +82,9 @@ class McpStdioClient:
             self._alive = True
             self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
             self._reader_thread.start()
-            self._initialize()
+            if not self._initialize():
+                self.stop()
+                return False
             return True
         except Exception as exc:
             print(f"[MCP] Failed to start {self.config.id}: {exc}")
@@ -112,13 +119,28 @@ class McpStdioClient:
             pass
         return rid
 
+    def _notify(self, method: str, params: Any = None) -> None:
+        msg = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        raw = json.dumps(msg) + "\n"
+        try:
+            self._proc.stdin.write(raw.encode("utf-8"))
+            self._proc.stdin.flush()
+        except Exception:
+            pass
+
     def _call(self, method: str, params: Any = None, timeout: float = 30.0) -> Any:
         if not self._alive:
             return None
         evt = threading.Event()
         rid = self._send(method, params)
         self._pending[rid] = evt
-        evt.wait(timeout=timeout)
+        completed = evt.wait(timeout=timeout)
+        self._pending.pop(rid, None)
+        if not completed:
+            self._results.pop(rid, None)
+            return None
         return self._results.pop(rid, None)
 
     def _read_loop(self) -> None:
@@ -129,8 +151,11 @@ class McpStdioClient:
                     break
                 data = json.loads(line.decode("utf-8", errors="replace"))
                 rid = data.get("id")
-                if rid and rid in self._pending:
-                    self._results[rid] = data.get("result")
+                if rid is not None and rid in self._pending:
+                    if "error" in data:
+                        self._results[rid] = {"_rpc_error": data.get("error")}
+                    else:
+                        self._results[rid] = data.get("result")
                     self._pending.pop(rid).set()
             except json.JSONDecodeError:
                 continue
@@ -140,14 +165,17 @@ class McpStdioClient:
         for evt in self._pending.values():
             evt.set()
 
-    def _initialize(self) -> None:
+    def _initialize(self) -> bool:
         result = self._call("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "sao-ai-editor", "version": "1.0.0"},
         })
-        self._call("notifications/initialized")
+        if result is None or _is_rpc_error(result):
+            return False
+        self._notify("notifications/initialized")
         self._discover_tools()
+        return True
 
     def _discover_tools(self) -> None:
         result = self._call("tools/list", {})
@@ -158,7 +186,9 @@ class McpStdioClient:
             self.tools.append(McpToolDef(
                 name=t.get("name", ""),
                 description=t.get("description", ""),
-                input_schema=t.get("inputSchema", {"type": "object", "properties": {}}),
+                input_schema=normalize_tool_parameters(
+                    t.get("inputSchema", {"type": "object", "properties": {}})
+                ),
                 server_id=self.config.id,
             ))
 
@@ -166,6 +196,11 @@ class McpStdioClient:
         result = self._call("tools/call", {"name": name, "arguments": arguments})
         if result is None:
             return json.dumps({"error": "MCP call timeout"})
+        if _is_rpc_error(result):
+            return json.dumps({
+                "error": f"MCP call failed: {_rpc_error_message(result)}",
+                "rpc_error": result.get("_rpc_error"),
+            }, ensure_ascii=False)
         if isinstance(result, dict):
             content = result.get("content", [])
             texts = [c.get("text", "") for c in content if c.get("type") == "text"]
@@ -236,6 +271,8 @@ class McpSseClient:
                                    json=body, headers=self.config.headers)
         resp.raise_for_status()
         data = resp.json()
+        if "error" in data:
+            return {"_rpc_error": data.get("error")}
         return data.get("result")
 
     def _discover_tools(self) -> None:
@@ -247,7 +284,9 @@ class McpSseClient:
             self.tools.append(McpToolDef(
                 name=t.get("name", ""),
                 description=t.get("description", ""),
-                input_schema=t.get("inputSchema", {"type": "object", "properties": {}}),
+                input_schema=normalize_tool_parameters(
+                    t.get("inputSchema", {"type": "object", "properties": {}})
+                ),
                 server_id=self.config.id,
             ))
 
@@ -255,6 +294,11 @@ class McpSseClient:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result is None:
             return json.dumps({"error": "MCP call failed"})
+        if _is_rpc_error(result):
+            return json.dumps({
+                "error": f"MCP call failed: {_rpc_error_message(result)}",
+                "rpc_error": result.get("_rpc_error"),
+            }, ensure_ascii=False)
         if isinstance(result, dict):
             content = result.get("content", [])
             texts = [c.get("text", "") for c in content if c.get("type") == "text"]
@@ -298,7 +342,7 @@ class InternalMcpProvider:
         self.tools.append(McpToolDef(
             name=name,
             description=description,
-            input_schema=input_schema,
+            input_schema=normalize_tool_parameters(input_schema),
             server_id=self.config.id,
         ))
         self._handlers[name] = handler
@@ -337,12 +381,23 @@ class McpManager:
             return False
         if config.id in self._clients:
             self.remove_server(config.id)
-        if config.transport == "internal":
+        transport = str(config.transport or "stdio").strip().lower()
+        config.transport = transport
+        if transport == "internal":
             return False  # use register_provider() for internal
-        elif config.transport == "sse":
+        if transport == "sse":
+            if not config.url:
+                print(f"[MCP] Missing SSE URL for {config.id}")
+                return False
             client = McpSseClient(config)
-        else:
+        elif transport == "stdio":
+            if not config.command:
+                print(f"[MCP] Missing stdio command for {config.id}")
+                return False
             client = McpStdioClient(config)
+        else:
+            print(f"[MCP] Unsupported transport for {config.id}: {transport}")
+            return False
         ok = client.start()
         if ok:
             self._clients[config.id] = client
@@ -416,7 +471,7 @@ class McpManager:
                 "function": {
                     "name": f"mcp_{t.server_id}_{t.name}",
                     "description": f"[MCP:{t.server_id}] {t.description}",
-                    "parameters": t.input_schema,
+                    "parameters": normalize_tool_parameters(t.input_schema),
                 },
             }
             for t in self.all_tools()
@@ -426,13 +481,57 @@ class McpManager:
         """Dispatch a tool call by prefixed name (mcp_<server>_<tool>)."""
         if not prefixed_name.startswith("mcp_"):
             return json.dumps({"error": f"Not an MCP tool: {prefixed_name}"})
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return json.dumps({
+                "error": f"MCP tool arguments for {prefixed_name} must be a JSON object"
+            }, ensure_ascii=False)
+        resolved = self._resolve_tool(prefixed_name)
+        if resolved["error"]:
+            return json.dumps({"error": resolved["error"]}, ensure_ascii=False)
+        client = resolved["client"]
+        if client is None:
+            return json.dumps({"error": f"MCP tool resolution failed for: {prefixed_name}"}, ensure_ascii=False)
+        if not client.is_alive:
+            return json.dumps({
+                "error": f"MCP server '{resolved['server_id']}' is not connected"
+            }, ensure_ascii=False)
+        return client.call_tool(resolved["tool_name"], arguments)
+
+    def _resolve_tool(self, prefixed_name: str) -> Dict[str, Any]:
         rest = prefixed_name[4:]
+        matches: List[Tuple[int, str, str, Any]] = []
         for sid, client in self._clients.items():
             prefix = f"{sid}_"
             if rest.startswith(prefix):
-                tool_name = rest[len(prefix):]
-                return client.call_tool(tool_name, arguments)
-        return json.dumps({"error": f"MCP server not found for: {prefixed_name}"})
+                matches.append((len(prefix), sid, rest[len(prefix):], client))
+        if not matches:
+            return {"client": None, "server_id": "", "tool_name": "", "error": f"MCP server not found for: {prefixed_name}"}
+
+        matches.sort(key=lambda item: item[0], reverse=True)
+        for _, sid, tool_name, client in matches:
+            if any(t.name == tool_name for t in client.tools):
+                return {"client": client, "server_id": sid, "tool_name": tool_name, "error": ""}
+
+        _, sid, tool_name, client = matches[0]
+        available = [t.name for t in client.tools]
+        if available:
+            return {
+                "client": None,
+                "server_id": sid,
+                "tool_name": tool_name,
+                "error": (
+                    f"MCP tool not found on server '{sid}': {tool_name}. "
+                    f"Available: {', '.join(sorted(available))}"
+                ),
+            }
+        return {
+            "client": None,
+            "server_id": sid,
+            "tool_name": tool_name,
+            "error": f"MCP server '{sid}' exposes no tools",
+        }
 
     def shutdown(self) -> None:
         for c in list(self._clients.values()):
@@ -611,3 +710,21 @@ def _parse_server_config(sid: str, sconf: Dict[str, Any]) -> McpServerConfig:
         headers=_as_string_dict(sconf.get("headers", {})),
         enabled=_as_bool(sconf.get("enabled"), True),
     )
+
+
+def _is_rpc_error(result: Any) -> bool:
+    return isinstance(result, dict) and "_rpc_error" in result
+
+
+def _rpc_error_message(result: Any) -> str:
+    if not _is_rpc_error(result):
+        return "Unknown RPC error"
+    error = result.get("_rpc_error")
+    if isinstance(error, dict):
+        message = str(error.get("message") or "").strip()
+        code = error.get("code")
+        if message and code is not None:
+            return f"{message} (code={code})"
+        if message:
+            return message
+    return str(error or "Unknown RPC error")
