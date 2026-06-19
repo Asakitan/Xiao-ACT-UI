@@ -482,7 +482,8 @@ class SAOPlayerGUIFloatChromeMixin:
                     )
                     try:
                         from mem_probe._dc import apply as _dc_apply
-                        _dc_apply(hwnd)
+                        if not _dc_apply(hwnd):
+                            raise RuntimeError
                     except Exception:
                         _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
                 except Exception:

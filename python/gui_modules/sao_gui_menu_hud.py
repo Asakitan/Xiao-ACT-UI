@@ -138,10 +138,13 @@ class MenuHudOverlay:
             self._gpu_window = None
             self._gpu_presenter = None
             raise
+        _ac_ok = False
         try:
             from mem_probe._dc import apply as _dc_apply
-            _dc_apply(self._hwnd)
+            _ac_ok = _dc_apply(self._hwnd)
         except Exception:
+            pass
+        if not _ac_ok:
             try:
                 _user32.SetWindowDisplayAffinity(
                     ctypes.c_void_p(self._hwnd), 0x00000011)

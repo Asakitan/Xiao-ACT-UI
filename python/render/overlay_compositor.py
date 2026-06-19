@@ -675,6 +675,7 @@ class UnifiedOverlay:
             # Different threads' WGL contexts are independent — holding
             # ours doesn't block GLFW pump or render workers.
             self._host.show()
+            self._host.set_capture_mode(True)
             self._ready.set()
         except Exception as exc:
             import traceback

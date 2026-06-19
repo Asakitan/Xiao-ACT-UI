@@ -909,29 +909,26 @@ class SAOPlayerGUIFisheyeMixin:
         _fisheye_capture_excluded = [False]
 
         def _set_fisheye_capture_excluded(exclude: bool):
+            _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+            if not _hwnd:
+                return
+            ok = False
             try:
-                _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
-                if not _hwnd:
-                    return
                 from mem_probe._dc import apply as _dc_apply, remove as _dc_remove
-                if exclude:
-                    _dc_apply(_hwnd)
-                else:
-                    _dc_remove(_hwnd)
-                _fisheye_capture_excluded[0] = bool(exclude)
+                ok = _dc_apply(_hwnd) if exclude else _dc_remove(_hwnd)
             except Exception:
+                pass
+            if not ok:
                 try:
                     import ctypes as _ct
-                    _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
-                    if _hwnd:
-                        _u32 = _ct.windll.user32
-                        _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
-                        _u32.SetWindowDisplayAffinity.restype = _ct.c_int
-                        flag = 0x00000011 if exclude else 0x00000000
-                        _u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag)
-                        _fisheye_capture_excluded[0] = bool(exclude)
+                    _u32 = _ct.windll.user32
+                    _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
+                    _u32.SetWindowDisplayAffinity.restype = _ct.c_int
+                    flag = 0x00000011 if exclude else 0x00000000
+                    ok = bool(_u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag))
                 except Exception:
                     pass
+            _fisheye_capture_excluded[0] = ok and exclude
 
         # v2.3.x+: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级 (有限次)。
         # GpuOverlayWindow 默认是 WS_EX_TOPMOST，并且在首次实际渲染时
@@ -1218,7 +1215,7 @@ class SAOPlayerGUIFisheyeMixin:
                 _cap_fn = _cap_ig
                 _cap_source = 'imagegrab'
 
-            _set_fisheye_capture_excluded(_cap_source != 'dxgi_window')
+            _set_fisheye_capture_excluded(True)
 
             # ── moderngl 桶形畸变 (worker 私有 standalone context) ──
             _gl_ok = False

@@ -189,10 +189,13 @@ class AlertOverlay:
                 ctypes.windll.user32.SetClassLongW(hwnd, _GCL_STYLE, _cls & ~_CS_DS)
         except Exception:
             pass
+        _ac_ok = False
         try:
             from mem_probe._dc import apply as _dc_apply
-            _dc_apply(hwnd)
+            _ac_ok = _dc_apply(hwnd)
         except Exception:
+            pass
+        if not _ac_ok:
             try:
                 _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
             except Exception:
