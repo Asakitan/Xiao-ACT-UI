@@ -201,7 +201,7 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._float_hover = False
         self._ng_drag_start = None
 
-        saved_pos = self._get_setting('nervegear_button_pos', None)
+        saved_pos = self.settings.get('nervegear_button_pos', None)
         if saved_pos and isinstance(saved_pos, (list, tuple)) and len(saved_pos) == 2:
             ng_x, ng_y = int(saved_pos[0]), int(saved_pos[1])
         else:
@@ -285,7 +285,8 @@ class SAOPlayerGUIFloatHandlersMixin:
         def _on_gpu_move_end(x: int, y: int):
             try:
                 self._float.geometry(f'{FW}x{FH}+{int(x)}+{int(y)}')
-                self._set_setting('nervegear_button_pos', [int(x), int(y)])
+                self.settings.set('nervegear_button_pos', [int(x), int(y)])
+                self.settings.save()
             except Exception:
                 pass
 

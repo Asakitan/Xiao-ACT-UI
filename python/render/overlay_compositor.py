@@ -286,6 +286,7 @@ class CompositorLayer:
                 self._on_scroll(0.0, dy)
 
         proxy.bind('<Motion>', _pos)
+        proxy.bind('<B1-Motion>', _pos)
         proxy.bind('<Leave>', _leave)
         proxy.bind('<ButtonPress-1>', _press)
         proxy.bind('<ButtonRelease-1>', _release)
