@@ -1227,6 +1227,7 @@ pre.code-block { overflow:visible; }
 <!-- Status bar -->
 <div class="statusbar">
   <span class="sb-item" id="status-text" data-i18n="ready">Ready</span>
+  <span class="sb-ext-left" id="sb-ext-left"></span>
   <span class="spacer"></span>
   <span class="sb-item" id="status-cursor" title="Go to Line (Ctrl+G)">Ln 1, Col 1</span>
   <span class="sb-item" id="status-indent" title="Indentation">Spaces: 4</span>
@@ -1237,6 +1238,7 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tokens</span>
+  <span class="sb-ext-right" id="sb-ext-right"></span>
 </div>
 
 <!-- Find/Replace bar (hidden by default) -->
@@ -1669,9 +1671,9 @@ window._onEditorEvent=function(event,data){
     const label=inc!=null?msg+' ('+Math.round(inc)+'%)':msg;
     setStatus(label||'Working...');
   }
-  else if(event==='dispose_status_bar_item'){/* no-op — status bar is static */}
-  else if(event==='show_status_bar_item'){setStatus(data.text||'')}
-  else if(event==='hide_status_bar_item'){/* no-op */}
+  else if(event==='dispose_status_bar_item'){_removeExtStatusBarItem(data.id)}
+  else if(event==='show_status_bar_item'){_upsertExtStatusBarItem(data)}
+  else if(event==='hide_status_bar_item'){_removeExtStatusBarItem(data.id)}
 };
 
 // ── LN-05+LN-09: Layout persistence ──
@@ -4964,6 +4966,41 @@ function runToolbarWorkflow(){
 window.runToolbarWorkflow=runToolbarWorkflow;
 
 function setStatus(t){$('status-text').textContent=t}
+
+// ── Extension Status Bar Items ──
+const _extStatusBarItems={};
+function _upsertExtStatusBarItem(data){
+  if(!data||!data.id)return;
+  const id=data.id,align=Number(data.alignment)||2,pri=Number(data.priority)||0;
+  let el=document.getElementById('sb-ext-'+id);
+  if(!el){
+    el=document.createElement('span');el.className='sb-item sb-ext-item';el.id='sb-ext-'+id;
+    el.style.cursor=data.command?'pointer':'default';
+    _extStatusBarItems[id]={alignment:align,priority:pri};
+    const container=align===1?$('sb-ext-left'):$('sb-ext-right');
+    if(container){
+      const children=Array.from(container.children);
+      let inserted=false;
+      for(let i=0;i<children.length;i++){
+        const cid=children[i].id.replace('sb-ext-','');
+        const cPri=(_extStatusBarItems[cid]||{}).priority||0;
+        if(pri>cPri){container.insertBefore(el,children[i]);inserted=true;break}
+      }
+      if(!inserted)container.appendChild(el);
+    }
+  }
+  el.textContent=data.text||'';
+  el.title=data.tooltip||'';
+  if(data.color)el.style.color=data.color;
+  if(data.backgroundColor)el.style.background=data.backgroundColor;
+  if(data.command){el.onclick=()=>{if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(data.command)}}
+}
+function _removeExtStatusBarItem(id){
+  if(!id)return;
+  const el=document.getElementById('sb-ext-'+id);
+  if(el)el.remove();
+  delete _extStatusBarItems[id];
+}
 
 // ── Mode & Permissions ──
 let currentMode='agent';

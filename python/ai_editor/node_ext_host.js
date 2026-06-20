@@ -262,6 +262,8 @@ const _onDidChangeConfigurationEmitter = new EventEmitter();
 // -------------------------------------------------------------------------
 // Build the mock vscode module for a given extension
 // -------------------------------------------------------------------------
+let _sbiCounter = 0;
+
 function buildVscodeModule(extDesc, extensionPath) {
     const subscriptions = [];
     const globalState = new Memento();
@@ -439,11 +441,20 @@ function buildVscodeModule(extDesc, extensionPath) {
                 return task(progress, token);
             },
             createStatusBarItem(alignmentOrId, priorityOrAlignment, priority) {
-                return {
-                    alignment: 1, priority: 0, text: '', tooltip: '', color: '',
-                    backgroundColor: undefined, command: undefined, name: '',
-                    show() {}, hide() {}, dispose() {},
+                const align = typeof alignmentOrId === 'number' ? alignmentOrId : 2;
+                const pri = typeof priorityOrAlignment === 'number' ? priorityOrAlignment :
+                            (typeof priority === 'number' ? priority : 0);
+                const id = 'sbi-node-' + (++_sbiCounter);
+                const item = {
+                    alignment: align, priority: pri, text: '', tooltip: '', color: '',
+                    backgroundColor: undefined, command: undefined, name: '', _id: id,
+                    show() { send({type:'status_bar_show', id, text:item.text, tooltip:item.tooltip,
+                              command:item.command||'', alignment:align, priority:pri,
+                              color:item.color||'', backgroundColor:item.backgroundColor||''}); },
+                    hide() { send({type:'status_bar_hide', id}); },
+                    dispose() { send({type:'status_bar_dispose', id}); },
                 };
+                return item;
             },
             registerTreeDataProvider(viewId, treeDataProvider) {
                 log(`stub: registerTreeDataProvider ${viewId}`);

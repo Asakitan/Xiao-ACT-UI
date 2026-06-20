@@ -725,7 +725,9 @@ class UIBridge(Protocol):
 
     # -- Status bar --
     def show_status_bar_item(self, item_id: str, text: str,
-                             tooltip: str, command: str) -> None: ...
+                             tooltip: str, command: str,
+                             alignment: int = 2, priority: int = 0,
+                             color: str = "", backgroundColor: str = "") -> None: ...
     def hide_status_bar_item(self, item_id: str) -> None: ...
     def dispose_status_bar_item(self, item_id: str) -> None: ...
 
@@ -986,7 +988,10 @@ class VscodeNamespace:
                 "showQuickPick": self._show_quick_pick,
                 "showInputBox": self._show_input_box,
                 "createOutputChannel": lambda name, **kw: _OutputChannel(name, self._ui_bridge),
-                "createStatusBarItem": lambda *a, **kw: _StatusBarItem(self._ui_bridge),
+                "createStatusBarItem": lambda *a, **kw: _StatusBarItem(
+                    alignment=a[0] if a else kw.get("alignment", 2),
+                    priority=a[1] if len(a) > 1 else kw.get("priority", 0),
+                    bridge=self._ui_bridge),
                 "createWebviewPanel": self._create_webview_panel,
                 "showTextDocument": self._show_text_document,
                 "createTreeView": self._create_tree_view,
@@ -2651,12 +2656,17 @@ class _OutputChannel:
 class _StatusBarItem:
     _counter = 0
 
-    def __init__(self, bridge: Optional[UIBridge] = None) -> None:
+    def __init__(self, alignment: int = 2, priority: int = 0,
+                 bridge: Optional[UIBridge] = None) -> None:
         _StatusBarItem._counter += 1
         self._id = f"sbi-{_StatusBarItem._counter}"
+        self.alignment = alignment
+        self.priority = priority
         self.text = ""
         self.tooltip = ""
         self.command = ""
+        self.color = ""
+        self.backgroundColor = ""
         self.visible = False
         self._bridge = bridge
 
@@ -2665,7 +2675,9 @@ class _StatusBarItem:
         if self._bridge is not None:
             try:
                 self._bridge.show_status_bar_item(
-                    self._id, self.text, self.tooltip, self.command)
+                    self._id, self.text, self.tooltip, self.command,
+                    self.alignment, self.priority,
+                    self.color, self.backgroundColor)
             except Exception:
                 pass
 

@@ -1765,6 +1765,24 @@ class NodeExtensionHost:
                         _log.exception("[NodeExtHost] on_config_set callback "
                                        "error for %s.%s", section, key)
 
+        elif msg_type == "status_bar_show":
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_status_bar_item(
+                        str(msg.get("id", "")), str(msg.get("text", "")),
+                        str(msg.get("tooltip", "")), str(msg.get("command", "")),
+                        int(msg.get("alignment", 2)), int(msg.get("priority", 0)),
+                        str(msg.get("color", "")), str(msg.get("backgroundColor", "")))
+                except Exception:
+                    pass
+
+        elif msg_type in ("status_bar_hide", "status_bar_dispose"):
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.dispose_status_bar_item(str(msg.get("id", "")))
+                except Exception:
+                    pass
+
         else:
             _log.debug("[NodeExtHost] Unknown message type: %s", msg_type)
 
