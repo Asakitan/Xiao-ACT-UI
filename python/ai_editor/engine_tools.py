@@ -31,6 +31,8 @@ def _call_editor_api(api_ref: Any, method_name: str, *args: Any) -> Dict[str, An
         result = fn(*args)
     except Exception as exc:
         return {"error": str(exc)}
+    if result is None:
+        return {"error": f"Editor API method returned no result: {method_name}"}
     if isinstance(result, dict):
         return result
     return {"result": result}

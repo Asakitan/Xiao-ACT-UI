@@ -171,10 +171,18 @@ class ToolRegistry:
 
         try:
             result = self._invoke_handler(desc.handler, args)
+            if result is None:
+                return json.dumps({
+                    "error": f"Tool {name} returned no result"
+                }, ensure_ascii=False)
             if isinstance(result, str):
                 return result
-            return json.dumps(
-                self._normalize_result(result), ensure_ascii=False, default=str)
+            normalized = self._normalize_result(result)
+            if normalized is None:
+                return json.dumps({
+                    "error": f"Tool {name} returned no result"
+                }, ensure_ascii=False)
+            return json.dumps(normalized, ensure_ascii=False, default=str)
         except Exception:
             return json.dumps({
                 "error": traceback.format_exc(limit=3),

@@ -121,7 +121,7 @@ def _dispatch_cli_runtime(action: str, missing_msg: str) -> None:
             ensure_act_plugin_manager,
             _extension_runtime_handler,
         )
-        owner = _OwnerStub()
+        owner = _CliRuntimeOwner()
         ensure_act_plugin_manager(owner, load=True)
     except Exception as exc:
         print(f'[SAO Auto] plugin manager bootstrap failed: {exc}')
@@ -136,7 +136,7 @@ def _dispatch_cli_runtime(action: str, missing_msg: str) -> None:
         print(f'[SAO Auto] {action} failed: {exc}')
 
 
-class _OwnerStub:
+class _CliRuntimeOwner:
     """Minimal owner for plugin-manager-driven CLI dispatch.
 
     ``main.py --test`` / ``--headless`` run before the full UI is online. We

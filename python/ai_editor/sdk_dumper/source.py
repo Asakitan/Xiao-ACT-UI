@@ -36,6 +36,7 @@ Source Engine key structures (x64):
 
 from __future__ import annotations
 
+import struct
 from typing import List
 
 from ai_editor.sdk_dumper.base import (
@@ -112,7 +113,6 @@ class SourceDumper(SDKDumper):
 
     def _find_client_class_head(self, base: int, size: int) -> int:
         r = self.reader
-        import struct
         # Pattern: find references to known network class names like "DT_BaseEntity"
         # or find CreateInterface → CHLClient → vtable[0] GetAllClasses
         # Simplest: scan for a ClientClass struct by checking name pointer validity
@@ -142,16 +142,48 @@ class SourceDumper(SDKDumper):
                                 v2 = struct.unpack_from("<Q", chunk2, k)[0]
                                 if v2 == rt:
                                     cc = base + off2 + k - self._CC_RECV_TABLE
-                                    # Walk backwards to find the head
-                                    return self._walk_to_head(cc)
+                                    return self._walk_to_head(cc, base, size)
         return 0
 
-    def _walk_to_head(self, cc: int) -> int:
-        """Walk ClientClass linked list backwards isn't possible (singly-linked).
-        Instead, from any node walk forward to validate, then scan for the head."""
-        # Just return this node — the caller will walk forward from here
-        # To find the real head, we'd need CreateInterface, but this is good enough
-        return cc
+    def _walk_to_head(self, cc: int, base: int, size: int) -> int:
+        """Find the earliest reachable ClientClass node by scanning predecessors."""
+        seen: set[int] = set()
+        head = cc
+        while head and head not in seen:
+            seen.add(head)
+            prev = self._find_prev_client_class(head, base, size)
+            if not prev or prev in seen:
+                break
+            head = prev
+        return head
+
+    def _find_prev_client_class(self, target: int, base: int, size: int) -> int:
+        r = self.reader
+        packed_target = struct.pack("<Q", target)
+        scan_size = min(size, 0x4000000)
+        for off in range(0, scan_size, 0x1000):
+            chunk = r.read(base + off, min(0x1000, scan_size - off))
+            if not chunk:
+                continue
+            idx = chunk.find(packed_target)
+            while idx >= 0:
+                candidate = base + off + idx - self._CC_NEXT
+                if candidate >= base and self._looks_like_client_class(candidate):
+                    return candidate
+                idx = chunk.find(packed_target, idx + 1)
+        return 0
+
+    def _looks_like_client_class(self, cc: int) -> bool:
+        r = self.reader
+        name = r.read_cstr(r.read_ptr(cc + self._CC_NETWORK_NAME), 128)
+        if not name or not name.isascii() or len(name) < 2:
+            return False
+        recv_table = r.read_ptr(cc + self._CC_RECV_TABLE)
+        if recv_table <= 0x10000:
+            return False
+        table_name = r.read_cstr(r.read_ptr(recv_table + self._RT_NAME), 128)
+        nprops = r.read_i32(recv_table + self._RT_NPROPS)
+        return bool(table_name) and 0 <= nprops < 5000
 
     def _dump_recv_table(self, rt: int, class_name: str) -> SDKClass:
         r = self.reader

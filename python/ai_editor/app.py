@@ -339,6 +339,28 @@ class _AIEditorUIBridge:
     def show_message(self, level: str, message: str) -> None:
         self._api._emit("show_message", {"level": level, "message": message})
 
+    def confirm_tool_invocation(self, tool_name: str,
+                                confirmation: Dict[str, Any],
+                                input_data: Any) -> bool:
+        if not getattr(self._api, "_window", None):
+            return False
+        title = str(
+            confirmation.get("title")
+            or confirmation.get("message")
+            or f"Run tool {tool_name}?"
+        )
+        message = str(
+            confirmation.get("message")
+            or confirmation.get("detail")
+            or json.dumps(input_data, ensure_ascii=False, default=str)
+        )
+        script = (
+            "(function(){"
+            f"return window.confirm({json.dumps(title + chr(10) + chr(10) + message)});"
+            "})()"
+        )
+        return bool(self._api._eval_js(script))
+
     # -- Progress --
     def show_progress(self, message: Optional[str],
                       increment: Optional[float]) -> None:
@@ -372,10 +394,75 @@ class _AIEditorUIBridge:
     # -- Pickers / dialogs --
     def show_quick_pick(self, items: List[Any],
                         options: Dict[str, Any]) -> Any:
-        return items[0] if items else None
+        if not items or not getattr(self._api, "_window", None):
+            return None
+        formatted: List[Dict[str, str]] = []
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                label = str(item.get("label") or item.get("name") or item.get("value") or item)
+                description = str(item.get("description") or item.get("detail") or "")
+            else:
+                label = str(item)
+                description = ""
+            formatted.append({
+                "index": str(index),
+                "label": label,
+                "description": description,
+            })
+        lines = []
+        for entry in formatted:
+            line = f"{entry['index']}: {entry['label']}"
+            if entry["description"]:
+                line += f" — {entry['description']}"
+            lines.append(line)
+        title = str(options.get("title") or options.get("placeHolder") or "Select an item")
+        prompt = title + "\n\n" + "\n".join(lines)
+        script = (
+            "(function(){"
+            f"const answer = window.prompt({json.dumps(prompt)}, '');"
+            "if (answer === null) { return null; }"
+            "return String(answer);"
+            "})()"
+        )
+        answer = self._api._eval_js(script)
+        if answer is None:
+            return None
+        raw = str(answer).strip()
+        if not raw:
+            return None
+        lookup: Dict[str, Any] = {}
+        for index, item in enumerate(items):
+            lookup[str(index)] = item
+            lookup[formatted[index]["label"]] = item
+        if options.get("canPickMany"):
+            picks: List[Any] = []
+            seen: set[str] = set()
+            for token in raw.split(","):
+                key = token.strip()
+                if not key or key in seen:
+                    continue
+                item = lookup.get(key)
+                if item is None:
+                    continue
+                seen.add(key)
+                picks.append(item)
+            return picks or None
+        return lookup.get(raw)
 
     def show_input_box(self, options: Dict[str, Any]) -> Optional[str]:
-        return options.get("value", "")
+        if not getattr(self._api, "_window", None):
+            return None
+        prompt = str(options.get("prompt") or options.get("placeHolder") or "Input")
+        value = str(options.get("value") or "")
+        script = (
+            "(function(){"
+            f"const answer = window.prompt({json.dumps(prompt)}, {json.dumps(value)});"
+            "if (answer === null) { return null; }"
+            "return String(answer);"
+            "})()"
+        )
+        result = self._api._eval_js(script)
+        return None if result is None else str(result)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +485,7 @@ class AIEditorAPI:
         self._mode: str = "agent"
         self._perm_overrides: Dict[str, str] = {}
         self._mcp = None
+        self._webview_states: Dict[str, Any] = {}
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -579,11 +667,7 @@ class AIEditorAPI:
         merged = _merge_ai_editor_config({}, data)
         if settings:
             merged = _merge_ai_editor_config(settings.get("ai_editor", {}) or {}, data)
-            settings.set("ai_editor", merged)
-            try:
-                settings.save()
-            except Exception:
-                pass
+        persist_error = self._persist_ai_editor_config(merged)
         if self._engine:
             self._apply_config_to_engine(merged)
         self._invalidate_provider_controllers(data)
@@ -593,6 +677,8 @@ class AIEditorAPI:
         if isinstance(merged.get("permissions"), dict):
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
+        if persist_error:
+            return {"error": persist_error, "applied": True}
         return {"ok": True}
 
     def _apply_config_to_engine(self, config: Dict[str, Any]) -> None:
@@ -602,16 +688,22 @@ class AIEditorAPI:
             if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
                 setattr(self._engine.config, k, v)
 
+    def _persist_ai_editor_config(self, merged: Dict[str, Any]) -> Optional[str]:
+        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        if not settings:
+            return "Settings not available"
+        settings.set("ai_editor", merged)
+        try:
+            settings.save()
+        except Exception as exc:
+            return str(exc)
+        return None
+
     def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
         current = settings.get("ai_editor", {}) if settings else self.load_config()
         merged = _merge_ai_editor_config(current or {}, data)
-        if settings:
-            settings.set("ai_editor", merged)
-            try:
-                settings.save()
-            except Exception:
-                pass
+        persist_error = self._persist_ai_editor_config(merged)
         self._apply_config_to_engine(merged)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
@@ -620,6 +712,8 @@ class AIEditorAPI:
         if isinstance(merged.get("permissions"), dict):
             self._perm_overrides = dict(merged.get("permissions") or {})
         self._apply_mode_permissions()
+        if persist_error:
+            raise RuntimeError(persist_error)
         return merged
 
     @staticmethod
@@ -749,7 +843,12 @@ class AIEditorAPI:
             return {"error": f"Invalid provider: {provider}. Valid: {sorted(valid)}"}
         selected_model = str(model or "").strip() or self._default_model_for_provider(provider_id)
         patch: Dict[str, Any] = {"provider": provider_id, "model": selected_model}
-        self._save_config_patch(patch)
+        try:
+            self._save_config_patch(patch)
+        except RuntimeError as exc:
+            return {"error": str(exc), "applied": True,
+                    "provider": provider_id, "model": selected_model,
+                    "controls": self.get_chat_controls()}
         return {"ok": True, "provider": provider_id, "model": selected_model,
                 "controls": self.get_chat_controls()}
 
@@ -759,7 +858,12 @@ class AIEditorAPI:
         selected_model = str(model or "").strip()
         if not selected_model:
             return {"error": "Model is required"}
-        self._save_config_patch({"model": selected_model})
+        try:
+            self._save_config_patch({"model": selected_model})
+        except RuntimeError as exc:
+            return {"error": str(exc), "applied": True,
+                    "model": selected_model,
+                    "controls": self.get_chat_controls()}
         return {"ok": True, "model": selected_model,
                 "controls": self.get_chat_controls()}
 
@@ -807,13 +911,23 @@ class AIEditorAPI:
         view_id = f"provider.{provider_id}"
         vscode_ns = getattr(self, "_vscode_ns", None)
         if not vscode_ns:
-            return {"html": "", "view_id": view_id, "available": False}
+            return {"html": "", "view_id": view_id, "available": False,
+                    "state": self._webview_states.get(view_id)}
         webview_view = vscode_ns._webview_views.get(view_id)
         if not webview_view:
-            return {"html": "", "view_id": view_id, "available": False}
+            return {"html": "", "view_id": view_id, "available": False,
+                    "state": self._webview_states.get(view_id)}
         webview = getattr(webview_view, "webview", None)
         html = getattr(webview, "html", "") if webview else ""
-        return {"html": html, "view_id": view_id, "available": bool(html)}
+        return {"html": html, "view_id": view_id, "available": bool(html),
+                "state": self._webview_states.get(view_id)}
+
+    def webview_set_state(self, view_id: str, state: Any) -> Dict:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return {"error": "view_id is required"}
+        self._webview_states[normalized_view_id] = state
+        return {"ok": True, "view_id": normalized_view_id}
 
     def set_chat_controls(self, data: Optional[Dict[str, Any]] = None) -> Dict:
         """Apply one or more chat toolbar selector updates in a single call."""
@@ -1239,8 +1353,13 @@ class AIEditorAPI:
         settings.set("ai_editor", ai)
         try:
             settings.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            if self._controller and self._controller.conversation:
+                self._controller.conversation.system_prompt = self._default_system_prompt()
+            return {
+                "error": f"Instructions updated only for the current runtime: {exc}",
+                "applied": True,
+            }
         if self._controller and self._controller.conversation:
             self._controller.conversation.system_prompt = self._default_system_prompt()
         return {"ok": True}
@@ -1323,21 +1442,37 @@ class AIEditorAPI:
         if mode not in MODES:
             return {"error": f"Invalid mode: {mode}. Valid: {list(MODES)}"}
         self._mode = mode
-        self._save_mode_to_settings()
+        persist_error = self._save_mode_to_settings()
         self._apply_mode_permissions()
+        if persist_error:
+            return {
+                "error": f"Mode updated only for the current runtime: {persist_error}",
+                "applied": True,
+                "mode": mode,
+            }
         return {"ok": True, "mode": mode}
 
     def set_tool_permission(self, tool_name: str, permission: str) -> Dict:
         if permission in ("", "default"):
             self._perm_overrides.pop(tool_name, None)
-            self._save_mode_to_settings()
+            persist_error = self._save_mode_to_settings()
             self._apply_mode_permissions()
+            if persist_error:
+                return {
+                    "error": f"Permission updated only for the current runtime: {persist_error}",
+                    "applied": True,
+                }
             return {"ok": True}
         if permission not in ("allowed", "confirm", "disabled"):
             return {"error": "Invalid permission"}
         self._perm_overrides[tool_name] = permission
-        self._save_mode_to_settings()
+        persist_error = self._save_mode_to_settings()
         self._apply_mode_permissions()
+        if persist_error:
+            return {
+                "error": f"Permission updated only for the current runtime: {persist_error}",
+                "applied": True,
+            }
         return {"ok": True}
 
     def get_scopes(self) -> Dict:
@@ -1347,10 +1482,10 @@ class AIEditorAPI:
             s["exists"] = os.path.isdir(s["path"])
         return {"scopes": scopes}
 
-    def _save_mode_to_settings(self) -> None:
+    def _save_mode_to_settings(self) -> Optional[str]:
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
         if not settings:
-            return
+            return "Settings not available"
         ai = settings.get("ai_editor", {}) or {}
         if not isinstance(ai, dict):
             ai = {}
@@ -1359,8 +1494,9 @@ class AIEditorAPI:
         settings.set("ai_editor", ai)
         try:
             settings.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            return str(exc)
+        return None
 
     def _install_engine_policy(self) -> None:
         if not self._registry:
@@ -3099,6 +3235,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
             if isinstance(result, dict):
                 if result.get("unsupported") or result.get("needsExtensionRuntime"):
                     payload = dict(result)
+                    payload.setdefault("ok", False)
                     payload.setdefault("error", payload.get("message") or "Tool is unsupported")
                     return payload
                 return {"ok": True, "result": result}
@@ -3116,6 +3253,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
             text = str(part.get("text", ""))
             if text.startswith("unsupported/") or "needsExtensionRuntime" in text:
                 return {
+                    "ok": False,
                     "error": text,
                     "unsupported": True,
                     "needsExtensionRuntime": "needsExtensionRuntime" in text,
@@ -3387,7 +3525,13 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
                     "This build supports stdio and SSE; streamable HTTP is not wired yet."
                 )
             }
-        self._upsert_saved_mcp_server(server)
+        try:
+            self._upsert_saved_mcp_server(server)
+        except RuntimeError as exc:
+            return {
+                "error": f"MCP server added only for the current runtime: {exc}",
+                "applied": False,
+            }
         cfg = McpServerConfig(
             id=server["id"],
             name=server["name"] or server["id"],
@@ -3409,7 +3553,13 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         return {"ok": ok, "id": cfg.id, "tools": tool_count}
 
     def remove_mcp_server(self, server_id: str) -> Dict:
-        self._remove_saved_mcp_server(server_id)
+        try:
+            self._remove_saved_mcp_server(server_id)
+        except RuntimeError as exc:
+            return {
+                "error": f"MCP server removal updated only for the current runtime: {exc}",
+                "applied": False,
+            }
         if self._mcp:
             self._mcp.remove_server(server_id)
         self._refresh_mcp_tools()
@@ -3445,10 +3595,10 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
             return [dict(v, id=str(k)) for k, v in raw.items() if isinstance(v, dict)]
         return []
 
-    def _save_mcp_servers(self, servers: List[Dict[str, Any]]) -> None:
+    def _save_mcp_servers(self, servers: List[Dict[str, Any]]) -> Optional[str]:
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
         if not settings:
-            return
+            return "Settings not available"
         ai = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
         mcp = _as_dict(ai.get("mcp"))
         mcp["servers"] = servers
@@ -3456,16 +3606,22 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         settings.set("ai_editor", ai)
         try:
             settings.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            return str(exc)
+        return None
 
     def _upsert_saved_mcp_server(self, server: Dict[str, Any]) -> None:
         servers = [s for s in self._saved_mcp_servers() if s.get("id") != server.get("id")]
         servers.append(server)
-        self._save_mcp_servers(servers)
+        persist_error = self._save_mcp_servers(servers)
+        if persist_error:
+            raise RuntimeError(persist_error)
 
     def _remove_saved_mcp_server(self, server_id: str) -> None:
-        self._save_mcp_servers([s for s in self._saved_mcp_servers() if s.get("id") != server_id])
+        persist_error = self._save_mcp_servers(
+            [s for s in self._saved_mcp_servers() if s.get("id") != server_id])
+        if persist_error:
+            raise RuntimeError(persist_error)
 
     def register_mcp_tools(self, server_id: str, tools: list, handlers: dict = None) -> Dict:
         """Register internal (Python-native) MCP tools — no subprocess needed.
@@ -3718,20 +3874,32 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         from ai_editor.llm_engine import register_model
         register_model(model_name, max_input, max_output,
                        tools, vision, thinking, streaming)
-        self._save_models_to_settings()
+        persist_error = self._save_models_to_settings()
+        if persist_error:
+            return {
+                "error": f"Model saved only for the current runtime: {persist_error}",
+                "applied": True,
+                "model": model_name,
+            }
         return {"ok": True, "model": model_name}
 
     def delete_custom_model(self, model_name: str) -> Dict:
         from ai_editor.llm_engine import unregister_model
         unregister_model(model_name)
-        self._save_models_to_settings()
+        persist_error = self._save_models_to_settings()
+        if persist_error:
+            return {
+                "error": f"Model removal updated only for the current runtime: {persist_error}",
+                "applied": True,
+                "model": model_name,
+            }
         return {"ok": True}
 
-    def _save_models_to_settings(self) -> None:
+    def _save_models_to_settings(self) -> Optional[str]:
         from ai_editor.llm_engine import _model_registry
         settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
         if not settings:
-            return
+            return "Settings not available"
         ai = settings.get("ai_editor", {}) or {}
         if not isinstance(ai, dict):
             ai = {}
@@ -3739,8 +3907,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         settings.set("ai_editor", ai)
         try:
             settings.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            return str(exc)
+        return None
 
     def get_full_config(self) -> Dict:
         """Return ALL configurable parameters for the active endpoint."""

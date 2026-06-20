@@ -22,6 +22,7 @@ IL2CPP struct layout (x64):
 
 from __future__ import annotations
 
+import struct
 from typing import List
 
 from ai_editor.sdk_dumper.base import (
@@ -68,12 +69,19 @@ class IL2CPPDumper(SDKDumper):
 
     _IMAGE_NAME     = 0x00
 
+    def __init__(self, reader: MemoryReader) -> None:
+        super().__init__(reader)
+        self._module_base = 0
+        self._module_size = 0
+
     def dump(self) -> SDKResult:
         r = self.reader
         ga_base, ga_size = r.get_module_base("gameassembly.dll")
         if not ga_base:
             self.result.errors.append("GameAssembly.dll not found")
             return self.result
+        self._module_base = ga_base
+        self._module_size = ga_size
         self._progress(0.05, "GameAssembly.dll found")
 
         classes = self._find_all_classes(ga_base, ga_size)
@@ -148,25 +156,84 @@ class IL2CPPDumper(SDKDumper):
         return 0
 
     def _walk_image_classes(self, image_name_ptr: int) -> List[int]:
-        """Given a pointer to an image name, try to find the Il2CppImage and walk its classes."""
-        r = self.reader
-        classes = []
-        # The Il2CppImage struct has name at offset 0, typeStart/typeCount further in
-        # Walk backwards to find the Image struct base
-        # Image pointer is at class+0x00, so scan for pointers to this image
-        for nearby in range(image_name_ptr - 0x100, image_name_ptr + 0x8, 8):
-            ptr = r.read_ptr(nearby)
-            if ptr == image_name_ptr:
-                # This might be Il2CppImage.name field → image base = nearby
-                image_base = nearby
-                # Read typeCount and walk
-                type_count = r.read_u32(image_base + 0x1C)
-                type_start = r.read_u32(image_base + 0x18)
-                if 0 < type_count < 100000:
-                    # Find the type definition table
-                    # For now just collect what we can
-                    break
+        """Resolve an ``Il2CppImage`` and collect class structs that reference it."""
+        image_base = self._resolve_image_base(image_name_ptr)
+        if not image_base:
+            return []
+
+        classes: list[int] = []
+        seen: set[int] = set()
+        packed_image = struct.pack("<Q", image_base)
+        scan_size = min(self._module_size or 0, 0x8000000)
+        if scan_size <= 0:
+            return []
+
+        chunk_size = 0x20000
+        for off in range(0, scan_size, chunk_size):
+            block = self.reader.read(self._module_base + off, min(chunk_size, scan_size - off))
+            if not block:
+                continue
+            idx = block.find(packed_image)
+            while idx >= 0:
+                candidate = self._module_base + off + idx - self._CLASS_IMAGE
+                if candidate not in seen and self._looks_like_class(candidate, image_base):
+                    classes.append(candidate)
+                    seen.add(candidate)
+                idx = block.find(packed_image, idx + 1)
         return classes
+
+    def _resolve_image_base(self, image_name_ptr: int) -> int:
+        r = self.reader
+        expected_name_ptr = r.read_ptr(image_name_ptr)
+        expected_name = r.read_cstr(expected_name_ptr, 128) if expected_name_ptr else ""
+        if expected_name_ptr:
+            start = max(self._module_base, image_name_ptr - 0x100)
+            end = image_name_ptr + 0x108
+            for candidate in range(start, end, 8):
+                if r.read_ptr(candidate + self._IMAGE_NAME) != expected_name_ptr:
+                    continue
+                if self._looks_like_image(candidate, expected_name):
+                    return candidate
+        if self._looks_like_image(image_name_ptr, expected_name):
+            return image_name_ptr
+        return 0
+
+    def _looks_like_image(self, image_base: int, expected_name: str = "") -> bool:
+        r = self.reader
+        name_ptr = r.read_ptr(image_base + self._IMAGE_NAME)
+        if not name_ptr:
+            return False
+        name = r.read_cstr(name_ptr, 128)
+        if not name:
+            return False
+        if expected_name and name != expected_name:
+            return False
+        type_count = r.read_u32(image_base + 0x1C)
+        return 0 < type_count < 200000
+
+    def _looks_like_class(self, klass: int, expected_image: int) -> bool:
+        r = self.reader
+        if klass <= 0:
+            return False
+        if r.read_ptr(klass + self._CLASS_IMAGE) != expected_image:
+            return False
+        name_ptr = r.read_ptr(klass + self._CLASS_NAME)
+        if name_ptr <= 0x10000:
+            return False
+        name = r.read_cstr(name_ptr, 96)
+        if not name or len(name) > 96:
+            return False
+        if not name.isascii() or not any(ch.isalnum() for ch in name):
+            return False
+        ns_ptr = r.read_ptr(klass + self._CLASS_NS)
+        if ns_ptr:
+            namespace = r.read_cstr(ns_ptr, 96)
+            if namespace and (not namespace.isascii() or len(namespace) > 96):
+                return False
+        isize = r.read_u32(klass + self._CLASS_SIZE)
+        fcount = r.read_u16(klass + self._CLASS_FCOUNT)
+        mcount = r.read_u16(klass + self._CLASS_MCOUNT)
+        return isize < 0x20000 and fcount < 2000 and mcount < 2000
 
     def _brute_scan_classes(self, base: int, size: int) -> List[int]:
         """Brute force scan for Il2CppClass structures by signature."""

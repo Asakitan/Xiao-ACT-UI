@@ -19,6 +19,15 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _validate_agent_id(agent_id: str) -> str:
+    normalized = str(agent_id or "").strip()
+    if not normalized:
+        raise ValueError("Agent id is required")
+    if normalized != os.path.basename(normalized) or any(sep in normalized for sep in ("/", "\\")) or ".." in normalized:
+        raise ValueError("Agent id must be a simple file-safe identifier")
+    return normalized
+
+
 @dataclass
 class AgentDef:
     id: str
@@ -189,25 +198,33 @@ class AgentRegistry:
                     workspace_root: str = "",
                     scope: str = "workspace") -> Dict[str, Any]:
         """Save agent to the specified scope (system/workspace/plugin:<id>)."""
-        if not str(agent.id).strip():
-            return {"ok": False, "error": "Agent id is required"}
+        try:
+            agent_id = _validate_agent_id(agent.id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if not str(agent.name).strip():
             return {"ok": False, "error": "Agent name is required"}
         target_dir = self._scope_dir(scope, workspace_root)
-        os.makedirs(target_dir, exist_ok=True)
-        fpath = os.path.join(target_dir, f"{agent.id}.json")
-        with open(fpath, "w", encoding="utf-8") as f:
-            json.dump(agent.to_dict(), f, ensure_ascii=False, indent=2)
+        agent.id = agent_id
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            fpath = os.path.join(target_dir, f"{agent_id}.json")
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(agent.to_dict(), f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
         agent.builtin = False
         agent._scope = scope  # type: ignore[attr-defined]
-        self._agents[agent.id] = agent
+        self._agents[agent_id] = agent
         self._bump_version()
         return {"ok": True, "path": fpath, "scope": scope}
 
     def delete_custom(self, agent_id: str,
                       workspace_root: str = "") -> Dict[str, Any]:
-        if not str(agent_id).strip():
-            return {"ok": False, "error": "Agent id is required"}
+        try:
+            agent_id = _validate_agent_id(agent_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         a = self._agents.get(agent_id)
         if a and a.builtin:
             return {"ok": False, "error": "Cannot delete built-in agent"}

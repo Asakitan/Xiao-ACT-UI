@@ -320,6 +320,19 @@ def _resolve_base_dir() -> str:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _instruction_target(root: str, name: str) -> str:
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        raise ValueError("Instruction file name is required")
+    if raw_name == "instructions.md":
+        return os.path.join(root, ".sao", "instructions.md")
+    normalized = raw_name.replace("\\", "/")
+    if normalized.startswith("/") or "/" in normalized or ".." in normalized.split("/"):
+        raise ValueError("Instruction file name must stay inside .sao/instructions")
+    file_name = raw_name if raw_name.endswith(".md") else f"{raw_name}.md"
+    return os.path.join(root, ".sao", "instructions", file_name)
+
+
 def _load_instructions_from_dir(base: str, label: str = "") -> list[str]:
     """Collect instructions from a single scope directory."""
     parts: list[str] = []
@@ -507,30 +520,31 @@ def save_instruction_file(name: str, content: str,
                           workspace_root: str = "") -> dict:
     """Create or update an instruction file. Returns ``{ok, path}``."""
     root = workspace_root or _resolve_base_dir()
-    if name == "instructions.md":
-        target = os.path.join(root, ".sao", "instructions.md")
-    else:
-        if not name.endswith(".md"):
-            name += ".md"
-        target = os.path.join(root, ".sao", "instructions", name)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        f.write(content)
-    return {"ok": True, "path": target}
+    try:
+        target = _instruction_target(root, name)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "path": target}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def delete_instruction_file(name: str,
                             workspace_root: str = "") -> dict:
     """Delete an instruction file. Returns ``{ok}``."""
     root = workspace_root or _resolve_base_dir()
-    if name == "instructions.md":
-        target = os.path.join(root, ".sao", "instructions.md")
-    else:
-        target = os.path.join(root, ".sao", "instructions", name)
-    if os.path.isfile(target):
+    try:
+        target = _instruction_target(root, name)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not os.path.isfile(target):
+        return {"ok": False, "error": "File not found"}
+    try:
         os.remove(target)
         return {"ok": True}
-    return {"ok": False, "error": "File not found"}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 # Cache for agent/workflow prompt sections — rebuild only when registry changes

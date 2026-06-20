@@ -483,17 +483,24 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
   }
 
   function doClear() {
-    chatArea.innerHTML = '';
-    messages = [];
-    totalTokens = 0;
-    tokenCount.textContent = '0 tokens';
-    bridgeCmd('ai_editor_new_chat', {});
-    appendSystemMessage('New conversation started.');
+    bridgeCmd('ai_editor_new_chat', {}).then((result) => {
+      if (!result || result.error) {
+        setStatus((result && result.error) || 'New chat failed');
+        return;
+      }
+      chatArea.innerHTML = '';
+      messages = [];
+      totalTokens = 0;
+      tokenCount.textContent = '0 tokens';
+      appendSystemMessage('New conversation started.');
+      setStatus('Ready');
+    });
   }
 
   function doExport() {
     bridgeCmd('ai_editor_export', {}).then(data => {
-      if (data) { navigator.clipboard.writeText(typeof data === 'string' ? data : JSON.stringify(data, null, 2)); setStatus('Exported to clipboard'); }
+      if (!data || data.error) { setStatus((data && data.error) || 'Export failed'); return; }
+      navigator.clipboard.writeText(typeof data === 'string' ? data : JSON.stringify(data, null, 2)); setStatus('Exported to clipboard');
     });
   }
 
@@ -525,7 +532,7 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
     else { s.textContent = (result && result.message) || 'Failed'; s.style.color = 'var(--fg-error)'; }
   }
 
-  function saveSettings() {
+  async function saveSettings() {
     config.provider = document.getElementById('s-provider').value;
     config.api_key = document.getElementById('s-apikey').value;
     config.base_url = document.getElementById('s-baseurl').value;
@@ -534,8 +541,16 @@ code { background: #2a2a3a; padding: 1px 4px; border-radius: 3px; font-family: v
     config.max_tokens = parseInt(document.getElementById('s-maxtokens').value) || 4096;
     config.system_prompt = document.getElementById('s-sysprompt').value;
     syncConfigToUI();
-    bridgeCmd('ai_editor_save_config', config);
+    const result = await bridgeCmd('ai_editor_save_config', config);
+    if (!result || result.error) {
+      const status = document.getElementById('s-status');
+      status.textContent = (result && result.error) || 'Save failed';
+      status.style.color = 'var(--fg-error)';
+      setStatus(status.textContent);
+      return;
+    }
     closeSettings();
+    setStatus('Settings saved');
   }
 
   function syncConfigToUI() {

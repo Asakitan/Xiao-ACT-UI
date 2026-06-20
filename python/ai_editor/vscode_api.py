@@ -1,4 +1,4 @@
-"""VSCode API compatibility shim for the SAO AI Editor.
+"""VSCode API compatibility layer for the SAO AI Editor.
 
 Provides the ``vscode.*`` namespace that VSCode extensions expect.
 Maps API calls to our native infrastructure (LLMEngine, ToolRegistry,
@@ -368,6 +368,14 @@ def _unsupported_tool_result(name: str, detail: str) -> LanguageModelToolResult:
         "or provide an object with invoke(options, token).")
 
 
+def _tool_confirmation_denied_result(name: str) -> LanguageModelToolResult:
+    return LanguageModelToolResult.text(json.dumps({
+        "ok": False,
+        "error": f"Tool invocation was not confirmed: {name}",
+        "requiresConfirmation": True,
+    }, ensure_ascii=False))
+
+
 def _call_registered_handler(handler: Callable,
                              options: LanguageModelToolInvocationOptions,
                              token: Any) -> Any:
@@ -681,7 +689,7 @@ class WorkspaceEdit:
 
 
 # ---------------------------------------------------------------------------
-# UIBridge protocol — connects vscode API shims to the HTML webview
+# UIBridge protocol — connects vscode API calls to the HTML webview
 # ---------------------------------------------------------------------------
 
 @runtime_checkable
@@ -706,6 +714,9 @@ class UIBridge(Protocol):
 
     # -- Messages / toasts --
     def show_message(self, level: str, message: str) -> None: ...
+    def confirm_tool_invocation(self, tool_name: str,
+                                confirmation: Dict[str, Any],
+                                input_data: Any) -> bool: ...
 
     # -- Progress --
     def show_progress(self, message: Optional[str],
@@ -754,17 +765,28 @@ class VscodeNamespace:
         self._visible_text_editors: List[_TextEditor] = []
         self._text_documents: List[_TextDocument] = []
         self._terminals: List[_Terminal] = []
+        self._active_terminal: Optional[_Terminal] = None
+        self._webview_panels: Dict[str, List[Any]] = {}
         self._chat_participants: Dict[str, ChatParticipant] = {}
         self._lm_tools: Dict[str, Any] = {}
+        self._mcp_definition_providers: Dict[str, Any] = {}
         self._auth_providers: Dict[str, Any] = {}
         self._auth_sessions: Dict[str, List[AuthenticationSession]] = {}
+        self._auth_provider_listeners: Dict[str, Any] = {}
         self._variables: Dict[str, Callable] = {}
         self._lm_providers: Dict[str, Any] = {}
         self._language_providers: Dict[str, List[Any]] = {}
         self._diagnostic_collections: Dict[str, Any] = {}
+        self._file_system_providers: Dict[str, Dict[str, Any]] = {}
+        self._chat_context_providers: Dict[str, Dict[str, Any]] = {
+            "workspace": {},
+            "explicit": {},
+            "resource": {},
+        }
         self._diagnostics_change_emitter = EventEmitter()
         self._window_active_text_editor_emitter = EventEmitter()
         self._window_visible_text_editors_emitter = EventEmitter()
+        self._window_active_terminal_emitter = EventEmitter()
         self._window_open_terminal_emitter = EventEmitter()
         self._window_close_terminal_emitter = EventEmitter()
         self._workspace_open_text_document_emitter = EventEmitter()
@@ -794,11 +816,25 @@ class VscodeNamespace:
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
+        self._extensions_change_emitter = EventEmitter()
+        self._window_tab_groups_emitter = EventEmitter()
+        self._window_tabs_emitter = EventEmitter()
         self._window_api: Optional[Dict[str, Any]] = None
         self._workspace_api: Optional[Dict[str, Any]] = None
         self._auth_api: Optional[Dict[str, Any]] = None
         self._tasks_api: Optional[Dict[str, Any]] = None
         self._debug_api: Optional[Dict[str, Any]] = None
+        self._extensions_api: Optional[Dict[str, Any]] = None
+        try:
+            host.on_did_change(self._on_host_extensions_changed)
+        except Exception:
+            pass
+
+    def _on_host_extensions_changed(self, event: Any = None) -> None:
+        self._sync_extensions_state()
+        self._sync_tasks_state()
+        self._sync_debug_state()
+        self._extensions_change_emitter.fire(event or {})
 
     def set_ui_bridge(self, bridge: UIBridge) -> None:
         """Connect this namespace to a live HTML UI bridge (e.g. AIEditorAPI).
@@ -897,7 +933,7 @@ class VscodeNamespace:
                 "showInputBox": self._show_input_box,
                 "createOutputChannel": lambda name, **kw: _OutputChannel(name, self._ui_bridge),
                 "createStatusBarItem": lambda *a, **kw: _StatusBarItem(self._ui_bridge),
-                "createWebviewPanel": lambda vt, title, col, **kw: _WebviewPanel(vt, title, bridge=self._ui_bridge),
+                "createWebviewPanel": self._create_webview_panel,
                 "showTextDocument": self._show_text_document,
                 "createTreeView": self._create_tree_view,
                 "registerTreeDataProvider": self._register_tree_data_provider,
@@ -906,15 +942,16 @@ class VscodeNamespace:
                 "withProgress": lambda opts, task: task(_UIProgress(self._ui_bridge), CancellationToken.NONE),
                 "activeTextEditor": None,
                 "visibleTextEditors": [],
+                "activeTerminal": None,
                 "terminals": [],
                 "onDidChangeActiveTextEditor": self._window_active_text_editor_emitter.event,
                 "onDidChangeVisibleTextEditors": self._window_visible_text_editors_emitter.event,
-                "onDidChangeActiveTerminal": EventEmitter().event,
+                "onDidChangeActiveTerminal": self._window_active_terminal_emitter.event,
                 "onDidOpenTerminal": self._window_open_terminal_emitter.event,
                 "onDidCloseTerminal": self._window_close_terminal_emitter.event,
                 "tabGroups": {"all": [], "activeTabGroup": None,
-                              "onDidChangeTabGroups": EventEmitter().event,
-                              "onDidChangeTabs": EventEmitter().event},
+                              "onDidChangeTabGroups": self._window_tab_groups_emitter.event,
+                              "onDidChangeTabs": self._window_tabs_emitter.event},
             }
         self._sync_window_state()
         return self._window_api
@@ -924,6 +961,7 @@ class VscodeNamespace:
             return
         self._window_api["activeTextEditor"] = self._active_text_editor
         self._window_api["visibleTextEditors"] = list(self._visible_text_editors)
+        self._window_api["activeTerminal"] = self._active_terminal
         self._window_api["terminals"] = list(self._terminals)
 
     def _show_message(self, level: str, message: Any,
@@ -990,6 +1028,25 @@ class VscodeNamespace:
         return Disposable(lambda: (self._webview_view_providers.pop(view_id, None),
                                    self._webview_views.pop(view_id, None)))
 
+    def _create_webview_panel(self, view_type: str, title: str,
+                              column: Any = None, **kw: Any) -> Any:
+        panel = _WebviewPanel(view_type, title, bridge=self._ui_bridge)
+        if column is not None:
+            panel.viewColumn = column
+        if kw:
+            panel.options = dict(kw)
+        self._webview_panels.setdefault(view_type, []).append(panel)
+        panel._on_dispose = lambda vt=view_type, instance=panel: self._dispose_webview_panel(vt, instance)
+        return panel
+
+    def _dispose_webview_panel(self, view_type: str,
+                               panel: "_WebviewPanel") -> None:
+        panels = self._webview_panels.get(view_type, [])
+        if panel in panels:
+            panels.remove(panel)
+        if not panels and view_type in self._webview_panels:
+            self._webview_panels.pop(view_type, None)
+
     def _create_terminal(self, *args: Any, **kw: Any) -> Any:
         name = ""
         if args and isinstance(args[0], str):
@@ -1000,14 +1057,19 @@ class VscodeNamespace:
         terminal = _Terminal(name, self._ui_bridge)
         terminal._on_dispose = lambda t=terminal: self._on_terminal_disposed(t)
         self._terminals.append(terminal)
+        self._active_terminal = terminal
         self._sync_window_state()
+        self._window_active_terminal_emitter.fire(terminal)
         self._window_open_terminal_emitter.fire(terminal)
         return terminal
 
     def _on_terminal_disposed(self, terminal: "_Terminal") -> None:
         if terminal in self._terminals:
             self._terminals.remove(terminal)
+            if self._active_terminal is terminal:
+                self._active_terminal = self._terminals[-1] if self._terminals else None
             self._sync_window_state()
+            self._window_active_terminal_emitter.fire(self._active_terminal)
             self._window_close_terminal_emitter.fire(terminal)
 
     # ── workspace ──
@@ -1088,6 +1150,52 @@ class VscodeNamespace:
         except Exception:
             return ""
 
+    def _get_file_system_provider(self, scheme: str) -> Optional[Dict[str, Any]]:
+        if not scheme or scheme == "file":
+            return None
+        return self._file_system_providers.get(str(scheme))
+
+    @staticmethod
+    def _call_provider_method(provider: Any,
+                              names: Sequence[str],
+                              *args: Any,
+                              **kwargs: Any) -> Any:
+        for name in names:
+            method = getattr(provider, name, None)
+            if callable(method):
+                return method(*args, **kwargs)
+        raise AttributeError(f"Provider missing methods: {', '.join(names)}")
+
+    def _read_document_bytes(self, uri: Uri) -> bytes:
+        provider_entry = self._get_file_system_provider(uri.scheme)
+        if provider_entry is None:
+            with open(uri.fs_path, "rb") as fh:
+                return fh.read()
+        raw = self._call_provider_method(
+            provider_entry["provider"], ("readFile", "read_file"), uri)
+        if isinstance(raw, bytes):
+            return raw
+        if isinstance(raw, bytearray):
+            return bytes(raw)
+        if isinstance(raw, memoryview):
+            return raw.tobytes()
+        if raw is None:
+            return b""
+        return str(raw).encode("utf-8")
+
+    def _write_document_bytes(self, uri: Uri, content: bytes) -> None:
+        provider_entry = self._get_file_system_provider(uri.scheme)
+        if provider_entry is None:
+            parent = os.path.dirname(uri.fs_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(uri.fs_path, "wb") as fh:
+                fh.write(content)
+            return
+        self._call_provider_method(
+            provider_entry["provider"], ("writeFile", "write_file"),
+            uri, bytes(content))
+
     def _open_text_document(self, uri: Any = None, **kw: Any) -> "_TextDocument":
         if isinstance(uri, dict):
             uri_value = uri.get("uri")
@@ -1106,10 +1214,17 @@ class VscodeNamespace:
         path = uri.fs_path if hasattr(uri, "fs_path") else str(uri or "")
         if not path:
             raise ValueError("openTextDocument requires a file URI/path or content")
-        uri_obj = raw_uri if isinstance(raw_uri, Uri) else Uri.file(path)
+        uri_obj = raw_uri if isinstance(raw_uri, Uri) else (
+            Uri.parse(path) if isinstance(path, str) and ":" in path and not os.path.isabs(path)
+            else Uri.file(path)
+        )
         if isinstance(uri_obj, Uri) and uri_obj.scheme != "file":
-            return self._remember_text_document(
-                _TextDocument(uri_obj, "", str(kw.get("language", "plaintext"))))
+            language = str(kw.get("language") or _language_id_for_path(uri_obj.path or path))
+            try:
+                content = self._read_document_bytes(uri_obj).decode("utf-8", errors="replace")
+            except Exception:
+                content = ""
+            return self._remember_text_document(_TextDocument(uri_obj, content, language))
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             content = fh.read()
         return self._remember_text_document(
@@ -1194,8 +1309,17 @@ class VscodeNamespace:
 
     def _apply_create_file(self, entry: Dict[str, Any]) -> bool:
         uri = _coerce_uri(entry.get("uri"))
-        if uri is None or uri.scheme != "file":
+        if uri is None:
             return False
+        if uri.scheme != "file":
+            try:
+                self._write_document_bytes(uri, b"")
+            except Exception:
+                return False
+            doc = _TextDocument(uri, "", _language_id_for_path(uri.path))
+            self._remember_text_document(doc)
+            self._workspace_create_files_emitter.fire({"files": [uri]})
+            return True
         path = uri.fs_path
         overwrite = bool((entry.get("options") or {}).get("overwrite"))
         if os.path.exists(path) and not overwrite:
@@ -1213,8 +1337,22 @@ class VscodeNamespace:
 
     def _apply_delete_file(self, entry: Dict[str, Any]) -> bool:
         uri = _coerce_uri(entry.get("uri"))
-        if uri is None or uri.scheme != "file":
+        if uri is None:
             return False
+        if uri.scheme != "file":
+            provider_entry = self._get_file_system_provider(uri.scheme)
+            if provider_entry is None:
+                return False
+            try:
+                self._call_provider_method(
+                    provider_entry["provider"], ("delete", "deleteFile", "delete_file"),
+                    uri, entry.get("options") or {})
+            except Exception:
+                return bool((entry.get("options") or {}).get("ignoreIfNotExists"))
+            self._text_documents = [doc for doc in self._text_documents if self._document_key(doc) != str(uri)]
+            self._sync_workspace_state()
+            self._workspace_delete_files_emitter.fire({"files": [uri]})
+            return True
         path = uri.fs_path
         if not os.path.exists(path):
             return bool((entry.get("options") or {}).get("ignoreIfNotExists"))
@@ -1234,6 +1372,26 @@ class VscodeNamespace:
         new_uri = _coerce_uri(entry.get("newUri"))
         if old_uri is None or new_uri is None:
             return False
+        if old_uri.scheme != "file" or new_uri.scheme != "file":
+            if old_uri.scheme != new_uri.scheme:
+                return False
+            provider_entry = self._get_file_system_provider(old_uri.scheme)
+            if provider_entry is None:
+                return False
+            try:
+                self._call_provider_method(
+                    provider_entry["provider"], ("rename", "renameFile", "rename_file"),
+                    old_uri, new_uri, entry.get("options") or {})
+            except Exception:
+                return False
+            for document in self._text_documents:
+                if self._document_key(document) == str(old_uri):
+                    document.uri = new_uri
+                    document.fileName = str(new_uri)
+                    document.languageId = _language_id_for_path(new_uri.path)
+            self._sync_workspace_state()
+            self._workspace_rename_files_emitter.fire({"files": [{"oldUri": old_uri, "newUri": new_uri}]})
+            return True
         old_path = old_uri.fs_path
         new_path = new_uri.fs_path
         if not os.path.exists(old_path):
@@ -1259,7 +1417,7 @@ class VscodeNamespace:
             if self._document_key(document) == key:
                 return document
         if uri.scheme != "file":
-            return self._remember_text_document(_TextDocument(uri, "", "plaintext"))
+            return self._open_text_document(uri)
         path = uri.fs_path
         if os.path.exists(path):
             return self._open_text_document(uri)
@@ -1281,7 +1439,12 @@ class VscodeNamespace:
             self._workspace_save_text_document_emitter.fire(document)
             self._notify_workspace_watchers(document.fileName, "change")
         else:
-            document.isDirty = True
+            try:
+                self._write_document_bytes(document.uri, content.encode("utf-8"))
+                document.isDirty = False
+                self._workspace_save_text_document_emitter.fire(document)
+            except Exception:
+                document.isDirty = True
         self._workspace_change_text_document_emitter.fire({"document": document})
 
     def _create_file_system_watcher(self, pattern: Any, *args: Any,
@@ -1326,7 +1489,16 @@ class VscodeNamespace:
 
     def _register_file_system_provider(self, scheme: str, provider: Any,
                                        options: Dict = None) -> Disposable:
-        return Disposable()
+        key = str(scheme or "")
+        self._file_system_providers[key] = {
+            "provider": provider,
+            "options": dict(options or {}),
+        }
+
+        def _dispose() -> None:
+            self._file_system_providers.pop(key, None)
+
+        return Disposable(_dispose)
 
     def _find_files(self, include: Any, exclude: Any = None,
                     max_results: Any = None, token: Any = None) -> List[Uri]:
@@ -1474,6 +1646,7 @@ class VscodeNamespace:
                 "fetchTasks": self._fetch_tasks,
                 "executeTask": self._execute_task,
                 "taskExecutions": [],
+                "taskDefinitions": [],
                 "onDidStartTask": self._tasks_start_emitter.event,
                 "onDidEndTask": self._tasks_end_emitter.event,
             }
@@ -1488,6 +1661,8 @@ class VscodeNamespace:
         if self._tasks_api is None:
             return
         self._tasks_api["taskExecutions"] = list(self._task_executions)
+        self._tasks_api["taskDefinitions"] = list(
+            self._host.ext_points.all_contributions.get("taskDefinitions", []))
 
     def _fetch_tasks(self, filter: Any = None) -> List[Any]:
         tasks: List[Any] = []
@@ -1628,6 +1803,7 @@ class VscodeNamespace:
                 "startDebugging": self._start_debugging,
                 "activeDebugSession": None,
                 "breakpoints": [],
+                "debuggers": [],
                 "onDidStartDebugSession": self._debug_start_emitter.event,
                 "onDidTerminateDebugSession": self._debug_terminate_emitter.event,
                 "onDidChangeBreakpoints": self._debug_breakpoints_emitter.event,
@@ -1651,6 +1827,8 @@ class VscodeNamespace:
                 active = session
                 break
         self._debug_api["activeDebugSession"] = active
+        self._debug_api["debuggers"] = list(
+            self._host.ext_points.all_contributions.get("debuggers", []))
 
     def _start_debugging(self, folder: Any, name_or_config: Any,
                          parent: Any = None) -> bool:
@@ -1770,11 +1948,22 @@ class VscodeNamespace:
     # ── extensions ──
 
     def _build_extensions(self) -> Dict[str, Any]:
-        return {
-            "getExtension": lambda ext_id: self._host.registry.get(ext_id),
-            "all": self._host.registry.list_all(),
-            "onDidChange": EventEmitter().event,
-        }
+        if self._extensions_api is None:
+            self._extensions_api = {
+                "getExtension": self._get_extension,
+                "all": [],
+                "onDidChange": self._extensions_change_emitter.event,
+            }
+        self._sync_extensions_state()
+        return self._extensions_api
+
+    def _sync_extensions_state(self) -> None:
+        if self._extensions_api is None:
+            return
+        self._extensions_api["all"] = list(self._host.registry.list_all())
+
+    def _get_extension(self, ext_id: str) -> Any:
+        return self._host.registry.get(ext_id)
 
     # ── lm (Language Model) ──
 
@@ -1795,6 +1984,7 @@ class VscodeNamespace:
             "getTools": self._get_tools_list,
             "onDidChangeChatModels": self._models_change_emitter.event,
             "onDidChangeTools": self._tools_change_emitter.event,
+            "mcpServerDefinitionProviders": self._mcp_definition_providers,
             "tools": self._lm_tools,
         }
 
@@ -1896,7 +2086,10 @@ class VscodeNamespace:
             record["code"] = "needsExtensionRuntime"
         self._lm_tools[name] = record
         self._tools_change_emitter.fire({"added": name})
-        return Disposable(lambda: self._lm_tools.pop(name, None))
+        def _dispose() -> None:
+            self._lm_tools.pop(name, None)
+            self._tools_change_emitter.fire({"removed": name})
+        return Disposable(_dispose)
 
     @staticmethod
     def _tool_has_runtime_handler(tool: Any) -> bool:
@@ -1945,9 +2138,12 @@ class VscodeNamespace:
 
     def _register_mcp_provider(self, provider_id: str, provider: Any) -> Disposable:
         """Register an MCP server definition provider (extension-contributed MCP)."""
-        self._lm_tools[f"mcp:{provider_id}"] = {
-            "provider": provider, "mcp": True}
-        return Disposable(lambda: self._lm_tools.pop(f"mcp:{provider_id}", None))
+        self._mcp_definition_providers[provider_id] = provider
+
+        def _dispose() -> None:
+            self._mcp_definition_providers.pop(provider_id, None)
+
+        return Disposable(_dispose)
 
     def _file_is_ignored(self, uri: Any, token: Any = None) -> bool:
         """Check if a file should be ignored (.gitignore/.copilotignore)."""
@@ -2018,9 +2214,14 @@ class VscodeNamespace:
                 prep = tool.prepareInvocation(
                     options, options.token)
                 if isinstance(prep, PreparedToolInvocation) and prep.confirmation_messages:
-                    pass  # UI would show confirmation — we auto-approve in shim
+                    if self._ui_bridge is None:
+                        return _tool_confirmation_denied_result(name)
+                    confirmed = self._ui_bridge.confirm_tool_invocation(
+                        name, prep.confirmation_messages, options.input)
+                    if not confirmed:
+                        return _tool_confirmation_denied_result(name)
             except Exception:
-                pass
+                return _tool_confirmation_denied_result(name)
         if hasattr(tool, "invoke"):
             return tool.invoke(options, options.token)
         if callable(tool):
@@ -2062,9 +2263,16 @@ class VscodeNamespace:
         return {
             "createChatParticipant": self._create_chat_participant,
             "registerVariable": self._register_variable,
-            "registerChatWorkspaceContextProvider": lambda id, p: Disposable(),
-            "registerChatExplicitContextProvider": lambda id, p: Disposable(),
-            "registerChatResourceContextProvider": lambda id, p: Disposable(),
+            "registerChatWorkspaceContextProvider": (
+                lambda provider_id, provider: self._register_chat_context_provider(
+                    "workspace", provider_id, provider)),
+            "registerChatExplicitContextProvider": (
+                lambda provider_id, provider: self._register_chat_context_provider(
+                    "explicit", provider_id, provider)),
+            "registerChatResourceContextProvider": (
+                lambda provider_id, provider: self._register_chat_context_provider(
+                    "resource", provider_id, provider)),
+            "contextProviders": self._chat_context_providers,
         }
 
     def _create_chat_participant(self, participant_id: str,
@@ -2082,6 +2290,17 @@ class VscodeNamespace:
         self._variables[name] = resolver
         return Disposable(lambda: self._variables.pop(name, None))
 
+    def _register_chat_context_provider(self, kind: str,
+                                        provider_id: str,
+                                        provider: Any) -> Disposable:
+        bucket = self._chat_context_providers.setdefault(kind, {})
+        bucket[provider_id] = provider
+
+        def _dispose() -> None:
+            bucket.pop(provider_id, None)
+
+        return Disposable(_dispose)
+
     # ── authentication ──
 
     def _build_auth(self) -> Dict[str, Any]:
@@ -2098,10 +2317,16 @@ class VscodeNamespace:
         sessions = self._auth_sessions.get(provider_id, [])
         if sessions:
             return sessions[0]
+        provider_sessions = self._refresh_auth_provider_sessions(
+            provider_id, scopes or [], options or {}, emit_change=False)
+        if provider_sessions:
+            return provider_sessions[0]
         if options and options.get("createIfNone"):
             prov = self._auth_providers.get(provider_id)
-            if prov and hasattr(prov, "create_session"):
-                session = prov.create_session(scopes or [], options)
+            if prov and (hasattr(prov, "create_session") or hasattr(prov, "createSession")):
+                session = self._call_provider_method(
+                    prov, ("create_session", "createSession"),
+                    scopes or [], options)
                 if session:
                     auth_session = _coerce_auth_session(
                         session, provider_id, scopes or [])
@@ -2126,6 +2351,16 @@ class VscodeNamespace:
     def _register_auth_provider(self, provider_id: str, label: str,
                                  provider: Any, options: Dict = None) -> Disposable:
         self._auth_providers[provider_id] = provider
+        self._refresh_auth_provider_sessions(provider_id, [], options or {}, emit_change=False)
+        session_event = (getattr(provider, "on_did_change_sessions", None)
+                         or getattr(provider, "onDidChangeSessions", None))
+        if callable(session_event):
+            try:
+                disposable = session_event(
+                    lambda evt=None, pid=provider_id: self._handle_auth_provider_change(pid, evt))
+                self._auth_provider_listeners[provider_id] = disposable
+            except Exception:
+                pass
         external_disposable = None
         try:
             from ai_editor.auth import get_auth_service
@@ -2136,9 +2371,54 @@ class VscodeNamespace:
 
         def _dispose() -> None:
             self._auth_providers.pop(provider_id, None)
+            listener = self._auth_provider_listeners.pop(provider_id, None)
+            if listener and hasattr(listener, "dispose"):
+                listener.dispose()
+            self._auth_sessions.pop(provider_id, None)
             if external_disposable:
                 external_disposable.dispose()
         return Disposable(_dispose)
+
+    def _handle_auth_provider_change(self, provider_id: str,
+                                     event: Any = None) -> None:
+        self._refresh_auth_provider_sessions(provider_id, [], {}, emit_change=True,
+                                             preferred_event=event)
+
+    def _refresh_auth_provider_sessions(self, provider_id: str,
+                                        scopes: List[str],
+                                        options: Dict[str, Any],
+                                        emit_change: bool,
+                                        preferred_event: Any = None
+                                        ) -> List[AuthenticationSession]:
+        provider = self._auth_providers.get(provider_id)
+        if provider is None:
+            return []
+        if not (hasattr(provider, "get_sessions") or hasattr(provider, "getSessions")):
+            return list(self._auth_sessions.get(provider_id, []))
+        try:
+            raw_sessions = self._call_provider_method(
+                provider, ("get_sessions", "getSessions"),
+                scopes or [], options or {}) or []
+        except Exception:
+            return list(self._auth_sessions.get(provider_id, []))
+        sessions = [_coerce_auth_session(item, provider_id, scopes or [])
+                    for item in list(raw_sessions)]
+        previous = list(self._auth_sessions.get(provider_id, []))
+        self._auth_sessions[provider_id] = sessions
+        if emit_change:
+            payload = preferred_event if isinstance(preferred_event, dict) else None
+            if payload is None:
+                previous_ids = {item.id for item in previous}
+                current_ids = {item.id for item in sessions}
+                payload = {
+                    "provider": provider_id,
+                    "added": sorted(current_ids - previous_ids),
+                    "removed": sorted(previous_ids - current_ids),
+                    "changed": sorted(previous_ids & current_ids),
+                }
+            payload.setdefault("provider", provider_id)
+            self._auth_sessions_emitter.fire(payload)
+        return sessions
 
     # ── Webview message routing (frontend -> extension) ──
 
@@ -2154,6 +2434,10 @@ class VscodeNamespace:
         if view is not None:
             view.webview.receive_message_from_webview(message)
             return True
+        panels = self._webview_panels.get(view_id, [])
+        if panels:
+            panels[-1].webview.receive_message_from_webview(message)
+            return True
         return False
 
     def get_webview_html(self, view_id: str) -> Optional[str]:
@@ -2161,11 +2445,14 @@ class VscodeNamespace:
         view = self._webview_views.get(view_id)
         if view is not None:
             return view.webview.html or None
+        panels = self._webview_panels.get(view_id, [])
+        if panels:
+            return panels[-1].webview.html or None
         return None
 
     def list_webview_view_ids(self) -> List[str]:
         """Return all registered webview view IDs."""
-        return list(self._webview_views.keys())
+        return sorted(set(self._webview_views.keys()) | set(self._webview_panels.keys()))
 
     # ── Accessors for host integration ──
 
@@ -2371,6 +2658,7 @@ class _WebviewPanel:
         self._bridge = bridge
         self._dispose_emitter = EventEmitter()
         self._view_state_emitter = EventEmitter()
+        self._on_dispose: Optional[Callable[[], None]] = None
 
         # Wire html change -> bridge
         self.webview._on_html_changed = self._push_html
@@ -2411,6 +2699,11 @@ class _WebviewPanel:
         self.visible = False
         self.active = False
         self._view_state_emitter.fire({"webviewPanel": self})
+        if self._on_dispose is not None:
+            try:
+                self._on_dispose()
+            except Exception:
+                pass
         self._dispose_emitter.fire()
 
 
@@ -3031,41 +3324,99 @@ class _FileSystem:
         self._namespace = namespace
 
     def readFile(self, uri: Any) -> bytes:
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
-        with open(path, "rb") as f:
-            return f.read()
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("readFile requires a Uri or path")
+        return self._namespace._read_document_bytes(uri_obj)
+
     def writeFile(self, uri: Any, content: bytes) -> None:
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        existed = os.path.exists(path)
-        with open(path, "wb") as f:
-            f.write(content)
-        self._namespace._notify_workspace_watchers(path, "change" if existed else "create")
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("writeFile requires a Uri or path")
+        if uri_obj.scheme == "file":
+            path = uri_obj.fs_path
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            existed = os.path.exists(path)
+            with open(path, "wb") as f:
+                f.write(content)
+            self._namespace._notify_workspace_watchers(path, "change" if existed else "create")
+            return
+        self._namespace._write_document_bytes(uri_obj, bytes(content))
+
     def stat(self, uri: Any) -> Dict:
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("stat requires a Uri or path")
+        provider_entry = self._namespace._get_file_system_provider(uri_obj.scheme)
+        if provider_entry is not None:
+            return dict(self._namespace._call_provider_method(
+                provider_entry["provider"], ("stat",), uri_obj) or {})
+        path = uri_obj.fs_path
         s = os.stat(path)
         return {"type": 1 if os.path.isfile(path) else 2,
                 "size": s.st_size, "mtime": int(s.st_mtime * 1000)}
+
     def readDirectory(self, uri: Any) -> List:
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("readDirectory requires a Uri or path")
+        provider_entry = self._namespace._get_file_system_provider(uri_obj.scheme)
+        if provider_entry is not None:
+            return list(self._namespace._call_provider_method(
+                provider_entry["provider"], ("readDirectory", "read_directory"), uri_obj) or [])
+        path = uri_obj.fs_path
         return [(n, 1 if os.path.isfile(os.path.join(path, n)) else 2)
                 for n in os.listdir(path)]
+
     def createDirectory(self, uri: Any) -> None:
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("createDirectory requires a Uri or path")
+        provider_entry = self._namespace._get_file_system_provider(uri_obj.scheme)
+        if provider_entry is not None:
+            self._namespace._call_provider_method(
+                provider_entry["provider"], ("createDirectory", "create_directory"), uri_obj)
+            return
+        path = uri_obj.fs_path
         os.makedirs(path, exist_ok=True)
+
     def delete(self, uri: Any, options: Dict = None) -> None:
         import shutil
-        path = uri.fs_path if hasattr(uri, "fs_path") else str(uri)
+        uri_obj = _coerce_uri(uri)
+        if uri_obj is None:
+            raise ValueError("delete requires a Uri or path")
+        provider_entry = self._namespace._get_file_system_provider(uri_obj.scheme)
+        if provider_entry is not None:
+            self._namespace._call_provider_method(
+                provider_entry["provider"], ("delete", "deleteFile", "delete_file"),
+                uri_obj, options or {})
+            return
+        path = uri_obj.fs_path
         if os.path.isdir(path):
             shutil.rmtree(path)
         elif os.path.isfile(path):
             os.remove(path)
         self._namespace._notify_workspace_watchers(path, "delete")
+
     def rename(self, old_uri: Any, new_uri: Any, options: Dict = None) -> None:
-        old_path = old_uri.fs_path if hasattr(old_uri, "fs_path") else str(old_uri)
-        new_path = new_uri.fs_path if hasattr(new_uri, "fs_path") else str(new_uri)
+        old_uri_obj = _coerce_uri(old_uri)
+        new_uri_obj = _coerce_uri(new_uri)
+        if old_uri_obj is None or new_uri_obj is None:
+            raise ValueError("rename requires source and target Uri/path")
+        provider_entry = self._namespace._get_file_system_provider(old_uri_obj.scheme)
+        if provider_entry is not None or new_uri_obj.scheme != "file":
+            if old_uri_obj.scheme != new_uri_obj.scheme:
+                raise ValueError("rename across filesystem providers is unsupported")
+            if provider_entry is None:
+                raise ValueError(f"No filesystem provider registered for scheme: {old_uri_obj.scheme}")
+            self._namespace._call_provider_method(
+                provider_entry["provider"], ("rename", "renameFile", "rename_file"),
+                old_uri_obj, new_uri_obj, options or {})
+            return
+        old_path = old_uri_obj.fs_path
+        new_path = new_uri_obj.fs_path
         parent = os.path.dirname(new_path)
         if parent:
             os.makedirs(parent, exist_ok=True)

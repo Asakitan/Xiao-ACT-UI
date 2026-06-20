@@ -263,6 +263,7 @@ def install_extension(ext_id: str, vsix_url: str = "") -> Dict[str, Any]:
             "installed_at": time.time(),
             "manifest": manifest,
             "ext_dir": ext_dir,
+            "manifest_path": os.path.join(ext_dir, "package.json"),
         }
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=1)
@@ -338,10 +339,17 @@ def list_installed() -> List[Dict[str, Any]]:
         try:
             with open(os.path.join(d, fname), "r", encoding="utf-8") as f:
                 data = json.load(f)
+            manifest = data.get("manifest") or {}
             result.append({
                 "id": data.get("id", fname[:-5]),
                 "installed_at": data.get("installed_at", 0),
                 "has_manifest": bool(data.get("manifest")),
+                "displayName": manifest.get("displayName", ""),
+                "version": manifest.get("version", ""),
+                "publisher": manifest.get("publisher", ""),
+                "ext_dir": data.get("ext_dir", ""),
+                "manifest_path": data.get("manifest_path", ""),
+                "contributes": sorted((manifest.get("contributes") or {}).keys()),
             })
         except Exception as exc:
             logger.warning("Failed to read installed extension state %s: %s",
@@ -393,6 +401,9 @@ def load_extension_tools(ext_id: str,
                 "source": "extension",
                 "extension_id": ext_id,
                 "original_name": t.get("name", ""),
+                "sourceName": t.get("name", ""),
+                "needsExtensionRuntime": True,
+                "runtimeAvailable": False,
             })
 
         # chatParticipants → register as tools
@@ -410,6 +421,9 @@ def load_extension_tools(ext_id: str,
                 "source": "extension",
                 "extension_id": ext_id,
                 "participant_id": pid,
+                "sourceName": pid,
+                "needsExtensionRuntime": True,
+                "runtimeAvailable": False,
             })
 
         # commands → register as callable tools
@@ -427,6 +441,9 @@ def load_extension_tools(ext_id: str,
                 "source": "extension",
                 "extension_id": ext_id,
                 "command_id": cmd_id,
+                "sourceName": cmd_id,
+                "needsExtensionRuntime": True,
+                "runtimeAvailable": False,
             })
 
         return tools

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import copy
 import base64
 import json
@@ -102,7 +103,7 @@ class ParserAdapterMetadata:
         )
 
 
-class ParserAdapter:
+class ParserAdapter(ABC):
     """Small runtime contract for parser/game integrations."""
 
     def __init__(self, metadata: ParserAdapterMetadata) -> None:
@@ -124,8 +125,9 @@ class ParserAdapter:
     def stop(self) -> None:
         self.started = False
 
+    @abstractmethod
     def parse_packet(self, frame: bytes) -> Any:
-        raise NotImplementedError("parse_packet is not implemented by this adapter")
+        ...
 
     def parse_log_line(self, line: str) -> list[dict[str, Any]]:
         return []

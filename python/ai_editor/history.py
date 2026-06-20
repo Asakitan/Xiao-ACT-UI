@@ -20,6 +20,15 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _validate_conversation_id(conv_id: str) -> str:
+    normalized = str(conv_id or "").strip()
+    if not normalized:
+        raise ValueError("Conversation id is required")
+    if normalized != os.path.basename(normalized) or any(sep in normalized for sep in ("/", "\\")) or ".." in normalized:
+        raise ValueError("Conversation id must be a simple file-safe identifier")
+    return normalized
+
+
 def _history_dir(scope: str = "workspace") -> str:
     try:
         from ai_editor.scopes import _home_sao, _base_dir
@@ -68,6 +77,7 @@ def _all_history_dirs() -> List[str]:
 def save_conversation(conv_id: str, title: str, messages: List[Dict[str, Any]],
                       system_prompt: str = "", model: str = "",
                       scope: str = "workspace") -> str:
+    conv_id = _validate_conversation_id(conv_id)
     path = os.path.join(_history_dir(scope), f"{conv_id}.json")
     data = {
         "id": conv_id,
@@ -88,6 +98,7 @@ def save_conversation(conv_id: str, title: str, messages: List[Dict[str, Any]],
 
 
 def load_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
+    conv_id = _validate_conversation_id(conv_id)
     for d in _all_history_dirs():
         path = os.path.join(d, f"{conv_id}.json")
         if not os.path.isfile(path):
@@ -166,6 +177,7 @@ def list_conversations(limit: int = 50,
 
 
 def delete_conversation(conv_id: str) -> bool:
+    conv_id = _validate_conversation_id(conv_id)
     removed = False
     for d in _all_history_dirs():
         path = os.path.join(d, f"{conv_id}.json")

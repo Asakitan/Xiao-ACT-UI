@@ -225,16 +225,35 @@ class ExtensionRegistry:
         self._activation_map: Dict[str, List[str]] = {}
         self._lock = threading.Lock()
         self._dirty = True
+        self._change_emitter = _LazyEventEmitter()
+
+    @property
+    def on_did_change(self):
+        return self._change_emitter.event
 
     def register(self, ext: ExtensionDescription) -> None:
+        previous = None
         with self._lock:
+            previous = self._extensions.get(ext.id)
             self._extensions[ext.id] = ext
             self._dirty = True
+        self._change_emitter.fire({
+            "added": [] if previous else [ext.id],
+            "removed": [],
+            "changed": [ext.id] if previous else [],
+        })
 
     def unregister(self, ext_id: str) -> None:
+        removed = None
         with self._lock:
-            self._extensions.pop(ext_id, None)
+            removed = self._extensions.pop(ext_id, None)
             self._dirty = True
+        if removed is not None:
+            self._change_emitter.fire({
+                "added": [],
+                "removed": [ext_id],
+                "changed": [],
+            })
 
     def get(self, ext_id: str) -> Optional[ExtensionDescription]:
         return self._extensions.get(ext_id)
@@ -834,12 +853,20 @@ class ExtensionPoints:
             if isinstance(auth, dict):
                 auth = dict(auth)
                 auth["_extensionId"] = eid
+                auth["_activation"] = _activation_metadata(
+                    ext, "authentication",
+                    auth.get("id") or auth.get("provider") or auth.get("label", ""))
+                auth["_runtimeSupport"] = _needs_extension_runtime(
+                    "authentication", ext.id,
+                    auth.get("id") or auth.get("provider") or auth.get("label", ""))
                 self._authentication.append(auth)
 
         for lang in c.get("languages", []):
             if isinstance(lang, dict):
                 lang = dict(lang)
                 lang["_extensionId"] = eid
+                lang["_activation"] = _activation_metadata(
+                    ext, "language", lang.get("id", ""))
                 self._languages.append(lang)
 
         for gram in c.get("grammars", []):
@@ -881,6 +908,8 @@ class ExtensionPoints:
             if isinstance(dbg, dict):
                 dbg = dict(dbg)
                 dbg["_extensionId"] = eid
+                dbg["_activation"] = _activation_metadata(
+                    ext, "debugger", dbg.get("type") or dbg.get("label", ""))
                 self._debuggers.append(dbg)
 
         for nb in c.get("notebooks", []):
@@ -893,6 +922,8 @@ class ExtensionPoints:
             if isinstance(td, dict):
                 td = dict(td)
                 td["_extensionId"] = eid
+                td["_activation"] = _activation_metadata(
+                    ext, "taskDefinition", td.get("type") or td.get("taskType", ""))
                 self._task_definitions.append(td)
 
         menus = c.get("menus", {})
@@ -1258,6 +1289,21 @@ class ExtensionHost:
             self.registry, self.commands, self.ext_points)
         self._started = False
         self._policy: Optional[Callable[[ExtensionDescription], bool]] = None
+        self._change_emitter = _LazyEventEmitter()
+        self.registry.on_did_change(self._relay_registry_change)
+
+    @property
+    def on_did_change(self):
+        return self._change_emitter.event
+
+    def _emit_change(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        self._change_emitter.fire({
+            "extensions": self.list_extensions(),
+            "change": payload or {"added": [], "removed": [], "changed": []},
+        })
+
+    def _relay_registry_change(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        self._emit_change(payload)
 
     def _activate_command_extension(self, command_id: str) -> None:
         self.activate_event(f"onCommand:{command_id}")
@@ -1300,20 +1346,32 @@ class ExtensionHost:
             self.registry.register(desc)
             if self._started:
                 self.activator.activate(desc.id)
+                self._emit_change({"activated": [desc.id]})
         return desc
 
     def start(self) -> List[ActivatedExtension]:
         self._started = True
         results = self.activator.activate_by_event("*")
         results += self.activator.activate_by_event("onStartupFinished")
+        if results:
+            self._emit_change({"activated": [item.ext.id for item in results]})
         return results
 
     def activate_event(self, event: str) -> List[ActivatedExtension]:
-        return self.activator.activate_by_event(event)
+        results = self.activator.activate_by_event(event)
+        if results:
+            self._emit_change({
+                "event": event,
+                "activated": [item.ext.id for item in results],
+            })
+        return results
 
     def shutdown(self) -> None:
+        had_active = bool(self.activator.list_activated())
         self.activator.deactivate_all()
         self._started = False
+        if had_active:
+            self._emit_change({"deactivatedAll": True})
 
     def list_extensions(self) -> List[Dict[str, Any]]:
         result = []

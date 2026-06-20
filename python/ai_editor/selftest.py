@@ -10,6 +10,7 @@ import shutil
 import sys
 import os
 import tempfile
+import threading
 import time
 import tkinter as tk
 
@@ -158,9 +159,20 @@ class _FakeSettings:
         self.saved = True
 
 
+class _FailingSettings(_FakeSettings):
+    def save(self):
+        raise RuntimeError("disk failed")
+
+
 class _SettingsGui(_FakeGui):
     def __init__(self, data):
         self.settings = _FakeSettings(data)
+        self._ai_engine_actions = dict(_FakeGui._ai_engine_actions)
+
+
+class _FailingSettingsGui(_FakeGui):
+    def __init__(self, data):
+        self.settings = _FailingSettings(data)
         self._ai_engine_actions = dict(_FakeGui._ai_engine_actions)
 
 
@@ -264,6 +276,16 @@ def test_app_settings_parity() -> None:
     _check("provider keys and unknown keys preserved",
            loaded.get("_provider_keys", {}).get("deepseek") == "new-deepseek"
            and stored.get("unknown_payload") == {"preserve": True})
+
+    no_settings_result = AIEditorAPI(_FakeGui()).save_config({"provider": "openai"})
+    _check("save_config reports missing settings instead of fake success",
+           no_settings_result.get("error") == "Settings not available"
+           and no_settings_result.get("applied") is True)
+
+    save_failure_result = AIEditorAPI(_FailingSettingsGui({"ai_editor": {}})).save_config({"provider": "openai"})
+    _check("save_config surfaces persistence errors",
+           save_failure_result.get("error") == "disk failed"
+           and save_failure_result.get("applied") is True)
 
     malformed = _SettingsGui({
         "ai_editor": {
@@ -902,11 +924,20 @@ def test_phase1_ai_editor_regressions() -> None:
            html.count('data-resize-edge="') == 8
            and "querySelectorAll('[data-resize-edge]')" in html
            and "call('win_resize_by',state.edge,dx,dy)" in html)
+    _check("provider webviews bridge persistent vscode state",
+           'type:"webview-set-state"' in html
+           and 'webview_set_state' in html
+           and 'getState:function(){return _state}' in html)
     _check("frontend Explorer calls workspace tree and file APIs",
            "call('list_workspace_tree',relPath||'')" in html
            and "call('list_workspace_tree',entry.path||'')" in html
            and "openWorkspaceFile(entry.path)" in html
            and "call('open_workspace_file',relPath||'')" in html)
+
+    state_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _check("provider webview state survives backend lookup without vscode namespace",
+           state_api.webview_set_state("provider.codex", {"draft": 1}).get("ok") is True
+           and state_api.get_provider_webview("codex").get("state") == {"draft": 1})
 
 
 def test_tool_registry() -> None:
@@ -1060,6 +1091,29 @@ def test_tool_registry() -> None:
     _check("LM tool result normalized to JSON",
            lm_result.get("content", [{}])[0].get("text") == "done")
 
+    reg.register(
+        "noneResult",
+        "Return no payload",
+        {"type": "object", "properties": {}},
+        lambda: None,
+    )
+    none_result = json.loads(reg.execute("noneResult", "{}"))
+    _check("tool registry rejects empty tool results explicitly",
+           "returned no result" in none_result.get("error", ""))
+
+    class _NoResultEditorApi:
+        def __init__(self):
+            self._window = object()
+
+        def editor_get_content(self):
+            return None
+
+    reg_editor_none = ToolRegistry()
+    register_engine_tools(reg_editor_none, _FakeGui(), _NoResultEditorApi())
+    editor_none = json.loads(reg_editor_none.execute("editor_getContent", "{}"))
+    _check("editor tool rejects empty bridge responses explicitly",
+           "returned no result" in editor_none.get("error", ""))
+
     result = reg.execute("nonexistent_tool", "{}")
     data = json.loads(result)
     _check("unknown tool error", "error" in data)
@@ -1126,6 +1180,30 @@ def test_mcp_client() -> None:
     _check("internal MCP stop is explicit and disables calls",
            stopped_provider.is_alive is False
            and "not connected" in stopped_call.get("error", ""))
+
+    empty_provider = InternalMcpProvider("empty")
+    empty_provider.add_tool("echo", "Echo", {}, lambda **kw: None)
+    empty_result = json.loads(empty_provider.call_tool("echo", {}))
+    _check("internal MCP empty handler result is explicit error",
+           "returned no result" in empty_result.get("error", ""))
+
+    class _FailingHttpClient:
+        def post(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    from ai_editor.mcp_client import McpServerConfig, McpSseClient
+    sse_client = McpSseClient(McpServerConfig(
+        id="sse_fail",
+        name="SSE Fail",
+        transport="sse",
+        url="http://localhost:3000/mcp",
+    ))
+    sse_client._alive = True
+    sse_client._http = _FailingHttpClient()
+    sse_error = json.loads(sse_client.call_tool("echo", {}))
+    _check("MCP SSE transport errors are explicit",
+           "MCP call failed" in sse_error.get("error", "")
+           and sse_error.get("rpc_error", {}).get("data", {}).get("serverId") == "sse_fail")
 
     framed_payload = b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'
     framed_stream = io.BytesIO(
@@ -1388,6 +1466,12 @@ def test_history() -> None:
     delete_conversation(cid)
     _check("Deleted", load_conversation(cid) is None)
 
+    try:
+        load_conversation("../escape")
+        _check("history blocks path traversal", False)
+    except ValueError:
+        _check("history blocks path traversal", True)
+
 
 def test_bridge() -> None:
     print("── WebView Bridge ──")
@@ -1414,6 +1498,17 @@ def test_bridge() -> None:
            set_mode.get("ok") is True
            and bridge.handle_command("ai_editor_get_mode", {}).get("mode") == "agent")
 
+    failing_bridge = AIEditorBridge(
+        _FailingSettingsGui({"ai_editor": {}}),
+        lambda n, p: None,
+    )
+    bridge_save = failing_bridge.handle_command(
+        "ai_editor_save_config", {"provider": "openai"}
+    )
+    _check("bridge save_config surfaces persistence errors",
+           bridge_save.get("error") == "disk failed"
+           and bridge_save.get("applied") is True)
+
     bridge._ensure_engine()
     sent = []
     bridge._controller.send = lambda text, agent_mode=False: sent.append(
@@ -1424,6 +1519,28 @@ def test_bridge() -> None:
            sent and sent[-1][0] == "hello bridge"
            and sent[-1][1] is False
            and "<!-- plan_ready -->" in sent[-1][2])
+
+    bridge._confirmation_timeout = 0.0
+    denied = bridge._on_tool_confirm("bridge-call", "runTerminal", "{}")
+    stale = bridge.handle_command("ai_editor_confirm_tool", {"id": "bridge-call", "allowed": True})
+    _check("bridge tool confirm fails closed when UI does not answer",
+           denied is False and stale.get("error") == "No pending confirmation")
+
+    bridge._confirmation_timeout = 1.0
+    allowed_result = {}
+
+    def _await_bridge_confirm():
+        allowed_result["value"] = bridge._on_tool_confirm(
+            "bridge-call-2", "runTerminal", "{}")
+
+    confirm_thread = threading.Thread(target=_await_bridge_confirm, daemon=True)
+    confirm_thread.start()
+    _wait_until(lambda: "bridge-call-2" in bridge._pending_confirm)
+    confirm_ok = bridge.handle_command(
+        "ai_editor_confirm_tool", {"id": "bridge-call-2", "allowed": True})
+    confirm_thread.join(timeout=1.0)
+    _check("bridge tool confirm handshake works",
+           confirm_ok.get("ok") is True and allowed_result.get("value") is True)
 
     result = bridge.handle_command("unknown_cmd", {})
     _check("unknown cmd", "error" in result)
@@ -1486,6 +1603,12 @@ def test_instructions() -> None:
         # Delete nonexistent
         r = delete_instruction_file("nope.md", workspace_root=tmpdir)
         _check("delete nonexistent", r.get("ok") is False)
+
+        r = save_instruction_file("../escape.md", "nope", workspace_root=tmpdir)
+        _check("instruction save blocks path traversal", r.get("ok") is False)
+
+        r = delete_instruction_file("../escape.md", workspace_root=tmpdir)
+        _check("instruction delete blocks path traversal", r.get("ok") is False)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1687,13 +1810,13 @@ def test_extension_host() -> None:
 
 def test_vscode_api() -> None:
     print("── VSCode API ──")
-    from ai_editor.extension_host import ExtensionHost
+    from ai_editor.extension_host import ExtensionHost, ExtensionDescription
     from ai_editor.vscode_api import (
         VscodeNamespace, LanguageModelChat, ChatParticipant,
         ChatRequest, ChatContext, ChatResponseStream, ChatResult,
         WorkspaceConfiguration, LanguageModelToolResult,
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
-        Position, Range,
+        Position, Range, AuthenticationSession, PreparedToolInvocation,
     )
 
     host = ExtensionHost()
@@ -1785,10 +1908,49 @@ def test_vscode_api() -> None:
     _check("merged runtime tool callable",
            merged_result.content[0]["text"] == "merged")
 
+    class ConfirmTool:
+        def __init__(self) -> None:
+            self.invoked = 0
+
+        def prepareInvocation(self, options, token):
+            return PreparedToolInvocation({
+                "title": "Confirm tool",
+                "message": "Run confirm_tool?",
+            })
+
+        def invoke(self, options, token):
+            self.invoked += 1
+            return LanguageModelToolResult.text("confirmed")
+
+    confirm_tool = ConfirmTool()
+    api["lm"]["registerTool"]("confirm_tool", confirm_tool)
+    denied_result = api["lm"]["invokeTool"]("confirm_tool", {})
+    _check("prepareInvocation requires UI confirmation",
+           confirm_tool.invoked == 0
+           and "requiresConfirmation" in denied_result.content[0]["text"])
+
+    class ConfirmBridge:
+        def confirm_tool_invocation(self, tool_name, confirmation, input_data):
+            return tool_name == "confirm_tool" and confirmation.get("title") == "Confirm tool"
+
+    ns.set_ui_bridge(ConfirmBridge())
+    confirmed_result = api["lm"]["invokeTool"]("confirm_tool", {})
+    _check("prepareInvocation uses UI confirmation bridge",
+           confirm_tool.invoked == 1
+           and confirmed_result.content[0]["text"] == "confirmed")
+    ns.set_ui_bridge(None)
+
     # Variable
     api["chat"]["registerVariable"]("testvar", "A test variable",
                                      lambda: "var_value")
     _check("registerVariable", "testvar" in ns.variables)
+    chat_ctx = api["chat"]["registerChatWorkspaceContextProvider"](
+        "ctx.workspace", {"label": "Workspace Context"})
+    _check("chat context providers are retained",
+           "ctx.workspace" in api["chat"]["contextProviders"]["workspace"])
+    chat_ctx.dispose()
+    _check("chat context provider disposal works",
+           "ctx.workspace" not in api["chat"]["contextProviders"]["workspace"])
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ns._get_root_path = lambda: tmpdir
@@ -1826,6 +1988,50 @@ def test_vscode_api() -> None:
              and "echo('vscode')" in open(sample, "r", encoding="utf-8").read())
         _check("workspace.applyEdit empty WorkspaceEdit succeeds",
                api["workspace"]["applyEdit"](WorkspaceEdit()) is True)
+        class _MemFS:
+            def __init__(self):
+                self.files = {"/note.txt": b"hello"}
+
+            def readFile(self, uri):
+                return self.files.get(uri.path, b"")
+
+            def writeFile(self, uri, content):
+                self.files[uri.path] = bytes(content)
+
+            def stat(self, uri):
+                content = self.files.get(uri.path, b"")
+                return {"type": 1, "size": len(content), "mtime": 0}
+
+            def readDirectory(self, uri):
+                prefix = uri.path.rstrip("/") + "/"
+                result = []
+                for path in sorted(self.files):
+                    if not path.startswith(prefix):
+                        continue
+                    name = path[len(prefix):]
+                    if "/" not in name:
+                        result.append((name, 1))
+                return result
+
+            def createDirectory(self, uri):
+                return None
+
+            def delete(self, uri, options=None):
+                self.files.pop(uri.path, None)
+
+            def rename(self, old_uri, new_uri, options=None):
+                self.files[new_uri.path] = self.files.pop(old_uri.path, b"")
+
+        memfs = _MemFS()
+        api["workspace"]["registerFileSystemProvider"]("memfs", memfs)
+        mem_uri = api["Uri"].parse("memfs:/note.txt")
+        mem_doc = api["workspace"]["openTextDocument"](mem_uri)
+        mem_edit = WorkspaceEdit()
+        mem_edit.replace(mem_uri, Range(Position(0, 0), Position(0, 5)), "HELLO")
+        _check("workspace.registerFileSystemProvider supports custom scheme edits",
+               api["workspace"]["applyEdit"](mem_edit) is True
+               and mem_doc.getText() == "HELLO"
+               and api["workspace"]["fs"].readFile(mem_uri) == b"HELLO")
         watcher = api["workspace"]["createFileSystemWatcher"]("*.py", True)
         watcher_events = []
         watcher.onDidCreate(lambda uri: watcher_events.append(uri))
@@ -1943,20 +2149,52 @@ def test_vscode_api() -> None:
                and debug_start[0].type == "python"
                and debug_end[0].exitStatus.get("code") == 0
                and api["debug"]["activeDebugSession"] is None)
+        manifest_desc = ExtensionDescription.from_package_json({
+            "name": "task-debug-manifest",
+            "publisher": "test",
+            "version": "0.0.1",
+            "contributes": {
+                "taskDefinitions": [{"type": "selftest-task", "required": ["command"]}],
+                "debuggers": [{"type": "selftest-debug", "label": "Selftest Debugger"}],
+            },
+        }, tmpdir)
+        host.ext_points.process(manifest_desc)
+        api["tasks"] = ns._build_tasks()
+        api["debug"] = ns._build_debug()
+        _check("manifest task/debug contributions are surfaced",
+               any(item.get("type") == "selftest-task" for item in api["tasks"]["taskDefinitions"])
+               and any(item.get("type") == "selftest-debug" for item in api["debug"]["debuggers"]))
         diagnostics.clear()
         _check("languages diagnostics clear", diagnostics.get("file:///tmp/a.py") == [])
+        ext_changes = []
+        api["extensions"]["onDidChange"](lambda evt: ext_changes.append(evt))
+        dyn_ext_dir = os.path.join(tmpdir, "dynamic-ext")
+        os.makedirs(dyn_ext_dir, exist_ok=True)
+        with open(os.path.join(dyn_ext_dir, "package.json"), "w", encoding="utf-8") as fh:
+            json.dump({"name": "dynamic-ext", "publisher": "test", "version": "0.0.1"}, fh)
+        host.install_from_dir(dyn_ext_dir)
+        _check("extensions API updates on host changes",
+               api["extensions"]["getExtension"]("test.dynamic-ext") is not None
+               and any(item.id == "test.dynamic-ext" for item in api["extensions"]["all"])
+               and len(ext_changes) >= 1)
 
-    panel = api["window"]["createWebviewPanel"]("test", "Test", 1)
-    webview_messages = []
-    panel.webview.on_did_receive_message(lambda msg: webview_messages.append(msg))
-    posted = panel.webview.post_message({"hello": "webview"})
-    _check("webview.post_message dispatches to listeners",
-           posted is True and webview_messages == [{"hello": "webview"}])
-    webview_messages_2 = []
-    panel.webview.onDidReceiveMessage(lambda msg: webview_messages_2.append(msg))
-    posted_2 = panel.webview.postMessage({"hello": "camel"})
-    _check("webview camelCase aliases work",
-           posted_2 is True and webview_messages_2 == [{"hello": "camel"}])
+        panel = api["window"]["createWebviewPanel"]("test", "Test", 1)
+        panel.webview.html = "<div>panel-html</div>"
+        webview_messages = []
+        panel.webview.on_did_receive_message(lambda msg: webview_messages.append(msg))
+        posted = panel.webview.post_message({"hello": "webview"})
+        _check("webview.post_message dispatches to listeners",
+            posted is True and webview_messages == [{"hello": "webview"}])
+        webview_messages_2 = []
+        panel.webview.onDidReceiveMessage(lambda msg: webview_messages_2.append(msg))
+        posted_2 = panel.webview.postMessage({"hello": "camel"})
+        _check("webview camelCase aliases work",
+            posted_2 is True and webview_messages_2 == [{"hello": "camel"}])
+        delivered = ns.deliver_webview_message("test", {"from": "ui"})
+        _check("webview panel routes UI messages and HTML through namespace",
+            delivered is True
+            and webview_messages_2[-1] == {"from": "ui"}
+            and ns.get_webview_html("test") == "<div>panel-html</div>")
     tree_provider = object()
     tree_view = api["window"]["createTreeView"](
         "selftest.tree", treeDataProvider=tree_provider)
@@ -2069,6 +2307,10 @@ def test_vscode_api() -> None:
     # MCP and ignored file APIs exist
     _check("lm.registerMcpServerDefinitionProvider", "registerMcpServerDefinitionProvider" in api["lm"])
     _check("lm.fileIsIgnored", callable(api["lm"]["fileIsIgnored"]))
+    api["lm"]["registerMcpServerDefinitionProvider"]("mcp.selftest", object())
+    _check("lm MCP providers stay separate from invocable tools",
+           "mcp.selftest" in api["lm"]["mcpServerDefinitionProviders"]
+           and all(not item.get("name", "").startswith("mcp:") for item in api["lm"]["getTools"]()))
 
     # chat context providers
     _check("chat.registerChatWorkspaceContextProvider",
@@ -2095,12 +2337,27 @@ def test_vscode_api() -> None:
                     "github-test", "gh-create", "GitHub Test", scopes=scopes or [])
         api["authentication"]["registerAuthenticationProvider"](
             "github-test", "GitHub Test", _AuthProvider())
+        class _SessionProvider(AuthenticationProviderBase):
+            def get_sessions(self, scopes=None, options=None):
+                return [AuthenticationSession(
+                    id="cached-session",
+                    access_token="cached-token",
+                    account={"id": "cached", "label": "Cached"},
+                    scopes=scopes or [],
+                )]
+        api["authentication"]["registerAuthenticationProvider"](
+            "cached-test", "Cached Test", _SessionProvider())
         created_auth_session = api["authentication"]["getSession"](
             "github-test", ["repo"], {"createIfNone": True})
         auth_session = api["authentication"]["getSession"](
             "github", ["read:user"], {})
+        cached_auth_session = api["authentication"]["getSession"](
+            "cached-test", ["read:user"], {})
         _check("authentication.getSession reads AuthService sessions",
                auth_session is not None and auth_session.accessToken == "gh-test")
+        _check("authentication.getSession reads registered provider sessions",
+               cached_auth_session is not None
+               and cached_auth_session.accessToken == "cached-token")
         _check("authentication provider createIfNone emits session event",
                created_auth_session is not None
                and created_auth_session.accessToken == "gh-create"
@@ -2423,6 +2680,8 @@ def test_auth() -> None:
 def test_claude_proxy() -> None:
     print("── Claude Proxy ──")
     from ai_editor.claude_proxy import ClaudeProxy
+    from ai_editor.claude_proxy import _ProxyHandler
+    from ai_editor.llm_engine import ToolCall
 
     proxy = ClaudeProxy()
     _check("not running", not proxy.is_running)
@@ -2444,6 +2703,29 @@ def test_claude_proxy() -> None:
         _check("health endpoint", data.get("status") == "ok")
     except Exception as e:
         _check("health endpoint", False, str(e))
+
+    tool_schema = _ProxyHandler._tools_schema([
+        {"name": "readFile", "description": "Read", "input_schema": {"type": "object", "properties": {}}}
+    ])
+    converted_msgs = _ProxyHandler._anthropic_messages_to_engine(
+        "system text",
+        [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "done"},
+            ],
+        }],
+    )
+    response_blocks = _ProxyHandler._anthropic_content_from_response(type("Resp", (), {
+        "content": "done",
+        "tool_calls": [ToolCall(id="tool-2", name="writeFile", arguments='{"path":"a.txt"}')],
+    })())
+    _check("claude proxy converts tool schemas and messages",
+           tool_schema and tool_schema[0].get("function", {}).get("name") == "readFile"
+           and converted_msgs[0].get("role") == "system"
+           and any(msg.get("role") == "tool" for msg in converted_msgs)
+           and any(block.get("type") == "tool_use" for block in response_blocks))
 
     proxy.stop()
     _check("stopped", not proxy.is_running)
@@ -2494,6 +2776,9 @@ def test_agents() -> None:
         # Cannot delete builtin
         r = reg.delete_custom("code-reviewer")
         _check("cant delete builtin", r.get("ok") is False)
+
+        r = reg.save_custom(AgentDef(id="../escape", name="Bad"), workspace_root=tmpdir)
+        _check("agent save blocks path traversal", r.get("ok") is False)
 
         # Prompt section
         section = reg.to_prompt_section()
@@ -2553,6 +2838,9 @@ def test_workflows() -> None:
         # Cannot delete builtin
         r = reg.delete_custom("review-and-fix")
         _check("cant delete builtin wf", r.get("ok") is False)
+
+        r = reg.save_custom(WorkflowDef(id="../escape", name="Bad"), workspace_root=tmpdir)
+        _check("workflow save blocks path traversal", r.get("ok") is False)
 
         # Prompt section
         section = reg.to_prompt_section()

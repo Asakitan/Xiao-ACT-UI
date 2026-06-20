@@ -38,6 +38,9 @@ class AIEditorBridge:
         self._engine: Optional[LLMEngine] = None
         self._registry: Optional[ToolRegistry] = None
         self._controller: Optional[ChatController] = None
+        self._pending_confirm: Dict[str, threading.Event] = {}
+        self._confirm_results: Dict[str, bool] = {}
+        self._confirmation_timeout = 10.0
 
     def _ensure_engine(self) -> None:
         if self._controller is not None:
@@ -140,6 +143,7 @@ class AIEditorBridge:
             "ai_editor_get_model_info": self._cmd_get_model_info,
             "ai_editor_get_mode": self._cmd_get_mode,
             "ai_editor_set_mode": self._cmd_set_mode,
+            "ai_editor_confirm_tool": self._cmd_confirm_tool,
         }
         handler = handlers.get(name)
         if handler:
@@ -159,6 +163,7 @@ class AIEditorBridge:
         }
 
     def _cmd_save_config(self, payload: Dict) -> Dict:
+        from ai_editor.app import _merge_ai_editor_config
         config_patch = {
             "provider": payload.get("provider", "openai"),
             "api_key": payload.get("api_key", ""),
@@ -168,23 +173,25 @@ class AIEditorBridge:
             "max_tokens": payload.get("max_tokens", 4096),
             "system_prompt": payload.get("system_prompt", ""),
         }
-        warning = ""
+        settings = getattr(self._gui_ref, 'settings', None)
+        merged = _merge_ai_editor_config({}, config_patch)
+        if settings:
+            merged = _merge_ai_editor_config(settings.get("ai_editor", {}) or {}, config_patch)
+        persist_error = ""
         try:
             merged = self._save_ai_settings_patch(config_patch)
         except Exception as exc:
             logger.warning("Failed to save AI Editor bridge config: %s", exc)
-            merged = config_patch
-            warning = str(exc)
+            persist_error = str(exc)
         if self._engine:
             self._engine.config = ProviderConfig(**{
                 k: v for k, v in merged.items()
                 if k in ProviderConfig.__dataclass_fields__
             })
         self._refresh_system_prompt()
-        result = {"ok": True}
-        if warning:
-            result["warning"] = warning
-        return result
+        if persist_error:
+            return {"error": persist_error, "applied": True}
+        return {"ok": True}
 
     def _cmd_send(self, payload: Dict) -> Dict:
         text = payload.get("text", "").strip()
@@ -412,6 +419,18 @@ class AIEditorBridge:
         self._refresh_system_prompt(requested)
         return {"ok": True, "mode": requested}
 
+    def _cmd_confirm_tool(self, payload: Dict) -> Dict:
+        call_id = str(payload.get("id") or "").strip()
+        if not call_id:
+            return {"error": "Missing tool confirmation id"}
+        evt = self._pending_confirm.pop(call_id, None)
+        if evt is None and call_id not in self._confirm_results:
+            return {"error": "No pending confirmation"}
+        self._confirm_results[call_id] = bool(payload.get("allowed", False))
+        if evt is not None:
+            evt.set()
+        return {"ok": True}
+
     # ── Event emitters (called from background thread) ──
 
     def _on_stream_delta(self, msg: ChatMessage, text: str) -> None:
@@ -440,8 +459,17 @@ class AIEditorBridge:
         self._emit("ai_editor_tool_end", {"id": call_id, "result": result, "state": state})
 
     def _on_tool_confirm(self, call_id: str, name: str, args: str) -> bool:
-        self._emit("ai_editor_tool_confirm", {"id": call_id, "name": name, "arguments": args})
-        return True
+        evt = threading.Event()
+        self._pending_confirm[call_id] = evt
+        self._confirm_results[call_id] = False
+        self._emit("ai_editor_tool_confirm", {
+            "id": call_id,
+            "name": name,
+            "arguments": args,
+        })
+        evt.wait(timeout=self._confirmation_timeout)
+        self._pending_confirm.pop(call_id, None)
+        return bool(self._confirm_results.pop(call_id, False))
 
     def _on_tool_progress(self, call_id: str, name: str, progress: float) -> None:
         self._emit("ai_editor_tool_progress", {"id": call_id, "name": name, "progress": progress})

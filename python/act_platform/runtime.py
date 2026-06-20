@@ -159,7 +159,7 @@ def _dispatch_trigger_action(owner: Any, name: str, *args: Any, **kwargs: Any) -
     """Forward a game-specific trigger action to the plugin's runtime bridge.
 
     The platform deliberately owns no trigger engine logic — every
-    ``act_trigger_*`` function is a thin shim that dispatches to the
+    ``act_trigger_*`` function dispatches to the
     plugin-contributed handler registered via ``register_extension_runtime``.
     If no game plugin is loaded, returns a generic "unavailable" payload so
     upstream UIs degrade gracefully.
@@ -261,7 +261,7 @@ def _extension_runtime_value(owner: Any, name: str, default: Any = None,
 
 # Note: plugins own their runtime engine creation and expose it via the
 # extension runtime provider. Platform code that needs an engine goes
-# through ``act_trigger_*`` dispatch shims only.
+# through ``act_trigger_*`` dispatch functions only.
 
 
 def _owner_snapshot_provider(owner: Any) -> Callable[[], Mapping[str, Any]]:
@@ -2060,7 +2060,7 @@ def _resolve_name(kind: str, value: Any) -> str:
 
     Returns "" when no game plugin is loaded (callers fall back to bare ids).
     The plugin runtime provider's name resolver is the registered
-    handler; it is a thin shim over its own tablekit/tables.
+    handler; the plugin owns its own tablekit/tables.
     """
     if value is None or not str(value or "").strip():
         return ""

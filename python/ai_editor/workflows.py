@@ -19,6 +19,15 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _validate_workflow_id(workflow_id: str) -> str:
+    normalized = str(workflow_id or "").strip()
+    if not normalized:
+        raise ValueError("Workflow id is required")
+    if normalized != os.path.basename(normalized) or any(sep in normalized for sep in ("/", "\\")) or ".." in normalized:
+        raise ValueError("Workflow id must be a simple file-safe identifier")
+    return normalized
+
+
 @dataclass
 class WorkflowStep:
     agent: str = "default"
@@ -197,25 +206,33 @@ class WorkflowRegistry:
     def save_custom(self, wf: WorkflowDef,
                     workspace_root: str = "",
                     scope: str = "workspace") -> Dict[str, Any]:
-        if not str(wf.id).strip():
-            return {"ok": False, "error": "Workflow id is required"}
+        try:
+            workflow_id = _validate_workflow_id(wf.id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         if not str(wf.name).strip():
             return {"ok": False, "error": "Workflow name is required"}
         target_dir = self._scope_dir(scope, workspace_root)
-        os.makedirs(target_dir, exist_ok=True)
-        fpath = os.path.join(target_dir, f"{wf.id}.json")
-        with open(fpath, "w", encoding="utf-8") as f:
-            json.dump(wf.to_dict(), f, ensure_ascii=False, indent=2)
+        wf.id = workflow_id
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            fpath = os.path.join(target_dir, f"{workflow_id}.json")
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(wf.to_dict(), f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
         wf.builtin = False
         wf._scope = scope  # type: ignore[attr-defined]
-        self._workflows[wf.id] = wf
+        self._workflows[workflow_id] = wf
         self._bump_version()
         return {"ok": True, "path": fpath, "scope": scope}
 
     def delete_custom(self, wf_id: str,
                       workspace_root: str = "") -> Dict[str, Any]:
-        if not str(wf_id).strip():
-            return {"ok": False, "error": "Workflow id is required"}
+        try:
+            wf_id = _validate_workflow_id(wf_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         w = self._workflows.get(wf_id)
         if w and w.builtin:
             return {"ok": False, "error": "Cannot delete built-in workflow"}

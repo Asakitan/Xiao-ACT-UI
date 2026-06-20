@@ -1038,7 +1038,7 @@ pre.code-block { overflow:visible; }
     <!-- Premium capabilities -->
     <div class="sb-view" id="sb-premium" style="display:none">
       <div class="sb-header"><span data-i18n="premium">Premium</span> <span class="spacer"></span>
-        <span class="sb-action" onclick="loadPremiumGuide()" data-i18n-title="refresh" title="Refresh">↻</span>
+        <span class="sb-action" onclick="refreshPremiumGuide()" data-i18n-title="refresh" title="Refresh">↻</span>
       </div>
       <div class="sb-section" id="premium-content" style="padding:8px 14px">
         <div style="color:var(--fg-dim);font-size:12px" data-i18n="loading">Loading...</div>
@@ -1555,6 +1555,18 @@ async function call(method,...args){
   if(!a){console.warn('[call] pywebview.api not ready for',method);return null}
   if(!a[method]){console.warn('[call] method not found:',method);return null}
   try{return await a[method](...args)}catch(e){console.error('[call]',method,e);return null}
+}
+function callSucceeded(result){
+  if(result==null)return false;
+  if(typeof result==='object')return !result.error&&result.ok!==false;
+  return true;
+}
+function callFailedMessage(result,fallback){
+  if(result&&typeof result==='object'){
+    if(typeof result.error==='string'&&result.error.trim())return result.error.trim();
+    if(result.ok===false&&typeof result.message==='string'&&result.message.trim())return result.message.trim();
+  }
+  return fallback||'Request failed';
 }
 
 // ── Event handler (called from Python) ──
@@ -2741,12 +2753,19 @@ async function doStop(){
   document.querySelectorAll('.confirm-bar').forEach(el=>{el.remove()});
   setStatus(t('ready'));
 }
-async function newChat(){await call('new_chat');$('chat-messages').innerHTML='';totalTokens=0;
+async function newChat(){
+  const r=await call('new_chat');
+  if(!callSucceeded(r)){showToast('New chat failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+  $('chat-messages').innerHTML='';totalTokens=0;
   mainToolNames=Object.create(null);
   updateContextUsage(0);
   appendSystem(t('new_chat'))}
 async function clearChat(){newChat()}
-async function exportChat(){const d=await call('export_chat');if(d){navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus(t('exported'))}}
+async function exportChat(){
+  const d=await call('export_chat');
+  if(d==null||(typeof d==='object'&&d.error)){showToast('Export failed: '+callFailedMessage(d,'backend unavailable'),'error',2500);return}
+  navigator.clipboard.writeText(typeof d==='string'?d:JSON.stringify(d,null,2));setStatus(t('exported'))
+}
 window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearChat=clearChat;window.exportChat=exportChat;
 
 // ── Slash commands ──
@@ -2933,9 +2952,10 @@ document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>i.addEventListener(
 }));
 
 let _premiumLoaded=false;
-async function loadPremiumGuide(){
-  if(_premiumLoaded)return;
+async function loadPremiumGuide(force){
+  if(_premiumLoaded&&!force)return;
   const el=$('premium-content');
+  if(el)el.innerHTML='<div style="color:var(--fg-dim);font-size:12px;padding:8px 0">Loading…</div>';
   try{
     const r=await call('get_premium_guide');
     if(!r||!r.paid){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px;padding:8px 0">'+esc(t('license_required'))+'</div>';return}
@@ -2964,6 +2984,7 @@ async function loadPremiumGuide(){
     el.innerHTML=html;_premiumLoaded=true
   }catch(e){el.innerHTML='<div style="color:var(--fg-dim);font-size:12px">'+esc(String(e))+'</div>'}
 }
+function refreshPremiumGuide(){_premiumLoaded=false;return loadPremiumGuide(true)}
 
 function renderToolsSidebar(toolList){
   const list=$('tools-list');list.innerHTML='';let lastCat='';
@@ -2992,7 +3013,7 @@ async function refreshHistory(){
     const meta=document.createElement('span');meta.className='meta';meta.textContent=e.message_count+'msg';
     const del=document.createElement('span');del.textContent='✕';del.title='Delete';
     del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44);flex-shrink:0';
-    del.onclick=ev=>{ev.stopPropagation();call('delete_history',e.id).then(()=>refreshHistory())};
+    del.onclick=ev=>{ev.stopPropagation();call('delete_history',e.id).then(res=>{if(callSucceeded(res))refreshHistory();else showToast('Delete failed: '+callFailedMessage(res,'backend unavailable'),'error',2500)})};
     item.appendChild(label);item.appendChild(meta);item.appendChild(del);
     item.onclick=()=>loadHistoryConv(e.id);
     list.appendChild(item);
@@ -3154,7 +3175,7 @@ async function saveUserInstructions(){
   const text=$('inst-user').value;
   const r=await call('save_user_instructions',text);
   if(r&&r.ok){$('inst-user-status').textContent='✓ Saved';setTimeout(()=>{$('inst-user-status').textContent=''},2000);refreshInstructions()}
-  else{$('inst-user-status').textContent='✗ Failed'}
+  else{$('inst-user-status').textContent='✗ '+callFailedMessage(r,'Failed')}
 }
 function createInstructionFile(){
   const name=prompt('Instruction file name (without .md):');if(!name)return;
@@ -3172,12 +3193,16 @@ function editInstructionFile(name,content){
   modal.onclick=e=>{if(e.target===modal)modal.remove()};
   document.getElementById('inst-edit-save').onclick=async()=>{
     const c=document.getElementById('inst-edit-content').value;
-    await call('save_instruction_file',name,c);modal.remove();refreshInstructions();
+    const r=await call('save_instruction_file',name,c);
+    if(!callSucceeded(r)){showToast('Save failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+    modal.remove();refreshInstructions();
   };
 }
 async function deleteInstructionFile(name){
   if(!confirm('Delete instruction file "'+name+'"?'))return;
-  await call('delete_instruction_file',name);refreshInstructions();
+  const r=await call('delete_instruction_file',name);
+  if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+  refreshInstructions();
 }
 window.refreshInstructions=refreshInstructions;window.saveUserInstructions=saveUserInstructions;
 window.createInstructionFile=createInstructionFile;
@@ -3238,12 +3263,15 @@ async function refreshAgents(){
 async function activateAgent(id){
   const r=await call('set_active_agent',id);
   if(r&&r.ok){appendSystem('Agent activated: '+(r.agent&&r.agent.name||id));refreshAgents()}
+  else{showToast('Activate failed: '+callFailedMessage(r,'backend unavailable'),'error',2500)}
 }
 async function clearAgent(){
-  await call('clear_active_agent');activeAgentId='';refreshAgents();appendSystem('Agent deactivated');}
+  const r=await call('clear_active_agent');
+  if(!callSucceeded(r)){showToast('Deactivate failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+  activeAgentId='';refreshAgents();appendSystem('Agent deactivated');}
 window.clearAgent=clearAgent;
-async function deleteAgent(id){if(!confirm('Delete agent "'+id+'"?'))return;await call('delete_agent',id);refreshAgents()}
-async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return;await call('delete_workflow',id);refreshAgents()}
+async function deleteAgent(id){if(!confirm('Delete agent "'+id+'"?'))return;const r=await call('delete_agent',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
+async function deleteWorkflow(id){if(!confirm('Delete workflow "'+id+'"?'))return;const r=await call('delete_workflow',id);if(!callSucceeded(r)){showToast('Delete failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}refreshAgents()}
 function promptRunWorkflow(id,name){
   const input=prompt('Input for workflow "'+name+'":');if(!input)return;
   appendSystem('⚡ Running workflow: '+name+'...');
@@ -3281,7 +3309,9 @@ function createAgent(){
       tools:readListValue('ag-tools',true),_scope:$('ag-scope').value};
     if(data.tools.length===0)delete data.tools;
     if(!data.id||!data.name)return;
-    await call('save_agent',data);modal.remove();refreshAgents();
+    const r=await call('save_agent',data);
+    if(!callSucceeded(r)){showToast('Save failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+    modal.remove();refreshAgents();
   };
 }
 function createWorkflow(){
@@ -3305,7 +3335,9 @@ function createWorkflow(){
     const data={id:$('wf-id').value.trim(),name:$('wf-name').value.trim(),icon:$('wf-icon').value,
       description:$('wf-desc').value,steps:steps,_scope:$('wf-scope').value};
     if(!data.id||!data.name)return;
-    await call('save_workflow',data);modal.remove();refreshAgents();
+    const r=await call('save_workflow',data);
+    if(!callSucceeded(r)){showToast('Save failed: '+callFailedMessage(r,'backend unavailable'),'error',2500);return}
+    modal.remove();refreshAgents();
   };
 }
 window.refreshAgents=refreshAgents;window.createAgent=createAgent;window.createWorkflow=createWorkflow;
@@ -3535,7 +3567,7 @@ function _buildChatProviderPanel(panel,p){
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(pid)}});
 }
 // ── Webview panel injection (plugin-provided panels) ──
-function _injectWebviewHtml(container,viewId,html){
+function _injectWebviewHtml(container,viewId,html,initialState){
   // Clear existing content
   container.innerHTML='';
   // Create sandboxed iframe for the webview content
@@ -3545,12 +3577,14 @@ function _injectWebviewHtml(container,viewId,html){
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
   iframe.setAttribute('sandbox','allow-scripts allow-same-origin');
   container.appendChild(iframe);
+  const initialStateJson=JSON.stringify(initialState===undefined?null:initialState).replace(/<\//g,'<\\/');
   // Build bridge script that defines acquireVsCodeApi for the extension
   const bridgeScript='<script>'
     +'(function(){'
+    +'var _state='+initialStateJson+';'
     +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',message:msg},"*")}catch(e){}},'
-    +'setState:function(s){try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',state:s},"*")}catch(e){}},'
-    +'getState:function(){return undefined}};'
+    +'setState:function(s){_state=s;try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',state:s},"*")}catch(e){}return s;},'
+    +'getState:function(){return _state}};'
     +'window.acquireVsCodeApi=function(){return _vscodeApi};'
     +'})();'
     +'<\/script>';
@@ -3560,10 +3594,19 @@ function _injectWebviewHtml(container,viewId,html){
 }
 // Listen for postMessage from webview iframes
 window.addEventListener('message',function(e){
-  if(!e.data||e.data.type!=='webview-message')return;
-  const viewId=e.data.viewId,msg=e.data.message;
-  if(viewId&&msg&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
-    window.pywebview.api.webview_post_message(viewId,msg);
+  if(!e.data)return;
+  if(e.data.type==='webview-message'){
+    const viewId=e.data.viewId,msg=e.data.message;
+    if(viewId&&msg&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
+      window.pywebview.api.webview_post_message(viewId,msg);
+    }
+    return;
+  }
+  if(e.data.type==='webview-set-state'){
+    const viewId=e.data.viewId;
+    if(viewId&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_set_state){
+      window.pywebview.api.webview_set_state(viewId,e.data.state);
+    }
   }
 });
 async function renderProviderTabs(){
@@ -3601,7 +3644,7 @@ async function renderProviderTabs(){
       // Request the extension-provided webview HTML
       (async()=>{
         const wv=await call('get_provider_webview',p.id);
-        if(wv&&wv.html){_injectWebviewHtml(panel,p.id,wv.html)}
+        if(wv&&wv.html){_injectWebviewHtml(panel,wv.view_id||('provider.'+p.id),wv.html,wv.state)}
         else{_buildChatProviderPanel(panel,p);placeholder.remove()}
       })();
     }else{
@@ -3635,8 +3678,18 @@ async function providerSend(pid){
   let r;try{r=await call('provider_send',pid,text)}catch(e){r={error:String(e)}}
   if(r&&r.error){appendProviderError(pid,r.error);setProviderRunning(pid,false,r.available===false?t('provider_status_unavailable'):t('provider_status_error'),'error');setStatus(providerDisplayName(pid)+': '+(r.available===false?t('provider_status_unavailable'):t('provider_status_error')))}
 }
-async function providerCancel(pid){updateProviderStatus(pid,t('provider_status_stopping'),'running');await call('provider_cancel',pid);setProviderRunning(pid,false,t('provider_status_ready'),'')}
-async function providerNewChat(pid){const r=await call('provider_new_chat',pid);const p=providerDefs[pid];if(r&&r.available===false&&p){p.available=false;p.unavailable_reason=r.unavailable_reason||p.unavailable_reason}providerToolNames[String(pid)]=Object.create(null);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);const unavailable=p&&p.available===false;setProviderRunning(pid,false,unavailable?t('provider_status_unavailable'):t('provider_status_ready'),unavailable?'error':'');updateProviderEmpty(pid);setStatus(providerDisplayName(pid)+': '+(unavailable?t('provider_status_unavailable'):t('provider_status_new_chat')))}
+async function providerCancel(pid){
+  updateProviderStatus(pid,t('provider_status_stopping'),'running');
+  const r=await call('provider_cancel',pid);
+  if(!callSucceeded(r)){appendProviderError(pid,callFailedMessage(r,'Cancel failed'));updateProviderStatus(pid,t('provider_status_error'),'error');return}
+  setProviderRunning(pid,false,t('provider_status_ready'),'')
+}
+async function providerNewChat(pid){
+  const r=await call('provider_new_chat',pid);const p=providerDefs[pid];
+  if(!callSucceeded(r)){appendProviderError(pid,callFailedMessage(r,'New chat failed'));updateProviderStatus(pid,t('provider_status_error'),'error');return}
+  if(r&&r.available===false&&p){p.available=false;p.unavailable_reason=r.unavailable_reason||p.unavailable_reason}
+  providerToolNames[String(pid)]=Object.create(null);const mc=providerRefs(pid).messages;if(mc)mc.innerHTML='';updateProviderContext(pid,0);const unavailable=p&&p.available===false;setProviderRunning(pid,false,unavailable?t('provider_status_unavailable'):t('provider_status_ready'),unavailable?'error':'');updateProviderEmpty(pid);setStatus(providerDisplayName(pid)+': '+(unavailable?t('provider_status_unavailable'):t('provider_status_new_chat')))
+}
 window.providerSend=providerSend;window.providerCancel=providerCancel;window.providerNewChat=providerNewChat;
 
 // Provider streaming events
@@ -4144,8 +4197,22 @@ async function saveSettings(){
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   const newMode=normalizeMode($('s-mode').value);
   config.mode=newMode;
-  if(newMode!==currentMode){await call('set_mode',newMode);currentMode=newMode;updateModeUI()}
-  syncUI();await call('save_config',config);closeSettings();
+  if(newMode!==currentMode){
+    const modeResult=await call('set_mode',newMode);
+    if(!(modeResult&&modeResult.ok)){
+      showToast('Mode update failed: '+callFailedMessage(modeResult,'backend unavailable'),'error',3000);
+      return;
+    }
+    currentMode=newMode;updateModeUI()
+  }
+  syncUI();
+  const saveResult=await call('save_config',config);
+  if(!(saveResult&&saveResult.ok)){
+    showToast('Save failed: '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
+    if(saveResult&&saveResult.applied)showToast('Current session updated, but settings were not persisted','warning',3600);
+    return;
+  }
+  closeSettings();
   renderProviderTabs();
 }
 window.saveSettings=saveSettings;
@@ -5519,6 +5586,7 @@ async function saveFile(){
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
+    if(r==null){showToast('Save failed: backend unavailable','error');return}
     if(r){try{const d=JSON.parse(r);if(d.error){showToast('Save failed: '+d.error,'error');return}}catch(e){}}
     editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     showToast('Saved: '+tab.filePath,'success',1500);

@@ -34,6 +34,99 @@ logger = logging.getLogger(__name__)
 class _ProxyHandler(BaseHTTPRequestHandler):
     server: "_ProxyServer"
 
+    @staticmethod
+    def _stringify_content(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        parts.append(str(item.get("text") or ""))
+                    else:
+                        parts.append(json.dumps(item, ensure_ascii=False))
+                else:
+                    parts.append(str(item))
+            return "\n".join(part for part in parts if part)
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value or "")
+
+    @classmethod
+    def _anthropic_messages_to_engine(
+            cls, system: Any, messages: Any) -> list[Dict[str, Any]]:
+        api_messages: list[Dict[str, Any]] = []
+        system_text = cls._stringify_content(system).strip()
+        if system_text:
+            api_messages.append({"role": "system", "content": system_text})
+        for message in messages if isinstance(messages, list) else []:
+            role = str(message.get("role") or "user") if isinstance(message, dict) else "user"
+            content = message.get("content", "") if isinstance(message, dict) else message
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                tool_calls: list[Dict[str, Any]] = []
+                tool_results: list[Dict[str, Any]] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        text_parts.append(str(block))
+                        continue
+                    block_type = str(block.get("type") or "")
+                    if block_type == "text":
+                        text_parts.append(str(block.get("text") or ""))
+                    elif block_type == "tool_use":
+                        tool_calls.append({
+                            "id": str(block.get("id") or ""),
+                            "type": "function",
+                            "function": {
+                                "name": str(block.get("name") or ""),
+                                "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                            },
+                        })
+                    elif block_type == "tool_result":
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": str(block.get("tool_use_id") or ""),
+                            "content": cls._stringify_content(block.get("content", "")),
+                        })
+                text = "\n".join(part for part in text_parts if part)
+                if tool_calls:
+                    api_messages.append({
+                        "role": role,
+                        "content": text or None,
+                        "tool_calls": tool_calls,
+                    })
+                elif text:
+                    api_messages.append({"role": role, "content": text})
+                api_messages.extend(tool_results)
+                continue
+            api_messages.append({"role": role, "content": cls._stringify_content(content)})
+        return api_messages
+
+    @staticmethod
+    def _tool_input(arguments: str) -> Any:
+        text = str(arguments or "").strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"_raw_arguments": text}
+
+    @classmethod
+    def _anthropic_content_from_response(cls, resp: Any) -> list[Dict[str, Any]]:
+        blocks: list[Dict[str, Any]] = []
+        if getattr(resp, "content", ""):
+            blocks.append({"type": "text", "text": resp.content})
+        for tc in getattr(resp, "tool_calls", []) or []:
+            blocks.append({
+                "type": "tool_use",
+                "id": tc.id or f"toolu_{secrets.token_hex(8)}",
+                "name": tc.name,
+                "input": cls._tool_input(tc.arguments),
+            })
+        return blocks
+
     def do_GET(self) -> None:
         if self.path == "/health":
             self._json_response(200, {"status": "ok"})
@@ -76,14 +169,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         stream = body.get("stream", False)
         tools = body.get("tools")
 
-        api_messages = []
-        if system:
-            api_messages.append({"role": "system", "content": system})
-        for m in messages:
-            api_messages.append({
-                "role": m.get("role", "user"),
-                "content": m.get("content", ""),
-            })
+        api_messages = self._anthropic_messages_to_engine(system, messages)
 
         if stream:
             self._handle_stream(api_messages, tools, model, max_tokens)
@@ -106,6 +192,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         "usage": {"input_tokens": 0, "output_tokens": 0}},
         })
 
+        text_block_open = True
         self._sse("content_block_start", {
             "type": "content_block_start", "index": 0,
             "content_block": {"type": "text", "text": ""},
@@ -126,12 +213,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 on_delta=on_delta,
             )
 
-            self._sse("content_block_stop", {
-                "type": "content_block_stop", "index": 0})
+            if text_block_open:
+                self._sse("content_block_stop", {
+                    "type": "content_block_stop", "index": 0})
+                text_block_open = False
+
+            for index, tc in enumerate(getattr(resp, "tool_calls", []) or [], start=1):
+                self._sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tc.id or f"toolu_{secrets.token_hex(8)}",
+                        "name": tc.name,
+                        "input": self._tool_input(tc.arguments),
+                    },
+                })
+                self._sse("content_block_stop", {
+                    "type": "content_block_stop", "index": index})
 
             self._sse("message_delta", {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn"},
+                "delta": {"stop_reason": "tool_use" if resp.tool_calls else "end_turn"},
                 "usage": resp.usage,
             })
             self._sse("message_stop", {"type": "message_stop"})
@@ -152,8 +255,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 "id": f"msg_{secrets.token_hex(12)}",
                 "type": "message", "role": "assistant",
                 "model": model,
-                "content": [{"type": "text", "text": resp.content or ""}],
-                "stop_reason": resp.finish_reason or "end_turn",
+                "content": self._anthropic_content_from_response(resp),
+                "stop_reason": "tool_use" if resp.tool_calls else (resp.finish_reason or "end_turn"),
                 "usage": resp.usage,
             })
         except Exception as exc:
@@ -176,7 +279,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def _tools_schema(tools: Any) -> Optional[list[Dict[str, Any]]]:
         if not tools:
             return None
-        return [{"type": "function", "function": t} for t in tools]
+        converted: list[Dict[str, Any]] = []
+        for tool in tools if isinstance(tools, list) else []:
+            if not isinstance(tool, dict):
+                continue
+            if isinstance(tool.get("function"), dict):
+                converted.append({"type": "function", "function": tool["function"]})
+                continue
+            converted.append({
+                "type": "function",
+                "function": {
+                    "name": str(tool.get("name") or ""),
+                    "description": str(tool.get("description") or ""),
+                    "parameters": tool.get("input_schema") or tool.get("parameters") or {"type": "object", "properties": {}},
+                },
+            })
+        return converted or None
 
     def log_message(self, format, *args) -> None:
         logger.debug("ClaudeProxy %s", format % args)

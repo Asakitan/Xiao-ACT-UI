@@ -388,7 +388,7 @@ class EngineAccess:
                 bridge = None
             if bridge is not None:
                 return bridge
-            # else fall through to the flat alias lookup (covers memory-only / stubs)
+            # else fall through to the flat alias lookup (covers memory-only adapters)
         try:
             value = getattr(owner, str(name))
         except Exception:

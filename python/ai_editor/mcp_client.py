@@ -63,13 +63,17 @@ def _rpc_error_result(message: str, code: int = -32000,
 
 
 def _extract_tool_call_result(result: Any) -> str:
+    if result is None:
+        return json.dumps({"error": "MCP tool returned no result"}, ensure_ascii=False)
     if isinstance(result, dict):
         content = result.get("content", [])
         texts = [c.get("text", "") for c in content if c.get("type") == "text"]
         if texts:
             return "\n".join(texts)
-        return json.dumps(result, ensure_ascii=False)
-    return str(result)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    if isinstance(result, str):
+        return result
+    return json.dumps(result, ensure_ascii=False, default=str)
 
 
 def _read_rpc_message_from_stream(stream: Any) -> Optional[bytes]:
@@ -358,8 +362,9 @@ class McpStdioClient:
                 if isinstance(line, bytes):
                     line = line.decode("utf-8", errors="replace")
                 self._log_buf.append(line.rstrip("\n\r"))
-        except Exception:
-            pass
+        except Exception as exc:
+            self._last_error = f"MCP stderr reader failed: {exc}"
+            self._log_buf.append(self._last_error)
 
     def get_logs(self) -> List[str]:
         """Return recent stderr lines."""
@@ -462,10 +467,24 @@ class McpSseClient:
         body = {"jsonrpc": "2.0", "id": 1, "method": method}
         if params:
             body["params"] = params
-        resp = self._client().post(self._session_url or self.config.url,
-                                   json=body, headers=self.config.headers)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = self._client().post(
+                self._session_url or self.config.url,
+                json=body,
+                headers=self.config.headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return _rpc_error_result(
+                f"MCP SSE request failed: {exc}",
+                data={"method": method, "serverId": self.config.id},
+            )
+        if not isinstance(data, dict):
+            return _rpc_error_result(
+                "MCP SSE response was not a JSON object",
+                data={"method": method, "serverId": self.config.id},
+            )
         if "error" in data:
             return {"_rpc_error": data.get("error")}
         return data.get("result")
@@ -550,6 +569,10 @@ class InternalMcpProvider:
             return json.dumps({"error": f"Tool not found: {name}"})
         try:
             result = _invoke_handler(handler, arguments)
+            if result is None:
+                return json.dumps({
+                    "error": f"Internal MCP tool '{name}' returned no result"
+                }, ensure_ascii=False)
             if isinstance(result, str):
                 return result
             return json.dumps(result, ensure_ascii=False, default=str)
