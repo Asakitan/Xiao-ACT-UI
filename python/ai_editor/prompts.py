@@ -24,32 +24,26 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Encrypted premium guide (Engine A/B/C/D documentation)
+# Encrypted premium guide
 # ---------------------------------------------------------------------------
 
 _ENCRYPTED_ENGINE_GUIDE = (
-    "W<%d}RQkcH2F+yhhKuN-YYi)E)o7M_0F4%h=b>N*av}<IhafH_PU9CdE(Hi`Z2f@Le3ck4Y<aMU39h"
-    "FIZ801vp>Hi>kCpf_qum@g0ALE}L07w-%6k-XYmq^NLc0>IRp6QjK*heV#zo1-`zxTjWAQVLIV9AEs"
-    "T?mi+7o7=Z=D2M11{4qygEkKO}FIo_#$QVzY^PSz6YtP$3$ys;2}^#j+s^OwY#x@>JtKcD%iSABjh8"
-    "G{nA{*%=2%;mr`wgcYU`!O2nzciLZ#6JqDZvZ;K-_fnr|~#c+DiuAY~hwX<?Xexi>fxPNhS2-{_cF?"
-    "%F!%i)r*zxkX!X2R(X|98EyQ_Ai@9aWPP1<M<u$fDV$=<MeDF&awByhAV*uwipn$N*$TJmRfY%?A6-"
-    "dw-@UCi?cMa~}HHJLr}3kalHu^Qwk3c87Mh7L?@Nw-G3vmKZmnP#|Rx`G+K0^(;M01(PV)85ssnJV5"
-    "ZHnKR}eVQF3X=*7kPquFnj8c(!lcTut=g4F4fh|{=3465X;QBPR)xlW<qgCpFnszrQb_Qcjc*;;Gey"
-    "nOR=ip;{A#zU+A8V)o(7-kLAfSbBVC44bFVLQ@(Z6dK~>-%?@^0_|o{0F?XJU}&^n#;GvGSl^idgeA"
-    "J$iKQf?lu*j<eSq;o>Ja9L~*!wFw=k}U#*5q;SdKRf-rIcT1~(Yr~U1>L_ZohTS-PY9x37OSz;-5r_"
-    "qcjegdcrnq}~Oixol)(>dNwN-SzCZ1G^Hg{#+s5kL+84W}VZKcvK#QHrd@%%LTPlzt-<YSvbjV5wE;"
-    "APNQ1W5v~&#7jDxPTZE94}x9<vly%XxhD6wzzONqmio0rb0l1wkBQ`}K!0)1Na3w+hCbh(DfXu0;&!"
-    "=b`O+$?m4GI6waAxcpxE6VP#+yrB|^wQ5d@vCJyUWe)|tMT>h-tpFMgA6x}Y+)f|V^6A+Z(|t^wz!d"
-    "!f9RO%{<{VmZQ{^aWtHo&V$A*u8z*mJAjbUTnV{jsW_ii3?$#laI4GZ?iF$TPZ=E5(J8GH2*KnI@nD"
-    "B{#K6g@Wp-QIr=#|f&D$c%W>^uxeAu@KCy?e`sGVoWEQSt_OuDUC8ylZQRbKi?q7m7gETMr4*BKDhQ"
-    "S#KfIqI!N<fv5JbvkayvuF$ty{TIVGg68a7h$p2%=`P&SQOS#c~9ZYC)VaNNwR2(&8{7MuljVic*Nn"
-    "SVXbvoJ^FD2qs`Wg7!w&IYv7^cMT_fK8r>$-1|I%Y;;yHk%tu$OJ(+_$}@<CblmMKj_g`%D)kHSH}z"
-    "w)UL3K~kErb)>$mA|vW(x?TQcmXXqbG;I4>RO4Q$5j;W-RWW=&ks0cd%@bQ5vVGwo?87FI^vDJOysg"
-    "Eq2CmVM(VO3;GcVFhYSkL2R~L8wOx{BKE~(Hkczc+6+eLO#XemMuHq^(2>pRe?Fr+{P<VQ{d;RJ&D0"
-    "oTOU+V@#0d)Tq`c$mjFOJw4{v0We4+2%7$HPT1~3-CXkjt0C!LpYS7WYc=N$_+LV?{pBvvo@ocI|(@"
-    "bRDy!Df$v0uc9s^;D(cJ;y{EM)i8r4%XNua-uBv?{h#^#p%lH@KYvtzMdE>Tr-#H{cNIne&3{k4wE}"
-    ";Esb(N%8gz;95|hN%tx+T<6UEU&fwl&T0TsyrVMd7Qb&>_nskd0{UkE);1#r6<adfOpFr>I}QnVKki"
-    "l*>BcR-9e+sJv`v`hRJVUhx=?@{P8%&DJa*60Vj2e46n`o+iE9`xklq*"
+    "W(D7ORQma(2F+yhhK1;EQ=EyPHO;i1Kw~*$oIoT5x>N}=hafHlt`_?+E)_-z5<hc8+r)UK%81y*+Etv0"
+    "q(aZhZn@@E#EE%{g2$Kn;zw`PH3pt(&!8FR<2k87e4mD(KG?x13~=|Y+S>NIh!p?pI`KW|#<_&Kvz_k4"
+    "<~L?I_nAa#=-CZl{%K&JoqD=@lCRi`p+4{{Zn&q7IQ{Wu8DWoxeRzj(FVv3E`b?3QUitJW>vdfahPwtY"
+    "Izk_B+DR1+_JhOxU;kseRQV*H@5zf&NqTf!rSLq~m;4w@y3zXgvjn!tnaA(qDVkBAL*8~xs&)P25L!hT"
+    "er`TrP^4e+jTz3RU_GiK3rB_nmu^Y(&Kgp`tF+BvJHMpXuOFG_2#RoP4p%S|ko(BMd%2)8p*_bN0ZLsX"
+    "j{MWi4t3@7qOTNMp(VIaav?^Qea|yp&Y`>afmjJ-4D{E%GGkGBsAO-)nN<vJrcJ}zlDX+9y_KcaJx&*o"
+    "U}yCa61js^sBpF~>?Sh>!>G{IKD)SR?d2SEGu@||V8H4wm9EYJJE)||pc#Kpx?dGl0$;7bV^$q*59#DP"
+    "MGfmN#*KWreA{j&Bm9g*r2A#bIqPDM8rU_rkJm^syrzEEnw|-d&?q!6^JeF4C9eEiAFc}HH6952O$l)5"
+    "9o1%uvn)ywe1TAkdk<od?P<^YPa>OP-TWY~a3EZB4mPN<e%XjSv&3A6@Ww<8l^7qM_*~{+o&8!&a4EG_"
+    "*u2pJ6BxawlZiiLGTS@&3K>;(Dat!&t4%=g5>#2&&$YX&#2ygkjO1Q2pM_eQa7VP~{CdMg8-e4A$~V0f"
+    "S>uz3BPKo^04iJsm6)dQ|7WL?SR4|U#|I0m(SYDyCq9v8V3v1g&u?V~uFbnkCSNtA&Yga@?xh7+YU}Vv"
+    "xT<dcA9|x-5>AJS&CxSTQ80y4cfMq_bLth4<7$aFWqJwknSt-uKU-(3;4pq1AZ;E2_+G2LOVX|T(yikP"
+    "{SIj;bTTHtEBng((s8PaRv_wwwqgbUkNrDTap(sr7m!329Ic!&E{ePpM~3DaXEw368YaXx$G%kMU8UjM"
+    "ye^PaQ5k5&O+%7HX4YQV3Bhmpv(1_^U)Q=Yi%a9fjY!0P;m2ifhivb8^cK@ZUL$4()OoyfXUCb>bP-~+"
+    "w|e`H7o-9&nf*!3;L=rqv~@BRP%yO!m!EoJ3>JsK-%rOV!-xCrhYHvEtoOFOE^j9{loMf$lSCvL#tHg)"
+    "(F^?zgu0Tfqa=4(spYpNv#U6QmTe>l<weehcv#j-^dIj"
 )
 
 _EG_SEED = b"\x4a\x91\xc3\x7f\x28\xe5\xd6\x0b\x73\xfa\x14\x9d\x55\xa2\x68\xbe"
