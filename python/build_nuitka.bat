@@ -67,6 +67,7 @@ python -m nuitka ^
     --nofollow-import-to=license ^
     --nofollow-import-to=mem_probe ^
     --nofollow-import-to=sao_web_panel_common ^
+    --no-deployment-flag=excluded-module-usage ^
     --jobs=8 ^
     stub.py
 if errorlevel 1 (
@@ -115,7 +116,23 @@ xcopy /e /i /y /q "%DIST%\nuitka_stub\stub.dist\*" "%RELEASE%\" >nul
 if exist "%RELEASE%\stub.exe" ren "%RELEASE%\stub.exe" XiaoACTUI.exe
 
 :: Move DLLs and stdlib .pyd into runtime/
-for %%F in ("%RELEASE%\*.dll" "%RELEASE%\*.pyd") do (
+:: Python runtime DLLs (python311/xactrt11) must be in BOTH root AND runtime/
+:: because .pyd modules in runtime/ need them in their DLL search path
+for %%F in ("%RELEASE%\*.dll") do (
+    set "FN=%%~nxF"
+    if /i "!FN!"=="python311.dll" (
+        copy /y "%%~F" "%RT%\" >nul
+    ) else if /i "!FN!"=="python3.dll" (
+        copy /y "%%~F" "%RT%\" >nul
+    ) else if /i "!FN!"=="xactrt11.dll" (
+        copy /y "%%~F" "%RT%\" >nul
+    ) else if /i "!FN!"=="xactrt3.dll" (
+        copy /y "%%~F" "%RT%\" >nul
+    ) else (
+        move /y "%%~F" "%RT%\" >nul 2>nul
+    )
+)
+for %%F in ("%RELEASE%\*.pyd") do (
     move /y "%%~F" "%RT%\" >nul 2>nul
 )
 :: Move supporting directories into runtime/
@@ -182,8 +199,8 @@ if exist "%ROOT%icon.ico" copy /y "%ROOT%icon.ico" "%RELEASE%\icon.ico" >nul
 
 :: Step [8/9] Post-build hardening
 echo [8/9] Post-build hardening...
-:: Harden runtime/ (DLLs + .pyd exports + strings + Tk classes)
-python post_build_harden.py "%RT%"
+:: Harden entire release tree (DLLs in root + runtime/ .pyd + strings + Tk)
+python post_build_harden.py "%RELEASE%"
 if errorlevel 1 (
     echo WARNING: Hardening failed, continuing without
 )

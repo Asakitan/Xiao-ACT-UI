@@ -22,5 +22,15 @@ def _bootstrap():
 
 if __name__ == "__main__":
     _bootstrap()
-    from main import main
-    sys.exit(main() or 0)
+    try:
+        from main import main
+        sys.exit(main() or 0)
+    except Exception as exc:
+        try:
+            log = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "crash.log")
+            with open(log, "w") as f:
+                import traceback
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        sys.exit(1)
