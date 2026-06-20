@@ -3593,6 +3593,78 @@ class AIEditorAPI:
         ctx.workspace_state.update(key, value)
         return {"ok": True, "extension": ext_id, "key": key}
 
+    def list_extension_settings(self) -> Dict:
+        """Return all extension configuration contributions with current values."""
+        self._ensure_engine()
+        contributions = self._ext_host.ext_points.configuration_contributions
+        result: List[Dict[str, Any]] = []
+        for entry in contributions:
+            eid = entry.get("extension_id", "")
+            ext = self._ext_host.registry.get(eid)
+            display_name = ext.display_name if ext else eid
+            ctx = self._ext_host.activator.get_context(eid)
+            ws_state = ctx.workspace_state if ctx else None
+            props = entry.get("properties", {})
+            values: Dict[str, Any] = {}
+            for key, schema in props.items():
+                if not isinstance(schema, dict):
+                    continue
+                stored = ws_state.get(key) if ws_state else None
+                if stored is not None:
+                    values[key] = stored
+                elif "default" in schema:
+                    values[key] = schema["default"]
+            result.append({
+                "extension_id": eid,
+                "display_name": display_name,
+                "title": entry.get("title", ""),
+                "properties": props,
+                "values": values,
+            })
+        return {"configurations": result}
+
+    def get_extension_setting(self, key: str, default: Any = None) -> Dict:
+        """Read a single extension setting value from workspace state."""
+        self._ensure_engine()
+        contributions = self._ext_host.ext_points.configuration_contributions
+        for entry in contributions:
+            props = entry.get("properties", {})
+            if key in props:
+                eid = entry.get("extension_id", "")
+                ctx = self._ext_host.activator.get_context(eid)
+                if ctx:
+                    stored = ctx.workspace_state.get(key)
+                    if stored is not None:
+                        return {"ok": True, "key": key, "value": stored}
+                schema_default = props[key].get("default") if isinstance(props[key], dict) else None
+                return {"ok": True, "key": key,
+                        "value": schema_default if schema_default is not None else default}
+        return {"ok": True, "key": key, "value": default}
+
+    def set_extension_setting(self, key: str, value: Any) -> Dict:
+        """Write a single extension setting value and persist."""
+        self._ensure_engine()
+        contributions = self._ext_host.ext_points.configuration_contributions
+        for entry in contributions:
+            props = entry.get("properties", {})
+            if key in props:
+                eid = entry.get("extension_id", "")
+                ctx = self._ext_host.activator.get_context(eid)
+                if not ctx:
+                    return {"error": f"Extension context not found: {eid}"}
+                ctx.workspace_state.update(key, value)
+                # Notify Node extension host of the change
+                section = key.rsplit(".", 1)[0] if "." in key else ""
+                short_key = key.rsplit(".", 1)[-1] if "." in key else key
+                host = getattr(self, "_node_ext_host", None)
+                if host is not None and host.is_running:
+                    try:
+                        host.send_settings_changed(section, short_key, value)
+                    except Exception:
+                        pass
+                return {"ok": True, "key": key, "extension_id": eid}
+        return {"error": f"Setting key not found in any extension: {key}"}
+
     def _decorate_extension_contributions(
             self,
             contributions: Dict[str, Any]) -> Dict[str, Any]:
@@ -4341,6 +4413,74 @@ class AIEditorAPI:
             return {"ok": True, "message_id": msg_id, "rating": value, "stored": "settings"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    def list_extension_activity_bar_items(self) -> Dict:
+        """Return activity bar view containers contributed by extensions."""
+        self._ensure_engine()
+        items: List[Dict[str, Any]] = []
+        try:
+            for vc in self._ext_host.ext_points.activity_bar_items:
+                vc_id = str(vc.get("id", ""))
+                if not vc_id:
+                    continue
+                ext_id = str(vc.get("_extensionId", ""))
+                title = str(vc.get("title", vc_id))
+                # Resolve icon: use extension's emoji-style icon or default
+                icon_text = ""
+                ext_desc = self._ext_host.registry.get(ext_id)
+                if ext_desc and ext_desc.icon:
+                    raw_icon = ext_desc.icon.strip()
+                    # If it looks like an emoji or short text icon, use it
+                    if len(raw_icon) <= 4 and not raw_icon.endswith((".svg", ".png")):
+                        icon_text = raw_icon
+                if not icon_text:
+                    icon_text = "▣"  # default: ▣
+                items.append({
+                    "id": vc_id,
+                    "title": title,
+                    "icon_text": icon_text,
+                    "extension_id": ext_id,
+                })
+        except Exception:
+            pass
+        return {"items": items}
+
+    def list_editor_title_actions(self) -> Dict:
+        """Return editor title bar actions contributed by extensions.
+
+        VSCode extensions declare these in contributes.menus["editor/title"].
+        Each action has a command, icon, and optional when-clause.
+        """
+        self._ensure_engine()
+        actions: List[Dict[str, Any]] = []
+        try:
+            ep = self._ext_host.ext_points
+            for item in getattr(ep, "editor_title_actions", []):
+                cmd_id = str(item.get("command", ""))
+                if not cmd_id:
+                    continue
+                ext_id = str(item.get("_extensionId", ""))
+                ext_desc = self._ext_host.registry.get(ext_id)
+                icon = ""
+                if ext_desc and ext_desc.icon:
+                    raw = ext_desc.icon.strip()
+                    if len(raw) <= 4 and not raw.endswith((".svg", ".png")):
+                        icon = raw
+                title = str(item.get("title", ""))
+                if not title:
+                    cmd_info = self._ext_host.commands.get_info(cmd_id) if hasattr(
+                        self._ext_host.commands, "get_info") else None
+                    title = str(cmd_info.get("title", cmd_id)) if cmd_info else cmd_id
+                actions.append({
+                    "command": cmd_id,
+                    "title": title,
+                    "icon": icon or "▣",
+                    "extension_id": ext_id,
+                    "group": str(item.get("group", "")),
+                })
+        except Exception:
+            pass
+        return {"actions": actions}
 
     # ── Extension marketplace API ──
 

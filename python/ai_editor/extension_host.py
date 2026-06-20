@@ -523,6 +523,7 @@ class ExtensionPoints:
             Callable[[Dict[str, Any], Dict[str, Any], List[Any]], Optional[Dict[str, Any]]]
         ] = None
         self._command_contributions: List[Dict[str, Any]] = []
+        self.configuration_contributions: List[Dict[str, Any]] = []
         self._chat_participants: List[Dict[str, Any]] = []
         self._lm_tools: List[Dict[str, Any]] = []
         self._lm_tool_sets: List[Dict[str, Any]] = []
@@ -760,6 +761,24 @@ class ExtensionPoints:
         cfg = c.get("configuration")
         if cfg:
             self._configurations.extend(self._tag_items(cfg, eid))
+            # Build structured configuration_contributions
+            cfg_items = cfg if isinstance(cfg, list) else [cfg]
+            for ci in cfg_items:
+                if not isinstance(ci, dict):
+                    continue
+                props = ci.get("properties")
+                if not isinstance(props, dict) or not props:
+                    continue
+                self.configuration_contributions.append({
+                    "title": ci.get("title", ""),
+                    "extension_id": eid,
+                    "properties": {
+                        k: {sk: sv for sk, sv in v.items()
+                             if sk != "_extensionId"}
+                        for k, v in props.items()
+                        if isinstance(v, dict)
+                    },
+                })
 
         for loc, vcs in c.get("viewsContainers", {}).items():
             if isinstance(vcs, list):
@@ -994,6 +1013,19 @@ class ExtensionPoints:
             "taskDefinitions": list(self._task_definitions),
         }
 
+    @property
+    def activity_bar_items(self) -> List[Dict[str, Any]]:
+        """Return viewContainers contributed to the activitybar location."""
+        return list(self._view_containers.get("activitybar", []))
+
+    @property
+    def editor_title_actions(self) -> List[Dict[str, Any]]:
+        """Return menu items contributed to editor/title."""
+        menus = self.all_contributions.get("menus", {})
+        if isinstance(menus, dict):
+            return list(menus.get("editor/title", []))
+        return []
+
     def to_summary(self) -> Dict[str, Any]:
         manifest_fallbacks = sum(
             1 for command_id in self._command_index
@@ -1006,6 +1038,7 @@ class ExtensionPoints:
             "chatParticipants": len(self._chat_participants),
             "languageModelTools": len(self._lm_tools),
             "languageModelToolSets": len(self._lm_tool_sets),
+            "activityBarItems": len(self.activity_bar_items),
             "needsExtensionRuntime": {
                 "commands": sum(
                     1 for cmd in self._command_contributions
