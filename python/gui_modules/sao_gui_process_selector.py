@@ -2,8 +2,6 @@
 """Process Selector Panel — platform-level process attach + module filter."""
 from __future__ import annotations
 
-import ctypes
-import ctypes.wintypes as wintypes
 import os
 import threading
 import tkinter as tk
@@ -18,39 +16,7 @@ from gui_modules.sao_panel_ui import (
 )
 from gui_modules.sao_panel_components import action_button
 
-_PROCESS_QUERY_LIMITED = 0x1000
-
-try:
-    _psapi = ctypes.WinDLL("psapi")
-
-    class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
-        _fields_ = [
-            ("cb", wintypes.DWORD),
-            ("PageFaultCount", wintypes.DWORD),
-            ("PeakWorkingSetSize", ctypes.c_size_t),
-            ("WorkingSetSize", ctypes.c_size_t),
-            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-            ("PagefileUsage", ctypes.c_size_t),
-            ("PeakPagefileUsage", ctypes.c_size_t),
-        ]
-
-    _GetProcessMemoryInfo = _psapi.GetProcessMemoryInfo
-    _GetProcessMemoryInfo.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
-        wintypes.DWORD,
-    ]
-    _GetProcessMemoryInfo.restype = wintypes.BOOL
-    _HAS_PSAPI = True
-except Exception:
-    _HAS_PSAPI = False
-
-
-def _list_processes_fallback() -> Optional[List[dict]]:
-    """Enumerate via low-level walk (Engine A)."""
+def _list_processes_primary() -> Optional[List[dict]]:
     try:
         from mem_probe._pm._core import PageResolver
         entries = PageResolver().enumerate_processes()
@@ -65,8 +31,7 @@ def _list_processes_fallback() -> Optional[List[dict]]:
         return None
 
 
-def _list_processes_toolhelp() -> List[dict]:
-    """Enumerate via CreateToolhelp32Snapshot (fallback)."""
+def _list_processes_fallback() -> List[dict]:
     from mem_probe.process import _iter_process_entries_wide
     seen: dict[int, dict] = {}
     for exe_name, pid in _iter_process_entries_wide():
@@ -79,7 +44,7 @@ def _list_processes_toolhelp() -> List[dict]:
 
 
 def list_processes() -> List[dict]:
-    return _list_processes_fallback() or _list_processes_toolhelp()
+    return _list_processes_primary() or _list_processes_fallback()
 
 
 MODULE_NONE = "none"
@@ -87,17 +52,17 @@ MODULE_PRIMARY = "primary"
 MODULE_SELECTED = "selected"
 MODULE_ALL = "all"
 
-_cached_sp_v1 = None
-_cached_gp_v1 = None
+_sp_ref = None
+_gp_ref = None
 
 
-def _set_cached_result(sp, gp):
-    global _cached_sp_v1, _cached_gp_v1
-    _cached_sp_v1, _cached_gp_v1 = sp, gp
+def _cache_result(sp, gp):
+    global _sp_ref, _gp_ref
+    _sp_ref, _gp_ref = sp, gp
 
 
-def _get_cached_game_process():
-    return _cached_gp_v1
+def get_cached_gp():
+    return _gp_ref
 
 
 # ── Palette (follows panel theme) ──
@@ -296,14 +261,7 @@ class ProcessSelectorPanel:
             self._mode_label.configure(text="", fg=_FG_DIM)
 
     def _restore_last_attach(self):
-        try:
-            name = self.owner.settings.get("attached_process_name", "")
-            pid = self.owner.settings.get("attached_process_pid", 0)
-            if name and pid and self._attached_label:
-                self._attached_label.configure(
-                    text=f"Last: {name} ({pid})", fg=_FG_DIM)
-        except Exception:
-            pass
+        pass
 
     # ── Module mode ──
     def _set_module_mode(self, mode: str):
@@ -334,15 +292,15 @@ class ProcessSelectorPanel:
     # ── Process list ──
     def _do_refresh(self):
         def _bg():
-            stealth = _list_processes_fallback()
-            if stealth is not None:
-                procs, src = stealth, "EngA"
+            primary = _list_processes_primary()
+            if primary is not None:
+                procs, src = primary, "A"
             else:
-                procs, src = _list_processes_toolhelp(), "Toolhelp"
+                procs, src = _list_processes_fallback(), "S"
             if self._exists():
                 self.root.after(0, lambda: self._set_processes(procs, src))
 
-        threading.Thread(target=_bg, daemon=True, name="proc-enum").start()
+        threading.Thread(target=_bg, daemon=True).start()
 
     def _set_processes(self, procs: List[dict], source: str = ""):
         if not self._exists():
@@ -453,7 +411,7 @@ class ProcessSelectorPanel:
             except Exception:
                 pass
 
-            stealth_ok = False
+            primary_ok = False
             found_pid = pid
             try:
                 from mem_probe._pm._core import PageResolver
@@ -462,12 +420,12 @@ class ProcessSelectorPanel:
                 if result:
                     found_pid, cr3 = result
                     gp = sp.as_game_process(found_pid)
-                    _set_cached_result(sp, gp)
-                    stealth_ok = True
+                    _cache_result(sp, gp)
+                    primary_ok = True
             except Exception:
                 pass
 
-            if not stealth_ok:
+            if not primary_ok:
                 try:
                     from mem_probe.process import set_game_process_names
                     set_game_process_names([name])
@@ -475,21 +433,19 @@ class ProcessSelectorPanel:
                     pass
 
             try:
-                self.owner.settings.set("attached_process_name", name)
-                self.owner.settings.set("attached_process_pid", found_pid)
                 self.owner.settings.set("process_module_mode", self._module_mode)
                 self.owner.settings.save()
             except Exception:
                 pass
 
             if self._exists():
-                self.root.after(0, lambda: self._on_attach_done(name, found_pid, stealth_ok))
+                self.root.after(0, lambda: self._on_attach_done(name, found_pid, primary_ok))
 
-        threading.Thread(target=_bg_attach, daemon=True, name="proc-attach").start()
+        threading.Thread(target=_bg_attach, daemon=True).start()
 
-    def _on_attach_done(self, name: str, pid: int, stealth: bool):
-        self._attach_mode = "Stealth" if stealth else "API"
-        mode = "Stealth" if stealth else "Attached"
+    def _on_attach_done(self, name: str, pid: int, primary: bool):
+        self._attach_mode = "A" if primary else "S"
+        mode = "A" if primary else "S"
         if self._attached_label:
             self._attached_label.configure(text=f"✓ {mode}: {name} ({pid})", fg=_FG_OK)
         self._update_mode_display()

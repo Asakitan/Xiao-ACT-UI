@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Page mapping resolver — core routines."""
 from __future__ import annotations
 import struct
 from typing import List, Optional, Tuple
@@ -9,17 +8,11 @@ _kv8, _kv4, _kvb = rt_io._r1_v8, rt_io._r1_v4, lambda va, n: rt_io._r1_r(va, n, 
 
 
 class PageResolver:
-    """Resolve page mappings for a target context."""
 
     def __init__(self) -> None:
         self._cr3 = self._pid = self._ep = 0
 
-    # -- 1. find_process_by_name -> Optional[(pid, cr3)] -----------------
     def find_process_by_name(self, name: str) -> Optional[Tuple[int, int]]:
-        """Walk PsActiveProcessHead matching EPROCESS.ImageFileName (15-char).
-
-        Case-insensitive prefix match (kernel truncates to 15 chars).
-        """
         if not rt_io.ensure_loaded(rt_io.ENGINE_READONLY):
             return None
         if not rt_io._resolve_ep_offsets():
@@ -34,7 +27,6 @@ class PageResolver:
         system_ep = _kv8(ps_ptr)
         if not system_ep:
             return None
-
         target = name.lower()
         target_base = target.rsplit(".exe", 1)[0] if target.endswith(".exe") else target
         flink = _kv8(system_ep + off_apl)
@@ -55,12 +47,7 @@ class PageResolver:
                 break
         return None
 
-    # -- enumerate all processes via EPROCESS walk -----------------------
     def enumerate_processes(self) -> List[Tuple[str, int]]:
-        """Walk PsActiveProcessHead, return [(image_name, pid), ...].
-
-        Zero handles — pure physical memory reads.
-        """
         if not rt_io.ensure_loaded(rt_io.ENGINE_READONLY):
             return []
         if not rt_io._resolve_ep_offsets():
@@ -92,7 +79,6 @@ class PageResolver:
                 break
         return result
 
-    # -- 2. read_memory (cr3 page-walk, handles page boundaries) ---------
     def read_memory(self, cr3: int, addr: int, size: int) -> Optional[bytes]:
         if size <= 0:
             return b""
@@ -111,9 +97,7 @@ class PageResolver:
             cur += chunk
         return bytes(result)
 
-    # -- 3. enumerate_modules (PEB->Ldr->InLoadOrderModuleList) ----------
     def enumerate_modules(self, pid: int) -> List[Tuple[str, int, int]]:
-        """Return [(name, base, size), ...] for user-mode modules."""
         if not rt_io._OFF_PEB:
             rt_io._resolve_ep_offsets()
         if not rt_io._OFF_PEB:
@@ -124,18 +108,17 @@ class PageResolver:
         peb_va = _kv8(ep + rt_io._OFF_PEB)
         if not peb_va:
             return []
-        d = self.read_memory(cr3, peb_va + 0x18, 8)  # PEB.Ldr
+        d = self.read_memory(cr3, peb_va + 0x18, 8)
         if not d:
             return []
         ldr = struct.unpack("<Q", d)[0]
         if not ldr:
             return []
-        d = self.read_memory(cr3, ldr + 0x10, 8)  # Ldr.InLoadOrderModuleList
+        d = self.read_memory(cr3, ldr + 0x10, 8)
         if not d:
             return []
         list_head = ldr + 0x10
         flink = struct.unpack("<Q", d)[0]
-
         modules: List[Tuple[str, int, int]] = []
         visited: set[int] = set()
         while flink and flink != list_head and flink not in visited:
@@ -162,22 +145,16 @@ class PageResolver:
                 break
         return modules
 
-    # -- 4. as_game_process -> duck-type wrapper -------------------------
-    def as_game_process(self, pid: int) -> "_MappedProcess":
-        """Wrapper whose read_bytes delegates to physical reads.
-
-        Compatible with code expecting a GameProcess-like duck type.
-        """
+    def as_game_process(self, pid: int):
         ep, cr3 = rt_io._r1_fe(pid)
         if not ep or not cr3:
-            raise RuntimeError(f"cannot locate EPROCESS for pid {pid}")
-        return _MappedProcess(pid, cr3, self)
+            raise RuntimeError(f"pid {pid}")
+        return _MP(pid, cr3, self)
 
 
-class _MappedProcess:
-    """GameProcess-compatible wrapper backed by mapped reads."""
+class _MP:
 
-    def __init__(self, pid: int, cr3: int, sp: PageResolver) -> None:
+    def __init__(self, pid: int, cr3: int, sp) -> None:
         self._pid, self._cr3, self._sp = pid, cr3, sp
 
     @property

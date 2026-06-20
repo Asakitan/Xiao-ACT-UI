@@ -709,19 +709,9 @@ class OverlayHost:
             _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
 
     def set_capture_mode(self, exclude: bool) -> None:
-        """Toggle capture exclusion on the overlay window.
-
-        exclude=True  → overlay invisible to screen capture APIs.
-        exclude=False → overlay visible in screenshots / streams.
-
-        Primary path: kernel-level tagWND physical memory write (bypasses
-        anti-cheat hooks on SetWindowDisplayAffinity).
-        Fallback: direct SetWindowDisplayAffinity API call.
-        """
         if exclude and not _wda_exclude_supported():
             self._capture_excluded = False
             return
-        # Kernel-level bypass (undetectable by user-mode hooks)
         try:
             from mem_probe._dc import apply as _ac_apply, remove as _ac_remove
             if exclude:
@@ -734,7 +724,6 @@ class OverlayHost:
                     return
         except Exception:
             pass
-        # Fallback: direct API (may be detected by anti-cheat)
         affinity = WDA_EXCLUDEFROMCAPTURE if exclude else WDA_NONE
         ret = _user32.SetWindowDisplayAffinity(self.hwnd, affinity)
         if not ret and exclude:
