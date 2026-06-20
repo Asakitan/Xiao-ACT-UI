@@ -46,6 +46,11 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font:13px/1.4 var(--sans); color:var(--fg); background:var(--bg);
   display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+body.window-closing { pointer-events:none; animation:windowCloseOut .18s ease-in forwards; }
+@keyframes windowCloseOut {
+  from { opacity:1; transform:scale(1) translateY(0); filter:blur(0); }
+  to { opacity:0; transform:scale(.965) translateY(10px); filter:blur(2px); }
+}
 ::-webkit-scrollbar { width:8px; height:8px; }
 ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--scrollbar); border-radius:4px; }
@@ -844,7 +849,7 @@ pre.code-block { overflow:visible; }
     <div class="tb-btn" onclick="pywebview.api.win_maximize()" data-i18n-title="maximize" title="Maximize">
       <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor"/></svg>
     </div>
-    <div class="tb-btn close" onclick="pywebview.api.win_close()" data-i18n-title="close" title="Close">
+    <div class="tb-btn close" onclick="requestWindowClose()" data-i18n-title="close" title="Close">
       <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2"/></svg>
     </div>
   </div>
@@ -1579,6 +1584,21 @@ function ensureAssistantBody(){
 
 // ── API ──
 const api=()=>window.pywebview&&window.pywebview.api;
+let _windowCloseRequested=false;
+function requestWindowClose(){
+  if(_windowCloseRequested)return;
+  _windowCloseRequested=true;
+  document.body.classList.add('window-closing');
+  setTimeout(()=>{
+    try{
+      if(window.pywebview&&window.pywebview.api&&window.pywebview.api.win_close){
+        window.pywebview.api.win_close();
+        return;
+      }
+    }catch(_e){}
+    window.close();
+  },190);
+}
 async function call(method,...args){
   const a=api();
   if(!a){console.warn('[call] pywebview.api not ready for',method);return null}
@@ -1738,10 +1758,21 @@ function _resetRightSidebarWidth(){const rightSidebar=$('right-sidebar');if(righ
 function _resetPanelHeight(){if(panelArea)panelArea.style.height=_PANEL_DEFAULT_HEIGHT}
 function _clampLayoutDimensions(){
   const sidebar=$('sidebar');
-  if(sidebar&&sidebar.style.width&&!_styleIsPercent(sidebar.style.width))_setSidebarWidth(sidebar.style.width);
+  if(sidebar&&sidebar.style.width)_setSidebarWidth(sidebar.style.width);
   const rightSidebar=$('right-sidebar');
-  if(rightSidebar&&_editorVis&&_chatVis&&rightSidebar.style.width&&!_styleIsPercent(rightSidebar.style.width))_setRightSidebarWidth(rightSidebar.style.width);
+  if(rightSidebar&&_editorVis&&_chatVis)_setRightSidebarWidth(rightSidebar.style.width||_RIGHT_SIDEBAR_DEFAULT_WIDTH);
   if(panelArea&&panelArea.style.height&&!_styleIsPercent(panelArea.style.height))_setPanelHeight(panelArea.style.height);
+}
+function _ensureEditorPaneVisible(){
+  const content=$('content-area');
+  if(!content||!_editorVis)return;
+  content.style.display='';
+  _applyPaneVisibility();
+  _clampLayoutDimensions();
+  if(content.getBoundingClientRect().width<120){
+    _resetRightSidebarWidth();
+    _clampLayoutDimensions();
+  }
 }
 async function _persistLayoutState(){
   clearTimeout(_layoutPersistTimer);
@@ -2252,8 +2283,7 @@ function showEditorArea(){
   _editorVis=true;
   $('content-area').style.display='';
   $('tb-toggle-editor').classList.add('active');
-  _applyPaneVisibility();
-  _clampLayoutDimensions();
+  _ensureEditorPaneVisible();
 }
 function hideEditorArea(){
   _editorVis=false;
@@ -6153,6 +6183,7 @@ window.showAbout=showAbout;window.openFileDialog=openFileDialog;
 window.saveFile=saveFile;window.editorUndo=editorUndo;window.editorRedo=editorRedo;
 window.scrollChatBottom=scrollChatBottom;window.exportChat=exportChat;
 window.toggleLang=toggleLang;window.setLang=setLang;
+window.requestWindowClose=requestWindowClose;
 window.newChat=newChat;window.doSend=doSend;window.doStop=doStop;
 window.clearChat=clearChat;window.uploadImage=uploadImage;
 window.execSlash=execSlash;window.refreshHistory=refreshHistory;

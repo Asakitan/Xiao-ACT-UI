@@ -45,6 +45,7 @@ _PROVIDER_CONFIG_KEYS = {
 
 _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
 _AI_EDITOR_MIN_SIZE = (600, 400)
+_AI_EDITOR_WINDOW_TITLE = "SAO AI Editor"
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _APPROVAL_VALUES = {"default", "bypass", "autopilot"}
@@ -533,10 +534,18 @@ class AIEditorAPI:
         self._window_geometry: Optional[Dict[str, int]] = None
         self._window_resize_supports_fix_point: Optional[bool] = None
 
-    def set_window(self, window: Any) -> None:
+    def set_window(self, window: Any, initial_geometry: Optional[Dict[str, int]] = None) -> None:
         self._window = window
         self._window_resize_supports_fix_point = None
-        self._capture_window_geometry(prefer_live=True)
+        if isinstance(initial_geometry, dict):
+            self._window_geometry = {
+                "x": _as_int(initial_geometry.get("x"), 0),
+                "y": _as_int(initial_geometry.get("y"), 0),
+                "width": max(_AI_EDITOR_MIN_SIZE[0], _as_int(initial_geometry.get("width"), _AI_EDITOR_MIN_SIZE[0])),
+                "height": max(_AI_EDITOR_MIN_SIZE[1], _as_int(initial_geometry.get("height"), _AI_EDITOR_MIN_SIZE[1])),
+            }
+        else:
+            self._capture_window_geometry(prefer_live=True)
         self._ready.set()
 
     def _capture_window_geometry(self, prefer_live: bool = False) -> Dict[str, int]:
@@ -4423,12 +4432,16 @@ def _launch_subprocess() -> None:
     if not os.path.isfile(html_file):
         print(f"[AIEditor] HTML not found: {html_file}")
         return
+    if _activate_existing_ai_editor_window():
+        print("[AIEditor] activated existing window")
+        return
     if getattr(sys, 'frozen', False):
         cmd = [sys.executable, '--ai-editor']
     else:
         cmd = [sys.executable, '-m', 'ai_editor.app']
     env = dict(os.environ)
     env.setdefault('PYTHONPATH', _ROOT)
+    env.setdefault('PYTHONUNBUFFERED', '1')
     cwd = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else _ROOT
     flags = 0
     if sys.platform == 'win32':
@@ -4436,9 +4449,14 @@ def _launch_subprocess() -> None:
         CREATE_NEW_PROCESS_GROUP = 0x00000200
         flags = BELOW_NORMAL | CREATE_NEW_PROCESS_GROUP
     try:
-        proc = _sp.Popen(cmd, cwd=cwd, env=env, creationflags=flags,
-                         close_fds=True)
-        print(f"[AIEditor] subprocess started (pid={proc.pid})")
+        log_path = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_subprocess.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"\n[AIEditor] launch cmd={cmd!r} cwd={cwd!r}\n")
+            log.flush()
+            proc = _sp.Popen(cmd, cwd=cwd, env=env, creationflags=flags,
+                             stdout=log, stderr=log, close_fds=True)
+        print(f"[AIEditor] subprocess started (pid={proc.pid}, log={log_path})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")
 
@@ -4463,71 +4481,203 @@ def _save_window_pos(x: int, y: int, w: int, h: int) -> None:
         pass
 
 
-def _default_bottom_right_pos(width: int = 1000, height: int = 700) -> tuple:
-    """Screen bottom-right, 20px above taskbar."""
+def _append_ai_editor_log(message: str) -> None:
+    try:
+        log_path = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_subprocess.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"[AIEditor] {message}\n")
+    except Exception:
+        pass
+
+
+def _virtual_screen_bounds() -> tuple[int, int, int, int]:
     try:
         import ctypes
         user32 = ctypes.windll.user32
-        sw = user32.GetSystemMetrics(0)
-        sh = user32.GetSystemMetrics(1)
-        # Taskbar ~ 40px, 20px margin above it
-        x = max(0, sw - width - 20)
-        y = max(0, sh - height - 60)
-        return x, y
+        x = int(user32.GetSystemMetrics(76))
+        y = int(user32.GetSystemMetrics(77))
+        width = int(user32.GetSystemMetrics(78))
+        height = int(user32.GetSystemMetrics(79))
+        if width > 0 and height > 0:
+            return x, y, width, height
+        width = int(user32.GetSystemMetrics(0))
+        height = int(user32.GetSystemMetrics(1))
+        if width > 0 and height > 0:
+            return 0, 0, width, height
     except Exception:
-        return 200, 100
+        pass
+    return 0, 0, 1920, 1080
+
+
+def _primary_screen_bounds() -> tuple[int, int, int, int]:
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        width = int(user32.GetSystemMetrics(0))
+        height = int(user32.GetSystemMetrics(1))
+        if width > 0 and height > 0:
+            return 0, 0, width, height
+    except Exception:
+        pass
+    return _virtual_screen_bounds()
+
+
+def _find_ai_editor_window() -> int:
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = ctypes.c_void_p
+        hwnd = user32.FindWindowW(None, _AI_EDITOR_WINDOW_TITLE)
+        return int(hwnd or 0)
+    except Exception:
+        return 0
+
+
+def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd_ptr = ctypes.c_void_p(int(hwnd))
+        flags = 0x0001 | 0x0002 | 0x0040  # NOSIZE | NOMOVE | SHOWWINDOW
+        user32.ShowWindow(hwnd_ptr, 9)  # SW_RESTORE
+        user32.SetWindowPos(hwnd_ptr, ctypes.c_void_p(-1), 0, 0, 0, 0, flags)
+        user32.SetForegroundWindow(hwnd_ptr)
+        if keep_topmost_seconds > 0:
+            def _release_topmost() -> None:
+                time.sleep(keep_topmost_seconds)
+                try:
+                    user32.SetWindowPos(hwnd_ptr, ctypes.c_void_p(-2), 0, 0, 0, 0, flags)
+                except Exception:
+                    pass
+            threading.Thread(target=_release_topmost, daemon=True).start()
+        return True
+    except Exception:
+        return False
+
+
+def _activate_existing_ai_editor_window() -> bool:
+    return _activate_window_handle(_find_ai_editor_window())
+
+
+def _activate_ai_editor_window_with_retry() -> None:
+    for _ in range(60):
+        if _activate_existing_ai_editor_window():
+            return
+        time.sleep(0.2)
+
+
+def _window_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+
+
+def _normalize_window_geometry(saved: Dict[str, Any]) -> tuple[int, int, int, int]:
+    screen_x, screen_y, screen_w, screen_h = _virtual_screen_bounds()
+    min_w, min_h = _AI_EDITOR_MIN_SIZE
+    width = min(max(min_w, _window_int(saved.get("w"), 1000)), max(min_w, screen_w))
+    height = min(max(min_h, _window_int(saved.get("h"), 700)), max(min_h, screen_h))
+
+    if saved.get("x") is None or saved.get("y") is None:
+        x, y = _default_bottom_right_pos(width, height)
+    else:
+        x = _window_int(saved.get("x"), screen_x)
+        y = _window_int(saved.get("y"), screen_y)
+
+    min_visible = 80
+    right = screen_x + screen_w
+    bottom = screen_y + screen_h
+    offscreen = (
+        x + width < screen_x + min_visible
+        or y + height < screen_y + min_visible
+        or x > right - min_visible
+        or y > bottom - min_visible
+    )
+    if offscreen:
+        x, y = _default_bottom_right_pos(width, height)
+
+    if width <= screen_w:
+        x = max(screen_x, min(x, right - width))
+    else:
+        x = screen_x
+    if height <= screen_h:
+        y = max(screen_y, min(y, bottom - height))
+    else:
+        y = screen_y
+    return x, y, width, height
+
+
+def _default_bottom_right_pos(width: int = 1000, height: int = 700) -> tuple:
+    """Screen bottom-right, 20px above taskbar."""
+    screen_x, screen_y, screen_w, screen_h = _primary_screen_bounds()
+    # Taskbar ~ 40px, 20px margin above it.
+    x = max(screen_x, screen_x + screen_w - int(width) - 20)
+    y = max(screen_y, screen_y + screen_h - int(height) - 60)
+    return x, y
 
 
 def _launch_webview_blocking(gui_ref: Any = None) -> None:
     """Run pywebview in the current thread (must be main thread)."""
     global _running_window
-    import webview
-    html_file = _html_path()
-    if not os.path.isfile(html_file):
-        print(f"[AIEditor] HTML not found: {html_file}")
-        return
+    try:
+        _append_ai_editor_log("child launch start")
+        import webview
+        html_file = _html_path()
+        if not os.path.isfile(html_file):
+            print(f"[AIEditor] HTML not found: {html_file}")
+            _append_ai_editor_log(f"HTML not found: {html_file}")
+            return
 
-    saved = _load_window_pos()
-    w = saved.get("w", 1000)
-    h = saved.get("h", 700)
-    if saved.get("x") is not None:
-        x, y = saved["x"], saved["y"]
-    else:
-        x, y = _default_bottom_right_pos(w, h)
+        x, y, w, h = _normalize_window_geometry(_load_window_pos())
+        _append_ai_editor_log(f"window geometry x={x} y={y} w={w} h={h}")
 
-    api = AIEditorAPI(gui_ref)
-    url = f"file:///{html_file.replace(os.sep, '/')}"
-    window = webview.create_window(
-        "SAO AI Editor",
-        url=url,
-        width=w,
-        height=h,
-        x=x,
-        y=y,
-        min_size=_AI_EDITOR_MIN_SIZE,
-        resizable=True,
-        js_api=api,
-        frameless=True,
-        easy_drag=False,
-        text_select=True,
-    )
-    _running_window = window
-    api.set_window(window)
+        api = AIEditorAPI(gui_ref)
+        url = f"file:///{html_file.replace(os.sep, '/')}"
+        window = webview.create_window(
+            _AI_EDITOR_WINDOW_TITLE,
+            url=url,
+            width=w,
+            height=h,
+            x=x,
+            y=y,
+            min_size=_AI_EDITOR_MIN_SIZE,
+            resizable=True,
+            js_api=api,
+            frameless=True,
+            easy_drag=False,
+            text_select=True,
+        )
+        _append_ai_editor_log("window object created")
+        _running_window = window
+        api.set_window(window, {"x": x, "y": y, "width": w, "height": h})
+        _append_ai_editor_log("window bound to API")
 
-    def _on_closed():
-        global _running_window
-        try:
-            _save_window_pos(window.x, window.y, window.width, window.height)
-        except Exception:
-            pass
-        _running_window = None
+        def _on_closed():
+            global _running_window
+            try:
+                _save_window_pos(window.x, window.y, window.width, window.height)
+            except Exception:
+                pass
+            _running_window = None
 
-    def _on_closing():
-        api.cancel()
+        def _on_closing():
+            api.cancel()
 
-    window.events.closing += _on_closing
-    window.events.closed += _on_closed
-    webview.start(debug=False)
+        window.events.closing += _on_closing
+        window.events.closed += _on_closed
+        threading.Thread(target=_activate_ai_editor_window_with_retry, daemon=True).start()
+        _append_ai_editor_log("webview.start entering")
+        webview.start(debug=False)
+        _append_ai_editor_log("webview.start returned")
+    except Exception as exc:
+        _append_ai_editor_log(f"child launch failed: {exc!r}")
+        raise
 
 
 # ---------------------------------------------------------------------------

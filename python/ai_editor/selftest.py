@@ -178,7 +178,7 @@ class _FailingSettingsGui(_FakeGui):
 
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
-    from ai_editor.app import AIEditorAPI
+    from ai_editor.app import AIEditorAPI, _activate_window_handle, _normalize_window_geometry
 
     api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     js_methods = (
@@ -206,6 +206,24 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+
+    x, y, w, h = _normalize_window_geometry({"x": 999999, "y": 999999, "w": 999999, "h": 999999})
+    _check("saved AI Editor window geometry is clamped to visible screen",
+           w >= 600 and h >= 400 and x < 999999 and y < 999999)
+    _check("AI Editor foreground activation ignores missing HWND",
+           _activate_window_handle(0) is False)
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
+    with open(panels_path, "r", encoding="utf-8") as fh:
+        panels_src = fh.read()
+    _check("AI Editor menu launch stops fisheye overlay",
+           "self._stop_fisheye_overlay()" in panels_src)
+    app_path = os.path.join(root_dir, "ai_editor", "app.py")
+    with open(app_path, "r", encoding="utf-8") as fh:
+        app_src = fh.read()
+    _check("AI Editor activation does not block webview.start",
+           "threading.Thread(target=_activate_ai_editor_window_with_retry" in app_src
+           and "webview.start(debug=False)" in app_src)
 
     data = {
         "ai_editor": {
@@ -957,6 +975,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "call('win_resize_by',state.edge,dx,dy)" in html
             and "titlebar.addEventListener('pointerdown'" in html
             and "getTitlebarResizeEdge" in html)
+    _check("frontend forces editor pane visible after opening",
+           "function _ensureEditorPaneVisible()" in html
+           and "if(content.getBoundingClientRect().width<120)" in html
+           and "_ensureEditorPaneVisible();" in html)
+    _check("frontend window close plays exit animation before backend close",
+           "body.window-closing" in html
+           and "function requestWindowClose()" in html
+           and "setTimeout(()=>" in html
+           and "window.requestWindowClose=requestWindowClose" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
