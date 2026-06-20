@@ -352,18 +352,25 @@ def describe_provider_status(
         return status
 
     if provider.id == "copilot":
+        has_auth = _has_copilot_auth(settings_getter)
+        copilot_available = has_auth
         status.update({
             "requested_transport": "chatParticipant",
             "resolved_transport": "native-chat",
             "transport": "native-chat",
             "runtime_mode": "native-chat",
             "backend_provider": "chatParticipant",
-            "api_key_available": True,
+            "api_key_available": has_auth,
             "capability": "github-copilot-chat",
             "model": provider.model,
             "native_chat": True,
-            "unavailable_reason": "",
         })
+        if not copilot_available:
+            return _unavailable(
+                status,
+                "GitHub Copilot is not configured. "
+                "Set a Copilot auth token in Settings to enable.",
+            )
         return status
 
     if provider.id == "claude-code":

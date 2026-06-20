@@ -963,7 +963,7 @@ def test_phase1_ai_editor_regressions() -> None:
            registry_cli_flags.get("chat") is True
             and registry_cli_flags.get("claude-code") is True
             and registry_cli_flags.get("codex") is True
-            and registry_cli_flags.get("copilot") is True)
+            and registry_cli_flags.get("copilot") is False)
 
     api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
     api_cli_items = {p["id"]: p
@@ -1051,7 +1051,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("extension providers expose CLI status without CLI gating",
            api_cli_items.get("claude-code", {}).get("available") is True
            and api_cli_items.get("codex", {}).get("available") is True
-           and api_cli_items.get("copilot", {}).get("available") is True)
+           and api_cli_items.get("copilot", {}).get("available") is False)
 
     api_key_settings = {"ai_editor": {
         "codex": {"model": "codex-status-test"},

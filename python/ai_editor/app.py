@@ -1132,6 +1132,19 @@ class AIEditorAPI:
         if vscode_ns and runtime_view_id:
             runtime_html = vscode_ns.get_webview_html(runtime_view_id)
             if runtime_html:
+                # Detect CLI placeholder HTML that was never updated by a
+                # real runtime.  Return unavailable so the frontend falls
+                # back to the native chat panel instead of showing a dead
+                # "Waiting for ... runtime" iframe.
+                if self._is_cli_placeholder_html(runtime_html, runtime_view_id):
+                    return {
+                        "html": "",
+                        "view_id": fallback_id,
+                        "available": False,
+                        "source": "cli-placeholder",
+                        "reason": "CLI runtime not connected.",
+                        "state": self._provider_webview_state("", fallback_id),
+                    }
                 return {"html": runtime_html, "view_id": runtime_view_id,
                         "available": True, "source": "runtime",
                         "state": self._provider_webview_state(runtime_view_id, fallback_id)}
@@ -2087,6 +2100,17 @@ class AIEditorAPI:
             return False
         return bool(self._provider_candidate_view_ids(prov))
 
+    def _is_cli_placeholder_html(self, html: str, view_id: str) -> bool:
+        """Return True if *html* is the stub set by _register_cli_provider_views.
+
+        The stub contains "Waiting for <provider> runtime" and is never
+        updated because no real CLI process is running.  Treating it as
+        real content would show a permanent dead placeholder in the UI.
+        """
+        if view_id not in self._CLI_WEBVIEW_EXTENSION_IDS:
+            return False
+        return "Waiting for" in html and "runtime" in html
+
     def _provider_runtime_webview_id(self, provider_id: str) -> str:
         info = self._provider_runtime_webview_info(provider_id)
         return str(
@@ -2316,6 +2340,8 @@ class AIEditorAPI:
             view_id = str(view.get("id") or "").strip()
             extension_id = str(view.get("_extensionId") or "").strip()
             if not view_id or self._is_copilot_extension_id(extension_id):
+                continue
+            if extension_id in self._CLI_WEBVIEW_EXTENSION_IDS:
                 continue
             if self._non_dynamic_provider_for_view_id(view_id):
                 continue
@@ -3083,15 +3109,21 @@ body {
         home_ext = os.path.join(os.path.expanduser("~"), ".sao", "extensions")
         if os.path.isdir(home_ext):
             ext_dirs.append(home_ext)
-        # VSCode extensions directory
-        vscode_ext = os.path.join(os.path.expanduser("~"),
-                                   ".vscode", "extensions")
-        if os.path.isdir(vscode_ext):
-            ext_dirs.append(vscode_ext)
-        vscode_insiders_ext = os.path.join(
-            os.path.expanduser("~"), ".vscode-insiders", "extensions")
-        if os.path.isdir(vscode_insiders_ext):
-            ext_dirs.append(vscode_insiders_ext)
+        # VSCode extension directories: only scan when the user has
+        # explicitly configured an allowed_publishers list, otherwise every
+        # installed extension (themes, language packs, linters, etc.) gets
+        # picked up as phantom extension entries and webview tabs.
+        ext_settings = self._extension_settings()
+        allowed = [str(x).strip() for x in ext_settings.get("allowed_publishers", []) if str(x).strip()]
+        if allowed:
+            vscode_ext = os.path.join(os.path.expanduser("~"),
+                                       ".vscode", "extensions")
+            if os.path.isdir(vscode_ext):
+                ext_dirs.append(vscode_ext)
+            vscode_insiders_ext = os.path.join(
+                os.path.expanduser("~"), ".vscode-insiders", "extensions")
+            if os.path.isdir(vscode_insiders_ext):
+                ext_dirs.append(vscode_insiders_ext)
         return ext_dirs
 
     def _register_ext_tools(self) -> None:

@@ -2011,7 +2011,7 @@ en:{
   provider_unavailable_generic:'Configure this provider in Settings.',
   provider_runtime_backend:'runs on $1',provider_runtime_cli_fallback:'CLI preference saved · embedded chat uses $1',provider_runtime_direct:'transport: $1',
   provider_backend_openai:'OpenAI',provider_backend_anthropic:'Anthropic',provider_backend_deepseek:'DeepSeek',provider_backend_ollama:'Ollama',provider_backend_custom:'Custom',provider_backend_github_copilot:'GitHub Copilot',
-  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI preference',provider_transport_copilot_chat:'Copilot chat',
+  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI preference',provider_transport_copilot_chat:'Copilot chat',provider_transport_native_chat:'Native Chat',
   provider_status_unavailable:'Unavailable',provider_status_ready:'Ready',provider_status_thinking:'Thinking...',
   provider_status_streaming:'Streaming...',provider_status_stopping:'Stopping...',provider_status_waiting_confirm:'Waiting for confirmation',
   provider_status_tool_running:'Tool: $1',provider_status_tool_progress:'Tool: $1 · $2',provider_status_tool_complete:'Tool complete',provider_status_error:'Error',
@@ -2132,7 +2132,7 @@ zh:{
   provider_unavailable_generic:'请在设置中配置此提供商。',
   provider_runtime_backend:'运行后端: $1',provider_runtime_cli_fallback:'已保存 CLI 偏好 · 内嵌聊天使用 $1',provider_runtime_direct:'传输方式: $1',
   provider_backend_openai:'OpenAI',provider_backend_anthropic:'Anthropic',provider_backend_deepseek:'DeepSeek',provider_backend_ollama:'Ollama',provider_backend_custom:'自定义',provider_backend_github_copilot:'GitHub Copilot',
-  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI 偏好',provider_transport_copilot_chat:'Copilot 聊天',
+  provider_transport_chat_completions:'Chat Completions',provider_transport_responses:'Responses',provider_transport_cli:'CLI 偏好',provider_transport_copilot_chat:'Copilot 聊天',provider_transport_native_chat:'原生对话',
   provider_status_unavailable:'不可用',provider_status_ready:'就绪',provider_status_thinking:'思考中...',
   provider_status_streaming:'流式输出中...',provider_status_stopping:'停止中...',provider_status_waiting_confirm:'等待确认',
   provider_status_tool_running:'工具: $1',provider_status_tool_progress:'工具: $1 · $2',provider_status_tool_complete:'工具完成',provider_status_error:'错误',
@@ -3747,7 +3747,8 @@ function providerRuntimeHint(p){
   if(!p||p.available===false)return '';
   if(p.runtime_mode==='backend-fallback')return tf('provider_runtime_backend',providerBackendLabel(p.backend_provider||p.provider_type||''));
   if(p.runtime_mode==='cli-fallback')return tf('provider_runtime_cli_fallback',providerTransportLabel(p.resolved_transport||p.transport||'responses'));
-  if(p.resolved_transport)return tf('provider_runtime_direct',providerTransportLabel(p.resolved_transport));
+  const rt=p.resolved_transport;
+  if(rt&&rt!=='native-chat')return tf('provider_runtime_direct',providerTransportLabel(rt));
   return '';
 }
 function providerFooterHint(p){
@@ -4053,6 +4054,15 @@ async function renderProviderTabs(){
   panels.querySelectorAll('.right-panel:not(#rp-chat)').forEach(p=>p.remove());
   orderedProviders.forEach(p=>{
     if(p.id==='chat')return;
+    // Filter phantom providers: webview views and extension-contributed entries
+    // that are not built-in and not explicitly registered by plugins
+    const isBuiltin=BUILTIN_PROVIDER_ORDER.includes(p.id);
+    const isPluginRegistered=!!dynamicExtensionProviderDefs[p.id];
+    if(!isBuiltin&&!isPluginRegistered){
+      const pid=String(p.id||'');
+      if(pid.startsWith('view-')||pid.indexOf('.')!==-1)return;
+      if(p.transport==='webview-pending'||p.runtime_mode==='webview-pending')return;
+    }
     if(p.available===false&&!isExtensionWebviewProvider(p))return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
