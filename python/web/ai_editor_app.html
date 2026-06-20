@@ -4063,7 +4063,7 @@ async function renderProviderTabs(){
       if(pid.startsWith('view-')||pid.indexOf('.')!==-1)return;
       if(p.transport==='webview-pending'||p.runtime_mode==='webview-pending')return;
     }
-    if(p.available===false&&!isExtensionWebviewProvider(p))return;
+    if(p.available===false)return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
     const tabLabel=document.createElement('span');tabLabel.className='rtab-label';tabLabel.textContent=providerTabLabel(p);

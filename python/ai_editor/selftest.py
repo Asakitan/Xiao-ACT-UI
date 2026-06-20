@@ -1231,11 +1231,8 @@ def test_phase1_ai_editor_regressions() -> None:
         p.get("id"): p for p in dynamic_api.list_chat_providers().get("providers", [])
     }
     dynamic_row = dynamic_providers.get("selftest.dynamic.view", {})
-    _check("manifest webview contribution dynamically creates provider tab",
-           dynamic_row.get("runtime_mode") == "extension-webview"
-           and dynamic_row.get("transport") == "extension-webview"
-           and dynamic_row.get("metadata", {}).get("dynamic_webview_provider") is True
-           and dynamic_row.get("webview_id") == "selftest.dynamic.view")
+    _check("manifest-only webview does NOT create phantom provider tab",
+           not dynamic_row)
 
     class _DynamicWebviewProvider:
         def __init__(self, html_text):

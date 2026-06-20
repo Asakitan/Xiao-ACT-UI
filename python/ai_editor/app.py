@@ -1123,12 +1123,18 @@ class AIEditorAPI:
             or runtime_info.get("runtime_view_id")
             or ""
         )
+        if not activate_view_id:
+            for mv in self._all_manifest_views(webview_only=True):
+                if str(mv.get("id") or "") == provider_id:
+                    activate_view_id = provider_id
+                    break
         if activate_view_id:
             self._activate_provider_view(activate_view_id)
             self._sync_dynamic_webview_providers()
             runtime_info = self._provider_runtime_webview_info(provider_id)
         vscode_ns = getattr(self, "_vscode_ns", None)
-        runtime_view_id = str(runtime_info.get("runtime_view_id") or "")
+        runtime_view_id = str(
+            runtime_info.get("runtime_view_id") or activate_view_id or "")
         if vscode_ns and runtime_view_id:
             runtime_html = vscode_ns.get_webview_html(runtime_view_id)
             if runtime_html:
@@ -2252,12 +2258,21 @@ class AIEditorAPI:
             return False
         from ai_editor.chat_providers import ChatProviderDef
 
+        vscode_ns = getattr(self, "_vscode_ns", None)
+
         desired: Dict[str, ChatProviderDef] = {}
         for spec in self._dynamic_webview_provider_specs():
             provider_id = str(spec.get("provider_id") or "").strip()
             view_id = str(spec.get("view_id") or "").strip()
             if not provider_id or not view_id:
                 continue
+            # Only create dynamic providers for views that have REAL HTML
+            # content from an activated extension. Manifest-only declarations
+            # should not create phantom tabs.
+            if vscode_ns:
+                html = vscode_ns.get_webview_html(view_id) if hasattr(vscode_ns, "get_webview_html") else ""
+                if not html or self._is_cli_placeholder_html(html, view_id):
+                    continue
             extension_id = str(spec.get("extension_id") or "").strip()
             metadata = {
                 self._DYNAMIC_WEBVIEW_METADATA_KEY: True,
@@ -2830,7 +2845,8 @@ class AIEditorAPI:
             return
         self._extensions_inited = True
         self._init_extension_host()
-        self._register_cli_provider_views()
+        # CLI provider views removed: claude-code/codex use native chat
+        # panel with CliChatController, not separate webview views.
 
     def _init_extension_host(self) -> None:
         """Scan extension directories and start the host.
