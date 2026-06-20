@@ -176,6 +176,34 @@ class _FailingSettingsGui(_FakeGui):
         self._ai_engine_actions = dict(_FakeGui._ai_engine_actions)
 
 
+class _FakeVscodeNamespace:
+    def __init__(self, html_by_id=None):
+        self.html_by_id = dict(html_by_id or {})
+        self.delivered = []
+
+    def get_webview_html(self, view_id):
+        return self.html_by_id.get(view_id, "")
+
+    def list_webview_view_ids(self):
+        return list(self.html_by_id.keys())
+
+    def deliver_webview_message(self, view_id, message):
+        if view_id not in self.html_by_id:
+            return False
+        self.delivered.append((view_id, message))
+        return True
+
+
+class _FakeExtPoints:
+    def __init__(self, all_contributions):
+        self.all_contributions = all_contributions
+
+
+class _FakeExtensionHost:
+    def __init__(self, all_contributions):
+        self.ext_points = _FakeExtPoints(all_contributions)
+
+
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
     from ai_editor.app import AIEditorAPI, _activate_window_handle, _normalize_window_geometry
@@ -310,10 +338,32 @@ def test_app_settings_parity() -> None:
            and loaded.get("active_chat_provider") == "copilot"
            and loaded.get("layout", {}).get("panelHeight") == "320px")
 
-    no_settings_result = AIEditorAPI(_FakeGui()).save_config({"provider": "openai"})
-    _check("save_config reports missing settings instead of fake success",
-           no_settings_result.get("error") == "Settings not available"
-           and no_settings_result.get("applied") is True)
+    from ai_editor import app as app_mod
+    from config import SettingsManager
+    previous_standalone_settings = getattr(app_mod, "_STANDALONE_SETTINGS", None)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            standalone_path = os.path.join(td, "settings.json")
+            app_mod._STANDALONE_SETTINGS = SettingsManager(standalone_path)
+            standalone_api = AIEditorAPI(_FakeGui())
+            no_settings_result = standalone_api.save_config({
+                "provider": "openai",
+                "theme": "light",
+                "active_chat_provider": "copilot",
+                "layout": {"panelHeight": "280px"},
+            })
+            switch_result = standalone_api.switch_provider("copilot")
+            reloaded = AIEditorAPI(_FakeGui()).load_config()
+            _check("standalone AI Editor persists settings fallback",
+                   no_settings_result.get("ok") is True
+                   and not no_settings_result.get("error")
+                   and switch_result.get("ok") is True
+                   and not switch_result.get("persist_error")
+                   and reloaded.get("theme") == "light"
+                   and reloaded.get("active_chat_provider") == "copilot"
+                   and reloaded.get("layout", {}).get("panelHeight") == "280px")
+    finally:
+        app_mod._STANDALONE_SETTINGS = previous_standalone_settings
 
     save_failure_result = AIEditorAPI(_FailingSettingsGui({"ai_editor": {}})).save_config({"provider": "openai"})
     _check("save_config surfaces persistence errors",
@@ -988,6 +1038,14 @@ def test_phase1_ai_editor_regressions() -> None:
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
            and 'getState:function(){return _state}' in html)
+    _check("frontend maps provider webview ids back to panels",
+           "panel.dataset.viewId=wv.view_id||('provider.'+p.id)" in html
+           and "document.querySelector('.right-panel[data-view-id=\"'+viewSelector+'\"]')" in html
+           and "String(viewId).startsWith('provider.')" in html)
+    _check("CLI providers never use built-in chat fallback panel",
+           "CLI providers own their panels. Never substitute the built-in chat UI." in html
+           and "placeholder.dataset.cliPanelUnavailable='true'" in html
+           and "else{_buildChatProviderPanel(panel,p);placeholder.remove()}" not in html)
     _check("webview bridge avoids raw script parser sentinel",
            "const bridgeScript='<script>'" not in html
            and "const bridgeScript='<scr'+'ipt>'" in html)
@@ -1010,6 +1068,47 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("provider webview state survives backend lookup without vscode namespace",
            state_api.webview_set_state("provider.codex", {"draft": 1}).get("ok") is True
            and state_api.get_provider_webview("codex").get("state") == {"draft": 1})
+
+    runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    runtime_ns = _FakeVscodeNamespace({"provider.codex": "<html>runtime codex</html>"})
+    runtime_api._vscode_ns = runtime_ns
+    runtime_result = runtime_api.get_provider_webview("codex")
+    post_result = runtime_api.webview_post_message("provider.codex", {"type": "send", "text": "hi"})
+    _check("provider runtime webview wins over fallback UI",
+           runtime_result.get("source") == "runtime"
+           and runtime_result.get("view_id") == "provider.codex"
+           and "runtime codex" in runtime_result.get("html", ""))
+    _check("webview postMessage uses vscode namespace bridge",
+           post_result.get("ok") is True
+           and runtime_ns.delivered == [("provider.codex", {"type": "send", "text": "hi"})])
+
+    manifest_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    manifest_api._vscode_ns = _FakeVscodeNamespace({})
+    manifest_api._ext_host = _FakeExtensionHost({
+        "views": {
+            "codex": [{
+                "id": "chatgpt.sidebarView",
+                "name": "Codex",
+                "_extensionId": "openai.chatgpt",
+                "_viewLocation": "codex",
+            }]
+        },
+        "commands": [{"command": "chatgpt.newChat", "_extensionId": "openai.chatgpt"}],
+        "chatParticipants": [],
+        "languageModelTools": [],
+        "authentication": [],
+        "mcpServerDefinitionProviders": [],
+    })
+    manifest_result = manifest_api.get_provider_webview("codex")
+    _check("manifest-only CLI provider exposes no built-in panel",
+           manifest_result.get("available") is False
+           and manifest_result.get("source") == "none"
+           and manifest_result.get("view_id") == "provider.codex"
+           and manifest_result.get("html") == "")
+
+    ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
+    _check("extension views contribution remains enabled for old settings",
+           "views" in ext_defaults._enabled_extension_contributions())
 
 
 def test_tool_registry() -> None:

@@ -3827,11 +3827,18 @@ async function renderProviderTabs(){
       placeholder.textContent='Loading...';
       panel.appendChild(placeholder);
       panels.appendChild(panel);
-      // Request the extension-provided webview HTML
+      // CLI providers own their panels. Never substitute the built-in chat UI.
       (async()=>{
         const wv=await call('get_provider_webview',p.id);
-        if(wv&&wv.html){_injectWebviewHtml(panel,wv.view_id||('provider.'+p.id),wv.html,wv.state)}
-        else{_buildChatProviderPanel(panel,p);placeholder.remove()}
+        if(wv&&wv.html){
+          panel.dataset.viewId=wv.view_id||('provider.'+p.id);
+          panel.dataset.webviewSource=wv.source||'runtime';
+          _injectWebviewHtml(panel,panel.dataset.viewId,wv.html,wv.state)
+        }
+        else{
+          placeholder.textContent='CLI provider panel is not registered by the provider runtime.';
+          placeholder.dataset.cliPanelUnavailable='true';
+        }
       })();
     }else{
       _buildChatProviderPanel(panel,p);
@@ -3975,9 +3982,15 @@ window._onEditorEvent=function(event,data){
   if(event==='render_webview_panel'){
     const viewId=data&&data.view_id,html=data&&data.html;
     if(!viewId||!html)return;
-    // Find the provider panel div for this view_id
-    const panelEl=$(providerElId('rp',viewId));
-    if(panelEl){_injectWebviewHtml(panelEl,viewId,html)}
+    // Runtime view ids are usually `provider.<id>`, but real extensions often
+    // use their own ids (for example `chatgpt.sidebarView`). Prefer the exact
+    // data-view-id match, then map provider.<id> back to the provider panel.
+    const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):'';
+    const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(viewId):String(viewId).replace(/["\\]/g,'\\$&');
+    const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]')
+      ||(providerId?$(providerElId('rp',providerId)):null)
+      ||$(providerElId('rp',viewId));
+    if(panelEl){panelEl.dataset.viewId=viewId;_injectWebviewHtml(panelEl,viewId,html)}
     return;
   }
   // ── webview_message: relay message from Python to webview iframe ──

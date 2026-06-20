@@ -119,7 +119,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "confirm_install": True,
         "allowed_publishers": [],
         "blocked_publishers": [],
-        "enabled_contributions": ["chatParticipants", "languageModelTools", "commands"],
+        "enabled_contributions": ["chatParticipants", "languageModelTools", "commands", "views"],
     },
     "customization": {
         "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
@@ -302,13 +302,33 @@ def _merge_ai_editor_config(existing: Any, incoming: Any) -> Dict[str, Any]:
     return _normalize_ai_editor_config(merged)
 
 
+_STANDALONE_SETTINGS = None
+
+
+def _resolve_settings(gui_ref: Any = None):
+    settings = getattr(gui_ref, 'settings', None) if gui_ref else None
+    if settings:
+        return settings
+    settings = getattr(gui_ref, '_cfg_settings_ref', None) if gui_ref else None
+    if settings:
+        return settings
+    global _STANDALONE_SETTINGS
+    if _STANDALONE_SETTINGS is None:
+        try:
+            from config import SettingsManager
+            _STANDALONE_SETTINGS = SettingsManager()
+        except Exception:
+            _STANDALONE_SETTINGS = False
+    return None if _STANDALONE_SETTINGS is False else _STANDALONE_SETTINGS
+
+
 def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
     """Shared helper: build a ProviderConfig from settings.
 
     Used by both ``AIEditorAPI`` (pywebview) and ``AIEditorBridge``
     (C# webview) to avoid duplicated config-parsing logic.
     """
-    settings = getattr(gui_ref, 'settings', None) if gui_ref else None
+    settings = _resolve_settings(gui_ref)
     if not settings:
         return ProviderConfig()
     raw = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
@@ -638,7 +658,7 @@ class AIEditorAPI:
         self._mcp = None
         try:
             from ai_editor.mcp_client import McpManager, load_mcp_configs
-            settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+            settings = _resolve_settings(self._gui_ref)
             getter = (lambda k, d=None: settings.get(k, d)) if settings else None
             configs = load_mcp_configs(getter)
             if configs:
@@ -731,7 +751,7 @@ class AIEditorAPI:
         actions["run_workflow"] = lambda **kw: self._eng_run_workflow(kw)
 
     def _settings_getter(self, key: str, default=None):
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if settings:
             return settings.get(key, default)
         return default
@@ -754,7 +774,7 @@ class AIEditorAPI:
         cfg = self._load_config_obj()
         # Load theme from ACT panel_themes or ai_editor config
         theme = "dark"
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         ai_cfg = {}
         if settings:
             ai_cfg = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
@@ -801,7 +821,7 @@ class AIEditorAPI:
         return result
 
     def save_config(self, data: Dict) -> Dict:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         merged = _merge_ai_editor_config({}, data)
         if settings:
             merged = _merge_ai_editor_config(settings.get("ai_editor", {}) or {}, data)
@@ -827,7 +847,7 @@ class AIEditorAPI:
                 setattr(self._engine.config, k, v)
 
     def _persist_ai_editor_config(self, merged: Dict[str, Any]) -> Optional[str]:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             return "Settings not available"
         settings.set("ai_editor", merged)
@@ -838,7 +858,7 @@ class AIEditorAPI:
         return None
 
     def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         current = settings.get("ai_editor", {}) if settings else self.load_config()
         merged = _merge_ai_editor_config(current or {}, data)
         persist_error = self._persist_ai_editor_config(merged)
@@ -1029,37 +1049,34 @@ class AIEditorAPI:
     def webview_post_message(self, view_id: str, message: Any) -> Dict:
         """Relay a message FROM the webview HTML TO the extension.
 
-        Finds the _WebviewView for *view_id* in the vscode namespace and
-        fires its webview message emitter so that any onDidReceiveMessage
-        listener sees the message.
+        Routes through the VS Code namespace bridge so runtime webview views and
+        panels receive the same onDidReceiveMessage event shape.
         """
         vscode_ns = getattr(self, "_vscode_ns", None)
         if not vscode_ns:
             return {"error": "vscode namespace not initialized"}
-        webview_view = vscode_ns._webview_views.get(view_id)
-        if not webview_view:
-            return {"error": f"No webview view found for: {view_id}"}
-        webview = getattr(webview_view, "webview", None)
-        if not webview or not hasattr(webview, "_message_emitter"):
-            return {"error": f"Webview has no message emitter: {view_id}"}
-        webview._message_emitter.fire(message)
+        delivered = vscode_ns.deliver_webview_message(view_id, message)
+        if not delivered:
+            return {"error": f"No webview receiver found for: {view_id}"}
         return {"ok": True, "view_id": view_id}
 
     def get_provider_webview(self, provider_id: str) -> Dict:
-        """Return the webview HTML content if a provider has a registered webview view."""
-        view_id = f"provider.{provider_id}"
+        """Return registered plugin/runtime webview HTML for a provider tab."""
+        provider_id = str(provider_id or "").strip()
+        if not provider_id:
+            return {"html": "", "view_id": "", "available": False, "state": None}
+        view_id = self._provider_runtime_webview_id(provider_id)
         vscode_ns = getattr(self, "_vscode_ns", None)
-        if not vscode_ns:
-            return {"html": "", "view_id": view_id, "available": False,
-                    "state": self._webview_states.get(view_id)}
-        webview_view = vscode_ns._webview_views.get(view_id)
-        if not webview_view:
-            return {"html": "", "view_id": view_id, "available": False,
-                    "state": self._webview_states.get(view_id)}
-        webview = getattr(webview_view, "webview", None)
-        html = getattr(webview, "html", "") if webview else ""
-        return {"html": html, "view_id": view_id, "available": bool(html),
-                "state": self._webview_states.get(view_id)}
+        if vscode_ns and view_id:
+            runtime_html = vscode_ns.get_webview_html(view_id)
+            if runtime_html:
+                return {"html": runtime_html, "view_id": view_id,
+                        "available": True, "source": "runtime",
+                        "state": self._webview_states.get(view_id)}
+        fallback_id = f"provider.{provider_id}"
+        return {"html": "", "view_id": fallback_id, "available": False,
+            "source": "none",
+                "state": self._webview_states.get(fallback_id)}
 
     def webview_set_state(self, view_id: str, state: Any) -> Dict:
         normalized_view_id = str(view_id or "").strip()
@@ -1494,7 +1511,7 @@ class AIEditorAPI:
 
     def save_user_instructions(self, text: str) -> Dict:
         """Persist user-level instructions to settings."""
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             return {"error": "Settings not available"}
         ai = settings.get("ai_editor", {}) or {}
@@ -1634,7 +1651,7 @@ class AIEditorAPI:
         return {"scopes": scopes}
 
     def _save_mode_to_settings(self) -> Optional[str]:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             return "Settings not available"
         ai = settings.get("ai_editor", {}) or {}
@@ -1954,15 +1971,70 @@ class AIEditorAPI:
         "codex": {"color": "#16a34a", "icon": "\U0001f52e", "name": "Codex"},
     }
 
-    def _register_cli_provider_views(self) -> None:
-        """Register webview view providers for each available CLI provider.
+    _PROVIDER_VIEW_SYNONYMS: Dict[str, List[str]] = {
+        "claude-code": ["claude-code", "claude code", "claudevscode", "anthropic.claude-code"],
+        "copilot": ["copilot", "github.copilot", "github.copilot-chat", "copilot-chat"],
+        "codex": ["codex", "chatgpt", "openai.chatgpt", "openai"],
+    }
 
-        Called once during init. For each CLI provider (claude-code, codex,
-        copilot) that has ``find_cli()`` returning a path, this registers a
-        webview view with id ``provider.<provider_id>`` whose HTML is a
-        self-contained chat panel. The onDidReceiveMessage handler pipes
-        messages through the CliChatController.
-        """
+    def _provider_runtime_webview_id(self, provider_id: str) -> str:
+        registry = getattr(self, "_provider_registry", None)
+        provider = registry.get(provider_id) if registry else None
+        candidates: List[str] = []
+        explicit = getattr(provider, "webview_id", "") if provider else ""
+        if explicit:
+            candidates.append(str(explicit))
+        candidates.append(f"provider.{provider_id}")
+        candidates.extend(str(v.get("id") or "") for v in self._provider_manifest_views(provider_id))
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns:
+            for view_id in vscode_ns.list_webview_view_ids():
+                if self._provider_text_matches(provider_id, view_id):
+                    candidates.append(view_id)
+            for view_id in candidates:
+                if view_id and vscode_ns.get_webview_html(view_id):
+                    return view_id
+        return candidates[0] if candidates else f"provider.{provider_id}"
+
+    def _provider_manifest_views(self, provider_id: str) -> List[Dict[str, Any]]:
+        ext_host = getattr(self, "_ext_host", None)
+        if not ext_host:
+            return []
+        contributions = ext_host.ext_points.all_contributions.get("views", {})
+        matched: List[Dict[str, Any]] = []
+        for location, views in contributions.items():
+            if not isinstance(views, list):
+                continue
+            for view in views:
+                if not isinstance(view, dict):
+                    continue
+                text = " ".join(str(view.get(k, "")) for k in (
+                    "id", "name", "_extensionId", "_viewLocation", "when"))
+                text = f"{text} {location}"
+                if self._provider_text_matches(provider_id, text):
+                    item = dict(view)
+                    item["_viewLocation"] = item.get("_viewLocation") or str(location)
+                    matched.append(item)
+        matched.sort(key=lambda v: (
+            0 if self._provider_text_matches(provider_id, str(v.get("id", ""))) else 1,
+            str(v.get("name") or v.get("id") or "").casefold(),
+        ))
+        return matched
+
+    def _provider_text_matches(self, provider_id: str, text: str) -> bool:
+        hay = re.sub(r"[^a-z0-9]+", " ", str(text or "").casefold())
+        compact = hay.replace(" ", "")
+        tokens = self._PROVIDER_VIEW_SYNONYMS.get(provider_id, [provider_id])
+        for token in tokens:
+            token_norm = re.sub(r"[^a-z0-9]+", " ", token.casefold()).strip()
+            if token_norm and token_norm in hay:
+                return True
+            if token_norm.replace(" ", "") and token_norm.replace(" ", "") in compact:
+                return True
+        return False
+
+    def _register_cli_provider_views(self) -> None:
+        """Wire existing provider webview views without installing stub UI."""
         try:
             from ai_editor.cli_controller import find_cli
         except ImportError:
@@ -1975,153 +2047,11 @@ class AIEditorAPI:
             if not cli_path:
                 continue
             view_id = f"provider.{provider_id}"
-            # Skip if already registered
-            if view_id in vscode_ns._webview_views:
-                continue
-            branding = self._CLI_PROVIDER_BRANDING.get(provider_id, {
-                "color": "#6b7280", "icon": "●", "name": provider_id,
-            })
-            html = self._cli_provider_chat_html(provider_id, branding)
-
-            class _CliWebviewViewProvider:
-                """Minimal webview view provider for a CLI chat panel."""
-                def __init__(self, panel_html: str):
-                    self._html = panel_html
-                def resolveWebviewView(self, webview_view, context, token):
-                    webview_view.webview.html = self._html
-
-            provider = _CliWebviewViewProvider(html)
-            vscode_ns._register_webview_view_provider(view_id, provider)
-            # Wire onDidReceiveMessage to pipe into the CLI controller
             wv_view = vscode_ns._webview_views.get(view_id)
             if wv_view and wv_view.webview:
                 wv_view.webview.onDidReceiveMessage(
                     lambda msg, _pid=provider_id: self._on_cli_webview_message(_pid, msg)
                 )
-
-    @staticmethod
-    def _cli_provider_chat_html(provider_id: str, branding: Dict[str, str]) -> str:
-        """Return a self-contained chat panel HTML for a CLI provider."""
-        color = branding.get("color", "#6b7280")
-        icon = branding.get("icon", "●")
-        name = branding.get("name", provider_id)
-        # The panel uses acquireVsCodeApi().postMessage() to send messages
-        # and listens for messages from the extension for streaming deltas.
-        return f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-  background:#1e1e2e;color:#cdd6f4;display:flex;flex-direction:column;height:100vh}}
-.header{{padding:10px 14px;border-bottom:1px solid #313244;display:flex;align-items:center;gap:8px}}
-.header .icon{{font-size:18px;color:{color}}}
-.header .title{{font-size:13px;font-weight:600;color:#cdd6f4}}
-.messages{{flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px}}
-.msg{{padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word}}
-.msg.user{{background:#313244;align-self:flex-end;max-width:85%}}
-.msg.assistant{{background:#181825;align-self:flex-start;max-width:90%;border:1px solid #313244}}
-.msg.error{{background:#45243e;color:#f38ba8;border:1px solid #6c3050}}
-.input-area{{padding:10px 14px;border-top:1px solid #313244;display:flex;gap:8px}}
-.input-area textarea{{flex:1;background:#313244;color:#cdd6f4;border:1px solid #45475a;
-  border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;
-  min-height:36px;max-height:120px;outline:none}}
-.input-area textarea:focus{{border-color:{color}}}
-.input-area button{{background:{color};color:#fff;border:none;border-radius:6px;
-  padding:0 14px;font-size:13px;cursor:pointer;white-space:nowrap}}
-.input-area button:hover{{opacity:0.9}}
-.input-area button:disabled{{opacity:0.5;cursor:not-allowed}}
-.streaming-indicator{{display:none;padding:4px 14px;font-size:11px;color:#6c7086}}
-.streaming-indicator.active{{display:block}}
-</style>
-</head>
-<body>
-<div class="header">
-  <span class="icon">{icon}</span>
-  <span class="title">{name}</span>
-</div>
-<div class="messages" id="messages"></div>
-<div class="streaming-indicator" id="streaming">Generating...</div>
-<div class="input-area">
-  <textarea id="input" rows="1" placeholder="Message {name}..."
-    onkeydown="if(event.key==='Enter'&&!event.shiftKey){{event.preventDefault();doSend()}}"></textarea>
-  <button id="sendBtn" onclick="doSend()">Send</button>
-</div>
-<script>
-(function(){{
-  var vscode;
-  try{{ vscode=acquireVsCodeApi(); }}catch(e){{ vscode=null; }}
-  var msgEl=document.getElementById('messages');
-  var inputEl=document.getElementById('input');
-  var sendBtn=document.getElementById('sendBtn');
-  var streamEl=document.getElementById('streaming');
-  var currentAssistant=null;
-  var isStreaming=false;
-
-  function addMsg(role,text){{
-    var d=document.createElement('div');
-    d.className='msg '+role;
-    d.textContent=text;
-    msgEl.appendChild(d);
-    msgEl.scrollTop=msgEl.scrollHeight;
-    return d;
-  }}
-
-  function setStreaming(v){{
-    isStreaming=v;
-    streamEl.classList.toggle('active',v);
-    sendBtn.disabled=v;
-    inputEl.disabled=v;
-  }}
-
-  window.doSend=function(){{
-    var text=inputEl.value.trim();
-    if(!text||isStreaming) return;
-    addMsg('user',text);
-    inputEl.value='';
-    setStreaming(true);
-    currentAssistant=null;
-    if(vscode){{
-      vscode.postMessage({{type:'send',text:text}});
-    }}else if(window.pywebview&&window.pywebview.api){{
-      window.pywebview.api.webview_post_message('{f"provider.{provider_id}"}',
-        {{type:'send',text:text}});
-    }}
-  }};
-
-  function onMessage(ev){{
-    var msg=ev.data||ev;
-    if(!msg||typeof msg!=='object') return;
-    // Unwrap webview-extension-message envelope from host
-    if(msg.type==='webview-extension-message'&&msg.message){{msg=msg.message}}
-    if(msg.type==='delta'){{
-      if(!currentAssistant){{
-        currentAssistant=addMsg('assistant','');
-      }}
-      currentAssistant.textContent+=msg.content||'';
-      msgEl.scrollTop=msgEl.scrollHeight;
-    }}else if(msg.type==='end'){{
-      if(!currentAssistant&&msg.content){{
-        addMsg('assistant',msg.content);
-      }}else if(currentAssistant&&msg.content&&!currentAssistant.textContent){{
-        currentAssistant.textContent=msg.content;
-      }}
-      currentAssistant=null;
-      setStreaming(false);
-    }}else if(msg.type==='error'){{
-      addMsg('error',msg.error||'An error occurred');
-      currentAssistant=null;
-      setStreaming(false);
-    }}else if(msg.type==='thinking'){{
-      // Optionally display thinking deltas
-    }}
-  }}
-  window.addEventListener('message',onMessage);
-}})();
-</script>
-</body>
-</html>'''
 
     def _on_cli_webview_message(self, provider_id: str, message: Any) -> None:
         """Handle messages from a CLI provider webview panel."""
@@ -2810,7 +2740,11 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         ext = self._extension_settings()
         raw = ext.get("enabled_contributions", [])
         if isinstance(raw, list) and raw:
-            return [str(x) for x in raw]
+            enabled = [str(x) for x in raw]
+            for name in _AI_EDITOR_SECTION_DEFAULTS["extensions"]["enabled_contributions"]:
+                if name not in enabled:
+                    enabled.append(name)
+            return enabled
         return list(_AI_EDITOR_SECTION_DEFAULTS["extensions"]["enabled_contributions"])
 
     @staticmethod
@@ -3761,7 +3695,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         return []
 
     def _save_mcp_servers(self, servers: List[Dict[str, Any]]) -> Optional[str]:
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             return "Settings not available"
         ai = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
@@ -3858,7 +3792,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         if value not in {"up", "down", "none"}:
             return {"error": "rating must be up, down, or none"}
         record = {"rating": value, "updated_at": time.time()}
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             feedback = getattr(self, "_feedback", {})
             if not isinstance(feedback, dict):
@@ -4062,7 +3996,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 
     def _save_models_to_settings(self) -> Optional[str]:
         from ai_editor.llm_engine import _model_registry
-        settings = getattr(self._gui_ref, 'settings', None) if self._gui_ref else None
+        settings = _resolve_settings(self._gui_ref)
         if not settings:
             return "Settings not available"
         ai = settings.get("ai_editor", {}) or {}

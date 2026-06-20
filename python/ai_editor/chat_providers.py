@@ -38,6 +38,7 @@ class ChatProviderDef:
     system_prompt: str = ""
     auto_agent: bool = False
     builtin: bool = False
+    webview_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
