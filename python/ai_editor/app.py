@@ -3550,10 +3550,24 @@ body {
         if self._mcp_access() == "disabled":
             status = "disabled"
 
+        node_host = getattr(self, "_node_ext_host", None)
+        node_running = node_host is not None and getattr(node_host, "is_running", False)
+        if node_running:
+            support_tier = "full_node_host"
+            support_label = "Full Node VS Code extension host active"
+        else:
+            from ai_editor.node_runtime import is_available as _node_available
+            if _node_available():
+                support_tier = "node_available"
+                support_label = "Node.js available; host starts on demand when extensions need it"
+            else:
+                support_tier = "manifest_api_compatibility"
+                support_label = "Manifest/API compatibility; install Node.js for full extension runtime"
+
         return {
-            "support_tier": "manifest_api_compatibility",
-            "support_label": "Manifest/API compatibility; full Node VS Code host not yet enabled",
-            "node_host_enabled": False,
+            "support_tier": support_tier,
+            "support_label": support_label,
+            "node_host_enabled": node_running,
             "node_sidecar_enabled": False,
             "summary_api_launches_external_commands": False,
             "extensions": {
