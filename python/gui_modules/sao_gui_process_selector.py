@@ -12,6 +12,9 @@ from typing import Any, List, Optional
 from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font, play_sound
 from gui_modules.sao_panel_ui import (
     _sao_panel_header, _sao_panel_body, _bind_panel_drag,
+    _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER, _SAO_PANEL_ACCENT,
+    _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG, _SAO_PANEL_HEADER_BG,
+    _SAO_PANEL_SEP,
 )
 from gui_modules.sao_panel_components import action_button
 
@@ -44,25 +47,6 @@ try:
     _HAS_PSAPI = True
 except Exception:
     _HAS_PSAPI = False
-
-
-def _get_working_set_mb(pid: int) -> float:
-    if not _HAS_PSAPI:
-        return 0.0
-    try:
-        h = ctypes.windll.kernel32.OpenProcess(_PROCESS_QUERY_LIMITED, False, pid)
-        if not h:
-            return 0.0
-        try:
-            pmc = _PROCESS_MEMORY_COUNTERS()
-            pmc.cb = ctypes.sizeof(pmc)
-            if _GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
-                return pmc.WorkingSetSize / (1024 * 1024)
-        finally:
-            ctypes.windll.kernel32.CloseHandle(h)
-    except Exception:
-        pass
-    return 0.0
 
 
 def _list_processes_fallback() -> Optional[List[dict]]:
@@ -116,23 +100,25 @@ def _get_cached_game_process():
     return _cached_gp_v1
 
 
-_BG = "#1a1d23"
-_BG_HEADER = "#22262e"
-_BG_ROW = "#1e2128"
-_BG_ROW_ALT = "#252930"
-_BG_ROW_HOVER = "#2a3040"
-_BG_ROW_SEL = "#1a3050"
-_FG = "#c8cdd5"
-_FG_DIM = "#6b7280"
-_FG_PID = "#8b95a5"
-_ACCENT = "#00c896"
-_BORDER = "#2e333b"
+# ── Palette (follows panel theme) ──
+_BODY = _SAO_PANEL_BODY_BG
+_ROW_BG = "#ffffff"
+_ROW_ALT = "#f4f6f8"
+_ROW_HOVER = "#e2f6fd"
+_ROW_SEL = "#d0efff"
+_FG = _SAO_PANEL_VALUE_FG
+_FG_DIM = _SAO_PANEL_LABEL_FG
+_FG_PID = "#8c878a"
+_ACCENT = _SAO_PANEL_ACCENT
+_BORDER = _SAO_PANEL_BORDER
 _FG_WARN = "#e5a63e"
+_FG_OK = "#3fae5a"
+_CTRL_BG = "#fafbfb"
 
 
 class ProcessSelectorPanel:
-    WIDTH = 420
-    HEIGHT = 520
+    WIDTH = 440
+    HEIGHT = 540
     _MAX_VISIBLE_ROWS = 200
 
     def __init__(self, root: tk.Misc, owner: Any):
@@ -153,6 +139,7 @@ class ProcessSelectorPanel:
         self._mode_label: Optional[tk.Label] = None
         self._count_label: Optional[tk.Label] = None
         self._attach_mode: str = ""
+        self._enum_source: str = ""
         self._build()
 
     def _load_module_mode(self) -> str:
@@ -173,62 +160,66 @@ class ProcessSelectorPanel:
         win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg=_BG)
+        win.configure(bg=_SAO_PANEL_BORDER)
         self._win = win
 
-        header = _sao_panel_header(win, "Process Selector", self.hide, flat=True)
-        _bind_panel_drag(header)
+        # Standard SAO panel header (non-flat: full title bar with drag + close)
+        header = _sao_panel_header(win, '◈', 'PROCESS SELECTOR', on_close=self.hide)
+        _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win, flat=True)
-        body.configure(bg=_BG)
+        body = _sao_panel_body(win)
+        body.configure(bg=_BODY)
 
         # ── Search bar ──
-        search_frame = tk.Frame(body, bg=_BG)
-        search_frame.pack(fill=tk.X, padx=8, pady=(6, 2))
+        search_frame = tk.Frame(body, bg=_BODY)
+        search_frame.pack(fill=tk.X, padx=10, pady=(8, 4))
 
-        tk.Label(search_frame, text="🔍", bg=_BG, fg=_FG_DIM,
+        tk.Label(search_frame, text="🔍", bg=_BODY, fg=_FG_DIM,
                  font=_cjk_font(9)).pack(side=tk.LEFT, padx=(0, 4))
         search_entry = tk.Entry(search_frame, textvariable=self._search_var,
-                                bg="#2a2e36", fg=_FG, insertbackground=_FG,
+                                bg=_CTRL_BG, fg=_FG, insertbackground=_FG,
                                 relief=tk.FLAT, font=_sao_font(9),
-                                highlightthickness=1, highlightcolor=_ACCENT)
+                                highlightthickness=1, highlightcolor=_ACCENT,
+                                highlightbackground=_BORDER)
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
 
         # ── Module loading filter ──
-        mod_frame = tk.Frame(body, bg=_BG)
-        mod_frame.pack(fill=tk.X, padx=8, pady=(4, 2))
-        tk.Label(mod_frame, text="Module Loading", bg=_BG, fg=_FG_DIM,
-                 font=_sao_font(8)).pack(side=tk.LEFT, padx=(0, 8))
+        mod_frame = tk.Frame(body, bg=_BODY)
+        mod_frame.pack(fill=tk.X, padx=10, pady=(2, 4))
+        tk.Label(mod_frame, text="Module", bg=_BODY, fg=_FG_DIM,
+                 font=_sao_font(8)).pack(side=tk.LEFT, padx=(0, 6))
 
         self._mod_buttons = {}
         for mode, label in [(MODULE_NONE, "None"), (MODULE_PRIMARY, "Primary"),
                             (MODULE_SELECTED, "Selected"), (MODULE_ALL, "All")]:
-            btn = tk.Label(mod_frame, text=label, bg=_BG_HEADER, fg=_FG,
+            btn = tk.Label(mod_frame, text=label, bg=_CTRL_BG, fg=_FG,
                            font=_sao_font(8), padx=8, pady=2, cursor="hand2",
-                           relief=tk.FLAT)
+                           relief=tk.FLAT, highlightthickness=1,
+                           highlightbackground=_BORDER)
             btn.pack(side=tk.LEFT, padx=2)
             btn.bind("<Button-1>", lambda e, m=mode: self._set_module_mode(m))
             self._mod_buttons[mode] = btn
         self._update_module_buttons()
 
         # ── Column headers ──
-        hdr = tk.Frame(body, bg=_BORDER)
-        hdr.pack(fill=tk.X, padx=8, pady=(6, 0))
-        tk.Label(hdr, text="Process", bg=_BORDER, fg=_FG_DIM,
-                 font=_sao_font(8), width=28, anchor="w").pack(side=tk.LEFT, padx=(6, 0))
-        tk.Label(hdr, text="PID", bg=_BORDER, fg=_FG_DIM,
-                 font=_sao_font(8), width=8, anchor="e").pack(side=tk.RIGHT, padx=(0, 6))
+        hdr_frame = tk.Frame(body, bg=_SAO_PANEL_SEP)
+        hdr_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
+        tk.Label(hdr_frame, text="Process", bg=_SAO_PANEL_SEP, fg=_FG_DIM,
+                 font=_sao_font(8), anchor="w").pack(side=tk.LEFT, padx=(6, 0), pady=1)
+        tk.Label(hdr_frame, text="PID", bg=_SAO_PANEL_SEP, fg=_FG_DIM,
+                 font=_sao_font(8), anchor="e").pack(side=tk.RIGHT, padx=(0, 6), pady=1)
 
         # ── Scrollable process list ──
-        list_frame = tk.Frame(body, bg=_BG)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        list_frame = tk.Frame(body, bg=_BODY)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
 
-        canvas = tk.Canvas(list_frame, bg=_BG, highlightthickness=0, bd=0)
+        canvas = tk.Canvas(list_frame, bg=_ROW_BG, highlightthickness=1,
+                           highlightbackground=_BORDER, bd=0)
         scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas, bg=_BG)
+        inner = tk.Frame(canvas, bg=_ROW_BG)
 
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw", width=self.WIDTH - 32)
+        canvas.create_window((0, 0), window=inner, anchor="nw", width=self.WIDTH - 42)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -243,24 +234,24 @@ class ProcessSelectorPanel:
         self._scroll_canvas = canvas
         self._inner_frame = inner
 
-        # ── Status line: mode indicator ──
-        status_frame = tk.Frame(body, bg=_BG)
-        status_frame.pack(fill=tk.X, padx=8, pady=(2, 0))
+        # ── Status line ──
+        status_frame = tk.Frame(body, bg=_BODY)
+        status_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
 
-        self._mode_label = tk.Label(status_frame, text="", bg=_BG, fg=_FG_DIM,
+        self._mode_label = tk.Label(status_frame, text="", bg=_BODY, fg=_FG_DIM,
                                     font=_sao_font(7), anchor="w")
-        self._mode_label.pack(side=tk.LEFT, padx=(4, 0))
+        self._mode_label.pack(side=tk.LEFT, padx=(2, 0))
         self._update_mode_display()
 
-        # ── Footer: attach label + buttons ──
-        footer = tk.Frame(body, bg=_BG)
-        footer.pack(fill=tk.X, padx=8, pady=(2, 8))
+        # ── Footer ──
+        footer = tk.Frame(body, bg=_BODY)
+        footer.pack(fill=tk.X, padx=10, pady=(4, 8))
 
-        self._count_label = tk.Label(footer, text="", bg=_BG, fg=_FG_DIM,
+        self._count_label = tk.Label(footer, text="", bg=_BODY, fg=_FG_DIM,
                                      font=_sao_font(7), anchor="w")
-        self._count_label.pack(side=tk.LEFT, padx=(4, 0))
+        self._count_label.pack(side=tk.LEFT, padx=(2, 0))
 
-        self._attached_label = tk.Label(footer, text="Not attached", bg=_BG,
+        self._attached_label = tk.Label(footer, text="Not attached", bg=_BODY,
                                         fg=_FG_DIM, font=_sao_font(8), anchor="w")
         self._attached_label.pack(side=tk.LEFT, padx=(4, 0), fill=tk.X, expand=True)
 
@@ -273,7 +264,6 @@ class ProcessSelectorPanel:
         btn_refresh = action_button(footer, "Refresh", self._do_refresh)
         btn_refresh.pack(side=tk.RIGHT, padx=(4, 0))
 
-        # Restore last attached info
         self._restore_last_attach()
         self.root.after(50, self._do_refresh)
 
@@ -294,13 +284,14 @@ class ProcessSelectorPanel:
                 pass
             if tier:
                 parts.append(f"Tier:{tier}")
-            src = getattr(self, '_enum_source', '')
+            src = self._enum_source
             if src:
                 parts.append(f"Enum:{src}")
             if self._attach_mode:
                 parts.append(self._attach_mode)
             text = " · ".join(parts) if parts else "No engine"
-            self._mode_label.configure(text=text, fg=_ACCENT if parts else _FG_DIM)
+            fg = _FG_OK if parts else _FG_DIM
+            self._mode_label.configure(text=text, fg=fg)
         except Exception:
             self._mode_label.configure(text="", fg=_FG_DIM)
 
@@ -326,9 +317,11 @@ class ProcessSelectorPanel:
     def _update_module_buttons(self):
         for m, btn in self._mod_buttons.items():
             if m == self._module_mode:
-                btn.configure(bg=_ACCENT, fg="#000000")
+                btn.configure(bg=_ACCENT, fg="#000000",
+                              highlightbackground=_ACCENT)
             else:
-                btn.configure(bg=_BG_HEADER, fg=_FG)
+                btn.configure(bg=_CTRL_BG, fg=_FG,
+                              highlightbackground=_BORDER)
 
     def _schedule_filter(self):
         if self._filter_after_id is not None:
@@ -386,13 +379,13 @@ class ProcessSelectorPanel:
 
         display = self._filtered[:self._MAX_VISIBLE_ROWS]
         for i, proc in enumerate(display):
-            bg = _BG_ROW_SEL if proc["pid"] == self._selected_pid else (
-                _BG_ROW_ALT if i % 2 else _BG_ROW)
+            bg = _ROW_SEL if proc["pid"] == self._selected_pid else (
+                _ROW_ALT if i % 2 else _ROW_BG)
             row = tk.Frame(inner, bg=bg, cursor="hand2")
             row.pack(fill=tk.X, pady=0)
 
             name_lbl = tk.Label(row, text=proc["name"], bg=bg, fg=_FG,
-                                font=_sao_font(9), anchor="w", width=24)
+                                font=_sao_font(9), anchor="w", width=26)
             name_lbl.pack(side=tk.LEFT, padx=(6, 0), pady=2)
 
             pid_lbl = tk.Label(row, text=str(proc["pid"]), bg=bg, fg=_FG_PID,
@@ -402,8 +395,8 @@ class ProcessSelectorPanel:
             pid = proc["pid"]
             for widget in (row, name_lbl, pid_lbl):
                 widget.bind("<Button-1>", lambda e, p=pid: self._select_pid(p))
-                widget.bind("<Enter>", lambda e, r=row: r.configure(bg=_BG_ROW_HOVER) or
-                            [c.configure(bg=_BG_ROW_HOVER) for c in r.winfo_children()])
+                widget.bind("<Enter>", lambda e, r=row: r.configure(bg=_ROW_HOVER) or
+                            [c.configure(bg=_ROW_HOVER) for c in r.winfo_children()])
                 widget.bind("<Leave>", lambda e, r=row, idx=i, p=pid: self._restore_row_bg(r, idx, p))
                 widget.bind("<MouseWheel>", lambda e: self._scroll_canvas.yview_scroll(
                     int(-1 * (e.delta / 120)), "units"))
@@ -412,13 +405,13 @@ class ProcessSelectorPanel:
             self._row_frames.append(row)
 
         if len(self._filtered) > self._MAX_VISIBLE_ROWS:
-            trunc = tk.Label(inner, text=f"… {len(self._filtered) - self._MAX_VISIBLE_ROWS} more (use search to filter)",
-                             bg=_BG, fg=_FG_DIM, font=_sao_font(7))
+            trunc = tk.Label(inner, text=f"… {len(self._filtered) - self._MAX_VISIBLE_ROWS} more (use search)",
+                             bg=_ROW_BG, fg=_FG_DIM, font=_sao_font(7))
             trunc.pack(fill=tk.X, pady=4)
 
     def _restore_row_bg(self, row, idx, pid):
-        bg = _BG_ROW_SEL if pid == self._selected_pid else (
-            _BG_ROW_ALT if idx % 2 else _BG_ROW)
+        bg = _ROW_SEL if pid == self._selected_pid else (
+            _ROW_ALT if idx % 2 else _ROW_BG)
         row.configure(bg=bg)
         for c in row.winfo_children():
             c.configure(bg=bg)
@@ -426,12 +419,12 @@ class ProcessSelectorPanel:
     def _select_pid(self, pid: int):
         old_pid = self._selected_pid
         self._selected_pid = pid
+        display = self._filtered[:self._MAX_VISIBLE_ROWS]
         for i, row in enumerate(self._row_frames):
-            display = self._filtered[:self._MAX_VISIBLE_ROWS]
             if i < len(display):
                 p = display[i]["pid"]
                 if p == pid or p == old_pid:
-                    bg = _BG_ROW_SEL if p == pid else (_BG_ROW_ALT if i % 2 else _BG_ROW)
+                    bg = _ROW_SEL if p == pid else (_ROW_ALT if i % 2 else _ROW_BG)
                     row.configure(bg=bg)
                     for c in row.winfo_children():
                         c.configure(bg=bg)
@@ -498,7 +491,7 @@ class ProcessSelectorPanel:
         self._attach_mode = "Stealth" if stealth else "API"
         mode = "Stealth" if stealth else "Attached"
         if self._attached_label:
-            self._attached_label.configure(text=f"✓ {mode}: {name} ({pid})", fg=_ACCENT)
+            self._attached_label.configure(text=f"✓ {mode}: {name} ({pid})", fg=_FG_OK)
         self._update_mode_display()
         try:
             play_sound("alert_close")
