@@ -63,6 +63,7 @@ python -m nuitka ^
     --nofollow-import-to=act_platform ^
     --nofollow-import-to=ui_gpu ^
     --nofollow-import-to=ai_editor ^
+    --nofollow-import-to=workshop ^
     --nofollow-import-to=license ^
     --nofollow-import-to=mem_probe ^
     --nofollow-import-to=sao_web_panel_common ^
@@ -78,7 +79,7 @@ echo [4/9] Compiling application modules to .pyd...
 if not exist "%DIST%\nuitka_modules" mkdir "%DIST%\nuitka_modules"
 
 :: Packages (--include-package ensures submodules are compiled into the .pyd)
-for %%P in (gui_modules utils render updater sao_theme act_platform ui_gpu ai_editor license mem_probe) do (
+for %%P in (gui_modules utils render updater sao_theme act_platform ui_gpu ai_editor workshop license mem_probe) do (
     echo   Compiling %%P...
     python -m nuitka --module --assume-yes-for-downloads --no-prefer-source-code --include-package=%%P --output-dir="%DIST%\nuitka_modules" --jobs=4 "%%P/" 2>nul
     if errorlevel 1 (

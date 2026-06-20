@@ -577,6 +577,15 @@ def act_plugin_import_dialog(owner: Any) -> dict[str, Any]:
     return act_plugin_import(owner, path)
 
 
+def act_open_workshop(owner: Any) -> dict[str, Any]:
+    try:
+        from workshop.app import launch as ws_launch
+        ws_launch(gui_ref=owner)
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
     """卸载一个**用户安装**的插件(卸载并删除其 user_plugins 目录)。内置插件不可删。"""
     plugin_id = str(plugin_id or "").strip()
@@ -4249,6 +4258,7 @@ __all__ = [
     "act_plugin_import",
     "act_plugin_import_dialog",
     "act_plugin_uninstall",
+    "act_open_workshop",
     "act_plugin_menu",
     "act_plugin_menu_surfaces",
     "act_plugin_action",

@@ -321,6 +321,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     <div class="pm-tabs">
         <div class="pm-tab active" id="tab-manage" onclick="PluginManager.showTab('manage')">管理 Manage</div>
         <div class="pm-tab" id="tab-panels" onclick="PluginManager.showTab('panels')">面板 Panels</div>
+        <div class="pm-tab" id="tab-workshop" onclick="PluginManager.showTab('workshop')">创意工坊 Workshop</div>
     </div>
     <div class="plugin-body" id="manage-body">
         <div class="plugin-list" id="plugin-list">
@@ -435,7 +436,8 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             set_plugin_hotkey: 'plugins.set_hotkey',
             get_plugin_ui_panels: 'plugins.ui_panels',
             render_ui_panel: 'plugins.render_ui_panel',
-            invoke_ui_action: 'plugins.invoke_ui_action'
+            invoke_ui_action: 'plugins.invoke_ui_action',
+            open_workshop: 'plugins.open_workshop'
         };
         var cmd = maps[name] || ('plugins.' + name);
         if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys' || name === 'get_plugin_ui_panels') return { name: cmd, payload: {} };
@@ -668,11 +670,16 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             render(parseResult(data));
         },
         showTab: function (name) {
+            if (name === 'workshop') {
+                apiCall('open_workshop', []);
+                return;
+            }
             var manage = name !== 'panels';
             document.getElementById('manage-body').style.display = manage ? '' : 'none';
             document.getElementById('panels-body').style.display = manage ? 'none' : '';
             document.getElementById('tab-manage').classList.toggle('active', manage);
             document.getElementById('tab-panels').classList.toggle('active', !manage);
+            document.getElementById('tab-workshop').classList.remove('active');
             PluginManager._panelsActive = !manage;
             if (!manage) PluginManager.renderPanels();
         },

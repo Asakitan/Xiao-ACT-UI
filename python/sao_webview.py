@@ -423,6 +423,7 @@ class SAOWebAPI:
             'plugins.import_dialog': lambda p: self.import_plugin_dialog(),
             'plugins.import': lambda p: self.import_plugin(p.get('archive_path', '')),
             'plugins.uninstall': lambda p: self.uninstall_plugin(p.get('plugin_id', '')),
+            'plugins.open_workshop': lambda p: self._open_workshop(),
             'plugins.hotkeys': lambda p: self.get_plugin_hotkeys(),
             'plugins.set_hotkey': lambda p: self.set_plugin_hotkey(p.get('action', ''), p.get('key', '')),
             'plugins.render_ui_panel': lambda p: self.render_ui_panel(p.get('panel_id', ''), p.get('payload', '')),
@@ -506,6 +507,10 @@ class SAOWebAPI:
     def uninstall_plugin(self, plugin_id):
         """Uninstall a user-installed plugin (delete its user_plugins dir)."""
         return json.dumps(act_plugin_uninstall(self._g, str(plugin_id or '')), ensure_ascii=False)
+
+    def _open_workshop(self):
+        from act_platform.runtime import act_open_workshop
+        return json.dumps(act_open_workshop(self._g), ensure_ascii=False)
 
     def get_plugin_hotkeys(self):
         return json.dumps(act_plugin_hotkeys(self._g), ensure_ascii=False)

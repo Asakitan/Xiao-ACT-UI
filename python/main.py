@@ -306,11 +306,16 @@ def main():
     parser.add_argument('--headless', action='store_true', help='无 HUD 终端模式')
     parser.add_argument('--ai-editor', action='store_true',
                         help='启动 AI Editor 独立窗口 (pywebview, 不进入主 UI)')
+    parser.add_argument('--workshop', action='store_true',
+                        help='启动创意工坊独立窗口 (pywebview, 不进入主 UI)')
     args = parser.parse_args()
 
     if args.ai_editor:
         from ai_editor.app import launch
         launch(blocking=True)
+    elif args.workshop:
+        from workshop.app import launch as ws_launch
+        ws_launch(blocking=True)
     elif args.test:
         run_test()
     elif args.headless:

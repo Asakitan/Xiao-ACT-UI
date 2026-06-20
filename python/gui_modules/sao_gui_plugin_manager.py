@@ -240,7 +240,7 @@ class PluginManagerPanel:
         # ── Tabs ──
         tabs = tk.Frame(body, bg=body_bg)
         tabs.pack(fill='x', padx=14, pady=(0, 4))
-        for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels')):
+        for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels'), ('workshop', '创意工坊 Workshop')):
             btn = action_button(tabs, label, lambda k=key: self._show_tab(k), kind='normal')
             btn.pack(side='left', padx=(0, 6))
             self._tab_buttons[key] = btn
@@ -279,6 +279,13 @@ class PluginManagerPanel:
         self._show_tab(self._active_tab)
 
     def _show_tab(self, name: str) -> None:
+        if name == 'workshop':
+            try:
+                from workshop.app import launch as ws_launch
+                ws_launch(gui_ref=self.owner)
+            except Exception as e:
+                print(f"[PluginManager] workshop launch failed: {e}")
+            return
         self._active_tab = name if name in ('manage', 'panels') else 'manage'
         for key, btn in self._tab_buttons.items():
             try:

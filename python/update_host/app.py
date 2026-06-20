@@ -813,6 +813,12 @@ def root():
             "POST /api/update/upload/init",
             "POST /api/update/upload/chunk",
             "POST /api/update/upload/complete",
+            "/api/workshop/catalog",
+            "/api/workshop/detail/{plugin_id}",
+            "/api/workshop/download/{plugin_id}",
+            "POST /api/workshop/publish/init",
+            "POST /api/workshop/publish/chunk",
+            "POST /api/workshop/publish/complete",
             "/downloads/*",
         ],
     }
@@ -1150,3 +1156,12 @@ async def upload_complete(
         )
 
     return JSONResponse(manifest)
+
+
+# ── Workshop (创意工坊) ──────────────────────────────────────────────
+try:
+    from update_host.workshop_routes import router as _workshop_router, init_workshop
+    init_workshop(DEFAULT_RELEASE_DIR, _authorize_publish_request)
+    app.include_router(_workshop_router)
+except Exception as _ws_exc:
+    print(f"[update_host] workshop routes not loaded: {_ws_exc}")

@@ -75,6 +75,7 @@ REORG_PKG_HIDDENIMPORTS = (
     + collect_submodules('act_platform')
     + collect_submodules('ui_gpu')
     + collect_submodules('ai_editor')
+    + collect_submodules('workshop')
     + collect_submodules('license')
 )
 MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
