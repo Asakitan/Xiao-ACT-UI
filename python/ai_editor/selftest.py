@@ -211,9 +211,12 @@ def test_app_settings_parity() -> None:
         "ai_editor": {
             "provider": "openai",
             "api_key": "old-key",
+            "approval": "bypass",
+            "active_chat_provider": "codex",
             "user_instructions": "keep me",
             "provider_keys": {"anthropic": "old-claude"},
             "custom_models": {"kept-model": {"max_input": 123, "max_output": 45}},
+            "layout": {"sidebarVisible": False, "editorVisible": True, "chatVisible": False},
             "mode": "agent",
             "permissions": {"readFile": "disabled"},
             "claude_code": {"cli_path": "claude-cli"},
@@ -228,11 +231,16 @@ def test_app_settings_parity() -> None:
         "top_p", "frequency_penalty", "presence_penalty", "stop",
         "max_input_tokens", "max_output_tokens", "timeout",
         "extra_headers", "extra_body", "provider_keys", "_provider_keys",
-        "custom_models", "mode", "permissions",
+        "custom_models", "mode", "permissions", "approval", "active_chat_provider",
     )
     _check("load_config advanced fields", all(k in loaded for k in advanced_keys))
     _check("load_config existing safe section",
            loaded.get("claude_code", {}).get("cli_path") == "claude-cli")
+    _check("load_config restores UI state payload",
+           loaded.get("approval") == "bypass"
+           and loaded.get("active_chat_provider") == "codex"
+           and loaded.get("layout", {}).get("sidebarVisible") is False
+           and loaded.get("layout", {}).get("editorVisible") is True)
     _check("load_config skips absent safe section", "codex" not in loaded)
 
     payload = {
@@ -251,6 +259,9 @@ def test_app_settings_parity() -> None:
         "timeout": "45",
         "extra_headers": {"X-Test": "1"},
         "extra_body": {"stream_options": {"include_usage": True}},
+        "approval": "autopilot",
+        "active_chat_provider": "copilot",
+        "layout": {"sidebarVisible": True, "editorVisible": True, "chatVisible": True, "panelHeight": "320px"},
         "_provider_keys": {"openai": "new-openai", "deepseek": "new-deepseek"},
         "unknown_payload": {"preserve": True},
     }
@@ -276,6 +287,10 @@ def test_app_settings_parity() -> None:
     _check("provider keys and unknown keys preserved",
            loaded.get("_provider_keys", {}).get("deepseek") == "new-deepseek"
            and stored.get("unknown_payload") == {"preserve": True})
+    _check("approval active provider and layout round-trip",
+           loaded.get("approval") == "autopilot"
+           and loaded.get("active_chat_provider") == "copilot"
+           and loaded.get("layout", {}).get("panelHeight") == "320px")
 
     no_settings_result = AIEditorAPI(_FakeGui()).save_config({"provider": "openai"})
     _check("save_config reports missing settings instead of fake success",
@@ -474,6 +489,8 @@ def test_app_settings_parity() -> None:
     window_api.set_window(fake_window)
     east_resize = window_api.win_resize_by("e", 50, 0)
     west_clamp = window_api.win_resize_by("w", 500, 0)
+    north_resize = window_api.win_resize_by("n", 0, 120)
+    south_resize = window_api.win_resize_by("s", 0, 90)
     window_api.win_minimize()
     window_api.win_maximize()
     blocked_resize = window_api.win_resize_by("se", 10, 10)
@@ -484,8 +501,14 @@ def test_app_settings_parity() -> None:
            and west_clamp.get("ok") is True
            and west_clamp.get("x") == 450
            and west_clamp.get("width") == 600
+           and north_resize.get("ok") is True
+           and north_resize.get("y") == 320
+           and north_resize.get("height") == 580
+           and south_resize.get("ok") is True
+           and south_resize.get("height") == 670
            and ("move", 450, 200) in fake_window.calls
-           and ("resize", 600, 700) in fake_window.calls)
+           and ("resize", 600, 580) in fake_window.calls
+           and ("resize", 600, 670) in fake_window.calls)
     _check("window chrome minimize maximize and resize lock work",
            fake_window.calls[-3:] == [("minimize",), ("maximize",), ("restore",)]
            and blocked_resize.get("ok") is False
@@ -595,6 +618,9 @@ def test_app_settings_parity() -> None:
         "provider": "openai",
         "api_key": "old-key",
         "model": "gpt-4o",
+        "approval": "default",
+        "active_chat_provider": "codex",
+        "layout": {"sidebarVisible": False},
         "provider_keys": {"anthropic": "old-claude"},
         "custom_models": {"toolbar-model": {"max_input": 321, "max_output": 45}},
         "mode": "plan",
@@ -607,6 +633,8 @@ def test_app_settings_parity() -> None:
            controls.get("provider") == "openai"
            and controls.get("model") == "gpt-4o"
            and controls.get("mode") == "plan"
+            and controls.get("approval") == "default"
+            and controls.get("active_chat_provider") == "codex"
            and isinstance(controls.get("providers"), list)
            and any(m.get("id") == "toolbar-model" for m in controls.get("models", []))
            and isinstance(controls.get("agents"), list)
@@ -700,18 +728,21 @@ def test_app_settings_parity() -> None:
     chat_provider_result = controls_api.set_chat_provider("chat")
     _check("set_chat_provider switches active provider tab",
            chat_provider_result.get("ok") is True
-           and chat_provider_result.get("controls", {}).get("active_chat_provider") == "chat")
+            and chat_provider_result.get("controls", {}).get("active_chat_provider") == "chat"
+            and controls_gui.settings.data["ai_editor"].get("active_chat_provider") == "chat")
 
     aggregate_result = controls_api.set_chat_controls({
         "provider": "openai", "model": "gpt-4o-mini", "mode": "plan",
-        "agent_id": "code-reviewer", "active_chat_provider": "chat",
+         "agent_id": "code-reviewer", "active_chat_provider": "chat", "approval": "autopilot",
     })
     _check("set_chat_controls aggregate setter updates state",
            aggregate_result.get("ok") is True
            and aggregate_result.get("controls", {}).get("provider") == "openai"
            and aggregate_result.get("controls", {}).get("model") == "gpt-4o-mini"
            and aggregate_result.get("controls", {}).get("mode") == "plan"
-           and aggregate_result.get("controls", {}).get("active_agent_id") == "code-reviewer")
+            and aggregate_result.get("controls", {}).get("active_agent_id") == "code-reviewer"
+            and aggregate_result.get("controls", {}).get("approval") == "autopilot"
+            and controls_gui.settings.data["ai_editor"].get("approval") == "autopilot")
 
     provider_model_result = controls_api.set_provider_model("anthropic", "claude-test")
     _check("set_provider_model compatibility alias updates provider and model",
@@ -923,16 +954,30 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend ships frameless resize handles and bridge call",
            html.count('data-resize-edge="') == 8
            and "querySelectorAll('[data-resize-edge]')" in html
-           and "call('win_resize_by',state.edge,dx,dy)" in html)
+            and "call('win_resize_by',state.edge,dx,dy)" in html
+            and "titlebar.addEventListener('pointerdown'" in html
+            and "getTitlebarResizeEdge" in html)
     _check("provider webviews bridge persistent vscode state",
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
            and 'getState:function(){return _state}' in html)
+    _check("webview bridge avoids raw script parser sentinel",
+           "const bridgeScript='<script>'" not in html
+           and "const bridgeScript='<scr'+'ipt>'" in html)
     _check("frontend Explorer calls workspace tree and file APIs",
            "call('list_workspace_tree',relPath||'')" in html
            and "call('list_workspace_tree',entry.path||'')" in html
            and "openWorkspaceFile(entry.path)" in html
            and "call('open_workspace_file',relPath||'')" in html)
+    _check("inline HTML handlers are exported to window",
+           all(token in html for token in (
+               "window.refreshExplorer=refreshExplorer",
+               "window.refreshPremiumGuide=refreshPremiumGuide",
+               "window.closeFindBar=closeFindBar",
+               "window.doReplace=doReplace",
+               "window.doReplaceAll=doReplaceAll",
+               "window.toggleExtInstall=toggleExtInstall",
+           )))
 
     state_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     _check("provider webview state survives backend lookup without vscode namespace",

@@ -11,6 +11,7 @@ the pywebview window in a background thread if not already running.
 from __future__ import annotations
 
 import json
+import inspect
 import math
 import os
 import re
@@ -46,6 +47,7 @@ _TRANSIENT_CONFIG_KEYS = {"_provider_keys", "context_window"}
 _AI_EDITOR_MIN_SIZE = (600, 400)
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
+_APPROVAL_VALUES = {"default", "bypass", "autopilot"}
 _ENGINE_TRANSPORT_VALUES = {"chat_completions", "responses"}
 _CODEX_TRANSPORT_VALUES = {"chat_completions", "responses", "cli"}
 _DANGEROUS_ENGINE_ACTIONS = {"settings_set", "eval", "exec"}
@@ -70,6 +72,17 @@ _EDITOR_LANGUAGE_BY_EXT = {
     ".lua": "lua", ".c": "c", ".cc": "cpp", ".cpp": "cpp",
     ".cxx": "cpp", ".h": "cpp", ".hpp": "cpp", ".cs": "csharp",
     ".java": "java", ".go": "go", ".rs": "rust", ".toml": "toml",
+}
+_AI_EDITOR_LAYOUT_DEFAULTS: Dict[str, Any] = {
+    "sidebarVisible": True,
+    "editorVisible": False,
+    "chatVisible": True,
+    "panelHeight": "",
+    "sidebarWidth": "",
+    "rightSidebarWidth": "",
+    "activeSidebarPanel": "chat",
+    "activeBottomTab": "terminal",
+    "minimapVisible": False,
 }
 
 _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -198,6 +211,31 @@ def _normalize_cli_provider_section(section: str,
     return cfg
 
 
+def _normalize_approval(value: Any, default: str = "default") -> str:
+    raw = str(value or default).strip().lower()
+    return raw if raw in _APPROVAL_VALUES else default
+
+
+def _normalize_layout_state(value: Any) -> Dict[str, Any]:
+    state = dict(_AI_EDITOR_LAYOUT_DEFAULTS)
+    if isinstance(value, dict):
+        state.update(value)
+    state["sidebarVisible"] = _as_bool(state.get("sidebarVisible"), True)
+    state["editorVisible"] = _as_bool(state.get("editorVisible"), False)
+    state["chatVisible"] = _as_bool(state.get("chatVisible"), True)
+    state["panelHeight"] = str(state.get("panelHeight") or "")
+    state["sidebarWidth"] = str(state.get("sidebarWidth") or "")
+    state["rightSidebarWidth"] = str(state.get("rightSidebarWidth") or "")
+    state["activeSidebarPanel"] = str(
+        state.get("activeSidebarPanel") or "chat")
+    active_bottom_tab = str(state.get("activeBottomTab") or "terminal")
+    state["activeBottomTab"] = active_bottom_tab if active_bottom_tab in {
+        "terminal", "output", "problems"
+    } else "terminal"
+    state["minimapVisible"] = _as_bool(state.get("minimapVisible"), False)
+    return state
+
+
 def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     """Return a backward-compatible AI Editor config dict.
 
@@ -230,6 +268,11 @@ def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     cfg["provider_keys"] = _as_dict(cfg.get("provider_keys"))
     cfg["custom_models"] = _as_dict(cfg.get("custom_models"))
     cfg["permissions"] = _as_dict(cfg.get("permissions"))
+    cfg["approval"] = _normalize_approval(cfg.get("approval"), "default")
+    cfg["active_chat_provider"] = str(
+        cfg.get("active_chat_provider") or "chat").strip() or "chat"
+    if "layout" in cfg:
+        cfg["layout"] = _normalize_layout_state(cfg.get("layout"))
     if "mode" in cfg:
         mode = str(cfg.get("mode") or "edit").strip().lower()
         cfg["mode"] = mode if mode in _MODE_VALUES else "agent"
@@ -486,10 +529,90 @@ class AIEditorAPI:
         self._perm_overrides: Dict[str, str] = {}
         self._mcp = None
         self._webview_states: Dict[str, Any] = {}
+        self._maximized = False
+        self._window_geometry: Optional[Dict[str, int]] = None
+        self._window_resize_supports_fix_point: Optional[bool] = None
 
     def set_window(self, window: Any) -> None:
         self._window = window
+        self._window_resize_supports_fix_point = None
+        self._capture_window_geometry(prefer_live=True)
         self._ready.set()
+
+    def _capture_window_geometry(self, prefer_live: bool = False) -> Dict[str, int]:
+        min_w, min_h = _AI_EDITOR_MIN_SIZE
+        cached = self._window_geometry if isinstance(self._window_geometry, dict) else {}
+
+        def _coerce(raw: Any, fallback: int) -> int:
+            try:
+                return int(raw)
+            except (TypeError, ValueError, OverflowError):
+                return int(fallback)
+
+        def _read(name: str, fallback: int) -> int:
+            if not prefer_live and name in cached:
+                return _coerce(cached.get(name), fallback)
+            raw = getattr(self._window, name, None) if self._window else None
+            if raw is None and name in cached:
+                raw = cached.get(name)
+            return _coerce(raw, fallback)
+
+        geom = {
+            "x": _read("x", 0),
+            "y": _read("y", 0),
+            "width": max(min_w, _read("width", min_w)),
+            "height": max(min_h, _read("height", min_h)),
+        }
+        self._window_geometry = geom
+        return dict(geom)
+
+    def _window_resize_supports_fix_point_arg(self) -> bool:
+        if self._window_resize_supports_fix_point is not None:
+            return bool(self._window_resize_supports_fix_point)
+        resize = getattr(self._window, "resize", None)
+        supports = False
+        if callable(resize):
+            try:
+                supports = "fix_point" in inspect.signature(resize).parameters
+            except (TypeError, ValueError):
+                supports = False
+        self._window_resize_supports_fix_point = supports
+        return supports
+
+    def _window_resize_fix_point(self, edge: str) -> Any:
+        if not self._window_resize_supports_fix_point_arg():
+            return None
+        try:
+            from webview.window import FixPoint
+        except Exception:
+            return None
+        vertical_anchor = FixPoint.SOUTH if "n" in edge else FixPoint.NORTH
+        horizontal_anchor = FixPoint.EAST if "w" in edge else FixPoint.WEST
+        return vertical_anchor | horizontal_anchor
+
+    def _apply_window_geometry(self, edge: str, x: int, y: int, width: int, height: int) -> None:
+        move = getattr(self._window, "move", None)
+        resize = getattr(self._window, "resize", None)
+        if not callable(resize):
+            raise AttributeError("Window resize API unavailable")
+
+        old = self._capture_window_geometry()
+        used_fix_point = False
+        fix_point = self._window_resize_fix_point(edge)
+        if fix_point is not None:
+            try:
+                resize(width, height, fix_point)
+                used_fix_point = True
+            except TypeError:
+                self._window_resize_supports_fix_point = False
+
+        if not used_fix_point and (x != old["x"] or y != old["y"]):
+            if not callable(move):
+                raise AttributeError("Window move API unavailable")
+            move(x, y)
+        if not used_fix_point:
+            resize(width, height)
+        self._window_geometry = {"x": x, "y": y, "width": width, "height": height}
 
     # ── Init ──
 
@@ -557,7 +680,8 @@ class AIEditorAPI:
         from ai_editor.chat_providers import get_provider_registry
         self._provider_registry = get_provider_registry()
         self._provider_controllers: Dict[str, ChatController] = {}
-        self._active_provider = "chat"
+        saved_provider = str(ai_cfg.get("active_chat_provider") or "chat") if isinstance(ai_cfg, dict) else "chat"
+        self._active_provider = saved_provider if self._provider_registry.get(saved_provider) else "chat"
 
         # Extension host — lazy init in background thread
         from ai_editor.extension_host import get_extension_host
@@ -654,12 +778,17 @@ class AIEditorAPI:
             "provider_keys": pkeys,
             "custom_models": ai_cfg.get("custom_models", {}),
             "mode": ai_cfg.get("mode", self._mode),
+            "approval": ai_cfg.get("approval", "default"),
+            "active_chat_provider": ai_cfg.get(
+                "active_chat_provider", getattr(self, "_active_provider", "chat")),
             "permissions": ai_cfg.get("permissions", self._perm_overrides),
             "context_window": ctx,
         }
         for section in _AI_EDITOR_SECTION_DEFAULTS:
             if isinstance(ai_cfg, dict) and section in ai_cfg:
                 result[section] = ai_cfg[section]
+        if isinstance(ai_cfg, dict) and "layout" in ai_cfg:
+            result["layout"] = ai_cfg["layout"]
         return result
 
     def save_config(self, data: Dict) -> Dict:
@@ -811,6 +940,7 @@ class AIEditorAPI:
             "provider": cfg.provider,
             "model": model,
             "mode": self._mode,
+            "approval": ai_cfg.get("approval", "default"),
             "active_agent_id": self._active_agent_id or "",
             "active_agent": active_agent,
             "active_chat_provider": self._active_provider,
@@ -966,6 +1096,18 @@ class AIEditorAPI:
             if result.get("error"):
                 return result
 
+        if "approval" in payload:
+            approval = _normalize_approval(payload.get("approval"), "default")
+            try:
+                self._save_config_patch({"approval": approval})
+            except RuntimeError as exc:
+                return {
+                    "error": str(exc),
+                    "applied": True,
+                    "approval": approval,
+                    "controls": self.get_chat_controls(),
+                }
+
         return {"ok": True, "controls": self.get_chat_controls()}
 
     def _invalidate_provider_controllers(self, data: Dict) -> None:
@@ -1085,6 +1227,7 @@ class AIEditorAPI:
             else:
                 self._window.maximize()
                 self._maximized = True
+            self._window_geometry = None
             return {"ok": True, "maximized": bool(self._maximized)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -1108,10 +1251,11 @@ class AIEditorAPI:
             delta_x = int(dx or 0)
             delta_y = int(dy or 0)
             min_w, min_h = _AI_EDITOR_MIN_SIZE
-            x = int(getattr(self._window, "x", 0) or 0)
-            y = int(getattr(self._window, "y", 0) or 0)
-            width = int(getattr(self._window, "width", min_w) or min_w)
-            height = int(getattr(self._window, "height", min_h) or min_h)
+            geometry = self._capture_window_geometry()
+            x = int(geometry["x"])
+            y = int(geometry["y"])
+            width = int(geometry["width"])
+            height = int(geometry["height"])
 
             new_x, new_y = x, y
             new_w, new_h = width, height
@@ -1126,10 +1270,8 @@ class AIEditorAPI:
                 new_h = max(min_h, height - delta_y)
                 new_y = y + (height - new_h)
 
-            if new_x != x or new_y != y:
-                self._window.move(new_x, new_y)
             if new_w != width or new_h != height:
-                self._window.resize(new_w, new_h)
+                self._apply_window_geometry(edge, new_x, new_y, new_w, new_h)
             return {"ok": True, "x": new_x, "y": new_y, "width": new_w, "height": new_h}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -1620,22 +1762,36 @@ class AIEditorAPI:
         if not prov:
             return {"error": f"Unknown provider: {provider_id}"}
         self._active_provider = provider_id
+        persist_error = None
+        try:
+            self._save_config_patch({"active_chat_provider": provider_id})
+        except RuntimeError as exc:
+            persist_error = str(exc)
         if provider_id == "chat":
-            return {"ok": True, "provider": "chat"}
+            result = {"ok": True, "provider": "chat"}
+            if persist_error:
+                result.update({"persist_error": persist_error, "applied": True})
+            return result
         unavailable = self._provider_unavailable_reason(prov)
         if unavailable:
-            return {
+            result = {
                 "ok": True,
                 "provider": provider_id,
                 "available": False,
                 "status": "unavailable",
                 "unavailable_reason": unavailable,
             }
+            if persist_error:
+                result.update({"persist_error": persist_error, "applied": True})
+            return result
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
             self._provider_controllers[provider_id] = ctrl
-        return {"ok": True, "provider": provider_id}
+        result = {"ok": True, "provider": provider_id}
+        if persist_error:
+            result.update({"persist_error": persist_error, "applied": True})
+        return result
 
     def provider_send(self, provider_id: str, text: str) -> Dict:
         """Send a message to a specific provider's conversation."""

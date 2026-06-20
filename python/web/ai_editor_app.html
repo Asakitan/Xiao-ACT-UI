@@ -118,9 +118,13 @@ body.window-resizing * { cursor:inherit !important; }
 .ab-spacer { flex:1; }
 
 /* ── Sidebar ── */
-.sidebar { width:var(--sidebar-w); background:var(--bg-sidebar); border-right:1px solid var(--border);
+.sidebar { width:var(--sidebar-w); min-width:180px; max-width:520px; background:var(--bg-sidebar); border-right:1px solid var(--border);
   display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
 .sidebar.hidden { display:none; }
+.lsplitter, .rsplitter { width:4px; cursor:ew-resize; flex-shrink:0; position:relative; touch-action:none; }
+.lsplitter::after, .rsplitter::after { content:''; position:absolute; top:0; bottom:0; left:1px; width:2px;
+  background:var(--border); }
+.lsplitter:hover::after, .lsplitter.dragging::after, .rsplitter:hover::after, .rsplitter.dragging::after { background:var(--border-focus); }
 .sb-view { flex-direction:column; flex:1; overflow:hidden; }
 .sb-header { padding:8px 16px 6px; font-size:11px; font-weight:600; text-transform:uppercase;
   letter-spacing:1px; color:var(--fg-dim); display:flex; align-items:center; height:35px; box-sizing:border-box; }
@@ -151,7 +155,7 @@ body.window-resizing * { cursor:inherit !important; }
 .tree-note { padding:6px 16px; font-size:11px; color:var(--fg-dim); }
 
 /* ── Content area (editor + bottom terminal) ── */
-.content { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:200px; }
+.content { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:280px; }
 
 /* ── Right sidebar (Chat / Copilot / Claude Code / Codex) ── */
 .right-sidebar { flex:1; min-width:320px; display:flex;
@@ -174,11 +178,6 @@ body.window-resizing * { cursor:inherit !important; }
   flex:1; color:var(--fg-dim); text-align:center; padding:24px; gap:10px; font-size:13px; }
 .rp-placeholder kbd { background:var(--bg3); padding:2px 8px; border-radius:3px;
   border:1px solid var(--border); font:12px var(--mono); }
-.rsplitter { width:4px; cursor:ew-resize; flex-shrink:0; position:relative; }
-.rsplitter::after { content:''; position:absolute; top:0; bottom:0; left:1px; width:2px;
-  background:var(--border); }
-.rsplitter:hover::after, .rsplitter.dragging::after { background:var(--border-focus); }
-
 /* ── Tab bar ── */
 .tab-bar { display:flex; align-items:center; height:35px; background:var(--bg-tab);
   border-bottom:1px solid var(--border); overflow-x:auto; flex-shrink:0; }
@@ -210,7 +209,7 @@ body.window-resizing * { cursor:inherit !important; }
   border:1px solid var(--border); font-family:var(--mono); font-size:12px; }
 
 /* ── Splitter ── */
-.splitter { height:4px; background:transparent; cursor:ns-resize; flex-shrink:0;
+.splitter { height:4px; background:transparent; cursor:ns-resize; flex-shrink:0; touch-action:none;
   position:relative; }
 .splitter::after { content:''; position:absolute; left:0; right:0; top:1px; height:2px;
   background:var(--border); }
@@ -367,8 +366,10 @@ pre.code-block code .type { color:var(--fg-type); }
     transparent 0deg, color-mix(in srgb, var(--fg-accent) 60%, transparent) 20deg,
     var(--fg-accent) 30deg, color-mix(in srgb, var(--fg-accent) 60%, transparent) 50deg,
     transparent 80deg, transparent 360deg);
+  mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite:exclude;
   -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite:xor; mask-composite:exclude; padding:1px;
+  -webkit-mask-composite:xor; padding:1px;
   animation:beamSpin 4s linear infinite; z-index:-1; pointer-events:none; }
 .chat-input-container.working::after { content:''; position:absolute; inset:-2px; border-radius:10px;
   background:conic-gradient(from var(--beam-angle,135deg),
@@ -683,7 +684,7 @@ pre.code-block { overflow:visible; }
 .ext-card .ext-name { font-size:13px; font-weight:600; color:var(--fg); white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; }
 .ext-card .ext-desc { font-size:11px; color:var(--fg-dim); line-height:1.4;
-  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-top:1px; }
+  display:-webkit-box; line-clamp:2; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-top:1px; }
 .ext-card .ext-meta { display:flex; align-items:center; gap:8px; margin-top:3px; font-size:10px; color:var(--fg-dim); }
 .ext-card .ext-publisher { color:var(--fg-accent); font-weight:500; }
 .ext-card .ext-stats { display:flex; align-items:center; gap:3px; }
@@ -1045,6 +1046,8 @@ pre.code-block { overflow:visible; }
       </div>
     </div>
   </div>
+
+  <div class="lsplitter" id="lsplitter"></div>
 
   <!-- Content (hidden by default — shown when a file is opened) -->
   <div class="content" id="content-area" style="display:none">
@@ -1471,7 +1474,7 @@ const SETTINGS_SECTION_DEFAULTS={
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -1499,6 +1502,32 @@ function withSettingsDefaults(raw){
   return merged;
 }
 let config=withSettingsDefaults({});
+const APPROVAL_VALUES=new Set(['default','bypass','autopilot']);
+function normalizeApproval(value){
+  const raw=String(value||'default').trim().toLowerCase();
+  return APPROVAL_VALUES.has(raw)?raw:'default';
+}
+function callAppliedLocally(result){return !!(result&&result.applied)}
+function callSucceededOrApplied(result){return callSucceeded(result)||callAppliedLocally(result)}
+function showPersistenceFailure(result,options){
+  const opts=isPlainObject(options)?options:{};
+  const message=callFailedMessage(result,'backend unavailable');
+  if(callAppliedLocally(result)){
+    showToast((opts.partialPrefix||'Current session updated, but settings were not persisted: ')+message,'warning',3600);
+    return;
+  }
+  showToast((opts.errorPrefix||'Save failed: ')+message,'error',3200);
+}
+function applyConfigPatchLocal(patch){
+  if(!isPlainObject(patch))return;
+  Object.keys(patch).forEach(key=>{config[key]=key==='approval'?normalizeApproval(patch[key]):patch[key]});
+}
+async function persistConfigPatch(patch,options){
+  applyConfigPatchLocal(patch);
+  const result=await call('save_config',patch);
+  if(!callSucceeded(result))showPersistenceFailure(result,options);
+  return result||{error:'backend unavailable'};
+}
 
 // SETTINGS-03: Per-setting reset to default
 const SETTING_INPUT_MAP={
@@ -1620,33 +1649,148 @@ window._onEditorEvent=function(event,data){
 // ── LN-05+LN-09: Layout persistence ──
 const _LAYOUT_KEY='sao-layout-state';
 let _layoutSaveTimer=null;
-function _loadLayoutState(){
-  try{const raw=localStorage.getItem(_LAYOUT_KEY);return raw?JSON.parse(raw):null}catch(e){return null}
+let _layoutPersistTimer=null;
+let _lastPersistedLayoutState='';
+const _SIDEBAR_DEFAULT_WIDTH='260px';
+const _RIGHT_SIDEBAR_DEFAULT_WIDTH='45%';
+const _PANEL_DEFAULT_HEIGHT='45%';
+const _SIDEBAR_MIN_WIDTH=180;
+const _SIDEBAR_MAX_WIDTH=520;
+const _RIGHT_SIDEBAR_MIN_WIDTH=320;
+const _RIGHT_SIDEBAR_MAX_WIDTH=700;
+const _EDITOR_MIN_WIDTH=280;
+const _EDITOR_MIN_HEIGHT=160;
+function _clamp(value,min,max){return Math.min(max,Math.max(min,value))}
+function _pixelValue(value,fallback){
+  if(typeof value==='number'&&Number.isFinite(value))return value;
+  if(typeof value==='string'){
+    const trimmed=value.trim();
+    if(trimmed.endsWith('px')){
+      const parsed=parseFloat(trimmed.slice(0,-2));
+      if(Number.isFinite(parsed))return parsed;
+    }
+  }
+  return fallback;
 }
-function _saveLayoutState(){
-  try{localStorage.setItem(_LAYOUT_KEY,JSON.stringify({
-    sidebarVisible:_sidebarVis,chatVisible:_chatVis,panelHeight:panelArea?panelArea.style.height:'',
-    sidebarWidth:$('sidebar')?$('sidebar').style.width:'',
-    rightSidebarWidth:$('right-sidebar')?$('right-sidebar').style.width:'',
+function _styleIsPercent(value){return typeof value==='string'&&value.trim().endsWith('%')}
+function _layoutSnapshot(){
+  return {
+    sidebarVisible:_sidebarVis,
+    editorVisible:_editorVis,
+    chatVisible:_chatVis,
+    panelHeight:panelArea?panelArea.style.height||'':'',
+    sidebarWidth:$('sidebar')?$('sidebar').style.width||'':'',
+    rightSidebarWidth:$('right-sidebar')?$('right-sidebar').style.width||'':'',
     activeSidebarPanel:_activeSidebarPanel,
     activeBottomTab:(function(){const a=document.querySelector('.ptab.active');return a?a.dataset.ptab:'terminal'})(),
     minimapVisible:typeof _minimapVisible!=='undefined'?_minimapVisible:false
-  }))}catch(e){}
+  };
 }
-function _saveLayoutImmediate(){clearTimeout(_layoutSaveTimer);_saveLayoutState()}
-function _saveLayoutDebounced(){clearTimeout(_layoutSaveTimer);_layoutSaveTimer=setTimeout(_saveLayoutState,500)}
+function _applyPaneVisibility(){
+  const sidebar=$('sidebar'),leftSplitter=$('lsplitter'),content=$('content-area'),rightSidebar=$('right-sidebar'),rightSplitter=$('rsplitter');
+  if(sidebar)sidebar.style.display=_sidebarVis?'':'none';
+  if(leftSplitter)leftSplitter.style.display=_sidebarVis?'':'none';
+  if(content)content.style.display=_editorVis?'':'none';
+  if(rightSidebar){
+    rightSidebar.style.display=_chatVis?'':'none';
+    rightSidebar.classList.toggle('has-editor',_editorVis);
+  }
+  if(rightSplitter)rightSplitter.style.display=(_editorVis&&_chatVis)?'':'none';
+}
+function _mainWidth(){const main=document.querySelector('.main');return main?main.clientWidth:window.innerWidth}
+function _elementWidth(el){return el&&el.offsetParent!==null?Math.round(el.getBoundingClientRect().width):0}
+function _sidebarMaxWidth(){
+  const activity=_elementWidth(document.querySelector('.activity-bar'))||48;
+  const reserveEditor=_editorVis?_EDITOR_MIN_WIDTH:0;
+  const reserveChat=_chatVis?(_editorVis?_RIGHT_SIDEBAR_MIN_WIDTH+4:_RIGHT_SIDEBAR_MIN_WIDTH):0;
+  const available=_mainWidth()-activity-4-reserveEditor-reserveChat;
+  return Math.max(_SIDEBAR_MIN_WIDTH,Math.min(_SIDEBAR_MAX_WIDTH,available));
+}
+function _rightSidebarMaxWidth(){
+  const activity=_elementWidth(document.querySelector('.activity-bar'))||48;
+  const sidebar=$('sidebar');
+  const leftRegion=_sidebarVis?(_elementWidth(sidebar)||_pixelValue(sidebar&&sidebar.style?sidebar.style.width:'',_SIDEBAR_MIN_WIDTH))+4:0;
+  const available=_mainWidth()-activity-leftRegion-4-_EDITOR_MIN_WIDTH;
+  return Math.max(_RIGHT_SIDEBAR_MIN_WIDTH,Math.min(_RIGHT_SIDEBAR_MAX_WIDTH,available));
+}
+function _panelMaxHeight(){
+  const content=$('content-area');
+  const available=(content?content.clientHeight:window.innerHeight)-_EDITOR_MIN_HEIGHT-((splitter&&splitter.offsetHeight)||4);
+  return Math.max(120,available);
+}
+function _setSidebarWidth(value){
+  const sidebar=$('sidebar');if(!sidebar)return;
+  const next=_clamp(_pixelValue(value,sidebar.offsetWidth||_SIDEBAR_MIN_WIDTH),_SIDEBAR_MIN_WIDTH,_sidebarMaxWidth());
+  sidebar.style.width=next+'px';
+}
+function _setRightSidebarWidth(value){
+  const rightSidebar=$('right-sidebar');if(!rightSidebar||!_editorVis||!_chatVis)return;
+  const next=_clamp(_pixelValue(value,rightSidebar.offsetWidth||_RIGHT_SIDEBAR_MIN_WIDTH),_RIGHT_SIDEBAR_MIN_WIDTH,_rightSidebarMaxWidth());
+  rightSidebar.style.width=next+'px';
+}
+function _setPanelHeight(value){
+  if(!panelArea)return;
+  const next=_clamp(_pixelValue(value,panelArea.offsetHeight||120),120,_panelMaxHeight());
+  panelArea.style.height=next+'px';
+}
+function _resetSidebarWidth(){const sidebar=$('sidebar');if(sidebar)sidebar.style.width=_SIDEBAR_DEFAULT_WIDTH}
+function _resetRightSidebarWidth(){const rightSidebar=$('right-sidebar');if(rightSidebar)rightSidebar.style.width=_RIGHT_SIDEBAR_DEFAULT_WIDTH}
+function _resetPanelHeight(){if(panelArea)panelArea.style.height=_PANEL_DEFAULT_HEIGHT}
+function _clampLayoutDimensions(){
+  const sidebar=$('sidebar');
+  if(sidebar&&sidebar.style.width&&!_styleIsPercent(sidebar.style.width))_setSidebarWidth(sidebar.style.width);
+  const rightSidebar=$('right-sidebar');
+  if(rightSidebar&&_editorVis&&_chatVis&&rightSidebar.style.width&&!_styleIsPercent(rightSidebar.style.width))_setRightSidebarWidth(rightSidebar.style.width);
+  if(panelArea&&panelArea.style.height&&!_styleIsPercent(panelArea.style.height))_setPanelHeight(panelArea.style.height);
+}
+async function _persistLayoutState(){
+  clearTimeout(_layoutPersistTimer);
+  _layoutPersistTimer=null;
+  const state=_layoutSnapshot();
+  const serialized=JSON.stringify(state);
+  if(serialized===_lastPersistedLayoutState)return;
+  _lastPersistedLayoutState=serialized;
+  config.layout=clonePlain(state);
+  if(!api())return;
+  const result=await persistConfigPatch({layout:config.layout},{errorPrefix:'Layout save failed: ',partialPrefix:'Layout updated only for current session: '});
+  if(!callSucceeded(result))_lastPersistedLayoutState='';
+}
+function _scheduleLayoutPersist(delay){
+  clearTimeout(_layoutPersistTimer);
+  _layoutPersistTimer=setTimeout(()=>{_persistLayoutState()},delay);
+}
+function _loadLayoutState(){
+  const stored=isPlainObject(config.layout)?Object.assign({},config.layout):null;
+  try{
+    const raw=localStorage.getItem(_LAYOUT_KEY);
+    if(!raw)return stored;
+    const local=JSON.parse(raw);
+    return isPlainObject(local)?Object.assign({},stored||{},local):stored;
+  }catch(e){return stored}
+}
+function _saveLayoutState(persistNow){
+  const state=_layoutSnapshot();
+  try{localStorage.setItem(_LAYOUT_KEY,JSON.stringify(state))}catch(e){}
+  config.layout=clonePlain(state);
+  if(persistNow)_persistLayoutState();
+  else _scheduleLayoutPersist(650);
+}
+function _saveLayoutImmediate(){clearTimeout(_layoutSaveTimer);_saveLayoutState(true)}
+function _saveLayoutDebounced(){clearTimeout(_layoutSaveTimer);_layoutSaveTimer=setTimeout(()=>_saveLayoutState(false),500)}
 function _applyLayoutState(){
   const st=_loadLayoutState();if(!st)return;
   // sidebar visibility
   if(typeof st.sidebarVisible==='boolean'&&st.sidebarVisible!==_sidebarVis){
     _sidebarVis=st.sidebarVisible;
-    $('sidebar').style.display=_sidebarVis?'':'none';
     $('tb-toggle-sidebar').classList.toggle('active',_sidebarVis);
+  }
+  if(typeof st.editorVisible==='boolean'){
+    _editorVis=st.editorVisible;
+    $('tb-toggle-editor').classList.toggle('active',_editorVis);
   }
   // chat visibility
   if(typeof st.chatVisible==='boolean'&&st.chatVisible!==_chatVis){
     _chatVis=st.chatVisible;
-    $('right-sidebar').style.display=_chatVis?'':'none';
     $('tb-toggle-chat').classList.toggle('active',_chatVis);
   }
   // panel height
@@ -1655,6 +1799,8 @@ function _applyLayoutState(){
   if(st.sidebarWidth){const sb=$('sidebar');if(sb)sb.style.width=st.sidebarWidth}
   // right sidebar width
   if(st.rightSidebarWidth){const rsb=$('right-sidebar');if(rsb)rsb.style.width=st.rightSidebarWidth}
+  _applyPaneVisibility();
+  _clampLayoutDimensions();
   // active sidebar panel
   if(st.activeSidebarPanel&&_sidebarVis){_activeSidebarPanel=st.activeSidebarPanel;switchSidebar(st.activeSidebarPanel)}
   // active bottom tab
@@ -1675,9 +1821,14 @@ function _applyLayoutState(){
 // ── Init ──
 async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
-  if(_curLang==='en'&&normalizeUiLanguage(config.language))_curLang=config.language;
+  if(normalizeUiLanguage(config.language))_curLang=config.language;
   syncUI();
   _applyLayoutState();
+  const persistedLayout=isPlainObject(config.layout)?JSON.stringify(config.layout):'';
+  const currentLayout=JSON.stringify(_layoutSnapshot());
+  _lastPersistedLayoutState=persistedLayout;
+  if(currentLayout!==persistedLayout)_scheduleLayoutPersist(250);
+  else _lastPersistedLayoutState=currentLayout;
   let t=await call('list_tools');
   if(!t||!t.tools||!t.tools.length){await new Promise(r=>setTimeout(r,500));t=await call('list_tools')}
   renderToolsSidebar(t&&t.tools?t.tools:[]);
@@ -1976,7 +2127,7 @@ function setLang(lang,options){
   // Persist
   if(opts.persist!==false){
     try{localStorage.setItem('sao-ai-lang',next)}catch(e){}
-    if(window.pywebview&&window.pywebview.api){try{call('save_config',{language:next})}catch(e){}}
+    if(window.pywebview&&window.pywebview.api)void persistConfigPatch({language:next},{errorPrefix:'Language save failed: ',partialPrefix:'Language updated only for current session: '})
   }
   document.title=t('welcome_title');
   if(typeof updateModeUI==='function')updateModeUI();
@@ -2098,14 +2249,17 @@ function openInEditor(code,lang){
   editorDirty=false;
 }
 function showEditorArea(){
+  _editorVis=true;
   $('content-area').style.display='';
-  $('rsplitter').style.display='';
-  $('right-sidebar').classList.add('has-editor');
+  $('tb-toggle-editor').classList.add('active');
+  _applyPaneVisibility();
+  _clampLayoutDimensions();
 }
 function hideEditorArea(){
-  $('content-area').style.display='none';
-  $('rsplitter').style.display='none';
-  $('right-sidebar').classList.remove('has-editor');
+  _editorVis=false;
+  $('tb-toggle-editor').classList.remove('active');
+  _applyPaneVisibility();
+  _clampLayoutDimensions();
 }
 
 // ── Editor state ──
@@ -3501,10 +3655,12 @@ function setProviderRunning(pid,running,status,kind){
 }
 function switchRightTab(pid){
   activeProviderId=pid;
+  config.active_chat_provider=pid;
   document.querySelectorAll('.rtab').forEach(r=>r.classList.toggle('active',r.dataset.rtab===pid));
   document.querySelectorAll('.right-panel').forEach(p=>p.classList.remove('active'));
   const rp=pid==='chat'?$('rp-chat'):$(providerElId('rp',pid));if(rp)rp.classList.add('active');
   call('switch_provider',pid).then(r=>{
+    if(r&&r.persist_error)showToast('Chat provider updated only for current session: '+r.persist_error,'warning',3600);
     if(pid==='chat'){setStatus(t('tab_chat'));return}
     const p=providerDefs[pid];
     if(r&&r.available===false){
@@ -3579,7 +3735,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   container.appendChild(iframe);
   const initialStateJson=JSON.stringify(initialState===undefined?null:initialState).replace(/<\//g,'<\\/');
   // Build bridge script that defines acquireVsCodeApi for the extension
-  const bridgeScript='<script>'
+  const bridgeScript='<scr'+'ipt>'
     +'(function(){'
     +'var _state='+initialStateJson+';'
     +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',message:msg},"*")}catch(e){}},'
@@ -3852,8 +4008,48 @@ document.querySelector('.rtab[data-rtab="chat"]').addEventListener('click',()=>s
 // ── Frameless window edge/corner resize ──
 (function(){
   const handles=document.querySelectorAll('[data-resize-edge]');
-  if(!handles.length)return;
-  let state=null,pending=null,raf=0;
+  const titlebar=document.getElementById('titlebar');
+  if(!handles.length&&!titlebar)return;
+  const TITLEBAR_RESIZE_BAND=4;
+  const TITLEBAR_CORNER_BAND=12;
+  let state=null,pending=null,raf=0,captureTarget=null;
+  function edgeCursor(edge){
+    if(edge==='n'||edge==='s')return 'ns-resize';
+    if(edge==='e'||edge==='w')return 'ew-resize';
+    if(edge==='nw'||edge==='se')return 'nwse-resize';
+    if(edge==='ne'||edge==='sw')return 'nesw-resize';
+    return '';
+  }
+  function getTitlebarResizeEdge(e){
+    if(!titlebar)return '';
+    const rect=titlebar.getBoundingClientRect();
+    const localX=e.clientX-rect.left;
+    const localY=e.clientY-rect.top;
+    if(localY<0||localY>TITLEBAR_RESIZE_BAND)return '';
+    if(localX<=TITLEBAR_CORNER_BAND)return 'nw';
+    if(localX>=rect.width-TITLEBAR_CORNER_BAND)return 'ne';
+    return 'n';
+  }
+  function clearPointerCapture(pointerId){
+    if(!captureTarget||pointerId==null||typeof captureTarget.releasePointerCapture!=='function'){
+      captureTarget=null;
+      return;
+    }
+    try{captureTarget.releasePointerCapture(pointerId)}catch(_e){}
+    captureTarget=null;
+  }
+  function startResize(edge,e){
+    state={edge,lastX:e.screenX,lastY:e.screenY,pointerId:e.pointerId};
+    pending=null;
+    captureTarget=e.currentTarget||e.target||null;
+    if(captureTarget&&e.pointerId!=null&&typeof captureTarget.setPointerCapture==='function'){
+      try{captureTarget.setPointerCapture(e.pointerId)}catch(_e){}
+    }
+    document.body.classList.add('window-resizing');
+    document.body.style.cursor=edgeCursor(edge);
+    if(titlebar)titlebar.style.cursor=edgeCursor(edge);
+    e.preventDefault();e.stopPropagation();
+  }
   function flushResize(){
     raf=0;if(!state||!pending)return;
     const dx=pending.x-state.lastX,dy=pending.y-state.lastY;
@@ -3863,61 +4059,102 @@ document.querySelector('.rtab[data-rtab="chat"]').addEventListener('click',()=>s
   function stopResize(){
     if(!state)return;
     if(raf){cancelAnimationFrame(raf);flushResize()}
+    clearPointerCapture(state.pointerId);
     state=null;pending=null;raf=0;
     document.body.classList.remove('window-resizing');
     document.body.style.cursor='';
+    if(titlebar)titlebar.style.cursor='';
   }
   handles.forEach(handle=>{
-    handle.addEventListener('mousedown',e=>{
+    handle.addEventListener('pointerdown',e=>{
       if(e.button!==0)return;
-      state={edge:handle.dataset.resizeEdge,lastX:e.screenX,lastY:e.screenY};
-      document.body.classList.add('window-resizing');
-      document.body.style.cursor=getComputedStyle(handle).cursor;
-      e.preventDefault();e.stopPropagation();
+      startResize(handle.dataset.resizeEdge,e);
     });
   });
-  document.addEventListener('mousemove',e=>{
+  if(titlebar){
+    titlebar.addEventListener('pointerdown',e=>{
+      if(e.button!==0)return;
+      const edge=getTitlebarResizeEdge(e);
+      if(!edge)return;
+      startResize(edge,e);
+    },true);
+    titlebar.addEventListener('pointermove',e=>{
+      if(state)return;
+      titlebar.style.cursor=edgeCursor(getTitlebarResizeEdge(e));
+    });
+    titlebar.addEventListener('pointerleave',()=>{
+      if(!state)titlebar.style.cursor='';
+    });
+  }
+  document.addEventListener('pointermove',e=>{
     if(!state)return;
     pending={x:e.screenX,y:e.screenY};
     if(!raf)raf=requestAnimationFrame(flushResize);
     e.preventDefault();
-  });
-  document.addEventListener('mouseup',stopResize);
+  },{passive:false});
+  document.addEventListener('pointerup',stopResize);
+  document.addEventListener('pointercancel',stopResize);
   window.addEventListener('blur',stopResize);
 })();
 
-// ── Right sidebar splitter (horizontal resize) ──
-(function(){
-  const rs=$('rsplitter'),rsb=$('right-sidebar');
-  if(!rs||!rsb)return;
-  let dragging=false,startX=0,startW=0;
-  rs.addEventListener('mousedown',e=>{dragging=true;startX=e.clientX;startW=rsb.offsetWidth;
-    rs.classList.add('dragging');e.preventDefault()});
-  document.addEventListener('mousemove',e=>{if(!dragging)return;
-    const w=startW-(e.clientX-startX);rsb.style.width=Math.max(260,Math.min(600,w))+'px'});
-  document.addEventListener('mouseup',()=>{if(dragging){dragging=false;rs.classList.remove('dragging');_saveLayoutDebounced()}});
-  // LN-03: Double-click right sidebar splitter to maximize/restore width
-  let rsMaximized=false,rsPrevW='';
-  rs.addEventListener('dblclick',()=>{
-    if(rsMaximized){rsb.style.width=rsPrevW||'45%';rsMaximized=false}
-    else{rsPrevW=rsb.style.width||rsb.offsetWidth+'px';rsb.style.width='70%';rsMaximized=true}
-    _saveLayoutDebounced();
-  });
-})();
-
-// ── Splitter ──
+// ── Splitters ──
 const splitter=$('splitter'),panelArea=$('panel-area'),editorArea=$('editor-area');
-let splitterDragging=false,splitterStartY=0,splitterStartH=0;
-splitter.addEventListener('mousedown',e=>{splitterDragging=true;splitterStartY=e.clientY;
-  splitterStartH=panelArea.offsetHeight;splitter.classList.add('dragging');e.preventDefault()});
-document.addEventListener('mousemove',e=>{if(!splitterDragging)return;
-  const dy=splitterStartY-e.clientY;panelArea.style.height=Math.max(120,Math.min(window.innerHeight-200,splitterStartH+dy))+'px'});
-document.addEventListener('mouseup',()=>{if(splitterDragging){splitterDragging=false;splitter.classList.remove('dragging');_saveLayoutDebounced()}});
-// LN-03: Double-click panel splitter to maximize/restore panel height
-let _panelMaximized=false,_panelPrevHeight='';
-splitter.addEventListener('dblclick',()=>{
-  if(_panelMaximized){panelArea.style.height=_panelPrevHeight||'45%';_panelMaximized=false}
-  else{_panelPrevHeight=panelArea.style.height||panelArea.offsetHeight+'px';panelArea.style.height=(window.innerHeight-200)+'px';_panelMaximized=true}
+function _bindPointerResize(handle,cursor,onStart,onMove,onReset){
+  if(!handle)return;
+  let state=null;
+  const finish=pointerId=>{
+    if(!state||(pointerId!=null&&state.pointerId!==pointerId))return;
+    state=null;
+    handle.classList.remove('dragging');
+    document.body.style.cursor='';
+    _clampLayoutDimensions();
+    _saveLayoutDebounced();
+  };
+  handle.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;
+    const next=onStart(e);
+    if(!next)return;
+    state={pointerId:e.pointerId,...next};
+    handle.classList.add('dragging');
+    document.body.style.cursor=cursor;
+    if(handle.setPointerCapture){try{handle.setPointerCapture(e.pointerId)}catch(_){}}
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  handle.addEventListener('pointermove',e=>{
+    if(!state||state.pointerId!==e.pointerId)return;
+    onMove(e,state);
+    e.preventDefault();
+  });
+  handle.addEventListener('pointerup',e=>finish(e.pointerId));
+  handle.addEventListener('pointercancel',e=>finish(e.pointerId));
+  handle.addEventListener('lostpointercapture',e=>finish(e.pointerId));
+  handle.addEventListener('dblclick',e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    onReset();
+    _clampLayoutDimensions();
+    _saveLayoutImmediate();
+  });
+  window.addEventListener('blur',()=>finish());
+}
+_bindPointerResize($('lsplitter'),'ew-resize',
+  e=>_sidebarVis?{startX:e.clientX,startWidth:_elementWidth($('sidebar'))||_SIDEBAR_MIN_WIDTH}:null,
+  (e,state)=>_setSidebarWidth(state.startWidth+(e.clientX-state.startX)),
+  ()=>_resetSidebarWidth()
+);
+_bindPointerResize($('rsplitter'),'ew-resize',
+  e=>(_editorVis&&_chatVis)?{startX:e.clientX,startWidth:_elementWidth($('right-sidebar'))||_RIGHT_SIDEBAR_MIN_WIDTH}:null,
+  (e,state)=>_setRightSidebarWidth(state.startWidth-(e.clientX-state.startX)),
+  ()=>_resetRightSidebarWidth()
+);
+_bindPointerResize(splitter,'ns-resize',
+  e=>_editorVis?{startY:e.clientY,startHeight:panelArea?panelArea.offsetHeight:120}:null,
+  (e,state)=>_setPanelHeight(state.startHeight+(state.startY-e.clientY)),
+  ()=>_resetPanelHeight()
+);
+window.addEventListener('resize',()=>{
+  _clampLayoutDimensions();
   _saveLayoutDebounced();
 });
 
@@ -4199,11 +4436,12 @@ async function saveSettings(){
   config.mode=newMode;
   if(newMode!==currentMode){
     const modeResult=await call('set_mode',newMode);
-    if(!(modeResult&&modeResult.ok)){
+    if(!callSucceededOrApplied(modeResult)){
       showToast('Mode update failed: '+callFailedMessage(modeResult,'backend unavailable'),'error',3000);
       return;
     }
-    currentMode=newMode;updateModeUI()
+    currentMode=newMode;updateModeUI();
+    if(callAppliedLocally(modeResult))showPersistenceFailure(modeResult,{errorPrefix:'Mode save failed: ',partialPrefix:'Mode updated only for current session: '});
   }
   syncUI();
   const saveResult=await call('save_config',config);
@@ -4259,10 +4497,19 @@ function updateProviderModel(provider,model,persist){
 async function persistProviderModel(){
   const payload={provider:config.provider,model:config.model};
   let r=await call('set_chat_controls',payload);
-  if(!(r&&r.ok))r=await call('set_active_provider',config.provider,config.model);
-  if(!(r&&r.ok)&&config.model)r=await call('set_active_model',config.model);
-  if(!(r&&r.ok))r=await call('set_provider_model',config.provider,config.model);
-  if(!(r&&r.ok))await call('save_config',config);
+  if(!callSucceededOrApplied(r))r=await call('set_active_provider',config.provider,config.model);
+  if(!callSucceededOrApplied(r)&&config.model)r=await call('set_active_model',config.model);
+  if(!callSucceededOrApplied(r))r=await call('set_provider_model',config.provider,config.model);
+  if(callSucceededOrApplied(r)){
+    if(r&&r.controls){
+      if(r.controls.provider)config.provider=r.controls.provider;
+      if(r.controls.model!==undefined)config.model=r.controls.model;
+    }
+    if(callAppliedLocally(r))showPersistenceFailure(r,{errorPrefix:'Provider/model save failed: ',partialPrefix:'Provider/model updated only for current session: '});
+    return true;
+  }
+  r=await persistConfigPatch(payload,{errorPrefix:'Provider/model save failed: ',partialPrefix:'Provider/model updated only for current session: '});
+  return callSucceeded(r);
 }
 $('provider-sel').onchange=e=>{
   const provider=e.target.value;
@@ -4324,6 +4571,8 @@ async function loadChatControls(){
     if(controls.provider)config.provider=controls.provider;
     if(controls.model!==undefined)config.model=controls.model;
     if(controls.mode)currentMode=normalizeMode(controls.mode);
+    currentApproval=normalizeApproval(controls.approval||config.approval||'default');
+    activeProviderId=String(controls.active_chat_provider||config.active_chat_provider||activeProviderId||'chat');
     activeAgentId=controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'';
     chatControlState.agents=normalizeControlList(controls.agents,'agents');
     chatControlState.workflows=normalizeControlList(controls.workflows,'workflows');
@@ -4331,6 +4580,8 @@ async function loadChatControls(){
     renderProviderControlOptions(chatControlState.providers);
   }else{
     const c=await call('load_config');if(c)Object.assign(config,withSettingsDefaults({...config,...c}));
+    currentApproval=normalizeApproval(config.approval||'default');
+    activeProviderId=String(config.active_chat_provider||activeProviderId||'chat');
     const ar=await call('list_agents');const wr=await call('list_workflows');const aa=await call('get_active_agent');
     chatControlState.agents=normalizeControlList(ar,'agents');
     chatControlState.workflows=normalizeControlList(wr,'workflows');
@@ -4365,10 +4616,11 @@ async function setToolbarMode(mode){
   mode=normalizeMode(mode);
   if(!MODE_ORDER.includes(mode)){renderChatControlOptions();return}
   let r=await call('set_chat_controls',{mode:mode});
-  if(!(r&&r.ok))r=await call('set_active_mode',mode);
-  if(!(r&&r.ok))r=await call('set_mode',mode);
-  if((r&&r.ok)||!api()){
+  if(!callSucceededOrApplied(r))r=await call('set_active_mode',mode);
+  if(!callSucceededOrApplied(r))r=await call('set_mode',mode);
+  if(callSucceededOrApplied(r)||!api()){
     currentMode=mode;config.mode=mode;updateModeUI();renderChatControlOptions();setStatus('Mode: '+mode);
+    if(callAppliedLocally(r))showPersistenceFailure(r,{errorPrefix:'Mode save failed: ',partialPrefix:'Mode updated only for current session: '});
   }else{renderChatControlOptions();setStatus((r&&r.error)||'Failed to change mode')}
 }
 function updateToolbarWorkflowButton(){
@@ -4420,25 +4672,30 @@ async function selectMode(e,mode){
   e.stopPropagation();closeModePopup();
   if(!MODE_ORDER.includes(mode))return;
   let r=await call('set_chat_controls',{mode:mode});
-  if(!(r&&r.ok))r=await call('set_active_mode',mode);
-  if(!(r&&r.ok))r=await call('set_mode',mode);
-  if((r&&r.ok)||!api()){currentMode=mode;config.mode=mode;updateModeUI();renderChatControlOptions();setStatus('Mode: '+mode)}
+  if(!callSucceededOrApplied(r))r=await call('set_active_mode',mode);
+  if(!callSucceededOrApplied(r))r=await call('set_mode',mode);
+  if(callSucceededOrApplied(r)||!api()){
+    currentMode=mode;config.mode=mode;updateModeUI();renderChatControlOptions();setStatus('Mode: '+mode);
+    if(callAppliedLocally(r))showPersistenceFailure(r,{errorPrefix:'Mode save failed: ',partialPrefix:'Mode updated only for current session: '});
+  }
 }
 window.selectMode=selectMode;
-function selectApproval(e,level){
+async function selectApproval(e,level){
   e.stopPropagation();closeModePopup();
   if(!APPROVAL_ORDER.includes(level))return;
-  currentApproval=level;updateModeUI();
-  if(level==='autopilot'&&currentMode!=='agent'){setToolbarMode('agent')}
+  currentApproval=normalizeApproval(level);config.approval=currentApproval;updateModeUI();
+  if(level==='autopilot'&&currentMode!=='agent')await setToolbarMode('agent');
   if(level==='bypass'||level==='autopilot'){
     call('set_mode','agent').then(()=>{});
   }
+  await persistConfigPatch({approval:currentApproval},{errorPrefix:'Approval save failed: ',partialPrefix:'Approval updated only for current session: '});
   setStatus(t('approval_'+level)||level);
 }
 window.selectApproval=selectApproval;
-function cycleApproval(){
+async function cycleApproval(){
   const idx=(APPROVAL_ORDER.indexOf(currentApproval)+1)%APPROVAL_ORDER.length;
-  currentApproval=APPROVAL_ORDER[idx];updateModeUI();
+  currentApproval=APPROVAL_ORDER[idx];config.approval=currentApproval;updateModeUI();
+  await persistConfigPatch({approval:currentApproval},{errorPrefix:'Approval save failed: ',partialPrefix:'Approval updated only for current session: '});
   setStatus(t('approval_'+currentApproval)||currentApproval);
 }
 window.cycleApproval=cycleApproval;
@@ -4446,7 +4703,10 @@ async function cycleMode(){
   const idx=(MODE_ORDER.indexOf(currentMode)+1)%MODE_ORDER.length;
   const next=MODE_ORDER[idx];
   const r=await call('set_mode',next);
-  if(r&&r.ok){currentMode=next;updateModeUI();renderChatControlOptions();setStatus('Mode: '+currentMode)}
+  if(callSucceededOrApplied(r)){
+    currentMode=next;config.mode=next;updateModeUI();renderChatControlOptions();setStatus('Mode: '+currentMode);
+    if(callAppliedLocally(r))showPersistenceFailure(r,{errorPrefix:'Mode save failed: ',partialPrefix:'Mode updated only for current session: '});
+  }
 }
 window.cycleMode=cycleMode;
 async function loadMode(){
@@ -5017,8 +5277,8 @@ let currentTheme='dark';
 async function toggleTheme(){
   currentTheme=currentTheme==='dark'?'light':'dark';
   applyTheme(currentTheme);
-  await call('save_config',{...config,theme:currentTheme});
-  showToast('Theme: '+currentTheme,'info');
+  const r=await persistConfigPatch({theme:currentTheme},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
+  if(callSucceeded(r))showToast('Theme: '+currentTheme,'info');
 }
 
 function applyTheme(theme){
@@ -5534,21 +5794,20 @@ function focusBestTarget(){
 }
 function toggleSidebarVis(){
   _sidebarVis=!_sidebarVis;
-  $('sidebar').style.display=_sidebarVis?'':'none';
+  _applyPaneVisibility();
   $('tb-toggle-sidebar').classList.toggle('active',_sidebarVis);
+  _clampLayoutDimensions();
   focusBestTarget();_saveLayoutImmediate();
 }
 function toggleEditorVis(){
-  _editorVis=!_editorVis;
-  if(_editorVis){showEditorArea()}else{hideEditorArea()}
-  $('tb-toggle-editor').classList.toggle('active',_editorVis);
+  if(_editorVis)hideEditorArea();else showEditorArea();
   focusBestTarget();_saveLayoutImmediate();
 }
 function toggleChatVis(){
   _chatVis=!_chatVis;
-  $('right-sidebar').style.display=_chatVis?'':'none';
-  $('rsplitter').style.display=(_chatVis&&_editorVis)?'':'none';
+  _applyPaneVisibility();
   $('tb-toggle-chat').classList.toggle('active',_chatVis);
+  _clampLayoutDimensions();
   focusBestTarget();_saveLayoutImmediate();
 }
 function focusTerminal(){
@@ -5899,6 +6158,9 @@ window.clearChat=clearChat;window.uploadImage=uploadImage;
 window.execSlash=execSlash;window.refreshHistory=refreshHistory;
 window.closeTab=closeTab;window.switchTab=switchTab;
 window.toggleMinimap=toggleMinimap;
+window.refreshExplorer=refreshExplorer;window.refreshPremiumGuide=refreshPremiumGuide;
+window.closeFindBar=closeFindBar;window.doReplace=doReplace;window.doReplaceAll=doReplaceAll;
+window.toggleExtInstall=toggleExtInstall;
 
 if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
 })();
