@@ -1413,6 +1413,8 @@ class NodeExtensionHost:
         {"type": "activate",   "extensionPath": "...", "extensionId": "...", "manifest": {...}}
         {"type": "deactivate", "extensionId": "..."}
         {"type": "webviewMessage", "viewId": "...", "message": {...}}
+        {"type": "settings_sync",    "settings": {...}}
+        {"type": "settings_changed", "section": "...", "key": "...", "value": ...}
         {"type": "shutdown"}
 
     Protocol (Node -> Python, one JSON object per line on stdout):
@@ -1421,14 +1423,18 @@ class NodeExtensionHost:
         {"type": "webview_html",        "viewId": "...", "html": "..."}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
+        {"type": "config_set",          "section": "...", "key": "...", "value": ...}
         {"type": "output",              "channel": "...", "text": "..."}
         {"type": "show_message",        "level": "info|warn|error", "message": "..."}
     """
 
     def __init__(self,
-                 node_path: str,
-                 script_path: str,
+                 node_path: Optional[str] = None,
+                 script_path: str = "",
                  ui_bridge: Any = None) -> None:
+        if node_path is None:
+            from ai_editor.node_runtime import get_node_path as _get_node
+            node_path = _get_node() or ""
         self._node_path = node_path
         self._script_path = script_path
         self._ui_bridge = ui_bridge
@@ -1440,6 +1446,10 @@ class NodeExtensionHost:
         self._command_service: Optional[CommandService] = None
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
+        self._on_config_set_callbacks: List[
+            Callable[[str, str, Any], None]
+        ] = []
+        self._language_providers: List[Dict[str, Any]] = []
         self._shutting_down = False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -1732,8 +1742,59 @@ class NodeExtensionHost:
             else:
                 _log.info("[NodeExtHost] %s: %s", level, message)
 
+        elif msg_type == "language_provider_registered":
+            kind = str(msg.get("kind", ""))
+            selector = msg.get("selector")
+            self._language_providers.append({
+                "kind": kind,
+                "selector": selector,
+            })
+            _log.info("[NodeExtHost] Language provider registered: %s "
+                      "selector=%s", kind, selector)
+
+        elif msg_type == "config_set":
+            section = str(msg.get("section", ""))
+            key = str(msg.get("key", ""))
+            value = msg.get("value")
+            if section and key:
+                _log.info("[NodeExtHost] config_set: %s.%s", section, key)
+                for cb in self._on_config_set_callbacks:
+                    try:
+                        cb(section, key, value)
+                    except Exception:
+                        _log.exception("[NodeExtHost] on_config_set callback "
+                                       "error for %s.%s", section, key)
+
         else:
             _log.debug("[NodeExtHost] Unknown message type: %s", msg_type)
+
+    # -- Settings sync -------------------------------------------------------
+
+    def send_settings_sync(self, settings: Dict[str, Any]) -> bool:
+        """Push the full settings dictionary to the Node subprocess.
+
+        Called once after activation so that ``workspace.getConfiguration``
+        returns real values instead of empty defaults.
+        """
+        return self._send({"type": "settings_sync", "settings": settings})
+
+    def send_settings_changed(self, section: str, key: str,
+                              value: Any) -> bool:
+        """Notify Node of an incremental settings change."""
+        return self._send({
+            "type": "settings_changed",
+            "section": section,
+            "key": key,
+            "value": value,
+        })
+
+    def on_config_set(self, callback: Callable[[str, str, Any], None]) -> None:
+        """Register a callback invoked when Node sends a config_set message.
+
+        The callback receives ``(section, key, value)`` and is responsible
+        for persisting the change on the Python side.
+        """
+        self._on_config_set_callbacks.append(callback)
 
     # -- Webview message relay -----------------------------------------------
 
@@ -1772,6 +1833,10 @@ class NodeExtensionHost:
     def list_activated(self) -> List[str]:
         return sorted(self._activated_ids)
 
+    def list_language_providers(self) -> List[Dict[str, Any]]:
+        """Return registered language provider capabilities from Node."""
+        return list(self._language_providers)
+
     # -- Private helpers -----------------------------------------------------
 
     def _resolve_node(self) -> Optional[str]:
@@ -1790,9 +1855,16 @@ class NodeExtensionHost:
 def find_node_path() -> Optional[str]:
     """Locate a usable Node.js executable on the system.
 
-    Returns the absolute path or None if node is not installed.
+    Delegates to :func:`ai_editor.node_runtime.get_node_path` which checks
+    the bundled binary, user PATH, and common install locations.
+
+    Returns the absolute path or None if node is not found.
     """
-    return shutil.which("node")
+    try:
+        from ai_editor.node_runtime import get_node_path
+        return get_node_path()
+    except Exception:
+        return shutil.which("node")
 
 
 # ---------------------------------------------------------------------------

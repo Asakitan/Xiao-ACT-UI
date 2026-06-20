@@ -92,6 +92,9 @@ python/ai_editor_history/
 python/.sao/chat_history/
 
 
+# ── Embedded Node.js runtime (downloaded binary, ~70 MB) ──
+python/runtime/node/node.exe
+
 # ── Misc ───────────────────────────────────────────
 .github/
 out/

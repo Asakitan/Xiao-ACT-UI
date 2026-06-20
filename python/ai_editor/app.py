@@ -876,7 +876,22 @@ class AIEditorAPI:
             settings.save()
         except Exception as exc:
             return str(exc)
+        # Push updated settings to Node extension host
+        self._notify_node_settings_changed()
         return None
+
+    def _notify_node_settings_changed(self) -> None:
+        """Re-sync the full settings dict to the Node extension host.
+
+        Called after any Python-side settings mutation so that
+        ``workspace.getConfiguration()`` in Node stays current.
+        """
+        host = getattr(self, "_node_ext_host", None)
+        if host is not None and host.is_running:
+            try:
+                self._sync_settings_to_node_host()
+            except Exception:
+                pass
 
     def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
         settings = _resolve_settings(self._gui_ref)
@@ -2821,17 +2836,19 @@ class AIEditorAPI:
         Node.js is available, spawns the Node subprocess and activates them.
         Extensions without ``main`` are unaffected.
         """
-        from ai_editor.extension_host import NodeExtensionHost, find_node_path
+        from ai_editor.extension_host import NodeExtensionHost
+        from ai_editor.node_runtime import get_node_path
 
         all_exts = self._ext_host.registry.list_all()
         node_exts = [ext for ext in all_exts if ext.main and ext.enabled]
         if not node_exts:
             return
 
-        node_path = find_node_path()
+        node_path = get_node_path()
         if not node_path:
-            print("[NodeExtHost] Node.js not found on PATH; "
-                  f"{len(node_exts)} JS extension(s) will run manifest-only.")
+            print("[NodeExtHost] Node.js not found (bundled / PATH / "
+                  f"common locations); {len(node_exts)} JS extension(s) "
+                  "will run manifest-only.")
             return
 
         # Locate the extension host bootstrap script
@@ -2870,6 +2887,85 @@ class AIEditorAPI:
         self._node_ext_host = host
         print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
               "sent for activation.")
+
+        # Push current settings so getConfiguration() returns real values
+        self._sync_settings_to_node_host()
+
+        # Handle config_set messages from Node (extension called config.update)
+        host.on_config_set(self._handle_node_config_set)
+
+    def _sync_settings_to_node_host(self) -> None:
+        """Push the full settings dict to the Node extension host.
+
+        Builds a section-keyed dict from the Python settings manager and
+        sends it via ``settings_sync`` so that ``workspace.getConfiguration``
+        in Node returns real values.
+        """
+        host = self._node_ext_host
+        if host is None or not host.is_running:
+            return
+        settings = _resolve_settings(self._gui_ref)
+        if not settings:
+            return
+        try:
+            # Build a flat section dict from all known settings
+            raw: Dict[str, Any] = {}
+            # Expose the full ai_editor config as a section
+            ai_cfg = settings.get("ai_editor", {})
+            if isinstance(ai_cfg, dict):
+                raw["ai_editor"] = dict(ai_cfg)
+            # Expose individual AI editor sub-sections at the top level too
+            # so extensions can do getConfiguration("mcp") etc.
+            for section in _AI_EDITOR_SECTION_DEFAULTS:
+                if isinstance(ai_cfg, dict) and section in ai_cfg:
+                    raw[section] = ai_cfg[section]
+            # Expose panel_themes for theme-aware extensions
+            themes = settings.get("panel_themes", {})
+            if isinstance(themes, dict):
+                raw["panel_themes"] = dict(themes)
+            host.send_settings_sync(raw)
+        except Exception as exc:
+            print(f"[NodeExtHost] Failed to sync settings: {exc}")
+
+    def _handle_node_config_set(self, section: str, key: str,
+                                value: Any) -> None:
+        """Handle a config_set message from Node.
+
+        Persists the change via the Python settings manager and notifies
+        the Node host of the final value (in case Python normalises it).
+        """
+        settings = _resolve_settings(self._gui_ref)
+        if not settings:
+            return
+        try:
+            if section == "ai_editor":
+                ai_cfg = settings.get("ai_editor", {}) or {}
+                if not isinstance(ai_cfg, dict):
+                    ai_cfg = {}
+                ai_cfg[key] = value
+                settings.set("ai_editor", ai_cfg)
+            elif section in _AI_EDITOR_SECTION_DEFAULTS:
+                ai_cfg = settings.get("ai_editor", {}) or {}
+                if not isinstance(ai_cfg, dict):
+                    ai_cfg = {}
+                sub = ai_cfg.get(section, {})
+                if not isinstance(sub, dict):
+                    sub = {}
+                sub[key] = value
+                ai_cfg[section] = sub
+                settings.set("ai_editor", ai_cfg)
+            else:
+                # Generic top-level section
+                current = settings.get(section, {})
+                if isinstance(current, dict):
+                    current[key] = value
+                    settings.set(section, current)
+                else:
+                    settings.set(section, {key: value})
+            settings.save()
+        except Exception as exc:
+            print(f"[NodeExtHost] Failed to persist config_set "
+                  f"{section}.{key}: {exc}")
 
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""
@@ -4309,7 +4405,7 @@ body {
             return {"error": str(exc)}
 
     def install_extension(self, ext_id: str, vsix_url: str = "", confirmed: bool = False) -> Dict:
-        """Install an extension from the marketplace and activate it."""
+        """Install an extension from the marketplace, activate it immediately."""
         try:
             policy = self._extension_settings()
             if policy.get("confirm_install", True) and not confirmed:
@@ -4320,11 +4416,37 @@ body {
             result = install_extension(ext_id, vsix_url)
             if result.get("ok") and result.get("ext_dir"):
                 self._ensure_engine()
+                # Re-scan so the host picks up the new extension
                 desc = self._ext_host.install_from_dir(result["ext_dir"])
                 if desc:
                     self._register_ext_tools()
                     result["activated"] = True
                     result["display_name"] = desc.display_name
+
+                    # Activate in Node host if extension has a JS entry point
+                    node_host = getattr(self, "_node_ext_host", None)
+                    if desc.main and node_host is not None and node_host.is_running:
+                        manifest = {
+                            "name": desc.name,
+                            "publisher": desc.publisher,
+                            "version": desc.version,
+                            "main": desc.main,
+                            "activationEvents": desc.activation_events,
+                            "contributes": desc.contributes,
+                        }
+                        node_host.activate(desc.extension_path, desc.id, manifest)
+                        result["node_activated"] = True
+
+                    # Emit event so the frontend refreshes the extensions list
+                    display = desc.display_name or desc.name or ext_id
+                    self._emit("extensions_changed", {
+                        "installed": ext_id,
+                        "extensions": self._ext_host.list_extensions(),
+                    })
+                    self._emit("show_message", {
+                        "level": "info",
+                        "message": f"Extension {display} installed and activated",
+                    })
             return result
         except Exception as exc:
             return {"error": str(exc)}

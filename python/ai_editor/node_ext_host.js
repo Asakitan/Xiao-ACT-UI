@@ -250,6 +250,14 @@ const _commands = new Map();             // commandId -> handler
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _outputChannels = new Map();       // name -> OutputChannel
+const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
+const _onDidChangeDiagnosticsEmitter = new EventEmitter();
+const _debugAdapterFactories = new Map();   // type -> factory
+const _debugConfigProviders = new Map();    // type -> provider
+const _taskProviders = new Map();           // type -> provider
+const _scmProviders = new Map();            // id -> SourceControl
+const _onDidChangeConfigurationEmitter = new EventEmitter();
 
 // -------------------------------------------------------------------------
 // Build the mock vscode module for a given extension
@@ -483,7 +491,7 @@ function buildVscodeModule(extDesc, extensionPath) {
                 rename: (src, dst) => require('node:fs/promises').rename(src.fsPath, dst.fsPath),
                 copy: (src, dst) => require('node:fs/promises').copyFile(src.fsPath, dst.fsPath),
             },
-            onDidChangeConfiguration: new EventEmitter().event,
+            onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
             onDidChangeWorkspaceFolders: new EventEmitter().event,
             findFiles(include, exclude, maxResults) {
                 log('stub: findFiles');
@@ -539,22 +547,104 @@ function buildVscodeModule(extDesc, extensionPath) {
             onDidChange: new EventEmitter().event,
         },
 
-        // --- Namespace: languages (stubs) ---
-        languages: {
-            registerHoverProvider() { log('stub: registerHoverProvider'); return new Disposable(() => {}); },
-            registerCompletionItemProvider() { log('stub: registerCompletionItemProvider'); return new Disposable(() => {}); },
-            registerDefinitionProvider() { log('stub: registerDefinitionProvider'); return new Disposable(() => {}); },
-            registerCodeActionsProvider() { log('stub: registerCodeActionsProvider'); return new Disposable(() => {}); },
-            registerCodeLensProvider() { log('stub: registerCodeLensProvider'); return new Disposable(() => {}); },
-            createDiagnosticCollection(name) { return { name, set() {}, delete() {}, clear() {}, forEach() {}, get() {}, has() { return false; }, dispose() {} }; },
-            registerDocumentFormattingEditProvider() { return new Disposable(() => {}); },
-            registerDocumentLinkProvider() { return new Disposable(() => {}); },
-            registerInlineCompletionItemProvider() { return new Disposable(() => {}); },
-            getLanguages() { return Promise.resolve([]); },
-            match(selector, doc) { return 0; },
-            onDidChangeDiagnostics: new EventEmitter().event,
-            getDiagnostics() { return []; },
-        },
+        // --- Namespace: languages ---
+        languages: (() => {
+            const _registerLangProvider = (kind, selector, provider, extra) => {
+                const entry = Object.assign({ kind, selector, provider }, extra || {});
+                _languageProviders.push(entry);
+                send({ type: 'language_provider_registered', kind, selector });
+                log(`register ${kind} provider: ${JSON.stringify(selector)}`);
+                const d = new Disposable(() => {
+                    const idx = _languageProviders.indexOf(entry);
+                    if (idx >= 0) _languageProviders.splice(idx, 1);
+                });
+                subscriptions.push(d);
+                return d;
+            };
+            return {
+                registerCompletionItemProvider(selector, provider, ...triggers) {
+                    return _registerLangProvider('completion', selector, provider, { triggers });
+                },
+                registerHoverProvider(selector, provider) {
+                    return _registerLangProvider('hover', selector, provider);
+                },
+                registerDefinitionProvider(selector, provider) {
+                    return _registerLangProvider('definition', selector, provider);
+                },
+                registerDocumentSymbolProvider(selector, provider) {
+                    return _registerLangProvider('documentSymbol', selector, provider);
+                },
+                registerCodeActionsProvider(selector, provider, metadata) {
+                    return _registerLangProvider('codeActions', selector, provider, { metadata });
+                },
+                registerCodeLensProvider(selector, provider) {
+                    return _registerLangProvider('codeLens', selector, provider);
+                },
+                createDiagnosticCollection(name) {
+                    const collName = name || `diag-${_diagnosticCollections.size}`;
+                    const entries = new Map();
+                    const collection = {
+                        name: collName,
+                        set(uri, diagnostics) {
+                            if (diagnostics) {
+                                entries.set(String(uri), diagnostics);
+                            } else if (Array.isArray(uri)) {
+                                for (const [u, d] of uri) entries.set(String(u), d);
+                            }
+                            _onDidChangeDiagnosticsEmitter.fire({ uris: [uri] });
+                        },
+                        delete(uri) { entries.delete(String(uri)); _onDidChangeDiagnosticsEmitter.fire({ uris: [uri] }); },
+                        clear() { entries.clear(); _onDidChangeDiagnosticsEmitter.fire({ uris: [] }); },
+                        forEach(cb) { entries.forEach((diags, uri) => cb(uri, diags, collection)); },
+                        get(uri) { return entries.get(String(uri)); },
+                        has(uri) { return entries.has(String(uri)); },
+                        dispose() { entries.clear(); _diagnosticCollections.delete(collName); },
+                    };
+                    _diagnosticCollections.set(collName, collection);
+                    return collection;
+                },
+                getDiagnostics(uri) {
+                    if (uri) {
+                        const key = String(uri);
+                        for (const col of _diagnosticCollections.values()) {
+                            const d = col.get(key);
+                            if (d) return d;
+                        }
+                        return [];
+                    }
+                    const all = [];
+                    for (const col of _diagnosticCollections.values()) {
+                        col.forEach((u, diags) => all.push([u, diags]));
+                    }
+                    return all;
+                },
+                onDidChangeDiagnostics: _onDidChangeDiagnosticsEmitter.event,
+                match(selector, document) {
+                    if (!selector || !document) return 0;
+                    const docLang = document.languageId || '';
+                    const docScheme = (document.uri && document.uri.scheme) || 'file';
+                    const selectors = Array.isArray(selector) ? selector : [selector];
+                    let best = 0;
+                    for (const sel of selectors) {
+                        let score = 0;
+                        if (typeof sel === 'string') {
+                            score = (sel === docLang) ? 10 : 0;
+                        } else if (typeof sel === 'object' && sel !== null) {
+                            const langMatch = !sel.language || sel.language === docLang || sel.language === '*';
+                            const schemeMatch = !sel.scheme || sel.scheme === docScheme || sel.scheme === '*';
+                            if (langMatch && schemeMatch) score = 10;
+                            if (sel.pattern) score = Math.max(score, 5);
+                        }
+                        best = Math.max(best, score);
+                    }
+                    return best;
+                },
+                registerDocumentFormattingEditProvider() { return new Disposable(() => {}); },
+                registerDocumentLinkProvider() { return new Disposable(() => {}); },
+                registerInlineCompletionItemProvider() { return new Disposable(() => {}); },
+                getLanguages() { return Promise.resolve([]); },
+            };
+        })(),
 
         // --- Namespace: lm (Language Models) ---
         lm: {
@@ -596,28 +686,95 @@ function buildVscodeModule(extDesc, extensionPath) {
             onDidChangeSessions: new EventEmitter().event,
         },
 
-        // --- Namespace: debug (stubs) ---
-        debug: {
-            registerDebugConfigurationProvider() { return new Disposable(() => {}); },
-            registerDebugAdapterDescriptorFactory() { return new Disposable(() => {}); },
-            startDebugging() { log('stub: debug.startDebugging'); return Promise.resolve(false); },
-            get activeDebugSession() { return undefined; },
-            get breakpoints() { return []; },
-            onDidChangeActiveDebugSession: new EventEmitter().event,
-            onDidStartDebugSession: new EventEmitter().event,
-            onDidTerminateDebugSession: new EventEmitter().event,
-            onDidChangeBreakpoints: new EventEmitter().event,
+        // --- Namespace: scm ---
+        scm: {
+            createSourceControl(id, label, rootUri) {
+                log(`scm: createSourceControl "${id}" ("${label}")`);
+                const groups = new Map();
+                const sc = {
+                    id,
+                    label,
+                    rootUri: rootUri || null,
+                    inputBox: { value: '', placeholder: '' },
+                    count: 0,
+                    quickDiffProvider: undefined,
+                    statusBarCommands: undefined,
+                    createResourceGroup(groupId, groupLabel) {
+                        const group = { id: groupId, label: groupLabel, resourceStates: [], hideWhenEmpty: false, dispose() { groups.delete(groupId); } };
+                        groups.set(groupId, group);
+                        return group;
+                    },
+                    dispose() {
+                        groups.clear();
+                        _scmProviders.delete(id);
+                        log(`scm: disposed "${id}"`);
+                    },
+                };
+                _scmProviders.set(id, sc);
+                return sc;
+            },
         },
 
-        // --- Namespace: tasks (stubs) ---
-        tasks: {
-            registerTaskProvider() { log('stub: tasks.registerTaskProvider'); return new Disposable(() => {}); },
-            fetchTasks() { return Promise.resolve([]); },
-            executeTask() { log('stub: executeTask'); return Promise.resolve({ terminate() {} }); },
-            onDidStartTask: new EventEmitter().event,
-            onDidEndTask: new EventEmitter().event,
-            taskExecutions: [],
-        },
+        // --- Namespace: debug ---
+        debug: (() => {
+            const _onDidStartDebugSession = new EventEmitter();
+            const _onDidTerminateDebugSession = new EventEmitter();
+            return {
+                registerDebugAdapterDescriptorFactory(type, factory) {
+                    _debugAdapterFactories.set(type, factory);
+                    log(`debug: registered adapter factory for "${type}"`);
+                    return new Disposable(() => _debugAdapterFactories.delete(type));
+                },
+                registerDebugConfigurationProvider(type, provider) {
+                    _debugConfigProviders.set(type, provider);
+                    log(`debug: registered config provider for "${type}"`);
+                    return new Disposable(() => _debugConfigProviders.delete(type));
+                },
+                startDebugging(folder, config) {
+                    log('debug: startDebugging');
+                    send({ type: 'debug_start', config: config || {} });
+                    return Promise.resolve(true);
+                },
+                get activeDebugSession() { return null; },
+                get breakpoints() { return []; },
+                onDidChangeActiveDebugSession: new EventEmitter().event,
+                onDidStartDebugSession: _onDidStartDebugSession.event,
+                onDidTerminateDebugSession: _onDidTerminateDebugSession.event,
+                onDidChangeBreakpoints: new EventEmitter().event,
+                _onDidStartDebugSession,
+                _onDidTerminateDebugSession,
+            };
+        })(),
+
+        // --- Namespace: tasks ---
+        tasks: (() => {
+            const _onDidStartTask = new EventEmitter();
+            const _onDidEndTask = new EventEmitter();
+            return {
+                registerTaskProvider(type, provider) {
+                    _taskProviders.set(type, provider);
+                    log(`tasks: registered provider for "${type}"`);
+                    return new Disposable(() => _taskProviders.delete(type));
+                },
+                fetchTasks(filter) {
+                    log('tasks: fetchTasks');
+                    return Promise.resolve([]);
+                },
+                executeTask(task) {
+                    log('tasks: executeTask');
+                    send({ type: 'task_execute', task: { name: task?.name, source: task?.source, definition: task?.definition } });
+                    const execution = { task, terminate() {} };
+                    return Promise.resolve(execution);
+                },
+                onDidStartTask: _onDidStartTask.event,
+                onDidEndTask: _onDidEndTask.event,
+                onDidStartTaskProcess: new EventEmitter().event,
+                onDidEndTaskProcess: new EventEmitter().event,
+                taskExecutions: [],
+                _onDidStartTask,
+                _onDidEndTask,
+            };
+        })(),
 
         // --- Types used by some extensions ---
         ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
@@ -649,6 +806,53 @@ function buildVscodeModule(extDesc, extensionPath) {
         EndOfLine: { LF: 1, CRLF: 2 },
         TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
 
+        // --- Task types ---
+        ShellExecution: class {
+            constructor(commandLineOrCommand, argsOrOptions, options) {
+                if (Array.isArray(argsOrOptions)) {
+                    this.command = commandLineOrCommand;
+                    this.args = argsOrOptions;
+                    this.options = options;
+                } else {
+                    this.commandLine = commandLineOrCommand;
+                    this.options = argsOrOptions;
+                }
+            }
+        },
+        ProcessExecution: class {
+            constructor(process_, args, options) {
+                this.process = process_;
+                this.args = args || [];
+                this.options = options;
+            }
+        },
+        Task: class {
+            constructor(definition, scopeOrName, nameOrSource, sourceOrExecution, execution) {
+                this.definition = definition;
+                if (typeof scopeOrName === 'string') {
+                    // 4-arg form: (definition, name, source, execution)
+                    this.name = scopeOrName;
+                    this.source = nameOrSource;
+                    this.execution = sourceOrExecution;
+                } else {
+                    // 5-arg form: (definition, scope, name, source, execution)
+                    this.scope = scopeOrName;
+                    this.name = nameOrSource;
+                    this.source = sourceOrExecution;
+                    this.execution = execution;
+                }
+                this.isBackground = false;
+                this.presentationOptions = {};
+                this.problemMatchers = [];
+                this.group = undefined;
+                this.detail = undefined;
+            }
+        },
+        TaskGroup: { Clean: { id: 'clean' }, Build: { id: 'build' }, Rebuild: { id: 'rebuild' }, Test: { id: 'test' } },
+        TaskScope: { Global: 1, Workspace: 2 },
+        TaskRevealKind: { Always: 1, Silent: 2, Never: 3 },
+        TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 },
+
         // Placeholder for LanguageModelChatMessage
         LanguageModelChatMessage: class {
             constructor(role, content, name) { this.role = role; this.content = content; this.name = name; }
@@ -661,16 +865,69 @@ function buildVscodeModule(extDesc, extensionPath) {
 }
 
 // -------------------------------------------------------------------------
-// Configuration proxy (returns defaults / empty values)
+// Settings cache — populated by Python via settings_sync / settings_changed
+// -------------------------------------------------------------------------
+let _settings = {};
+
+// -------------------------------------------------------------------------
+// Configuration proxy — reads from _settings cache, writes back to Python
 // -------------------------------------------------------------------------
 function _createConfigProxy(section) {
-    const _data = {};
+    const sectionData = () => (section && typeof _settings[section] === 'object' && _settings[section] !== null) ? _settings[section] : {};
     return {
-        get(key, defaultValue) { return key in _data ? _data[key] : defaultValue; },
-        has(key) { return key in _data; },
-        inspect(key) { return { key: `${section}.${key}` }; },
+        get(key, defaultValue) {
+            if (arguments.length === 0 || key === undefined) {
+                return Object.assign({}, sectionData());
+            }
+            const data = sectionData();
+            if (key in data) return data[key];
+            // Support dotted keys: "editor.fontSize" -> nested lookup
+            const parts = String(key).split('.');
+            let current = data;
+            for (const part of parts) {
+                if (current && typeof current === 'object' && part in current) {
+                    current = current[part];
+                } else {
+                    return defaultValue;
+                }
+            }
+            return current;
+        },
+        has(key) {
+            const data = sectionData();
+            if (key in data) return true;
+            const parts = String(key).split('.');
+            let current = data;
+            for (const part of parts) {
+                if (current && typeof current === 'object' && part in current) {
+                    current = current[part];
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        },
+        inspect(key) {
+            const data = sectionData();
+            const value = key in data ? data[key] : undefined;
+            return {
+                key: section ? `${section}.${key}` : key,
+                defaultValue: undefined,
+                globalValue: value,
+                workspaceValue: value,
+            };
+        },
         update(key, value, configTarget, overrideInLanguage) {
-            _data[key] = value;
+            if (!_settings[section] || typeof _settings[section] !== 'object') {
+                _settings[section] = {};
+            }
+            _settings[section][key] = value;
+            send({
+                type: 'config_set',
+                section: section || '',
+                key: String(key),
+                value: value,
+            });
             return Promise.resolve();
         },
     };
@@ -874,6 +1131,35 @@ async function handleMessage(msg) {
         case 'command':
             await executeCommand(msg.commandId, msg.args);
             break;
+        case 'settings_sync':
+            // Full settings replacement from Python
+            if (msg.settings && typeof msg.settings === 'object') {
+                _settings = msg.settings;
+                log(`settings_sync: ${Object.keys(_settings).length} section(s)`);
+            }
+            break;
+        case 'settings_changed': {
+            // Incremental update: a single section/key changed
+            const changedSection = msg.section;
+            if (changedSection !== undefined) {
+                if (msg.key !== undefined) {
+                    if (!_settings[changedSection] || typeof _settings[changedSection] !== 'object') {
+                        _settings[changedSection] = {};
+                    }
+                    _settings[changedSection][msg.key] = msg.value;
+                } else if (msg.value !== undefined && typeof msg.value === 'object') {
+                    _settings[changedSection] = msg.value;
+                }
+                // Fire onDidChangeConfiguration for listening extensions
+                _onDidChangeConfigurationEmitter.fire({
+                    affectsConfiguration(sect) {
+                        if (!sect) return true;
+                        return sect === changedSection || changedSection.startsWith(sect + '.') || sect.startsWith(changedSection + '.');
+                    },
+                });
+            }
+            break;
+        }
         case 'shutdown':
             await shutdown();
             break;
