@@ -162,7 +162,7 @@ body.window-resizing * { cursor:inherit !important; }
 /* ── Content area (editor + bottom terminal) ── */
 .content { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:280px; }
 
-/* ── Right sidebar (Chat / Copilot / Claude Code / Codex) ── */
+/* ── Right sidebar (Assistant / Copilot / Claude Code / Codex) ── */
 .right-sidebar { flex:1; min-width:320px; display:flex;
   flex-direction:column; background:var(--bg); }
 .right-sidebar.has-editor { flex:none; width:45%; min-width:320px; max-width:700px;
@@ -312,6 +312,7 @@ code.inline { background:var(--bg3); padding:1px 3px; border-radius:4px;
 .error-text { color:var(--fg-error); }
 .stream-cursor::after { content:''; display:inline-block; width:3em;
   animation:ellipsis steps(4,end) 1s infinite; color:var(--fg-dim); }
+@keyframes ellipsis { 0%{content:'.'} 25%{content:'..'} 50%{content:'...'} 75%{content:''} }
 
 /* Thinking block (VSCode-style collapsible) */
 .thinking-block { margin:4px 0; overflow:hidden; }
@@ -398,7 +399,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-toolbar { display:flex; align-items:center; gap:6px; padding:0 8px 6px; font-size:11px; }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { flex:1; }
-.chat-toolbar .token-count { color:var(--fg-dim); }
+
 .chat-control-strip { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:var(--bg3); color:var(--fg); font:11px var(--sans);
@@ -915,7 +916,7 @@ pre.code-block { overflow:visible; }
   <!-- Activity bar -->
   <div class="activity-bar">
     <div class="ab-icon" data-panel="explorer" data-i18n-title="explorer" title="Explorer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.75 5.25A1.75 1.75 0 014.5 3.5h3.2l1.5 1.5h6.3a1.75 1.75 0 011.75 1.75v7.75A1.75 1.75 0 0115.5 16.25h-11A1.75 1.75 0 012.75 14.5v-9.25z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
-    <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Chat"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Assistant"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
@@ -937,9 +938,9 @@ pre.code-block { overflow:visible; }
         <div id="explorer-tree" class="tree-root"></div>
       </div>
     </div>
-    <!-- Chat sidebar (default) -->
+    <!-- Assistant sidebar (default) -->
     <div class="sb-view" id="sb-chat">
-      <div class="sb-header"><span data-i18n="chat">Chat</span> <span class="spacer"></span>
+      <div class="sb-header"><span data-i18n="chat">Assistant</span> <span class="spacer"></span>
         <span class="sb-action" onclick="openChatHistory()" data-i18n-title="history" title="History">◷</span>
         <span class="sb-action" onclick="newChat()" data-i18n-title="new_chat_action" title="New Chat">✚</span>
       </div>
@@ -1082,7 +1083,7 @@ pre.code-block { overflow:visible; }
           22 个引擎底层工具 · Tool Calling · 流式输出
         </div>
         <div style="margin-top:12px;color:var(--fg-dim);font-size:12px">
-          <kbd>⚙ Settings</kbd> 配置 API Key &nbsp;→&nbsp; 在下方 Chat 面板开始对话
+          <kbd>⚙ Settings</kbd> 配置 API Key &nbsp;→&nbsp; 在下方 Assistant 面板开始对话
         </div>
       </div>
       <div class="editor-container" id="editor-container" style="display:none">
@@ -1129,7 +1130,7 @@ pre.code-block { overflow:visible; }
   <!-- Right sidebar: dynamic provider tabs -->
   <div class="right-sidebar" id="right-sidebar">
     <div class="right-tabs" id="right-tabs">
-      <div class="rtab active" data-rtab="chat" data-i18n-title="tab_chat_title" title="Chat (configured LLM provider)"><span class="rtab-label" data-i18n="tab_chat">Chat</span></div>
+      <div class="rtab active" data-rtab="chat" data-i18n-title="tab_chat_title" title="Assistant (configured LLM provider)"><span class="rtab-label" data-i18n="tab_chat">Assistant</span></div>
       <!-- GitHub Copilot / Claude Code / Codex / plugin tabs injected by renderProviderTabs() -->
     </div>
     <div id="right-panels" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
@@ -1305,7 +1306,7 @@ pre.code-block { overflow:visible; }
     <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
     <label>Max Output Tokens</label><input id="s-maxtok" type="number" value="4096">
 
-    <div class="sb-group" style="padding:0;margin-top:12px">Chat</div>
+    <div class="sb-group" style="padding:0;margin-top:12px">Assistant</div>
     <label>System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
     <label>Mode</label>
     <select id="s-mode" style="width:100%"><option value="ask">Ask (no tools)</option><option value="plan">Plan (confirm writes)</option><option value="agent" selected>Agent (autonomous)</option></select>
@@ -1889,7 +1890,7 @@ en:{
   undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
-  chat:'Chat',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
+  chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ for commands, @ for context)',
   agents:'Agents',workflows:'Workflows',new_agent:'New Agent',new_wf:'New Workflow',
   model:'Model',quick_actions:'Quick Actions',
@@ -1959,7 +1960,7 @@ en:{
   s_settings:'Settings',s_endpoint:'Endpoint',s_provider:'Provider',s_api_key:'API Key (active provider)',
   s_base_url:'Base URL (empty = default)',s_provider_keys:'Provider Keys',s_model:'Model',
   s_model_name:'Model Name',s_temperature:'Temperature',s_max_tokens:'Max Output Tokens',
-  s_chat:'Chat',s_system_prompt:'System Prompt',s_mode:'Mode',
+  s_chat:'Assistant',s_system_prompt:'System Prompt',s_mode:'Mode',
   s_ask_mode:'Ask (no tools)',s_plan_mode:'Plan (confirm writes)',s_agent_mode:'Agent (autonomous)',
   s_claude_code:'Claude Code',s_cli_cmd:'CLI Command',s_cli_args:'CLI Args (one per line)',
   s_prefer_cli:'Prefer Claude Code CLI',s_skip_perms:'Skip permissions',
@@ -1997,7 +1998,7 @@ en:{
   streaming:'Streaming...',stopping:'Stopping...',executing_tools:'Executing tools...',status_error:'Error',
   no_models_hint:'No models defined. Add models below to configure context window and capabilities.',
   custom_model_hint:'Custom model — default 128K context.',
-  tab_chat:'Chat',tab_chat_title:'Chat (configured LLM provider)',
+  tab_chat:'Assistant',tab_chat_title:'Assistant (configured LLM provider)',
   provider_copilot_label:'Copilot',provider_claude_code_label:'Claude Code',provider_codex_label:'Codex',
   provider_default_model:'Default model',provider_start_chat:'Start a $1 chat',provider_unavailable_title:'$1 is unavailable',
   provider_focus_prompt:'Focus prompt',provider_new_chat:'New chat',provider_shares_context:'shares editor context and tools',
@@ -2030,7 +2031,7 @@ zh:{
   undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
-  chat:'聊天',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
+  chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文)',
   agents:'代理',workflows:'工作流',new_agent:'新建代理',new_wf:'新建工作流',
   model:'模型',quick_actions:'快捷操作',
@@ -2085,7 +2086,7 @@ zh:{
   s_settings:'设置',s_endpoint:'端点',s_provider:'提供商',s_api_key:'API Key (当前提供商)',
   s_base_url:'Base URL (留空 = 默认)',s_provider_keys:'提供商密钥',s_model:'模型',
   s_model_name:'模型名称',s_temperature:'温度',s_max_tokens:'最大输出 Token',
-  s_chat:'聊天',s_system_prompt:'系统提示词',s_mode:'模式',
+  s_chat:'助手',s_system_prompt:'系统提示词',s_mode:'模式',
   s_ask_mode:'问答 (无工具)',s_plan_mode:'规划 (确认写入)',s_agent_mode:'代理 (全自动)',
   s_claude_code:'Claude Code',s_cli_cmd:'CLI 命令',s_cli_args:'CLI 参数 (每行一个)',
   s_prefer_cli:'优先使用 Claude Code CLI',s_skip_perms:'跳过权限',
@@ -2118,7 +2119,7 @@ zh:{
   streaming:'流式输出中...',stopping:'停止中...',executing_tools:'执行工具中...',status_error:'错误',
   no_models_hint:'未定义模型。在下方添加模型来配置上下文窗口和能力。',
   custom_model_hint:'自定义模型 — 默认 128K 上下文。',
-  tab_chat:'Chat',tab_chat_title:'聊天（已配置 LLM 提供商）',
+  tab_chat:'Assistant',tab_chat_title:'助手（已配置 LLM 提供商）',
   provider_copilot_label:'Copilot',provider_claude_code_label:'Claude Code',provider_codex_label:'Codex',
   provider_default_model:'默认模型',provider_start_chat:'开始 $1 对话',provider_unavailable_title:'$1 不可用',
   provider_focus_prompt:'聚焦输入框',provider_new_chat:'新对话',provider_shares_context:'共享编辑器上下文和工具',
@@ -2908,7 +2909,6 @@ async function updateTokenCount(){
   const r=await call('count_conversation_tokens');
   if(r&&r.tokens!==undefined){
     totalTokens=r.tokens;
-    const legacy=$('token-count');if(legacy)legacy.textContent=totalTokens+' tokens';
     updateContextUsage(totalTokens);
     const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=totalTokens+' tokens';
   }
@@ -5574,7 +5574,6 @@ window.pickAtVar=function(v){$('at-popup').classList.remove('open');
   inp.value=before+val.substring(pos);inp.selectionStart=inp.selectionEnd=before.length;inp.focus()};
 
 // ── Agent Mode in doSend ──
-const _origDoSend=doSend;
 doSend=async function(){
   const inp=$('chat-input');let text=inp.value.trim();
   if(!text||streaming)return;
@@ -5828,7 +5827,6 @@ function _buildFindRegex(globalFlag){
   const flags=(globalFlag?'g':'')+(caseSensitive?'':'i');
   try{return new RegExp(pattern,flags)}catch(e){return null}
 }
-const _origDoFind=doFind;
 doFind=function(){
   const regex=_buildFindRegex(true);if(!regex){$('find-count').textContent='';return}
   try{
@@ -5845,7 +5843,6 @@ doFind=function(){
   }catch(e){$('find-count').textContent='Invalid regex'}
 };
 // FIND-001: doFindPrev also shows N of M and respects toggles
-const _origDoFindPrev=doFindPrev;
 doFindPrev=function(){
   const regex=_buildFindRegex(true);if(!regex){$('find-count').textContent='';return}
   try{
@@ -6319,7 +6316,6 @@ function _getActiveTermHistory(){
   if(_activeTermId!==null){const t=_terminals.find(t=>t.id===_activeTermId);if(t)return t}
   return null;
 }
-const _origClearTerminal=clearTerminal;
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
 window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;

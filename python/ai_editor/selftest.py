@@ -975,7 +975,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("built-in chat providers include Copilot in order",
            ordered_builtin_ids == ["chat", "copilot", "claude-code", "codex"])
     _check("built-in chat provider names are exact",
-           ordered_builtin_names == ["Chat", "Copilot", "Claude Code", "Codex"])
+           ordered_builtin_names == ["Assistant", "Copilot", "Claude Code", "Codex"])
     _check(
         "Copilot chat provider is native ChatWidget participant surface",
         api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot"
@@ -1075,7 +1075,7 @@ def test_phase1_ai_editor_regressions() -> None:
     with open(html_path, "r", encoding="utf-8") as fh:
         html = fh.read()
     _check("right-sidebar tabs use exact built-in labels",
-           "tab_chat:'Chat'" in html
+           "tab_chat:'Assistant'" in html
            and "provider_copilot_label:'Copilot'" in html
            and "provider_claude_code_label:'Claude Code'" in html
            and "provider_codex_label:'Codex'" in html)

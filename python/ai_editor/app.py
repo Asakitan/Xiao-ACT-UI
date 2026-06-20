@@ -1138,19 +1138,6 @@ class AIEditorAPI:
         if vscode_ns and runtime_view_id:
             runtime_html = vscode_ns.get_webview_html(runtime_view_id)
             if runtime_html:
-                # Detect CLI placeholder HTML that was never updated by a
-                # real runtime.  Return unavailable so the frontend falls
-                # back to the native chat panel instead of showing a dead
-                # "Waiting for ... runtime" iframe.
-                if self._is_cli_placeholder_html(runtime_html, runtime_view_id):
-                    return {
-                        "html": "",
-                        "view_id": fallback_id,
-                        "available": False,
-                        "source": "cli-placeholder",
-                        "reason": "CLI runtime not connected.",
-                        "state": self._provider_webview_state("", fallback_id),
-                    }
                 return {"html": runtime_html, "view_id": runtime_view_id,
                         "available": True, "source": "runtime",
                         "state": self._provider_webview_state(runtime_view_id, fallback_id)}
@@ -2094,7 +2081,6 @@ class AIEditorAPI:
 
     _CLI_PROVIDER_IDS = ("claude-code", "codex")
     _COPILOT_EXTENSION_IDS = {"github.copilot", "github.copilot-chat"}
-    _CLI_WEBVIEW_EXTENSION_IDS = {"sao.cli.claude-code", "sao.cli.codex"}
     _DYNAMIC_WEBVIEW_METADATA_KEY = "dynamic_webview_provider"
 
     @staticmethod
@@ -2105,17 +2091,6 @@ class AIEditorAPI:
         if self._provider_uses_native_chat(prov):
             return False
         return bool(self._provider_candidate_view_ids(prov))
-
-    def _is_cli_placeholder_html(self, html: str, view_id: str) -> bool:
-        """Return True if *html* is the stub set by _register_cli_provider_views.
-
-        The stub contains "Waiting for <provider> runtime" and is never
-        updated because no real CLI process is running.  Treating it as
-        real content would show a permanent dead placeholder in the UI.
-        """
-        if view_id not in self._CLI_WEBVIEW_EXTENSION_IDS:
-            return False
-        return "Waiting for" in html and "runtime" in html
 
     def _provider_runtime_webview_id(self, provider_id: str) -> str:
         info = self._provider_runtime_webview_info(provider_id)
@@ -2271,7 +2246,7 @@ class AIEditorAPI:
             # should not create phantom tabs.
             if vscode_ns:
                 html = vscode_ns.get_webview_html(view_id) if hasattr(vscode_ns, "get_webview_html") else ""
-                if not html or self._is_cli_placeholder_html(html, view_id):
+                if not html:
                     continue
             extension_id = str(spec.get("extension_id") or "").strip()
             metadata = {
@@ -2356,8 +2331,6 @@ class AIEditorAPI:
             extension_id = str(view.get("_extensionId") or "").strip()
             if not view_id or self._is_copilot_extension_id(extension_id):
                 continue
-            if extension_id in self._CLI_WEBVIEW_EXTENSION_IDS:
-                continue
             if self._non_dynamic_provider_for_view_id(view_id):
                 continue
             specs.append({
@@ -2389,8 +2362,6 @@ class AIEditorAPI:
             if not view_id:
                 continue
             if self._is_copilot_extension_id(extension_id):
-                continue
-            if extension_id in self._CLI_WEBVIEW_EXTENSION_IDS:
                 continue
             if self._non_dynamic_provider_for_view_id(view_id):
                 continue
@@ -3023,93 +2994,6 @@ class AIEditorAPI:
             return {"error": "Node extension host not running"}
         ok = host.relay_webview_message(view_id, message)
         return {"ok": ok, "view_id": view_id}
-
-    # Theme CSS variable block injected into CLI provider webview HTML so
-    # that extensions relying on VS Code theme tokens render correctly in
-    # our standalone pywebview shell.
-    _CLI_WEBVIEW_THEME_CSS = """\
-<style>
-:root {
-  --vscode-editor-background: var(--sao-bg, #1e1e1e);
-  --vscode-editor-foreground: var(--sao-fg, #cccccc);
-  --vscode-input-background: var(--sao-input-bg, #3c3c3c);
-  --vscode-input-foreground: var(--sao-fg, #cccccc);
-  --vscode-input-border: var(--sao-border, #3c3c3c);
-  --vscode-button-background: var(--sao-accent, #0e639c);
-  --vscode-button-foreground: #ffffff;
-  --vscode-button-hoverBackground: var(--sao-accent-hover, #1177bb);
-  --vscode-focusBorder: var(--sao-accent, #0e639c);
-  --vscode-foreground: var(--sao-fg, #cccccc);
-  --vscode-descriptionForeground: var(--sao-fg-dim, #9e9e9e);
-  --vscode-errorForeground: #f48771;
-  --vscode-font-family: var(--sao-font, 'Segoe UI', sans-serif);
-  --vscode-font-size: var(--sao-font-size, 13px);
-  --vscode-sideBar-background: var(--sao-sidebar-bg, #252526);
-  --vscode-panel-background: var(--sao-bg, #1e1e1e);
-  --vscode-panel-border: var(--sao-border, #3c3c3c);
-}
-body {
-  background: var(--vscode-editor-background);
-  color: var(--vscode-editor-foreground);
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  margin: 0;
-  padding: 0;
-}
-</style>
-"""
-
-    def _register_cli_provider_views(self) -> None:
-        """Register WebviewView providers for CLI-backed chat providers.
-
-        Only claude-code and codex are registered as WebviewView providers.
-        Copilot is deliberately excluded: it uses the VS Code native
-        ChatWidget / chat participant protocol and does not expose a
-        WebviewView.  Registering it as a WebviewView would create a
-        non-functional empty panel.  Copilot stays as a regular
-        ChatProvider backed by our native chat panel.
-        """
-        vscode_ns = getattr(self, "_vscode_ns", None)
-        if vscode_ns is None:
-            return
-
-        for provider_id in ("claude-code", "codex"):
-            view_id = f"sao.cli.{provider_id}"
-            html = (
-                "<!DOCTYPE html>"
-                "<html><head><meta charset='utf-8'>"
-                f"{self._CLI_WEBVIEW_THEME_CSS}"
-                "</head><body>"
-                f"<div id='root' data-provider='{provider_id}'>"
-                f"<p>Waiting for {provider_id} runtime&hellip;</p>"
-                "</div>"
-                "<script>"
-                "const vscode = acquireVsCodeApi();"
-                "window.addEventListener('message', e => {"
-                "  const msg = e.data;"
-                "  if (msg && msg.type === 'setHtml') {"
-                "    document.getElementById('root').innerHTML = msg.html;"
-                "  }"
-                "});"
-                "</script>"
-                "</body></html>"
-            )
-
-            class _CliViewProvider:
-                """Minimal WebviewViewProvider for a CLI chat provider."""
-                def __init__(self, pid: str, initial_html: str) -> None:
-                    self._pid = pid
-                    self._html = initial_html
-
-                def resolveWebviewView(self, view: Any,
-                                       context: Any = None,
-                                       token: Any = None) -> None:
-                    if hasattr(view, "webview"):
-                        view.webview.html = self._html
-
-            provider = _CliViewProvider(provider_id, html)
-            vscode_ns._register_webview_view_provider(
-                view_id, provider, _extension_id=f"sao.cli.{provider_id}")
 
     def _extension_scan_dirs(self) -> List[str]:
         """Return extension directories to scan without activating anything."""

@@ -94,14 +94,14 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 
 ## AI Editor (`python/ai_editor/`)
 
-Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Chat Provider tabs (CHAT / Claude Code / Codex / plugin), custom Agents & Workflows, three-scope system, and full endpoint customization. See `docs/AI_EDITOR.md` for full architecture reference.
+Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Chat Provider tabs (Assistant / Claude Code / Codex / plugin), custom Agents & Workflows, three-scope system, and full endpoint customization. See `docs/AI_EDITOR.md` for full architecture reference.
 
 ### Architecture
 
-- VSCode layout: Activity Bar → Left Sidebar → Editor + Terminal → **Right Sidebar (Chat)**
+- VSCode layout: Activity Bar → Left Sidebar → Editor + Terminal → **Right Sidebar (Assistant)**
 - Three-scope system: System (`~/.sao/`) → Workspace (`<BASE_DIR>/.sao/`) → Plugin (`plugins/<id>/.sao/`)
 - Three modes: Agent (autonomous) / Ask (read-only Q&A) / Plan (read + confirm writes)
-- Chat Provider registry: plugins call `register_chat_provider()` to add right-sidebar tabs
+- Provider registry: plugins call `register_chat_provider()` to add right-sidebar tabs
 - Model context windows: built-in 20+ model table + user custom overrides in settings
 - Auto-compress: threshold = 90% of model max_input_tokens (VSCode Copilot pattern)
 
@@ -127,7 +127,7 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 | `agents.py` | Agent registry: 5 built-in + custom from `.sao/agents/` |
 | `workflows.py` | Workflow engine: 3 built-in + custom, chain LLM calls with `{{var}}` |
 | `scopes.py` | Three-scope resolution + mode/permission defaults |
-| `chat_providers.py` | Right-sidebar provider tabs: CHAT/CC/Codex/plugin |
+| `chat_providers.py` | Right-sidebar provider tabs: Assistant/CC/Codex/plugin |
 | `mcp_client.py` | MCP server connections (stdio + SSE + internal) |
 | `extensions.py` | VSCode Marketplace API client |
 | `history.py` | Scope-aware conversation persistence |

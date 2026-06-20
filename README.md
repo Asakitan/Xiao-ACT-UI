@@ -59,7 +59,7 @@
 从 SAO 菜单 → ACT → "AI Editor (LLM)" 打开内置 AI 编辑器。
 
 - 支持 OpenAI、Claude、DeepSeek、Ollama 等多种模型
-- VSCode 风格布局，右侧边栏支持 CHAT / Claude Code / Codex 多 tab
+- VSCode 风格布局，右侧边栏支持 Assistant / Claude Code / Codex 多 tab
 - 12 个 Tool Calling 工具，可读写文件、搜索代码、运行终端
 - 自定义 Agent（代码审查、调试、优化等）和多步 Workflow
 - MCP 服务器集成，VSCode Marketplace 扩展浏览

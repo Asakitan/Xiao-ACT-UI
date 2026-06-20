@@ -1,6 +1,6 @@
 """Right-sidebar chat provider registry.
 
-Providers are tabs in the right sidebar (Chat / Copilot / Claude Code / Codex / plugin).
+Providers are tabs in the right sidebar (Assistant / Copilot / Claude Code / Codex / plugin).
 Each provider wraps a conversation with its own model config and system prompt.
 
 Built-in providers auto-detect availability from supported settings.
@@ -115,7 +115,7 @@ _COPILOT_SYSTEM = (
 
 BUILTIN_PROVIDERS: List[ChatProviderDef] = [
     ChatProviderDef(
-        id="chat", name="Chat", icon="\U0001f4ac",
+        id="chat", name="Assistant", icon="\U0001f4ac",
         builtin=True, auto_agent=False,
     ),
     ChatProviderDef(
@@ -139,7 +139,6 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
             "claudeVSCodeSidebarSecondary",
             "claudeVSCodeSidebar",
             "claudeVSCodeSessionsList",
-            "sao.cli.claude-code",
         ],
         extension_ids=["anthropic.claude-code"],
     ),
@@ -151,7 +150,6 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
         webview_ids=[
             "chatgpt.sidebarSecondaryView",
             "chatgpt.sidebarView",
-            "sao.cli.codex",
         ],
         extension_ids=["openai.chatgpt"],
     ),
