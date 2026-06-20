@@ -32,7 +32,10 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import sys
+import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from typing import Optional
@@ -807,6 +810,9 @@ def root():
             "/api/update/anchor",
             "POST /api/update/anchor",
             "POST /api/update/publish",
+            "POST /api/update/upload/init",
+            "POST /api/update/upload/chunk",
+            "POST /api/update/upload/complete",
             "/downloads/*",
         ],
     }
@@ -930,6 +936,215 @@ async def publish(
             target=safe_tg,
             commit=commit,
             commit_short=commit_short,
+            version=safe_ver,
+            source="publish",
+        )
+
+    return JSONResponse(manifest)
+
+
+# ── 分片并行上传 ─────────────────────────────────────────────────────
+
+_CHUNK_UPLOAD_DIR = os.path.join(DEFAULT_RELEASE_DIR, "_chunks")
+_active_uploads: dict[str, dict] = {}
+_UPLOAD_TTL = 600
+
+
+def _cleanup_stale_uploads():
+    now = time.monotonic()
+    expired = [uid for uid, info in _active_uploads.items() if now - info["created"] > _UPLOAD_TTL]
+    for uid in expired:
+        info = _active_uploads.pop(uid, None)
+        if info:
+            chunk_dir = info.get("chunk_dir", "")
+            if chunk_dir and os.path.isdir(chunk_dir):
+                try:
+                    import shutil
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+
+@app.post("/api/update/upload/init")
+async def upload_init(
+    request: Request,
+    version: str,
+    file_size: int,
+    chunk_size: int = 4 * 1024 * 1024,
+    package_type: str = "runtime-delta",
+    force_update: str = "false",
+    notes: str = "",
+    minimum_version: str = "",
+    channel: str = "stable",
+    target: str = "windows-x64",
+    commit: str = "",
+    commit_short: str = "",
+    anchor_commit: str = "",
+    anchor_commit_short: str = "",
+    anchor_version: str = "",
+):
+    _authorize_publish_request(request)
+    _cleanup_stale_uploads()
+
+    if file_size <= 0:
+        raise HTTPException(400, "file_size must be > 0")
+    chunk_size = max(512 * 1024, min(chunk_size, 32 * 1024 * 1024))
+    total_chunks = (file_size + chunk_size - 1) // chunk_size
+
+    uid = secrets.token_hex(12)
+    os.makedirs(_CHUNK_UPLOAD_DIR, exist_ok=True)
+    chunk_dir = os.path.join(_CHUNK_UPLOAD_DIR, uid)
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    _active_uploads[uid] = {
+        "created": time.monotonic(),
+        "chunk_dir": chunk_dir,
+        "chunk_size": chunk_size,
+        "file_size": file_size,
+        "total_chunks": total_chunks,
+        "received": set(),
+        "params": {
+            "version": version,
+            "package_type": package_type,
+            "force_update": force_update,
+            "notes": notes,
+            "minimum_version": minimum_version,
+            "channel": channel,
+            "target": target,
+            "commit": commit,
+            "commit_short": commit_short,
+            "anchor_commit": anchor_commit,
+            "anchor_commit_short": anchor_commit_short,
+            "anchor_version": anchor_version,
+        },
+    }
+
+    return JSONResponse({
+        "upload_id": uid,
+        "chunk_size": chunk_size,
+        "total_chunks": total_chunks,
+    })
+
+
+@app.post("/api/update/upload/chunk")
+async def upload_chunk(
+    request: Request,
+    upload_id: str,
+    index: int,
+):
+    _authorize_publish_request(request)
+
+    info = _active_uploads.get(upload_id)
+    if not info:
+        raise HTTPException(404, "upload session not found or expired")
+
+    if index < 0 or index >= info["total_chunks"]:
+        raise HTTPException(400, f"chunk index out of range [0, {info['total_chunks']})")
+
+    chunk_path = os.path.join(info["chunk_dir"], f"{index:06d}")
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "empty chunk")
+
+    with open(chunk_path, "wb") as f:
+        f.write(body)
+    info["received"].add(index)
+
+    return JSONResponse({
+        "index": index,
+        "size": len(body),
+        "received": len(info["received"]),
+        "total": info["total_chunks"],
+    })
+
+
+@app.post("/api/update/upload/complete")
+async def upload_complete(
+    request: Request,
+    upload_id: str,
+):
+    _authorize_publish_request(request)
+
+    info = _active_uploads.get(upload_id)
+    if not info:
+        raise HTTPException(404, "upload session not found or expired")
+
+    missing = set(range(info["total_chunks"])) - info["received"]
+    if missing:
+        raise HTTPException(400, f"missing {len(missing)} chunks: {sorted(missing)[:20]}")
+
+    params = info["params"]
+    safe_ch, safe_tg = _safe_channel_target(params["channel"], params["target"])
+    safe_ver = "".join(c for c in params["version"] if c.isalnum() or c in ".-") or "0.0.0"
+    safe_type = params["package_type"] if params["package_type"] in ("runtime-delta", "full-package") else "runtime-delta"
+
+    target_dir = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
+    os.makedirs(target_dir, exist_ok=True)
+    fname = f"update-{safe_ver}-{safe_type}.zip"
+    dst = os.path.join(target_dir, fname)
+
+    hasher = hashlib.sha256()
+    size = 0
+    tmp_dst = dst + ".assembling"
+    try:
+        with open(tmp_dst, "wb") as out:
+            for i in range(info["total_chunks"]):
+                chunk_path = os.path.join(info["chunk_dir"], f"{i:06d}")
+                with open(chunk_path, "rb") as cf:
+                    data = cf.read()
+                out.write(data)
+                hasher.update(data)
+                size += len(data)
+        os.replace(tmp_dst, dst)
+    except Exception as exc:
+        try:
+            os.remove(tmp_dst)
+        except Exception:
+            pass
+        raise HTTPException(500, f"assembly failed: {exc}") from exc
+    finally:
+        import shutil
+        shutil.rmtree(info["chunk_dir"], ignore_errors=True)
+        _active_uploads.pop(upload_id, None)
+
+    digest = hasher.hexdigest()
+    manifest = {
+        "version": safe_ver,
+        "minimum_version": params["minimum_version"],
+        "force_update": params["force_update"].lower() in ("true", "1", "yes"),
+        "package_type": safe_type,
+        "target": safe_tg,
+        "channel": safe_ch,
+        "download_url": f"/downloads/{safe_ch}/{safe_tg}/{fname}",
+        "sha256": digest,
+        "size": size,
+        "notes": params["notes"],
+        "commit": params["commit"],
+        "commit_short": params["commit_short"],
+        "anchor_commit": params["anchor_commit"],
+        "anchor_commit_short": params["anchor_commit_short"],
+        "anchor_version": params["anchor_version"],
+        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    manifest_path = os.path.join(target_dir, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    versioned_path = os.path.join(target_dir, f"manifest-{safe_ver}.json")
+    with open(versioned_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    versions = _load_versions_index(safe_ch, safe_tg)
+    if safe_ver not in versions:
+        versions.append(safe_ver)
+    _save_versions_index(safe_ch, safe_tg, versions)
+
+    if (params["commit"] or "").strip():
+        _set_anchor(
+            channel=safe_ch,
+            target=safe_tg,
+            commit=params["commit"],
+            commit_short=params["commit_short"],
             version=safe_ver,
             source="publish",
         )
