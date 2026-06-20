@@ -75,6 +75,7 @@ drivers/
 locale/
 driver_*.py
 rt_io.py
+post_build_harden.py
 _sao_cy_wnd.pyx
 _encrypt_drivers.py
 _build_driver.py
