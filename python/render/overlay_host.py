@@ -474,11 +474,148 @@ class OverlayHost:
             )
 
     def _setup_wgl(self) -> None:
-        """Set up WGL pixel format + OpenGL context with alpha support."""
+        """Set up WGL pixel format + OpenGL context with alpha support.
+
+        Uses wglChoosePixelFormatARB (via bootstrap context) to
+        guarantee 8-bit alpha + DWM composition support. The basic
+        ChoosePixelFormat is unreliable — some GPU drivers return a
+        format without alpha, causing the window to render as opaque
+        black instead of transparent.
+        """
         self.hdc = _user32.GetDC(self.hwnd)
         if not self.hdc:
             raise OSError('GetDC failed')
 
+        pf = self._try_arb_pixel_format()
+        if not pf:
+            pf = self._fallback_pixel_format()
+        if not pf:
+            raise OSError('No suitable pixel format with alpha')
+
+        pfd = _PIXELFORMATDESCRIPTOR()
+        pfd.nSize = sizeof(_PIXELFORMATDESCRIPTOR)
+        if not _gdi32.SetPixelFormat(self.hdc, pf, byref(pfd)):
+            raise OSError('SetPixelFormat failed')
+
+        self.hglrc = _opengl32.wglCreateContext(self.hdc)
+        if not self.hglrc:
+            raise OSError('wglCreateContext failed')
+
+        _opengl32.wglMakeCurrent(self.hdc, self.hglrc)
+
+        try:
+            _wglGetProcAddress = _opengl32.wglGetProcAddress
+            _wglGetProcAddress.restype = ctypes.c_void_p
+            _wglGetProcAddress.argtypes = [ctypes.c_char_p]
+            _addr = _wglGetProcAddress(b'wglSwapIntervalEXT')
+            if _addr:
+                _fn = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)(_addr)
+                _fn(0)
+        except Exception:
+            pass
+
+        import moderngl
+        self.ctx = moderngl.create_context()
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = (moderngl.ONE,
+                               moderngl.ONE_MINUS_SRC_ALPHA)
+
+    def _try_arb_pixel_format(self) -> int:
+        """Use wglChoosePixelFormatARB for guaranteed alpha support.
+
+        Requires a bootstrap dummy context to get the extension.
+        Returns pixel format index or 0 on failure.
+        """
+        try:
+            hinst = _kernel32.GetModuleHandleW(None)
+            # Dummy window for bootstrap WGL context
+            dummy = _user32.CreateWindowExW(
+                0, self._class_name, '', WS_POPUP,
+                0, 0, 1, 1, None, None, hinst, None,
+            )
+            if not dummy:
+                return 0
+            dummy_dc = _user32.GetDC(dummy)
+
+            pfd = _PIXELFORMATDESCRIPTOR()
+            pfd.nSize = sizeof(_PIXELFORMATDESCRIPTOR)
+            pfd.nVersion = 1
+            pfd.dwFlags = (PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL
+                           | PFD_DOUBLEBUFFER)
+            pfd.iPixelType = PFD_TYPE_RGBA
+            pfd.cColorBits = 32
+            pfd.cAlphaBits = 8
+
+            tmp_pf = _gdi32.ChoosePixelFormat(dummy_dc, byref(pfd))
+            if not tmp_pf:
+                _user32.ReleaseDC(dummy, dummy_dc)
+                _user32.DestroyWindow(dummy)
+                return 0
+            _gdi32.SetPixelFormat(dummy_dc, tmp_pf, byref(pfd))
+            tmp_rc = _opengl32.wglCreateContext(dummy_dc)
+            if not tmp_rc:
+                _user32.ReleaseDC(dummy, dummy_dc)
+                _user32.DestroyWindow(dummy)
+                return 0
+            _opengl32.wglMakeCurrent(dummy_dc, tmp_rc)
+
+            # Get wglChoosePixelFormatARB
+            _wglGetProcAddress = _opengl32.wglGetProcAddress
+            _wglGetProcAddress.restype = ctypes.c_void_p
+            _wglGetProcAddress.argtypes = [ctypes.c_char_p]
+            _addr = _wglGetProcAddress(b'wglChoosePixelFormatARB')
+
+            result_pf = 0
+            if _addr:
+                WGL_DRAW_TO_WINDOW = 0x2001
+                WGL_SUPPORT_OPENGL = 0x2010
+                WGL_DOUBLE_BUFFER = 0x2011
+                WGL_PIXEL_TYPE = 0x2013
+                WGL_TYPE_RGBA = 0x202B
+                WGL_COLOR_BITS = 0x2014
+                WGL_ALPHA_BITS = 0x201B
+                WGL_SUPPORT_COMPOSITION = 0x20A0
+
+                # wglChoosePixelFormatARB(HDC, attribs, NULL, nMax, piFormats, nNumFormats)
+                _CPFA = ctypes.CFUNCTYPE(
+                    wt.BOOL,
+                    wt.HDC,
+                    ctypes.POINTER(ctypes.c_int),   # piAttribIList
+                    ctypes.POINTER(ctypes.c_float),  # pfAttribFList
+                    wt.UINT,                         # nMaxFormats
+                    ctypes.POINTER(ctypes.c_int),    # piFormats (output)
+                    ctypes.POINTER(wt.UINT),         # nNumFormats (output)
+                )(_addr)
+
+                attrs = (ctypes.c_int * 15)(
+                    WGL_DRAW_TO_WINDOW, 1,
+                    WGL_SUPPORT_OPENGL, 1,
+                    WGL_DOUBLE_BUFFER, 1,
+                    WGL_PIXEL_TYPE, WGL_TYPE_RGBA,
+                    WGL_COLOR_BITS, 32,
+                    WGL_ALPHA_BITS, 8,
+                    WGL_SUPPORT_COMPOSITION, 1,
+                    0,
+                )
+                fmt = ctypes.c_int(0)
+                n_fmt = wt.UINT(0)
+                ok = _CPFA(
+                    self.hdc, attrs, None, 1,
+                    ctypes.byref(fmt), ctypes.byref(n_fmt),
+                )
+                if ok and n_fmt.value > 0 and fmt.value > 0:
+                    result_pf = fmt.value
+
+            _opengl32.wglMakeCurrent(0, 0)
+            _opengl32.wglDeleteContext(tmp_rc)
+            _user32.ReleaseDC(dummy, dummy_dc)
+            _user32.DestroyWindow(dummy)
+            return result_pf
+        except Exception:
+            return 0
+
+    def _fallback_pixel_format(self) -> int:
+        """Basic ChoosePixelFormat fallback."""
         pfd = _PIXELFORMATDESCRIPTOR()
         pfd.nSize = sizeof(_PIXELFORMATDESCRIPTOR)
         pfd.nVersion = 1
@@ -490,40 +627,7 @@ class OverlayHost:
         pfd.cDepthBits = 0
         pfd.cStencilBits = 0
         pfd.iLayerType = PFD_MAIN_PLANE
-
-        pf = _gdi32.ChoosePixelFormat(self.hdc, byref(pfd))
-        if not pf:
-            raise OSError('ChoosePixelFormat failed — no alpha format')
-
-        if not _gdi32.SetPixelFormat(self.hdc, pf, byref(pfd)):
-            raise OSError('SetPixelFormat failed')
-
-        self.hglrc = _opengl32.wglCreateContext(self.hdc)
-        if not self.hglrc:
-            raise OSError('wglCreateContext failed')
-
-        _opengl32.wglMakeCurrent(self.hdc, self.hglrc)
-
-        # Disable vsync on compositor — SwapBuffers must not block 16ms
-        # per frame, as it starves GLFW pump + worker GL contexts.
-        try:
-            _wglGetProcAddress = _opengl32.wglGetProcAddress
-            _wglGetProcAddress.restype = ctypes.c_void_p
-            _wglGetProcAddress.argtypes = [ctypes.c_char_p]
-            _addr = _wglGetProcAddress(b'wglSwapIntervalEXT')
-            if _addr:
-                _PFNWGLSWAPINTERVALEXTPROC = ctypes.CFUNCTYPE(
-                    ctypes.c_int, ctypes.c_int)
-                _swap_fn = _PFNWGLSWAPINTERVALEXTPROC(_addr)
-                _swap_fn(0)  # swap interval 0 = no vsync
-        except Exception:
-            pass
-
-        import moderngl
-        self.ctx = moderngl.create_context()
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = (moderngl.ONE,
-                               moderngl.ONE_MINUS_SRC_ALPHA)
+        return _gdi32.ChoosePixelFormat(self.hdc, byref(pfd))
 
     def _setup_dwm(self) -> None:
         """Enable DWM glass for per-pixel alpha transparency.
