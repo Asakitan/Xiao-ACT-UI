@@ -170,10 +170,10 @@ PATTERNS = {
     "dwViewMatrix": "48 8D 0D {rip} 48 C1 E0 06",
     # dwLocalPlayerController: mov rax, [rip+disp] ; mov [r14+...], edi
     "dwLocalPlayerController": "48 8B 05 {rip} 41 89 BE",
-    # dwPrediction: lea rax, [rip+disp] ; ret ; padding ; push rbx ; push rsi ; push r12
-    # (cs2-dumper derives dwLocalPlayerPawn from this via a secondary scan;
-    #  we keep it available for future use but do not wire the derivation.)
-    "dwPrediction": "48 8D 05 {rip} C3 CC CC CC CC CC CC CC CC CC CC CC CC CC CC 40 53 56 41 54",
+    # dwLocalPlayerPawn: mov rdi, [rip+disp] ; followed by test/cmp
+    "dwLocalPlayerPawn": "48 8B 3D {rip} 48 85 FF 0F 84",
+    # dwViewAngles: lea rax, [rip+disp] ; movss ...
+    "dwViewAngles": "48 8D 05 {rip} F3 0F 11",
 }
 
 
