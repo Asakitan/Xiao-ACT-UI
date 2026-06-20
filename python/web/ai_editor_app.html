@@ -3632,6 +3632,7 @@ function providerPrimaryViewId(p){const ids=providerCandidateViewIds(p);return i
 function isExtensionWebviewProvider(providerOrId){
   const isObject=providerOrId&&typeof providerOrId==='object';
   const id=String(isObject?providerOrId.id:providerOrId||'');
+  if(BUILTIN_PROVIDER_ORDER.includes(id))return false;
   if(!isObject){
     const known=providerDefs[id]||dynamicExtensionProviderDefs[id];
     return known?isExtensionWebviewProvider(known):false;
