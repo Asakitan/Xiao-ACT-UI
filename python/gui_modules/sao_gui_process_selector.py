@@ -1,19 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Process Selector Panel — platform-level process attach + module filter.
-
-Tk floating panel listing running processes (via Toolhelp Unicode API),
-with search, module-loading filter, and attach action. Selected process
-feeds into mem_probe.process for memory scanning.
-"""
+"""Process Selector Panel — platform-level process attach + module filter."""
 from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
 import os
 import threading
-import time
 import tkinter as tk
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font, play_sound
 from gui_modules.sao_panel_ui import (
@@ -21,17 +15,15 @@ from gui_modules.sao_panel_ui import (
 )
 from gui_modules.sao_panel_components import action_button
 
-# ── Win32 process size helper ──
 _PROCESS_QUERY_LIMITED = 0x1000
-_PROCESS_VM_READ = 0x0010
 
 try:
     _psapi = ctypes.WinDLL("psapi")
 
     class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
         _fields_ = [
-            ("cb", ctypes.wintypes.DWORD),
-            ("PageFaultCount", ctypes.wintypes.DWORD),
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
             ("PeakWorkingSetSize", ctypes.c_size_t),
             ("WorkingSetSize", ctypes.c_size_t),
             ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
@@ -74,7 +66,6 @@ def _get_working_set_mb(pid: int) -> float:
 
 
 def list_processes() -> List[dict]:
-    """Enumerate running processes via Unicode Toolhelp API."""
     from mem_probe.process import _iter_process_entries_wide
     seen = {}
     for exe_name, pid in _iter_process_entries_wide():
@@ -86,7 +77,6 @@ def list_processes() -> List[dict]:
     return sorted(seen.values(), key=lambda x: x["name"].lower())
 
 
-# ── Module Loading Modes ──
 MODULE_NONE = "none"
 MODULE_PRIMARY = "primary"
 MODULE_SELECTED = "selected"
@@ -115,15 +105,14 @@ _FG = "#c8cdd5"
 _FG_DIM = "#6b7280"
 _FG_PID = "#8b95a5"
 _ACCENT = "#00c896"
-_ACCENT_DIM = "#007a5a"
 _BORDER = "#2e333b"
+_FG_WARN = "#e5a63e"
 
 
 class ProcessSelectorPanel:
-    """Floating Tk panel for selecting a target process."""
-
     WIDTH = 420
     HEIGHT = 520
+    _MAX_VISIBLE_ROWS = 200
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -140,7 +129,9 @@ class ProcessSelectorPanel:
         self._scroll_canvas: Optional[tk.Canvas] = None
         self._inner_frame: Optional[tk.Frame] = None
         self._attached_label: Optional[tk.Label] = None
+        self._mode_label: Optional[tk.Label] = None
         self._count_label: Optional[tk.Label] = None
+        self._attach_mode: str = ""
         self._build()
 
     def _load_module_mode(self) -> str:
@@ -165,7 +156,7 @@ class ProcessSelectorPanel:
         self._win = win
 
         header = _sao_panel_header(win, "Process Selector", self.hide, flat=True)
-        _bind_panel_drag(win, header)
+        _bind_panel_drag(header)
 
         body = _sao_panel_body(win, flat=True)
         body.configure(bg=_BG)
@@ -222,7 +213,6 @@ class ProcessSelectorPanel:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Mouse wheel scrolling
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
@@ -232,7 +222,16 @@ class ProcessSelectorPanel:
         self._scroll_canvas = canvas
         self._inner_frame = inner
 
-        # ── Status + buttons ──
+        # ── Status line: mode indicator ──
+        status_frame = tk.Frame(body, bg=_BG)
+        status_frame.pack(fill=tk.X, padx=8, pady=(2, 0))
+
+        self._mode_label = tk.Label(status_frame, text="", bg=_BG, fg=_FG_DIM,
+                                    font=_sao_font(7), anchor="w")
+        self._mode_label.pack(side=tk.LEFT, padx=(4, 0))
+        self._update_mode_display()
+
+        # ── Footer: attach label + buttons ──
         footer = tk.Frame(body, bg=_BG)
         footer.pack(fill=tk.X, padx=8, pady=(2, 8))
 
@@ -253,8 +252,43 @@ class ProcessSelectorPanel:
         btn_refresh = action_button(footer, "Refresh", self._do_refresh)
         btn_refresh.pack(side=tk.RIGHT, padx=(4, 0))
 
-        # Initial load
+        # Restore last attached info
+        self._restore_last_attach()
         self.root.after(50, self._do_refresh)
+
+    def _update_mode_display(self):
+        if not self._mode_label:
+            return
+        try:
+            from mem_probe import rt_io
+            parts = []
+            if getattr(rt_io, '_r1_ok', None) or getattr(rt_io, '_DRIVER_OK', False):
+                parts.append("EngA")
+            if getattr(rt_io, '_r3h', None):
+                parts.append("EngE")
+            tier = ""
+            try:
+                tier = rt_io.memory_tier()
+            except Exception:
+                pass
+            if tier:
+                parts.append(f"Tier:{tier}")
+            if self._attach_mode:
+                parts.append(self._attach_mode)
+            text = " · ".join(parts) if parts else "No engine"
+            self._mode_label.configure(text=text, fg=_ACCENT if parts else _FG_DIM)
+        except Exception:
+            self._mode_label.configure(text="", fg=_FG_DIM)
+
+    def _restore_last_attach(self):
+        try:
+            name = self.owner.settings.get("attached_process_name", "")
+            pid = self.owner.settings.get("attached_process_pid", 0)
+            if name and pid and self._attached_label:
+                self._attached_label.configure(
+                    text=f"Last: {name} ({pid})", fg=_FG_DIM)
+        except Exception:
+            pass
 
     # ── Module mode ──
     def _set_module_mode(self, mode: str):
@@ -284,8 +318,6 @@ class ProcessSelectorPanel:
     def _do_refresh(self):
         def _bg():
             procs = list_processes()
-            for p in procs:
-                p["mem_mb"] = _get_working_set_mb(p["pid"])
             if self._exists():
                 self.root.after(0, lambda: self._set_processes(procs))
 
@@ -322,7 +354,8 @@ class ProcessSelectorPanel:
             w.destroy()
         self._row_frames = []
 
-        for i, proc in enumerate(self._filtered):
+        display = self._filtered[:self._MAX_VISIBLE_ROWS]
+        for i, proc in enumerate(display):
             bg = _BG_ROW_SEL if proc["pid"] == self._selected_pid else (
                 _BG_ROW_ALT if i % 2 else _BG_ROW)
             row = tk.Frame(inner, bg=bg, cursor="hand2")
@@ -331,11 +364,6 @@ class ProcessSelectorPanel:
             name_lbl = tk.Label(row, text=proc["name"], bg=bg, fg=_FG,
                                 font=_sao_font(9), anchor="w", width=24)
             name_lbl.pack(side=tk.LEFT, padx=(6, 0), pady=2)
-
-            mem_text = f"{proc.get('mem_mb', 0):.0f}M" if proc.get("mem_mb", 0) > 0 else ""
-            if mem_text:
-                tk.Label(row, text=mem_text, bg=bg, fg=_FG_DIM,
-                         font=_sao_font(7), anchor="e", width=6).pack(side=tk.RIGHT, padx=(0, 2))
 
             pid_lbl = tk.Label(row, text=str(proc["pid"]), bg=bg, fg=_FG_PID,
                                font=_sao_font(9), anchor="e", width=7)
@@ -353,6 +381,11 @@ class ProcessSelectorPanel:
 
             self._row_frames.append(row)
 
+        if len(self._filtered) > self._MAX_VISIBLE_ROWS:
+            trunc = tk.Label(inner, text=f"… {len(self._filtered) - self._MAX_VISIBLE_ROWS} more (use search to filter)",
+                             bg=_BG, fg=_FG_DIM, font=_sao_font(7))
+            trunc.pack(fill=tk.X, pady=4)
+
     def _restore_row_bg(self, row, idx, pid):
         bg = _BG_ROW_SEL if pid == self._selected_pid else (
             _BG_ROW_ALT if idx % 2 else _BG_ROW)
@@ -361,13 +394,22 @@ class ProcessSelectorPanel:
             c.configure(bg=bg)
 
     def _select_pid(self, pid: int):
+        old_pid = self._selected_pid
         self._selected_pid = pid
-        self._rebuild_rows()
+        for i, row in enumerate(self._row_frames):
+            display = self._filtered[:self._MAX_VISIBLE_ROWS]
+            if i < len(display):
+                p = display[i]["pid"]
+                if p == pid or p == old_pid:
+                    bg = _BG_ROW_SEL if p == pid else (_BG_ROW_ALT if i % 2 else _BG_ROW)
+                    row.configure(bg=bg)
+                    for c in row.winfo_children():
+                        c.configure(bg=bg)
         proc = next((p for p in self._filtered if p["pid"] == pid), None)
         if proc and self._attached_label:
             self._attached_label.configure(text=f"Selected: {proc['name']} ({pid})", fg=_FG)
 
-    # ── Attach ──
+    # ── Attach (non-blocking) ──
     def _do_attach(self):
         if self._selected_pid <= 0:
             return
@@ -378,48 +420,56 @@ class ProcessSelectorPanel:
         name = proc["name"]
         pid = proc["pid"]
 
-        # Set platform process config
-        try:
-            import config
-            config.GAME_PROCESS_NAMES = [name]
-        except Exception:
-            pass
+        if self._attached_label:
+            self._attached_label.configure(text=f"Attaching {name}…", fg=_FG_WARN)
 
-        # Try stealth attach (Engine A physical memory, no handles)
-        stealth_ok = False
-        try:
-            from mem_probe._pm._core import PageResolver
-            sp = PageResolver()
-            result = sp.find_process_by_name(name)
-            if result:
-                found_pid, cr3 = result
-                gp = sp.as_game_process(found_pid)
-                _set_cached_result(sp, gp)
-                pid = found_pid
-                stealth_ok = True
-        except Exception:
-            pass
-
-        if not stealth_ok:
+        def _bg_attach():
             try:
-                from mem_probe.process import set_game_process_names
-                set_game_process_names([name])
+                import config
+                config.GAME_PROCESS_NAMES = [name]
             except Exception:
                 pass
 
-        # Store in settings
-        try:
-            self.owner.settings.set("attached_process_name", name)
-            self.owner.settings.set("attached_process_pid", pid)
-            self.owner.settings.set("process_module_mode", self._module_mode)
-            self.owner.settings.save()
-        except Exception:
-            pass
+            stealth_ok = False
+            found_pid = pid
+            try:
+                from mem_probe._pm._core import PageResolver
+                sp = PageResolver()
+                result = sp.find_process_by_name(name)
+                if result:
+                    found_pid, cr3 = result
+                    gp = sp.as_game_process(found_pid)
+                    _set_cached_result(sp, gp)
+                    stealth_ok = True
+            except Exception:
+                pass
 
-        mode = "Stealth" if stealth_ok else "Attached"
+            if not stealth_ok:
+                try:
+                    from mem_probe.process import set_game_process_names
+                    set_game_process_names([name])
+                except Exception:
+                    pass
+
+            try:
+                self.owner.settings.set("attached_process_name", name)
+                self.owner.settings.set("attached_process_pid", found_pid)
+                self.owner.settings.set("process_module_mode", self._module_mode)
+                self.owner.settings.save()
+            except Exception:
+                pass
+
+            if self._exists():
+                self.root.after(0, lambda: self._on_attach_done(name, found_pid, stealth_ok))
+
+        threading.Thread(target=_bg_attach, daemon=True, name="proc-attach").start()
+
+    def _on_attach_done(self, name: str, pid: int, stealth: bool):
+        self._attach_mode = "Stealth" if stealth else "API"
+        mode = "Stealth" if stealth else "Attached"
         if self._attached_label:
             self._attached_label.configure(text=f"✓ {mode}: {name} ({pid})", fg=_ACCENT)
-
+        self._update_mode_display()
         try:
             play_sound("alert_close")
         except Exception:
@@ -432,6 +482,7 @@ class ProcessSelectorPanel:
             self._build()
         self._win.deiconify()
         self._win.lift()
+        self._update_mode_display()
         if not self._win.geometry().startswith("1x1"):
             self._do_refresh()
             return
