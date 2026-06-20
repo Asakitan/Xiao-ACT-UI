@@ -22,6 +22,7 @@ import inspect
 import json
 import os
 import fnmatch
+import secrets
 import subprocess
 import threading
 import time
@@ -737,6 +738,7 @@ class UIBridge(Protocol):
     def render_webview_panel(self, view_id: str, html: str) -> None: ...
     def post_webview_message(self, view_id: str, message: Any) -> None: ...
     def receive_webview_message(self, view_id: str, message: Any) -> None: ...
+    def dispose_webview_panel(self, view_id: str) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +769,7 @@ class VscodeNamespace:
         self._terminals: List[_Terminal] = []
         self._active_terminal: Optional[_Terminal] = None
         self._webview_panels: Dict[str, List[Any]] = {}
+        self._webview_tokens: Dict[str, str] = {}
         self._chat_participants: Dict[str, ChatParticipant] = {}
         self._lm_tools: Dict[str, Any] = {}
         self._mcp_definition_providers: Dict[str, Any] = {}
@@ -844,6 +847,19 @@ class VscodeNamespace:
         state changes to the webview.
         """
         self._ui_bridge = bridge
+
+    def _generate_view_token(self, view_id: str) -> str:
+        """Create a per-webview nonce token and store it for later verification."""
+        token = secrets.token_hex(16)
+        self._webview_tokens[view_id] = token
+        return token
+
+    def verify_webview_token(self, view_id: str, token: str) -> bool:
+        """Verify that *token* matches the stored nonce for *view_id*."""
+        expected = self._webview_tokens.get(view_id)
+        if expected is None:
+            return False
+        return secrets.compare_digest(expected, token)
 
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
@@ -1013,20 +1029,44 @@ class VscodeNamespace:
         return Disposable(lambda: self._tree_data_providers.pop(view_id, None))
 
     def _register_webview_view_provider(self, view_id: str, provider: Any,
-                                        options: Dict[str, Any] = None) -> Disposable:
+                                        options: Dict[str, Any] = None,
+                                        _extension_id: str = "") -> Disposable:
+        # Risk 3: check for view ID conflicts with another extension
+        existing = self._webview_view_providers.get(view_id)
+        if existing is not None:
+            existing_ext = existing.get("_extensionId", "")
+            registering_ext = _extension_id or ""
+            if existing_ext and registering_ext and existing_ext != registering_ext:
+                print(f"[webviewView] view ID conflict: '{view_id}' already "
+                      f"registered by '{existing_ext}', skipping "
+                      f"registration from '{registering_ext}'")
+                return Disposable()
+
+        # Risk 2: generate per-webview nonce token
+        token = self._generate_view_token(view_id)
+
         self._webview_view_providers[view_id] = {
             "provider": provider,
             "options": dict(options or {}),
+            "_extensionId": _extension_id or "",
         }
-        view = _WebviewView(view_id, bridge=self._ui_bridge)
+        view = _WebviewView(view_id, bridge=self._ui_bridge, token=token)
         self._webview_views[view_id] = view
         if hasattr(provider, "resolveWebviewView"):
             try:
                 provider.resolveWebviewView(view, None, CancellationToken.NONE)
             except TypeError:
                 provider.resolveWebviewView(view)
-        return Disposable(lambda: (self._webview_view_providers.pop(view_id, None),
-                                   self._webview_views.pop(view_id, None)))
+
+        # Risk 4: disposable cleans up view, dicts, and token
+        def _dispose_registration() -> None:
+            v = self._webview_views.pop(view_id, None)
+            if v is not None:
+                v.dispose()
+            self._webview_view_providers.pop(view_id, None)
+            self._webview_tokens.pop(view_id, None)
+
+        return Disposable(_dispose_registration)
 
     def _create_webview_panel(self, view_type: str, title: str,
                               column: Any = None, **kw: Any) -> Any:
@@ -2656,6 +2696,7 @@ class _WebviewPanel:
         self.visible = True
         self.active = True
         self._bridge = bridge
+        self._disposed = False
         self._dispose_emitter = EventEmitter()
         self._view_state_emitter = EventEmitter()
         self._on_dispose: Optional[Callable[[], None]] = None
@@ -2696,9 +2737,22 @@ class _WebviewPanel:
         self._view_state_emitter.fire({"webviewPanel": self})
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self.visible = False
         self.active = False
         self._view_state_emitter.fire({"webviewPanel": self})
+        # Risk 4: notify bridge of disposal
+        if self._bridge is not None:
+            try:
+                self._bridge.dispose_webview_panel(self.view_type)
+            except Exception:
+                pass
+        # Clear HTML content and unhook callbacks
+        self.webview._html = ""
+        self.webview._on_html_changed = None
+        self.webview._on_post_message = None
         if self._on_dispose is not None:
             try:
                 self._on_dispose()
@@ -2765,18 +2819,12 @@ class _Webview:
 
     def post_message(self, message: Any) -> bool:
         """Send *message* to the webview HTML (extension -> webview direction).
-
-        In the embedded environment (no real iframe), the message is also
-        echoed to the ``onDidReceiveMessage`` emitter so extension listeners
-        can observe it without a round-trip through a real webview.
         """
         if self._on_post_message is not None:
             try:
                 self._on_post_message(message)
             except Exception:
                 pass
-        # Loopback: echo to message emitter for embedded use
-        self._message_emitter.fire(message)
         return True
 
     def postMessage(self, message: Any) -> bool:
@@ -2801,7 +2849,8 @@ class _Webview:
 
 class _WebviewView:
     def __init__(self, view_id: str,
-                 bridge: Optional[UIBridge] = None) -> None:
+                 bridge: Optional[UIBridge] = None,
+                 token: str = "") -> None:
         self.viewType = view_id
         self.title = view_id
         self.description = ""
@@ -2809,6 +2858,8 @@ class _WebviewView:
         self.visible = True
         self.webview = _Webview()
         self._bridge = bridge
+        self._token = token
+        self._disposed = False
         self._dispose_emitter = EventEmitter()
         self._visibility_emitter = EventEmitter()
 
@@ -2819,7 +2870,9 @@ class _WebviewView:
     def _push_html(self, html: str) -> None:
         if self._bridge is not None:
             try:
-                self._bridge.render_webview_panel(self.viewType, html)
+                self._bridge.render_webview_panel(
+                    self.viewType, html,
+                )
             except Exception:
                 pass
 
@@ -2829,6 +2882,10 @@ class _WebviewView:
                 self._bridge.post_webview_message(self.viewType, message)
             except Exception:
                 pass
+
+    @property
+    def token(self) -> str:
+        return self._token
 
     @property
     def onDidDispose(self):
@@ -2845,8 +2902,21 @@ class _WebviewView:
             self._visibility_emitter.fire()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         was_visible = self.visible
         self.visible = False
+        # Risk 4: notify bridge of disposal
+        if self._bridge is not None:
+            try:
+                self._bridge.dispose_webview_panel(self.viewType)
+            except Exception:
+                pass
+        # Clear HTML content
+        self.webview._html = ""
+        self.webview._on_html_changed = None
+        self.webview._on_post_message = None
         if was_visible:
             self._visibility_emitter.fire()
         self._dispose_emitter.fire()

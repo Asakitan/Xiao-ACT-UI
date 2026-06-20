@@ -19,11 +19,18 @@ from ai_editor.llm_engine import ProviderConfig
 
 BUILTIN_PROVIDER_ORDER = ("chat", "copilot", "claude-code", "codex")
 COPILOT_UNAVAILABLE_REASON = (
-    "Copilot mirrors the active editor backend in this runtime. Configure any "
-    "runnable provider in Settings to activate the Copilot surface."
+    "GitHub Copilot Chat uses VS Code's native ChatWidget/chat participant surface, "
+    "not an extension WebviewView."
 )
 _KEY_REQUIRED_PROVIDERS = {"openai", "anthropic", "deepseek"}
-_COPILOT_BACKEND_PRIORITY = ("openai", "anthropic", "deepseek", "ollama", "custom")
+_CLI_PROVIDER_SECTION_NAMES = {
+    "claude-code": "claude_code",
+    "codex": "codex",
+}
+_CLI_PROVIDER_DEFAULT_COMMANDS = {
+    "claude-code": ("claude",),
+    "codex": ("codex",),
+}
 
 
 @dataclass
@@ -39,6 +46,41 @@ class ChatProviderDef:
     auto_agent: bool = False
     builtin: bool = False
     webview_id: str = ""
+    webview_ids: List[str] = field(default_factory=list)
+    extension_ids: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @staticmethod
+    def _metadata_values(value: Any) -> List[Any]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return value
+        return []
+
+    def candidate_webview_ids(self) -> List[str]:
+        ids: List[str] = []
+        for value in [
+            self.webview_id,
+            *self.webview_ids,
+            *self._metadata_values(self.metadata.get("webview_ids")),
+            *self._metadata_values(self.metadata.get("candidate_view_ids")),
+        ]:
+            candidate = str(value or "").strip()
+            if candidate and candidate not in ids:
+                ids.append(candidate)
+        return ids
+
+    def candidate_extension_ids(self) -> List[str]:
+        ids: List[str] = []
+        for value in [
+            *self.extension_ids,
+            *self._metadata_values(self.metadata.get("extension_ids")),
+        ]:
+            candidate = str(value or "").strip()
+            if candidate and candidate not in ids:
+                ids.append(candidate)
+        return ids
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -80,16 +122,33 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
         id="copilot", name="Copilot", icon="◉",
         provider_type="github-copilot", model="GitHub Copilot Chat",
         system_prompt=_COPILOT_SYSTEM, auto_agent=False, builtin=True,
+        extension_ids=["github.copilot-chat", "github.copilot"],
+        metadata={
+            "native_chat_reason": (
+                "Copilot 主聊天运行在 VS Code 原生 ChatWidget 中，"
+                "当前没有可注入的 WebviewView HTML。"
+            ),
+        },
     ),
     ChatProviderDef(
         id="claude-code", name="Claude Code", icon="✦",
         provider_type="anthropic", model="",
         system_prompt=_CC_SYSTEM, auto_agent=True, builtin=True,
+        webview_id="claudeVSCodeSidebarSecondary",
+        webview_ids=[
+            "claudeVSCodeSidebarSecondary",
+            "claudeVSCodeSidebar",
+            "claudeVSCodeSessionsList",
+        ],
+        extension_ids=["anthropic.claude-code"],
     ),
     ChatProviderDef(
         id="codex", name="Codex", icon="\U0001f52e",
         provider_type="openai", model="codex-mini-latest",
         system_prompt=_CODEX_SYSTEM, auto_agent=True, builtin=True,
+        webview_id="chatgpt.sidebarSecondaryView",
+        webview_ids=["chatgpt.sidebarSecondaryView", "chatgpt.sidebarView"],
+        extension_ids=["openai.chatgpt"],
     ),
 ]
 
@@ -226,28 +285,6 @@ def _config_is_runnable(cfg: Optional[ProviderConfig]) -> bool:
     return True
 
 
-def _copilot_runtime_config(
-        provider: ChatProviderDef,
-        settings_getter: Optional[Callable],
-        base_config: Optional[ProviderConfig] = None) -> Optional[ProviderConfig]:
-    base = _base_config_from_settings(settings_getter, base_config)
-    candidates: List[str] = []
-    for name in (base.provider, *_COPILOT_BACKEND_PRIORITY):
-        normalized = str(name or "").strip().lower()
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    for provider_type in candidates:
-        cfg = _compose_runtime_config(
-            provider_type,
-            settings_getter,
-            base,
-            system_prompt=provider.system_prompt,
-        )
-        if _config_is_runnable(cfg):
-            return cfg
-    return None
-
-
 def build_provider_runtime_config(
         provider: ChatProviderDef,
         settings_getter: Optional[Callable],
@@ -255,7 +292,7 @@ def build_provider_runtime_config(
     if provider.id == "chat":
         return _base_config_from_settings(settings_getter, base_config)
     if provider.id == "copilot":
-        return _copilot_runtime_config(provider, settings_getter, base_config)
+        return None
     if provider.id == "claude-code":
         return _compose_runtime_config(
             "anthropic",
@@ -310,66 +347,57 @@ def describe_provider_status(
         return status
 
     if provider.id == "copilot":
-        cli_info = _cli_status("copilot", "gh", settings_getter)
-        cli_ok = cli_info.get("cli_available", False)
-        cfg = _copilot_runtime_config(provider, settings_getter, base_config)
-        status.update(cli_info)
         status.update({
-            "requested_transport": "cli" if cli_ok else "copilot-chat",
-            "runtime_mode": "cli" if cli_ok else "backend-fallback",
-            "api_key_available": _has_copilot_auth(settings_getter),
+            "requested_transport": "chatParticipant",
+            "resolved_transport": "native-chat",
+            "transport": "native-chat",
+            "runtime_mode": "native-chat",
+            "backend_provider": "chatParticipant",
+            "api_key_available": True,
             "capability": "github-copilot-chat",
-        })
-        if cli_ok:
-            status.update({
-                "resolved_transport": "cli",
-                "transport": "cli",
-                "model": "copilot (CLI)",
-            })
-            return status
-        if not _config_is_runnable(cfg):
-            return _unavailable(
-                status,
-                "Install the GitHub CLI ('gh') with Copilot extension, or configure a provider API key.",
-            )
-        status.update({
-            "backend_provider": cfg.provider,
-            "resolved_transport": cfg.transport,
-            "transport": cfg.transport,
-            "model": cfg.effective_model or provider.model,
+            "model": provider.model,
+            "native_chat": True,
+            "unavailable_reason": "",
         })
         return status
 
     if provider.id == "claude-code":
-        cli_info = _cli_status("claude_code", "claude", settings_getter)
-        cli_ok = cli_info.get("cli_available", False)
+        cli_info = provider_runtime_cli_status("claude-code", settings_getter)
         status.update(cli_info)
         status.update({
-            "requested_transport": "cli",
-            "resolved_transport": "cli",
-            "transport": "cli",
-            "runtime_mode": "cli",
-            "backend_provider": "cli",
-            "model": "claude (CLI)",
+            "requested_transport": "webviewView",
+            "resolved_transport": "webviewView",
+            "transport": "extension-webview",
+            "runtime_mode": "extension-webview",
+            "backend_provider": "extension",
+            "model": provider.model or "Claude Code",
+            "api_key_available": True,
         })
-        if not cli_ok:
-            return _unavailable(status, "Install the 'claude' CLI to enable this tab.")
         return status
 
     if provider.id == "codex":
-        cli_info = _cli_status("codex", "codex", settings_getter)
-        cli_ok = cli_info.get("cli_available", False)
+        cli_info = provider_runtime_cli_status("codex", settings_getter)
         status.update(cli_info)
         status.update({
-            "requested_transport": "cli",
-            "resolved_transport": "cli",
-            "transport": "cli",
-            "runtime_mode": "cli",
-            "backend_provider": "cli",
-            "model": "codex (CLI)",
+            "requested_transport": "webviewView",
+            "resolved_transport": "webviewView",
+            "transport": "extension-webview",
+            "runtime_mode": "extension-webview",
+            "backend_provider": "extension",
+            "model": provider.model or "Codex",
+            "api_key_available": True,
         })
-        if not cli_ok:
-            return _unavailable(status, "Install the 'codex' CLI to enable this tab.")
+        return status
+
+    if provider.candidate_webview_ids():
+        status.update({
+            "requested_transport": "webviewView",
+            "resolved_transport": "webviewView",
+            "transport": "extension-webview",
+            "runtime_mode": "extension-webview",
+            "backend_provider": "extension",
+            "api_key_available": True,
+        })
         return status
 
     cfg = build_provider_runtime_config(provider, settings_getter, base_config)
@@ -511,6 +539,51 @@ def _cli_status(section_name: str, default_command: str,
         "cli_args_count": _get_provider_args_count(section_name, settings_getter),
     }
 
+
+def provider_runtime_cli_status(provider_id: str,
+                                settings_getter: Optional[Callable]) -> Dict[str, Any]:
+    """Return CLI availability for a native provider controller."""
+    section = _CLI_PROVIDER_SECTION_NAMES.get(provider_id, provider_id)
+    configured_path = _get_provider_cli_path(section, settings_getter)
+    return {
+        "cli_configured": bool(configured_path),
+        "cli_available": bool(provider_runtime_cli_path(provider_id, settings_getter)),
+        "cli_args_count": _get_provider_args_count(section, settings_getter),
+    }
+
+
+def provider_runtime_cli_path(provider_id: str,
+                              settings_getter: Optional[Callable]) -> str:
+    """Resolve the CLI executable that backs a native provider controller.
+
+    GitHub Copilot Chat intentionally has no CLI mapping here: VS Code hosts it
+    through native chat participants, not a provider CLI or WebviewView.
+    """
+    normalized = str(provider_id or "").strip()
+    if normalized == "copilot":
+        return ""
+    section = _CLI_PROVIDER_SECTION_NAMES.get(normalized, normalized)
+    configured_path = _get_provider_cli_path(section, settings_getter)
+    if configured_path:
+        resolved = _resolve_cli_path(configured_path)
+        if resolved:
+            return resolved
+
+    for command in _CLI_PROVIDER_DEFAULT_COMMANDS.get(normalized, ()):  # trusted command names
+        resolved = _resolve_cli_path(command)
+        if resolved:
+            return resolved
+    return ""
+
+
+def _resolve_cli_path(cli_path: str) -> str:
+    candidate = str(cli_path or "").strip().strip('"').strip("'")
+    if not candidate:
+        return ""
+    expanded = os.path.expandvars(os.path.expanduser(candidate))
+    if os.path.isabs(expanded) or os.path.dirname(expanded):
+        return expanded if os.path.isfile(expanded) else ""
+    return shutil.which(expanded) or ""
 
 def _cli_available(cli_path: str) -> bool:
     if not cli_path:

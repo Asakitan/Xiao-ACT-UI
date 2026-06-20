@@ -30,7 +30,11 @@ from ai_editor.llm_engine import LLMEngine, ProviderConfig, StreamDelta
 from ai_editor.tool_registry import ToolRegistry, normalize_tool_parameters
 from ai_editor.engine_tools import register_engine_tools
 from ai_editor.chat_state import ChatController, Conversation, ChatMessage
-from ai_editor.chat_providers import build_provider_runtime_config, describe_provider_status
+from ai_editor.chat_providers import (
+    build_provider_runtime_config,
+    describe_provider_status,
+    provider_runtime_cli_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +451,10 @@ class _AIEditorUIBridge:
         """Push HTML content for a webview panel to the frontend."""
         self._api._emit("render_webview_panel", {"view_id": view_id, "html": html})
 
+    def dispose_webview_panel(self, view_id: str) -> None:
+        """Dispose a webview panel by emitting a dispose event to the frontend."""
+        self._api._emit("dispose_webview_panel", {"view_id": view_id})
+
     def post_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the extension to the webview iframe."""
         self._api._emit("webview_message", {"view_id": view_id, "message": message})
@@ -712,25 +720,29 @@ class AIEditorAPI:
         saved_provider = str(ai_cfg.get("active_chat_provider") or "chat") if isinstance(ai_cfg, dict) else "chat"
         self._active_provider = saved_provider if self._provider_registry.get(saved_provider) else "chat"
 
-        # Extension host — lazy init in background thread
+        # Extension host + VSCode API namespace
+        # IMPORTANT: _vscode_ns must be fully initialised (including
+        # set_ui_bridge) BEFORE the init_extensions thread proceeds,
+        # because extension activation and _register_ext_tools both
+        # access _vscode_ns.  A threading.Event gates the background
+        # thread until the main thread signals readiness.
         from ai_editor.extension_host import get_extension_host
         self._ext_host = get_extension_host()
         self._extensions_inited = False
-        threading.Thread(target=self.init_extensions, daemon=True).start()
+        self._vscode_ns_ready = threading.Event()
 
-        # VSCode API namespace
         from ai_editor.vscode_api import VscodeNamespace
         self._vscode_ns = VscodeNamespace(
             self._ext_host, self._engine, self._settings_getter)
         self._vscode_ns.set_ui_bridge(_AIEditorUIBridge(self))
         self._ext_host.set_command_fallback_resolver(
             self._resolve_extension_command_fallback)
+        self._vscode_ns_ready.set()
+
+        threading.Thread(target=self.init_extensions, daemon=True).start()
 
         # Claude proxy (lazy — started on first CC provider use)
         self._claude_proxy = None
-
-        # Register webview views for CLI providers (claude-code, codex, copilot)
-        self._register_cli_provider_views()
 
         # Agent & Workflow registries
         from ai_editor.agents import get_agent_registry
@@ -1051,32 +1063,81 @@ class AIEditorAPI:
 
         Routes through the VS Code namespace bridge so runtime webview views and
         panels receive the same onDidReceiveMessage event shape.
+        Token validation: if the message carries a ``_token`` field, it must
+        match the nonce stored in ``_vscode_ns._webview_tokens`` for the
+        given *view_id*.  Messages without a ``_token`` are allowed through
+        (backward compat), but an incorrect token is rejected.
         """
         vscode_ns = getattr(self, "_vscode_ns", None)
         if not vscode_ns:
             return {"error": "vscode namespace not initialized"}
+        # Validate webview token when present
+        if isinstance(message, dict):
+            token = message.get("_token")
+            if token is not None:
+                expected = vscode_ns._webview_tokens.get(view_id)
+                if expected is None or not vscode_ns.verify_webview_token(view_id, str(token)):
+                    return {"error": "Invalid webview token", "view_id": view_id}
         delivered = vscode_ns.deliver_webview_message(view_id, message)
         if not delivered:
             return {"error": f"No webview receiver found for: {view_id}"}
         return {"ok": True, "view_id": view_id}
 
     def get_provider_webview(self, provider_id: str) -> Dict:
-        """Return registered plugin/runtime webview HTML for a provider tab."""
+        """Return the real provider webview surface when the runtime exposes one."""
+        self._ensure_engine()
         provider_id = str(provider_id or "").strip()
         if not provider_id:
             return {"html": "", "view_id": "", "available": False, "state": None}
-        view_id = self._provider_runtime_webview_id(provider_id)
+        provider = self._provider_registry.get(provider_id) if hasattr(self, "_provider_registry") else None
+        fallback_id = self._provider_fallback_view_id(provider_id)
+        runtime_info = self._provider_runtime_webview_info(provider_id)
         vscode_ns = getattr(self, "_vscode_ns", None)
-        if vscode_ns and view_id:
-            runtime_html = vscode_ns.get_webview_html(view_id)
+        runtime_view_id = str(runtime_info.get("runtime_view_id") or "")
+        if vscode_ns and runtime_view_id:
+            runtime_html = vscode_ns.get_webview_html(runtime_view_id)
             if runtime_html:
-                return {"html": runtime_html, "view_id": view_id,
+                return {"html": runtime_html, "view_id": runtime_view_id,
                         "available": True, "source": "runtime",
-                        "state": self._webview_states.get(view_id)}
-        fallback_id = f"provider.{provider_id}"
-        return {"html": "", "view_id": fallback_id, "available": False,
-            "source": "none",
-                "state": self._webview_states.get(fallback_id)}
+                        "state": self._provider_webview_state(runtime_view_id, fallback_id)}
+
+        manifest_view = runtime_info.get("manifest_view") or {}
+        manifest_view_id = str(runtime_info.get("manifest_view_id") or "")
+        if manifest_view_id:
+            reason = manifest_view.get("_runtimeSupport", {}).get(
+                "message",
+                "扩展声明了视图，但当前 runtime 尚未注册可读取的 HTML。",
+            )
+            return {
+                "html": "",
+                "view_id": manifest_view_id,
+                "available": False,
+                "source": "manifest",
+                "reason": reason,
+                "state": self._provider_webview_state(manifest_view_id, fallback_id),
+            }
+
+        if provider_id == "copilot":
+            reason = "Copilot 走 VS Code 原生 ChatWidget/chat participant，当前没有 WebviewView HTML。"
+            if provider is not None:
+                reason = str(getattr(provider, "metadata", {}).get("native_chat_reason") or reason)
+            return {
+                "html": "",
+                "view_id": fallback_id,
+                "available": False,
+                "source": "native-chat",
+                "reason": reason,
+                "state": self._provider_webview_state("", fallback_id),
+            }
+
+        return {
+            "html": "",
+            "view_id": fallback_id,
+            "available": False,
+            "source": "missing-runtime",
+            "reason": "未找到扩展 runtime 注册的 WebviewView HTML。",
+            "state": self._provider_webview_state("", fallback_id),
+        }
 
     def webview_set_state(self, view_id: str, state: Any) -> Dict:
         normalized_view_id = str(view_id or "").strip()
@@ -1810,6 +1871,11 @@ class AIEditorAPI:
             if persist_error:
                 result.update({"persist_error": persist_error, "applied": True})
             return result
+        if self._provider_uses_native_chat(prov) or self._provider_uses_extension_webview(prov):
+            result = {"ok": True, "provider": provider_id}
+            if persist_error:
+                result.update({"persist_error": persist_error, "applied": True})
+            return result
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -1833,6 +1899,11 @@ class AIEditorAPI:
         unavailable = self._provider_unavailable_reason(prov)
         if unavailable:
             return {"error": unavailable, "provider": provider_id, "available": False}
+        if self._provider_uses_native_chat(prov):
+            return self.send_message(message)
+        if self._provider_uses_extension_webview(prov):
+            return {"error": "Provider input is owned by its extension WebviewView.",
+                    "provider": provider_id, "runtime_mode": "extension-webview"}
         ctrl = self._provider_controllers.get(provider_id)
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
@@ -1874,6 +1945,14 @@ class AIEditorAPI:
                 "status": "unavailable",
                 "unavailable_reason": unavailable,
             }
+        if self._provider_uses_native_chat(prov):
+            result = self.new_chat()
+            result["provider"] = provider_id
+            return result
+        if self._provider_uses_extension_webview(prov):
+            return {"ok": True, "provider": provider_id,
+                    "runtime_mode": "extension-webview",
+                    "created_controller": False}
         ctrl = self._provider_controllers.get(provider_id)
         created_controller = False
         if not ctrl:
@@ -1919,15 +1998,16 @@ class AIEditorAPI:
     def _create_provider_controller(self, prov):
         """Create a controller for a non-default provider.
 
-        For claude-code / codex / copilot: prefer the real CLI if installed.
-        Falls back to our LLMEngine-based ChatController otherwise.
+        CLI controllers are only fallback command backends. Extension webview
+        providers own their input boxes through VS Code WebviewView registration.
         """
         pid = prov.id
 
-        if pid in ("claude-code", "codex", "copilot"):
+        if pid in self._CLI_PROVIDER_IDS:
             cli_ctrl = self._try_create_cli_controller(prov)
             if cli_ctrl is not None:
                 return cli_ctrl
+            raise RuntimeError(f"CLI runtime is unavailable for provider: {pid}")
 
         cfg = self._provider_config_for(prov)
         engine = LLMEngine(cfg)
@@ -1942,179 +2022,150 @@ class AIEditorAPI:
         """Return a CliChatController that pipes messages through the real CLI."""
         try:
             from ai_editor.cli_controller import (
-                CliChatController, find_cli, get_cli_args,
+                CliChatController, get_cli_args,
             )
         except ImportError:
             return None
-        cli_path = find_cli(prov.id, self._settings_getter)
+        cli_path = provider_runtime_cli_path(prov.id, self._settings_getter)
         if not cli_path:
             return None
         cli_args = get_cli_args(prov.id, self._settings_getter)
         cwd = self._workspace_root() or None
         ctrl = CliChatController(cli_path, prov.id, cli_args, cwd)
         self._wire_provider_callbacks(ctrl, prov.id)
-        # If a webview view is registered for this provider, wire streaming
-        # events to push into the webview via postMessage.
-        view_id = f"provider.{prov.id}"
-        vscode_ns = getattr(self, "_vscode_ns", None)
-        if vscode_ns:
-            wv_view = vscode_ns._webview_views.get(view_id)
-            if wv_view:
-                self._wire_cli_webview_relay(ctrl, prov.id, wv_view)
         return ctrl
 
-    # ── CLI provider webview views ──
+    # ── CLI provider controllers ──
 
-    _CLI_PROVIDER_BRANDING: Dict[str, Dict[str, str]] = {
-        "claude-code": {"color": "#7c3aed", "icon": "✦", "name": "Claude Code"},
-        "copilot": {"color": "#2563eb", "icon": "◉", "name": "Copilot"},
-        "codex": {"color": "#16a34a", "icon": "\U0001f52e", "name": "Codex"},
-    }
+    _CLI_PROVIDER_IDS = ("claude-code", "codex")
 
-    _PROVIDER_VIEW_SYNONYMS: Dict[str, List[str]] = {
-        "claude-code": ["claude-code", "claude code", "claudevscode", "anthropic.claude-code"],
-        "copilot": ["copilot", "github.copilot", "github.copilot-chat", "copilot-chat"],
-        "codex": ["codex", "chatgpt", "openai.chatgpt", "openai"],
-    }
+    @staticmethod
+    def _provider_uses_native_chat(prov: Any) -> bool:
+        return str(getattr(prov, "id", "") or "") == "copilot"
+
+    def _provider_uses_extension_webview(self, prov: Any) -> bool:
+        if self._provider_uses_native_chat(prov):
+            return False
+        return bool(self._provider_candidate_view_ids(prov))
 
     def _provider_runtime_webview_id(self, provider_id: str) -> str:
+        info = self._provider_runtime_webview_info(provider_id)
+        return str(
+            info.get("runtime_view_id")
+            or info.get("manifest_view_id")
+            or info.get("declared_view_id")
+            or ""
+        )
+
+    def _provider_runtime_webview_info(self, provider_id: str) -> Dict[str, Any]:
+        if not hasattr(self, "_provider_registry"):
+            self._ensure_engine()
         registry = getattr(self, "_provider_registry", None)
         provider = registry.get(provider_id) if registry else None
-        candidates: List[str] = []
-        explicit = getattr(provider, "webview_id", "") if provider else ""
-        if explicit:
-            candidates.append(str(explicit))
-        candidates.append(f"provider.{provider_id}")
-        candidates.extend(str(v.get("id") or "") for v in self._provider_manifest_views(provider_id))
-        vscode_ns = getattr(self, "_vscode_ns", None)
-        if vscode_ns:
-            for view_id in vscode_ns.list_webview_view_ids():
-                if self._provider_text_matches(provider_id, view_id):
-                    candidates.append(view_id)
-            for view_id in candidates:
-                if view_id and vscode_ns.get_webview_html(view_id):
-                    return view_id
-        return candidates[0] if candidates else f"provider.{provider_id}"
+        candidate_ids = self._provider_candidate_view_ids(provider)
+        manifest_views = self._provider_manifest_views(provider)
+        manifest_ids = [str(view.get("id") or "") for view in manifest_views if str(view.get("id") or "")]
+        runtime_ids = self._provider_runtime_registered_view_ids()
 
-    def _provider_manifest_views(self, provider_id: str) -> List[Dict[str, Any]]:
+        runtime_view_id = self._first_matching_value(candidate_ids, runtime_ids)
+        if not runtime_view_id:
+            runtime_view_id = self._first_matching_value(manifest_ids, runtime_ids)
+
+        manifest_view = next((view for view in manifest_views if str(view.get("id") or "") == runtime_view_id), None)
+        if manifest_view is None and manifest_views:
+            manifest_view = manifest_views[0]
+
+        declared_view_id = candidate_ids[0] if candidate_ids else ""
+        manifest_view_id = str(manifest_view.get("id") or "") if manifest_view else ""
+        return {
+            "declared_view_id": declared_view_id,
+            "runtime_view_id": runtime_view_id,
+            "manifest_view_id": manifest_view_id,
+            "manifest_view": manifest_view or {},
+        }
+
+    def _provider_candidate_view_ids(self, provider: Any) -> List[str]:
+        if provider is None:
+            return []
+        if hasattr(provider, "candidate_webview_ids"):
+            ids = provider.candidate_webview_ids()
+        else:
+            ids = []
+        return [str(view_id).strip() for view_id in ids if str(view_id).strip()]
+
+    def _provider_candidate_extension_ids(self, provider: Any) -> List[str]:
+        if provider is None:
+            return []
+        if hasattr(provider, "candidate_extension_ids"):
+            ids = provider.candidate_extension_ids()
+        else:
+            ids = []
+        return [str(ext_id).strip() for ext_id in ids if str(ext_id).strip()]
+
+    def _provider_runtime_registered_view_ids(self) -> List[str]:
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not vscode_ns or not hasattr(vscode_ns, "list_webview_view_ids"):
+            return []
+        try:
+            view_ids = vscode_ns.list_webview_view_ids()
+        except Exception:
+            return []
+        return [str(view_id).strip() for view_id in view_ids if str(view_id).strip()]
+
+    def _provider_manifest_views(self, provider: Any) -> List[Dict[str, Any]]:
         ext_host = getattr(self, "_ext_host", None)
         if not ext_host:
             return []
-        contributions = ext_host.ext_points.all_contributions.get("views", {})
-        matched: List[Dict[str, Any]] = []
-        for location, views in contributions.items():
+        contributions = getattr(getattr(ext_host, "ext_points", None), "all_contributions", {})
+        views_by_location = contributions.get("views", {}) if isinstance(contributions, dict) else {}
+        if not isinstance(views_by_location, dict):
+            return []
+
+        candidate_ids = self._provider_candidate_view_ids(provider)
+        candidate_extensions = self._provider_candidate_extension_ids(provider)
+        matched: List[tuple[tuple[int, int, int, str], Dict[str, Any]]] = []
+        for location, views in views_by_location.items():
             if not isinstance(views, list):
                 continue
-            for view in views:
-                if not isinstance(view, dict):
+            for raw_view in views:
+                if not isinstance(raw_view, dict):
                     continue
-                text = " ".join(str(view.get(k, "")) for k in (
-                    "id", "name", "_extensionId", "_viewLocation", "when"))
-                text = f"{text} {location}"
-                if self._provider_text_matches(provider_id, text):
-                    item = dict(view)
-                    item["_viewLocation"] = item.get("_viewLocation") or str(location)
-                    matched.append(item)
-        matched.sort(key=lambda v: (
-            0 if self._provider_text_matches(provider_id, str(v.get("id", ""))) else 1,
-            str(v.get("name") or v.get("id") or "").casefold(),
-        ))
-        return matched
+                view = dict(raw_view)
+                view_id = str(view.get("id") or "").strip()
+                extension_id = str(view.get("_extensionId") or view.get("extensionId") or "").strip()
+                id_index = candidate_ids.index(view_id) if view_id in candidate_ids else -1
+                ext_index = candidate_extensions.index(extension_id) if extension_id in candidate_extensions else -1
+                if id_index < 0 and ext_index < 0:
+                    continue
+                view["_viewLocation"] = view.get("_viewLocation") or str(location)
+                if id_index >= 0:
+                    score = (0, id_index, ext_index if ext_index >= 0 else len(candidate_extensions), view_id.casefold())
+                else:
+                    score = (1, len(candidate_ids), ext_index, view_id.casefold())
+                matched.append((score, view))
 
-    def _provider_text_matches(self, provider_id: str, text: str) -> bool:
-        hay = re.sub(r"[^a-z0-9]+", " ", str(text or "").casefold())
-        compact = hay.replace(" ", "")
-        tokens = self._PROVIDER_VIEW_SYNONYMS.get(provider_id, [provider_id])
-        for token in tokens:
-            token_norm = re.sub(r"[^a-z0-9]+", " ", token.casefold()).strip()
-            if token_norm and token_norm in hay:
-                return True
-            if token_norm.replace(" ", "") and token_norm.replace(" ", "") in compact:
-                return True
-        return False
+        matched.sort(key=lambda item: item[0])
+        return [view for _, view in matched]
 
-    def _register_cli_provider_views(self) -> None:
-        """Wire existing provider webview views without installing stub UI."""
-        try:
-            from ai_editor.cli_controller import find_cli
-        except ImportError:
-            return
-        vscode_ns = getattr(self, "_vscode_ns", None)
-        if not vscode_ns:
-            return
-        for provider_id in ("claude-code", "codex", "copilot"):
-            cli_path = find_cli(provider_id, self._settings_getter)
-            if not cli_path:
-                continue
-            view_id = f"provider.{provider_id}"
-            wv_view = vscode_ns._webview_views.get(view_id)
-            if wv_view and wv_view.webview:
-                wv_view.webview.onDidReceiveMessage(
-                    lambda msg, _pid=provider_id: self._on_cli_webview_message(_pid, msg)
-                )
+    @staticmethod
+    def _first_matching_value(preferred: List[str], candidates: List[str]) -> str:
+        candidate_set = {str(value).strip() for value in candidates if str(value).strip()}
+        for value in preferred:
+            normalized = str(value).strip()
+            if normalized and normalized in candidate_set:
+                return normalized
+        return ""
 
-    def _on_cli_webview_message(self, provider_id: str, message: Any) -> None:
-        """Handle messages from a CLI provider webview panel."""
-        if not isinstance(message, dict):
-            return
-        msg_type = str(message.get("type", ""))
-        if msg_type == "send":
-            text = str(message.get("text", "")).strip()
-            if text:
-                self.provider_send(provider_id, text)
+    @staticmethod
+    def _provider_fallback_view_id(provider_id: str) -> str:
+        return f"provider.{provider_id}"
 
-    def _wire_cli_webview_relay(self, ctrl: Any, provider_id: str,
-                                webview_view: Any) -> None:
-        """Overlay the controller's stream callbacks to also push into the webview."""
-        webview = getattr(webview_view, "webview", None)
-        if not webview:
-            return
-        # Save original callbacks set by _wire_provider_callbacks
-        orig_delta = ctrl.on_stream_delta
-        orig_thinking = ctrl.on_thinking_delta
-        orig_end = ctrl.on_stream_end
-        orig_error = ctrl.on_error
-
-        def _relay_delta(msg, text):
-            if orig_delta:
-                orig_delta(msg, text)
-            try:
-                webview.postMessage({"type": "delta", "content": text})
-            except Exception:
-                pass
-
-        def _relay_thinking(msg, text):
-            if orig_thinking:
-                orig_thinking(msg, text)
-            try:
-                webview.postMessage({"type": "thinking", "content": text})
-            except Exception:
-                pass
-
-        def _relay_end(msg):
-            if orig_end:
-                orig_end(msg)
-            try:
-                payload = {"type": "end", "content": getattr(msg, "content", "")}
-                if getattr(msg, "is_error", False):
-                    payload["type"] = "error"
-                    payload["error"] = getattr(msg, "content", "")
-                webview.postMessage(payload)
-            except Exception:
-                pass
-
-        def _relay_error(err):
-            if orig_error:
-                orig_error(err)
-            try:
-                webview.postMessage({"type": "error", "error": str(err)})
-            except Exception:
-                pass
-
-        ctrl.on_stream_delta = _relay_delta
-        ctrl.on_thinking_delta = _relay_thinking
-        ctrl.on_stream_end = _relay_end
-        ctrl.on_error = _relay_error
+    def _provider_webview_state(self, view_id: str, fallback_id: str) -> Any:
+        if view_id:
+            state = self._webview_states.get(view_id)
+            if state is not None:
+                return state
+        return self._webview_states.get(fallback_id)
 
     # ── CLI launcher (real terminal window) ──
 
@@ -2122,8 +2173,8 @@ class AIEditorAPI:
 
     def launch_provider_cli(self, provider_id: str) -> Dict:
         """Launch a CLI provider in its own interactive terminal window."""
-        from ai_editor.cli_controller import CliLauncher, find_cli, get_cli_args
-        cli_path = find_cli(provider_id, self._settings_getter)
+        from ai_editor.cli_controller import CliLauncher, get_cli_args
+        cli_path = provider_runtime_cli_path(provider_id, self._settings_getter)
         if not cli_path:
             return {"error": f"CLI not found for {provider_id}"}
         launcher = self._cli_launchers.get(provider_id)
@@ -2146,9 +2197,8 @@ class AIEditorAPI:
         """Get status of a CLI provider."""
         launcher = self._cli_launchers.get(provider_id)
         if not launcher:
-            from ai_editor.cli_controller import find_cli
-            cli_path = find_cli(provider_id, self._settings_getter)
-            return {"running": False, "cli_available": cli_path is not None,
+            cli_path = provider_runtime_cli_path(provider_id, self._settings_getter)
+            return {"running": False, "cli_available": bool(cli_path),
                     "provider": provider_id}
         return launcher.status()
 
@@ -2478,11 +2528,19 @@ class AIEditorAPI:
     # ── Extension Host API ──
 
     def init_extensions(self) -> None:
-        """Scan and activate extensions. Safe to call from a background thread."""
+        """Scan and activate extensions. Safe to call from a background thread.
+
+        Waits for ``_vscode_ns_ready`` so that the VS Code namespace and its
+        UI bridge are guaranteed to exist before any extension code runs.
+        """
+        gate = getattr(self, "_vscode_ns_ready", None)
+        if gate is not None:
+            gate.wait(timeout=30)
         if self._extensions_inited:
             return
         self._extensions_inited = True
         self._init_extension_host()
+        self._register_cli_provider_views()
 
     def _init_extension_host(self) -> None:
         """Scan extension directories and start the host."""
@@ -2497,6 +2555,93 @@ class AIEditorAPI:
             print(f"[ExtHost] {count} extensions scanned, "
                   f"{len(activated)} activated")
             self._register_ext_tools()
+
+    # Theme CSS variable block injected into CLI provider webview HTML so
+    # that extensions relying on VS Code theme tokens render correctly in
+    # our standalone pywebview shell.
+    _CLI_WEBVIEW_THEME_CSS = """\
+<style>
+:root {
+  --vscode-editor-background: var(--sao-bg, #1e1e1e);
+  --vscode-editor-foreground: var(--sao-fg, #cccccc);
+  --vscode-input-background: var(--sao-input-bg, #3c3c3c);
+  --vscode-input-foreground: var(--sao-fg, #cccccc);
+  --vscode-input-border: var(--sao-border, #3c3c3c);
+  --vscode-button-background: var(--sao-accent, #0e639c);
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: var(--sao-accent-hover, #1177bb);
+  --vscode-focusBorder: var(--sao-accent, #0e639c);
+  --vscode-foreground: var(--sao-fg, #cccccc);
+  --vscode-descriptionForeground: var(--sao-fg-dim, #9e9e9e);
+  --vscode-errorForeground: #f48771;
+  --vscode-font-family: var(--sao-font, 'Segoe UI', sans-serif);
+  --vscode-font-size: var(--sao-font-size, 13px);
+  --vscode-sideBar-background: var(--sao-sidebar-bg, #252526);
+  --vscode-panel-background: var(--sao-bg, #1e1e1e);
+  --vscode-panel-border: var(--sao-border, #3c3c3c);
+}
+body {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  margin: 0;
+  padding: 0;
+}
+</style>
+"""
+
+    def _register_cli_provider_views(self) -> None:
+        """Register WebviewView providers for CLI-backed chat providers.
+
+        Only claude-code and codex are registered as WebviewView providers.
+        Copilot is deliberately excluded: it uses the VS Code native
+        ChatWidget / chat participant protocol and does not expose a
+        WebviewView.  Registering it as a WebviewView would create a
+        non-functional empty panel.  Copilot stays as a regular
+        ChatProvider backed by our native chat panel.
+        """
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return
+
+        for provider_id in ("claude-code", "codex"):
+            view_id = f"sao.cli.{provider_id}"
+            html = (
+                "<!DOCTYPE html>"
+                "<html><head><meta charset='utf-8'>"
+                f"{self._CLI_WEBVIEW_THEME_CSS}"
+                "</head><body>"
+                f"<div id='root' data-provider='{provider_id}'>"
+                f"<p>Waiting for {provider_id} runtime&hellip;</p>"
+                "</div>"
+                "<script>"
+                "const vscode = acquireVsCodeApi();"
+                "window.addEventListener('message', e => {"
+                "  const msg = e.data;"
+                "  if (msg && msg.type === 'setHtml') {"
+                "    document.getElementById('root').innerHTML = msg.html;"
+                "  }"
+                "});"
+                "</script>"
+                "</body></html>"
+            )
+
+            class _CliViewProvider:
+                """Minimal WebviewViewProvider for a CLI chat provider."""
+                def __init__(self, pid: str, initial_html: str) -> None:
+                    self._pid = pid
+                    self._html = initial_html
+
+                def resolveWebviewView(self, view: Any,
+                                       context: Any = None,
+                                       token: Any = None) -> None:
+                    if hasattr(view, "webview"):
+                        view.webview.html = self._html
+
+            provider = _CliViewProvider(provider_id, html)
+            vscode_ns._register_webview_view_provider(
+                view_id, provider, _extension_id=f"sao.cli.{provider_id}")
 
     def _extension_scan_dirs(self) -> List[str]:
         """Return extension directories to scan without activating anything."""

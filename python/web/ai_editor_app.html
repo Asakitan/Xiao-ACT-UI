@@ -460,6 +460,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .toolbar-btn:hover { background:var(--bg-hover); color:var(--fg); }
 
 /* Provider panels */
+.provider-native-host { background:var(--bg); }
+.provider-native-surface { background:var(--bg); color:var(--fg); }
+.provider-native-surface .provider-messages { background:var(--bg); }
+.provider-native-surface .provider-input-area { background:var(--bg); }
+.provider-native-surface .provider-footer { background:var(--bg); border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.provider-webview-host, .provider-webview-host .provider-empty { background:var(--bg); }
 .provider-messages { display:flex; flex-direction:column; }
 .provider-messages .msg, .provider-messages .tool-call { flex-shrink:0; }
 .provider-empty { flex:1; min-height:180px; display:flex; flex-direction:column;
@@ -1995,6 +2001,9 @@ en:{
   provider_default_model:'Default model',provider_start_chat:'Start a $1 chat',provider_unavailable_title:'$1 is unavailable',
   provider_focus_prompt:'Focus prompt',provider_new_chat:'New chat',provider_shares_context:'shares editor context and tools',
   provider_mode_copilot:'Copilot surface',provider_mode_agent:'Agent mode',provider_mode_chat:'Chat mode',
+  provider_webview_loading_title:'Loading $1 view...',provider_webview_loading_subtitle:'Waiting for the provider extension to supply its webview HTML.',
+  provider_webview_native_title:'Native Chat unavailable',provider_webview_native_subtitle:'Copilot uses the VS Code native ChatWidget, so there is no extension webview HTML to embed here.',
+  provider_webview_extension_title:'$1 extension view unavailable',provider_webview_extension_subtitle:'The provider extension has not registered or activated its own webview yet. This tab only shows this diagnostic until the extension pushes HTML.',
   provider_unavailable_copilot:'Configure any runnable provider in Settings and the Copilot tab will mirror it here.',
   provider_unavailable_codex:'Add an OpenAI key to Provider Keys to activate Codex.',
   provider_unavailable_claude:'Add an Anthropic key to Provider Keys to activate Claude Code.',
@@ -2113,6 +2122,9 @@ zh:{
   provider_default_model:'默认模型',provider_start_chat:'开始 $1 对话',provider_unavailable_title:'$1 不可用',
   provider_focus_prompt:'聚焦输入框',provider_new_chat:'新对话',provider_shares_context:'共享编辑器上下文和工具',
   provider_mode_copilot:'Copilot 工作面',provider_mode_agent:'代理模式',provider_mode_chat:'聊天模式',
+  provider_webview_loading_title:'正在加载 $1 视图...',provider_webview_loading_subtitle:'等待提供商扩展提供它自己的 webview HTML。',
+  provider_webview_native_title:'原生 Chat 不可嵌入',provider_webview_native_subtitle:'Copilot 使用 VS Code 原生 ChatWidget，这里没有可注入的扩展 webview HTML。',
+  provider_webview_extension_title:'$1 扩展视图不可用',provider_webview_extension_subtitle:'该提供商扩展尚未注册或激活自己的 webview；在扩展推送 HTML 之前，此标签页只显示此诊断。',
   provider_unavailable_copilot:'在设置中配置任意可运行提供商后，Copilot 标签页就会在这里镜像它。',
   provider_unavailable_codex:'在 Provider Keys 中加入 OpenAI Key 即可启用 Codex。',
   provider_unavailable_claude:'在 Provider Keys 中加入 Anthropic Key 即可启用 Claude Code。',
@@ -3577,7 +3589,13 @@ let providerDefs=Object.create(null);
 let providerUiState=Object.create(null);
 let providerToolNames=Object.create(null);
 const BUILTIN_PROVIDER_ORDER=['copilot','claude-code','codex'];
+const EXTENSION_WEBVIEW_PROVIDER_IDS=new Set(['claude-code','codex']);
 const PROVIDER_TAB_LABEL_KEYS={chat:'tab_chat',copilot:'provider_copilot_label','claude-code':'provider_claude_code_label',codex:'provider_codex_label'};
+function isExtensionWebviewProvider(providerOrId){
+  const isObject=providerOrId&&typeof providerOrId==='object';
+  const id=String(isObject?providerOrId.id:providerOrId||'');
+  return EXTENSION_WEBVIEW_PROVIDER_IDS.has(id)||(isObject&&(providerOrId.runtime_mode==='extension-webview'||providerOrId.transport==='extension-webview'||providerOrId.requested_transport==='webviewView'));
+}
 function providerDomKey(pid){
   const raw=String(pid||'provider');
   return raw.split('').map(ch=>/[a-zA-Z0-9_-]/.test(ch)?ch:'_'+ch.charCodeAt(0).toString(16)+'_').join('')||'provider';
@@ -3638,9 +3656,8 @@ function createProviderEmpty(pid){
   const title=document.createElement('div');title.className='provider-empty-title';
   title.textContent=p.available===false?tf('provider_unavailable_title',providerDisplayName(pid)):tf('provider_start_chat',providerDisplayName(pid));
   const subtitle=document.createElement('div');subtitle.className='provider-empty-subtitle';
-  const isCli=p.runtime_mode==='cli'||p.transport==='cli';
   const runtimeHint=providerRuntimeHint(p);
-  subtitle.textContent=p.available===false?providerUnavailableText(p):isCli?'':
+  subtitle.textContent=p.available===false?providerUnavailableText(p):
     (providerModeHint(p)+' · '+(providerModelLabel(pid)||t('provider_default_model'))+' · '+t('provider_shares_context')+(runtimeHint?' · '+runtimeHint:'')+'.');
   const actions=document.createElement('div');actions.className='provider-actions';
   const primary=document.createElement('button');primary.type='button';primary.className='provider-action';
@@ -3687,8 +3704,16 @@ function switchRightTab(pid){
   activeProviderId=pid;
   config.active_chat_provider=pid;
   document.querySelectorAll('.rtab').forEach(r=>r.classList.toggle('active',r.dataset.rtab===pid));
-  document.querySelectorAll('.right-panel').forEach(p=>p.classList.remove('active'));
-  const rp=pid==='chat'?$('rp-chat'):$(providerElId('rp',pid));if(rp)rp.classList.add('active');
+  document.querySelectorAll('.right-panel').forEach(p=>{
+    const isActive=(p.id===(pid==='chat'?'rp-chat':providerElId('rp',pid)));
+    p.classList.toggle('active',isActive);
+    // retainContextWhenHidden: hide/show iframes instead of relying on panel CSS alone
+    const frame=p.querySelector('iframe.provider-webview-frame');
+    if(frame){
+      if(isActive){frame.style.display=''}
+      else if(p.dataset.retainContext)frame.style.display='none';
+    }
+  });
   call('switch_provider',pid).then(r=>{
     if(r&&r.persist_error)showToast('Chat provider updated only for current session: '+r.persist_error,'warning',3600);
     if(pid==='chat'){setStatus(t('tab_chat'));return}
@@ -3714,6 +3739,9 @@ function localizeProviderUi(){
     const tab=document.querySelector('.rtab[data-rtab="'+pid+'"]');
     if(tab){const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
     const refs=providerRefs(pid);
+    if(refs.panel&&refs.panel.dataset.providerSurface==='extension-webview'&&!refs.panel.querySelector('iframe')){
+      renderProviderWebviewPlaceholder(refs.panel,p,refs.panel.dataset.webviewFallback||'missing-runtime');
+    }
     if(refs.input)refs.input.placeholder=p.available===false?providerUnavailableText(p):tf('message_provider_placeholder',providerDisplayName(pid));
     if(refs.send)refs.send.title=t('send_title');
     if(refs.stop)refs.stop.title=t('stop_title');
@@ -3728,7 +3756,9 @@ function localizeProviderUi(){
 }
 function _buildChatProviderPanel(panel,p){
   const pid=p.id;
-  const chatPanel=document.createElement('div');chatPanel.className='chat-panel';
+  panel.classList.add('provider-native-host');
+  panel.dataset.providerSurface=isExtensionWebviewProvider(p)?'extension-webview':'native-chat';
+  const chatPanel=document.createElement('div');chatPanel.className='chat-panel provider-native-surface';
   const mc=document.createElement('div');mc.className='chat-messages provider-messages';mc.id=providerElId('pm',pid);chatPanel.appendChild(mc);
   const inputArea=document.createElement('div');inputArea.className='chat-input-area provider-input-area';
   const inputBox=document.createElement('div');inputBox.className='chat-input-container';
@@ -3738,8 +3768,7 @@ function _buildChatProviderPanel(panel,p){
   const send=document.createElement('button');send.className='send-btn';send.id=providerElId('psend',pid);send.title=t('send_title');send.innerHTML=_SEND_SVG;send.disabled=p.available===false;send.onclick=()=>providerSend(pid);
   row.appendChild(input);row.appendChild(send);inputBox.appendChild(row);
   const footer=document.createElement('div');footer.className='provider-footer';
-  const isCli=p.runtime_mode==='cli'||p.transport==='cli';
-  const hint=document.createElement('span');hint.className='provider-hint';hint.textContent=isCli?'CLI':providerFooterHint(p);
+  const hint=document.createElement('span');hint.className='provider-hint';hint.textContent=providerFooterHint(p);
   const spacer=document.createElement('span');spacer.style.flex='1';
   const status=document.createElement('span');status.className='provider-status';status.id=providerElId('pstatus',pid);status.textContent=p.available===false?t('provider_status_unavailable'):t('provider_status_ready');
   const ctx=document.createElement('span');ctx.className='provider-context';ctx.title=t('last_response_context');
@@ -3752,45 +3781,121 @@ function _buildChatProviderPanel(panel,p){
   updateProviderEmpty(pid);updateProviderContext(pid,0);updateProviderStatus(pid,p.available===false?t('provider_status_unavailable'):t('provider_status_ready'),p.available===false?'error':'');
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(pid)}});
 }
+function createProviderWebviewPlaceholder(p,mode){
+  const empty=document.createElement('div');empty.className='provider-empty'+(mode==='missing-runtime'?' unavailable':'');
+  const icon=document.createElement('div');icon.className='provider-empty-icon';icon.textContent=p.icon||'✦';
+  const title=document.createElement('div');title.className='provider-empty-title';
+  const subtitle=document.createElement('div');subtitle.className='provider-empty-subtitle';
+  if(mode==='loading'){
+    title.textContent=tf('provider_webview_loading_title',providerDisplayName(p.id));
+    subtitle.textContent=t('provider_webview_loading_subtitle');
+  }else if(p.id==='copilot'){
+    title.textContent=t('provider_webview_native_title');
+    subtitle.textContent=t('provider_webview_native_subtitle');
+  }else{
+    title.textContent=tf('provider_webview_extension_title',providerDisplayName(p.id));
+    subtitle.textContent=t('provider_webview_extension_subtitle');
+  }
+  empty.appendChild(icon);empty.appendChild(title);empty.appendChild(subtitle);
+  return empty;
+}
+function renderProviderWebviewPlaceholder(panel,p,mode){
+  panel.classList.add('provider-webview-host');
+  panel.dataset.providerSurface='extension-webview';
+  panel.dataset.webviewFallback=mode;
+  panel.innerHTML='';
+  panel.appendChild(createProviderWebviewPlaceholder(p,mode));
+}
+async function mountProviderWebviewPanel(panel,p){
+  const fallbackViewId='provider.'+p.id;
+  panel.dataset.viewId=fallbackViewId;
+  renderProviderWebviewPlaceholder(panel,p,'loading');
+  let wv=null;
+  try{wv=await call('get_provider_webview',p.id)}catch(e){wv=null}
+  if(!panel.isConnected)return;
+  const viewId=wv&&wv.view_id?String(wv.view_id):fallbackViewId;
+  panel.dataset.viewId=viewId;
+  if(wv&&wv.html){
+    panel.dataset.webviewSource=wv.source||'runtime';
+    delete panel.dataset.webviewFallback;
+    _injectWebviewHtml(panel,viewId,wv.html,wv.state);
+    return;
+  }
+  delete panel.dataset.webviewSource;
+  renderProviderWebviewPlaceholder(panel,p,'missing-runtime');
+}
+// ── Webview token registry for postMessage validation ──
+var _webviewTokens=Object.create(null);
 // ── Webview panel injection (plugin-provided panels) ──
 function _injectWebviewHtml(container,viewId,html,initialState){
+  delete container.dataset.webviewFallback;
   // Clear existing content
   container.innerHTML='';
+  // Generate a unique token for this webview iframe
+  var token=(typeof crypto!=='undefined'&&crypto.getRandomValues)?
+    Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join(''):
+    Math.random().toString(36).slice(2)+Date.now().toString(36);
+  _webviewTokens[viewId]=token;
   // Create sandboxed iframe for the webview content
   const iframe=document.createElement('iframe');
   iframe.className='provider-webview-frame';
   iframe.id='webview-frame-'+providerDomKey(viewId);
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
-  iframe.setAttribute('sandbox','allow-scripts allow-same-origin');
+  iframe.setAttribute('sandbox','allow-scripts');
   container.appendChild(iframe);
   const initialStateJson=JSON.stringify(initialState===undefined?null:initialState).replace(/<\//g,'<\\/');
+  const rootStyle=getComputedStyle(document.documentElement);
+  const cssValue=(name,fallback)=>String(rootStyle.getPropertyValue(name)||fallback||'').trim().replace(/[;<>]/g,'')||fallback;
+  const themeKind=(document.documentElement.getAttribute('data-theme')==='light')?'light':'dark';
+  const themeStyle='<style id="sao-vscode-webview-theme">:root{'
+    +'color-scheme:'+themeKind+';'
+    +'--vscode-editor-background:'+cssValue('--bg','#1e1e1e')+';'
+    +'--vscode-editor-foreground:'+cssValue('--fg','#d4d4d4')+';'
+    +'--vscode-panel-background:'+cssValue('--bg','#1e1e1e')+';'
+    +'--vscode-sideBar-background:'+cssValue('--bg','#1e1e1e')+';'
+    +'--vscode-input-background:'+cssValue('--bg-elev','#252526')+';'
+    +'--vscode-input-foreground:'+cssValue('--fg','#d4d4d4')+';'
+    +'--vscode-input-border:'+cssValue('--border','#3c3c3c')+';'
+    +'--vscode-focusBorder:'+cssValue('--accent','#007acc')+';'
+    +'--vscode-button-background:'+cssValue('--accent','#0e639c')+';'
+    +'--vscode-button-foreground:#ffffff;'
+    +'--vscode-descriptionForeground:'+cssValue('--fg-dim','#8b949e')+';'
+    +'--vscode-widget-border:'+cssValue('--border','#3c3c3c')+';'
+    +'}html,body{background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);}</style>';
   // Build bridge script that defines acquireVsCodeApi for the extension
+  const tokenJson=JSON.stringify(token);
   const bridgeScript='<scr'+'ipt>'
     +'(function(){'
+    +'var _token='+tokenJson+';'
+    +'var _themeKind='+JSON.stringify(themeKind)+';'
+    +'document.documentElement.classList.add("vscode-"+_themeKind);'
+    +'document.documentElement.dataset.vscodeThemeKind=_themeKind;'
     +'var _state='+initialStateJson+';'
-    +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',message:msg},"*")}catch(e){}},'
-    +'setState:function(s){_state=s;try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',state:s},"*")}catch(e){}return s;},'
+    +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg},"*")}catch(e){}},'
+    +'setState:function(s){_state=s;try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
     +'getState:function(){return _state}};'
     +'window.acquireVsCodeApi=function(){return _vscodeApi};'
     +'})();'
     +'<\/script>';
-  // Inject bridge + extension HTML into the iframe
-  const doc=iframe.contentDocument||iframe.contentWindow.document;
-  doc.open();doc.write(bridgeScript+html);doc.close();
+  // Inject bridge + extension HTML into the iframe via srcdoc
+  // (contentDocument is inaccessible without allow-same-origin)
+  iframe.srcdoc=themeStyle+bridgeScript+html;
 }
-// Listen for postMessage from webview iframes
+// Listen for postMessage from webview iframes (token-validated)
 window.addEventListener('message',function(e){
   if(!e.data)return;
   if(e.data.type==='webview-message'){
-    const viewId=e.data.viewId,msg=e.data.message;
-    if(viewId&&msg&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
+    const viewId=e.data.viewId,msg=e.data.message,tok=e.data.token;
+    if(!viewId||!msg||!tok||_webviewTokens[viewId]!==tok)return;
+    if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
       window.pywebview.api.webview_post_message(viewId,msg);
     }
     return;
   }
   if(e.data.type==='webview-set-state'){
-    const viewId=e.data.viewId;
-    if(viewId&&window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_set_state){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_set_state){
       window.pywebview.api.webview_set_state(viewId,e.data.state);
     }
   }
@@ -3811,7 +3916,8 @@ async function renderProviderTabs(){
   panels.querySelectorAll('.right-panel:not(#rp-chat)').forEach(p=>p.remove());
   orderedProviders.forEach(p=>{
     if(p.id==='chat')return;
-    if(p.available===false)return;
+    if(p.id==='copilot')return;
+    if(p.available===false&&!isExtensionWebviewProvider(p))return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
     const tabLabel=document.createElement('span');tabLabel.className='rtab-label';tabLabel.textContent=providerTabLabel(p);
@@ -3819,31 +3925,9 @@ async function renderProviderTabs(){
     tab.onclick=()=>switchRightTab(p.id);
     tabs.appendChild(tab);
     const panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panel.dataset.providerId=p.id;
-    const isCli=p.runtime_mode==='cli'||p.transport==='cli';
-    if(isCli){
-      // CLI providers get webview panels from extensions; request it async
-      const placeholder=document.createElement('div');placeholder.className='rp-placeholder';
-      placeholder.style.cssText='display:flex;align-items:center;justify-content:center;flex:1;color:var(--fg-dim)';
-      placeholder.textContent='Loading...';
-      panel.appendChild(placeholder);
-      panels.appendChild(panel);
-      // CLI providers own their panels. Never substitute the built-in chat UI.
-      (async()=>{
-        const wv=await call('get_provider_webview',p.id);
-        if(wv&&wv.html){
-          panel.dataset.viewId=wv.view_id||('provider.'+p.id);
-          panel.dataset.webviewSource=wv.source||'runtime';
-          _injectWebviewHtml(panel,panel.dataset.viewId,wv.html,wv.state)
-        }
-        else{
-          placeholder.textContent='CLI provider panel is not registered by the provider runtime.';
-          placeholder.dataset.cliPanelUnavailable='true';
-        }
-      })();
-    }else{
-      _buildChatProviderPanel(panel,p);
-      panels.appendChild(panel);
-    }
+    panels.appendChild(panel);
+    if(isExtensionWebviewProvider(p))void mountProviderWebviewPanel(panel,p);
+    else _buildChatProviderPanel(panel,p);
   });
   if(activeProviderId!=='chat'&&!providerDefs[activeProviderId])activeProviderId='chat';
   document.querySelectorAll('.rtab').forEach(t=>t.classList.toggle('active',t.dataset.rtab===activeProviderId));
@@ -3990,7 +4074,36 @@ window._onEditorEvent=function(event,data){
     const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]')
       ||(providerId?$(providerElId('rp',providerId)):null)
       ||$(providerElId('rp',viewId));
-    if(panelEl){panelEl.dataset.viewId=viewId;_injectWebviewHtml(panelEl,viewId,html)}
+    if(panelEl){
+      panelEl.dataset.viewId=viewId;
+      if(data.retainContextWhenHidden)panelEl.dataset.retainContext='1';
+      _injectWebviewHtml(panelEl,viewId,html);
+    }
+    return;
+  }
+  // ── dispose_webview_panel: remove iframe and clean up panel ──
+  if(event==='dispose_webview_panel'){
+    const viewId=data&&data.view_id;
+    if(!viewId)return;
+    // Remove token
+    delete _webviewTokens[viewId];
+    // Find and remove the iframe
+    const frameId='webview-frame-'+providerDomKey(viewId);
+    const iframe=document.getElementById(frameId);
+    if(iframe)iframe.remove();
+    // Find the panel container by view_id and clear it
+    const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(viewId):String(viewId).replace(/["\\]/g,'\\$&');
+    const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]');
+    if(panelEl){
+      panelEl.innerHTML='';
+      delete panelEl.dataset.viewId;
+      delete panelEl.dataset.webviewSource;
+    }
+    // If disposed view was the active tab, switch to chat
+    const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):viewId;
+    if(activeProviderId===providerId||activeProviderId===viewId){
+      switchRightTab('chat');
+    }
     return;
   }
   // ── webview_message: relay message from Python to webview iframe ──

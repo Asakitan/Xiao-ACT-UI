@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -394,33 +395,29 @@ def test_app_settings_parity() -> None:
            and loaded_bad.get("permissions") == {}
            and loaded_bad.get("terminal", {}).get("profile"))
 
-    import ai_editor.cli_controller as _cli_mod
-    _orig_find = _cli_mod.find_cli
-    _cli_mod.find_cli = lambda *a, **kw: None  # force API fallback for test
+    from ai_editor.chat_providers import ChatProviderDef
 
     provider_gui = _SettingsGui({"ai_editor": {
-        "provider_keys": {"openai": "test-openai"},
-        "codex": {"model": "codex-test", "transport": "responses"},
+        "codex": {"cli_path": sys.executable, "model": "codex-test", "transport": "responses"},
     }})
     provider_api = AIEditorAPI(provider_gui)
     provider_api._ensure_engine()
     codex = provider_api._provider_registry.get("codex")
     ctrl = provider_api._create_provider_controller(codex)
-    _check("codex provider settings applied",
-           hasattr(ctrl, "engine")
-           and ctrl.engine.config.model == "codex-test"
-           and ctrl.engine.config.transport == "responses"
-           and ctrl.engine.config.api_key == "test-openai"
-           and ctrl.engine.config.effective_base_url == "https://api.openai.com/v1")
+    _check("codex provider uses CLI controller",
+           ctrl.__class__.__name__ == "CliChatController"
+           and getattr(ctrl, "_provider_id", "") == "codex"
+           and getattr(ctrl, "_cli_path", "") == sys.executable)
 
     legacy_provider_gui = _SettingsGui({"ai_editor": {
         "_provider_keys": {"openai": "legacy-openai"},
-        "codex": {"model": "legacy-codex", "transport": "responses"},
     }})
     legacy_provider_api = AIEditorAPI(legacy_provider_gui)
     legacy_provider_api._ensure_engine()
-    legacy_codex = legacy_provider_api._provider_registry.get("codex")
-    legacy_ctrl = legacy_provider_api._create_provider_controller(legacy_codex)
+    legacy_provider = ChatProviderDef(
+        id="legacy-openai", name="Legacy OpenAI", provider_type="openai",
+        model="legacy-codex")
+    legacy_ctrl = legacy_provider_api._create_provider_controller(legacy_provider)
     _check("legacy provider keys applied to provider controllers",
            hasattr(legacy_ctrl, "engine")
            and legacy_ctrl.engine.config.api_key == "legacy-openai"
@@ -433,8 +430,9 @@ def test_app_settings_parity() -> None:
     }})
     wrong_key_api = AIEditorAPI(wrong_key_gui)
     wrong_key_api._ensure_engine()
-    wrong_key_codex = wrong_key_api._provider_registry.get("codex")
-    wrong_key_ctrl = wrong_key_api._create_provider_controller(wrong_key_codex)
+    wrong_key_provider = ChatProviderDef(
+        id="wrong-key-openai", name="Wrong Key OpenAI", provider_type="openai")
+    wrong_key_ctrl = wrong_key_api._create_provider_controller(wrong_key_provider)
     _check("provider controllers do not reuse another provider key",
            hasattr(wrong_key_ctrl, "engine")
            and wrong_key_ctrl.engine.config.api_key == "")
@@ -457,7 +455,6 @@ def test_app_settings_parity() -> None:
 
         stale_claude_gui = _SettingsGui({"ai_editor": {
             "provider_keys": {"anthropic": "test-anthropic"},
-            "claude_code": {"model": "claude-sonnet-4-20250514"},
         }})
         stale_claude_api = AIEditorAPI(stale_claude_gui)
         stale_claude_api._ensure_engine()
@@ -473,7 +470,9 @@ def test_app_settings_parity() -> None:
                 "default_model": "official-claude",
             }
         stale_claude_api._fetch_provider_models = _stale_fetch
-        stale_claude = stale_claude_api._provider_registry.get("claude-code")
+        stale_claude = ChatProviderDef(
+            id="stale-claude", name="Stale Claude", provider_type="anthropic",
+            model="claude-sonnet-4-20250514")
         stale_ctrl = stale_claude_api._create_provider_controller(stale_claude)
         _check("stale Claude default model replaced from official models",
                hasattr(stale_ctrl, "engine")
@@ -483,11 +482,11 @@ def test_app_settings_parity() -> None:
 
     cli_runtime = provider_api.list_chat_providers().get("providers", [])
     cli_codex = next((p for p in cli_runtime if p.get("id") == "codex"), {})
-    _check("codex provider is CLI-only (available iff CLI installed)",
-           cli_codex.get("transport") == "cli"
-           and cli_codex.get("runtime_mode") == "cli")
-
-    _cli_mod.find_cli = _orig_find
+    _check("codex provider is extension WebviewView-backed",
+           cli_codex.get("requested_transport") == "webviewView"
+           and cli_codex.get("resolved_transport") == "webviewView"
+           and cli_codex.get("transport") == "extension-webview"
+           and cli_codex.get("runtime_mode") == "extension-webview")
 
     mode_data = {"ai_editor": {"mode": "ask", "permissions": {"readFile": "allowed"}}}
     mode_api = AIEditorAPI(_SettingsGui(mode_data))
@@ -822,7 +821,7 @@ def test_app_settings_parity() -> None:
 def test_phase1_ai_editor_regressions() -> None:
     print("── Phase 1 AI Editor Regressions ──")
     from ai_editor.app import AIEditorAPI
-    from ai_editor.chat_providers import ChatProviderRegistry
+    from ai_editor.chat_providers import ChatProviderRegistry, get_provider_registry
     from ai_editor.scopes import tool_permission
 
     eval_args = json.dumps({"action": "eval", "expression": "2 + 2"})
@@ -896,15 +895,16 @@ def test_phase1_ai_editor_regressions() -> None:
                 for p in ChatProviderRegistry().list_available(getter)}
 
     cli_only_settings = {"ai_editor": {
-        "claude_code": {"cli_path": "claude"},
-        "codex": {"cli_path": "codex"},
+        "claude_code": {"cli_path": sys.executable},
+        "codex": {"cli_path": sys.executable},
         "provider_keys": {"openai": "test-openai"},
     }}
     registry_cli_flags = flags(cli_only_settings)
-    _check("CLI providers available only when CLI binary exists",
+    _check("native and extension providers are not hidden by CLI availability",
            registry_cli_flags.get("chat") is True
-           and isinstance(registry_cli_flags.get("claude-code"), bool)
-           and isinstance(registry_cli_flags.get("codex"), bool))
+            and registry_cli_flags.get("claude-code") is True
+            and registry_cli_flags.get("codex") is True
+            and registry_cli_flags.get("copilot") is True)
 
     api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
     api_cli_items = {p["id"]: p
@@ -918,17 +918,20 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("built-in chat provider names are exact",
            ordered_builtin_names == ["Chat", "Copilot", "Claude Code", "Codex"])
     _check(
-        "Copilot chat provider is CLI-only capability surface",
+        "Copilot chat provider is native ChatWidget participant surface",
         api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot"
         and api_cli_items.get("copilot", {}).get("capability") == "github-copilot-chat"
-        and api_cli_items.get("copilot", {}).get("runtime_mode") == "cli"
-        and api_cli_items.get("copilot", {}).get("transport") == "cli",
+        and api_cli_items.get("copilot", {}).get("runtime_mode") == "native-chat"
+        and api_cli_items.get("copilot", {}).get("transport") == "native-chat"
+        and api_cli_items.get("copilot", {}).get("requested_transport") == "chatParticipant"
+        and api_cli_items.get("copilot", {}).get("resolved_transport") == "native-chat",
     )
     copilot_switch = api_cli.switch_provider("copilot")
-    _check("switch_provider selects runnable Copilot surface",
+    _check("switch_provider selects native Copilot surface without CLI controller",
            copilot_switch.get("ok") is True
            and copilot_switch.get("provider") == "copilot"
-           and api_cli.get_chat_controls().get("active_chat_provider") == "copilot")
+           and api_cli.get_chat_controls().get("active_chat_provider") == "copilot"
+           and "copilot" not in api_cli._provider_controllers)
 
     class _FakeProviderController:
         def __init__(self) -> None:
@@ -945,17 +948,11 @@ def test_phase1_ai_editor_regressions() -> None:
         def new_conversation(self, system_prompt: str = "") -> None:
             self.new_chat_calls += 1
 
-    fake_copilot_ctrl = _FakeProviderController()
-    api_cli._provider_controllers["copilot"] = fake_copilot_ctrl
-    copilot_send = api_cli.provider_send("copilot", "hello")
-    _check("provider_send accepts runnable Copilot surface",
-           copilot_send.get("ok") is True
-           and fake_copilot_ctrl.sent == [("hello", False)])
     copilot_new = api_cli.provider_new_chat("copilot")
-    _check("provider_new_chat resets runnable Copilot surface",
+    _check("provider_new_chat resets native Copilot surface without provider controller",
            copilot_new.get("ok") is True
            and copilot_new.get("provider") == "copilot"
-           and fake_copilot_ctrl.new_chat_calls == 1)
+           and "copilot" not in api_cli._provider_controllers)
     _check("provider_cancel rejects unknown provider ids explicitly",
            "Unknown provider" in api_cli.provider_cancel("missing-provider").get("error", ""))
     _check("built-in provider surfaces cannot be overridden or unregistered",
@@ -984,30 +981,36 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("unregister_chat_provider removes custom providers only",
            plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
            and plugin_provider_api._provider_registry.get("plugin-demo") is None)
-    _check("list_chat_providers shows CLI-only metadata",
-           api_cli_items.get("claude-code", {}).get("runtime_mode") == "cli"
-           and api_cli_items.get("codex", {}).get("runtime_mode") == "cli"
-           and api_cli_items.get("copilot", {}).get("runtime_mode") == "cli"
+    _check("list_chat_providers shows native/webview metadata",
+           api_cli_items.get("claude-code", {}).get("runtime_mode") == "extension-webview"
+           and api_cli_items.get("codex", {}).get("runtime_mode") == "extension-webview"
+           and api_cli_items.get("copilot", {}).get("runtime_mode") == "native-chat"
+           and api_cli_items.get("claude-code", {}).get("transport") == "extension-webview"
+           and api_cli_items.get("codex", {}).get("transport") == "extension-webview"
+           and api_cli_items.get("copilot", {}).get("transport") == "native-chat"
            and "cli_available" in api_cli_items.get("codex", {}))
-    _check("CLI-unavailable providers have unavailable_reason",
-           all(api_cli_items.get(pid, {}).get("unavailable_reason", "") != ""
-               for pid in ("claude-code", "codex", "copilot")
-               if not api_cli_items.get(pid, {}).get("available")))
+    _check("extension providers expose CLI status without CLI gating",
+           api_cli_items.get("claude-code", {}).get("available") is True
+           and api_cli_items.get("codex", {}).get("available") is True
+           and api_cli_items.get("copilot", {}).get("available") is True)
 
     api_key_settings = {"ai_editor": {
         "codex": {"model": "codex-status-test"},
         "provider_keys": {"anthropic": "test-anthropic", "openai": "test-openai"},
     }}
     registry_key_flags = flags(api_key_settings)
-    _check("CLI providers are CLI-gated even with API keys",
+    _check("extension providers are not CLI-gated even with API keys",
            isinstance(registry_key_flags.get("claude-code"), bool)
-           and isinstance(registry_key_flags.get("codex"), bool))
+           and registry_key_flags.get("claude-code") is True
+           and registry_key_flags.get("codex") is True)
     registry_key_items = {p["id"]: p
                           for p in ChatProviderRegistry().list_available(
                               lambda key, default=None: api_key_settings.get(key, default))}
-    _check("CLI provider transport is always 'cli'",
-           registry_key_items.get("codex", {}).get("transport") == "cli"
-           and registry_key_items.get("codex", {}).get("runtime_mode") == "cli")
+    _check("extension provider transport is WebviewView",
+           registry_key_items.get("codex", {}).get("requested_transport") == "webviewView"
+           and registry_key_items.get("codex", {}).get("resolved_transport") == "webviewView"
+           and registry_key_items.get("codex", {}).get("transport") == "extension-webview"
+           and registry_key_items.get("codex", {}).get("runtime_mode") == "extension-webview")
 
     html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
     with open(html_path, "r", encoding="utf-8") as fh:
@@ -1038,14 +1041,22 @@ def test_phase1_ai_editor_regressions() -> None:
            'type:"webview-set-state"' in html
            and 'webview_set_state' in html
            and 'getState:function(){return _state}' in html)
-    _check("frontend maps provider webview ids back to panels",
-           "panel.dataset.viewId=wv.view_id||('provider.'+p.id)" in html
-           and "document.querySelector('.right-panel[data-view-id=\"'+viewSelector+'\"]')" in html
-           and "String(viewId).startsWith('provider.')" in html)
-    _check("CLI providers never use built-in chat fallback panel",
-           "CLI providers own their panels. Never substitute the built-in chat UI." in html
-           and "placeholder.dataset.cliPanelUnavailable='true'" in html
-           and "else{_buildChatProviderPanel(panel,p);placeholder.remove()}" not in html)
+    _check("frontend accepts provider webview pushes",
+           "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
+            and "isNativeCliProvider" not in html
+           and "document.querySelector('.right-panel[data-view-id=\"'+viewSelector+'\"]')" in html)
+    _check("extension provider panels request runtime webviews first",
+            "async function mountProviderWebviewPanel(panel,p)" in html
+            and "call('get_provider_webview',p.id)" in html
+            and "_injectWebviewHtml(panel,viewId,wv.html,wv.state)" in html
+            and "renderProviderWebviewPlaceholder(panel,p,'missing-runtime')" in html)
+    _check("Copilot provider does not create a duplicate webview tab",
+           "if(p.id==='copilot')return" in html
+           and "EXTENSION_WEBVIEW_PROVIDER_IDS=new Set(['claude-code','codex'])" in html)
+    _check("non-webview provider panels use backend provider callbacks",
+           "function _buildChatProviderPanel(panel,p)" in html
+           and "send.onclick=()=>providerSend(pid)" in html
+           and "stop.onclick=()=>providerCancel(pid)" in html)
     _check("webview bridge avoids raw script parser sentinel",
            "const bridgeScript='<script>'" not in html
            and "const bridgeScript='<scr'+'ipt>'" in html)
@@ -1069,20 +1080,32 @@ def test_phase1_ai_editor_regressions() -> None:
            state_api.webview_set_state("provider.codex", {"draft": 1}).get("ok") is True
            and state_api.get_provider_webview("codex").get("state") == {"draft": 1})
 
+    app_path = os.path.join(os.path.dirname(__file__), "app.py")
+    with open(app_path, "r", encoding="utf-8") as fh:
+        app_source = fh.read()
+    _check("provider surfaces do not import provider_runtime_views shim",
+           "provider_runtime_views" not in app_source
+           and "CliProviderWebviewRuntime" not in app_source
+           and "_register_cli_provider_view(" not in app_source)
+
     runtime_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
-    runtime_ns = _FakeVscodeNamespace({"provider.codex": "<html>runtime codex</html>"})
+    runtime_api._controller = object()
+    runtime_api._provider_registry = get_provider_registry()
+    runtime_ns = _FakeVscodeNamespace({"chatgpt.sidebarView": "<html>runtime codex</html>"})
     runtime_api._vscode_ns = runtime_ns
     runtime_result = runtime_api.get_provider_webview("codex")
-    post_result = runtime_api.webview_post_message("provider.codex", {"type": "send", "text": "hi"})
-    _check("provider runtime webview wins over fallback UI",
-           runtime_result.get("source") == "runtime"
-           and runtime_result.get("view_id") == "provider.codex"
-           and "runtime codex" in runtime_result.get("html", ""))
+    post_result = runtime_api.webview_post_message("chatgpt.sidebarView", {"type": "send", "text": "hi"})
+    _check("provider runtime webview HTML wins for Codex",
+            runtime_result.get("source") == "runtime"
+            and runtime_result.get("view_id") == "chatgpt.sidebarView"
+            and "runtime codex" in runtime_result.get("html", ""))
     _check("webview postMessage uses vscode namespace bridge",
            post_result.get("ok") is True
-           and runtime_ns.delivered == [("provider.codex", {"type": "send", "text": "hi"})])
+            and runtime_ns.delivered == [("chatgpt.sidebarView", {"type": "send", "text": "hi"})])
 
     manifest_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    manifest_api._controller = object()
+    manifest_api._provider_registry = get_provider_registry()
     manifest_api._vscode_ns = _FakeVscodeNamespace({})
     manifest_api._ext_host = _FakeExtensionHost({
         "views": {
@@ -1100,11 +1123,11 @@ def test_phase1_ai_editor_regressions() -> None:
         "mcpServerDefinitionProviders": [],
     })
     manifest_result = manifest_api.get_provider_webview("codex")
-    _check("manifest-only CLI provider exposes no built-in panel",
+    _check("manifest-only provider exposes declared view without fake HTML",
            manifest_result.get("available") is False
-           and manifest_result.get("source") == "none"
-           and manifest_result.get("view_id") == "provider.codex"
-           and manifest_result.get("html") == "")
+            and manifest_result.get("source") == "manifest"
+            and manifest_result.get("view_id") == "chatgpt.sidebarView"
+            and manifest_result.get("html") == "")
 
     ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
     _check("extension views contribution remains enabled for old settings",
@@ -2252,9 +2275,14 @@ def test_vscode_api() -> None:
         api["env"]["clipboard"]["writeText"]("clip-value")
         _check("env.clipboard round-trips text",
                api["env"]["clipboard"]["readText"]() == "clip-value")
-        ext_result = api["env"]["openExternal"]("https://example.invalid")
-        _check("env.openExternal returns bool",
-               isinstance(ext_result, bool))
+        opener_target = (
+            "ai_editor.vscode_api.os.startfile"
+            if os.name == "nt" else "ai_editor.vscode_api.webbrowser.open"
+        )
+        with patch(opener_target, return_value=None, create=True) as open_external_mock:
+            ext_result = api["env"]["openExternal"]("https://example.invalid")
+        _check("env.openExternal returns bool without launching browser",
+               isinstance(ext_result, bool) and open_external_mock.call_count == 1)
 
         diagnostics = api["languages"]["createDiagnosticCollection"]("selftest")
         diagnostics.set("file:///tmp/a.py", [{"message": "bad"}])
@@ -2354,13 +2382,13 @@ def test_vscode_api() -> None:
         webview_messages = []
         panel.webview.on_did_receive_message(lambda msg: webview_messages.append(msg))
         posted = panel.webview.post_message({"hello": "webview"})
-        _check("webview.post_message dispatches to listeners",
-            posted is True and webview_messages == [{"hello": "webview"}])
+        _check("webview.post_message stays extension-to-webview only",
+            posted is True and webview_messages == [])
         webview_messages_2 = []
         panel.webview.onDidReceiveMessage(lambda msg: webview_messages_2.append(msg))
         posted_2 = panel.webview.postMessage({"hello": "camel"})
-        _check("webview camelCase aliases work",
-            posted_2 is True and webview_messages_2 == [{"hello": "camel"}])
+        _check("webview camelCase postMessage stays outbound only",
+            posted_2 is True and webview_messages_2 == [])
         delivered = ns.deliver_webview_message("test", {"from": "ui"})
         _check("webview panel routes UI messages and HTML through namespace",
             delivered is True
