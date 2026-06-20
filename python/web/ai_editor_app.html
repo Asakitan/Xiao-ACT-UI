@@ -918,7 +918,6 @@ pre.code-block { overflow:visible; }
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Chat"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="history" data-i18n-title="history" title="History"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="agents" data-i18n-title="agents_wf" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="premium" data-i18n-title="premium" title="Premium"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="8" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V5.5a3 3 0 016 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="13" r="1.2" fill="currentColor"/></svg></div>
@@ -941,6 +940,7 @@ pre.code-block { overflow:visible; }
     <!-- Chat sidebar (default) -->
     <div class="sb-view" id="sb-chat">
       <div class="sb-header"><span data-i18n="chat">Chat</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="openChatHistory()" data-i18n-title="history" title="History">◷</span>
         <span class="sb-action" onclick="newChat()" data-i18n-title="new_chat_action" title="New Chat">✚</span>
       </div>
       <div class="sb-section">
@@ -1203,6 +1203,7 @@ pre.code-block { overflow:visible; }
                   </div>
                   <!-- Tools checkbox removed — mode controls tool access -->
                   <span class="toolbar-btn" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()">■</span>
+                  <span class="toolbar-btn" onclick="openChatHistory()" data-i18n-title="history" title="History">◷</span>
                   <span class="toolbar-btn" onclick="uploadImage()" title="Attach image">📎</span>
                   <span class="spacer"></span>
                   <span class="model-chip" id="model-chip" onclick="openSettings()" title="Change model">-</span>
@@ -2979,7 +2980,7 @@ async function execSlash(raw){
   else if(cmd==='/export')exportChat();
   else if(cmd==='/settings')openSettings();
   else if(cmd==='/tools')switchSidebar('tools');
-  else if(cmd==='/history'){switchSidebar('history');refreshHistory()}
+  else if(cmd==='/history')openChatHistory();
   else if(cmd==='/instructions')switchSidebar('instructions')
   else if(cmd==='/agents')switchSidebar('agents')
   else if(cmd==='/system'){
@@ -3216,6 +3217,17 @@ async function refreshHistory(){
   });
 }
 window.refreshHistory=refreshHistory;
+async function openChatHistory(){
+  if(typeof _sidebarVis!=='undefined'&&!_sidebarVis){
+    _sidebarVis=true;
+    const sb=$('sidebar');if(sb)sb.style.display='';
+    const toggle=$('tb-toggle-sidebar');if(toggle)toggle.classList.add('active');
+  }
+  switchSidebar('history');
+  await refreshHistory();
+  if(typeof _saveLayoutImmediate==='function')_saveLayoutImmediate();
+}
+window.openChatHistory=openChatHistory;
 
 // ── Explorer ──
 let explorerRoot='';
@@ -3589,12 +3601,47 @@ let providerDefs=Object.create(null);
 let providerUiState=Object.create(null);
 let providerToolNames=Object.create(null);
 const BUILTIN_PROVIDER_ORDER=['copilot','claude-code','codex'];
-const EXTENSION_WEBVIEW_PROVIDER_IDS=new Set(['claude-code','codex']);
 const PROVIDER_TAB_LABEL_KEYS={chat:'tab_chat',copilot:'provider_copilot_label','claude-code':'provider_claude_code_label',codex:'provider_codex_label'};
+let dynamicExtensionProviderDefs=Object.create(null);
+let webviewRuntimeCache=Object.create(null);
+function markerKey(value){return String(value||'').toLowerCase().replace(/[\s_-]/g,'')}
+function asArray(value){
+  if(Array.isArray(value))return value;
+  if(value===undefined||value===null||value==='')return [];
+  return [value];
+}
+function isWebviewMarker(value){
+  const key=markerKey(value);
+  return key==='webview'||key==='webviewview'||key==='extensionwebview'||key==='webviewprovider'||key==='webviewpanel'||key.includes('webview');
+}
+function providerCandidateViewIds(p){
+  const ids=[];
+  const push=value=>{const id=String(value||'').trim();if(id&&!ids.includes(id))ids.push(id)};
+  if(!p||typeof p!=='object')return ids;
+  push(p.view_id||p.viewId||p.webview_id||p.webviewId);
+  asArray(p.webview_ids||p.webviewIds||p.view_ids||p.viewIds).forEach(push);
+  const extensionView=p.extension_view||p.extensionView||p.webview_view||p.webviewView;
+  if(typeof extensionView==='string')push(extensionView);
+  else if(extensionView&&typeof extensionView==='object'){
+    push(extensionView.view_id||extensionView.viewId||extensionView.id||extensionView.webview_id||extensionView.webviewId);
+    asArray(extensionView.webview_ids||extensionView.webviewIds||extensionView.view_ids||extensionView.viewIds).forEach(push);
+  }
+  return ids;
+}
+function providerPrimaryViewId(p){const ids=providerCandidateViewIds(p);return ids[0]||('provider.'+String(p&&p.id||'provider'))}
 function isExtensionWebviewProvider(providerOrId){
   const isObject=providerOrId&&typeof providerOrId==='object';
   const id=String(isObject?providerOrId.id:providerOrId||'');
-  return EXTENSION_WEBVIEW_PROVIDER_IDS.has(id)||(isObject&&(providerOrId.runtime_mode==='extension-webview'||providerOrId.transport==='extension-webview'||providerOrId.requested_transport==='webviewView'));
+  if(!isObject){
+    const known=providerDefs[id]||dynamicExtensionProviderDefs[id];
+    return known?isExtensionWebviewProvider(known):false;
+  }
+  return isWebviewMarker(providerOrId.runtime_mode||providerOrId.runtimeMode)
+    ||isWebviewMarker(providerOrId.transport)
+    ||isWebviewMarker(providerOrId.requested_transport||providerOrId.requestedTransport)
+    ||isWebviewMarker(providerOrId.resolved_transport||providerOrId.resolvedTransport)
+    ||providerCandidateViewIds(providerOrId).length>0
+    ||!!(providerOrId.extension_view||providerOrId.extensionView||providerOrId.webview_view||providerOrId.webviewView);
 }
 function providerDomKey(pid){
   const raw=String(pid||'provider');
@@ -3622,6 +3669,76 @@ function providerDisplayName(pid){
 }
 function providerTabLabel(p){return t(PROVIDER_TAB_LABEL_KEYS[p.id]||'')||p.short_name||p.name||p.id}
 function providerTabTitle(p){return providerDisplayName(p.id)+(p.available===false?' — '+providerUnavailableText(p):'')}
+function normalizeExtensionProviderRecord(raw,fallbackViewId){
+  const rec=raw&&typeof raw==='object'?raw:{};
+  const viewId=String(rec.view_id||rec.viewId||rec.webview_id||rec.webviewId||fallbackViewId||'').trim();
+  const providerId=String(rec.provider_id||rec.providerId||rec.provider||rec.tab_id||rec.tabId||rec.id||(viewId.startsWith('provider.')?viewId.slice(9):viewId)).trim();
+  if(!providerId)return null;
+  const viewIds=providerCandidateViewIds(rec);
+  if(viewId&&!viewIds.includes(viewId))viewIds.push(viewId);
+  return {...rec,id:providerId,name:rec.name||rec.title||rec.label||rec.short_name||providerId,short_name:rec.short_name||rec.shortName||rec.label||rec.title||rec.name||providerId,available:rec.available!==false,runtime_mode:rec.runtime_mode||rec.runtimeMode||'extension-webview',requested_transport:rec.requested_transport||rec.requestedTransport||'webviewView',webview_ids:viewIds,extension_view:rec.extension_view||rec.extensionView||rec.webview_view||rec.webviewView||true};
+}
+function recordLooksLikeExtensionWebview(raw,fallbackViewId){
+  if(fallbackViewId)return true;
+  if(!raw||typeof raw!=='object')return false;
+  return !!raw.html
+    ||providerCandidateViewIds(raw).length>0
+    ||isWebviewMarker(raw.runtime_mode||raw.runtimeMode)
+    ||isWebviewMarker(raw.transport)
+    ||isWebviewMarker(raw.requested_transport||raw.requestedTransport)
+    ||isWebviewMarker(raw.resolved_transport||raw.resolvedTransport)
+    ||!!(raw.extension_view||raw.extensionView||raw.webview_view||raw.webviewView);
+}
+function rememberDynamicExtensionProvider(raw,fallbackViewId){
+  if(!recordLooksLikeExtensionWebview(raw,fallbackViewId))return null;
+  const p=normalizeExtensionProviderRecord(raw,fallbackViewId);if(!p)return null;
+  const existing=dynamicExtensionProviderDefs[p.id]||{};
+  const ids=[...providerCandidateViewIds(existing),...providerCandidateViewIds(p)].filter((id,i,a)=>id&&a.indexOf(id)===i);
+  dynamicExtensionProviderDefs[p.id]={...existing,...p,webview_ids:ids,extension_view:p.extension_view||existing.extension_view||true};
+  return dynamicExtensionProviderDefs[p.id];
+}
+function collectExtensionProviderRecords(data){
+  const records=[];
+  const add=item=>{if(item)records.push(item)};
+  const scan=value=>{
+    if(Array.isArray(value)){value.forEach(add);return}
+    if(value&&typeof value==='object')add(value);
+  };
+  if(Array.isArray(data))scan(data);
+  else if(data&&typeof data==='object'){
+    ['providers','provider_tabs','providerTabs','tabs','views','extension_views','extensionViews','webview_views','webviewViews','webviews','webview_ids','webviewIds'].forEach(key=>scan(data[key]));
+    if(!records.length&&(data.view_id||data.viewId||data.webview_id||data.webviewId||data.provider||data.id||data.html))add(data);
+  }
+  return records;
+}
+function rememberDynamicProvidersFromEventData(data){return collectExtensionProviderRecords(data).map(rec=>rememberDynamicExtensionProvider(rec)).filter(Boolean)}
+function rememberWebviewRuntime(viewId,data){
+  const id=String(viewId||'').trim();if(!id||!data||!data.html)return null;
+  webviewRuntimeCache[id]={html:data.html,state:data.state,source:data.source||'event',retainContextWhenHidden:!!data.retainContextWhenHidden};
+  return webviewRuntimeCache[id];
+}
+function cachedWebviewForProvider(p){
+  const ids=providerCandidateViewIds(p);ids.push('provider.'+String(p&&p.id||''));
+  for(const id of ids){if(id&&webviewRuntimeCache[id]&&webviewRuntimeCache[id].html)return {viewId:id,...webviewRuntimeCache[id]}}
+  return null;
+}
+function providerTabElement(pid){return Array.from(document.querySelectorAll('.rtab')).find(tab=>tab.dataset.rtab===String(pid))||null}
+function ensureExtensionProviderPanel(raw,viewId){
+  const p=rememberDynamicExtensionProvider(raw,viewId);if(!p)return null;
+  providerDefs[p.id]={...(providerDefs[p.id]||{}),...p};
+  const tabs=$('right-tabs'),panels=$('right-panels');
+  let tab=providerTabElement(p.id);
+  if(!tab&&tabs){
+    tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
+    const label=document.createElement('span');label.className='rtab-label';tab.appendChild(label);
+    tab.onclick=()=>switchRightTab(p.id);tabs.appendChild(tab);
+  }
+  if(tab){const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
+  let panel=$(providerElId('rp',p.id));
+  if(!panel&&panels){panel=document.createElement('div');panel.className='right-panel';panel.id=providerElId('rp',p.id);panels.appendChild(panel)}
+  if(panel){panel.dataset.providerId=p.id;panel.dataset.providerSurface='extension-webview';panel.classList.add('provider-webview-host');if(viewId)panel.dataset.viewId=viewId}
+  return panel;
+}
 function providerModelLabel(pid){const p=providerDefs[pid]||{};return p.model||p.provider_type||''}
 function providerModeHint(p){return p&&p.id==='copilot'?t('provider_mode_copilot'):((p&&p.auto_agent)?t('provider_mode_agent'):t('provider_mode_chat'))}
 function providerBackendLabel(raw){return t('provider_backend_'+String(raw||'').replace(/-/g,'_'))||raw||''}
@@ -3736,7 +3853,7 @@ function localizeProviderUi(){
   }
   Object.keys(providerDefs||{}).forEach(pid=>{
     const p=providerDefs[pid];
-    const tab=document.querySelector('.rtab[data-rtab="'+pid+'"]');
+    const tab=providerTabElement(pid);
     if(tab){const label=tab.querySelector('.rtab-label');if(label)label.textContent=providerTabLabel(p);tab.title=providerTabTitle(p);tab.setAttribute('aria-label',providerTabTitle(p))}
     const refs=providerRefs(pid);
     if(refs.panel&&refs.panel.dataset.providerSurface==='extension-webview'&&!refs.panel.querySelector('iframe')){
@@ -3807,17 +3924,30 @@ function renderProviderWebviewPlaceholder(panel,p,mode){
   panel.appendChild(createProviderWebviewPlaceholder(p,mode));
 }
 async function mountProviderWebviewPanel(panel,p){
-  const fallbackViewId='provider.'+p.id;
+  const fallbackViewId=providerPrimaryViewId(p);
   panel.dataset.viewId=fallbackViewId;
   renderProviderWebviewPlaceholder(panel,p,'loading');
+  const cached=cachedWebviewForProvider(p);
+  if(cached){
+    panel.dataset.viewId=cached.viewId;
+    panel.dataset.webviewSource=cached.source||'event';
+    if(cached.retainContextWhenHidden)panel.dataset.retainContext='1';
+    _injectWebviewHtml(panel,cached.viewId,cached.html,cached.state);
+    return;
+  }
   let wv=null;
-  try{wv=await call('get_provider_webview',p.id)}catch(e){wv=null}
+  const requestIds=[p.id,...providerCandidateViewIds(p),fallbackViewId].filter((id,i,a)=>id&&a.indexOf(id)===i);
+  for(const requestId of requestIds){
+    try{wv=await call('get_provider_webview',requestId)}catch(e){wv=null}
+    if(wv&&wv.html)break;
+  }
   if(!panel.isConnected)return;
   const viewId=wv&&wv.view_id?String(wv.view_id):fallbackViewId;
   panel.dataset.viewId=viewId;
   if(wv&&wv.html){
     panel.dataset.webviewSource=wv.source||'runtime';
     delete panel.dataset.webviewFallback;
+    rememberWebviewRuntime(viewId,wv);
     _injectWebviewHtml(panel,viewId,wv.html,wv.state);
     return;
   }
@@ -3829,6 +3959,9 @@ var _webviewTokens=Object.create(null);
 // ── Webview panel injection (plugin-provided panels) ──
 function _injectWebviewHtml(container,viewId,html,initialState){
   delete container.dataset.webviewFallback;
+  container.classList.add('provider-webview-host');
+  container.dataset.providerSurface='extension-webview';
+  container.dataset.viewId=viewId;
   // Clear existing content
   container.innerHTML='';
   // Generate a unique token for this webview iframe
@@ -3886,7 +4019,7 @@ window.addEventListener('message',function(e){
   if(!e.data)return;
   if(e.data.type==='webview-message'){
     const viewId=e.data.viewId,msg=e.data.message,tok=e.data.token;
-    if(!viewId||!msg||!tok||_webviewTokens[viewId]!==tok)return;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
       window.pywebview.api.webview_post_message(viewId,msg);
     }
@@ -3903,12 +4036,16 @@ window.addEventListener('message',function(e){
 async function renderProviderTabs(){
   const r=await call('list_chat_providers');
   const listedProviders=r&&Array.isArray(r.providers)?r.providers:[];
+  const mergedProviders=listedProviders.slice();
+  Object.keys(dynamicExtensionProviderDefs).forEach(id=>{
+    if(!mergedProviders.some(p=>p&&p.id===id))mergedProviders.push(dynamicExtensionProviderDefs[id]);
+  });
   const tabs=$('right-tabs'),panels=$('right-panels');
   const byId=Object.create(null);
-  listedProviders.forEach(p=>{if(p&&p.id)byId[p.id]=p});
+  mergedProviders.forEach(p=>{if(p&&p.id)byId[p.id]=dynamicExtensionProviderDefs[p.id]?{...dynamicExtensionProviderDefs[p.id],...p,webview_ids:[...providerCandidateViewIds(dynamicExtensionProviderDefs[p.id]),...providerCandidateViewIds(p)].filter((id,i,a)=>id&&a.indexOf(id)===i)}:p});
   const orderedProviders=[];
   BUILTIN_PROVIDER_ORDER.forEach(id=>{if(byId[id])orderedProviders.push(byId[id])});
-  listedProviders.forEach(p=>{if(p&&p.id&&p.id!=='chat'&&!BUILTIN_PROVIDER_ORDER.includes(p.id))orderedProviders.push(p)});
+  mergedProviders.forEach(p=>{if(p&&p.id&&p.id!=='chat'&&!BUILTIN_PROVIDER_ORDER.includes(p.id)&&byId[p.id])orderedProviders.push(byId[p.id])});
   providerDefs=Object.create(null);
   // Clear dynamic tabs (keep CHAT tab)
   tabs.querySelectorAll('.rtab:not([data-rtab="chat"])').forEach(t=>t.remove());
@@ -3916,7 +4053,6 @@ async function renderProviderTabs(){
   panels.querySelectorAll('.right-panel:not(#rp-chat)').forEach(p=>p.remove());
   orderedProviders.forEach(p=>{
     if(p.id==='chat')return;
-    if(p.id==='copilot')return;
     if(p.available===false&&!isExtensionWebviewProvider(p))return;
     providerDefs[p.id]=p;
     const tab=document.createElement('div');tab.className='rtab';tab.dataset.rtab=p.id;
@@ -4061,11 +4197,34 @@ function renderProviderToolConfirm(pid,data){
   const body=createProviderMessage(pid,'tool',data.name||'tool');
   if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');
 }
+function postExtensionMessageToWebview(iframe,msg){
+  if(!iframe||!iframe.contentWindow)return;
+  try{iframe.contentWindow.postMessage(msg,'*')}catch(e){}
+  const alreadyWrapped=msg&&typeof msg==='object'&&msg.type==='webview-extension-message'&&Object.prototype.hasOwnProperty.call(msg,'message');
+  if(!alreadyWrapped){
+    try{iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*')}catch(e){}
+  }
+}
 window._onEditorEvent=function(event,data){
+  if(event==='provider_tabs_changed'||event==='extension_views_changed'){
+    rememberDynamicProvidersFromEventData(data);
+    void renderProviderTabs().then(()=>{
+      collectExtensionProviderRecords(data).forEach(record=>{
+        const viewId=record&&(record.view_id||record.viewId||record.webview_id||record.webviewId);
+        if(viewId&&record.html){
+          rememberWebviewRuntime(viewId,record);
+          const panelEl=ensureExtensionProviderPanel(record,viewId);
+          if(panelEl)_injectWebviewHtml(panelEl,viewId,record.html,record.state);
+        }
+      });
+    });
+    return;
+  }
   // ── render_webview_panel: extension pushes its webview HTML ──
   if(event==='render_webview_panel'){
     const viewId=data&&data.view_id,html=data&&data.html;
     if(!viewId||!html)return;
+    rememberWebviewRuntime(viewId,data);
     // Runtime view ids are usually `provider.<id>`, but real extensions often
     // use their own ids (for example `chatgpt.sidebarView`). Prefer the exact
     // data-view-id match, then map provider.<id> back to the provider panel.
@@ -4073,7 +4232,8 @@ window._onEditorEvent=function(event,data){
     const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(viewId):String(viewId).replace(/["\\]/g,'\\$&');
     const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]')
       ||(providerId?$(providerElId('rp',providerId)):null)
-      ||$(providerElId('rp',viewId));
+      ||$(providerElId('rp',viewId))
+      ||ensureExtensionProviderPanel(data,viewId);
     if(panelEl){
       panelEl.dataset.viewId=viewId;
       if(data.retainContextWhenHidden)panelEl.dataset.retainContext='1';
@@ -4113,7 +4273,7 @@ window._onEditorEvent=function(event,data){
     const frameId='webview-frame-'+providerDomKey(viewId);
     const iframe=document.getElementById(frameId);
     if(iframe&&iframe.contentWindow){
-      iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*');
+      postExtensionMessageToWebview(iframe,msg);
     }
     return;
   }
@@ -5489,7 +5649,7 @@ const COMMANDS=[
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
   {label:'Explorer',shortcut:'',action:()=>switchSidebar('explorer')},
   {label:'Extensions',shortcut:'',action:()=>switchSidebar('extensions')},
-  {label:'Chat History',shortcut:'',action:()=>{switchSidebar('history');refreshHistory()}},
+  {label:'Chat History',shortcut:'',action:()=>openChatHistory()},
   {label:'Custom Instructions',shortcut:'',action:()=>switchSidebar('instructions')},
   {label:'Agents & Workflows',shortcut:'',action:()=>switchSidebar('agents')},
   {label:'Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',action:()=>openKeybindings()},

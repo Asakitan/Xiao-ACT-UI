@@ -1388,6 +1388,414 @@ class ExtensionHost:
 
 
 # ---------------------------------------------------------------------------
+# NodeExtensionHost — subprocess bridge for Node.js extensions with "main"
+# ---------------------------------------------------------------------------
+
+import logging
+import shutil
+import subprocess
+
+_log = logging.getLogger(__name__)
+
+
+class NodeExtensionHost:
+    """Manages a Node.js child process that runs real VS Code extension code.
+
+    Extensions whose ``package.json`` declares a ``"main"`` entry point
+    require a JavaScript runtime.  This class spawns a Node.js subprocess
+    running *script_path* (the extension host bootstrap script), then
+    communicates over a newline-delimited JSON protocol on stdin/stdout.
+
+    The class **complements** the existing Python ``ExtensionHost`` which
+    continues to handle manifest-only (no ``main``) extensions.
+
+    Protocol (Python -> Node, one JSON object per line on stdin):
+        {"type": "activate",   "extensionPath": "...", "extensionId": "...", "manifest": {...}}
+        {"type": "deactivate", "extensionId": "..."}
+        {"type": "webviewMessage", "viewId": "...", "message": {...}}
+        {"type": "shutdown"}
+
+    Protocol (Node -> Python, one JSON object per line on stdout):
+        {"type": "activated",           "extensionId": "..."}
+        {"type": "error",               "extensionId": "...", "message": "..."}
+        {"type": "webview_html",        "viewId": "...", "html": "..."}
+        {"type": "webview_post_message","viewId": "...", "message": {...}}
+        {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
+        {"type": "output",              "channel": "...", "text": "..."}
+        {"type": "show_message",        "level": "info|warn|error", "message": "..."}
+    """
+
+    def __init__(self,
+                 node_path: str,
+                 script_path: str,
+                 ui_bridge: Any = None) -> None:
+        self._node_path = node_path
+        self._script_path = script_path
+        self._ui_bridge = ui_bridge
+        self._proc: Optional[subprocess.Popen] = None
+        self._reader: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._activated_ids: Set[str] = set()
+        self._output_channels: Dict[str, List[str]] = {}
+        self._command_service: Optional[CommandService] = None
+        self._on_activated_callbacks: List[Callable[[str], None]] = []
+        self._on_error_callbacks: List[Callable[[str, str], None]] = []
+        self._shutting_down = False
+
+    # -- Lifecycle -----------------------------------------------------------
+
+    def start(self) -> bool:
+        """Spawn the Node subprocess and start the reader thread.
+
+        Returns True on success, False if node is unavailable or the
+        process fails to start.
+        """
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return True  # already running
+
+        node = self._resolve_node()
+        if not node:
+            _log.warning("[NodeExtHost] Node.js not found at %r; "
+                         "JS extensions will not be activated.", self._node_path)
+            return False
+
+        if not os.path.isfile(self._script_path):
+            _log.warning("[NodeExtHost] Extension host script not found: %s",
+                         self._script_path)
+            return False
+
+        try:
+            self._shutting_down = False
+            self._proc = subprocess.Popen(
+                [node, self._script_path],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if os.name == "nt" else 0
+                ),
+            )
+        except FileNotFoundError:
+            _log.error("[NodeExtHost] Failed to spawn Node: executable %r "
+                       "not found.", node)
+            return False
+        except OSError as exc:
+            _log.error("[NodeExtHost] Failed to spawn Node: %s", exc)
+            return False
+
+        self._reader = threading.Thread(
+            target=self._reader_thread, daemon=True,
+            name="NodeExtHost-reader")
+        self._reader.start()
+
+        # Start a stderr logger too
+        threading.Thread(
+            target=self._stderr_thread, daemon=True,
+            name="NodeExtHost-stderr").start()
+
+        _log.info("[NodeExtHost] Started (pid=%d)", self._proc.pid)
+        return True
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Gracefully shut down the Node subprocess."""
+        self._shutting_down = True
+        proc = self._proc
+        if proc is None:
+            return
+        # Try graceful shutdown first
+        try:
+            self._send({"type": "shutdown"})
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _log.warning("[NodeExtHost] Graceful shutdown timed out; killing.")
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+        self._proc = None
+        self._activated_ids.clear()
+        _log.info("[NodeExtHost] Stopped.")
+
+    @property
+    def is_running(self) -> bool:
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
+    # -- Extension activation -----------------------------------------------
+
+    def activate(self, extension_path: str, extension_id: str,
+                 manifest: Dict[str, Any]) -> bool:
+        """Send an activate message for a single extension.
+
+        Returns True if the message was sent successfully.
+        """
+        if not self.is_running:
+            _log.warning("[NodeExtHost] Cannot activate %s: host not running.",
+                         extension_id)
+            return False
+        msg = {
+            "type": "activate",
+            "extensionPath": extension_path,
+            "extensionId": extension_id,
+            "manifest": manifest,
+        }
+        return self._send(msg)
+
+    def deactivate(self, extension_id: str) -> bool:
+        """Send a deactivate message for a single extension."""
+        if not self.is_running:
+            return False
+        self._activated_ids.discard(extension_id)
+        return self._send({
+            "type": "deactivate",
+            "extensionId": extension_id,
+        })
+
+    def activate_all(self, extensions: List[ExtensionDescription]) -> int:
+        """Activate a list of extensions. Returns the number successfully sent."""
+        count = 0
+        for ext in extensions:
+            if not ext.main:
+                continue
+            manifest = {
+                "name": ext.name,
+                "publisher": ext.publisher,
+                "version": ext.version,
+                "main": ext.main,
+                "activationEvents": ext.activation_events,
+                "contributes": ext.contributes,
+            }
+            if self.activate(ext.extension_path, ext.id, manifest):
+                count += 1
+        return count
+
+    # -- Communication: send -------------------------------------------------
+
+    def _send(self, msg: Dict[str, Any]) -> bool:
+        """Write a JSON line to the subprocess stdin.
+
+        Returns True if the write succeeded.
+        """
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            return False
+        try:
+            line = json.dumps(msg, ensure_ascii=False, default=str) + "\n"
+            proc.stdin.write(line.encode("utf-8"))
+            proc.stdin.flush()
+            return True
+        except (BrokenPipeError, OSError) as exc:
+            if not self._shutting_down:
+                _log.error("[NodeExtHost] Write failed: %s", exc)
+            return False
+
+    # -- Communication: receive ----------------------------------------------
+
+    def _reader_thread(self) -> None:
+        """Read JSON lines from the subprocess stdout and dispatch."""
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            for raw_line in proc.stdout:
+                if self._shutting_down:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    _log.warning("[NodeExtHost] Malformed JSON from Node: %s",
+                                 line[:200])
+                    continue
+                if isinstance(msg, dict):
+                    try:
+                        self._on_message(msg)
+                    except Exception:
+                        _log.exception("[NodeExtHost] Error handling message: "
+                                       "%s", msg.get("type", "?"))
+        except Exception:
+            if not self._shutting_down:
+                _log.exception("[NodeExtHost] Reader thread crashed.")
+        finally:
+            # If the process exited unexpectedly, log it
+            if not self._shutting_down and proc.poll() is not None:
+                _log.warning("[NodeExtHost] Node subprocess exited with "
+                             "code %d.", proc.returncode or -1)
+
+    def _stderr_thread(self) -> None:
+        """Drain stderr from the Node subprocess and log it."""
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            for raw_line in proc.stderr:
+                if self._shutting_down:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    _log.info("[NodeExtHost:stderr] %s", line)
+        except Exception:
+            pass
+
+    def _on_message(self, msg: Dict[str, Any]) -> None:
+        """Dispatch an incoming message from the Node subprocess."""
+        msg_type = str(msg.get("type", ""))
+
+        if msg_type == "activated":
+            ext_id = str(msg.get("extensionId", ""))
+            self._activated_ids.add(ext_id)
+            _log.info("[NodeExtHost] Extension activated: %s", ext_id)
+            for cb in self._on_activated_callbacks:
+                try:
+                    cb(ext_id)
+                except Exception:
+                    _log.exception("[NodeExtHost] on_activated callback error")
+
+        elif msg_type == "error":
+            ext_id = str(msg.get("extensionId", ""))
+            message = str(msg.get("message", "Unknown error"))
+            _log.error("[NodeExtHost] Extension error (%s): %s",
+                       ext_id, message)
+            for cb in self._on_error_callbacks:
+                try:
+                    cb(ext_id, message)
+                except Exception:
+                    pass
+
+        elif msg_type == "webview_html":
+            view_id = str(msg.get("viewId", ""))
+            html = str(msg.get("html", ""))
+            if self._ui_bridge and view_id:
+                try:
+                    self._ui_bridge.render_webview_panel(view_id, html)
+                except Exception:
+                    _log.exception("[NodeExtHost] render_webview_panel failed "
+                                   "for %s", view_id)
+
+        elif msg_type == "webview_post_message":
+            view_id = str(msg.get("viewId", ""))
+            message = msg.get("message")
+            if self._ui_bridge and view_id:
+                try:
+                    self._ui_bridge.post_webview_message(view_id, message)
+                except Exception:
+                    _log.exception("[NodeExtHost] post_webview_message failed "
+                                   "for %s", view_id)
+
+        elif msg_type == "command_registered":
+            command_id = str(msg.get("commandId", ""))
+            ext_id = str(msg.get("extensionId", ""))
+            if command_id and self._command_service:
+                # Register a proxy command that forwards execution to Node
+                def _node_command_proxy(*args, _cid=command_id):
+                    self._send({
+                        "type": "executeCommand",
+                        "commandId": _cid,
+                        "args": list(args),
+                    })
+                    return {"ok": True, "proxied": True,
+                            "commandId": _cid}
+                self._command_service.register(command_id, _node_command_proxy)
+                _log.info("[NodeExtHost] Command registered: %s (from %s)",
+                          command_id, ext_id)
+
+        elif msg_type == "output":
+            channel = str(msg.get("channel", "Extension Output"))
+            text = str(msg.get("text", ""))
+            self._output_channels.setdefault(channel, []).append(text)
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_output(channel, text)
+                except Exception:
+                    pass
+
+        elif msg_type == "show_message":
+            level = str(msg.get("level", "info"))
+            message = str(msg.get("message", ""))
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_message(level, message)
+                except Exception:
+                    pass
+            else:
+                _log.info("[NodeExtHost] %s: %s", level, message)
+
+        else:
+            _log.debug("[NodeExtHost] Unknown message type: %s", msg_type)
+
+    # -- Webview message relay -----------------------------------------------
+
+    def relay_webview_message(self, view_id: str, message: Any) -> bool:
+        """Relay a message from the webview UI to the Node subprocess.
+
+        The Node side fires the extension's ``onDidReceiveMessage`` handler.
+        """
+        return self._send({
+            "type": "webviewMessage",
+            "viewId": view_id,
+            "message": message,
+        })
+
+    # -- Integration helpers -------------------------------------------------
+
+    def set_command_service(self, commands: CommandService) -> None:
+        """Wire the CommandService so Node-registered commands are usable."""
+        self._command_service = commands
+
+    def set_ui_bridge(self, bridge: Any) -> None:
+        """Update the UI bridge after construction."""
+        self._ui_bridge = bridge
+
+    def on_activated(self, callback: Callable[[str], None]) -> None:
+        """Register a callback invoked when a Node extension confirms activation."""
+        self._on_activated_callbacks.append(callback)
+
+    def on_error(self, callback: Callable[[str, str], None]) -> None:
+        """Register a callback invoked on Node extension errors."""
+        self._on_error_callbacks.append(callback)
+
+    def is_extension_activated(self, extension_id: str) -> bool:
+        return extension_id in self._activated_ids
+
+    def list_activated(self) -> List[str]:
+        return sorted(self._activated_ids)
+
+    # -- Private helpers -----------------------------------------------------
+
+    def _resolve_node(self) -> Optional[str]:
+        """Find the node executable: explicit path, then PATH lookup."""
+        if self._node_path:
+            expanded = os.path.expandvars(os.path.expanduser(self._node_path))
+            if os.path.isfile(expanded):
+                return expanded
+            found = shutil.which(expanded)
+            if found:
+                return found
+        # Fallback: try "node" on PATH
+        return shutil.which("node")
+
+
+def find_node_path() -> Optional[str]:
+    """Locate a usable Node.js executable on the system.
+
+    Returns the absolute path or None if node is not installed.
+    """
+    return shutil.which("node")
+
+
+# ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
 

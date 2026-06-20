@@ -139,6 +139,7 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
             "claudeVSCodeSidebarSecondary",
             "claudeVSCodeSidebar",
             "claudeVSCodeSessionsList",
+            "sao.cli.claude-code",
         ],
         extension_ids=["anthropic.claude-code"],
     ),
@@ -147,7 +148,11 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
         provider_type="openai", model="codex-mini-latest",
         system_prompt=_CODEX_SYSTEM, auto_agent=True, builtin=True,
         webview_id="chatgpt.sidebarSecondaryView",
-        webview_ids=["chatgpt.sidebarSecondaryView", "chatgpt.sidebarView"],
+        webview_ids=[
+            "chatgpt.sidebarSecondaryView",
+            "chatgpt.sidebarView",
+            "sao.cli.codex",
+        ],
         extension_ids=["openai.chatgpt"],
     ),
 ]

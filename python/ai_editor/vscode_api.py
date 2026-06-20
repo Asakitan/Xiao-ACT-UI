@@ -805,6 +805,9 @@ class VscodeNamespace:
         self._tree_data_providers: Dict[str, Any] = {}
         self._webview_view_providers: Dict[str, Any] = {}
         self._webview_views: Dict[str, Any] = {}
+        self._webview_view_change_callback: Optional[
+            Callable[[Dict[str, Any]], None]
+        ] = None
         self._task_providers: Dict[str, Any] = {}
         self._debug_providers: Dict[str, Any] = {}
         self._task_executions: List[_TaskExecution] = []
@@ -848,6 +851,33 @@ class VscodeNamespace:
         """
         self._ui_bridge = bridge
 
+    def set_webview_view_change_callback(
+            self,
+            callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+        """Notify the host when runtime WebviewView providers change."""
+        self._webview_view_change_callback = callback
+
+    def _notify_webview_view_changed(
+            self,
+            event: str,
+            view_id: str,
+            extension_id: str = "",
+            options: Optional[Dict[str, Any]] = None) -> None:
+        payload = {
+            "event": event,
+            "view_id": view_id,
+            "extension_id": extension_id,
+            "options": dict(options or {}),
+        }
+        self._window_tabs_emitter.fire(payload)
+        self._window_tab_groups_emitter.fire(payload)
+        callback = self._webview_view_change_callback
+        if callback is not None:
+            try:
+                callback(payload)
+            except Exception:
+                pass
+
     def _generate_view_token(self, view_id: str) -> str:
         """Create a per-webview nonce token and store it for later verification."""
         token = secrets.token_hex(16)
@@ -864,10 +894,18 @@ class VscodeNamespace:
     def build(self, ext: ExtensionDescription = None) -> Dict[str, Any]:
         """Return a dict that serves as the ``vscode`` module for an extension."""
         extension_id = ext.id if ext else ""
+        window_api = self._build_window()
+        if extension_id:
+            window_api = dict(window_api)
+            window_api["registerWebviewViewProvider"] = (
+                lambda view_id, provider, options=None, _eid=extension_id:
+                self._register_webview_view_provider(
+                    view_id, provider, options, _extension_id=_eid)
+            )
         return {
             # Namespaces
             "commands": self._build_commands(),
-            "window": self._build_window(),
+            "window": window_api,
             "workspace": self._build_workspace(),
             "env": self._build_env(),
             "extensions": self._build_extensions(),
@@ -1057,6 +1095,8 @@ class VscodeNamespace:
                 provider.resolveWebviewView(view, None, CancellationToken.NONE)
             except TypeError:
                 provider.resolveWebviewView(view)
+        self._notify_webview_view_changed(
+            "registered", view_id, _extension_id or "", dict(options or {}))
 
         # Risk 4: disposable cleans up view, dicts, and token
         def _dispose_registration() -> None:
@@ -1065,6 +1105,8 @@ class VscodeNamespace:
                 v.dispose()
             self._webview_view_providers.pop(view_id, None)
             self._webview_tokens.pop(view_id, None)
+            self._notify_webview_view_changed(
+                "disposed", view_id, _extension_id or "", dict(options or {}))
 
         return Disposable(_dispose_registration)
 
@@ -2493,6 +2535,37 @@ class VscodeNamespace:
     def list_webview_view_ids(self) -> List[str]:
         """Return all registered webview view IDs."""
         return sorted(set(self._webview_views.keys()) | set(self._webview_panels.keys()))
+
+    def list_webview_views(self) -> List[Dict[str, Any]]:
+        """Return runtime webview registrations with provider metadata."""
+        rows: List[Dict[str, Any]] = []
+        for view_id in sorted(self._webview_views.keys()):
+            view = self._webview_views.get(view_id)
+            entry = self._webview_view_providers.get(view_id, {})
+            rows.append({
+                "view_id": view_id,
+                "kind": "webviewView",
+                "extension_id": str(entry.get("_extensionId") or ""),
+                "options": dict(entry.get("options") or {}),
+                "title": str(getattr(view, "title", "") or view_id),
+                "visible": bool(getattr(view, "visible", False)),
+                "html_available": bool(getattr(getattr(view, "webview", None), "html", "")),
+            })
+        for view_type in sorted(self._webview_panels.keys()):
+            panels = self._webview_panels.get(view_type, [])
+            if not panels:
+                continue
+            panel = panels[-1]
+            rows.append({
+                "view_id": view_type,
+                "kind": "webviewPanel",
+                "extension_id": "",
+                "options": dict(getattr(panel, "options", {}) or {}),
+                "title": str(getattr(panel, "title", "") or view_type),
+                "visible": bool(getattr(panel, "visible", False)),
+                "html_available": bool(getattr(getattr(panel, "webview", None), "html", "")),
+            })
+        return rows
 
     # ── Accessors for host integration ──
 

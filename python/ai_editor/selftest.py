@@ -188,6 +188,18 @@ class _FakeVscodeNamespace:
     def list_webview_view_ids(self):
         return list(self.html_by_id.keys())
 
+    def list_webview_views(self):
+        return [
+            {
+                "view_id": view_id,
+                "kind": "webviewView",
+                "extension_id": "",
+                "title": view_id,
+                "html_available": bool(html),
+            }
+            for view_id, html in self.html_by_id.items()
+        ]
+
     def deliver_webview_message(self, view_id, message):
         if view_id not in self.html_by_id:
             return False
@@ -200,9 +212,55 @@ class _FakeExtPoints:
         self.all_contributions = all_contributions
 
 
+class _FakeExtDesc:
+    """Minimal extension descriptor for selftest manifest-view lookup."""
+    def __init__(self, ext_id, contributes=None, enabled=True, publisher=""):
+        self.id = ext_id
+        self.contributes = contributes or {}
+        self.enabled = enabled
+        self.publisher = publisher or ext_id.split(".", 1)[0] if "." in ext_id else ""
+
+
+class _FakeRegistry:
+    def __init__(self, extensions=None):
+        self._extensions = list(extensions or [])
+
+    def list_all(self):
+        return list(self._extensions)
+
+
 class _FakeExtensionHost:
     def __init__(self, all_contributions):
         self.ext_points = _FakeExtPoints(all_contributions)
+        self.registry = _FakeRegistry(
+            self._build_fake_extensions(all_contributions)
+        )
+
+    def activate_event(self, event):
+        return []
+
+    @staticmethod
+    def _build_fake_extensions(contribs):
+        """Synthesize _FakeExtDesc entries from all_contributions['views']."""
+        views_by_location = contribs.get("views", {})
+        if not views_by_location:
+            return []
+        by_ext: dict = {}
+        for location, views in views_by_location.items():
+            if not isinstance(views, list):
+                continue
+            for view in views:
+                ext_id = view.get("_extensionId", "unknown.ext")
+                if ext_id not in by_ext:
+                    by_ext[ext_id] = {}
+                by_ext[ext_id].setdefault(location, []).append(view)
+        result = []
+        for ext_id, loc_views in by_ext.items():
+            result.append(_FakeExtDesc(
+                ext_id=ext_id,
+                contributes={"views": loc_views},
+            ))
+        return result
 
 
 def test_app_settings_parity() -> None:
@@ -822,6 +880,7 @@ def test_phase1_ai_editor_regressions() -> None:
     print("── Phase 1 AI Editor Regressions ──")
     from ai_editor.app import AIEditorAPI
     from ai_editor.chat_providers import ChatProviderRegistry, get_provider_registry
+    from ai_editor.extension_host import ExtensionDescription
     from ai_editor.scopes import tool_permission
 
     eval_args = json.dumps({"action": "eval", "expression": "2 + 2"})
@@ -1047,12 +1106,32 @@ def test_phase1_ai_editor_regressions() -> None:
            and "document.querySelector('.right-panel[data-view-id=\"'+viewSelector+'\"]')" in html)
     _check("extension provider panels request runtime webviews first",
             "async function mountProviderWebviewPanel(panel,p)" in html
-            and "call('get_provider_webview',p.id)" in html
+            and "call('get_provider_webview',requestId)" in html
             and "_injectWebviewHtml(panel,viewId,wv.html,wv.state)" in html
             and "renderProviderWebviewPlaceholder(panel,p,'missing-runtime')" in html)
-    _check("Copilot provider does not create a duplicate webview tab",
-           "if(p.id==='copilot')return" in html
-           and "EXTENSION_WEBVIEW_PROVIDER_IDS=new Set(['claude-code','codex'])" in html)
+    _check("Copilot provider renders as native tab, not extension webview",
+            "if(p.id==='copilot')return;\n    if(p.available===false" not in html
+            and "EXTENSION_WEBVIEW_PROVIDER_IDS" not in html
+            and "panel.dataset.providerSurface=isExtensionWebviewProvider(p)?'extension-webview':'native-chat'" in html
+            and "const BUILTIN_PROVIDER_ORDER=['copilot','claude-code','codex'];" in html)
+    _check("chat history entry moved into Chat controls",
+            'data-panel="history"' not in html
+            and html.count('onclick="openChatHistory()"') >= 2
+            and "async function openChatHistory()" in html
+            and "window.openChatHistory=openChatHistory" in html
+            and "else if(cmd==='/history')openChatHistory();" in html
+            and "{label:'Chat History',shortcut:'',action:()=>openChatHistory()}" in html)
+    _check("frontend supports dynamic extension webview provider tabs",
+            "function isExtensionWebviewProvider(providerOrId)" in html
+            and "dynamicExtensionProviderDefs" in html
+            and "provider_tabs_changed'||event==='extension_views_changed" in html
+            and "ensureExtensionProviderPanel(data,viewId)" in html
+            and "rememberDynamicProvidersFromEventData(data)" in html)
+    _check("webview bridge preserves raw and falsy messages",
+            "postExtensionMessageToWebview(iframe,msg)" in html
+            and "iframe.contentWindow.postMessage(msg,'*')" in html
+            and "if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;" in html
+            and "if(!viewId||!msg||!tok" not in html)
     _check("non-webview provider panels use backend provider callbacks",
            "function _buildChatProviderPanel(panel,p)" in html
            and "send.onclick=()=>providerSend(pid)" in html
@@ -1128,6 +1207,103 @@ def test_phase1_ai_editor_regressions() -> None:
             and manifest_result.get("source") == "manifest"
             and manifest_result.get("view_id") == "chatgpt.sidebarView"
             and manifest_result.get("html") == "")
+
+    dynamic_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    dynamic_api._ensure_engine()
+    dynamic_events = []
+    dynamic_api._emit = lambda event, data: dynamic_events.append((event, data))
+    dynamic_desc = ExtensionDescription.from_package_json({
+        "name": "dynamic-view",
+        "publisher": "selftest",
+        "version": "0.0.1",
+        "activationEvents": ["onView:selftest.dynamic.view"],
+        "contributes": {
+            "views": {"copilot": [{
+                "id": "selftest.dynamic.view",
+                "name": "Selftest Dynamic View",
+                "type": "webview",
+            }]},
+        },
+    }, "/tmp/selftest-dynamic-view")
+    dynamic_api._ext_host.registry.register(dynamic_desc)
+    dynamic_api._ext_host.ext_points.process(dynamic_desc)
+    dynamic_providers = {
+        p.get("id"): p for p in dynamic_api.list_chat_providers().get("providers", [])
+    }
+    dynamic_row = dynamic_providers.get("selftest.dynamic.view", {})
+    _check("manifest webview contribution dynamically creates provider tab",
+           dynamic_row.get("runtime_mode") == "extension-webview"
+           and dynamic_row.get("transport") == "extension-webview"
+           and dynamic_row.get("metadata", {}).get("dynamic_webview_provider") is True
+           and dynamic_row.get("webview_id") == "selftest.dynamic.view")
+
+    class _DynamicWebviewProvider:
+        def __init__(self, html_text):
+            self.html_text = html_text
+
+        def resolveWebviewView(self, view, context=None, token=None):
+            view.webview.html = self.html_text
+
+    dynamic_api._vscode_ns.build(dynamic_desc)["window"]["registerWebviewViewProvider"](
+        "selftest.dynamic.view", _DynamicWebviewProvider("<div>dynamic-runtime</div>"))
+    dynamic_result = dynamic_api.get_provider_webview("selftest.dynamic.view")
+    _check("runtime registerWebviewViewProvider feeds dynamic provider HTML",
+           dynamic_result.get("source") == "runtime"
+           and dynamic_result.get("view_id") == "selftest.dynamic.view"
+           and "dynamic-runtime" in dynamic_result.get("html", "")
+           and any(event == "provider_tabs_changed" for event, _ in dynamic_events))
+
+    lazy_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    lazy_api._ensure_engine()
+    lazy_desc = ExtensionDescription.from_package_json({
+        "name": "lazy-view",
+        "publisher": "selftest",
+        "version": "0.0.1",
+        "activationEvents": ["onView:selftest.lazy.view"],
+        "contributes": {
+            "views": {"copilot": [{
+                "id": "selftest.lazy.view",
+                "name": "Selftest Lazy View",
+                "type": "webview",
+            }]},
+        },
+    }, "/tmp/selftest-lazy-view")
+    lazy_api._ext_host.registry.register(lazy_desc)
+    lazy_api._ext_host.ext_points.process(lazy_desc)
+    activated_events = []
+    real_activate_event = lazy_api._ext_host.activate_event
+
+    def _activate_lazy(event):
+        activated_events.append(event)
+        if event == "onView:selftest.lazy.view":
+            lazy_api._vscode_ns.build(lazy_desc)["window"]["registerWebviewViewProvider"](
+                "selftest.lazy.view", _DynamicWebviewProvider("<div>lazy-runtime</div>"))
+            return [object()]
+        return real_activate_event(event)
+
+    lazy_api._ext_host.activate_event = _activate_lazy
+    lazy_result = lazy_api.get_provider_webview("selftest.lazy.view")
+    _check("get_provider_webview activates onView before reading runtime HTML",
+           activated_events == ["onView:selftest.lazy.view"]
+           and lazy_result.get("source") == "runtime"
+           and "lazy-runtime" in lazy_result.get("html", ""))
+
+    webview_event_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    webview_event_api._ensure_engine()
+    webview_events = []
+    webview_event_api._emit = lambda event, data: webview_events.append((event, data))
+    webview_event_api._vscode_ns.build(dynamic_desc)["window"]["registerWebviewViewProvider"](
+        "selftest.message.view", _DynamicWebviewProvider("<div>message-runtime</div>"))
+    view = webview_event_api._vscode_ns._webview_views.get("selftest.message.view")
+    posted_zero = view.webview.postMessage(0) if view is not None else False
+    message_event = next((data for event, data in webview_events if event == "webview_message"), {})
+    _check("extension webview postMessage emits raw falsy payload",
+           posted_zero is True
+           and message_event.get("view_id") == "selftest.message.view"
+           and message_event.get("message") == 0
+           and message_event.get("raw_message") == 0
+           and message_event.get("rawMessage") == 0
+           and message_event.get("data") == 0)
 
     ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
     _check("extension views contribution remains enabled for old settings",

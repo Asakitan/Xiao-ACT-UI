@@ -457,7 +457,13 @@ class _AIEditorUIBridge:
 
     def post_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the extension to the webview iframe."""
-        self._api._emit("webview_message", {"view_id": view_id, "message": message})
+        self._api._emit("webview_message", {
+            "view_id": view_id,
+            "message": message,
+            "raw_message": message,
+            "rawMessage": message,
+            "data": message,
+        })
 
     def receive_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the webview back to the extension."""
@@ -728,6 +734,7 @@ class AIEditorAPI:
         # thread until the main thread signals readiness.
         from ai_editor.extension_host import get_extension_host
         self._ext_host = get_extension_host()
+        self._node_ext_host = None  # NodeExtensionHost, created lazily in _init_extension_host
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -735,6 +742,8 @@ class AIEditorAPI:
         self._vscode_ns = VscodeNamespace(
             self._ext_host, self._engine, self._settings_getter)
         self._vscode_ns.set_ui_bridge(_AIEditorUIBridge(self))
+        self._vscode_ns.set_webview_view_change_callback(
+            self._on_webview_view_changed)
         self._ext_host.set_command_fallback_resolver(
             self._resolve_extension_command_fallback)
         self._vscode_ns_ready.set()
@@ -1089,9 +1098,20 @@ class AIEditorAPI:
         provider_id = str(provider_id or "").strip()
         if not provider_id:
             return {"html": "", "view_id": "", "available": False, "state": None}
+        self._sync_dynamic_webview_providers()
         provider = self._provider_registry.get(provider_id) if hasattr(self, "_provider_registry") else None
         fallback_id = self._provider_fallback_view_id(provider_id)
         runtime_info = self._provider_runtime_webview_info(provider_id)
+        activate_view_id = str(
+            runtime_info.get("manifest_view_id")
+            or runtime_info.get("declared_view_id")
+            or runtime_info.get("runtime_view_id")
+            or ""
+        )
+        if activate_view_id:
+            self._activate_provider_view(activate_view_id)
+            self._sync_dynamic_webview_providers()
+            runtime_info = self._provider_runtime_webview_info(provider_id)
         vscode_ns = getattr(self, "_vscode_ns", None)
         runtime_view_id = str(runtime_info.get("runtime_view_id") or "")
         if vscode_ns and runtime_view_id:
@@ -1834,6 +1854,7 @@ class AIEditorAPI:
 
     def list_chat_providers(self) -> Dict:
         self._ensure_engine()
+        self._sync_dynamic_webview_providers()
         providers = []
         base_cfg = self._engine.config if self._engine else None
         for prov in self._provider_registry.list_all():
@@ -2038,6 +2059,9 @@ class AIEditorAPI:
     # ── CLI provider controllers ──
 
     _CLI_PROVIDER_IDS = ("claude-code", "codex")
+    _COPILOT_EXTENSION_IDS = {"github.copilot", "github.copilot-chat"}
+    _CLI_WEBVIEW_EXTENSION_IDS = {"sao.cli.claude-code", "sao.cli.codex"}
+    _DYNAMIC_WEBVIEW_METADATA_KEY = "dynamic_webview_provider"
 
     @staticmethod
     def _provider_uses_native_chat(prov: Any) -> bool:
@@ -2113,36 +2137,22 @@ class AIEditorAPI:
         return [str(view_id).strip() for view_id in view_ids if str(view_id).strip()]
 
     def _provider_manifest_views(self, provider: Any) -> List[Dict[str, Any]]:
-        ext_host = getattr(self, "_ext_host", None)
-        if not ext_host:
-            return []
-        contributions = getattr(getattr(ext_host, "ext_points", None), "all_contributions", {})
-        views_by_location = contributions.get("views", {}) if isinstance(contributions, dict) else {}
-        if not isinstance(views_by_location, dict):
-            return []
-
         candidate_ids = self._provider_candidate_view_ids(provider)
         candidate_extensions = self._provider_candidate_extension_ids(provider)
         matched: List[tuple[tuple[int, int, int, str], Dict[str, Any]]] = []
-        for location, views in views_by_location.items():
-            if not isinstance(views, list):
+        for raw_view in self._all_manifest_views(webview_only=False):
+            view = dict(raw_view)
+            view_id = str(view.get("id") or "").strip()
+            extension_id = str(view.get("_extensionId") or view.get("extensionId") or "").strip()
+            id_index = candidate_ids.index(view_id) if view_id in candidate_ids else -1
+            ext_index = candidate_extensions.index(extension_id) if extension_id in candidate_extensions else -1
+            if id_index < 0 and ext_index < 0:
                 continue
-            for raw_view in views:
-                if not isinstance(raw_view, dict):
-                    continue
-                view = dict(raw_view)
-                view_id = str(view.get("id") or "").strip()
-                extension_id = str(view.get("_extensionId") or view.get("extensionId") or "").strip()
-                id_index = candidate_ids.index(view_id) if view_id in candidate_ids else -1
-                ext_index = candidate_extensions.index(extension_id) if extension_id in candidate_extensions else -1
-                if id_index < 0 and ext_index < 0:
-                    continue
-                view["_viewLocation"] = view.get("_viewLocation") or str(location)
-                if id_index >= 0:
-                    score = (0, id_index, ext_index if ext_index >= 0 else len(candidate_extensions), view_id.casefold())
-                else:
-                    score = (1, len(candidate_ids), ext_index, view_id.casefold())
-                matched.append((score, view))
+            if id_index >= 0:
+                score = (0, id_index, ext_index if ext_index >= 0 else len(candidate_extensions), view_id.casefold())
+            else:
+                score = (1, len(candidate_ids), ext_index, view_id.casefold())
+            matched.append((score, view))
 
         matched.sort(key=lambda item: item[0])
         return [view for _, view in matched]
@@ -2166,6 +2176,245 @@ class AIEditorAPI:
             if state is not None:
                 return state
         return self._webview_states.get(fallback_id)
+
+    def _on_webview_view_changed(self, event: Dict[str, Any]) -> None:
+        self._sync_dynamic_webview_providers()
+        self._refresh_provider_tabs({"source": "runtime_webview", **_as_dict(event)})
+
+    def _refresh_provider_tabs(self, change: Optional[Dict[str, Any]] = None) -> None:
+        payload = {"change": _as_dict(change)}
+        try:
+            payload["providers"] = self.list_chat_providers().get("providers", [])
+        except Exception:
+            pass
+        self._emit("chat_providers_changed", payload)
+        self._emit("provider_tabs_changed", payload)
+        self._eval_js(
+            "(function(){if(typeof renderProviderTabs==='function')"
+            "{renderProviderTabs();}})()"
+        )
+
+    def _activate_provider_view(self, view_id: str) -> bool:
+        ext_host = getattr(self, "_ext_host", None)
+        normalized = str(view_id or "").strip()
+        if not ext_host or not normalized:
+            return False
+        try:
+            activated = ext_host.activate_event(f"onView:{normalized}")
+        except Exception:
+            return False
+        if activated:
+            self._register_ext_tools()
+        return bool(activated)
+
+    def _sync_dynamic_webview_providers(self) -> bool:
+        registry = getattr(self, "_provider_registry", None)
+        if registry is None:
+            return False
+        from ai_editor.chat_providers import ChatProviderDef
+
+        desired: Dict[str, ChatProviderDef] = {}
+        for spec in self._dynamic_webview_provider_specs():
+            provider_id = str(spec.get("provider_id") or "").strip()
+            view_id = str(spec.get("view_id") or "").strip()
+            if not provider_id or not view_id:
+                continue
+            extension_id = str(spec.get("extension_id") or "").strip()
+            metadata = {
+                self._DYNAMIC_WEBVIEW_METADATA_KEY: True,
+                "view_id": view_id,
+                "webview_ids": [view_id],
+                "candidate_view_ids": [view_id],
+                "extension_id": extension_id,
+                "extension_ids": [extension_id] if extension_id else [],
+                "view_location": spec.get("location", ""),
+                "runtime_mode": "extension-webview",
+                "source": spec.get("source", "manifest"),
+            }
+            manifest_view = spec.get("manifest_view")
+            if isinstance(manifest_view, dict):
+                metadata["manifest_view"] = dict(manifest_view)
+            provider = ChatProviderDef(
+                id=provider_id,
+                name=str(spec.get("name") or view_id),
+                icon=str(spec.get("icon") or "▣"),
+                provider_type="extension-webview",
+                model="WebviewView",
+                auto_agent=False,
+                builtin=False,
+                webview_id=view_id,
+                webview_ids=[view_id],
+                extension_ids=[extension_id] if extension_id else [],
+                metadata=metadata,
+            )
+            desired[provider_id] = provider
+
+        changed = False
+        for provider_id, provider in desired.items():
+            existing = registry.get(provider_id)
+            if existing and not self._is_dynamic_webview_provider(existing):
+                continue
+            if existing is None or not self._same_dynamic_webview_provider(existing, provider):
+                changed = True
+            registry.register(provider)
+
+        for provider in list(registry.list_all()):
+            if not self._is_dynamic_webview_provider(provider):
+                continue
+            if provider.id not in desired and registry.unregister(provider.id):
+                changed = True
+                if getattr(self, "_active_provider", "chat") == provider.id:
+                    self._active_provider = "chat"
+        return changed
+
+    def _same_dynamic_webview_provider(self, left: Any, right: Any) -> bool:
+        return (
+            getattr(left, "name", "") == getattr(right, "name", "")
+            and left.candidate_webview_ids() == right.candidate_webview_ids()
+            and left.candidate_extension_ids() == right.candidate_extension_ids()
+            and _as_dict(getattr(left, "metadata", {})) == _as_dict(getattr(right, "metadata", {}))
+        )
+
+    def _is_dynamic_webview_provider(self, provider: Any) -> bool:
+        metadata = _as_dict(getattr(provider, "metadata", {}))
+        return bool(metadata.get(self._DYNAMIC_WEBVIEW_METADATA_KEY))
+
+    def _dynamic_webview_provider_specs(self) -> List[Dict[str, Any]]:
+        specs: Dict[str, Dict[str, Any]] = {}
+        for spec in self._manifest_webview_provider_specs():
+            specs.setdefault(str(spec.get("view_id") or ""), spec)
+        for spec in self._runtime_webview_provider_specs():
+            view_id = str(spec.get("view_id") or "")
+            current = specs.get(view_id, {})
+            merged = dict(current)
+            merged.update(spec)
+            if current.get("manifest_view") and "manifest_view" not in merged:
+                merged["manifest_view"] = current["manifest_view"]
+            specs[view_id] = merged
+        return list(specs.values())
+
+    def _manifest_webview_provider_specs(self) -> List[Dict[str, Any]]:
+        specs: List[Dict[str, Any]] = []
+        if "views" not in set(self._enabled_extension_contributions()):
+            return specs
+        for view in self._all_manifest_views(webview_only=True):
+            view_id = str(view.get("id") or "").strip()
+            extension_id = str(view.get("_extensionId") or "").strip()
+            if not view_id or self._is_copilot_extension_id(extension_id):
+                continue
+            if self._non_dynamic_provider_for_view_id(view_id):
+                continue
+            specs.append({
+                "provider_id": self._provider_id_for_webview_view(view_id),
+                "view_id": view_id,
+                "extension_id": extension_id,
+                "name": view.get("name") or view.get("title") or view_id,
+                "icon": self._view_icon(view),
+                "location": view.get("_viewLocation", ""),
+                "source": "manifest",
+                "manifest_view": dict(view),
+            })
+        return specs
+
+    def _runtime_webview_provider_specs(self) -> List[Dict[str, Any]]:
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not vscode_ns or not hasattr(vscode_ns, "list_webview_views"):
+            return []
+        try:
+            rows = vscode_ns.list_webview_views()
+        except Exception:
+            return []
+        specs: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            view_id = str(row.get("view_id") or "").strip()
+            extension_id = str(row.get("extension_id") or "").strip()
+            if not view_id:
+                continue
+            if self._is_copilot_extension_id(extension_id):
+                continue
+            if extension_id in self._CLI_WEBVIEW_EXTENSION_IDS:
+                continue
+            if self._non_dynamic_provider_for_view_id(view_id):
+                continue
+            specs.append({
+                "provider_id": self._provider_id_for_webview_view(view_id),
+                "view_id": view_id,
+                "extension_id": extension_id,
+                "name": row.get("title") or view_id,
+                "icon": "▣",
+                "location": "runtime",
+                "source": "runtime",
+            })
+        return specs
+
+    def _all_manifest_views(self, webview_only: bool = False) -> List[Dict[str, Any]]:
+        ext_host = getattr(self, "_ext_host", None)
+        registry = getattr(ext_host, "registry", None) if ext_host else None
+        if registry is None:
+            return []
+        result: List[Dict[str, Any]] = []
+        for ext in registry.list_all():
+            if not getattr(ext, "enabled", True) or not self._extension_allowed(ext):
+                continue
+            contributes = getattr(ext, "contributes", {}) or {}
+            views_by_location = contributes.get("views", {})
+            if not isinstance(views_by_location, dict):
+                continue
+            for location, views in views_by_location.items():
+                if not isinstance(views, list):
+                    continue
+                for raw_view in views:
+                    if not isinstance(raw_view, dict):
+                        continue
+                    view = dict(raw_view)
+                    if webview_only and not self._manifest_view_is_webview(view):
+                        continue
+                    view["_extensionId"] = getattr(ext, "id", "")
+                    view["_viewLocation"] = str(location)
+                    result.append(view)
+        return result
+
+    @staticmethod
+    def _manifest_view_is_webview(view: Dict[str, Any]) -> bool:
+        return str(view.get("type") or "").strip().lower() == "webview"
+
+    @staticmethod
+    def _view_icon(view: Dict[str, Any]) -> str:
+        icon = view.get("icon")
+        if isinstance(icon, str) and icon.strip():
+            return icon.strip()
+        return "▣"
+
+    def _provider_id_for_webview_view(self, view_id: str) -> str:
+        registry = getattr(self, "_provider_registry", None)
+        normalized = str(view_id or "").strip()
+        if not registry or not normalized:
+            return normalized
+        existing = registry.get(normalized)
+        if existing is None or self._is_dynamic_webview_provider(existing):
+            return normalized
+        return f"view:{normalized}"
+
+    def _non_dynamic_provider_for_view_id(self, view_id: str) -> str:
+        registry = getattr(self, "_provider_registry", None)
+        normalized = str(view_id or "").strip()
+        if not registry or not normalized:
+            return ""
+        for provider in registry.list_all():
+            if self._is_dynamic_webview_provider(provider):
+                continue
+            if normalized in self._provider_candidate_view_ids(provider):
+                return str(getattr(provider, "id", "") or "")
+        return ""
+
+    def _is_copilot_extension_id(self, extension_id: str) -> bool:
+        normalized = str(extension_id or "").strip().lower()
+        return (
+            normalized in self._COPILOT_EXTENSION_IDS
+            or normalized.startswith("github.copilot")
+        )
 
     # ── CLI launcher (real terminal window) ──
 
@@ -2543,18 +2792,99 @@ class AIEditorAPI:
         self._register_cli_provider_views()
 
     def _init_extension_host(self) -> None:
-        """Scan extension directories and start the host."""
+        """Scan extension directories and start the host.
+
+        After scanning, extensions with a ``main`` entry point in their
+        manifest are forwarded to a ``NodeExtensionHost`` subprocess (if
+        Node.js is available).  Extensions **without** ``main`` continue
+        through the existing Python-only activation path.
+        """
         ext_dirs = self._extension_scan_dirs()
         self._ext_host.set_policy(
             self._extension_allowed,
             set(self._enabled_extension_contributions()),
         )
         count = self._ext_host.scan(ext_dirs)
+        activated = self._ext_host.start()
         if count:
-            activated = self._ext_host.start()
             print(f"[ExtHost] {count} extensions scanned, "
                   f"{len(activated)} activated")
             self._register_ext_tools()
+
+        # --- Node.js extension host for extensions with "main" ---
+        self._try_start_node_extension_host()
+
+    def _try_start_node_extension_host(self) -> None:
+        """Start a NodeExtensionHost for extensions that declare ``main``.
+
+        Filters registered extensions, and if any have a JS entry point and
+        Node.js is available, spawns the Node subprocess and activates them.
+        Extensions without ``main`` are unaffected.
+        """
+        from ai_editor.extension_host import NodeExtensionHost, find_node_path
+
+        all_exts = self._ext_host.registry.list_all()
+        node_exts = [ext for ext in all_exts if ext.main and ext.enabled]
+        if not node_exts:
+            return
+
+        node_path = find_node_path()
+        if not node_path:
+            print("[NodeExtHost] Node.js not found on PATH; "
+                  f"{len(node_exts)} JS extension(s) will run manifest-only.")
+            return
+
+        # Locate the extension host bootstrap script
+        here = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(here, "node_ext_host.js")
+        if not os.path.isfile(script_path):
+            # Also check a sibling "runtime" directory
+            alt = os.path.join(os.path.dirname(here), "runtime",
+                               "node_ext_host.js")
+            if os.path.isfile(alt):
+                script_path = alt
+            else:
+                print("[NodeExtHost] Bootstrap script not found: "
+                      f"{script_path}; JS extensions will run manifest-only.")
+                return
+
+        # Build the UI bridge reference
+        ui_bridge = getattr(self, "_vscode_ns", None)
+        if ui_bridge is not None:
+            ui_bridge = ui_bridge._ui_bridge if hasattr(ui_bridge, "_ui_bridge") else None
+        if ui_bridge is None:
+            ui_bridge = _AIEditorUIBridge(self) if hasattr(self, "_emit") else None
+
+        host = NodeExtensionHost(
+            node_path=node_path,
+            script_path=script_path,
+            ui_bridge=ui_bridge,
+        )
+        host.set_command_service(self._ext_host.commands)
+
+        if not host.start():
+            print("[NodeExtHost] Failed to start Node subprocess.")
+            return
+
+        activated = host.activate_all(node_exts)
+        self._node_ext_host = host
+        print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
+              "sent for activation.")
+
+    def _shutdown_node_extension_host(self) -> None:
+        """Stop the Node extension host if running."""
+        host = self._node_ext_host
+        if host is not None:
+            host.stop()
+            self._node_ext_host = None
+
+    def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
+        """Forward a webview message to the Node extension host."""
+        host = self._node_ext_host
+        if host is None or not host.is_running:
+            return {"error": "Node extension host not running"}
+        ok = host.relay_webview_message(view_id, message)
+        return {"ok": ok, "view_id": view_id}
 
     # Theme CSS variable block injected into CLI provider webview HTML so
     # that extensions relying on VS Code theme tokens render correctly in
@@ -2734,6 +3064,9 @@ body {
                 auto_agent=True,
             )
             self._provider_registry.register(prov)
+        changed = self._sync_dynamic_webview_providers()
+        if changed:
+            self._refresh_provider_tabs({"source": "extension_contributions"})
         self._apply_mode_permissions()
 
     def _register_runtime_lm_tools(self, runtime_tools: Dict[str, Any],
@@ -4747,6 +5080,7 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
 
         def _on_closing():
             api.cancel()
+            api._shutdown_node_extension_host()
 
         window.events.closing += _on_closing
         window.events.closed += _on_closed
