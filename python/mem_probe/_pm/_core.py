@@ -86,7 +86,7 @@ class PageResolver:
         remaining, cur = size, addr
         while remaining > 0:
             pa = rt_io._r1_w(cr3, cur)
-            if pa is None:
+            if pa is None or pa < 0x100000 or 0xFEC00000 <= pa <= 0xFEE00000:
                 return None
             chunk = min(remaining, 0x1000 - (cur & 0xFFF))
             data = rt_io._r1_r(pa, chunk, 1)

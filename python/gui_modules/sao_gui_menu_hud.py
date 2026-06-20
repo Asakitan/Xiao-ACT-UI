@@ -131,26 +131,27 @@ class MenuHudOverlay:
             self._gpu_window = gpu_win
             self._gpu_presenter = presenter
             self._win = self  # type: ignore[assignment]  # sentinel
-            self._hwnd = 0
+            _ghwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+            self._hwnd = _ghwnd
+            if _ghwnd:
+                _ac_ok = False
+                try:
+                    from mem_probe._dc import apply as _dc_apply
+                    _ac_ok = _dc_apply(_ghwnd)
+                except Exception:
+                    pass
+                if not _ac_ok:
+                    try:
+                        _user32.SetWindowDisplayAffinity(
+                            ctypes.c_void_p(_ghwnd), 0x00000011)
+                    except Exception:
+                        pass
             self._visible = True
             return
         except Exception:
             self._gpu_window = None
             self._gpu_presenter = None
             raise
-        _ac_ok = False
-        try:
-            from mem_probe._dc import apply as _dc_apply
-            _ac_ok = _dc_apply(self._hwnd)
-        except Exception:
-            pass
-        if not _ac_ok:
-            try:
-                _user32.SetWindowDisplayAffinity(
-                    ctypes.c_void_p(self._hwnd), 0x00000011)
-            except Exception:
-                pass
-        self._visible = True
 
     def set_geometry(self, anchor_x: int, anchor_y: int,
                      content_w: int, content_h: int,
