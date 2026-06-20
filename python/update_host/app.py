@@ -494,6 +494,158 @@ def _build_cumulative_delta_manifest(
     return merged_manifest
 
 
+def _build_fullpack_plus_delta_manifest(
+    channel: str,
+    target: str,
+    current: str,
+    latest_manifest: dict,
+) -> Optional[dict]:
+    """当用户版本低于最后一个 full-package 时, 把该 fullpack + 后续
+    runtime-delta 合并成一个 zip 一次性下发, 避免客户端多轮更新."""
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    latest_ver = str(latest_manifest.get("version") or "").strip()
+    if not current or not latest_ver:
+        return None
+
+    versions = _load_versions_index(safe_ch, safe_tg)
+    if latest_ver not in versions:
+        versions.append(latest_ver)
+        versions = sorted(set(versions), key=_parse_version)
+
+    chain = [
+        v for v in versions
+        if compare_versions(v, current) > 0 and compare_versions(v, latest_ver) <= 0
+    ]
+    if not chain:
+        return None
+
+    last_fullpack_ver = ""
+    last_fullpack_manifest = None
+    for ver in chain:
+        vm = (
+            latest_manifest if ver == latest_ver
+            else _load_versioned_manifest(safe_ch, safe_tg, ver)
+        )
+        if vm and str(vm.get("package_type") or "") == "full-package":
+            last_fullpack_ver = ver
+            last_fullpack_manifest = vm
+
+    if not last_fullpack_manifest:
+        return None
+
+    tail_deltas = [
+        v for v in chain
+        if compare_versions(v, last_fullpack_ver) > 0
+    ]
+
+    if not tail_deltas:
+        return last_fullpack_manifest
+
+    tail_manifests = []
+    for ver in tail_deltas:
+        vm = (
+            latest_manifest if ver == latest_ver
+            else _load_versioned_manifest(safe_ch, safe_tg, ver)
+        )
+        if not isinstance(vm, dict):
+            return last_fullpack_manifest
+        if str(vm.get("package_type") or "") != "runtime-delta":
+            return last_fullpack_manifest
+        zip_path = _manifest_zip_path(safe_ch, safe_tg, vm)
+        if not os.path.isfile(zip_path):
+            return last_fullpack_manifest
+        tail_manifests.append(vm)
+
+    fp_zip = _manifest_zip_path(safe_ch, safe_tg, last_fullpack_manifest)
+    if not os.path.isfile(fp_zip):
+        return last_fullpack_manifest
+
+    merged_force_update = bool(last_fullpack_manifest.get("force_update"))
+    merged_min_version = str(last_fullpack_manifest.get("minimum_version") or "").strip()
+    for vm in tail_manifests:
+        if bool(vm.get("force_update")):
+            merged_force_update = True
+        mv = str(vm.get("minimum_version") or "").strip()
+        if mv and ((not merged_min_version) or compare_versions(mv, merged_min_version) > 0):
+            merged_min_version = mv
+
+    all_manifests = [last_fullpack_manifest] + tail_manifests
+    chain_sig = hashlib.sha256(
+        json.dumps(
+            [
+                {
+                    "version": str(item.get("version") or ""),
+                    "sha256": str(item.get("sha256") or ""),
+                    "size": int(item.get("size") or 0),
+                    "package_type": str(item.get("package_type") or ""),
+                }
+                for item in all_manifests
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+
+    merged_dir = os.path.join(_release_target_dir(safe_ch, safe_tg), "_merged")
+    os.makedirs(merged_dir, exist_ok=True)
+    merged_name = (
+        f"update-{_safe_version_tag(last_fullpack_ver)}-to-"
+        f"{_safe_version_tag(latest_ver)}-full-package-{chain_sig}.zip"
+    )
+    merged_path = os.path.join(merged_dir, merged_name)
+
+    if not os.path.isfile(merged_path):
+        tmp_path = merged_path + ".tmp"
+        entries: dict[str, bytes] = {}
+        try:
+            with zipfile.ZipFile(fp_zip, "r") as src:
+                for info in src.infolist():
+                    if info.is_dir():
+                        continue
+                    entries[info.filename] = src.read(info.filename)
+
+            for vm in tail_manifests:
+                zip_path = _manifest_zip_path(safe_ch, safe_tg, vm)
+                with zipfile.ZipFile(zip_path, "r") as src:
+                    for info in src.infolist():
+                        if info.is_dir():
+                            continue
+                        entries[info.filename] = src.read(info.filename)
+
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
+                for arcname in sorted(entries):
+                    dst.writestr(arcname, entries[arcname])
+            os.replace(tmp_path, merged_path)
+        except Exception as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            try:
+                print(f"[update_host] fullpack+delta build failed: {exc}")
+            except Exception:
+                pass
+            return last_fullpack_manifest
+
+    digest, size = _sha256_file(merged_path)
+    merged_manifest = dict(latest_manifest)
+    merged_manifest.update({
+        "version": latest_ver,
+        "minimum_version": merged_min_version,
+        "force_update": merged_force_update,
+        "package_type": "full-package",
+        "target": safe_tg,
+        "channel": safe_ch,
+        "download_url": f"/downloads/{safe_ch}/{safe_tg}/_merged/{merged_name}",
+        "sha256": digest,
+        "size": size,
+        "merged_from": current,
+        "merged_versions": [last_fullpack_ver] + tail_deltas,
+    })
+    return merged_manifest
+
+
 def _empty_manifest_response(channel: str, target: str, current: Optional[str] = None) -> dict:
     safe_channel, safe_target = _safe_channel_target(channel, target)
     return {
@@ -545,7 +697,7 @@ def latest(
       2. current >= latest.version → available=false (已是最新)
       3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
       4. 尝试累积 delta (全链 runtime-delta 时合并成一个 zip)
-      5. 链中存在 full-package → 返回最后一个 fullpack (它覆盖之前所有版本)
+      5. 链中存在 full-package → 合并最后一个 fullpack + 后续 delta 为一个 zip
       6. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
       7. 找不到 / 文件缺失 → 回退返回最新 manifest
     """
@@ -589,27 +741,13 @@ def latest(
         return _finalize(cumulative_manifest)
 
     # (4) Fullpack gate: if any full-package version sits between current
-    #     and latest, the client MUST install it before runtime-deltas that
-    #     follow — a fullpack is a complete client replacement and cannot be
-    #     skipped.  Jump to the LAST fullpack in the chain (it supersedes
-    #     all prior versions including earlier fullpacks).
-    versions = _load_versions_index(safe_ch, safe_tg)
-    chain = [
-        v for v in versions
-        if compare_versions(v, current_ver) > 0
-        and compare_versions(v, latest_ver) <= 0
-    ]
-    last_fullpack_manifest = None
-    for ver in chain:
-        vm = (
-            latest_manifest
-            if ver == latest_ver
-            else _load_versioned_manifest(safe_ch, safe_tg, ver)
-        )
-        if vm and str(vm.get("package_type") or "") == "full-package":
-            last_fullpack_manifest = vm
-    if last_fullpack_manifest:
-        return _finalize(last_fullpack_manifest)
+    #     and latest, merge the LAST fullpack + subsequent runtime-deltas
+    #     into one zip so the client updates in a single round.
+    fp_merged = _build_fullpack_plus_delta_manifest(
+        safe_ch, safe_tg, current_ver, latest_manifest,
+    )
+    if fp_merged:
+        return _finalize(fp_merged)
 
     # (5) Sequential: find next version after current
     next_ver = _find_next_version(versions, current_ver)
