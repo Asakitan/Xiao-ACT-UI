@@ -65,9 +65,26 @@ def _get_working_set_mb(pid: int) -> float:
     return 0.0
 
 
-def list_processes() -> List[dict]:
+def _list_processes_fallback() -> Optional[List[dict]]:
+    """Enumerate via low-level walk (Engine A)."""
+    try:
+        from mem_probe._pm._core import PageResolver
+        entries = PageResolver().enumerate_processes()
+        if not entries:
+            return None
+        seen: dict[int, dict] = {}
+        for img, pid in entries:
+            if pid > 0 and img and pid not in seen:
+                seen[pid] = {"name": img, "pid": pid}
+        return sorted(seen.values(), key=lambda x: x["name"].lower())
+    except Exception:
+        return None
+
+
+def _list_processes_toolhelp() -> List[dict]:
+    """Enumerate via CreateToolhelp32Snapshot (fallback)."""
     from mem_probe.process import _iter_process_entries_wide
-    seen = {}
+    seen: dict[int, dict] = {}
     for exe_name, pid in _iter_process_entries_wide():
         name = os.path.basename(str(exe_name or ""))
         if not name or pid <= 0:
@@ -75,6 +92,10 @@ def list_processes() -> List[dict]:
         if pid not in seen:
             seen[pid] = {"name": name, "pid": pid}
     return sorted(seen.values(), key=lambda x: x["name"].lower())
+
+
+def list_processes() -> List[dict]:
+    return _list_processes_fallback() or _list_processes_toolhelp()
 
 
 MODULE_NONE = "none"
@@ -273,6 +294,9 @@ class ProcessSelectorPanel:
                 pass
             if tier:
                 parts.append(f"Tier:{tier}")
+            src = getattr(self, '_enum_source', '')
+            if src:
+                parts.append(f"Enum:{src}")
             if self._attach_mode:
                 parts.append(self._attach_mode)
             text = " · ".join(parts) if parts else "No engine"
@@ -317,17 +341,23 @@ class ProcessSelectorPanel:
     # ── Process list ──
     def _do_refresh(self):
         def _bg():
-            procs = list_processes()
+            stealth = _list_processes_fallback()
+            if stealth is not None:
+                procs, src = stealth, "EngA"
+            else:
+                procs, src = _list_processes_toolhelp(), "Toolhelp"
             if self._exists():
-                self.root.after(0, lambda: self._set_processes(procs))
+                self.root.after(0, lambda: self._set_processes(procs, src))
 
         threading.Thread(target=_bg, daemon=True, name="proc-enum").start()
 
-    def _set_processes(self, procs: List[dict]):
+    def _set_processes(self, procs: List[dict], source: str = ""):
         if not self._exists():
             return
         self._processes = procs
+        self._enum_source = source
         self._apply_filter()
+        self._update_mode_display()
 
     def _apply_filter(self):
         self._filter_after_id = None

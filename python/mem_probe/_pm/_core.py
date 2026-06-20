@@ -55,6 +55,43 @@ class PageResolver:
                 break
         return None
 
+    # -- enumerate all processes via EPROCESS walk -----------------------
+    def enumerate_processes(self) -> List[Tuple[str, int]]:
+        """Walk PsActiveProcessHead, return [(image_name, pid), ...].
+
+        Zero handles — pure physical memory reads.
+        """
+        if not rt_io.ensure_loaded(rt_io.ENGINE_READONLY):
+            return []
+        if not rt_io._resolve_ep_offsets():
+            return []
+        off_pid, off_apl = rt_io._OFF_PID, rt_io._OFF_APL
+        off_name = rt_io._OFF_NAME
+        if not (off_pid and off_apl and off_name):
+            return []
+        ps_ptr = rt_io._r1_fp()
+        if not ps_ptr:
+            return []
+        system_ep = _kv8(ps_ptr)
+        if not system_ep:
+            return []
+        result: List[Tuple[str, int]] = []
+        flink = _kv8(system_ep + off_apl)
+        visited: set[int] = set()
+        while flink and flink not in visited:
+            visited.add(flink)
+            ep = flink - off_apl
+            raw = _kvb(ep + off_name, 15)
+            if raw:
+                img = raw.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                pid = _kv4(ep + off_pid)
+                if img and pid and pid > 0:
+                    result.append((img, pid))
+            flink = _kv8(flink)
+            if len(visited) > 4000:
+                break
+        return result
+
     # -- 2. read_memory (cr3 page-walk, handles page boundaries) ---------
     def read_memory(self, cr3: int, addr: int, size: int) -> Optional[bytes]:
         if size <= 0:
