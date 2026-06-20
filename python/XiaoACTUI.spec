@@ -130,6 +130,11 @@ a = Analysis(
         ('assets', 'assets'),
         # ACT 插件树 — 用 collect_plugins() 排除开发产物 (il2cpp/out 1.8GB+)
         *collect_plugins(),
+        # AI Editor Node.js extension host (JS file, not collected by collect_submodules)
+        ('ai_editor/node_ext_host.js', 'ai_editor'),
+        # Bundled Node.js runtime (single binary, optional — skip if not present)
+        *([('runtime/node/node.exe', 'runtime/node')]
+          if os.path.isfile(os.path.join(HERE, 'runtime', 'node', 'node.exe')) else []),
         # 图标
         ('icon.ico', '.'),
         # backend data (local only, skip if absent)
