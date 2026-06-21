@@ -361,6 +361,10 @@ class SAOPlayerGUIFloatHandlersMixin:
         """Fail-safe: show the GPU trigger if startup animation stalls."""
         if getattr(self, '_destroyed', False):
             return
+        nervgear_on = bool(getattr(self, '_get_setting', lambda *a: True)('nervgear_mode', True))
+        if not nervgear_on:
+            self._sync_float_button_geometry(show=False)
+            return
         btn = getattr(self, '_float_gpu_button', None)
         if btn is None or getattr(btn, '_visible', False):
             return

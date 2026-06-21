@@ -504,6 +504,7 @@ class SAOPlayerGUIMenuMixin:
         menu = getattr(self, '_sao_menu', None)
         if menu is not None:
             menu.cascade_mode = not new_val
+        self._sync_float_button_geometry(show=new_val)
         self._refresh_menu_if_open(force=True)
         tag = 'ON' if new_val else 'OFF'
         self._show_entity_alert('NERVGEAR', f'NervGear Mode: {tag}', display_time=2.5)
@@ -594,8 +595,7 @@ class SAOPlayerGUIMenuMixin:
                 play_sound('menu_open')
             except Exception:
                 pass
-            if self._is_nervgear_mode():
-                self._play_motion_blur(closing=False)
+            self._play_motion_blur(closing=False)
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             try:
                 self._sao_menu.open()
@@ -712,14 +712,13 @@ class SAOPlayerGUIMenuMixin:
         self._sao_menu_close_pending = False
 
     def _on_sao_menu_open(self):
-        """SAO 菜单打开时 — 停止呼吸, NervGear模式启动持久鱼眼"""
+        """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
         self._stop_float_breath()
         self._lift_loop_active = False
-        if self._is_nervgear_mode():
-            try:
-                self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
-            except Exception:
-                self._start_fisheye_with_retry(retries=12, delay=100)
+        try:
+            self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
+        except Exception:
+            self._start_fisheye_with_retry(retries=12, delay=100)
         self._notify_plugin_menu_surfaces('on_open')
         try:
             self.root.after(90, self._restore_entity_menu_state)

@@ -74,6 +74,10 @@ class SAOPlayerGUIFloatChromeMixin:
                 anchor.geometry(f'{w}x{h}+{int(gx)}+{int(gy)}')
         except Exception:
             pass
+        if show is True:
+            nervgear_on = bool(getattr(self, '_get_setting', lambda *a: True)('nervgear_mode', True))
+            if not nervgear_on:
+                show = False
         try:
             if show is True:
                 gpu_btn.deiconify()
