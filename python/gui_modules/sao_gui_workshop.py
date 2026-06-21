@@ -875,6 +875,7 @@ class WorkshopPanel:
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _on_loaded(self, plugins: list, total: int):
+        self._loading = False
         self._plugins = list(plugins)
         self._total = total
         if self._status_dot is not None:

@@ -596,6 +596,12 @@ class SAOPlayerGUIMenuMixin:
             except Exception:
                 pass
             self._play_motion_blur(closing=False)
+            try:
+                wp = getattr(self, '_workshop_panel', None)
+                if wp is not None and wp.is_visible():
+                    wp.hide()
+            except Exception:
+                pass
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             try:
                 self._sao_menu.open()
