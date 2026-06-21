@@ -7,7 +7,6 @@ framebuffer; DWM presents the alpha-composited result.
 
 Window behavior:
   - Random class name from normal-looking Windows pool
-
   - Click-through via WM_NCHITTEST → HTTRANSPARENT (per-pixel)
   - No-activate via WM_MOUSEACTIVATE → MA_NOACTIVATE
   - Transparency via DWM glass (no WS_EX_LAYERED)

@@ -675,7 +675,9 @@ class UnifiedOverlay:
             self._ready.set()
             print('[Compositor] running', flush=True)
             try:
-                self._host.set_capture_mode(True)
+                from config import get_config_value
+                if get_config_value('streaming_mode', False):
+                    self._host.set_capture_mode(True)
             except Exception:
                 pass
         except Exception as exc:
