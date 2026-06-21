@@ -237,6 +237,25 @@ if sys.platform == 'win32':
     _user32.ShowWindow.restype = wintypes.BOOL
     _user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 
+    _dwmapi = ctypes.WinDLL('dwmapi', use_last_error=True)
+    _gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
+
+    class _MARGINS(ctypes.Structure):
+        _fields_ = [
+            ('cxLeftWidth', ctypes.c_int),
+            ('cxRightWidth', ctypes.c_int),
+            ('cyTopHeight', ctypes.c_int),
+            ('cyBottomHeight', ctypes.c_int),
+        ]
+
+    class _DWM_BLURBEHIND(ctypes.Structure):
+        _fields_ = [
+            ('dwFlags', wintypes.DWORD),
+            ('fEnable', wintypes.BOOL),
+            ('hRgnBlur', wintypes.HANDLE),
+            ('fTransitionOnMaximized', wintypes.BOOL),
+        ]
+
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
@@ -269,6 +288,37 @@ def _apply_interactive(hwnd: int) -> None:
     _user32.SetWindowPos(
         hwnd, HWND_TOPMOST, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+
+def _apply_dwm_transparency(hwnd: int) -> None:
+    """Enable DWM per-pixel alpha for GLFW overlay windows.
+
+    GLFW TRANSPARENT_FRAMEBUFFER only calls DwmExtendFrameIntoClientArea.
+    AMD and Intel iGPU drivers additionally require DwmEnableBlurBehindWindow
+    with a full-window region — without it the framebuffer renders as opaque
+    black.  NVIDIA tolerates the missing call, so the bug only surfaces on
+    AMD/Intel.  We call both unconditionally (no vendor branching) since
+    the calls are harmless on NVIDIA and required on the others.
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        margins = _MARGINS(-1, -1, -1, -1)
+        _dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+    except Exception:
+        pass
+    try:
+        _DWM_BB_ENABLE = 0x01
+        _DWM_BB_BLURREGION = 0x02
+        bb = _DWM_BLURBEHIND()
+        bb.dwFlags = _DWM_BB_ENABLE | _DWM_BB_BLURREGION
+        bb.fEnable = True
+        bb.hRgnBlur = _gdi32.CreateRectRgn(0, 0, -1, -1)
+        _dwmapi.DwmEnableBlurBehindWindow(hwnd, ctypes.byref(bb))
+        if bb.hRgnBlur:
+            _gdi32.DeleteObject(bb.hRgnBlur)
+    except Exception:
+        pass
 
 
 _overlay_creation_lock = threading.Lock()
@@ -1014,6 +1064,8 @@ class GpuOverlayWindow:
         if sys.platform == 'win32':
             try:
                 self._hwnd = int(glfw.get_win32_window(win) or 0)  # type: ignore[union-attr]
+                if self._hwnd:
+                    _apply_dwm_transparency(self._hwnd)
                 if self._click_through and self._hwnd:
                     _apply_click_through(self._hwnd)
                 elif self._hwnd:
