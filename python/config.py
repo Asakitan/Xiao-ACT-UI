@@ -11,7 +11,9 @@ from typing import Any, Dict, Optional
 
 _is_frozen = getattr(sys, "frozen", False)
 if not _is_frozen:
-    _is_frozen = getattr(sys.modules.get(__name__), '__compiled__', False)
+    _is_frozen = not os.path.isfile(os.path.abspath(__file__))
+if _is_frozen:
+    sys.frozen = True
 if _is_frozen:
     _exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     _meipass = getattr(sys, '_MEIPASS', None)
@@ -337,6 +339,19 @@ try:
 except Exception:
     pass
 
+def get_main_executable() -> str:
+    """Return the path to the main application EXE.
+
+    Nuitka sets sys.executable to python.exe, not the compiled binary.
+    """
+    exe = sys.executable
+    if _is_frozen and os.path.basename(exe).lower() == 'python.exe':
+        candidate = os.path.join(os.path.dirname(exe), 'XiaoACTUI.exe')
+        if os.path.isfile(candidate):
+            return candidate
+    return exe
+
+
 # 远程更新可写覆盖层 (可选, delta 直接写到 BASE_DIR 同名子目录, 这里仅用于 staging/backup/state)
 RUNTIME_DIR = BASE_DIR
 RUNTIME_PY_DIR = os.path.join(BASE_DIR, "runtime")           # 我们的 .py 与 Python DLL 同处 runtime/
@@ -569,9 +584,7 @@ def select_hotkey_match(candidates, pressed_vks, mods_down=None):
 
 
 def _get_config_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(__file__)
+    return BASE_DIR
 
 
 CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")

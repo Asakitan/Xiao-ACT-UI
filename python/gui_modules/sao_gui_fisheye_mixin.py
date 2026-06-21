@@ -390,17 +390,6 @@ class SAOPlayerGUIFisheyeMixin:
 
     @_probe.decorate('ui.fisheye.start')
     def _start_fisheye_overlay(self):
-        """
-        SAO 菜单开启期间的持久鱼眼叠加层 (GPU 渲染).
-
-        架构 (v2.3.x):
-          • 后台 _worker 线程: 截屏 + GPU/numpy 畸变 + HUD合成 → BGRA bytes
-          • GpuOverlayWindow + BgraPresenter: GLFW pump 60fps 直绘
-          • Fade: 通过 BgraPresenter.set_alpha 在着色器侧实现, 不再
-            走 SetLayeredWindowAttributes 的逐帧 GDI 调用
-          • 相比旧 Tk Canvas + PhotoImage 路径: 主线程 CPU 占用大幅
-            下降 (无每帧 ImageTk.PhotoImage 构造 / Canvas 更新)
-        """
         if self._fisheye_close_suppressed():
             return
         self._stop_fisheye_overlay()
@@ -1108,6 +1097,10 @@ class SAOPlayerGUIFisheyeMixin:
         def _worker():
             """后台线程: 全部重活在此, 主线程仅 set_frame/set_alpha."""
             import time as _time
+            try:
+                ctypes.windll.ole32.CoInitializeEx(0, 0)
+            except Exception:
+                pass
             # WGL driver serialization: this worker owns a private moderngl
             # standalone context. Without this lock its WGL ctypes calls
             # (texture upload, framebuffer use, clear, render, readback)
@@ -1178,27 +1171,17 @@ class SAOPlayerGUIFisheyeMixin:
                 _cap_source = 'static'
 
             # ── 优先显示器快速截屏 (DXGI), fallback ImageGrab ──
-            if _cap_fn is None and capture_monitor_bgr_for_point is not None:
-                def _cap_dxgi():
-                    px = sw // 2
-                    py = sh // 2
-                    frame = capture_monitor_bgr_for_point(
-                        px, py, timeout_ms=16, max_age_s=0.2)
-                    if frame is None or frame.size == 0:
-                        return None
-                    return _bgr_to_rgb_payload(frame)
-                _cap_fn = _cap_dxgi
-                _cap_source = 'dxgi_monitor'
+            # DXGI via windows_capture pyo3 不可靠(Nuitka 下 COM/线程问题),
+            # 直接用 mss (同样走 DXGI Desktop Duplication, 纯 ctypes 实现)。
             try:
-                if _cap_fn is None:
-                    import mss as _mss_mod
-                    _sct = _mss_mod.mss()
-                    _mon = {"top": 0, "left": 0, "width": sw, "height": sh}
-                    def _cap_mss():
-                        s = _sct.grab(_mon)
-                        return Image.frombytes('RGB', s.size, s.rgb)
-                    _cap_fn = _cap_mss
-                    _cap_source = 'mss'
+                import mss as _mss_mod
+                _sct = _mss_mod.mss()
+                _primary = _sct.monitors[1] if len(_sct.monitors) > 1 else _sct.monitors[0]
+                def _cap_mss():
+                    s = _sct.grab(_primary)
+                    return Image.frombytes('RGB', s.size, s.rgb)
+                _cap_fn = _cap_mss
+                _cap_source = 'mss'
             except Exception:
                 pass
             if _cap_fn is None:

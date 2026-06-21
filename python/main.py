@@ -58,6 +58,18 @@ def _early_dpi_aware():
 
 _early_dpi_aware()
 
+# Nuitka: redirect all output to log file (no console window)
+_is_compiled = not os.path.isfile(os.path.abspath(__file__))
+if _is_compiled:
+    sys.frozen = True
+    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), '_nuitka.log')
+    try:
+        _log_f = open(_log_path, 'w', encoding='utf-8', buffering=1)
+        sys.stdout = _log_f
+        sys.stderr = _log_f
+    except Exception:
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -76,7 +88,9 @@ def _bootstrap_runtime_overrides():
     runtime/update.exe 提升到顶层 (旧 update.exe 通过嵌套路径绕过 _collect_entries)。
     """
     try:
-        _frozen = getattr(sys, 'frozen', False) or hasattr(sys.modules.get('__main__'), '__compiled__')
+        _frozen = getattr(sys, 'frozen', False)
+        if not _frozen:
+            _frozen = 'python' not in os.path.basename(sys.executable).lower()
         if _frozen:
             exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         else:
