@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 router = APIRouter(prefix="/api/workshop", tags=["workshop"])
 
@@ -520,3 +520,184 @@ async def update_plugin_meta(request: Request, plugin_id: str):
     _save_json(meta_path, meta)
     _upsert_catalog(safe, meta)
     return JSONResponse({"ok": True, "plugin": meta})
+
+
+# ── Admin web panel ──────────────────────────────────────────────
+
+_ADMIN_HTML = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><title>Workshop Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#1a1c22;color:#e8e8ec;padding:24px;max-width:1100px;margin:0 auto}
+h1{font-size:20px;color:#dea620;margin-bottom:4px}
+.sub{font-size:12px;color:#8a8d96;margin-bottom:20px}
+.key-row{display:flex;gap:8px;margin-bottom:20px;align-items:center}
+.key-row input{flex:1;max-width:400px;padding:6px 12px;border-radius:6px;border:1px solid #383c46;background:#282b33;color:#e8e8ec;font-size:13px}
+.key-row button{padding:6px 16px;border-radius:6px;border:none;background:#dea620;color:#1a1c22;font-weight:600;cursor:pointer;font-size:13px}
+.key-row button:hover{filter:brightness(1.1)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 10px;color:#8a8d96;border-bottom:1px solid #383c46;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+td{padding:8px 10px;border-bottom:1px solid #282b33}
+tr:hover td{background:#22252c}
+.badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600}
+.badge-free{background:#1a3020;color:#4ae68a}
+.badge-paid{background:#3a2010;color:#ffc040}
+.actions button{padding:3px 10px;border-radius:6px;border:1px solid #383c46;background:#282b33;color:#e8e8ec;cursor:pointer;font-size:11px;margin-right:4px}
+.actions button:hover{border-color:#68e4ff;color:#68e4ff}
+.actions button.del{color:#ff707a}
+.actions button.del:hover{border-color:#ff707a;background:#3a1a1a}
+.empty{color:#8a8d96;text-align:center;padding:40px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#282b33;color:#e8e8ec;padding:8px 24px;border-radius:16px;border:1px solid #68e4ff;font-size:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999}
+.toast.show{opacity:1}
+.edit-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
+.edit-modal.active{display:flex}
+.edit-box{background:#22252c;border:1px solid #383c46;border-radius:10px;padding:20px;width:500px;max-height:80vh;overflow-y:auto}
+.edit-box h2{font-size:16px;color:#dea620;margin-bottom:12px}
+.edit-box label{display:block;font-size:11px;color:#8a8d96;margin-bottom:2px;margin-top:8px}
+.edit-box input,.edit-box textarea,.edit-box select{width:100%;padding:6px 10px;border-radius:6px;border:1px solid #383c46;background:#282b33;color:#e8e8ec;font-size:12px;font-family:inherit}
+.edit-box textarea{min-height:60px;resize:vertical}
+.edit-box .btn-row{margin-top:14px;display:flex;gap:8px;justify-content:flex-end}
+.edit-box .btn-row button{padding:6px 18px;border-radius:8px;border:none;cursor:pointer;font-size:12px;font-weight:600}
+.edit-box .btn-save{background:#dea620;color:#1a1c22}
+.edit-box .btn-cancel{background:#383c46;color:#e8e8ec}
+</style>
+</head>
+<body>
+<h1>&#9670; Creative Workshop Admin</h1>
+<div class="sub">Manage published plugins — edit metadata, delete versions, view stats.</div>
+
+<div class="key-row">
+  <input type="password" id="api-key" placeholder="API Key" />
+  <button onclick="loadPlugins()">Load</button>
+</div>
+
+<table>
+<thead><tr><th>Plugin</th><th>Author</th><th>Version</th><th>Access</th><th>Downloads</th><th>Updated</th><th>Actions</th></tr></thead>
+<tbody id="tbody"><tr><td colspan="7" class="empty">Enter API key and click Load</td></tr></tbody>
+</table>
+
+<div class="edit-modal" id="edit-modal">
+<div class="edit-box">
+  <h2>Edit Plugin</h2>
+  <input type="hidden" id="ed-id"/>
+  <label>Name</label><input id="ed-name"/>
+  <label>Author</label><input id="ed-author"/>
+  <label>Description</label><input id="ed-desc"/>
+  <label>Long Description</label><textarea id="ed-long"></textarea>
+  <label>Games (comma separated)</label><input id="ed-games"/>
+  <label>Tags (comma separated)</label><input id="ed-tags"/>
+  <label>Access Level</label>
+  <select id="ed-access"><option value="free">Free</option><option value="paid">Paid (Premium)</option></select>
+  <div class="btn-row">
+    <button class="btn-cancel" onclick="closeEdit()">Cancel</button>
+    <button class="btn-save" onclick="saveEdit()">Save</button>
+  </div>
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var BASE = location.origin;
+function key() { return document.getElementById('api-key').value.trim(); }
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { 'X-API-Key': key(), 'Accept': 'application/json' } };
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  return fetch(BASE + path, opts).then(function(r) { return r.json(); });
+}
+
+function toast(msg) {
+  var t = document.getElementById('toast'); t.textContent = msg;
+  t.className = 'toast show'; setTimeout(function() { t.className = 'toast'; }, 3000);
+}
+
+function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function loadPlugins() {
+  if (!key()) { toast('Please enter API key'); return; }
+  api('GET', '/api/workshop/manage').then(function(r) {
+    if (!r.ok) { toast('Error: ' + (r.detail || 'unauthorized')); return; }
+    renderTable(r.plugins || []);
+  }).catch(function(e) { toast('Error: ' + e); });
+}
+
+function renderTable(plugins) {
+  var tb = document.getElementById('tbody');
+  if (!plugins.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">No plugins published</td></tr>'; return; }
+  var html = '';
+  for (var i = 0; i < plugins.length; i++) {
+    var p = plugins[i];
+    var acc = p.access_level === 'paid'
+      ? '<span class="badge badge-paid">PAID</span>'
+      : '<span class="badge badge-free">FREE</span>';
+    var vers = (p.versions || []).join(', ') || p.version || '?';
+    html += '<tr>' +
+      '<td><strong>' + esc(p.name || p.plugin_id) + '</strong><br><span style="color:#8a8d96;font-size:11px">' + esc(p.plugin_id) + '</span></td>' +
+      '<td>' + esc(p.author) + '</td>' +
+      '<td>' + esc(vers) + '</td>' +
+      '<td>' + acc + '</td>' +
+      '<td>' + (p.download_count || 0) + '</td>' +
+      '<td style="font-size:11px">' + esc((p.updated_at || '').split('T')[0]) + '</td>' +
+      '<td class="actions">' +
+        '<button onclick="openEdit(\'' + esc(p.plugin_id) + '\')">Edit</button>' +
+        '<button class="del" onclick="deletePlugin(\'' + esc(p.plugin_id) + '\')">Delete</button>' +
+      '</td></tr>';
+  }
+  tb.innerHTML = html;
+}
+
+function deletePlugin(id) {
+  if (!confirm('Delete plugin ' + id + '? This cannot be undone.')) return;
+  api('DELETE', '/api/workshop/plugin/' + encodeURIComponent(id)).then(function(r) {
+    toast(r.ok ? 'Deleted' : ('Error: ' + (r.detail || '')));
+    loadPlugins();
+  }).catch(function(e) { toast('Error: ' + e); });
+}
+
+var _editData = {};
+function openEdit(id) {
+  api('GET', '/api/workshop/detail/' + encodeURIComponent(id)).then(function(r) {
+    if (!r.ok) { toast('Error loading plugin'); return; }
+    var p = r.plugin;
+    _editData = p;
+    document.getElementById('ed-id').value = p.plugin_id;
+    document.getElementById('ed-name').value = p.name || '';
+    document.getElementById('ed-author').value = p.author || '';
+    document.getElementById('ed-desc').value = p.description || '';
+    document.getElementById('ed-long').value = p.long_description || '';
+    document.getElementById('ed-games').value = (p.game_ids || []).join(', ');
+    document.getElementById('ed-tags').value = (p.tags || []).join(', ');
+    document.getElementById('ed-access').value = p.access_level || 'free';
+    document.getElementById('edit-modal').className = 'edit-modal active';
+  });
+}
+
+function closeEdit() { document.getElementById('edit-modal').className = 'edit-modal'; }
+
+function saveEdit() {
+  var id = document.getElementById('ed-id').value;
+  var body = {
+    name: document.getElementById('ed-name').value,
+    author: document.getElementById('ed-author').value,
+    description: document.getElementById('ed-desc').value,
+    long_description: document.getElementById('ed-long').value,
+    game_ids: document.getElementById('ed-games').value.split(',').map(function(s){return s.trim();}).filter(Boolean),
+    tags: document.getElementById('ed-tags').value.split(',').map(function(s){return s.trim();}).filter(Boolean),
+    access_level: document.getElementById('ed-access').value,
+  };
+  api('PATCH', '/api/workshop/plugin/' + encodeURIComponent(id), body).then(function(r) {
+    if (r.ok) { toast('Saved'); closeEdit(); loadPlugins(); }
+    else toast('Error: ' + (r.detail || ''));
+  }).catch(function(e) { toast('Error: ' + e); });
+}
+</script>
+</body>
+</html>"""
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    return HTMLResponse(_ADMIN_HTML)
