@@ -10,25 +10,30 @@ import threading
 from typing import Any, Dict, Optional
 
 if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(sys.executable)
-    # PyInstaller: _MEIPASS = contents_directory ('runtime')
-    # Nuitka: no _MEIPASS, everything is in EXE directory (flat layout)
+    _exe_dir = os.path.dirname(sys.executable)
     _meipass = getattr(sys, '_MEIPASS', None)
     if _meipass:
+        BASE_DIR = os.path.dirname(_meipass)
         BUNDLE_DIR = _meipass
+    elif os.path.basename(_exe_dir).lower() == 'runtime':
+        BASE_DIR = os.path.dirname(_exe_dir)
+        BUNDLE_DIR = _exe_dir
     else:
-        _rt = os.path.join(BASE_DIR, 'runtime')
-        BUNDLE_DIR = _rt if os.path.isdir(_rt) else BASE_DIR
+        BASE_DIR = _exe_dir
+        BUNDLE_DIR = _exe_dir
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# onedir 下 sys.path 只含 runtime/, 但 build_release.bat 把
-#   proto/ assets/ web/ 提升到 BASE_DIR (exe 顶层). 在 config 被任何模块
-#   import 时立即把 BASE_DIR 加入 sys.path 头, 这是最早的修复点。
 try:
     if BASE_DIR and BASE_DIR not in sys.path:
         sys.path.insert(0, BASE_DIR)
+    _rt_dir = os.path.join(BASE_DIR, 'runtime')
+    if os.path.isdir(_rt_dir):
+        if _rt_dir not in sys.path:
+            sys.path.insert(0, _rt_dir)
+        if hasattr(os, 'add_dll_directory'):
+            os.add_dll_directory(_rt_dir)
 except Exception:
     pass
 
