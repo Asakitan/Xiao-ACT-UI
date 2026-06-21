@@ -671,10 +671,13 @@ class UnifiedOverlay:
             print('[Compositor] init GL...', flush=True)
             self._init_gl()
             print('[Compositor] GL ready, showing window', flush=True)
-            self._host.set_capture_mode(True)
             self._host.show()
             self._ready.set()
             print('[Compositor] running', flush=True)
+            try:
+                self._host.set_capture_mode(True)
+            except Exception:
+                pass
         except Exception as exc:
             import traceback
             print(f'[Compositor] FATAL init error: {exc}', flush=True)

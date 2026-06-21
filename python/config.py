@@ -9,8 +9,11 @@ import tempfile
 import threading
 from typing import Any, Dict, Optional
 
-if getattr(sys, "frozen", False):
-    _exe_dir = os.path.dirname(sys.executable)
+_is_frozen = getattr(sys, "frozen", False)
+if not _is_frozen:
+    _is_frozen = getattr(sys.modules.get(__name__), '__compiled__', False)
+if _is_frozen:
+    _exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     _meipass = getattr(sys, '_MEIPASS', None)
     if _meipass:
         BASE_DIR = os.path.dirname(_meipass)

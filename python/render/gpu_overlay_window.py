@@ -749,18 +749,16 @@ def prestart_unified_overlay(root: Any = None) -> None:
         return
     import threading
     def _init():
+        global _UNIFIED_OVERLAY_MODE
         try:
             uo = _get_unified_overlay(root)
-            ok = uo.wait_ready(timeout=10.0)
-            if ok:
-                print('[Overlay] compositor ready', flush=True)
-            else:
-                print('[Overlay] WARNING: compositor not ready after 10s',
-                      flush=True)
+            if not uo.wait_ready(timeout=10.0):
+                raise RuntimeError('compositor did not become ready in 10s')
+            print('[Overlay] compositor ready', flush=True)
         except Exception as exc:
-            import traceback
-            print(f'[Overlay] compositor init error: {exc}', flush=True)
-            traceback.print_exc()
+            print(f'[Overlay] compositor failed, falling back to GLFW: '
+                  f'{exc}', flush=True)
+            _UNIFIED_OVERLAY_MODE = False
     threading.Thread(target=_init, daemon=True).start()
 
 
@@ -794,47 +792,55 @@ class GpuOverlayWindow:
         self._unified = _UNIFIED_OVERLAY_MODE and not vsync
         self._delegate = None
         if self._unified:
-            root = getattr(pump, '_root', None)
-            uo = _get_unified_overlay(root)
-            from render.overlay_adapter import CompositorOverlayWindow
-            _tl = title.lower()
-            if 'fisheye' in _tl:
-                _z = 10
-            elif 'popup' in _tl:
-                _z = 80
-            elif 'menu_bar' in _tl or 'child_bar' in _tl:
-                _z = 85
-            elif 'menu_hud' in _tl or 'left_info' in _tl:
-                _z = 90
-            elif 'nervegear' in _tl or 'float' in _tl:
-                _z = 200
-            elif any(k in _tl for k in ('dps', 'hp', 'boss', 'buff', 'skill', 'player', 'session')):
-                _z = 150
-            else:
-                _z = 100
-            self._delegate = CompositorOverlayWindow(
-                uo, w=w, h=h, x=x, y=y,
-                render_fn=render_fn, click_through=click_through,
-                title=title, vsync=vsync, z=_z,
-            )
-            # Expose compat attributes
-            self._pump = pump
-            self._root = root
-            self._w = max(1, int(w))
-            self._h = max(1, int(h))
-            self._x = int(x)
-            self._y = int(y)
-            self._click_through = bool(click_through)
-            self._title = title
-            self._visible = False
-            self._created = True
-            self._shown = False
-            self._show_pending = False
-            self._dirty = False
-            self._hwnd = uo.hwnd
-            self._ctx = uo.host.ctx if uo.host else None
-            self._win = None
-            return
+            try:
+                root = getattr(pump, '_root', None)
+                uo = _get_unified_overlay(root)
+                if not uo._ready.is_set():
+                    raise RuntimeError('compositor not ready')
+                from render.overlay_adapter import CompositorOverlayWindow
+                _tl = title.lower()
+                if 'fisheye' in _tl:
+                    _z = 10
+                elif 'popup' in _tl:
+                    _z = 80
+                elif 'menu_bar' in _tl or 'child_bar' in _tl:
+                    _z = 85
+                elif 'menu_hud' in _tl or 'left_info' in _tl:
+                    _z = 90
+                elif 'nervegear' in _tl or 'float' in _tl:
+                    _z = 200
+                elif any(k in _tl for k in ('dps', 'hp', 'boss', 'buff', 'skill', 'player', 'session')):
+                    _z = 150
+                else:
+                    _z = 100
+                self._delegate = CompositorOverlayWindow(
+                    uo, w=w, h=h, x=x, y=y,
+                    render_fn=render_fn, click_through=click_through,
+                    title=title, vsync=vsync, z=_z,
+                )
+            except Exception as exc:
+                print(f'[GOW] unified delegation failed for {title}, '
+                      f'using GLFW: {exc}', flush=True)
+                self._unified = False
+                self._delegate = None
+            if self._unified and self._delegate is not None:
+                self._pump = pump
+                self._root = root
+                self._w = max(1, int(w))
+                self._h = max(1, int(h))
+                self._x = int(x)
+                self._y = int(y)
+                self._click_through = bool(click_through)
+                self._title = title
+                self._visible = False
+                self._created = True
+                self._shown = False
+                self._show_pending = False
+                self._dirty = False
+                self._hwnd = uo.hwnd
+                self._ctx = uo.host.ctx if uo.host else None
+                self._win = None
+                return
 
         # ── Legacy GLFW path ──
         self._pump = pump

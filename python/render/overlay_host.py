@@ -204,16 +204,16 @@ _user32.GetDC.restype = wt.HDC
 _user32.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
 _user32.ReleaseDC.restype = ctypes.c_int
 
-_user32.PeekMessageW.argtypes = [
+_user32_pump = ctypes.WinDLL('user32', use_last_error=True)
+_user32_pump.PeekMessageW.argtypes = [
     POINTER(_MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT,
 ]
-_user32.PeekMessageW.restype = wt.BOOL
+_user32_pump.PeekMessageW.restype = wt.BOOL
+_user32_pump.TranslateMessage.argtypes = [POINTER(_MSG)]
+_user32_pump.TranslateMessage.restype = wt.BOOL
+_user32_pump.DispatchMessageW.argtypes = [POINTER(_MSG)]
+_user32_pump.DispatchMessageW.restype = ctypes.c_long
 
-_user32.TranslateMessage.argtypes = [POINTER(_MSG)]
-_user32.TranslateMessage.restype = wt.BOOL
-
-_user32.DispatchMessageW.argtypes = [POINTER(_MSG)]
-_user32.DispatchMessageW.restype = ctypes.c_long
 
 _user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 _user32.GetSystemMetrics.restype = ctypes.c_int
@@ -747,12 +747,12 @@ class OverlayHost:
         msg = _MSG()
         hwnd_w = wt.HWND(self.hwnd)
         for _ in range(128):
-            if not _user32.PeekMessageW(
+            if not _user32_pump.PeekMessageW(
                 byref(msg), hwnd_w, 0, 0, PM_REMOVE,
             ):
                 break
-            _user32.TranslateMessage(byref(msg))
-            _user32.DispatchMessageW(byref(msg))
+            _user32_pump.TranslateMessage(byref(msg))
+            _user32_pump.DispatchMessageW(byref(msg))
 
     def resize(self, w: int, h: int, x: int = 0, y: int = 0) -> None:
         self.width = w

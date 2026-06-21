@@ -305,25 +305,30 @@ class SAOPlayerGUIFloatHandlersMixin:
             except Exception:
                 _open_menu()
 
-        try:
-            self._float_gpu_button = GpuNerveGearButton(
-                self.root,
-                ng_x,
-                ng_y,
-                theme=self._ng_theme,
-                on_click=_on_gpu_click,
-                on_right_click=_show_ctx_menu_at,
-                on_move_end=_on_gpu_move_end,
-                on_hover=_on_gpu_hover,
-            )
-        except Exception as exc:
-            self._float_gpu_button = None
-            print(
-                f'[SAO] GPU NerveGear button unavailable: '
-                f'{type(exc).__name__}: {exc}',
-                flush=True,
-            )
-            raise
+        def _create_gpu_btn():
+            if self._destroyed:
+                return
+            try:
+                self._float_gpu_button = GpuNerveGearButton(
+                    self.root,
+                    ng_x,
+                    ng_y,
+                    theme=self._ng_theme,
+                    on_click=_on_gpu_click,
+                    on_right_click=_show_ctx_menu_at,
+                    on_move_end=_on_gpu_move_end,
+                    on_hover=_on_gpu_hover,
+                )
+            except Exception as exc:
+                self._float_gpu_button = None
+                print(
+                    f'[SAO] GPU NerveGear button unavailable: '
+                    f'{type(exc).__name__}: {exc}',
+                    flush=True,
+                )
+
+        self._float_gpu_button = None
+        self._deferred_gpu_btn_fn = _create_gpu_btn
 
         def _render_ng():
             btn = getattr(self, '_float_gpu_button', None)

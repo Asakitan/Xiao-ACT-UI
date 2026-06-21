@@ -4,6 +4,7 @@
 #pragma comment(linker, "/NODEFAULTLIB")
 #pragma comment(linker, "/ENTRY:_start")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
+#pragma comment(lib, "kernel32")
 
 void __stdcall _start(void) {
     WCHAR path[MAX_PATH], dir[MAX_PATH], target[MAX_PATH + 32];

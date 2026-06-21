@@ -76,7 +76,8 @@ def _bootstrap_runtime_overrides():
     runtime/update.exe 提升到顶层 (旧 update.exe 通过嵌套路径绕过 _collect_entries)。
     """
     try:
-        if getattr(sys, 'frozen', False):
+        _frozen = getattr(sys, 'frozen', False) or hasattr(sys.modules.get('__main__'), '__compiled__')
+        if _frozen:
             exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         else:
             exe_dir = os.path.dirname(os.path.abspath(__file__))

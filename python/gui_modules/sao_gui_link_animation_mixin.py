@@ -134,6 +134,10 @@ class SAOPlayerGUILinkAnimationMixin:
 
         def on_done():
             _resume_overlay_creation()
+            gpu_btn_fn = getattr(self, '_deferred_gpu_btn_fn', None)
+            if callable(gpu_btn_fn):
+                gpu_btn_fn()
+                self._deferred_gpu_btn_fn = None
             self._float.geometry(f'{self._fw}x{self._fh}+{fx_start}+{fy_start}')
             self._float.deiconify()
             self._float.lift()
