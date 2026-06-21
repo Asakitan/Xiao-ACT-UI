@@ -4,17 +4,22 @@
 Two widgets:
   * ``WorkshopChildPreview``: compact preview inside the SAO menu childbar area
     (search + featured list + "open full panel" button).
-  * ``WorkshopPanel``: full-featured floating Tk Toplevel with plugin card grid,
-    search, resize, drag, zoom, install — white+gold colour scheme.
+  * ``WorkshopPanel``: full-featured floating Tk Toplevel with tabs:
+    - 在线商店 (online catalog, install from workshop)
+    - 我的插件 (local user plugins, delete/publish/open in AI editor)
+    - 上传 (publish a local plugin to workshop)
 
 Both use ``workshop.client.WorkshopClient`` for catalog data (HTTP, threaded).
 """
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import threading
 import tkinter as tk
+from tkinter import filedialog
 from typing import Any, Dict, List, Mapping, Optional
 
 from utils.sao_sound import get_sao_font, get_cjk_font
@@ -78,7 +83,6 @@ def _get_installed_ids(owner: Any) -> list[str]:
     except Exception:
         pass
     try:
-        import os
         from config import BASE_DIR
         ids = []
         for base in (os.path.join(BASE_DIR, 'plugins'), os.path.join(BASE_DIR, 'user_plugins')):
@@ -90,6 +94,58 @@ def _get_installed_ids(owner: Any) -> list[str]:
         return ids
     except Exception:
         return []
+
+
+def _get_local_user_plugins() -> list[dict]:
+    """List plugins from user_plugins/ (non-builtin, user-installed)."""
+    results = []
+    try:
+        from config import BASE_DIR
+        user_dir = os.path.join(BASE_DIR, 'user_plugins')
+        if not os.path.isdir(user_dir):
+            return results
+        for name in sorted(os.listdir(user_dir)):
+            plugin_json = os.path.join(user_dir, name, 'plugin.json')
+            if not os.path.isfile(plugin_json):
+                continue
+            try:
+                with open(plugin_json, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+            results.append({
+                'id': name,
+                'name': str(meta.get('name') or name),
+                'version': str(meta.get('version') or '0.0.0'),
+                'author': str(meta.get('author') or ''),
+                'description': str(meta.get('description') or ''),
+                'path': os.path.join(user_dir, name),
+                'source': 'user',
+            })
+    except Exception:
+        pass
+    return results
+
+
+def _make_tab_btn(parent, text, command, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                  active_bg=_WG_GOLD, active_fg='#FFFFFF'):
+    btn = tk.Label(parent, text=text, bg=bg, fg=fg,
+                   font=get_cjk_font(10, True), padx=12, pady=4, cursor='hand2')
+    btn.pack(side='left', padx=(0, 4))
+    btn.bind('<Button-1>', lambda e: command())
+    btn._active_bg = active_bg
+    btn._active_fg = active_fg
+    btn._normal_bg = bg
+    btn._normal_fg = fg
+    return btn
+
+
+def _set_tab_active(btns: dict, active_key: str):
+    for key, btn in btns.items():
+        if key == active_key:
+            btn.configure(bg=btn._active_bg, fg=btn._active_fg)
+        else:
+            btn.configure(bg=btn._normal_bg, fg=btn._normal_fg)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -109,6 +165,7 @@ class WorkshopChildPreview(tk.Frame):
         self._on_open_full = on_open_full
         self._client = None
         self._plugins: list[dict] = []
+        self._local_plugins: list[dict] = []
         self._installed: list[str] = []
         self._loading = False
         self._loaded = False
@@ -119,7 +176,7 @@ class WorkshopChildPreview(tk.Frame):
         bg = _WG_BODY_BG
         self.configure(bg=bg, width=self._PREVIEW_W)
 
-        # ── Header: diamond accent + title ──
+        # ── Header ──
         title_f = tk.Frame(self, bg=bg)
         title_f.pack(fill='x', padx=12, pady=(10, 0))
         hdr_row = tk.Frame(title_f, bg=bg)
@@ -129,32 +186,32 @@ class WorkshopChildPreview(tk.Frame):
         tk.Label(hdr_row, text='WORKSHOP', bg=bg, fg=_WG_GOLD,
                  font=get_sao_font(9, True), anchor='w').pack(side='left')
         tk.Label(title_f, text='创意工坊', bg=bg, fg=_WG_MUTED,
-                 font=get_cjk_font(9), anchor='w').pack(fill='x', padx=(0, 0), pady=(1, 0))
+                 font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(1, 0))
 
-        # ── Gold accent line ──
         tk.Frame(self, bg=_WG_GOLD, height=1).pack(fill='x', padx=12, pady=(6, 0))
         tk.Frame(self, bg=_WG_SEP, height=1).pack(fill='x', padx=12, pady=(1, 6))
 
-        # ── Search ──
-        search_f = tk.Frame(self, bg=bg)
-        search_f.pack(fill='x', padx=12, pady=(0, 6))
-        search_inner = tk.Frame(search_f, bg=_WG_CARD_BG, highlightthickness=1,
-                                highlightbackground=_WG_BORDER)
-        search_inner.pack(fill='x')
-        tk.Label(search_inner, text='⌕', bg=_WG_CARD_BG, fg=_WG_MUTED,
-                 font=get_cjk_font(10)).pack(side='left', padx=(6, 0))
-        entry = tk.Entry(search_inner, textvariable=self._search_var,
-                         bg=_WG_CARD_BG, fg=_WG_TEXT, insertbackground=_WG_GOLD,
-                         relief='flat', bd=0, highlightthickness=0,
-                         font=get_cjk_font(9))
-        entry.pack(side='left', fill='x', expand=True, padx=4, ipady=4)
-        self._search_var.trace_add('write', lambda *_: self._filter_render())
+        # ── Local plugins section ──
+        local_hdr = tk.Frame(self, bg=bg)
+        local_hdr.pack(fill='x', padx=12, pady=(0, 4))
+        tk.Label(local_hdr, text='我的插件', bg=bg, fg=_WG_TEXT,
+                 font=get_cjk_font(9, True), anchor='w').pack(side='left')
 
-        # ── Plugin list area ──
+        self._local_frame = tk.Frame(self, bg=bg)
+        self._local_frame.pack(fill='x', padx=12, pady=(0, 4))
+
+        tk.Frame(self, bg=_WG_SEP, height=1).pack(fill='x', padx=12, pady=(2, 4))
+
+        # ── Online section ──
+        online_hdr = tk.Frame(self, bg=bg)
+        online_hdr.pack(fill='x', padx=12, pady=(0, 4))
+        tk.Label(online_hdr, text='在线商店', bg=bg, fg=_WG_TEXT,
+                 font=get_cjk_font(9, True), anchor='w').pack(side='left')
+
         self._list_frame = tk.Frame(self, bg=bg)
         self._list_frame.pack(fill='both', expand=True, padx=12, pady=(0, 4))
 
-        # ── Bottom: separator + button ──
+        # ── Bottom ──
         tk.Frame(self, bg=_WG_SEP, height=1).pack(fill='x', padx=12, pady=(2, 0))
         bottom = tk.Frame(self, bg=bg)
         bottom.pack(fill='x', padx=12, pady=(6, 10))
@@ -168,8 +225,61 @@ class WorkshopChildPreview(tk.Frame):
         open_btn.bind('<Leave>', lambda e: open_btn.configure(bg=_WG_GOLD))
 
     def activate(self):
+        self._local_plugins = _get_local_user_plugins()
+        self._render_local()
         if not self._loaded:
             self._load_featured()
+
+    def _render_local(self):
+        for w in self._local_frame.winfo_children():
+            w.destroy()
+        plugins = self._local_plugins[:4]
+        if not plugins:
+            tk.Label(self._local_frame, text='无用户插件', bg=_WG_BODY_BG,
+                     fg=_WG_MUTED, font=get_cjk_font(8)).pack(pady=2)
+            return
+        for p in plugins:
+            self._render_local_row(p)
+
+    def _render_local_row(self, plugin: dict):
+        bg = _WG_CARD_BG
+        pid = str(plugin.get('id') or '')
+        name = str(plugin.get('name') or pid)
+
+        row = tk.Frame(self._local_frame, bg=bg, highlightthickness=1,
+                       highlightbackground=_WG_BORDER)
+        row.pack(fill='x', pady=2)
+
+        rail = tk.Frame(row, bg=_WG_GREEN, width=3)
+        rail.pack(side='left', fill='y')
+
+        inner = tk.Frame(row, bg=bg)
+        inner.pack(fill='x', padx=6, pady=4)
+
+        tk.Label(inner, text=name, bg=bg, fg=_WG_TEXT,
+                 font=get_cjk_font(9, True), anchor='w').pack(side='left', fill='x', expand=True)
+
+        # AI editor button
+        ed_btn = tk.Label(inner, text='✦', bg=_WG_BADGE_BG, fg=_WG_GOLD,
+                          font=get_cjk_font(9), padx=3, cursor='hand2')
+        ed_btn.pack(side='right', padx=(2, 0))
+        ed_btn.bind('<Button-1>', lambda e, p=pid: self._open_in_editor(p))
+
+        row.bind('<Enter>', lambda e, r=row: r.configure(highlightbackground=_WG_GOLD))
+        row.bind('<Leave>', lambda e, r=row: r.configure(highlightbackground=_WG_BORDER))
+
+    def _open_in_editor(self, plugin_id: str):
+        try:
+            plugin_path = None
+            for p in self._local_plugins:
+                if p.get('id') == plugin_id:
+                    plugin_path = p.get('path')
+                    break
+            if plugin_path:
+                from ai_editor.app import launch
+                launch(gui_ref=self._owner)
+        except Exception:
+            pass
 
     def _load_featured(self):
         if self._loading:
@@ -181,7 +291,7 @@ class WorkshopChildPreview(tk.Frame):
         def _fetch():
             client = _get_workshop_client()
             if client is None:
-                self.after(0, lambda: self._render_error('Workshop client unavailable'))
+                self.after(0, lambda: self._render_error('Workshop server unavailable'))
                 self._loading = False
                 return
             try:
@@ -206,29 +316,29 @@ class WorkshopChildPreview(tk.Frame):
             plugins = [p for p in plugins
                        if query in str(p.get('name') or '').lower()
                        or query in str(p.get('plugin_id') or '').lower()]
-        self._render_list(plugins[:6])
+        self._render_list(plugins[:4])
 
     def _render_loading(self):
         for w in self._list_frame.winfo_children():
             w.destroy()
         tk.Label(self._list_frame, text='加载中...', bg=_WG_BODY_BG,
-                 fg=_WG_MUTED, font=get_cjk_font(9)).pack(pady=12)
+                 fg=_WG_MUTED, font=get_cjk_font(9)).pack(pady=6)
 
     def _render_error(self, msg: str):
         self._loading = False
         for w in self._list_frame.winfo_children():
             w.destroy()
         tk.Label(self._list_frame, text='离线', bg=_WG_BODY_BG,
-                 fg=_WG_RED, font=get_cjk_font(9)).pack(pady=4)
+                 fg=_WG_RED, font=get_cjk_font(9)).pack(pady=2)
         tk.Label(self._list_frame, text=str(msg)[:40], bg=_WG_BODY_BG,
-                 fg=_WG_MUTED, font=get_cjk_font(8), wraplength=220).pack(pady=2)
+                 fg=_WG_MUTED, font=get_cjk_font(8), wraplength=280).pack(pady=2)
 
     def _render_list(self, plugins: list):
         for w in self._list_frame.winfo_children():
             w.destroy()
         if not plugins:
-            tk.Label(self._list_frame, text='无结果', bg=_WG_BODY_BG,
-                     fg=_WG_MUTED, font=get_cjk_font(9)).pack(pady=12)
+            tk.Label(self._list_frame, text='无在线插件', bg=_WG_BODY_BG,
+                     fg=_WG_MUTED, font=get_cjk_font(9)).pack(pady=6)
             return
         for p in plugins:
             self._render_row(p)
@@ -237,44 +347,33 @@ class WorkshopChildPreview(tk.Frame):
         bg = _WG_CARD_BG
         pid = str(plugin.get('plugin_id') or '')
         name = str(plugin.get('name') or pid)
-        author = str(plugin.get('author') or '')
         installed = pid in self._installed
 
         row = tk.Frame(self._list_frame, bg=bg, highlightthickness=1,
                        highlightbackground=_WG_BORDER, cursor='hand2')
-        row.pack(fill='x', pady=3)
+        row.pack(fill='x', pady=2)
 
         rail = tk.Frame(row, bg=_WG_GOLD if installed else _WG_SEP, width=3)
         rail.pack(side='left', fill='y')
 
         inner = tk.Frame(row, bg=bg)
-        inner.pack(fill='x', padx=8, pady=6)
+        inner.pack(fill='x', padx=6, pady=4)
 
         tk.Label(inner, text=name, bg=bg, fg=_WG_TEXT,
-                 font=get_cjk_font(10, True), anchor='w').pack(fill='x')
-        if author:
-            tk.Label(inner, text=author, bg=bg, fg=_WG_MUTED,
-                     font=get_cjk_font(8), anchor='w').pack(fill='x')
+                 font=get_cjk_font(9, True), anchor='w').pack(side='left', fill='x', expand=True)
 
-        badge_row = tk.Frame(inner, bg=bg)
-        badge_row.pack(fill='x', pady=(3, 0))
         if installed:
-            tk.Label(badge_row, text='✓ 已安装', bg='#E8F5E9',
-                     fg=_WG_GREEN, font=get_cjk_font(8),
-                     padx=4, pady=1).pack(side='left')
+            tk.Label(inner, text='✓', bg=bg, fg=_WG_GREEN,
+                     font=get_cjk_font(9, True)).pack(side='right')
         else:
-            lbl = tk.Label(badge_row, text='安装', bg=_WG_GOLD,
+            lbl = tk.Label(inner, text='安装', bg=_WG_GOLD,
                            fg='#FFFFFF', font=get_cjk_font(8, True),
                            padx=6, pady=1, cursor='hand2')
-            lbl.pack(side='left')
+            lbl.pack(side='right')
             lbl.bind('<Button-1>', lambda e, pid=pid: self._install(pid))
-            lbl.bind('<Enter>', lambda e, b=lbl: b.configure(bg=_WG_GOLD_DARK))
-            lbl.bind('<Leave>', lambda e, b=lbl: b.configure(bg=_WG_GOLD))
 
         row.bind('<Enter>', lambda e, r=row: r.configure(highlightbackground=_WG_GOLD))
         row.bind('<Leave>', lambda e, r=row: r.configure(highlightbackground=_WG_BORDER))
-        for child in (row, inner):
-            child.bind('<Button-1>', lambda e, pid=pid: self._show_detail(pid))
 
     def _install(self, plugin_id: str):
         def _do():
@@ -296,20 +395,17 @@ class WorkshopChildPreview(tk.Frame):
                 pass
         threading.Thread(target=_do, daemon=True).start()
 
-    def _show_detail(self, plugin_id: str):
-        self._open_full()
-
     def _open_full(self):
         if callable(self._on_open_full):
             self._on_open_full()
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  WorkshopPanel — full floating panel
+#  WorkshopPanel — full floating panel with tabs
 # ═══════════════════════════════════════════════════════════════════
 
 class WorkshopPanel:
-    """Full-featured workshop floating panel with white+gold theme."""
+    """Full-featured workshop floating panel with tabs."""
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -321,14 +417,17 @@ class WorkshopPanel:
         self._search_var = tk.StringVar()
         self._client = None
         self._plugins: list[dict] = []
+        self._local_plugins: list[dict] = []
         self._installed: list[str] = []
         self._loading = False
         self._page = 1
         self._per_page = 30
         self._total = 0
         self._zoom = 1.0
-        self._detail_plugin: Optional[dict] = None
         self._resize_start: Optional[tuple] = None
+        self._active_tab = 'store'
+        self._tab_buttons: dict[str, tk.Label] = {}
+        self._tab_frames: dict[str, tk.Frame] = {}
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -342,7 +441,7 @@ class WorkshopPanel:
             self._win.after(220, lambda: self._win and self._win.attributes('-topmost', False))
         except Exception:
             pass
-        self._load_catalog()
+        self._show_tab(self._active_tab)
 
     def hide(self) -> None:
         if self._win is not None:
@@ -388,23 +487,19 @@ class WorkshopPanel:
         except Exception:
             pass
 
-        # Header
+        # ── Header ──
         header = tk.Frame(win, bg=_WG_HEADER_BG, height=44)
         header.pack(fill='x')
         header.pack_propagate(False)
         _bind_panel_drag(win, header)
-
         hdr_inner = tk.Frame(header, bg=_WG_HEADER_BG)
         hdr_inner.pack(fill='both', expand=True, padx=12, pady=0)
-
         tk.Label(hdr_inner, text='◇', bg=_WG_HEADER_BG, fg=_WG_GOLD,
                  font=get_sao_font(14, True)).pack(side='left')
         tk.Label(hdr_inner, text='CREATIVE WORKSHOP', bg=_WG_HEADER_BG,
                  fg=_WG_GOLD, font=get_sao_font(11, True)).pack(side='left', padx=(4, 0))
         tk.Label(hdr_inner, text='创意工坊', bg=_WG_HEADER_BG,
                  fg=_WG_HEADER_FG, font=get_cjk_font(10)).pack(side='left', padx=(8, 0))
-
-        # Close button
         close_btn = tk.Label(hdr_inner, text='×', bg=_WG_HEADER_BG,
                              fg=_WG_MUTED, font=('Consolas', 16),
                              cursor='hand2', padx=6)
@@ -412,19 +507,66 @@ class WorkshopPanel:
         close_btn.bind('<Button-1>', lambda e: self.hide())
         close_btn.bind('<Enter>', lambda e: close_btn.configure(fg=_WG_RED))
         close_btn.bind('<Leave>', lambda e: close_btn.configure(fg=_WG_MUTED))
-
-        # Header border
         tk.Frame(win, bg=_WG_BORDER, height=1).pack(fill='x')
 
-        # Toolbar
-        toolbar = tk.Frame(win, bg=_WG_BODY_BG)
-        toolbar.pack(fill='x', padx=14, pady=(8, 4))
+        # ── Tabs ──
+        tab_bar = tk.Frame(win, bg=_WG_BODY_BG)
+        tab_bar.pack(fill='x', padx=14, pady=(8, 0))
+        for key, label in (('store', '在线商店'), ('local', '我的插件'), ('publish', '上传发布')):
+            btn = _make_tab_btn(tab_bar, label, lambda k=key: self._show_tab(k))
+            self._tab_buttons[key] = btn
+        tk.Frame(win, bg=_WG_SEP, height=1).pack(fill='x', padx=14, pady=(6, 0))
 
-        # Search
+        # ── Tab content frames ──
+        content = tk.Frame(win, bg=_WG_BODY_BG)
+        content.pack(fill='both', expand=True, padx=0, pady=0)
+        self._content = content
+
+        # Store tab
+        store_frame = tk.Frame(content, bg=_WG_BODY_BG)
+        self._tab_frames['store'] = store_frame
+        self._build_store_tab(store_frame)
+
+        # Local tab
+        local_frame = tk.Frame(content, bg=_WG_BODY_BG)
+        self._tab_frames['local'] = local_frame
+        self._build_local_tab(local_frame)
+
+        # Publish tab
+        publish_frame = tk.Frame(content, bg=_WG_BODY_BG)
+        self._tab_frames['publish'] = publish_frame
+        self._build_publish_tab(publish_frame)
+
+        # ── Status bar ──
+        tk.Frame(win, bg=_WG_BORDER, height=1).pack(fill='x', pady=(4, 0))
+        status_bar = tk.Frame(win, bg=_WG_HEADER_BG, height=28)
+        status_bar.pack(fill='x')
+        status_bar.pack_propagate(False)
+        self._status_dot = tk.Label(status_bar, text='●', bg=_WG_HEADER_BG,
+                                    fg=_WG_MUTED, font=('Consolas', 8))
+        self._status_dot.pack(side='left', padx=(12, 4))
+        tk.Label(status_bar, textvariable=self._status_var, bg=_WG_HEADER_BG,
+                 fg=_WG_MUTED, font=get_cjk_font(9), anchor='w').pack(
+                     side='left', fill='x', expand=True)
+        self._page_frame = tk.Frame(status_bar, bg=_WG_HEADER_BG)
+        self._page_frame.pack(side='right', padx=(0, 8))
+
+        # ── Resize grip ──
+        grip = tk.Label(win, text='⋱', bg=_WG_HEADER_BG, fg=_WG_BORDER,
+                        font=('Consolas', 10), cursor='size_nw_se')
+        grip.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)
+        grip.bind('<ButtonPress-1>', self._resize_start_cb)
+        grip.bind('<B1-Motion>', self._resize_motion_cb)
+
+        win.protocol('WM_DELETE_WINDOW', self.hide)
+
+    def _build_store_tab(self, parent: tk.Frame):
+        toolbar = tk.Frame(parent, bg=_WG_BODY_BG)
+        toolbar.pack(fill='x', padx=14, pady=(8, 4))
         search_frame = tk.Frame(toolbar, bg=_WG_CARD_BG, highlightthickness=1,
                                 highlightbackground=_WG_BORDER)
         search_frame.pack(side='left', fill='x', expand=True)
-        tk.Label(search_frame, text='🔍', bg=_WG_CARD_BG, fg=_WG_MUTED,
+        tk.Label(search_frame, text='⌕', bg=_WG_CARD_BG, fg=_WG_MUTED,
                  font=get_cjk_font(10)).pack(side='left', padx=(6, 0))
         entry = tk.Entry(search_frame, textvariable=self._search_var,
                          bg=_WG_CARD_BG, fg=_WG_TEXT, insertbackground=_WG_GOLD,
@@ -433,7 +575,6 @@ class WorkshopPanel:
         entry.pack(side='left', fill='x', expand=True, padx=4, ipady=4)
         self._search_var.trace_add('write', lambda *_: self._on_search())
 
-        # Zoom controls
         zoom_frame = tk.Frame(toolbar, bg=_WG_BODY_BG)
         zoom_frame.pack(side='right', padx=(8, 0))
         for text, cmd in [('−', self._zoom_out), ('+', self._zoom_in)]:
@@ -446,72 +587,130 @@ class WorkshopPanel:
             btn.bind('<Enter>', lambda e, b=btn: b.configure(bg=_WG_GOLD_SOFT))
             btn.bind('<Leave>', lambda e, b=btn: b.configure(bg=_WG_CARD_BG))
 
-        # Body (scrollable)
-        body = tk.Frame(win, bg=_WG_BODY_BG)
-        body.pack(fill='both', expand=True, padx=0, pady=0)
-
+        body = tk.Frame(parent, bg=_WG_BODY_BG)
+        body.pack(fill='both', expand=True)
         canvas = tk.Canvas(body, bg=_WG_BODY_BG, highlightthickness=0, bd=0)
         scrollbar = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
         self._grid_frame = tk.Frame(canvas, bg=_WG_BODY_BG)
         self._grid_frame.bind('<Configure>',
                               lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        self._canvas_win = canvas.create_window((0, 0), window=self._grid_frame,
-                                                 anchor='nw')
+        self._canvas_win = canvas.create_window((0, 0), window=self._grid_frame, anchor='nw')
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfigure(self._canvas_win, width=e.width))
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(14, 0), pady=(4, 0))
         scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=(4, 0))
+        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
         self._canvas = canvas
 
-        # Mouse wheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+    def _build_local_tab(self, parent: tk.Frame):
+        toolbar = tk.Frame(parent, bg=_WG_BODY_BG)
+        toolbar.pack(fill='x', padx=14, pady=(8, 4))
+        tk.Label(toolbar, text='用户安装的插件 (user_plugins/)', bg=_WG_BODY_BG,
+                 fg=_WG_MUTED, font=get_cjk_font(9), anchor='w').pack(side='left')
+        refresh_btn = tk.Label(toolbar, text='刷新', bg=_WG_CARD_BG, fg=_WG_TEXT,
+                               font=get_cjk_font(9, True), padx=8, pady=2,
+                               cursor='hand2', highlightthickness=1,
+                               highlightbackground=_WG_BORDER)
+        refresh_btn.pack(side='right')
+        refresh_btn.bind('<Button-1>', lambda e: self._load_local())
+        refresh_btn.bind('<Enter>', lambda e: refresh_btn.configure(bg=_WG_GOLD_SOFT))
+        refresh_btn.bind('<Leave>', lambda e: refresh_btn.configure(bg=_WG_CARD_BG))
 
-        # Status bar
-        tk.Frame(win, bg=_WG_BORDER, height=1).pack(fill='x', pady=(4, 0))
-        status_bar = tk.Frame(win, bg=_WG_HEADER_BG, height=28)
-        status_bar.pack(fill='x')
-        status_bar.pack_propagate(False)
+        import_btn = tk.Label(toolbar, text='导入 .zip', bg=_WG_GOLD, fg='#FFFFFF',
+                              font=get_cjk_font(9, True), padx=8, pady=2,
+                              cursor='hand2')
+        import_btn.pack(side='right', padx=(0, 6))
+        import_btn.bind('<Button-1>', lambda e: self._import_local())
+        import_btn.bind('<Enter>', lambda e: import_btn.configure(bg=_WG_GOLD_DARK))
+        import_btn.bind('<Leave>', lambda e: import_btn.configure(bg=_WG_GOLD))
 
-        self._status_dot = tk.Label(status_bar, text='●', bg=_WG_HEADER_BG,
-                                    fg=_WG_MUTED, font=('Consolas', 8))
-        self._status_dot.pack(side='left', padx=(12, 4))
-        tk.Label(status_bar, textvariable=self._status_var, bg=_WG_HEADER_BG,
-                 fg=_WG_MUTED, font=get_cjk_font(9), anchor='w').pack(
-                     side='left', fill='x', expand=True)
+        body = tk.Frame(parent, bg=_WG_BODY_BG)
+        body.pack(fill='both', expand=True)
+        canvas = tk.Canvas(body, bg=_WG_BODY_BG, highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        self._local_list = tk.Frame(canvas, bg=_WG_BODY_BG)
+        self._local_list.bind('<Configure>',
+                              lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        _lid = canvas.create_window((0, 0), window=self._local_list, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_lid, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(14, 0), pady=(4, 0))
+        scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=(4, 0))
+        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
 
-        # Pagination frame
-        self._page_frame = tk.Frame(status_bar, bg=_WG_HEADER_BG)
-        self._page_frame.pack(side='right', padx=(0, 8))
+    def _build_publish_tab(self, parent: tk.Frame):
+        body = tk.Frame(parent, bg=_WG_BODY_BG)
+        body.pack(fill='both', expand=True, padx=14, pady=14)
 
-        # Resize grip
-        grip = tk.Label(win, text='⋱', bg=_WG_HEADER_BG, fg=_WG_BORDER,
-                        font=('Consolas', 10), cursor='size_nw_se')
-        grip.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)
-        grip.bind('<ButtonPress-1>', self._resize_start_cb)
-        grip.bind('<B1-Motion>', self._resize_motion_cb)
+        tk.Label(body, text='上传插件到创意工坊', bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(12, True), anchor='w').pack(fill='x', pady=(0, 4))
+        tk.Label(body, text='选择一个本地插件的 .zip 包上传到创意工坊供其他用户下载。',
+                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(9),
+                 anchor='w', wraplength=600).pack(fill='x', pady=(0, 12))
 
-        win.protocol('WM_DELETE_WINDOW', self.hide)
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(0, 12))
 
-    # ── Resize ─────────────────────────────────────────────────────
+        # Plugin selector from local user plugins
+        sel_frame = tk.Frame(body, bg=_WG_BODY_BG)
+        sel_frame.pack(fill='x', pady=(0, 8))
+        tk.Label(sel_frame, text='选择插件:', bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(10), anchor='w').pack(side='left')
+        self._publish_var = tk.StringVar()
+        self._publish_menu_frame = tk.Frame(sel_frame, bg=_WG_BODY_BG)
+        self._publish_menu_frame.pack(side='left', padx=(8, 0))
 
-    def _resize_start_cb(self, event):
-        self._resize_start = (event.x_root, event.y_root,
-                              self._win.winfo_width(), self._win.winfo_height())
+        # Or select zip file
+        or_frame = tk.Frame(body, bg=_WG_BODY_BG)
+        or_frame.pack(fill='x', pady=(0, 8))
+        tk.Label(or_frame, text='或选择 .zip 文件:', bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(10), anchor='w').pack(side='left')
+        self._zip_path_var = tk.StringVar()
+        tk.Label(or_frame, textvariable=self._zip_path_var, bg=_WG_CARD_BG,
+                 fg=_WG_TEXT, font=get_cjk_font(9), anchor='w',
+                 padx=6, pady=2, width=40).pack(side='left', padx=(8, 4))
+        browse_btn = tk.Label(or_frame, text='浏览', bg=_WG_CARD_BG, fg=_WG_TEXT,
+                              font=get_cjk_font(9, True), padx=8, pady=2,
+                              cursor='hand2', highlightthickness=1,
+                              highlightbackground=_WG_BORDER)
+        browse_btn.pack(side='left')
+        browse_btn.bind('<Button-1>', lambda e: self._browse_zip())
 
-    def _resize_motion_cb(self, event):
-        if self._resize_start is None:
-            return
-        sx, sy, sw, sh = self._resize_start
-        new_w = max(640, sw + (event.x_root - sx))
-        new_h = max(420, sh + (event.y_root - sy))
-        x = self._win.winfo_x()
-        y = self._win.winfo_y()
-        self._win.geometry(f'{new_w}x{new_h}+{x}+{y}')
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(8, 12))
 
-    # ── Zoom ───────────────────────────────────────────────────────
+        pub_btn = tk.Label(body, text='上传到创意工坊', bg=_WG_GOLD, fg='#FFFFFF',
+                           font=get_cjk_font(11, True), padx=16, pady=6, cursor='hand2')
+        pub_btn.pack(anchor='w')
+        pub_btn.bind('<Button-1>', lambda e: self._do_publish())
+        pub_btn.bind('<Enter>', lambda e: pub_btn.configure(bg=_WG_GOLD_DARK))
+        pub_btn.bind('<Leave>', lambda e: pub_btn.configure(bg=_WG_GOLD))
+
+        self._publish_status = tk.Label(body, text='', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                                        font=get_cjk_font(9), anchor='w')
+        self._publish_status.pack(fill='x', pady=(8, 0))
+
+    # ── Tab switching ─────────────────────────────────────────────
+
+    def _show_tab(self, name: str):
+        self._active_tab = name
+        _set_tab_active(self._tab_buttons, name)
+        for key, frame in self._tab_frames.items():
+            if key == name:
+                frame.pack(fill='both', expand=True)
+            else:
+                frame.pack_forget()
+        if name == 'store':
+            self._load_catalog()
+        elif name == 'local':
+            self._load_local()
+        elif name == 'publish':
+            self._refresh_publish_menu()
+
+    # ── Store tab ─────────────────────────────────────────────────
+
+    def _on_search(self):
+        self._page = 1
+        self._load_catalog()
 
     def _zoom_in(self):
         self._zoom = min(1.5, self._zoom + 0.1)
@@ -520,14 +719,6 @@ class WorkshopPanel:
     def _zoom_out(self):
         self._zoom = max(0.7, self._zoom - 0.1)
         self._render_grid(self._plugins)
-
-    # ── Search ─────────────────────────────────────────────────────
-
-    def _on_search(self):
-        self._page = 1
-        self._load_catalog()
-
-    # ── Data loading ───────────────────────────────────────────────
 
     def _load_catalog(self):
         if self._loading:
@@ -539,7 +730,7 @@ class WorkshopPanel:
         def _fetch():
             client = _get_workshop_client()
             if client is None:
-                self.root.after(0, lambda: self._on_error('Workshop client unavailable'))
+                self.root.after(0, lambda: self._on_error('Workshop server unavailable'))
                 self._loading = False
                 return
             try:
@@ -574,8 +765,6 @@ class WorkshopPanel:
         self._status_var.set(str(msg))
         self._render_empty(msg)
 
-    # ── Render ─────────────────────────────────────────────────────
-
     def _render_loading(self):
         if self._grid_frame is None:
             return
@@ -602,46 +791,34 @@ class WorkshopPanel:
         if not plugins:
             self._render_empty('无结果')
             return
-
         z = self._zoom
         cols = max(1, _COLS)
         card_w = max(180, int(_CARD_W * z))
-
         for idx, plugin in enumerate(plugins):
-            row = idx // cols
-            col = idx % cols
-            self._render_card(self._grid_frame, plugin, row, col, card_w, z)
-
+            self._render_store_card(self._grid_frame, plugin, idx // cols, idx % cols, card_w, z)
         for c in range(cols):
             self._grid_frame.columnconfigure(c, weight=1, uniform='wscard')
 
-    def _render_card(self, parent: tk.Frame, plugin: dict,
-                     row: int, col: int, card_w: int, z: float):
+    def _render_store_card(self, parent, plugin, row, col, card_w, z):
         pid = str(plugin.get('plugin_id') or '')
         name = str(plugin.get('name') or pid)
         author = str(plugin.get('author') or 'Unknown')
         desc = str(plugin.get('description') or '')[:80]
         installed = pid in self._installed
         downloads = _finite_int(plugin.get('download_count'), 0, lo=0)
-
         base_font = max(8, int(9 * z))
         title_font = max(9, int(11 * z))
 
-        # Card frame
         card = tk.Frame(parent, bg=_WG_CARD_BG, highlightthickness=1,
                         highlightbackground=_WG_BORDER, cursor='hand2')
-        card.grid(row=row, column=col, padx=_CARD_PAD, pady=_CARD_PAD,
-                  sticky='nsew')
-
+        card.grid(row=row, column=col, padx=_CARD_PAD, pady=_CARD_PAD, sticky='nsew')
         inner = tk.Frame(card, bg=_WG_CARD_BG)
         inner.pack(fill='both', expand=True, padx=int(10 * z), pady=int(8 * z))
 
-        # Top: icon + title
         top = tk.Frame(inner, bg=_WG_CARD_BG)
         top.pack(fill='x', pady=(0, 4))
         tk.Label(top, text='◇', bg=_WG_BADGE_BG, fg=_WG_GOLD,
-                 font=get_sao_font(int(14 * z)), width=2,
-                 relief='flat').pack(side='left', padx=(0, 8))
+                 font=get_sao_font(int(14 * z)), width=2, relief='flat').pack(side='left', padx=(0, 8))
         title_area = tk.Frame(top, bg=_WG_CARD_BG)
         title_area.pack(side='left', fill='x', expand=True)
         tk.Label(title_area, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
@@ -649,42 +826,28 @@ class WorkshopPanel:
         tk.Label(title_area, text=f'by {author}', bg=_WG_CARD_BG, fg=_WG_MUTED,
                  font=get_cjk_font(base_font), anchor='w').pack(fill='x')
 
-        # Description
         tk.Label(inner, text=desc, bg=_WG_CARD_BG, fg=_WG_MUTED,
                  font=get_cjk_font(base_font), anchor='w', justify='left',
                  wraplength=max(160, card_w - 40)).pack(fill='x', pady=(2, 6))
 
-        # Footer: badges + install
         footer = tk.Frame(inner, bg=_WG_CARD_BG)
         footer.pack(fill='x')
-
-        # Download count badge
-        tk.Label(footer, text=f'↓ {downloads}', bg=_WG_BADGE_BG,
-                 fg=_WG_MUTED, font=get_cjk_font(max(7, int(8 * z))),
-                 padx=4, pady=1).pack(side='left', padx=(0, 4))
-
+        tk.Label(footer, text=f'↓ {downloads}', bg=_WG_BADGE_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(max(7, int(8 * z))), padx=4, pady=1).pack(side='left', padx=(0, 4))
         if installed:
-            tk.Label(footer, text='✓ 已安装', bg='#E8F5E9',
-                     fg=_WG_GREEN, font=get_cjk_font(max(7, int(8 * z))),
-                     padx=6, pady=1).pack(side='right')
+            tk.Label(footer, text='✓ 已安装', bg='#E8F5E9', fg=_WG_GREEN,
+                     font=get_cjk_font(max(7, int(8 * z))), padx=6, pady=1).pack(side='right')
         else:
-            install_btn = tk.Label(footer, text='安装', bg=_WG_GOLD,
-                                   fg='#FFFFFF',
+            install_btn = tk.Label(footer, text='安装', bg=_WG_GOLD, fg='#FFFFFF',
                                    font=get_cjk_font(max(7, int(8 * z)), True),
                                    padx=8, pady=2, cursor='hand2')
             install_btn.pack(side='right')
-            install_btn.bind('<Button-1>',
-                             lambda e, p=pid: self._install_plugin(p))
-            install_btn.bind('<Enter>',
-                             lambda e, b=install_btn: b.configure(bg=_WG_GOLD_DARK))
-            install_btn.bind('<Leave>',
-                             lambda e, b=install_btn: b.configure(bg=_WG_GOLD))
+            install_btn.bind('<Button-1>', lambda e, p=pid: self._install_plugin(p))
+            install_btn.bind('<Enter>', lambda e, b=install_btn: b.configure(bg=_WG_GOLD_DARK))
+            install_btn.bind('<Leave>', lambda e, b=install_btn: b.configure(bg=_WG_GOLD))
 
-        # Card hover
-        def _enter(e, c=card):
-            c.configure(highlightbackground=_WG_GOLD)
-        def _leave(e, c=card):
-            c.configure(highlightbackground=_WG_BORDER)
+        def _enter(e, c=card): c.configure(highlightbackground=_WG_GOLD)
+        def _leave(e, c=card): c.configure(highlightbackground=_WG_BORDER)
         for widget in (card, inner, top, footer):
             widget.bind('<Enter>', _enter)
             widget.bind('<Leave>', _leave)
@@ -697,7 +860,6 @@ class WorkshopPanel:
         total_pages = max(1, math.ceil(self._total / max(1, self._per_page)))
         if total_pages <= 1:
             return
-
         def _make_btn(text, page, active=False):
             bg = _WG_GOLD if active else _WG_CARD_BG
             fg = '#FFFFFF' if active else _WG_TEXT
@@ -709,7 +871,6 @@ class WorkshopPanel:
                 btn.bind('<Button-1>', lambda e, p=page: self._go_page(p))
                 btn.bind('<Enter>', lambda e, b=btn: b.configure(bg=_WG_GOLD_SOFT))
                 btn.bind('<Leave>', lambda e, b=btn: b.configure(bg=_WG_CARD_BG))
-
         if self._page > 1:
             _make_btn('<', self._page - 1)
         for i in range(1, min(total_pages + 1, 8)):
@@ -723,11 +884,8 @@ class WorkshopPanel:
         if self._canvas:
             self._canvas.yview_moveto(0)
 
-    # ── Install ────────────────────────────────────────────────────
-
     def _install_plugin(self, plugin_id: str):
         self._status_var.set(f'Installing {plugin_id}...')
-
         def _do():
             try:
                 client = _get_workshop_client()
@@ -735,8 +893,7 @@ class WorkshopPanel:
                     self.root.after(0, lambda: self._status_var.set('Client unavailable'))
                     return
                 detail = client.detail(plugin_id)
-                meta = (detail.get('plugin', {})
-                        if isinstance(detail, dict) else {})
+                meta = detail.get('plugin', {}) if isinstance(detail, dict) else {}
                 import tempfile
                 with tempfile.TemporaryDirectory() as tmp:
                     path = client.download(plugin_id, tmp,
@@ -746,12 +903,10 @@ class WorkshopPanel:
                         act_plugin_import(self.owner, path)
                     except ImportError:
                         from act_platform.plugin_install import install_plugin_archive
-                        import os
                         from config import BASE_DIR
                         dest = os.path.join(BASE_DIR, 'user_plugins')
                         os.makedirs(dest, exist_ok=True)
                         install_plugin_archive(path, dest)
-
                 if plugin_id not in self._installed:
                     self._installed.append(plugin_id)
                 self.root.after(0, lambda: (
@@ -759,10 +914,260 @@ class WorkshopPanel:
                     self._render_grid(self._plugins),
                 ))
             except Exception as exc:
-                self.root.after(0, lambda e=str(exc):
-                               self._status_var.set(f'Install failed: {e}'))
+                self.root.after(0, lambda e=str(exc): self._status_var.set(f'Install failed: {e}'))
+        threading.Thread(target=_do, daemon=True).start()
+
+    # ── Local tab ─────────────────────────────────────────────────
+
+    def _load_local(self):
+        self._local_plugins = _get_local_user_plugins()
+        self._render_local_list()
+
+    def _render_local_list(self):
+        parent = getattr(self, '_local_list', None)
+        if parent is None:
+            return
+        for w in parent.winfo_children():
+            w.destroy()
+        if not self._local_plugins:
+            tk.Label(parent, text='◇', bg=_WG_BODY_BG, fg=_WG_BORDER,
+                     font=get_sao_font(36)).pack(pady=(30, 8))
+            tk.Label(parent, text='无用户插件', bg=_WG_BODY_BG,
+                     fg=_WG_MUTED, font=get_cjk_font(11)).pack()
+            tk.Label(parent, text='使用「导入 .zip」按钮安装插件，或从在线商店下载。',
+                     bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(9),
+                     wraplength=400).pack(pady=(4, 0))
+            return
+        self._status_var.set(f'{len(self._local_plugins)} user plugins')
+        for idx, plugin in enumerate(self._local_plugins):
+            self._render_local_card(parent, plugin, idx)
+
+    def _render_local_card(self, parent, plugin: dict, idx: int):
+        pid = str(plugin.get('id') or '')
+        name = str(plugin.get('name') or pid)
+        version = str(plugin.get('version') or '')
+        author = str(plugin.get('author') or '')
+        desc = str(plugin.get('description') or '')[:100]
+
+        card = tk.Frame(parent, bg=_WG_CARD_BG, highlightthickness=1,
+                        highlightbackground=_WG_BORDER)
+        card.pack(fill='x', padx=14, pady=4)
+
+        rail = tk.Frame(card, bg=_WG_GREEN, width=3)
+        rail.pack(side='left', fill='y')
+
+        inner = tk.Frame(card, bg=_WG_CARD_BG)
+        inner.pack(fill='x', padx=12, pady=8)
+
+        # Top row: name + version
+        top = tk.Frame(inner, bg=_WG_CARD_BG)
+        top.pack(fill='x')
+        tk.Label(top, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(11, True), anchor='w').pack(side='left')
+        if version:
+            tk.Label(top, text=f'v{version}', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                     font=get_cjk_font(8), anchor='e').pack(side='right')
+
+        if author:
+            tk.Label(inner, text=f'by {author}', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                     font=get_cjk_font(9), anchor='w').pack(fill='x')
+        if desc:
+            tk.Label(inner, text=desc, bg=_WG_CARD_BG, fg=_WG_MUTED,
+                     font=get_cjk_font(9), anchor='w', wraplength=600).pack(fill='x', pady=(2, 0))
+
+        tk.Frame(inner, bg=_WG_SEP, height=1).pack(fill='x', pady=(6, 4))
+
+        # Action buttons
+        actions = tk.Frame(inner, bg=_WG_CARD_BG)
+        actions.pack(fill='x')
+
+        # Open in AI editor
+        ed_btn = tk.Label(actions, text='✦ AI Editor', bg=_WG_BADGE_BG, fg=_WG_GOLD,
+                          font=get_cjk_font(9, True), padx=8, pady=2, cursor='hand2')
+        ed_btn.pack(side='left', padx=(0, 4))
+        ed_btn.bind('<Button-1>', lambda e, p=plugin: self._open_in_editor(p))
+        ed_btn.bind('<Enter>', lambda e: ed_btn.configure(bg=_WG_GOLD_SOFT))
+        ed_btn.bind('<Leave>', lambda e: ed_btn.configure(bg=_WG_BADGE_BG))
+
+        # Upload to workshop
+        pub_btn = tk.Label(actions, text='↑ 上传', bg=_WG_BADGE_BG, fg=_WG_GOLD,
+                           font=get_cjk_font(9, True), padx=8, pady=2, cursor='hand2')
+        pub_btn.pack(side='left', padx=(0, 4))
+        pub_btn.bind('<Button-1>', lambda e, p=plugin: self._publish_local(p))
+        pub_btn.bind('<Enter>', lambda e: pub_btn.configure(bg=_WG_GOLD_SOFT))
+        pub_btn.bind('<Leave>', lambda e: pub_btn.configure(bg=_WG_BADGE_BG))
+
+        # Delete
+        del_btn = tk.Label(actions, text='删除', bg='#FFF0F0', fg=_WG_RED,
+                           font=get_cjk_font(9, True), padx=8, pady=2, cursor='hand2')
+        del_btn.pack(side='right')
+        del_btn.bind('<Button-1>', lambda e, p=pid: self._delete_local(p))
+        del_btn.bind('<Enter>', lambda e: del_btn.configure(bg='#FFE0E0'))
+        del_btn.bind('<Leave>', lambda e: del_btn.configure(bg='#FFF0F0'))
+
+        card.bind('<Enter>', lambda e, c=card: c.configure(highlightbackground=_WG_GOLD))
+        card.bind('<Leave>', lambda e, c=card: c.configure(highlightbackground=_WG_BORDER))
+
+    def _open_in_editor(self, plugin: dict):
+        try:
+            from ai_editor.app import launch
+            launch(gui_ref=self.owner)
+        except Exception as exc:
+            self._status_var.set(f'AI Editor: {exc}')
+
+    def _delete_local(self, plugin_id: str):
+        try:
+            from act_platform.runtime import act_plugin_uninstall
+            result = act_plugin_uninstall(self.owner, plugin_id)
+            msg = str(result.get('message') or ('已删除' if result.get('ok') else '删除失败'))
+            self._status_var.set(msg)
+        except Exception as exc:
+            self._status_var.set(f'删除失败: {exc}')
+        self._load_local()
+
+    def _import_local(self):
+        try:
+            path = filedialog.askopenfilename(
+                parent=self._win,
+                title='导入插件 Import plugin',
+                filetypes=(('SAO 插件包', '*.zip *.saoplugin'), ('All files', '*.*')),
+            )
+        except Exception:
+            return
+        if not path:
+            return
+        try:
+            from act_platform.runtime import act_plugin_import
+            result = act_plugin_import(self.owner, str(path))
+            msg = str(result.get('message') or ('已导入' if result.get('ok') else '导入失败'))
+            self._status_var.set(msg)
+        except Exception as exc:
+            self._status_var.set(f'导入失败: {exc}')
+        self._load_local()
+
+    def _publish_local(self, plugin: dict):
+        plugin_path = str(plugin.get('path') or '')
+        if not plugin_path or not os.path.isdir(plugin_path):
+            self._status_var.set('插件目录不存在')
+            return
+        self._status_var.set(f'正在打包 {plugin.get("name")}...')
+
+        def _do():
+            try:
+                import shutil
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    zip_base = os.path.join(tmp, str(plugin.get('id') or 'plugin'))
+                    zip_path = shutil.make_archive(zip_base, 'zip', plugin_path)
+                    client = _get_workshop_client()
+                    if client is None:
+                        self.root.after(0, lambda: self._status_var.set('Workshop server unavailable'))
+                        return
+                    meta_path = os.path.join(plugin_path, 'plugin.json')
+                    meta = {}
+                    if os.path.isfile(meta_path):
+                        with open(meta_path, 'r', encoding='utf-8') as f:
+                            meta = json.load(f)
+                    result = client.publish(zip_path, meta)
+                    ok = result.get('ok', False) if isinstance(result, dict) else False
+                    msg = '上传成功' if ok else str(result.get('error', '上传失败'))
+                    self.root.after(0, lambda m=msg: self._status_var.set(m))
+            except Exception as exc:
+                self.root.after(0, lambda e=str(exc): self._status_var.set(f'上传失败: {e}'))
 
         threading.Thread(target=_do, daemon=True).start()
+
+    # ── Publish tab ───────────────────────────────────────────────
+
+    def _refresh_publish_menu(self):
+        self._local_plugins = _get_local_user_plugins()
+        parent = self._publish_menu_frame
+        for w in parent.winfo_children():
+            w.destroy()
+        if not self._local_plugins:
+            tk.Label(parent, text='(无用户插件)', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                     font=get_cjk_font(9)).pack(side='left')
+            return
+        names = [f'{p["name"]} ({p["id"]})' for p in self._local_plugins]
+        self._publish_var.set(names[0] if names else '')
+        try:
+            om = tk.OptionMenu(parent, self._publish_var, *names)
+            om.configure(bg=_WG_CARD_BG, fg=_WG_TEXT, font=get_cjk_font(9),
+                         highlightthickness=1, highlightbackground=_WG_BORDER,
+                         relief='flat')
+            om.pack(side='left')
+        except Exception:
+            pass
+
+    def _browse_zip(self):
+        try:
+            path = filedialog.askopenfilename(
+                parent=self._win,
+                title='选择插件包',
+                filetypes=(('ZIP files', '*.zip'), ('All files', '*.*')),
+            )
+            if path:
+                self._zip_path_var.set(path)
+        except Exception:
+            pass
+
+    def _do_publish(self):
+        zip_path = self._zip_path_var.get().strip()
+        if zip_path and os.path.isfile(zip_path):
+            self._publish_zip(zip_path)
+            return
+        selected = self._publish_var.get().strip()
+        if not selected:
+            self._publish_status.configure(text='请选择一个插件或 .zip 文件', fg=_WG_RED)
+            return
+        plugin = None
+        for p in self._local_plugins:
+            label = f'{p["name"]} ({p["id"]})'
+            if label == selected:
+                plugin = p
+                break
+        if plugin is None:
+            self._publish_status.configure(text='未找到所选插件', fg=_WG_RED)
+            return
+        self._publish_local(plugin)
+
+    def _publish_zip(self, zip_path: str):
+        self._publish_status.configure(text='正在上传...', fg=_WG_GOLD)
+
+        def _do():
+            try:
+                client = _get_workshop_client()
+                if client is None:
+                    self.root.after(0, lambda: self._publish_status.configure(
+                        text='Workshop server unavailable', fg=_WG_RED))
+                    return
+                result = client.publish(zip_path, {})
+                ok = result.get('ok', False) if isinstance(result, dict) else False
+                msg = '上传成功' if ok else str(result.get('error', '上传失败'))
+                color = _WG_GREEN if ok else _WG_RED
+                self.root.after(0, lambda m=msg, c=color:
+                               self._publish_status.configure(text=m, fg=c))
+            except Exception as exc:
+                self.root.after(0, lambda e=str(exc):
+                               self._publish_status.configure(text=f'上传失败: {e}', fg=_WG_RED))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    # ── Resize ────────────────────────────────────────────────────
+
+    def _resize_start_cb(self, event):
+        self._resize_start = (event.x_root, event.y_root,
+                              self._win.winfo_width(), self._win.winfo_height())
+
+    def _resize_motion_cb(self, event):
+        if self._resize_start is None:
+            return
+        sx, sy, sw, sh = self._resize_start
+        new_w = max(640, sw + (event.x_root - sx))
+        new_h = max(420, sh + (event.y_root - sy))
+        x = self._win.winfo_x()
+        y = self._win.winfo_y()
+        self._win.geometry(f'{new_w}x{new_h}+{x}+{y}')
 
 
 __all__ = ['WorkshopPanel', 'WorkshopChildPreview']

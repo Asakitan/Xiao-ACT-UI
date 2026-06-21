@@ -1050,9 +1050,9 @@ class SAOPopUpMenu:
         shell = tk.Toplevel(self.root)
         shell.overrideredirect(True)
         shell.attributes('-topmost', True)
-        shell.configure(bg=_TRANSPARENT_KEY)
+        shell.configure(bg='#FFFCF5')
         try:
-            shell.attributes('-transparentcolor', _TRANSPARENT_KEY)
+            shell.attributes('-alpha', 0.98)
         except Exception:
             pass
         shell.withdraw()
