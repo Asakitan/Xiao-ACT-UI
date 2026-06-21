@@ -95,6 +95,7 @@ class AimbotState:
 
     def tick(self, local: Optional[dict],
              enemies: Sequence[dict]) -> Optional[Tuple[int, int]]:
+        """head_pos on each enemy is already resolved by timeshift."""
         if not self.enabled or not local:
             self.reset()
             return None
@@ -120,17 +121,19 @@ class AimbotState:
                 return angle_to_pixels(jp, jy, self.sensitivity, self.fov_scale)
             return None
 
+        sel_candidates = candidates
+
         # sticky target
         locked = None
         if self._locked_index >= 0:
-            for e in candidates:
+            for e in sel_candidates:
                 if e.get("index") == self._locked_index:
                     head = e.get("head_pos")
                     if head and angle_fov(angles, angle_to(eye, head)) < self.fov * 2.0:
                         locked = e
                     break
 
-        target = locked or best_target(eye, angles, candidates,
+        target = locked or best_target(eye, angles, sel_candidates,
                                        self.fov, self.max_distance)
         if target is None:
             self.reset()

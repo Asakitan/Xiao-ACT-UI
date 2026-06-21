@@ -21,7 +21,8 @@ from .cs2_local import HitStats
 from .cs2_offsets import OffsetConfig, default_config, load_config
 from .cs2_project import DEFAULT_VIEWPORT, build_overlay_spec, filter_enemies
 from .cs2_reader import EngineAReader
-from .cs2_rcs import AutoStopState, RCSState
+from .cs2_rcs import RCSState
+from .cs2_timeshift import TimeshiftEngine
 from .cs2_triggerbot import TriggerbotState
 
 PANEL_ID = "cs2_combat"
@@ -42,9 +43,9 @@ _last_spec: dict = {}
 # Feature states
 _aimbot = AimbotState()
 _rcs = RCSState()
-_autostop = AutoStopState()
 _triggerbot = TriggerbotState()
 _hitstats = HitStats()
+_ts = TimeshiftEngine()
 
 
 def on_load(ctx):
@@ -132,6 +133,7 @@ def _stop(reason: str = "manual") -> None:
     _aimbot.reset()
     _rcs.reset()
     _triggerbot.reset()
+    _ts.reset()
     if _ctx is not None:
         try:
             _ctx.clear_overlay(SURFACE)
@@ -193,10 +195,6 @@ def _sync_features():
     _rcs.jitter = _float("rcs_jitter", 0.0)
     _rcs.sensitivity = sens
 
-    # Auto-stop
-    _autostop.enabled = _bool("autostop_enabled", False)
-    _autostop.speed_threshold = _float("autostop_threshold", 10.0)
-
     # Triggerbot
     _triggerbot.enabled = _bool("triggerbot_enabled", False)
     _triggerbot.seed_mode = _bool("triggerbot_seed", False)
@@ -210,6 +208,16 @@ def _sync_features():
     _triggerbot.burst_max = _int("triggerbot_burst_max", 0)
     _triggerbot.burst_cooldown_ms = _int("triggerbot_burst_cooldown", 500)
     _triggerbot.visible_only = _bool("triggerbot_visible_only", True)
+
+    # Timeshift
+    _ts.backtrack.enabled = _bool("backtrack_enabled", False)
+    _ts.backtrack.max_window_ms = _float("backtrack_window_ms", 200.0)
+    _ts.selftrack.enabled = _bool("selftrack_enabled", False)
+    _ts.interp.enabled = _bool("interp_enabled", False)
+    _ts.interp.render_delay_ms = _float("interp_delay_ms", 0.0)
+    _ts.extrap.enabled = _bool("extrap_enabled", False)
+    _ts.extrap.lookahead_ms = _float("extrap_lookahead_ms", 20.0)
+    _ts.extrap.min_confidence = _float("extrap_min_confidence", 0.3)
 
 
 # ── tick ────────────────────────────────────────────────────────────────
@@ -260,6 +268,28 @@ def _tick() -> None:
         _aimbot.fov_scale = fov_scale
         _rcs.fov_scale = fov_scale
 
+    # --- Timeshift: feed all entity + local data ---
+    now = time.perf_counter()
+    for e in enemies:
+        origin = e.get("origin")
+        head = e.get("head_pos")
+        vel = e.get("velocity", (0, 0, 0))
+        if origin:
+            _ts.feed(e["index"], origin, head=head, vel=vel, now=now)
+    _ts.feed_local(local, now)
+    alive = {e["index"] for e in enemies}
+    _ts.cleanup(alive, now)
+
+    # Resolve aim targets via timeshift (backtrack/extrap/interp)
+    if local and local.get("eye_pos") and local.get("view_angles"):
+        eye = local["eye_pos"]
+        va = local["view_angles"]
+        for e in enemies:
+            idx = e.get("index", -1)
+            resolved = _ts.resolve_aim_target(idx, eye, va, now)
+            if resolved:
+                e["head_pos"] = resolved
+
     # Hit stats
     if local:
         _hitstats.update(local.get("shots_fired", 0), enemies)
@@ -267,12 +297,11 @@ def _tick() -> None:
     # --- Aimbot ---
     aim_delta = _aimbot.tick(local, enemies)
 
-    # --- Auto-stop (before aimbot move) ---
-    if _autostop.enabled and _aimbot.has_target and local:
-        if _autostop.should_stop(local):
-            keys = _autostop.get_counter_keys(local)
-            for vk in keys:
-                key_tap(vk, _autostop.tap_ms)
+    # --- Auto-stop (selftrack) ---
+    if _ts.selftrack.enabled and _aimbot.has_target:
+        if _ts.selftrack.should_autostop():
+            for vk in _ts.selftrack.counter_keys():
+                key_tap(vk, 20)
 
     if aim_delta:
         move_mouse(aim_delta[0], aim_delta[1])
@@ -438,12 +467,28 @@ def _render(_payload=None) -> dict:
                                 f"{_triggerbot.burst_cooldown_ms}ms CD"))
     nodes.append(ui.section("板机", trig_items))
 
-    # ── Auto-stop ──
-    as_on = _bool("autostop_enabled", False)
-    nodes.append(ui.section("急停", [
-        ui.row([ui.badge("ON" if as_on else "OFF", "ok" if as_on else "muted")]),
-        ui.kv("阈值", f"{_autostop.speed_threshold:.0f} u/s"),
-    ]))
+    # ── Timeshift ──
+    bt_on = _ts.backtrack.enabled
+    st_on = _ts.selftrack.enabled
+    ip_on = _ts.interp.enabled
+    ex_on = _ts.extrap.enabled
+    any_ts = bt_on or st_on or ip_on or ex_on
+    ts_badges = []
+    if bt_on: ts_badges.append(ui.badge("回溯", "gold"))
+    if st_on: ts_badges.append(ui.badge("自跟踪", "accent"))
+    if ip_on: ts_badges.append(ui.badge("插值", "cyan"))
+    if ex_on: ts_badges.append(ui.badge("外推", "ok"))
+    if not any_ts: ts_badges.append(ui.badge("全关", "muted"))
+    ts_items = [ui.row(ts_badges)]
+    if bt_on:
+        ts_items.append(ui.kv("回溯窗口", f"{_ts.backtrack.max_window_ms:.0f} ms"))
+    if ex_on:
+        ts_items.append(ui.kv("前瞻", f"{_ts.extrap.lookahead_ms:.0f} ms"))
+    if st_on:
+        ts_items.append(ui.kv("自身速度", f"{_ts.selftrack.speed:.0f} u/s"))
+        ts_items.append(ui.kv("移动状态", _ts.selftrack.strafe_state))
+    ts_items.append(ui.kv("跟踪实体", f"{len(_ts._timelines)}"))
+    nodes.append(ui.section("时间操纵", ts_items))
 
     # ── Controls ──
     nodes.append(ui.divider())

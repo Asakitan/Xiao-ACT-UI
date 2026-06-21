@@ -175,7 +175,11 @@ class TriggerbotState:
 
     def _hitchance_check(self, local: dict,
                          enemies: Sequence[dict]) -> tuple:
-        """Hitchance mode: fire when computed hit probability ≥ threshold."""
+        """Hitchance mode: fire when hit probability ≥ threshold.
+
+        head_pos on each enemy is already resolved by timeshift
+        (backtrack/extrap/interp) before this is called.
+        """
         eye = local.get("eye_pos")
         angles = local.get("view_angles")
         if not eye or not angles:
@@ -201,7 +205,7 @@ class TriggerbotState:
 
             if hc > best_hc:
                 best_hc = hc
-                best_id = e.get("index", -1)
+                best_id = idx
 
         if best_id < 0 or best_hc < self.hitchance_min:
             return (False, best_id)

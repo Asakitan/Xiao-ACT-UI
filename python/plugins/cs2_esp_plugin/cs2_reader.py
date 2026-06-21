@@ -108,30 +108,37 @@ class EngineAReader:
             pass
         # Manual EPROCESS iteration via rt_io kernel primitives
         try:
-            initial = rt_io._r1_fp()
-            if not initial:
+            rt_io._resolve_ep_offsets()
+            ps_ptr = rt_io._r1_fp()
+            if not ps_ptr:
                 return 0
-            off_links = getattr(rt_io, "_OFF_LINKS", 0x448)
-            off_pid = getattr(rt_io, "_OFF_PID", 0x440)
-            off_name = getattr(rt_io, "_OFF_NAME", 0x5A8)
-            cur = rt_io._r1_v8(initial + off_links)
+            system_ep = rt_io._r1_v8(ps_ptr)
+            if not system_ep:
+                return 0
+            off_apl = rt_io._OFF_APL
+            off_pid = rt_io._OFF_PID
+            off_name = rt_io._OFF_NAME
+            if not off_apl or not off_pid:
+                return 0
+            cur = rt_io._r1_v8(system_ep + off_apl)
             if not cur:
                 return 0
-            head = initial + off_links
+            head = system_ep + off_apl
             visited = set()
             while cur and cur != head and cur not in visited and len(visited) < 512:
                 visited.add(cur)
-                ep = cur - off_links
-                img_raw = rt_io._r1_vn(ep + off_name, 15)
-                if img_raw:
-                    try:
-                        img = img_raw.split(b"\x00", 1)[0].decode("utf-8", "replace").lower()
-                        if img == name:
-                            pid = rt_io._r1_v8(ep + off_pid)
-                            if pid and pid > 0:
-                                return int(pid)
-                    except Exception:
-                        pass
+                ep = cur - off_apl
+                if off_name:
+                    img_raw = rt_io._r1_r(ep + off_name, 15, 2)
+                    if img_raw:
+                        try:
+                            img = img_raw.split(b"\x00", 1)[0].decode("utf-8", "replace").lower()
+                            if img == name:
+                                pid = rt_io._r1_v4(ep + off_pid)
+                                if pid and pid > 0:
+                                    return int(pid)
+                        except Exception:
+                            pass
                 nxt = rt_io._r1_v8(cur)
                 if not nxt:
                     break
