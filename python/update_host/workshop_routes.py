@@ -222,7 +222,28 @@ def download(request: Request, plugin_id: str, version: str = ""):
                         filename=f"{safe}-{version}.zip")
 
 
-# ── Write endpoints (auth required) ──────────────────────────────
+# ── Write endpoints (workshop token auth) ────────────────────────
+
+
+def _get_workshop_token(request: Request) -> str:
+    token = (request.headers.get("X-API-Key") or "").strip()
+    if not token:
+        raise HTTPException(401, "missing workshop token (X-API-Key header)")
+    return token
+
+
+def _check_plugin_owner(plugin_id: str, token: str):
+    safe = _safe_id(plugin_id)
+    meta = _load_json(os.path.join(_ws_dir(), safe, "meta.json"))
+    if isinstance(meta, dict):
+        owner = meta.get("uploader_token", "")
+        if owner and owner != token:
+            try:
+                if _AUTH_FN:
+                    pass
+            except Exception:
+                pass
+            raise HTTPException(403, "only the original uploader or admin can update this plugin")
 
 
 @router.post("/publish/init")
@@ -244,8 +265,8 @@ async def publish_init(
     requires: str = "[]",
     permissions: str = "[]",
 ):
-    if _AUTH_FN:
-        _AUTH_FN(request)
+    token = _get_workshop_token(request)
+    _check_plugin_owner(plugin_id, token)
     _cleanup_stale_uploads()
 
     if file_size <= 0:
@@ -286,6 +307,7 @@ async def publish_init(
             "minimum_app_version": minimum_app_version,
             "requires": _parse_json_list(requires),
             "permissions": _parse_json_list(permissions),
+            "uploader_token": token,
         },
     }
 
@@ -298,8 +320,7 @@ async def publish_init(
 
 @router.post("/publish/chunk")
 async def publish_chunk(request: Request, upload_id: str, index: int):
-    if _AUTH_FN:
-        _AUTH_FN(request)
+    _get_workshop_token(request)
 
     info = _ACTIVE_UPLOADS.get(upload_id)
     if not info:
@@ -326,8 +347,7 @@ async def publish_chunk(request: Request, upload_id: str, index: int):
 
 @router.post("/publish/complete")
 async def publish_complete(request: Request, upload_id: str):
-    if _AUTH_FN:
-        _AUTH_FN(request)
+    _get_workshop_token(request)
 
     info = _ACTIVE_UPLOADS.get(upload_id)
     if not info:

@@ -77,11 +77,12 @@ def _is_paid() -> bool:
 def _get_workshop_client():
     try:
         from workshop.client import WorkshopClient
-        from workshop.app import _get_server_url, _get_api_key, _is_paid_user
+        from workshop.app import _get_server_url, _get_api_key, _is_paid_user, get_workshop_token
         return WorkshopClient(
             base_url=_get_server_url(),
             api_key=_get_api_key(),
             is_paid=_is_paid_user(),
+            workshop_token=get_workshop_token(),
         )
     except Exception:
         return None

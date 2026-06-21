@@ -94,6 +94,7 @@ class WorkshopAPI:
                 base_url=_get_server_url(),
                 api_key=_get_api_key(),
                 is_paid=_is_paid_user(),
+                workshop_token=get_workshop_token(),
             )
         return self._client
 
@@ -192,8 +193,8 @@ class WorkshopAPI:
     def upload(self, zip_path: str, metadata: Dict) -> Dict:
         try:
             client = self._ensure_client()
-            if not client.api_key:
-                return {"ok": False, "error": "未配置 API Key，无法上传"}
+            if not client.workshop_token:
+                return {"ok": False, "error": "无法生成上传凭证"}
             return client.publish(zip_path, metadata)
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -261,6 +262,12 @@ def generate_plugin_id(plugin_name: str) -> str:
     hwid = _get_hwid()[:16]
     name_hash = hashlib.sha256(plugin_name.strip().lower().encode("utf-8")).hexdigest()[:8]
     return f"{name_hash}-{hwid[:8]}"
+
+
+def get_workshop_token() -> str:
+    import hashlib
+    hwid = _get_hwid()
+    return hashlib.sha256(f"sao-workshop-{hwid}".encode()).hexdigest()[:32]
 
 
 def _get_api_key() -> str:

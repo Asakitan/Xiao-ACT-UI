@@ -38,10 +38,11 @@ def _post_json(url: str, api_key: str, body: bytes = b"",
 
 
 class WorkshopClient:
-    def __init__(self, base_url: str, api_key: str = "", is_paid: bool = False):
+    def __init__(self, base_url: str, api_key: str = "", is_paid: bool = False, workshop_token: str = ""):
         self.base = base_url.rstrip("/")
         self.api_key = api_key
         self.is_paid = is_paid
+        self.workshop_token = workshop_token
 
     def catalog(self, game_id: str = "", search: str = "", tag: str = "",
                 page: int = 1, per_page: int = 40, sort: str = "updated_at") -> dict:
@@ -132,8 +133,9 @@ class WorkshopClient:
             "permissions": json.dumps(metadata.get("permissions", [])),
         }
 
+        token = self.workshop_token or self.api_key
         qs = urllib.parse.urlencode(init_params)
-        init_resp = _post_json(f"{self.base}/api/workshop/publish/init?{qs}", self.api_key)
+        init_resp = _post_json(f"{self.base}/api/workshop/publish/init?{qs}", token)
         upload_id = init_resp["upload_id"]
         chunk_size = int(init_resp["chunk_size"])
         total_chunks = int(init_resp["total_chunks"])
@@ -145,7 +147,7 @@ class WorkshopClient:
                 chunk_qs = urllib.parse.urlencode({"upload_id": upload_id, "index": str(idx)})
                 _post_json(
                     f"{self.base}/api/workshop/publish/chunk?{chunk_qs}",
-                    self.api_key,
+                    token,
                     body=data,
                     timeout=_DL_TIMEOUT,
                 )
@@ -154,4 +156,4 @@ class WorkshopClient:
                     progress_cb(sent, file_size)
 
         complete_qs = urllib.parse.urlencode({"upload_id": upload_id})
-        return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", self.api_key)
+        return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", token)
