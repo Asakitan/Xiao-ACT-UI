@@ -96,7 +96,7 @@ python post_build_harden.py "%RELEASE%\runtime"
 :: ---- [6/6] Verify ----
 echo [6/6] Verify
 echo.
-for %%F in ("%RELEASE%\XiaoACTUI.exe") do echo   Launcher: %%~zF bytes
+for %%F in ("%RELEASE%\linkstart.exe") do echo   Launcher: %%~zF bytes
 for %%F in ("%RELEASE%\runtime\XiaoACTUI.exe") do echo   Runtime:  %%~zF bytes
 echo.
 echo BUILD OK
