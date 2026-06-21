@@ -90,13 +90,19 @@ class WorkshopAPI:
     def _ensure_client(self):
         if self._client is None:
             from workshop.client import WorkshopClient
-            self._client = WorkshopClient(base_url=_get_server_url())
+            self._client = WorkshopClient(
+                base_url=_get_server_url(),
+                api_key=_get_api_key(),
+                is_paid=_is_paid_user(),
+            )
         return self._client
 
     def load_config(self) -> Dict:
         return {
             "server": _get_server_url(),
             "version": _get_app_version(),
+            "has_api_key": bool(_get_api_key()),
+            "is_paid": _is_paid_user(),
         }
 
     def browse(self, game_id: str = "", tag: str = "", search: str = "",
@@ -183,6 +189,53 @@ class WorkshopAPI:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def upload(self, zip_path: str, metadata: Dict) -> Dict:
+        try:
+            client = self._ensure_client()
+            if not client.api_key:
+                return {"ok": False, "error": "未配置 API Key，无法上传"}
+            return client.publish(zip_path, metadata)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def get_local_plugins(self) -> List[Dict]:
+        results = []
+        for base in (os.path.join(_ROOT, "user_plugins"), os.path.join(_ROOT, "plugins")):
+            if not os.path.isdir(base):
+                continue
+            for name in sorted(os.listdir(base)):
+                pdir = os.path.join(base, name)
+                mf = os.path.join(pdir, "plugin.json")
+                if not os.path.isfile(mf):
+                    continue
+                try:
+                    with open(mf, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    results.append({
+                        "plugin_id": data.get("id", name),
+                        "name": data.get("name", name),
+                        "version": data.get("version", "0.0.0"),
+                        "description": data.get("description", ""),
+                        "game_ids": data.get("game_ids", []),
+                        "path": pdir,
+                    })
+                except Exception:
+                    results.append({"plugin_id": name, "name": name, "version": "?", "path": pdir})
+        return results
+
+    def pick_file(self) -> str:
+        try:
+            result = self._window.create_file_dialog(
+                dialog_type=1,
+                allow_multiple=False,
+                file_types=("Zip Archives (*.zip)",),
+            )
+            if result and len(result) > 0:
+                return str(result[0])
+        except Exception:
+            pass
+        return ""
+
     def close_window(self):
         if self._window:
             try:
@@ -191,6 +244,26 @@ class WorkshopAPI:
                 self._window.destroy()
             except Exception:
                 pass
+
+
+def _get_api_key() -> str:
+    try:
+        cfg_path = os.path.join(_ROOT, "dev_publish_config.json")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return str(data.get("publish_api_key", "")).strip()
+    except Exception:
+        pass
+    return os.environ.get("SAO_UPDATE_API_KEY", "").strip()
+
+
+def _is_paid_user() -> bool:
+    try:
+        from license import get_license_manager
+        return bool(get_license_manager().is_paid)
+    except Exception:
+        return False
 
 
 def _get_app_version() -> str:

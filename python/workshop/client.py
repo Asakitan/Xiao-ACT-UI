@@ -38,9 +38,10 @@ def _post_json(url: str, api_key: str, body: bytes = b"",
 
 
 class WorkshopClient:
-    def __init__(self, base_url: str, api_key: str = ""):
+    def __init__(self, base_url: str, api_key: str = "", is_paid: bool = False):
         self.base = base_url.rstrip("/")
         self.api_key = api_key
+        self.is_paid = is_paid
 
     def catalog(self, game_id: str = "", search: str = "", tag: str = "",
                 page: int = 1, per_page: int = 40, sort: str = "updated_at") -> dict:
@@ -78,7 +79,10 @@ class WorkshopClient:
         dst = os.path.join(dest_dir, f"{safe_id}.zip")
         tmp = dst + ".part"
 
-        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        headers = {"User-Agent": _UA}
+        if self.is_paid:
+            headers["X-Paid-User"] = "true"
+        req = urllib.request.Request(url, headers=headers)
         sha = hashlib.sha256()
         total = 0
 
@@ -122,6 +126,7 @@ class WorkshopClient:
             "game_ids": json.dumps(metadata.get("game_ids", [])),
             "tags": json.dumps(metadata.get("tags", [])),
             "language": metadata.get("language", "python"),
+            "access_level": metadata.get("access_level", "free"),
             "minimum_app_version": metadata.get("minimum_app_version", ""),
             "requires": json.dumps(metadata.get("requires", [])),
             "permissions": json.dumps(metadata.get("permissions", [])),

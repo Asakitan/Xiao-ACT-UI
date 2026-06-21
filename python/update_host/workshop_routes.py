@@ -94,6 +94,7 @@ def _rebuild_catalog_entry(plugin_id: str, meta: dict) -> dict:
         "icon_url": meta.get("icon_url", ""),
         "download_count": meta.get("download_count", 0),
         "size": meta.get("size", 0),
+        "access_level": meta.get("access_level", "free"),
         "published_at": meta.get("published_at", ""),
         "updated_at": meta.get("updated_at", ""),
     }
@@ -188,11 +189,19 @@ def detail(plugin_id: str):
 
 
 @router.get("/download/{plugin_id}")
-def download(plugin_id: str, version: str = ""):
+def download(request: Request, plugin_id: str, version: str = ""):
     safe = _safe_id(plugin_id)
     pdir = os.path.join(_ws_dir(), safe)
     if not os.path.isdir(pdir):
         raise HTTPException(404, f"plugin {safe} not found")
+
+    meta_path = os.path.join(pdir, "meta.json")
+    meta = _load_json(meta_path)
+
+    if isinstance(meta, dict) and meta.get("access_level") == "paid":
+        client_paid = request.headers.get("X-Paid-User", "").lower() in ("true", "1")
+        if not client_paid:
+            raise HTTPException(403, "This plugin requires a paid license")
 
     if not version:
         manifest = _load_json(os.path.join(pdir, "manifest.json"))
@@ -204,8 +213,6 @@ def download(plugin_id: str, version: str = ""):
     if not os.path.isfile(zip_path):
         raise HTTPException(404, f"version {version} not found for {safe}")
 
-    meta_path = os.path.join(pdir, "meta.json")
-    meta = _load_json(meta_path)
     if isinstance(meta, dict):
         meta["download_count"] = meta.get("download_count", 0) + 1
         _save_json(meta_path, meta)
@@ -232,6 +239,7 @@ async def publish_init(
     game_ids: str = "[]",
     tags: str = "[]",
     language: str = "python",
+    access_level: str = "free",
     minimum_app_version: str = "",
     requires: str = "[]",
     permissions: str = "[]",
@@ -274,6 +282,7 @@ async def publish_init(
             "game_ids": _parse_json_list(game_ids),
             "tags": _parse_json_list(tags),
             "language": language,
+            "access_level": access_level if access_level in ("free", "paid") else "free",
             "minimum_app_version": minimum_app_version,
             "requires": _parse_json_list(requires),
             "permissions": _parse_json_list(permissions),

@@ -66,11 +66,23 @@ def _finite_int(v: Any, default: int = 0, *, lo: int | None = None,
     return int(n)
 
 
+def _is_paid() -> bool:
+    try:
+        from workshop.app import _is_paid_user
+        return _is_paid_user()
+    except Exception:
+        return False
+
+
 def _get_workshop_client():
     try:
         from workshop.client import WorkshopClient
-        from workshop.app import _get_server_url
-        return WorkshopClient(base_url=_get_server_url())
+        from workshop.app import _get_server_url, _get_api_key, _is_paid_user
+        return WorkshopClient(
+            base_url=_get_server_url(),
+            api_key=_get_api_key(),
+            is_paid=_is_paid_user(),
+        )
     except Exception:
         return None
 
@@ -640,18 +652,43 @@ class WorkshopPanel:
         canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
 
     def _build_publish_tab(self, parent: tk.Frame):
-        body = tk.Frame(parent, bg=_WG_BODY_BG)
-        body.pack(fill='both', expand=True, padx=14, pady=14)
+        outer = tk.Frame(parent, bg=_WG_BODY_BG)
+        outer.pack(fill='both', expand=True)
+        canvas = tk.Canvas(outer, bg=_WG_BODY_BG, highlightthickness=0)
+        scrollbar = sao_scrollbar(outer, canvas.yview)
+        body = tk.Frame(canvas, bg=_WG_BODY_BG)
+        body.bind('<Configure>', lambda _: canvas.configure(scrollregion=canvas.bbox('all')))
+        _wid = canvas.create_window((0, 0), window=body, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_wid, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(14, 0), pady=10)
+        scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=10)
+        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+
+        lbl_font = get_cjk_font(9)
+        entry_font = get_cjk_font(10)
 
         tk.Label(body, text='上传插件到创意工坊', bg=_WG_BODY_BG, fg=_WG_TEXT,
                  font=get_cjk_font(12, True), anchor='w').pack(fill='x', pady=(0, 4))
-        tk.Label(body, text='选择一个本地插件的 .zip 包上传到创意工坊供其他用户下载。',
-                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(9),
+        tk.Label(body, text='填写插件信息并选择 .zip 包上传，其他用户即可浏览和下载。',
+                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=lbl_font,
                  anchor='w', wraplength=600).pack(fill='x', pady=(0, 12))
 
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(0, 12))
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(0, 10))
 
-        # Plugin selector from local user plugins
+        def _field(parent, label_text, var, width=50):
+            row = tk.Frame(parent, bg=_WG_BODY_BG)
+            row.pack(fill='x', pady=(0, 6))
+            tk.Label(row, text=label_text, bg=_WG_BODY_BG, fg=_WG_MUTED,
+                     font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+            e = tk.Entry(row, textvariable=var, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                         font=entry_font, relief='flat', highlightthickness=1,
+                         highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
+                         width=width)
+            e.pack(side='left', fill='x', expand=True)
+            return e
+
+        # Select from local plugins
         sel_frame = tk.Frame(body, bg=_WG_BODY_BG)
         sel_frame.pack(fill='x', pady=(0, 8))
         tk.Label(sel_frame, text='选择插件:', bg=_WG_BODY_BG, fg=_WG_TEXT,
@@ -659,16 +696,82 @@ class WorkshopPanel:
         self._publish_var = tk.StringVar()
         self._publish_menu_frame = tk.Frame(sel_frame, bg=_WG_BODY_BG)
         self._publish_menu_frame.pack(side='left', padx=(8, 0))
+        fill_btn = tk.Label(sel_frame, text='填入', bg=_WG_CARD_BG, fg=_WG_GOLD,
+                            font=get_cjk_font(9, True), padx=8, pady=2, cursor='hand2',
+                            highlightthickness=1, highlightbackground=_WG_BORDER)
+        fill_btn.pack(side='left', padx=(8, 0))
+        fill_btn.bind('<Button-1>', lambda e: self._fill_from_selected())
 
-        # Or select zip file
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 8))
+
+        # Metadata fields
+        self._pub_id_var = tk.StringVar()
+        self._pub_name_var = tk.StringVar()
+        self._pub_version_var = tk.StringVar(value='1.0.0')
+        self._pub_author_var = tk.StringVar()
+        self._pub_desc_var = tk.StringVar()
+        self._pub_games_var = tk.StringVar()
+        self._pub_tags_var = tk.StringVar()
+
+        _field(body, '插件 ID', self._pub_id_var)
+        _field(body, '显示名称', self._pub_name_var)
+
+        row2 = tk.Frame(body, bg=_WG_BODY_BG)
+        row2.pack(fill='x', pady=(0, 6))
+        tk.Label(row2, text='版本', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+        tk.Entry(row2, textvariable=self._pub_version_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                 font=entry_font, relief='flat', highlightthickness=1,
+                 highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
+                 width=15).pack(side='left')
+        tk.Label(row2, text='作者', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, anchor='e').pack(side='left', padx=(16, 6))
+        tk.Entry(row2, textvariable=self._pub_author_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                 font=entry_font, relief='flat', highlightthickness=1,
+                 highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
+                 width=20).pack(side='left', fill='x', expand=True)
+
+        _field(body, '简介', self._pub_desc_var)
+
+        # Long description
+        tk.Label(body, text='详细介绍 (可选)', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, anchor='w').pack(fill='x', padx=(0, 0), pady=(0, 2))
+        self._pub_long_desc = tk.Text(body, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                                       font=entry_font, relief='flat', height=4,
+                                       highlightthickness=1, highlightbackground=_WG_BORDER,
+                                       insertbackground=_WG_TEXT, wrap='word')
+        self._pub_long_desc.pack(fill='x', pady=(0, 6))
+
+        _field(body, '游戏 (逗号隔)', self._pub_games_var)
+        _field(body, '标签 (逗号隔)', self._pub_tags_var)
+
+        # Access level
+        acc_frame = tk.Frame(body, bg=_WG_BODY_BG)
+        acc_frame.pack(fill='x', pady=(0, 6))
+        tk.Label(acc_frame, text='访问权限', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+        self._pub_access_var = tk.StringVar(value='free')
+        tk.Radiobutton(acc_frame, text='免费 (所有用户)', variable=self._pub_access_var,
+                       value='free', bg=_WG_BODY_BG, fg=_WG_TEXT, selectcolor=_WG_CARD_BG,
+                       font=lbl_font, activebackground=_WG_BODY_BG,
+                       activeforeground=_WG_TEXT).pack(side='left', padx=(0, 12))
+        tk.Radiobutton(acc_frame, text='★ 高级版专属 (付费用户)', variable=self._pub_access_var,
+                       value='paid', bg=_WG_BODY_BG, fg='#ffc040', selectcolor=_WG_CARD_BG,
+                       font=lbl_font, activebackground=_WG_BODY_BG,
+                       activeforeground='#ffc040').pack(side='left')
+
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 8))
+
+        # Zip file selector
         or_frame = tk.Frame(body, bg=_WG_BODY_BG)
         or_frame.pack(fill='x', pady=(0, 8))
-        tk.Label(or_frame, text='或选择 .zip 文件:', bg=_WG_BODY_BG, fg=_WG_TEXT,
-                 font=get_cjk_font(10), anchor='w').pack(side='left')
+        tk.Label(or_frame, text='.zip 文件', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
         self._zip_path_var = tk.StringVar()
-        tk.Label(or_frame, textvariable=self._zip_path_var, bg=_WG_CARD_BG,
-                 fg=_WG_TEXT, font=get_cjk_font(9), anchor='w',
-                 padx=6, pady=2, width=40).pack(side='left', padx=(8, 4))
+        tk.Entry(or_frame, textvariable=self._zip_path_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
+                 font=entry_font, relief='flat', highlightthickness=1,
+                 highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
+                 state='readonly', width=40).pack(side='left', fill='x', expand=True, padx=(0, 4))
         browse_btn = tk.Label(or_frame, text='浏览', bg=_WG_CARD_BG, fg=_WG_TEXT,
                               font=get_cjk_font(9, True), padx=8, pady=2,
                               cursor='hand2', highlightthickness=1,
@@ -676,9 +779,9 @@ class WorkshopPanel:
         browse_btn.pack(side='left')
         browse_btn.bind('<Button-1>', lambda e: self._browse_zip())
 
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(8, 12))
+        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 10))
 
-        pub_btn = tk.Label(body, text='上传到创意工坊', bg=_WG_GOLD, fg='#FFFFFF',
+        pub_btn = tk.Label(body, text='  上传到创意工坊  ', bg=_WG_GOLD, fg='#FFFFFF',
                            font=get_cjk_font(11, True), padx=16, pady=6, cursor='hand2')
         pub_btn.pack(anchor='w')
         pub_btn.bind('<Button-1>', lambda e: self._do_publish())
@@ -686,7 +789,7 @@ class WorkshopPanel:
         pub_btn.bind('<Leave>', lambda e: pub_btn.configure(bg=_WG_GOLD))
 
         self._publish_status = tk.Label(body, text='', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                                        font=get_cjk_font(9), anchor='w')
+                                        font=get_cjk_font(9), anchor='w', wraplength=500)
         self._publish_status.pack(fill='x', pady=(8, 0))
 
     # ── Tab switching ─────────────────────────────────────────────
@@ -806,6 +909,7 @@ class WorkshopPanel:
         desc = str(plugin.get('description') or '')[:80]
         installed = pid in self._installed
         downloads = _finite_int(plugin.get('download_count'), 0, lo=0)
+        access = str(plugin.get('access_level') or 'free')
         base_font = max(8, int(9 * z))
         title_font = max(9, int(11 * z))
 
@@ -832,11 +936,19 @@ class WorkshopPanel:
 
         footer = tk.Frame(inner, bg=_WG_CARD_BG)
         footer.pack(fill='x')
+        badge_font = get_cjk_font(max(7, int(8 * z)))
         tk.Label(footer, text=f'↓ {downloads}', bg=_WG_BADGE_BG, fg=_WG_MUTED,
-                 font=get_cjk_font(max(7, int(8 * z))), padx=4, pady=1).pack(side='left', padx=(0, 4))
+                 font=badge_font, padx=4, pady=1).pack(side='left', padx=(0, 4))
+        if access == 'paid':
+            tk.Label(footer, text='★ PREMIUM', bg='#3a2010', fg='#ffc040',
+                     font=badge_font, padx=6, pady=1).pack(side='left', padx=(0, 4))
+        is_paid_user = _is_paid()
         if installed:
             tk.Label(footer, text='✓ 已安装', bg='#E8F5E9', fg=_WG_GREEN,
-                     font=get_cjk_font(max(7, int(8 * z))), padx=6, pady=1).pack(side='right')
+                     font=badge_font, padx=6, pady=1).pack(side='right')
+        elif access == 'paid' and not is_paid_user:
+            tk.Label(footer, text='高级版专属', bg='#2a1a10', fg='#c09050',
+                     font=badge_font, padx=8, pady=2).pack(side='right')
         else:
             install_btn = tk.Label(footer, text='安装', bg=_WG_GOLD, fg='#FFFFFF',
                                    font=get_cjk_font(max(7, int(8 * z)), True),
@@ -1045,12 +1157,12 @@ class WorkshopPanel:
             self._status_var.set(f'导入失败: {exc}')
         self._load_local()
 
-    def _publish_local(self, plugin: dict):
+    def _publish_local(self, plugin: dict, form_meta: dict | None = None):
         plugin_path = str(plugin.get('path') or '')
         if not plugin_path or not os.path.isdir(plugin_path):
-            self._status_var.set('插件目录不存在')
+            self._publish_status.configure(text='插件目录不存在', fg=_WG_RED)
             return
-        self._status_var.set(f'正在打包 {plugin.get("name")}...')
+        self._publish_status.configure(text=f'正在打包 {plugin.get("name")}...', fg=_WG_GOLD)
 
         def _do():
             try:
@@ -1061,19 +1173,30 @@ class WorkshopPanel:
                     zip_path = shutil.make_archive(zip_base, 'zip', plugin_path)
                     client = _get_workshop_client()
                     if client is None:
-                        self.root.after(0, lambda: self._status_var.set('Workshop server unavailable'))
+                        self.root.after(0, lambda: self._publish_status.configure(
+                            text='Workshop server unavailable', fg=_WG_RED))
                         return
-                    meta_path = os.path.join(plugin_path, 'plugin.json')
                     meta = {}
+                    meta_path = os.path.join(plugin_path, 'plugin.json')
                     if os.path.isfile(meta_path):
                         with open(meta_path, 'r', encoding='utf-8') as f:
                             meta = json.load(f)
+                    if form_meta:
+                        for k, v in form_meta.items():
+                            if v:
+                                meta[k] = v
                     result = client.publish(zip_path, meta)
                     ok = result.get('ok', False) if isinstance(result, dict) else False
-                    msg = '上传成功' if ok else str(result.get('error', '上传失败'))
-                    self.root.after(0, lambda m=msg: self._status_var.set(m))
+                    name = ''
+                    if isinstance(result, dict) and isinstance(result.get('plugin'), dict):
+                        name = result['plugin'].get('name', '')
+                    msg = f'上传成功! {name}' if ok else str(result.get('error', '上传失败'))
+                    color = _WG_GREEN if ok else _WG_RED
+                    self.root.after(0, lambda m=msg, c=color:
+                                   self._publish_status.configure(text=m, fg=c))
             except Exception as exc:
-                self.root.after(0, lambda e=str(exc): self._status_var.set(f'上传失败: {e}'))
+                self.root.after(0, lambda e=str(exc):
+                               self._publish_status.configure(text=f'上传失败: {e}', fg=_WG_RED))
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1099,6 +1222,44 @@ class WorkshopPanel:
         except Exception:
             pass
 
+    def _fill_from_selected(self):
+        selected = self._publish_var.get().strip()
+        if not selected:
+            return
+        plugin = None
+        for p in self._local_plugins:
+            label = f'{p["name"]} ({p["id"]})'
+            if label == selected:
+                plugin = p
+                break
+        if plugin is None:
+            return
+        self._pub_id_var.set(plugin.get('id', ''))
+        self._pub_name_var.set(plugin.get('name', ''))
+        self._pub_version_var.set(plugin.get('version', '1.0.0'))
+        self._pub_desc_var.set(plugin.get('description', ''))
+        self._pub_games_var.set(', '.join(plugin.get('game_ids', [])))
+        self._pub_author_var.set(plugin.get('author', ''))
+
+    def _collect_publish_meta(self) -> dict:
+        def _split(s): return [x.strip() for x in s.split(',') if x.strip()]
+        long_desc = ''
+        try:
+            long_desc = self._pub_long_desc.get('1.0', 'end-1c').strip()
+        except Exception:
+            pass
+        return {
+            'plugin_id': self._pub_id_var.get().strip(),
+            'name': self._pub_name_var.get().strip(),
+            'version': self._pub_version_var.get().strip() or '1.0.0',
+            'author': self._pub_author_var.get().strip(),
+            'description': self._pub_desc_var.get().strip(),
+            'long_description': long_desc,
+            'game_ids': _split(self._pub_games_var.get()),
+            'tags': _split(self._pub_tags_var.get()),
+            'access_level': self._pub_access_var.get().strip() or 'free',
+        }
+
     def _browse_zip(self):
         try:
             path = filedialog.askopenfilename(
@@ -1112,10 +1273,19 @@ class WorkshopPanel:
             pass
 
     def _do_publish(self):
+        meta = self._collect_publish_meta()
+        if not meta.get('plugin_id'):
+            self._publish_status.configure(text='请填写插件 ID', fg=_WG_RED)
+            return
+        if meta.get('access_level') == 'paid' and not _is_paid():
+            self._publish_status.configure(text='只有付费用户才能上传高级版专属插件', fg=_WG_RED)
+            return
+
         zip_path = self._zip_path_var.get().strip()
         if zip_path and os.path.isfile(zip_path):
-            self._publish_zip(zip_path)
+            self._publish_zip(zip_path, meta)
             return
+
         selected = self._publish_var.get().strip()
         if not selected:
             self._publish_status.configure(text='请选择一个插件或 .zip 文件', fg=_WG_RED)
@@ -1129,9 +1299,11 @@ class WorkshopPanel:
         if plugin is None:
             self._publish_status.configure(text='未找到所选插件', fg=_WG_RED)
             return
-        self._publish_local(plugin)
+        self._publish_local(plugin, meta)
 
-    def _publish_zip(self, zip_path: str):
+    def _publish_zip(self, zip_path: str, meta: dict | None = None):
+        if meta is None:
+            meta = self._collect_publish_meta()
         self._publish_status.configure(text='正在上传...', fg=_WG_GOLD)
 
         def _do():
@@ -1141,9 +1313,12 @@ class WorkshopPanel:
                     self.root.after(0, lambda: self._publish_status.configure(
                         text='Workshop server unavailable', fg=_WG_RED))
                     return
-                result = client.publish(zip_path, {})
+                result = client.publish(zip_path, meta)
                 ok = result.get('ok', False) if isinstance(result, dict) else False
-                msg = '上传成功' if ok else str(result.get('error', '上传失败'))
+                name = ''
+                if isinstance(result, dict) and isinstance(result.get('plugin'), dict):
+                    name = result['plugin'].get('name', '')
+                msg = f'上传成功! {name}' if ok else str(result.get('error', '上传失败'))
                 color = _WG_GREEN if ok else _WG_RED
                 self.root.after(0, lambda m=msg, c=color:
                                self._publish_status.configure(text=m, fg=c))
