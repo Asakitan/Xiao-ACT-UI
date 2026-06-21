@@ -1,40 +1,47 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmdLine, int show) {
-    WCHAR exePath[MAX_PATH];
-    WCHAR dirPath[MAX_PATH];
-    WCHAR targetExe[MAX_PATH];
+#pragma comment(linker, "/NODEFAULTLIB")
+#pragma comment(linker, "/ENTRY:_start")
+#pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
-    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+void __stdcall _start(void) {
+    WCHAR path[MAX_PATH], dir[MAX_PATH], target[MAX_PATH + 32];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    int i;
+    WCHAR *s;
 
-    /* Get directory of this launcher */
-    wcscpy_s(dirPath, MAX_PATH, exePath);
-    WCHAR *lastSlash = wcsrchr(dirPath, L'\\');
-    if (lastSlash) *lastSlash = L'\0';
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    for (i = 0; path[i]; i++) dir[i] = path[i];
+    dir[i] = 0;
+    s = dir;
+    WCHAR *last = NULL;
+    for (; *s; s++) if (*s == L'\\') last = s;
+    if (last) *last = 0;
 
-    /* Build path to runtime/XiaoACTUI.exe */
-    wsprintfW(targetExe, L"%s\\runtime\\XiaoACTUI.exe", dirPath);
+    i = 0;
+    for (s = dir; *s; s++) target[i++] = *s;
+    WCHAR suffix[] = L"\\runtime\\XiaoACTUI.exe";
+    for (s = suffix; *s; s++) target[i++] = *s;
+    target[i] = 0;
 
-    /* Check if target exists */
-    if (GetFileAttributesW(targetExe) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(NULL, L"runtime\\XiaoACTUI.exe not found", L"Error", MB_ICONERROR);
-        return 1;
+    if (GetFileAttributesW(target) == INVALID_FILE_ATTRIBUTES) {
+        ExitProcess(2);
     }
 
-    /* Launch with same working directory as launcher */
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi = {0};
+    __stosb((unsigned char*)&si, 0, sizeof(si));
+    __stosb((unsigned char*)&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_SHOW;
 
-    if (!CreateProcessW(targetExe, cmdLine, NULL, NULL, FALSE,
-                        0, NULL, dirPath, &si, &pi)) {
-        MessageBoxW(NULL, L"Failed to start runtime\\XiaoACTUI.exe", L"Error", MB_ICONERROR);
-        return 1;
+    if (!CreateProcessW(target, GetCommandLineW(), NULL, NULL, FALSE,
+                        0, NULL, dir, &si, &pi)) {
+        ExitProcess(3);
     }
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
-    return 0;
+    ExitProcess(0);
 }
