@@ -70,7 +70,7 @@ mkdir "%RELEASE%\runtime"
 mkdir "%RELEASE%\temp"
 mkdir "%RELEASE%\user_plugins"
 
-copy /y "%LAUNCHER_OUT%\XiaoACTUI.exe" "%RELEASE%\" >nul
+copy /y "%LAUNCHER_OUT%\XiaoACTUI.exe" "%RELEASE%\linkstart.exe" >nul
 xcopy /e /i /y /q "%NUITKA_OUT%\*" "%RELEASE%\runtime\" >nul
 
 if exist "%RELEASE%\runtime\web" (
