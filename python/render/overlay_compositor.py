@@ -671,6 +671,7 @@ class UnifiedOverlay:
             print('[Compositor] init GL...', flush=True)
             self._init_gl()
             print('[Compositor] GL ready, showing window', flush=True)
+            self._host.set_capture_mode(True)
             self._host.show()
             self._ready.set()
             print('[Compositor] running', flush=True)
