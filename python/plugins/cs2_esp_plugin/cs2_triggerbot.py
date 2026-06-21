@@ -26,6 +26,7 @@ from .cs2_math import Vec3, angle_fov, angle_to, distance_3d
 
 HEAD_HITBOX_RADIUS = 3.6   # CS2 head capsule approximate radius (game units)
 DEFAULT_SPREAD_DEG = 0.8   # standing AK spray mid-burst (degrees)
+MOVE_ACCURACY_THRESH = 88.0  # 34% max speed — above = very inaccurate
 
 
 def _hitbox_angle(dist: float, radius: float = HEAD_HITBOX_RADIUS) -> float:
@@ -81,6 +82,7 @@ class TriggerbotState:
         # --- accuracy control ---
         self.hit_rate: float = 1.0
         self.visible_only: bool = True
+        self.movement_gate: bool = True    # don't fire when moving > threshold
 
         # --- burst control ---
         self.burst_max: int = 0
@@ -105,6 +107,20 @@ class TriggerbotState:
         if not self.enabled or not local:
             self.reset()
             return None
+
+        # Movement gate: don't fire when inaccurate
+        if self.movement_gate:
+            vel = local.get("velocity", (0, 0, 0))
+            if vel:
+                import math
+                speed_xy = math.hypot(vel[0], vel[1])
+                if speed_xy > MOVE_ACCURACY_THRESH:
+                    return None
+
+        # Use runtime accuracy penalty if available (dynamic spread)
+        runtime_spread = local.get("accuracy_penalty")
+        if runtime_spread is not None and runtime_spread > 0:
+            self.spread_deg = runtime_spread * 57.2958  # radians → degrees
 
         now = time.perf_counter()
 

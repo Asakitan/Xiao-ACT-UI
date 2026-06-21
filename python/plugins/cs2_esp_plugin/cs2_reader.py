@@ -374,7 +374,8 @@ class EngineAReader:
         if dw_local:
             local = read_local_player(
                 self.read, self._module_base, dw_local,
-                cfg.all_entity_offsets()
+                cfg.all_entity_offsets(),
+                global_offsets=cfg.offsets,
             )
             result["local_player"] = local
 

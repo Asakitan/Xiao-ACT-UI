@@ -17,12 +17,14 @@ Vec3 = Tuple[float, float, float]
 
 def read_local_player(read_fn, module_base: int,
                       dw_local_pawn: int,
-                      offsets: dict) -> Optional[dict]:
+                      offsets: dict,
+                      global_offsets: Optional[dict] = None) -> Optional[dict]:
     """Read the local player state from memory.
 
     ``read_fn(addr, size) -> Optional[bytes]`` is the reader callback.
     ``dw_local_pawn`` is the RVA of dwLocalPlayerPawn in client.dll.
     ``offsets`` is a dict of field name → offset within the pawn.
+    ``global_offsets`` (optional) has dwViewAngles etc for direct reads.
 
     Returns a dict with all local player fields, or None if not in-game.
     """
@@ -37,6 +39,7 @@ def read_local_player(read_fn, module_base: int,
         return None
 
     result = {"pawn": pawn}
+    g_off = global_offsets or {}
 
     # Health + team + lifeState — skip if dead
     h_off = offsets.get("m_iHealth", 0)
@@ -53,15 +56,24 @@ def read_local_player(read_fn, module_base: int,
         result["life_state"] = raw[0] if raw else 0
 
     if result.get("health", 0) <= 0 or result.get("life_state", 0) != 0:
-        return None  # dead / not spawned
+        return None
 
-    # View angles (m_angEyeAngles: pitch, yaw, roll — 3 floats)
-    eye_ang_off = offsets.get("m_angEyeAngles", 0)
-    if eye_ang_off:
-        raw = read_fn(pawn + eye_ang_off, 12)
+    # View angles: prefer dwViewAngles (real-time input angle) over
+    # m_angEyeAngles (networked, up to 1 tick lag).
+    # Bullet direction = ViewAngles + aimPunch × 2.0
+    dw_va = g_off.get("dwViewAngles", 0)
+    if dw_va and module_base:
+        raw = read_fn(module_base + dw_va, 12)
         if raw and len(raw) >= 12:
             p, y, _r = struct.unpack_from("<3f", raw)
             result["view_angles"] = (p, y)
+    if "view_angles" not in result:
+        eye_ang_off = offsets.get("m_angEyeAngles", 0)
+        if eye_ang_off:
+            raw = read_fn(pawn + eye_ang_off, 12)
+            if raw and len(raw) >= 12:
+                p, y, _r = struct.unpack_from("<3f", raw)
+                result["view_angles"] = (p, y)
 
     # Eye position = origin + vecViewOffset
     origin_off = offsets.get("m_pGameSceneNode", 0)
@@ -126,6 +138,25 @@ def read_local_player(read_fn, module_base: int,
         raw = read_fn(pawn + fov_off, 4)
         if raw and len(raw) >= 4:
             result["fov_scale"] = struct.unpack_from("<f", raw)[0]
+
+    # Flags (FL_ONGROUND etc.)
+    flags_off = offsets.get("m_fFlags", 0)
+    if flags_off:
+        raw = read_fn(pawn + flags_off, 4)
+        if raw and len(raw) >= 4:
+            result["flags"] = struct.unpack_from("<I", raw)[0]
+
+    # Weapon accuracy penalty (m_fAccuracyPenalty on active weapon)
+    weapon_off = offsets.get("m_pClippingWeapon", 0)
+    acc_off = offsets.get("m_fAccuracyPenalty", 0)
+    if weapon_off and acc_off:
+        wp_raw = read_fn(pawn + weapon_off, 8)
+        if wp_raw and len(wp_raw) >= 8:
+            weapon_ptr = struct.unpack_from("<Q", wp_raw)[0]
+            if weapon_ptr:
+                ac_raw = read_fn(weapon_ptr + acc_off, 4)
+                if ac_raw and len(ac_raw) >= 4:
+                    result["accuracy_penalty"] = struct.unpack_from("<f", ac_raw)[0]
 
     return result
 
