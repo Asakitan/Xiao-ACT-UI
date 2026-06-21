@@ -6,32 +6,28 @@ SAO AI Editor 内置 MCP (Model Context Protocol) 服务器，允许外部 IDE �
 
 ## 快速开始
 
-### 1. 确定启动方式
+### 1. 确定启动命令
 
-MCP 服务器支持两种入口，根据部署方式选择：
+MCP 服务器是主程序的一个运行模式，通过命令行参数启动：
 
 | 部署方式 | 启动命令 |
 |----------|----------|
-| 源码运行 | `python -m ai_editor.mcp_server` |
-| Nuitka 打包 | `sao-mcp-server.exe`（或打包产物中对应的可执行文件） |
+| 打包发布 | `XiaoACTUI.exe --mcp-server` |
+| 源码开发 | `python main.py --mcp-server` |
 
-> 下文统一用 `<mcp-command>` 指代上述命令。实际配置时替换为你的启动命令。
-
-### 2. 验证服务器可用
+验证：
 
 ```bash
-<mcp-command> --help
+XiaoACTUI.exe --mcp-server --help
 ```
 
-### 3. 在 IDE 中配置接入
+### 2. 在 IDE 中配置接入
 
 见下方各 IDE 的配置示例。
 
 ---
 
 ## IDE 接入配置
-
-所有配置中的 `command` 和 `args` 请根据实际部署方式替换。
 
 ### Claude Code
 
@@ -41,22 +37,22 @@ MCP 服务器支持两种入口，根据部署方式选择：
 {
   "mcpServers": {
     "sao-ai-editor": {
-      "command": "<mcp-command>",
-      "args": []
+      "command": "XiaoACTUI.exe",
+      "args": ["--mcp-server"]
     }
   }
 }
 ```
 
-源码运行时的典型配置：
+源码开发时：
 
 ```json
 {
   "mcpServers": {
     "sao-ai-editor": {
       "command": "python",
-      "args": ["-m", "ai_editor.mcp_server"],
-      "cwd": "<sao_auto/python 目录的绝对路径>"
+      "args": ["main.py", "--mcp-server"],
+      "cwd": "<sao_auto/python 目录>"
     }
   }
 }
@@ -65,7 +61,7 @@ MCP 服务器支持两种入口，根据部署方式选择：
 也可以用 CLI 直接添加：
 
 ```bash
-claude mcp add sao-ai-editor -- <mcp-command>
+claude mcp add sao-ai-editor -- XiaoACTUI.exe --mcp-server
 ```
 
 ### VS Code (Copilot / Continue / Cline)
@@ -77,8 +73,8 @@ claude mcp add sao-ai-editor -- <mcp-command>
   "servers": {
     "sao-ai-editor": {
       "type": "stdio",
-      "command": "<mcp-command>",
-      "args": []
+      "command": "XiaoACTUI.exe",
+      "args": ["--mcp-server"]
     }
   }
 }
@@ -92,8 +88,8 @@ claude mcp add sao-ai-editor -- <mcp-command>
 {
   "mcpServers": {
     "sao-ai-editor": {
-      "command": "<mcp-command>",
-      "args": []
+      "command": "XiaoACTUI.exe",
+      "args": ["--mcp-server"]
     }
   }
 }
@@ -108,7 +104,7 @@ claude mcp add sao-ai-editor -- <mcp-command>
 如果需要多个 IDE 同时连接同一个服务器实例：
 
 ```bash
-<mcp-command> --port 9820
+XiaoACTUI.exe --mcp-server --mcp-port 9820
 ```
 
 客户端用 HTTP POST 连接 `http://127.0.0.1:9820`。
@@ -252,9 +248,9 @@ sdk_dumper：action="dump", pid=12345
 │  AI 发现 MCP 工具 → 按需调用               │
 └────────────────┬────────────────────────────┘
                  │ stdio (JSON-RPC 2.0)
-                 │ 或 HTTP (:9820)
+                 │ 或 HTTP (--mcp-port)
 ┌────────────────▼────────────────────────────┐
-│         ai_editor.mcp_server                │
+│    XiaoACTUI.exe --mcp-server               │
 │                                             │
 │  McpServer (stdio)  或  McpHttpServer (HTTP)│
 │         │                                   │
@@ -274,18 +270,18 @@ sdk_dumper：action="dump", pid=12345
 **Stdio 模式**（默认）：IDE 启动 MCP 服务器作为子进程，通过 stdin/stdout 通信。每个 IDE 连接一个独立实例。
 
 ```bash
-<mcp-command>
+XiaoACTUI.exe --mcp-server
 ```
 
 **HTTP 模式**：作为长驻 HTTP 服务器运行，多个客户端可以同时连接。
 
 ```bash
-<mcp-command> --port 9820
+XiaoACTUI.exe --mcp-server --mcp-port 9820
 ```
 
 ### 无 GUI 依赖
 
-MCP 服务器以 headless 模式运行，不依赖 pywebview 或 Tk GUI。它直接初始化：
+MCP 服务器以 headless 模式运行，不启动主界面。它直接初始化：
 - LLM 引擎（从 settings.json 读取 provider/api_key/model 配置）
 - 工具注册表
 - Agent 和 Workflow 注册表
@@ -346,12 +342,14 @@ MCP 服务器以 headless 模式运行，不依赖 pywebview 或 Tk GUI。它直
 ### MCP 服务器无法启动
 
 ```bash
-# 源码方式：确认 ai_editor 包可被 import
-python -c "from ai_editor.mcp_server import McpServer; print('OK')"
+# 打包版
+XiaoACTUI.exe --mcp-server
 
-# 打包方式：确认可执行文件存在且可运行
-sao-mcp-server.exe --help
+# 源码版
+python main.py --mcp-server
 ```
+
+如果报 import 错误，确认运行目录包含 `ai_editor/` 包。
 
 ### LLM 工具返回 "not configured"
 
@@ -361,13 +359,9 @@ sao-mcp-server.exe --help
 
 MCP 服务器的日志输出到 stderr。在 Claude Code 中可以通过 `claude mcp logs sao-ai-editor` 查看。
 
-### 工具列表验证
+### Nuitka 打包注意
 
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | <mcp-command> 2>/dev/null
-```
-
-正常应返回包含 `protocolVersion` 和 `serverInfo` 的 JSON 响应。
+打包后主程序会将 stdout/stderr 重定向到 `_nuitka.log`。MCP stdio 模式依赖 stdout 通信，需要确保 `--mcp-server` 模式跳过日志重定向（见下方说明）。
 
 ---
 

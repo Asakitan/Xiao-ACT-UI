@@ -59,16 +59,18 @@ def _early_dpi_aware():
 _early_dpi_aware()
 
 # Nuitka: redirect all output to log file (no console window)
+# --mcp-server 模式依赖 stdout 做 JSON-RPC 通信，必须跳过重定向
 _is_compiled = not os.path.isfile(os.path.abspath(__file__))
 if _is_compiled:
     sys.frozen = True
-    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), '_nuitka.log')
-    try:
-        _log_f = open(_log_path, 'w', encoding='utf-8', buffering=1)
-        sys.stdout = _log_f
-        sys.stderr = _log_f
-    except Exception:
-        pass
+    if '--mcp-server' not in sys.argv:
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), '_nuitka.log')
+        try:
+            _log_f = open(_log_path, 'w', encoding='utf-8', buffering=1)
+            sys.stdout = _log_f
+            sys.stderr = _log_f
+        except Exception:
+            pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -311,11 +313,6 @@ def _elevate_process_priority():
 
 
 def main():
-    _set_dpi_aware()
-    _elevate_process_priority()
-    _register_apply_on_exit()
-    _start_update_check()
-
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
     parser.add_argument('--headless', action='store_true', help='无 HUD 终端模式')
@@ -323,7 +320,24 @@ def main():
                         help='启动 AI Editor 独立窗口 (pywebview, 不进入主 UI)')
     parser.add_argument('--workshop', action='store_true',
                         help='启动创意工坊独立窗口 (pywebview, 不进入主 UI)')
+    parser.add_argument('--mcp-server', action='store_true',
+                        help='启动 AI Editor MCP 服务器 (stdio, 供外部 IDE AI 接入)')
+    parser.add_argument('--mcp-port', type=int, default=0,
+                        help='MCP 服务器 HTTP 模式端口 (配合 --mcp-server 使用)')
     args = parser.parse_args()
+
+    if args.mcp_server:
+        from ai_editor.mcp_server import McpServer, McpHttpServer
+        if args.mcp_port:
+            McpHttpServer(port=args.mcp_port).run()
+        else:
+            McpServer().run()
+        return
+
+    _set_dpi_aware()
+    _elevate_process_priority()
+    _register_apply_on_exit()
+    _start_update_check()
 
     if args.ai_editor:
         if getattr(sys, 'frozen', False):
