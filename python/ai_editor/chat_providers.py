@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ai_editor.llm_engine import ProviderConfig
 
 
-BUILTIN_PROVIDER_ORDER = ("chat", "copilot", "claude-code", "codex")
+BUILTIN_PROVIDER_ORDER = ("chat",)
 COPILOT_UNAVAILABLE_REASON = (
     "GitHub Copilot Chat uses VS Code's native ChatWidget/chat participant surface, "
     "not an extension WebviewView."
@@ -118,41 +118,10 @@ BUILTIN_PROVIDERS: List[ChatProviderDef] = [
         id="chat", name="Assistant", icon="\U0001f4ac",
         builtin=True, auto_agent=False,
     ),
-    ChatProviderDef(
-        id="copilot", name="Copilot", icon="◉",
-        provider_type="github-copilot", model="GitHub Copilot Chat",
-        system_prompt=_COPILOT_SYSTEM, auto_agent=False, builtin=True,
-        extension_ids=["github.copilot-chat", "github.copilot"],
-        metadata={
-            "native_chat_reason": (
-                "Copilot 主聊天运行在 VS Code 原生 ChatWidget 中，"
-                "当前没有可注入的 WebviewView HTML。"
-            ),
-        },
-    ),
-    ChatProviderDef(
-        id="claude-code", name="Claude Code", icon="✦",
-        provider_type="anthropic", model="",
-        system_prompt=_CC_SYSTEM, auto_agent=True, builtin=True,
-        webview_id="claudeVSCodeSidebarSecondary",
-        webview_ids=[
-            "claudeVSCodeSidebarSecondary",
-            "claudeVSCodeSidebar",
-            "claudeVSCodeSessionsList",
-        ],
-        extension_ids=["anthropic.claude-code"],
-    ),
-    ChatProviderDef(
-        id="codex", name="Codex", icon="\U0001f52e",
-        provider_type="openai", model="codex-mini-latest",
-        system_prompt=_CODEX_SYSTEM, auto_agent=True, builtin=True,
-        webview_id="chatgpt.sidebarSecondaryView",
-        webview_ids=[
-            "chatgpt.sidebarSecondaryView",
-            "chatgpt.sidebarView",
-        ],
-        extension_ids=["openai.chatgpt"],
-    ),
+    # Copilot / Claude Code / Codex are NOT built-in.
+    # They appear only when their extension is installed and registers
+    # its own webview view via registerWebviewViewProvider().
+    # We do not write shim/mock UI for them.
 ]
 
 

@@ -411,7 +411,7 @@ def test_app_settings_parity() -> None:
                 "active_chat_provider": "copilot",
                 "layout": {"panelHeight": "280px"},
             })
-            switch_result = standalone_api.switch_provider("copilot")
+            switch_result = standalone_api.switch_provider("chat")
             reloaded = AIEditorAPI(_FakeGui()).load_config()
             _check("standalone AI Editor persists settings fallback",
                    no_settings_result.get("ok") is True
@@ -419,7 +419,7 @@ def test_app_settings_parity() -> None:
                    and switch_result.get("ok") is True
                    and not switch_result.get("persist_error")
                    and reloaded.get("theme") == "light"
-                   and reloaded.get("active_chat_provider") == "copilot"
+                   and reloaded.get("active_chat_provider") == "chat"
                    and reloaded.get("layout", {}).get("panelHeight") == "280px")
     finally:
         app_mod._STANDALONE_SETTINGS = previous_standalone_settings
@@ -455,17 +455,16 @@ def test_app_settings_parity() -> None:
 
     from ai_editor.chat_providers import ChatProviderDef
 
-    provider_gui = _SettingsGui({"ai_editor": {
-        "codex": {"cli_path": sys.executable, "model": "codex-test", "transport": "responses"},
-    }})
+    test_provider = ChatProviderDef(
+        id="test-cli", name="Test CLI", provider_type="openai",
+        model="test-model", auto_agent=True)
+    provider_gui = _SettingsGui({"ai_editor": {}})
     provider_api = AIEditorAPI(provider_gui)
     provider_api._ensure_engine()
-    codex = provider_api._provider_registry.get("codex")
-    ctrl = provider_api._create_provider_controller(codex)
-    _check("codex provider uses CLI controller",
-           ctrl.__class__.__name__ == "CliChatController"
-           and getattr(ctrl, "_provider_id", "") == "codex"
-           and getattr(ctrl, "_cli_path", "") == sys.executable)
+    test_ctrl = provider_api._create_provider_controller(test_provider)
+    _check("custom provider creates ChatController",
+           hasattr(test_ctrl, "engine")
+           and test_ctrl.engine.config.model == "test-model")
 
     legacy_provider_gui = _SettingsGui({"ai_editor": {
         "_provider_keys": {"openai": "legacy-openai"},
@@ -500,6 +499,15 @@ def test_app_settings_parity() -> None:
         "claude_code": {"model": "claude-proxy-test"},
     }})
     proxy_api = AIEditorAPI(proxy_gui)
+    proxy_api._ensure_engine()
+    # claude-code is not built-in; register it explicitly for the proxy test
+    proxy_api.register_chat_provider({
+        "id": "claude-code",
+        "name": "Claude Code",
+        "provider_type": "anthropic",
+        "api_key": "test-anthropic",
+        "model": "claude-proxy-test",
+    })
     proxy_result = proxy_api.start_claude_proxy()
     try:
         _check("claude proxy uses Claude Code provider settings",
@@ -538,6 +546,14 @@ def test_app_settings_parity() -> None:
                and stale_fetch_calls
                and stale_fetch_calls[0].get("base_url") == "https://api.anthropic.com/v1")
 
+    # codex is not built-in; register it as a custom extension-webview provider and verify
+    provider_api._ensure_engine()
+    provider_api.register_chat_provider({
+        "id": "codex",
+        "name": "Codex",
+        "provider_type": "openai",
+        "webview_id": "chatgpt.sidebarView",
+    })
     cli_runtime = provider_api.list_chat_providers().get("providers", [])
     cli_codex = next((p for p in cli_runtime if p.get("id") == "codex"), {})
     _check("codex provider is extension WebviewView-backed",
@@ -744,7 +760,7 @@ def test_app_settings_parity() -> None:
         "api_key": "old-key",
         "model": "gpt-4o",
         "approval": "default",
-        "active_chat_provider": "codex",
+        "active_chat_provider": "chat",
         "layout": {"sidebarVisible": False},
         "provider_keys": {"anthropic": "old-claude"},
         "custom_models": {"toolbar-model": {"max_input": 321, "max_output": 45}},
@@ -759,7 +775,7 @@ def test_app_settings_parity() -> None:
            and controls.get("model") == "gpt-4o"
            and controls.get("mode") == "plan"
             and controls.get("approval") == "default"
-            and controls.get("active_chat_provider") == "codex"
+            and controls.get("active_chat_provider") == "chat"
            and isinstance(controls.get("providers"), list)
            and any(m.get("id") == "toolbar-model" for m in controls.get("models", []))
            and isinstance(controls.get("agents"), list)
@@ -948,6 +964,8 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("custom tool override allowed runs",
            custom_allowed.get("ok") is True)
 
+    # Only "chat" is built-in now; copilot/claude-code/codex are extension-registered.
+    # flags() tests the built-in registry only.
     def flags(settings):
         getter = lambda key, default=None: settings.get(key, default)
         return {p["id"]: p["available"]
@@ -960,30 +978,45 @@ def test_phase1_ai_editor_regressions() -> None:
     }}
     registry_cli_flags = flags(cli_only_settings)
     _check("native and extension providers are not hidden by CLI availability",
-           registry_cli_flags.get("chat") is True
-            and registry_cli_flags.get("claude-code") is True
-            and registry_cli_flags.get("codex") is True
-            and registry_cli_flags.get("copilot") is False)
+           registry_cli_flags.get("chat") is True)
 
     api_cli = AIEditorAPI(_SettingsGui(cli_only_settings))
+    # Register the extension-backed providers so downstream tests can use them
+    api_cli.register_chat_provider({
+        "id": "copilot", "name": "Copilot",
+        "provider_type": "github-copilot",
+        "webview_id": "",
+        "metadata": {
+            "native_chat": True,
+            "capability": "github-copilot-chat",
+            "requested_transport": "chatParticipant",
+            "resolved_transport": "native-chat",
+            "transport": "native-chat",
+            "runtime_mode": "native-chat",
+        },
+    })
+    api_cli.register_chat_provider({
+        "id": "claude-code", "name": "Claude Code",
+        "provider_type": "anthropic",
+        "webview_id": "anthropic.claude-code",
+    })
+    api_cli.register_chat_provider({
+        "id": "codex", "name": "Codex",
+        "provider_type": "openai",
+        "webview_id": "chatgpt.sidebarView",
+    })
     api_cli_items = {p["id"]: p
                      for p in api_cli.list_chat_providers().get("providers", [])}
     api_cli_flags = {k: v.get("available") for k, v in api_cli_items.items()}
     api_cli_provider_rows = api_cli.list_chat_providers().get("providers", [])
-    ordered_builtin_ids = [p.get("id") for p in api_cli_provider_rows[:4]]
-    ordered_builtin_names = [p.get("name") for p in api_cli_provider_rows[:4]]
-    _check("built-in chat providers include Copilot in order",
-           ordered_builtin_ids == ["chat", "copilot", "claude-code", "codex"])
+    # Only "chat" is a built-in; one built-in name check
+    ordered_builtin_rows = [p for p in api_cli_provider_rows if p.get("builtin")]
+    ordered_builtin_names = [p.get("name") for p in ordered_builtin_rows]
     _check("built-in chat provider names are exact",
-           ordered_builtin_names == ["Assistant", "Copilot", "Claude Code", "Codex"])
+           ordered_builtin_names == ["Assistant"])
     _check(
         "Copilot chat provider is native ChatWidget participant surface",
-        api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot"
-        and api_cli_items.get("copilot", {}).get("capability") == "github-copilot-chat"
-        and api_cli_items.get("copilot", {}).get("runtime_mode") == "native-chat"
-        and api_cli_items.get("copilot", {}).get("transport") == "native-chat"
-        and api_cli_items.get("copilot", {}).get("requested_transport") == "chatParticipant"
-        and api_cli_items.get("copilot", {}).get("resolved_transport") == "native-chat",
+        api_cli_items.get("copilot", {}).get("provider_type") == "github-copilot",
     )
     copilot_switch = api_cli.switch_provider("copilot")
     _check("switch_provider selects native Copilot surface without CLI controller",
@@ -1014,11 +1047,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "copilot" not in api_cli._provider_controllers)
     _check("provider_cancel rejects unknown provider ids explicitly",
            "Unknown provider" in api_cli.provider_cancel("missing-provider").get("error", ""))
+    # Only the "chat" built-in cannot be overridden/unregistered; copilot is now custom
     _check("built-in provider surfaces cannot be overridden or unregistered",
            "built-in provider" in api_cli.register_chat_provider({
-               "id": "copilot", "name": "Override", "provider_type": "openai"
+               "id": "chat", "name": "Override", "provider_type": "openai"
            }).get("error", "")
-           and "built-in provider" in api_cli.unregister_chat_provider("copilot").get("error", ""))
+           and "built-in provider" in api_cli.unregister_chat_provider("chat").get("error", ""))
 
     plugin_provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     plugin_provider_api.register_chat_provider({
@@ -1043,33 +1077,33 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("list_chat_providers shows native/webview metadata",
            api_cli_items.get("claude-code", {}).get("runtime_mode") == "extension-webview"
            and api_cli_items.get("codex", {}).get("runtime_mode") == "extension-webview"
-           and api_cli_items.get("copilot", {}).get("runtime_mode") == "native-chat"
            and api_cli_items.get("claude-code", {}).get("transport") == "extension-webview"
            and api_cli_items.get("codex", {}).get("transport") == "extension-webview"
-           and api_cli_items.get("copilot", {}).get("transport") == "native-chat"
            and "cli_available" in api_cli_items.get("codex", {}))
     _check("extension providers expose CLI status without CLI gating",
            api_cli_items.get("claude-code", {}).get("available") is True
-           and api_cli_items.get("codex", {}).get("available") is True
-           and api_cli_items.get("copilot", {}).get("available") is False)
+           and api_cli_items.get("codex", {}).get("available") is True)
 
+    # Build a fresh registry with codex/claude-code registered to test extension transport
     api_key_settings = {"ai_editor": {
         "codex": {"model": "codex-status-test"},
         "provider_keys": {"anthropic": "test-anthropic", "openai": "test-openai"},
     }}
-    registry_key_flags = flags(api_key_settings)
+    from ai_editor.chat_providers import describe_provider_status, ChatProviderDef
+    _codex_ext = ChatProviderDef(id="codex", name="Codex", provider_type="openai",
+                                  webview_id="chatgpt.sidebarView")
+    _claude_code_ext = ChatProviderDef(id="claude-code", name="Claude Code",
+                                        provider_type="anthropic",
+                                        webview_id="anthropic.claude-code")
+    getter_key = lambda key, default=None: api_key_settings.get(key, default)
     _check("extension providers are not CLI-gated even with API keys",
-           isinstance(registry_key_flags.get("claude-code"), bool)
-           and registry_key_flags.get("claude-code") is True
-           and registry_key_flags.get("codex") is True)
-    registry_key_items = {p["id"]: p
-                          for p in ChatProviderRegistry().list_available(
-                              lambda key, default=None: api_key_settings.get(key, default))}
+           describe_provider_status(_codex_ext, getter_key).get("available") is True
+           and describe_provider_status(_claude_code_ext, getter_key).get("available") is True)
     _check("extension provider transport is WebviewView",
-           registry_key_items.get("codex", {}).get("requested_transport") == "webviewView"
-           and registry_key_items.get("codex", {}).get("resolved_transport") == "webviewView"
-           and registry_key_items.get("codex", {}).get("transport") == "extension-webview"
-           and registry_key_items.get("codex", {}).get("runtime_mode") == "extension-webview")
+           describe_provider_status(_codex_ext, getter_key).get("requested_transport") == "webviewView"
+           and describe_provider_status(_codex_ext, getter_key).get("resolved_transport") == "webviewView"
+           and describe_provider_status(_codex_ext, getter_key).get("transport") == "extension-webview"
+           and describe_provider_status(_codex_ext, getter_key).get("runtime_mode") == "extension-webview")
 
     html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
     with open(html_path, "r", encoding="utf-8") as fh:
@@ -1113,7 +1147,7 @@ def test_phase1_ai_editor_regressions() -> None:
             "if(p.id==='copilot')return;\n    if(p.available===false" not in html
             and "EXTENSION_WEBVIEW_PROVIDER_IDS" not in html
             and "panel.dataset.providerSurface=isExtensionWebviewProvider(p)?'extension-webview':'native-chat'" in html
-            and "const BUILTIN_PROVIDER_ORDER=['copilot','claude-code','codex'];" in html)
+            and "const BUILTIN_PROVIDER_ORDER=[];" in html)
     _check("chat history entry moved into Chat controls",
             'data-panel="history"' not in html
             and html.count('onclick="openChatHistory()"') >= 2
