@@ -326,6 +326,8 @@ def main():
     args = parser.parse_args()
 
     if args.ai_editor:
+        if getattr(sys, 'frozen', False):
+            os.environ['PYWEBVIEW_GUI'] = 'edgechromium'
         from ai_editor.app import launch
         launch(blocking=True)
     elif args.workshop:

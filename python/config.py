@@ -26,6 +26,9 @@ if _is_frozen:
     else:
         BASE_DIR = _exe_dir
         BUNDLE_DIR = _exe_dir
+    _pydll = os.path.join(_exe_dir, 'xactrt311.dll')
+    if os.path.isfile(_pydll):
+        os.environ.setdefault('PYTHONNET_PYDLL', _pydll)
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))

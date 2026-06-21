@@ -5069,6 +5069,8 @@ def _launch_subprocess() -> None:
     env = dict(os.environ)
     env.setdefault('PYTHONPATH', _ROOT)
     env.setdefault('PYTHONUNBUFFERED', '1')
+    if getattr(sys, 'frozen', False):
+        env['PYWEBVIEW_GUI'] = 'edgechromium'
     cwd = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else _ROOT
     flags = 0
     if sys.platform == 'win32':
