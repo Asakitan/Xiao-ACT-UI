@@ -454,6 +454,12 @@ class WorkshopPanel:
         self._pub_tags_var = tk.StringVar()
         self._pub_access_var = tk.StringVar(value='free')
         self._pub_long_desc: Optional[tk.Text] = None
+        self._page_frame: Optional[tk.Frame] = None
+        self._content: Optional[tk.Frame] = None
+        self._canvas_win = None
+        self._list_frame: Optional[tk.Frame] = None
+        self._local_frame: Optional[tk.Frame] = None
+        self._local_list: Optional[tk.Frame] = None
 
     def show(self) -> None:
         if self._win is None or not self._exists():
