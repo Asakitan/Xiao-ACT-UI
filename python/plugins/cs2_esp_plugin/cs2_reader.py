@@ -12,6 +12,9 @@ Bug fixes from audit (2026-06-21):
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import struct
 from typing import Any, Optional
 
@@ -45,6 +48,7 @@ class EngineAReader:
         self._use_pattern_scan = bool(use_pattern_scan)
         self._scanned_rvas: dict = {}
         self._scan_attempted = False
+        self._module_version: str = ""
 
     # ── lifecycle ───────────────────────────────────────────────────────
     def ensure_engine(self) -> bool:
@@ -136,6 +140,15 @@ class EngineAReader:
             pass
         return 0
 
+    def _check_module_version(self) -> str:
+        """Read first 4KB of module to compute version hash."""
+        if self._module_base == 0:
+            return ""
+        header = self.read(self._module_base, 4096)
+        if not header or len(header) < 4096:
+            return ""
+        return hashlib.sha256(header).hexdigest()[:16]
+
     def attach(self, pid: int) -> bool:
         self._last_error = ""
         if rt_io is None:
@@ -153,6 +166,18 @@ class EngineAReader:
             return False
         self._attached_pid = int(pid)
         self._resolve_module_base()
+        self._module_version = self._check_module_version()
+        # Check if cached offsets match this version
+        if self._use_pattern_scan:
+            cache_file = os.path.join(os.path.dirname(__file__), '.offset_cache.json')
+            try:
+                with open(cache_file, 'r') as f:
+                    cache = json.load(f)
+                if cache.get('version') == self._module_version:
+                    self._scanned_rvas = cache.get('rvas', {})
+                    self._scan_attempted = True
+            except Exception:
+                pass
         return True
 
     def detach(self) -> None:
@@ -197,6 +222,13 @@ class EngineAReader:
             self._last_error = f"pattern scan failed: {exc}"
             return {}
         self._scanned_rvas = resolved
+        if self._scanned_rvas and self._module_version:
+            try:
+                cache_file = os.path.join(os.path.dirname(__file__), '.offset_cache.json')
+                with open(cache_file, 'w') as f:
+                    json.dump({'version': self._module_version, 'rvas': self._scanned_rvas}, f)
+            except Exception:
+                pass
         return dict(resolved)
 
     def _rva(self, name: str) -> int:
