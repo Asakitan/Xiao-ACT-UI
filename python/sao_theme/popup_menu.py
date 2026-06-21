@@ -60,6 +60,7 @@ class SAOPopUpMenu:
         self._custom_child_factories: Dict[str, Callable] = dict(custom_child_factories or {})
         self._custom_child_widgets: Dict[str, object] = {}
         self._active_custom_child: Optional[str] = None
+        self.cascade_mode: bool = bool(_kwargs.get('cascade_mode', False))
         # 锚定位置 (anchor_widget 模式下存储内容左上角坐标)
         self._content_x: Optional[int] = None
         self._content_y: Optional[int] = None

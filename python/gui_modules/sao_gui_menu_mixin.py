@@ -186,6 +186,7 @@ class SAOPlayerGUIMenuMixin:
             update_label,
             plugin_sig,
             plugin_menu_cat_count,
+            self._is_nervgear_mode(),
         )
         self._last_menu_refresh_sig = sig
         self._last_menu_refresh_sig_time = _now
@@ -238,6 +239,7 @@ class SAOPlayerGUIMenuMixin:
             return f'  [{v}]' if v else ''
 
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
+        nervgear_label = 'NervGear: ON' if self._is_nervgear_mode() else 'NervGear: OFF'
 
         skin_items = [
             {'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')},
@@ -255,6 +257,7 @@ class SAOPlayerGUIMenuMixin:
         children = {
             '控制': [
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
+                {'icon': '◈', 'label': nervgear_label, 'command': self._toggle_nervgear_mode},
                 {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
@@ -487,6 +490,24 @@ class SAOPlayerGUIMenuMixin:
         factory = self._first_plugin_menu_surface_callable('left_widget_factory')
         return factory if callable(factory) else None
 
+    def _is_nervgear_mode(self) -> bool:
+        return bool(self._get_setting('nervgear_mode', True))
+
+    def _toggle_nervgear_mode(self):
+        current = self._is_nervgear_mode()
+        new_val = not current
+        self.settings.set('nervgear_mode', new_val)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        menu = getattr(self, '_sao_menu', None)
+        if menu is not None:
+            menu.cascade_mode = not new_val
+        self._refresh_menu_if_open(force=True)
+        tag = 'ON' if new_val else 'OFF'
+        self._show_entity_alert('NERVGEAR', f'NervGear Mode: {tag}', display_time=2.5)
+
     def _open_workshop_panel(self):
         self._dismiss_sao_menu_for_panel()
         try:
@@ -509,6 +530,7 @@ class SAOPlayerGUIMenuMixin:
         self._menu_icons = self._build_menu_icons()
         header = self._get_menu_header()
 
+        nervgear = self._is_nervgear_mode()
         self._sao_menu = SAOPopUpMenu(
             self.root, self._menu_icons, self._get_menu_children_cached(force=True),
             username=header['title'],
@@ -522,6 +544,7 @@ class SAOPlayerGUIMenuMixin:
             external_close=False,
             alt_toggle_close=False,
             on_background_click=self._close_sao_menu_from_background,
+            cascade_mode=not nervgear,
         )
         self._sao_menu.bind_events()
 
@@ -571,7 +594,8 @@ class SAOPlayerGUIMenuMixin:
                 play_sound('menu_open')
             except Exception:
                 pass
-            self._play_motion_blur(closing=False)
+            if self._is_nervgear_mode():
+                self._play_motion_blur(closing=False)
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             try:
                 self._sao_menu.open()
@@ -688,17 +712,14 @@ class SAOPlayerGUIMenuMixin:
         self._sao_menu_close_pending = False
 
     def _on_sao_menu_open(self):
-        """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
+        """SAO 菜单打开时 — 停止呼吸, NervGear模式启动持久鱼眼"""
         self._stop_float_breath()
-        # 不启动 _lift_float_loop (tkinter .lift() 会引起闪烁);
-        # z-order 完全由 _start_fisheye_overlay 内的 Win32 SetWindowPos 管理
         self._lift_loop_active = False
-        # 延迟启动鱼眼叠加 (等菜单 GPU 首帧渲染完再截图/创建全屏层),
-        # 带更长重试确保首次 GPU compose 较慢时也能生效。
-        try:
-            self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
-        except Exception:
-            self._start_fisheye_with_retry(retries=12, delay=100)
+        if self._is_nervgear_mode():
+            try:
+                self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
+            except Exception:
+                self._start_fisheye_with_retry(retries=12, delay=100)
         self._notify_plugin_menu_surfaces('on_open')
         try:
             self.root.after(90, self._restore_entity_menu_state)

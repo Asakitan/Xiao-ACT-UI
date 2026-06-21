@@ -53,7 +53,8 @@ class SAOPopUpMenu:
                  external_close: bool = True,
                  alt_toggle_close: bool = True,
                  on_background_click: Optional[Callable] = None,
-                 custom_child_factories: Optional[Dict[str, Callable]] = None):
+                 custom_child_factories: Optional[Dict[str, Callable]] = None,
+                 cascade_mode: bool = False):
         if not _gow.glfw_supported():
             raise RuntimeError(
                 'SAOPopUpMenu requires GLFW; gpu_overlay_window reports it is unavailable')
@@ -76,6 +77,14 @@ class SAOPopUpMenu:
         self._custom_child_widgets: Dict[str, object] = {}
         self._active_custom_child: Optional[str] = None
         self._custom_child_shell: Optional[tk.Toplevel] = None
+
+        # Cascade mode: slide down from screen top center (Apple-style)
+        self.cascade_mode: bool = bool(cascade_mode)
+        self._cascade_start_y: int = 0
+        self._cascade_target_y: int = 0
+        self._cascade_gpu_x: int = 0
+        self._cascade_win_w: int = 0
+        self._cascade_win_h: int = 0
 
         self._state = PopupState()
         self._state.menu_items = list(icon_arr)
@@ -369,12 +378,13 @@ class SAOPopUpMenu:
         except Exception:
             pass
 
-        # Build left widget if factory provided. Pack WITHOUT
-        # fill/expand so the panel uses its own requested size; the
-        # surrounding shell stays chroma-key transparent. The legacy
-        # SAOPlayerPanel starts collapsed (0×0) and animates open via
-        # set_active(True), called from _activate_menu below.
-        if self.left_widget_factory is not None:
+        # Build left widget if factory provided (skip in cascade mode
+        # for a clean Apple-style layout). Pack WITHOUT fill/expand so
+        # the panel uses its own requested size; the surrounding shell
+        # stays chroma-key transparent. The legacy SAOPlayerPanel starts
+        # collapsed (0×0) and animates open via set_active(True), called
+        # from _activate_menu below.
+        if self.left_widget_factory is not None and not self.cascade_mode:
             try:
                 self._left_widget = self.left_widget_factory(self._shell)
                 self._left_widget.pack(anchor='nw')
@@ -402,55 +412,69 @@ class SAOPopUpMenu:
         win_w = max(win_w, 200)
         win_h = max(win_h, 200)
 
-        left_w = 240
-        left_h = 280
-        if self._left_widget is not None:
-            # Reserve enough room for the fully-grown panel so its
-            # set_active(True) animation has space to expand into.
-            # Empty parts of the shell remain chroma-key transparent.
-            target_w = int(getattr(self._left_widget, '_target_w', 0) or 0)
-            top_h = int(getattr(self._left_widget, '_top_h', 0) or 0)
-            bot_h = int(getattr(self._left_widget, '_bottom_h', 0) or 0)
-            left_w = max(left_w, target_w or 0)
-            left_h = max(left_h, (top_h + bot_h) or 0)
-
         margin = 16
-        gap_left_to_gpu = 25
-        total_w = left_w + gap_left_to_gpu + win_w
-        total_h = max(left_h, win_h)
 
-        aw = self.anchor_widget
-        if aw is not None:
-            try:
-                ax = aw.winfo_rootx() + aw.winfo_width() - 8
-                ay = aw.winfo_rooty() - 8
-                # Position popup so its bottom-right corner sits at (ax, ay)
-                base_x = max(margin, ax - total_w)
-                base_y = max(margin, ay - total_h)
-            except Exception:
+        if self.cascade_mode:
+            # Cascade (Apple-style): centered at screen top, slide down
+            gpu_x = max(margin, (sw - win_w) // 2)
+            target_y = max(margin, int(sh * 0.08))
+            slide_dist = int(win_h * 0.55)
+            start_y = target_y - slide_dist
+            self._cascade_gpu_x = gpu_x
+            self._cascade_target_y = target_y
+            self._cascade_start_y = start_y
+            self._cascade_win_w = win_w
+            self._cascade_win_h = win_h
+            gpu_y = start_y
+            self._gpu_pos = (gpu_x, gpu_y)
+            self._shell.geometry(f'1x1+{-2}+{-2}')
+        else:
+            left_w = 240
+            left_h = 280
+            if self._left_widget is not None:
+                # Reserve enough room for the fully-grown panel so its
+                # set_active(True) animation has space to expand into.
+                # Empty parts of the shell remain chroma-key transparent.
+                target_w = int(getattr(self._left_widget, '_target_w', 0) or 0)
+                top_h = int(getattr(self._left_widget, '_top_h', 0) or 0)
+                bot_h = int(getattr(self._left_widget, '_bottom_h', 0) or 0)
+                left_w = max(left_w, target_w or 0)
+                left_h = max(left_h, (top_h + bot_h) or 0)
+
+            gap_left_to_gpu = 25
+            total_w = left_w + gap_left_to_gpu + win_w
+            total_h = max(left_h, win_h)
+
+            aw = self.anchor_widget
+            if aw is not None:
+                try:
+                    ax = aw.winfo_rootx() + aw.winfo_width() - 8
+                    ay = aw.winfo_rooty() - 8
+                    # Position popup so its bottom-right corner sits at (ax, ay)
+                    base_x = max(margin, ax - total_w)
+                    base_y = max(margin, ay - total_h)
+                except Exception:
+                    base_x = max(margin, (sw - total_w) // 2)
+                    base_y = max(margin, (sh - total_h) // 2)
+            else:
                 base_x = max(margin, (sw - total_w) // 2)
                 base_y = max(margin, (sh - total_h) // 2)
-        else:
-            base_x = max(margin, (sw - total_w) // 2)
-            base_y = max(margin, (sh - total_h) // 2)
 
-        # Place left_widget shell
-        if self._left_widget is not None:
-            self._shell.geometry(f'{left_w}x{left_h}+{base_x}+{base_y + (total_h - left_h) // 2}')
-        else:
-            # No left widget — keep shell tiny and offscreen-ish (acts as
-            # an anchor for Tk events only). Some platforms need a
-            # non-zero size.
-            self._shell.geometry(f'1x1+{-2}+{-2}')
+            # Place left_widget shell
+            if self._left_widget is not None:
+                self._shell.geometry(f'{left_w}x{left_h}+{base_x}+{base_y + (total_h - left_h) // 2}')
+            else:
+                self._shell.geometry(f'1x1+{-2}+{-2}')
 
-        # GPU window position: to the right of the left_widget
-        gpu_x = base_x + left_w + gap_left_to_gpu
-        gpu_y = base_y + (total_h - win_h) // 2
-        self._gpu_pos = (gpu_x, gpu_y)
+            # GPU window position: to the right of the left_widget
+            gpu_x = base_x + left_w + gap_left_to_gpu
+            gpu_y = base_y + (total_h - win_h) // 2
+            self._gpu_pos = (gpu_x, gpu_y)
 
         # Create the GPU window once, then hide/reuse it across normal
         # menu closes. Recreating GLFW/moderngl while WGC is active can
         # force a slow capture pause/resume cycle on every later open.
+        gx, gy = self._gpu_pos
         if self._presenter is None:
             self._presenter = _gow.BgraPresenter()
         if self._gpu_win is None:
@@ -458,7 +482,7 @@ class SAOPopUpMenu:
             self._gpu_win = _gow.GpuOverlayWindow(
                 pump,
                 w=win_w, h=win_h,
-                x=gpu_x, y=gpu_y,
+                x=gx, y=gy,
                 render_fn=self._presenter.render,
                 click_through=False,
                 title='sao_popup_gpu',
@@ -469,7 +493,7 @@ class SAOPopUpMenu:
             except Exception:
                 pass
             try:
-                self._gpu_win.set_geometry(gpu_x, gpu_y, win_w, win_h)
+                self._gpu_win.set_geometry(gx, gy, win_w, win_h)
             except Exception:
                 pass
             try:
@@ -630,6 +654,25 @@ class SAOPopUpMenu:
                         except Exception:
                             pass
                     return
+        # Cascade slide animation: move GPU window during fade
+        if self.cascade_mode and self._fading and self._gpu_win is not None:
+            DUR_c = float(self._fade_duration or 0.45)
+            elapsed_c = tick_now - self._fade_t0
+            progress = max(0.0, min(1.0, elapsed_c / DUR_c))
+            if self._fade_target > 0:
+                t = 1.0 - (1.0 - progress) ** 3  # ease-out cubic
+                cur_y = int(self._cascade_start_y
+                            + (self._cascade_target_y - self._cascade_start_y) * t)
+            else:
+                t = progress * progress  # ease-in quad
+                cur_y = int(self._cascade_target_y
+                            + (self._cascade_start_y - self._cascade_target_y) * t)
+            try:
+                self._gpu_win.set_geometry(
+                    self._cascade_gpu_x, cur_y,
+                    self._cascade_win_w, self._cascade_win_h)
+            except Exception:
+                pass
         self._advance_child_phase(dt)
         # Animations
         menu_bar_layout.advance_animation(self._state)
