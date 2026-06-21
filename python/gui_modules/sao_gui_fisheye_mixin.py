@@ -379,10 +379,25 @@ class SAOPlayerGUIFisheyeMixin:
                 pass
             return
         ov = self._fisheye_ov
+        # Play closing motion blur so the fisheye fade-out has visual
+        # coverage — without it, the clear background bleeds through
+        # as fisheye alpha decreases.  Delay the fadeout by 120 ms so
+        # the motion blur's background thread has time to capture and
+        # display before the fisheye starts losing opacity.
+        try:
+            motion_blur = getattr(self, '_play_motion_blur', None)
+            if callable(motion_blur):
+                motion_blur(closing=True)
+        except Exception:
+            pass
         request_fadeout = getattr(ov, '_request_fadeout', None)
         if callable(request_fadeout):
             try:
-                request_fadeout()
+                _ov_ref = ov
+                def _delayed_fadeout():
+                    if self._fisheye_ov is _ov_ref:
+                        request_fadeout()
+                self.root.after(120, _delayed_fadeout)
                 return
             except Exception:
                 pass
@@ -1091,6 +1106,29 @@ class SAOPlayerGUIFisheyeMixin:
         if self._destroyed:
             self._stop_fisheye_overlay()
             return
+
+        # ── Pre-capture: grab one frame synchronously so the first
+        # _tick immediately starts the fade-in instead of waiting
+        # 50-150 ms for the worker thread to deliver its first frame.
+        # The pre-captured frame is undistorted — at alpha ≈0.05 the
+        # difference is imperceptible, and by the time alpha reaches
+        # ~0.2 the worker has delivered a distorted replacement.
+        try:
+            import mss as _mss_pre
+            with _mss_pre.mss() as _sct_pre:
+                _mon_pre = (_sct_pre.monitors[1]
+                            if len(_sct_pre.monitors) > 1
+                            else _sct_pre.monitors[0])
+                _s_pre = _sct_pre.grab(_mon_pre)
+                _pre_img = Image.frombytes('RGB', _s_pre.size, _s_pre.rgb)
+                _pre_rgb = _pre_img.tobytes()
+                _pre_w, _pre_h = _s_pre.size.width, _s_pre.size.height
+                presenter.set_frame(_pre_rgb, _pre_w, _pre_h)
+                _frame_seq[0] = 1
+                _latest_frame[0] = (1, _pre_rgb, _pre_w, _pre_h)
+        except Exception:
+            pass
+
         self.root.after(50, _tick)
 
         # ── 后台 worker: 截屏 + 畸变 + 缩放 + HUD 合成 → BGRA bytes ──
