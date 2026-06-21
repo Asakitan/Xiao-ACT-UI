@@ -6,26 +6,49 @@ SAO AI Editor 内置 MCP (Model Context Protocol) 服务器，允许外部 IDE �
 
 ## 快速开始
 
-### 1. 确认 Python 环境
+### 1. 确定启动方式
 
-MCP 服务器运行在 `sao_auto/python/` 目录下，需要能 import `ai_editor` 包：
+MCP 服务器支持两种入口，根据部署方式选择：
+
+| 部署方式 | 启动命令 |
+|----------|----------|
+| 源码运行 | `python -m ai_editor.mcp_server` |
+| Nuitka 打包 | `sao-mcp-server.exe`（或打包产物中对应的可执行文件） |
+
+> 下文统一用 `<mcp-command>` 指代上述命令。实际配置时替换为你的启动命令。
+
+### 2. 验证服务器可用
 
 ```bash
-cd E:\VC\SAO-UI\sao_auto\python
-python -m ai_editor.mcp_server --help
+<mcp-command> --help
 ```
 
-### 2. 配置 IDE 接入
+### 3. 在 IDE 中配置接入
 
-根据你使用的 IDE，在对应位置添加 MCP 配置。
+见下方各 IDE 的配置示例。
 
 ---
 
 ## IDE 接入配置
 
+所有配置中的 `command` 和 `args` 请根据实际部署方式替换。
+
 ### Claude Code
 
-在项目根目录创建 `mcp.json`，或添加到 `~/.claude.json`：
+在项目根目录创建 `mcp.json`，或添加到全局 `~/.claude.json`：
+
+```json
+{
+  "mcpServers": {
+    "sao-ai-editor": {
+      "command": "<mcp-command>",
+      "args": []
+    }
+  }
+}
+```
+
+源码运行时的典型配置：
 
 ```json
 {
@@ -33,16 +56,16 @@ python -m ai_editor.mcp_server --help
     "sao-ai-editor": {
       "command": "python",
       "args": ["-m", "ai_editor.mcp_server"],
-      "cwd": "E:\\VC\\SAO-UI\\sao_auto\\python"
+      "cwd": "<sao_auto/python 目录的绝对路径>"
     }
   }
 }
 ```
 
-也可以用 Claude Code CLI 直接添加：
+也可以用 CLI 直接添加：
 
 ```bash
-claude mcp add sao-ai-editor -- python -m ai_editor.mcp_server
+claude mcp add sao-ai-editor -- <mcp-command>
 ```
 
 ### VS Code (Copilot / Continue / Cline)
@@ -54,9 +77,8 @@ claude mcp add sao-ai-editor -- python -m ai_editor.mcp_server
   "servers": {
     "sao-ai-editor": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "ai_editor.mcp_server"],
-      "cwd": "E:\\VC\\SAO-UI\\sao_auto\\python"
+      "command": "<mcp-command>",
+      "args": []
     }
   }
 }
@@ -70,9 +92,8 @@ claude mcp add sao-ai-editor -- python -m ai_editor.mcp_server
 {
   "mcpServers": {
     "sao-ai-editor": {
-      "command": "python",
-      "args": ["-m", "ai_editor.mcp_server"],
-      "cwd": "E:\\VC\\SAO-UI\\sao_auto\\python"
+      "command": "<mcp-command>",
+      "args": []
     }
   }
 }
@@ -87,10 +108,10 @@ claude mcp add sao-ai-editor -- python -m ai_editor.mcp_server
 如果需要多个 IDE 同时连接同一个服务器实例：
 
 ```bash
-python -m ai_editor.mcp_server --port 9820
+<mcp-command> --port 9820
 ```
 
-客户端用 SSE 方式连接 `http://127.0.0.1:9820`。
+客户端用 HTTP POST 连接 `http://127.0.0.1:9820`。
 
 ---
 
@@ -204,20 +225,20 @@ Claude 会调用 run_workflow 工具：
 ```
 > 查看 SAO ACT 的系统状态
 
-Claude 调用 engine：action="system_info"
+engine：action="system_info"
 → 返回版本、运行时间、数据源模式
 ```
 
 ```
 > 列出当前运行的游戏进程
 
-Claude 调用 engine：action="list_processes"
+engine：action="list_processes"
 ```
 
 ```
 > 从 PID 12345 导出 IL2CPP SDK
 
-Claude 调用 sdk_dumper：action="dump", pid=12345
+sdk_dumper：action="dump", pid=12345
 ```
 
 ---
@@ -253,13 +274,13 @@ Claude 调用 sdk_dumper：action="dump", pid=12345
 **Stdio 模式**（默认）：IDE 启动 MCP 服务器作为子进程，通过 stdin/stdout 通信。每个 IDE 连接一个独立实例。
 
 ```bash
-python -m ai_editor.mcp_server
+<mcp-command>
 ```
 
 **HTTP 模式**：作为长驻 HTTP 服务器运行，多个客户端可以同时连接。
 
 ```bash
-python -m ai_editor.mcp_server --port 9820
+<mcp-command> --port 9820
 ```
 
 ### 无 GUI 依赖
@@ -302,7 +323,7 @@ MCP 服务器以 headless 模式运行，不依赖 pywebview 或 Tk GUI。它直
 
 ### SDK Dumper
 
-需要 `ai_editor.sdk_dumper` 模块可用（项目自带）。目标游戏进程必须正在运行。
+需要 `ai_editor.sdk_dumper` 模块可用（随 SAO ACT 分发）。目标游戏进程必须正在运行。
 
 ---
 
@@ -325,9 +346,11 @@ MCP 服务器以 headless 模式运行，不依赖 pywebview 或 Tk GUI。它直
 ### MCP 服务器无法启动
 
 ```bash
-# 检查 Python 路径和 import
-cd E:\VC\SAO-UI\sao_auto\python
+# 源码方式：确认 ai_editor 包可被 import
 python -c "from ai_editor.mcp_server import McpServer; print('OK')"
+
+# 打包方式：确认可执行文件存在且可运行
+sao-mcp-server.exe --help
 ```
 
 ### LLM 工具返回 "not configured"
@@ -341,9 +364,10 @@ MCP 服务器的日志输出到 stderr。在 Claude Code 中可以通过 `claude
 ### 工具列表验证
 
 ```bash
-# 快速测试 tools/list 响应
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | python -m ai_editor.mcp_server 2>/dev/null | head -1
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | <mcp-command> 2>/dev/null
 ```
+
+正常应返回包含 `protocolVersion` 和 `serverInfo` 的 JSON 响应。
 
 ---
 
