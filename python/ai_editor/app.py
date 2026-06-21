@@ -5062,7 +5062,8 @@ def _launch_subprocess() -> None:
         print("[AIEditor] activated existing window")
         return
     if getattr(sys, 'frozen', False):
-        cmd = [sys.executable, '--ai-editor']
+        from config import get_main_executable
+        cmd = [get_main_executable(), '--ai-editor']
     else:
         cmd = [sys.executable, '-m', 'ai_editor.app']
     env = dict(os.environ)
