@@ -256,6 +256,29 @@ if sys.platform == 'win32':
             ('fTransitionOnMaximized', wintypes.BOOL),
         ]
 
+    class _ACCENT_POLICY(ctypes.Structure):
+        _fields_ = [
+            ('AccentState', ctypes.c_uint),
+            ('AccentFlags', ctypes.c_uint),
+            ('GradientColor', ctypes.c_uint),
+            ('AnimationId', ctypes.c_uint),
+        ]
+
+    class _WINCOMPATTRDATA(ctypes.Structure):
+        _fields_ = [
+            ('Attribute', ctypes.c_int),
+            ('Data', ctypes.c_void_p),
+            ('SizeOfData', ctypes.c_size_t),
+        ]
+
+    try:
+        _SetWindowCompositionAttribute = _user32.SetWindowCompositionAttribute
+        _SetWindowCompositionAttribute.restype = wintypes.BOOL
+        _SetWindowCompositionAttribute.argtypes = [
+            wintypes.HWND, ctypes.POINTER(_WINCOMPATTRDATA)]
+    except AttributeError:
+        _SetWindowCompositionAttribute = None
+
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
@@ -293,20 +316,22 @@ def _apply_interactive(hwnd: int) -> None:
 def _apply_dwm_transparency(hwnd: int) -> None:
     """Enable DWM per-pixel alpha for GLFW overlay windows.
 
-    GLFW TRANSPARENT_FRAMEBUFFER only calls DwmExtendFrameIntoClientArea.
-    AMD and Intel iGPU drivers additionally require DwmEnableBlurBehindWindow
-    with a full-window region — without it the framebuffer renders as opaque
-    black.  NVIDIA tolerates the missing call, so the bug only surfaces on
-    AMD/Intel.  We call both unconditionally (no vendor branching) since
-    the calls are harmless on NVIDIA and required on the others.
+    Three escalation levels, all applied unconditionally (no vendor
+    branching — harmless on NVIDIA, required on AMD/Intel):
+      L1  DwmExtendFrameIntoClientArea  (GLFW already does this; belt-and-suspenders)
+      L2  DwmEnableBlurBehindWindow     (required by AMD/Intel for GL alpha)
+      L3  SetWindowCompositionAttribute  (Win10+ undocumented; fallback for
+          25H2+ where legacy DWM blur-behind semantics may have changed)
     """
     if sys.platform != 'win32':
         return
+    # L1
     try:
         margins = _MARGINS(-1, -1, -1, -1)
         _dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
     except Exception:
         pass
+    # L2
     try:
         _DWM_BB_ENABLE = 0x01
         _DWM_BB_BLURREGION = 0x02
@@ -319,6 +344,22 @@ def _apply_dwm_transparency(hwnd: int) -> None:
             _gdi32.DeleteObject(bb.hRgnBlur)
     except Exception:
         pass
+    # L3
+    if _SetWindowCompositionAttribute is not None:
+        try:
+            _WCA_ACCENT_POLICY = 19
+            _ACCENT_ENABLE_BLURBEHIND = 3
+            accent = _ACCENT_POLICY()
+            accent.AccentState = _ACCENT_ENABLE_BLURBEHIND
+            data = _WINCOMPATTRDATA()
+            data.Attribute = _WCA_ACCENT_POLICY
+            data.Data = ctypes.cast(
+                ctypes.pointer(accent), ctypes.c_void_p)
+            data.SizeOfData = ctypes.sizeof(accent)
+            _SetWindowCompositionAttribute(
+                hwnd, ctypes.byref(data))
+        except Exception:
+            pass
 
 
 _overlay_creation_lock = threading.Lock()
@@ -1073,6 +1114,55 @@ class GpuOverlayWindow:
             except Exception:
                 pass
 
+        # ── Transparency verification + compositor auto-fallback ──
+        # GLFW reports whether the driver actually granted an alpha-capable
+        # framebuffer.  If False, the window will render opaque black no
+        # matter what DWM calls we made — the pixel format itself lacks
+        # alpha.  Tear down and delegate to the unified compositor, which
+        # uses wglChoosePixelFormatARB(WGL_SUPPORT_COMPOSITION) on a raw
+        # Win32 window and is proven to work on AMD/Intel.
+        _fb_transparent = True
+        try:
+            _fb_transparent = bool(
+                glfw.get_window_attrib(  # type: ignore[union-attr]
+                    win, glfw.TRANSPARENT_FRAMEBUFFER))  # type: ignore[union-attr]
+        except Exception:
+            pass
+        if not _fb_transparent and not self._vsync:
+            print(f'[GOW] GLFW framebuffer NOT transparent for '
+                  f'{self._title}, attempting compositor fallback',
+                  flush=True)
+            glfw.make_context_current(None)  # type: ignore[union-attr]
+            glfw.destroy_window(win)  # type: ignore[union-attr]
+            if self._try_compositor_fallback():
+                return
+            # Compositor also unavailable — recreate GLFW window as
+            # best-effort (DWM L1-L3 may still help on some drivers
+            # even without a composition pixel format).
+            print(f'[GOW] compositor fallback also failed for '
+                  f'{self._title}, recreating GLFW (best effort)',
+                  flush=True)
+            win = glfw.create_window(  # type: ignore[union-attr]
+                self._w, self._h, self._title, None, None)
+            if not win:
+                raise RuntimeError(
+                    'glfw.create_window failed on transparency retry')
+            glfw.set_window_pos(win, self._x, self._y)  # type: ignore[union-attr]
+            glfw.make_context_current(win)  # type: ignore[union-attr]
+            glfw.swap_interval(0)  # type: ignore[union-attr]
+            if sys.platform == 'win32':
+                try:
+                    self._hwnd = int(
+                        glfw.get_win32_window(win) or 0)  # type: ignore[union-attr]
+                    if self._hwnd:
+                        _apply_dwm_transparency(self._hwnd)
+                    if self._click_through and self._hwnd:
+                        _apply_click_through(self._hwnd)
+                    elif self._hwnd:
+                        _apply_interactive(self._hwnd)
+                except Exception:
+                    pass
+
         self._ctx = _moderngl.create_context()  # type: ignore[union-attr]
         self._ctx.enable(_moderngl.BLEND)  # type: ignore[union-attr]
         # Render targets must output PREMULTIPLIED alpha for DWM.
@@ -1090,6 +1180,54 @@ class GpuOverlayWindow:
                     reg(self._hwnd)
             except Exception:
                 pass
+
+    def _try_compositor_fallback(self) -> bool:
+        """Attempt to delegate to the unified compositor after GLFW
+        transparency failure.  Returns True if delegation succeeded and
+        all instance state has been switched over."""
+        try:
+            root = getattr(self._pump, '_root', None)
+            uo = _get_unified_overlay(root)
+            if not uo._ready.is_set():
+                return False
+            from render.overlay_adapter import CompositorOverlayWindow
+            _tl = self._title.lower()
+            if 'fisheye' in _tl:
+                _z = 10
+            elif 'popup' in _tl:
+                _z = 80
+            elif 'menu_bar' in _tl or 'child_bar' in _tl:
+                _z = 85
+            elif 'menu_hud' in _tl or 'left_info' in _tl:
+                _z = 90
+            elif 'nervegear' in _tl or 'float' in _tl:
+                _z = 200
+            elif any(k in _tl for k in (
+                    'dps', 'hp', 'boss', 'buff',
+                    'skill', 'player', 'session')):
+                _z = 150
+            else:
+                _z = 100
+            self._delegate = CompositorOverlayWindow(
+                uo, w=self._w, h=self._h,
+                x=self._x, y=self._y,
+                render_fn=self._render_fn,
+                click_through=self._click_through,
+                title=self._title, vsync=False, z=_z,
+            )
+            self._unified = True
+            self._root = root
+            self._created = True
+            self._win = None
+            self._hwnd = uo.hwnd
+            self._ctx = uo.host.ctx if uo.host else None
+            print(f'[GOW] compositor fallback OK for {self._title}',
+                  flush=True)
+            return True
+        except Exception as exc:
+            print(f'[GOW] compositor fallback failed for '
+                  f'{self._title}: {exc}', flush=True)
+            return False
 
     def show(self, async_create: bool = False) -> None:
         if self._unified:
