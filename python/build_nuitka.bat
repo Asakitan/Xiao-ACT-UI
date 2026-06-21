@@ -2,11 +2,10 @@
 setlocal enabledelayedexpansion
 
 :: ──────────────────────────────────────────────────────────
-::  SAO-UI Nuitka Build Pipeline
+::  SAO-UI Nuitka Build — one-click full pipeline
 ::
-::  Compiles the entire application into a single native EXE
-::  then applies post-build hardening (DLL rename + Tk class).
-::  Output: dist\release\XiaoACTUI\ (same path as PyInstaller)
+::  Output: dist\release\XiaoACTUI\ (flat layout, hardened)
+::  Usage:  build_nuitka.bat
 :: ──────────────────────────────────────────────────────────
 
 set "ROOT=%~dp0"
@@ -16,21 +15,12 @@ set "DIST=%ROOT%dist"
 set "NUITKA_OUT=%DIST%\nuitka\main.dist"
 set "RELEASE=%DIST%\release\XiaoACTUI"
 
-:: ── Step [1/6] Cython accelerators ──
-echo [1/6] Building Cython accelerators...
+echo [1/5] Building Cython accelerators...
 python build_cython_ext.py build_ext --inplace
 if errorlevel 1 goto :fail
 
-:: ── Step [2/6] Encrypt backend data ──
-echo [2/6] Encrypting backend data...
-if exist "%ROOT%mem_probe\_encrypt_drivers.py" (
-    python "%ROOT%mem_probe\_encrypt_drivers.py" 2>nul
-)
-
-:: ── Step [3/6] Nuitka full compilation ──
-echo [3/6] Nuitka compilation (uses C cache if available)...
+echo [2/5] Nuitka compilation...
 if exist "%NUITKA_OUT%" rmdir /s /q "%NUITKA_OUT%"
-
 python -m nuitka ^
     --standalone ^
     --assume-yes-for-downloads ^
@@ -105,61 +95,28 @@ if errorlevel 1 (
     goto :fail
 )
 
-:: ── Step [4/6] Assemble release layout ──
-echo [4/6] Assembling release layout...
+echo [3/5] Assembling release...
 if exist "%RELEASE%" rmdir /s /q "%RELEASE%"
 mkdir "%RELEASE%"
-
-:: Copy Nuitka output to release
+mkdir "%RELEASE%\temp"
+mkdir "%RELEASE%\user_plugins"
 xcopy /e /i /y /q "%NUITKA_OUT%\*" "%RELEASE%\" >nul
-
-:: Copy plugins (source .py, loaded dynamically)
-if exist "%ROOT%plugins" (
-    xcopy /e /i /y /q "%ROOT%plugins" "%RELEASE%\plugins\" >nul
-    for /r "%RELEASE%\plugins" %%F in (*.pyc *.pdb *.lib *.h *.c *.pyx) do del /f "%%F" 2>nul
-    for /d /r "%RELEASE%\plugins" %%D in (__pycache__ out bin _cache) do (
-        if exist "%%D" rmdir /s /q "%%D" 2>nul
-    )
-)
-:: Plugin Cython .pyd
-for /r "%ROOT%plugins" %%F in (_sao_cy*.pyd) do (
-    set "REL=%%~dpF"
-    set "REL=!REL:%ROOT%=!"
-    if not exist "%RELEASE%\!REL!" mkdir "%RELEASE%\!REL!"
-    copy /y "%%F" "%RELEASE%\!REL!" >nul
-)
-
-:: Extras
+if exist "%ROOT%plugins" xcopy /e /i /y /q "%ROOT%plugins" "%RELEASE%\plugins\" >nul
 if exist "%ROOT%locale" xcopy /e /i /y /q "%ROOT%locale" "%RELEASE%\locale\" >nul
 if exist "%ROOT%docs" xcopy /e /i /y /q "%ROOT%docs" "%RELEASE%\docs\" >nul
-if not exist "%RELEASE%\user_plugins" mkdir "%RELEASE%\user_plugins"
-if not exist "%RELEASE%\temp" mkdir "%RELEASE%\temp"
+if exist "%ROOT%icon.ico" copy /y "%ROOT%icon.ico" "%RELEASE%\" >nul
 
-:: ── Step [5/6] Post-build hardening ──
-echo [5/6] Post-build hardening (DLL rename + Tk class)...
+echo [4/5] Post-build hardening...
 python post_build_harden.py "%RELEASE%"
-if errorlevel 1 (
-    echo WARNING: Hardening had issues, continuing
-)
 
-:: ── Step [6/6] Verify ──
-echo [6/6] Verifying...
-echo   Checking module names...
-python -c "import os; [print(f'  FOUND: {f}') for f in os.listdir(r'%RELEASE%') if 'python' in f.lower()]"
-echo   Layout:
-dir /b "%RELEASE%"
-
-echo.
-echo ══════════════════════════════════════
-echo   BUILD COMPLETE
+echo [5/5] Done.
 echo   Output: %RELEASE%
-echo ══════════════════════════════════════
+dir /b "%RELEASE%\XiaoACTUI.exe"
 
 popd
 exit /b 0
 
 :fail
-echo.
 echo BUILD FAILED
 popd
 exit /b 1

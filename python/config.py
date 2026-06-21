@@ -10,11 +10,15 @@ import threading
 from typing import Any, Dict, Optional
 
 if getattr(sys, "frozen", False):
-    # onedir + 模块化布局:
-    #   BASE_DIR = exe 所在目录, 含 XiaoACTUI.exe / update.exe / web/ / assets/ / proto/ / runtime/
-    #   BUNDLE_DIR = PyInstaller 解包根 (= contents_directory='runtime'), 仅作为最终回退
     BASE_DIR = os.path.dirname(sys.executable)
-    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.join(BASE_DIR, 'runtime'))
+    # PyInstaller: _MEIPASS = contents_directory ('runtime')
+    # Nuitka: no _MEIPASS, everything is in EXE directory (flat layout)
+    _meipass = getattr(sys, '_MEIPASS', None)
+    if _meipass:
+        BUNDLE_DIR = _meipass
+    else:
+        _rt = os.path.join(BASE_DIR, 'runtime')
+        BUNDLE_DIR = _rt if os.path.isdir(_rt) else BASE_DIR
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
