@@ -675,7 +675,7 @@ class WorkshopPanel:
         outer = tk.Frame(parent, bg=_WG_BODY_BG)
         outer.pack(fill='both', expand=True)
         canvas = tk.Canvas(outer, bg=_WG_BODY_BG, highlightthickness=0)
-        scrollbar = sao_scrollbar(outer, canvas.yview)
+        scrollbar = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
         body = tk.Frame(canvas, bg=_WG_BODY_BG)
         body.bind('<Configure>', lambda _: canvas.configure(scrollregion=canvas.bbox('all')))
         _wid = canvas.create_window((0, 0), window=body, anchor='nw')
