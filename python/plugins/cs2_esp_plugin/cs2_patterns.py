@@ -128,7 +128,13 @@ def scan_module(read_fn, module_base: int, module_size: int,
     ``read_fn(addr, size) -> Optional[bytes]`` is the reader's batch read
     callback (typically ``EngineAReader.read``). Returns ``{name: rva}``;
     patterns that did not match are omitted from the result.
+
+    A small random delay is inserted between chunk reads to spread the
+    IOCTL burst and avoid a perfectly periodic access cadence.
     """
+    import random
+    import time
+
     resolved: dict = {}
     pending = list(patterns)
     if not pending or module_size <= 0:
@@ -136,7 +142,13 @@ def scan_module(read_fn, module_base: int, module_size: int,
     max_pat = max(p.length for p in pending)
     overlap = max(CHUNK_OVERLAP, max_pat)
     offset = 0
+    first_chunk = True
     while offset < module_size and pending:
+        # Spread chunk reads with a small random delay
+        if not first_chunk:
+            time.sleep(random.uniform(0.05, 0.2))
+        first_chunk = False
+
         chunk_len = min(CHUNK_SIZE, module_size - offset)
         # Read a bit past chunk_len so cross-boundary matches land inside
         # the buffer; the next iteration re-scans the overlap region.

@@ -9,11 +9,9 @@ unavailable; no user-mode path is used in active code.
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.wintypes
 import random
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 # --- Engine E (kernel HID injection) ----------------------------------------
 
@@ -47,70 +45,7 @@ def _km_ok() -> bool:
     return _km_available
 
 
-# --- User-mode SendInput fallback -------------------------------------------
-
-_user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-INPUT_MOUSE = 0
-MOUSEEVENTF_MOVE = 0x0001
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
-
-
-class _MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx", ctypes.c_long), ("dy", ctypes.c_long),
-        ("mouseData", ctypes.wintypes.DWORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-    ]
-
-
-class _KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", ctypes.wintypes.WORD), ("wScan", ctypes.wintypes.WORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-    ]
-
-
-class _INPUT_U(ctypes.Union):
-    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
-
-
-class _INPUT(ctypes.Structure):
-    _fields_ = [("type", ctypes.wintypes.DWORD), ("u", _INPUT_U)]
-
-
-def _um_send(*inputs: _INPUT) -> int:
-    n = len(inputs)
-    arr = (_INPUT * n)(*inputs)
-    return _user32.SendInput(n, arr, ctypes.sizeof(_INPUT))
-
-
-def _um_move(dx: int, dy: int):
-    inp = _INPUT()
-    inp.type = INPUT_MOUSE
-    inp.u.mi.dx = dx
-    inp.u.mi.dy = dy
-    inp.u.mi.dwFlags = MOUSEEVENTF_MOVE
-    _um_send(inp)
-
-
-def _um_click(down_flag: int, up_flag: int, hold_ms: float = 0):
-    d = _INPUT(); d.type = INPUT_MOUSE; d.u.mi.dwFlags = down_flag
-    u = _INPUT(); u.type = INPUT_MOUSE; u.u.mi.dwFlags = up_flag
-    _um_send(d)
-    if hold_ms > 0:
-        time.sleep(hold_ms / 1000.0)
-    _um_send(u)
-
-
-# --- Public API (auto-selects kernel or usermode) ----------------------------
+# --- Public API (kernel-mode only) --------------------------------------------
 
 # btn flags for rt_io.send_m
 _BTN_LDOWN = 0x0001

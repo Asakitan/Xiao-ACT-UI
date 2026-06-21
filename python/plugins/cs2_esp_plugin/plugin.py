@@ -9,6 +9,7 @@ Feature toggles in plugin settings; all features default off except ESP.
 
 from __future__ import annotations
 
+import random
 import time
 from typing import Any, Optional
 
@@ -109,9 +110,9 @@ def _start() -> bool:
         _rcs.enabled = False
         _triggerbot.enabled = False
     _running = True
-    tick_s = max(0.004, min(1.0, float(_ctx.get_setting("tick_s", DEFAULT_TICK_S) or DEFAULT_TICK_S)))
-    _timer_token = _ctx.set_interval(_tick, tick_s)
-    _ctx.log(f"cs2_combat started (pid={pid}, tick={tick_s*1000:.0f}ms, input={input_mode()})")
+    base_tick = max(0.004, min(1.0, float(_ctx.get_setting("tick_s", DEFAULT_TICK_S) or DEFAULT_TICK_S)))
+    _timer_token = _ctx.set_interval(_tick, base_tick)
+    _ctx.log(f"cs2_combat started (pid={pid}, tick={base_tick*1000:.0f}ms, input={input_mode()})")
     _ctx.notify("CS2", f"已启动 (pid={pid})", duration_s=4.0, kind=ALERT_KIND)
     _refresh()
     return True
@@ -221,6 +222,10 @@ def _tick() -> None:
         _stop("detached")
         return
 
+    # Skip ~5% of ticks randomly to break perfect periodicity
+    if random.random() < 0.05:
+        return
+
     _sync_features()
     started = time.perf_counter()
     snap = _reader.snapshot()
@@ -240,6 +245,9 @@ def _tick() -> None:
     entities = snap.get("entities") or []
     local = snap.get("local_player")
     local_team = local.get("team", 0) if local else 0
+    # Randomise entity read order to avoid deterministic access cadence
+    if entities:
+        random.shuffle(entities)
     enemies = filter_enemies(entities, local_team)
 
     # Build enemy index for triggerbot
