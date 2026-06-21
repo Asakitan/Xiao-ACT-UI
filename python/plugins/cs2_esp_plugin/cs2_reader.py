@@ -12,7 +12,6 @@ Bug fixes from audit (2026-06-21):
 
 from __future__ import annotations
 
-import ctypes
 import struct
 from typing import Any, Optional
 
@@ -97,25 +96,44 @@ class EngineAReader:
         name = (self._config.target_process or "").lower()
         if not name:
             return 0
-        snap = 0
+        if rt_io is None:
+            return 0
         try:
-            snap = _create_toolhelp_snapshot()
-            if not snap or snap == -1:
+            return rt_io.find_process_by_name(name)
+        except AttributeError:
+            pass
+        # Manual EPROCESS iteration via rt_io kernel primitives
+        try:
+            initial = rt_io._r1_fp()
+            if not initial:
                 return 0
-            entry = _process_entry()
-            got = ctypes.windll.kernel32.Process32FirstW(snap, ctypes.byref(entry))
-            while got:
-                exe = entry.szExeFile
-                if isinstance(exe, bytes):
-                    exe = exe.decode("utf-16-le", "ignore").split("\x00", 1)[0]
-                if exe.lower() == name:
-                    return int(entry.th32ProcessID)
-                got = ctypes.windll.kernel32.Process32NextW(snap, ctypes.byref(entry))
+            off_links = getattr(rt_io, "_OFF_LINKS", 0x448)
+            off_pid = getattr(rt_io, "_OFF_PID", 0x440)
+            off_name = getattr(rt_io, "_OFF_NAME", 0x5A8)
+            cur = rt_io._r1_v8(initial + off_links)
+            if not cur:
+                return 0
+            head = initial + off_links
+            visited = set()
+            while cur and cur != head and cur not in visited and len(visited) < 512:
+                visited.add(cur)
+                ep = cur - off_links
+                img_raw = rt_io._r1_vn(ep + off_name, 15)
+                if img_raw:
+                    try:
+                        img = img_raw.split(b"\x00", 1)[0].decode("utf-8", "replace").lower()
+                        if img == name:
+                            pid = rt_io._r1_v8(ep + off_pid)
+                            if pid and pid > 0:
+                                return int(pid)
+                    except Exception:
+                        pass
+                nxt = rt_io._r1_v8(cur)
+                if not nxt:
+                    break
+                cur = nxt
         except Exception:
             pass
-        finally:
-            if snap and snap != -1:
-                ctypes.windll.kernel32.CloseHandle(snap)
         return 0
 
     def attach(self, pid: int) -> bool:
@@ -192,32 +210,66 @@ class EngineAReader:
     def _resolve_module_base(self) -> bool:
         self._module_base = 0
         self._module_size = 0
-        if self._attached_pid == 0:
+        if self._attached_pid == 0 or rt_io is None:
             return False
         target = (self._config.module or "").lower()
         if not target:
             return False
-        snap = 0
         try:
-            snap = _create_module_snapshot(self._attached_pid)
-            if not snap or snap == -1:
-                return False
-            entry = _module_entry()
-            got = ctypes.windll.kernel32.Module32FirstW(snap, ctypes.byref(entry))
-            while got:
-                mod = entry.szModule
-                if isinstance(mod, bytes):
-                    mod = mod.decode("utf-16-le", "ignore").split("\x00", 1)[0]
-                if mod.lower() == target:
-                    self._module_base = int(entry.modBaseAddr)
-                    self._module_size = int(entry.modBaseSize)
-                    return True
-                got = ctypes.windll.kernel32.Module32NextW(snap, ctypes.byref(entry))
+            ep, cr3 = rt_io._r1_fe(self._attached_pid)
         except Exception:
-            pass
-        finally:
-            if snap and snap != -1:
-                ctypes.windll.kernel32.CloseHandle(snap)
+            return False
+        if not ep or not cr3:
+            return False
+        off_peb = getattr(rt_io, "_OFF_PEB", None)
+        if off_peb is None:
+            return False
+        peb_ptr = rt_io._r1_v8(ep + off_peb)
+        if not peb_ptr:
+            return False
+        # PEB->Ldr at +0x18 (x64)
+        ldr_data = rt_io._r5_read(self._attached_pid, peb_ptr + 0x18, 8)
+        if not ldr_data:
+            return False
+        ldr = struct.unpack("<Q", ldr_data)[0]
+        if not ldr:
+            return False
+        # InLoadOrderModuleList at Ldr + 0x10
+        list_head = ldr + 0x10
+        flink_data = rt_io._r5_read(self._attached_pid, list_head, 8)
+        if not flink_data:
+            return False
+        flink = struct.unpack("<Q", flink_data)[0]
+        visited = set()
+        while flink and flink != list_head and flink not in visited and len(visited) < 300:
+            visited.add(flink)
+            # LDR_DATA_TABLE_ENTRY layout (x64):
+            #   +0x30  DllBase
+            #   +0x40  SizeOfImage
+            #   +0x58  BaseDllName.Length
+            #   +0x60  BaseDllName.Buffer
+            entry_data = rt_io._r5_read(self._attached_pid, flink, 0x68)
+            if not entry_data or len(entry_data) < 0x68:
+                break
+            dll_base = struct.unpack_from("<Q", entry_data, 0x30)[0]
+            size_of_image = struct.unpack_from("<I", entry_data, 0x40)[0]
+            name_len = struct.unpack_from("<H", entry_data, 0x58)[0]
+            name_buf = struct.unpack_from("<Q", entry_data, 0x60)[0]
+            if name_len > 0 and name_len < 520 and name_buf:
+                name_raw = rt_io._r5_read(self._attached_pid, name_buf, min(name_len, 520))
+                if name_raw:
+                    try:
+                        mod_name = name_raw.decode("utf-16-le").rstrip("\x00").lower()
+                        if mod_name == target or mod_name.endswith("\\" + target):
+                            self._module_base = dll_base
+                            self._module_size = size_of_image
+                            return True
+                    except Exception:
+                        pass
+            next_data = rt_io._r5_read(self._attached_pid, flink, 8)
+            if not next_data:
+                break
+            flink = struct.unpack("<Q", next_data)[0]
         return False
 
     # ── reads ───────────────────────────────────────────────────────────
@@ -438,66 +490,3 @@ class EngineAReader:
         result["local_index"] = local_index
         return result
 
-
-# ── Windows toolhelp helpers ─────────────────────────────────────────
-
-_TH32CS_SNAPPROCESS = 0x00000002
-_TH32CS_SNAPMODULE = 0x00000008
-_TH32CS_SNAPMODULE32 = 0x00000010
-
-
-class _ProcessEntry32W(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_uint32),
-        ("cntUsage", ctypes.c_uint32),
-        ("th32ProcessID", ctypes.c_uint32),
-        ("th32DefaultHeapID", ctypes.c_void_p),
-        ("th32ModuleID", ctypes.c_uint32),
-        ("cntThreads", ctypes.c_uint32),
-        ("th32ParentProcessID", ctypes.c_uint32),
-        ("pcPriClassBase", ctypes.c_int32),
-        ("dwFlags", ctypes.c_uint32),
-        ("szExeFile", ctypes.c_wchar * 260),
-    ]
-
-
-class _ModuleEntry32W(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_uint32),
-        ("th32ModuleID", ctypes.c_uint32),
-        ("th32ProcessID", ctypes.c_uint32),
-        ("GlblcntUsage", ctypes.c_uint32),
-        ("ProccntUsage", ctypes.c_uint32),
-        ("modBaseAddr", ctypes.c_void_p),
-        ("modBaseSize", ctypes.c_uint32),
-        ("hModule", ctypes.c_void_p),
-        ("szModule", ctypes.c_wchar * 256),
-        ("szExePath", ctypes.c_wchar * 260),
-    ]
-
-
-def _process_entry() -> _ProcessEntry32W:
-    entry = _ProcessEntry32W()
-    entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
-    return entry
-
-
-def _module_entry() -> _ModuleEntry32W:
-    entry = _ModuleEntry32W()
-    entry.dwSize = ctypes.sizeof(_ModuleEntry32W)
-    return entry
-
-
-def _create_toolhelp_snapshot() -> int:
-    try:
-        return ctypes.windll.kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0) or 0
-    except Exception:
-        return 0
-
-
-def _create_module_snapshot(pid: int) -> int:
-    try:
-        flags = _TH32CS_SNAPMODULE | _TH32CS_SNAPMODULE32
-        return ctypes.windll.kernel32.CreateToolhelp32Snapshot(flags, int(pid)) or 0
-    except Exception:
-        return 0

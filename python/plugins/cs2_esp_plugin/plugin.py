@@ -103,6 +103,11 @@ def _start() -> bool:
         return False
 
     _sync_features()
+    if input_mode() == "unavailable":
+        _ctx.log("cs2: kernel input unavailable, combat features disabled")
+        _aimbot.enabled = False
+        _rcs.enabled = False
+        _triggerbot.enabled = False
     _running = True
     tick_s = max(0.004, min(1.0, float(_ctx.get_setting("tick_s", DEFAULT_TICK_S) or DEFAULT_TICK_S)))
     _timer_token = _ctx.set_interval(_tick, tick_s)

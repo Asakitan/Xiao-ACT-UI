@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""CS2 plugin — input simulation (kernel-mode preferred).
+"""CS2 plugin — input simulation (kernel-mode only).
 
-Prefers Engine E kernel-level HID injection (rt_io.send_m / send_k)
+Uses Engine E kernel-level HID injection (rt_io.send_m / send_k)
 which injects through mouclass/kbdclass service callbacks — appears
-as genuine hardware input.  Falls back to user-mode SendInput when
-Engine E is unavailable.
+as genuine hardware input.  Returns silently when Engine E is
+unavailable; no user-mode path is used in active code.
 """
 
 from __future__ import annotations
@@ -120,52 +120,38 @@ _BTN_RUP = 0x0008
 
 
 def move_mouse(dx: int, dy: int) -> None:
-    """Relative mouse movement (pixels). Kernel-mode if available."""
+    """Relative mouse movement (pixels). Kernel-mode required."""
     dx, dy = int(dx), int(dy)
     if dx == 0 and dy == 0:
         return
     if _km_ok():
         _rt.send_m(dx, dy)
-    else:
-        _um_move(dx, dy)
 
 
 def click(button: str = "left", hold_ms: float = 0) -> None:
-    """Mouse click. Kernel-mode if available."""
-    if _km_ok():
-        db, ub = {"left": (_BTN_LDOWN, _BTN_LUP),
-                  "right": (_BTN_RDOWN, _BTN_RUP)}.get(button, (_BTN_LDOWN, _BTN_LUP))
-        _rt.send_m(0, 0, db)
-        if hold_ms > 0:
-            time.sleep(hold_ms / 1000.0)
-        _rt.send_m(0, 0, ub)
-    else:
-        df, uf = {"left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
-                  "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)}.get(
-            button, (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
-        _um_click(df, uf, hold_ms)
+    """Mouse click. Kernel-mode required."""
+    if not _km_ok():
+        return
+    db, ub = {"left": (_BTN_LDOWN, _BTN_LUP),
+              "right": (_BTN_RDOWN, _BTN_RUP)}.get(button, (_BTN_LDOWN, _BTN_LUP))
+    _rt.send_m(0, 0, db)
+    if hold_ms > 0:
+        time.sleep(hold_ms / 1000.0)
+    _rt.send_m(0, 0, ub)
 
 
 def mouse_down(button: str = "left") -> None:
-    if _km_ok():
-        b = {"left": _BTN_LDOWN, "right": _BTN_RDOWN}.get(button, _BTN_LDOWN)
-        _rt.send_m(0, 0, b)
-    else:
-        f = {"left": MOUSEEVENTF_LEFTDOWN, "right": MOUSEEVENTF_RIGHTDOWN}.get(
-            button, MOUSEEVENTF_LEFTDOWN)
-        inp = _INPUT(); inp.type = INPUT_MOUSE; inp.u.mi.dwFlags = f
-        _um_send(inp)
+    if not _km_ok():
+        return
+    b = {"left": _BTN_LDOWN, "right": _BTN_RDOWN}.get(button, _BTN_LDOWN)
+    _rt.send_m(0, 0, b)
 
 
 def mouse_up(button: str = "left") -> None:
-    if _km_ok():
-        b = {"left": _BTN_LUP, "right": _BTN_RUP}.get(button, _BTN_LUP)
-        _rt.send_m(0, 0, b)
-    else:
-        f = {"left": MOUSEEVENTF_LEFTUP, "right": MOUSEEVENTF_RIGHTUP}.get(
-            button, MOUSEEVENTF_LEFTUP)
-        inp = _INPUT(); inp.type = INPUT_MOUSE; inp.u.mi.dwFlags = f
-        _um_send(inp)
+    if not _km_ok():
+        return
+    b = {"left": _BTN_LUP, "right": _BTN_RUP}.get(button, _BTN_LUP)
+    _rt.send_m(0, 0, b)
 
 
 def click_with_delay(min_ms: int = 30, max_ms: int = 80,
@@ -185,39 +171,23 @@ VK_SHIFT = 0x10
 
 
 def key_press(vk: int) -> None:
-    """Press a key (hold down). Kernel-mode if available."""
+    """Press a key (hold down). Kernel-mode required."""
     if _km_ok():
         _rt.send_k(vk, True)
-    else:
-        inp = _INPUT()
-        inp.type = 1  # INPUT_KEYBOARD
-        inp.u.ki.wVk = vk
-        inp.u.ki.dwFlags = 0
-        _um_send(inp)
 
 
 def key_release(vk: int) -> None:
-    """Release a key. Kernel-mode if available."""
+    """Release a key. Kernel-mode required."""
     if _km_ok():
         _rt.send_k(vk, False)
-    else:
-        inp = _INPUT()
-        inp.type = 1
-        inp.u.ki.wVk = vk
-        inp.u.ki.dwFlags = 0x0002  # KEYEVENTF_KEYUP
-        _um_send(inp)
 
 
 def key_tap(vk: int, hold_ms: int = 30) -> None:
-    """Tap a key (press + delay + release)."""
+    """Tap a key (press + delay + release). Kernel-mode required."""
     if _km_ok():
         _rt.send_k_tap(vk, hold_ms)
-    else:
-        key_press(vk)
-        time.sleep(max(0.005, hold_ms / 1000.0))
-        key_release(vk)
 
 
 def input_mode() -> str:
-    """Return 'kernel' or 'usermode' describing current input path."""
-    return "kernel" if _km_ok() else "usermode"
+    """Return 'kernel' or 'unavailable' describing current input path."""
+    return "kernel" if _km_ok() else "unavailable"
