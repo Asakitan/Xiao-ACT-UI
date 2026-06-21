@@ -124,6 +124,10 @@ class SAOPlayerGUIPanelsMixin:
     def _open_act_plugin_manager(self, tab='manage'):
         """打开插件管理面板并切到指定页签 (manage / panels)."""
         self._dismiss_sao_menu_for_panel()
+        try:
+            self._stop_fisheye_overlay()
+        except Exception:
+            pass
         self._ensure_plugin_window_bridge()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
