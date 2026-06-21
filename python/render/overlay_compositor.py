@@ -661,21 +661,25 @@ class UnifiedOverlay:
 
     def _run(self) -> None:
         try:
+            print('[Compositor] creating host window...', flush=True)
             self._host = OverlayHost()
             self._host.create()
+            print(f'[Compositor] host HWND=0x{self._host.hwnd:08X} '
+                  f'{self._host.width}x{self._host.height}', flush=True)
             self._host.hit_test_fn = self._hit_test
             self._host.mouse_fn = self._on_mouse_event
+            print('[Compositor] init GL...', flush=True)
             self._init_gl()
-            # Keep WGL context current for the entire thread lifetime.
-            # Different threads' WGL contexts are independent — holding
-            # ours doesn't block GLFW pump or render workers.
+            print('[Compositor] GL ready, showing window', flush=True)
             self._host.show()
-            self._host.set_capture_mode(True)
             self._ready.set()
+            print('[Compositor] running', flush=True)
         except Exception as exc:
             import traceback
+            print(f'[Compositor] FATAL init error: {exc}', flush=True)
             traceback.print_exc()
             self._running = False
+            self._ready.set()  # unblock waiters
             return
 
         t0 = time.perf_counter()
