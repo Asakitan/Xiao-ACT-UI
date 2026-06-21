@@ -171,17 +171,25 @@ class EntityTimeline:
 # ═══════════════════════════════════════════════════════════════════════
 
 class Backtrack:
-    """Find the historical tick where an enemy's head is closest to crosshair.
+    """Latency-window aim optimisation (NOT time-travel backtrack).
 
-    CS2 lag compensation: server rewinds entities up to ~200ms based on
-    client latency. External backtrack aims at a past position; the
-    server validates the hit against historical state. No packet
-    modification needed — pure aim adjustment.
+    CS2 server rewinds hitboxes by the CLIENT'S MEASURED RTT — NOT by
+    a client-reported tick.  External cheats cannot inflate this window.
+    Effective range: your actual ping + interp buffer ≈ 30–80 ms.
+
+    Within that small window this IS useful: pick the historical head
+    position closest to crosshair.  30 ms at full sprint ≈ 7.5 units
+    (2× head hitbox radius), enough to turn a near-miss into a headshot
+    against peeking / jiggling enemies.
+
+    Default 50 ms — raise only if your ping is genuinely higher.
+    Setting 200 ms when your ping is 30 ms just makes you aim at stale
+    positions the server will NOT validate → lower accuracy.
     """
 
     def __init__(self) -> None:
         self.enabled: bool = False
-        self.max_window_ms: float = 200.0   # max rewind (ms)
+        self.max_window_ms: float = 50.0    # ≈ realistic RTT + interp
         self.prefer_head: bool = True
 
     def best_record(self, timeline: EntityTimeline,

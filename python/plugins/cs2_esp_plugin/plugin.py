@@ -211,7 +211,7 @@ def _sync_features():
 
     # Timeshift
     _ts.backtrack.enabled = _bool("backtrack_enabled", False)
-    _ts.backtrack.max_window_ms = _float("backtrack_window_ms", 200.0)
+    _ts.backtrack.max_window_ms = _float("backtrack_window_ms", 50.0)
     _ts.selftrack.enabled = _bool("selftrack_enabled", False)
     _ts.interp.enabled = _bool("interp_enabled", False)
     _ts.interp.render_delay_ms = _float("interp_delay_ms", 0.0)
@@ -474,14 +474,14 @@ def _render(_payload=None) -> dict:
     ex_on = _ts.extrap.enabled
     any_ts = bt_on or st_on or ip_on or ex_on
     ts_badges = []
-    if bt_on: ts_badges.append(ui.badge("回溯", "gold"))
+    if bt_on: ts_badges.append(ui.badge("延迟补偿", "gold"))
     if st_on: ts_badges.append(ui.badge("自跟踪", "accent"))
     if ip_on: ts_badges.append(ui.badge("插值", "cyan"))
     if ex_on: ts_badges.append(ui.badge("外推", "ok"))
     if not any_ts: ts_badges.append(ui.badge("全关", "muted"))
     ts_items = [ui.row(ts_badges)]
     if bt_on:
-        ts_items.append(ui.kv("回溯窗口", f"{_ts.backtrack.max_window_ms:.0f} ms"))
+        ts_items.append(ui.kv("延迟窗口", f"{_ts.backtrack.max_window_ms:.0f} ms (≈ping)"))
     if ex_on:
         ts_items.append(ui.kv("前瞻", f"{_ts.extrap.lookahead_ms:.0f} ms"))
     if st_on:
