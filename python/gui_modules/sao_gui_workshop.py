@@ -440,6 +440,20 @@ class WorkshopPanel:
         self._active_tab = 'store'
         self._tab_buttons: dict[str, tk.Label] = {}
         self._tab_frames: dict[str, tk.Frame] = {}
+        self._publish_menu_frame: Optional[tk.Frame] = None
+        self._publish_var = tk.StringVar()
+        self._publish_status: Optional[tk.Label] = None
+        self._status_dot: Optional[tk.Label] = None
+        self._zip_path_var = tk.StringVar()
+        self._pub_id_var = tk.StringVar()
+        self._pub_name_var = tk.StringVar()
+        self._pub_version_var = tk.StringVar(value='1.0.0')
+        self._pub_author_var = tk.StringVar()
+        self._pub_desc_var = tk.StringVar()
+        self._pub_games_var = tk.StringVar()
+        self._pub_tags_var = tk.StringVar()
+        self._pub_access_var = tk.StringVar(value='free')
+        self._pub_long_desc: Optional[tk.Text] = None
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -857,14 +871,16 @@ class WorkshopPanel:
     def _on_loaded(self, plugins: list, total: int):
         self._plugins = list(plugins)
         self._total = total
-        self._status_dot.configure(fg=_WG_GREEN)
+        if self._status_dot is not None:
+            self._status_dot.configure(fg=_WG_GREEN)
         self._status_var.set(f'{total} plugins available')
         self._render_grid(plugins)
         self._render_pagination()
 
     def _on_error(self, msg: str):
         self._loading = False
-        self._status_dot.configure(fg=_WG_RED)
+        if self._status_dot is not None:
+            self._status_dot.configure(fg=_WG_RED)
         self._status_var.set(str(msg))
         self._render_empty(msg)
 
@@ -1205,6 +1221,8 @@ class WorkshopPanel:
     def _refresh_publish_menu(self):
         self._local_plugins = _get_local_user_plugins()
         parent = self._publish_menu_frame
+        if parent is None:
+            return
         for w in parent.winfo_children():
             w.destroy()
         if not self._local_plugins:
