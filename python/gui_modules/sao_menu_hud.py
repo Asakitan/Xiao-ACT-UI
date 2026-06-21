@@ -852,6 +852,24 @@ class MenuCircleButtonRenderer:
                 pts.append((cx + math.cos(ang_i) * ri, cy + math.sin(ang_i) * ri))
             draw.polygon(pts, fill=color)
             return True
+        # Workshop diamond outline (◇ U+25C7) — "创意工坊" category
+        if icon_text == '◇':
+            r = canvas * 0.22
+            ri = r * 0.62
+            pts_outer = [
+                (cx, cy - r), (cx + r, cy),
+                (cx, cy + r), (cx - r, cy),
+            ]
+            pts_inner = [
+                (cx, cy - ri), (cx + ri, cy),
+                (cx, cy + ri), (cx - ri, cy),
+            ]
+            draw.polygon(pts_outer, fill=color)
+            draw.polygon(pts_inner, fill=(0, 0, 0, 0))
+            # center sparkle dot
+            dr = max(scale * 0.8, 1.5)
+            draw.ellipse((cx - dr, cy - dr, cx + dr, cy + dr), fill=color)
+            return True
         # Hash / number sign (⌗ U+2317) — "工具" category
         if icon_text == '⌗':
             bar = max(scale, 2)

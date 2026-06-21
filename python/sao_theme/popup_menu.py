@@ -43,7 +43,9 @@ class SAOPopUpMenu:
                  key_code: str = 'a',
                  slide_down: bool = True,
                  left_widget_factory: Optional[Callable] = None,
-                 anchor_widget=None):
+                 anchor_widget=None,
+                 custom_child_factories: Optional[Dict[str, Callable]] = None,
+                 **_kwargs):
         self.root = root
         self.icon_arr = icon_arr
         self.child_menus = child_menus
@@ -55,6 +57,9 @@ class SAOPopUpMenu:
         self.slide_down = slide_down
         self.left_widget_factory = left_widget_factory
         self.anchor_widget = anchor_widget
+        self._custom_child_factories: Dict[str, Callable] = dict(custom_child_factories or {})
+        self._custom_child_widgets: Dict[str, object] = {}
+        self._active_custom_child: Optional[str] = None
         # 锚定位置 (anchor_widget 模式下存储内容左上角坐标)
         self._content_x: Optional[int] = None
         self._content_y: Optional[int] = None
@@ -775,6 +780,43 @@ class SAOPopUpMenu:
         except Exception:
             self.close()
 
+    def _hide_all_custom_children(self) -> bool:
+        changed = False
+        for _cname, cwidget in self._custom_child_widgets.items():
+            try:
+                if cwidget.winfo_ismapped():
+                    cwidget.pack_forget()
+                    changed = True
+            except Exception:
+                pass
+        self._active_custom_child = None
+        return changed
+
+    def _show_custom_child(self, name: str) -> bool:
+        self._hide_all_custom_children()
+        if name not in self._custom_child_widgets:
+            factory = self._custom_child_factories.get(name)
+            if not callable(factory):
+                return False
+            try:
+                widget = factory(self._content)
+                self._custom_child_widgets[name] = widget
+            except Exception:
+                return False
+        widget = self._custom_child_widgets[name]
+        try:
+            widget.pack(side=tk.LEFT, padx=(25, 0), anchor='n')
+        except Exception:
+            return False
+        self._active_custom_child = name
+        activate_cb = getattr(widget, 'activate', None)
+        if callable(activate_cb):
+            try:
+                activate_cb()
+            except Exception:
+                pass
+        return True
+
     def _on_menu_activate(self, item):
         _phase_trace('menu.activate.begin', str(getattr(item, 'get', lambda *_: None)('name', '<none>') if item is not None else '<none>'))
         self._menu_force_60_until = time.time() + 0.95
@@ -784,6 +826,7 @@ class SAOPopUpMenu:
             if lw and hasattr(lw, 'set_active'):
                 lw.set_active(False)
             layout_changed = bool(self._child_bar.hide_menu())
+            layout_changed = self._hide_all_custom_children() or layout_changed
             if layout_changed:
                 self._hud_cached_dims = None
                 self._content_place_sig = None
@@ -803,14 +846,37 @@ class SAOPopUpMenu:
                 except Exception:
                     lw.sync_pulse()
         name = item.get('name', '')
-        if name in self.child_menus:
+        # Custom child view (e.g. workshop preview): replaces childbar
+        if name in self._custom_child_factories:
             try:
                 from utils.sao_sound import play_sound as _ps
                 _ps('submenu', volume=0.5)
             except Exception:
                 pass
+            self._child_bar.hide_menu()
+            try:
+                self._child_bar.pack_forget()
+            except Exception:
+                pass
+            layout_changed = self._show_custom_child(name)
+        elif name in self.child_menus:
+            try:
+                from utils.sao_sound import play_sound as _ps
+                _ps('submenu', volume=0.5)
+            except Exception:
+                pass
+            self._hide_all_custom_children()
+            try:
+                self._child_bar.pack(side=tk.LEFT, padx=(25, 0), anchor='n')
+            except Exception:
+                pass
             layout_changed = bool(self._child_bar.show_menu(name))
         else:
+            self._hide_all_custom_children()
+            try:
+                self._child_bar.pack(side=tk.LEFT, padx=(25, 0), anchor='n')
+            except Exception:
+                pass
             layout_changed = bool(self._child_bar.hide_menu())
         _phase_trace('menu.activate.layout', f'changed={int(bool(layout_changed))}')
         if layout_changed:
@@ -960,6 +1026,8 @@ class SAOPopUpMenu:
         self._overlay_drift_sig = None
         self._menu_hud_renderer.reset()
         self._hud_cached_dims = None
+        self._custom_child_widgets.clear()
+        self._active_custom_child = None
         self._external_close_prepared = False
         if invoke_callback and self.on_close_callback:
             self.on_close_callback()

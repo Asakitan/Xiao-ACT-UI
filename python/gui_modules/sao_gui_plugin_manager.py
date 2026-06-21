@@ -32,7 +32,7 @@ from gui_modules import sao_panel_ui as _panel_ui
 from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
 from gui_modules.sao_panel_components import (
     SP_SM, SP_MD, SP_XS,
-    _pc, _accent,
+    _pc,
     action_button, dropdown_button, keep_canvas_scroll,
     rounded_panel, sao_entry, sao_option_menu, sao_scrollbar,
     status_badge,
@@ -50,7 +50,6 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
-    _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
@@ -170,84 +169,104 @@ class PluginManagerPanel:
             return False
 
     def _build(self) -> None:
-        body_bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
-        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
-        header_bg = _pc('header_bg', _SAO_PANEL_HEADER_BG)
-        border = _pc('border', _SAO_PANEL_BORDER)
-        gold = _pc('gold', _SAO_PANEL_GOLD)
-        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
-        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+        body_bg = _pc('body_bg', '#101823')
+        card_bg = _pc('card_bg', '#162233')
+        border = _pc('border', '#2d5e6f')
+        gold = _pc('gold', '#f0c456')
+        label_fg = _pc('label_fg', '#9fb4c4')
+        value_fg = _pc('value_fg', '#eaf6ff')
+        header_bg = _pc('header_bg', '#111b28')
+        header_fg = _pc('header_fg', '#e6f4ff')
+        sep = _pc('sep', '#1c3743')
+        bg = _pc('bg', '#14202b')
 
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO Plugin Manager')
         win.geometry('960x862+160+120')
         win.minsize(620, 420)
-        win.configure(bg=_SAO_PANEL_BG)
+        win.configure(bg=bg)
         try:
             win.overrideredirect(True)
-            win.attributes('-alpha', 1.0)
+            win.attributes('-alpha', 0.98)
         except Exception:
             pass
         try:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'PLUGIN MANAGER', on_close=self.hide, flat=True)
-        header.pack(fill='x')
-        _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win, flat=True)
+        # ── Header ──
+        header = tk.Frame(win, bg=header_bg, height=44)
+        header.pack(fill='x')
+        header.pack_propagate(False)
+        _bind_panel_drag(win, header)
+        hdr_inner = tk.Frame(header, bg=header_bg)
+        hdr_inner.pack(fill='both', expand=True, padx=12)
+        tk.Label(hdr_inner, text='⬢', bg=header_bg, fg=gold,
+                 font=get_sao_font(14, True)).pack(side='left')
+        tk.Label(hdr_inner, text='PLUGIN MANAGER', bg=header_bg,
+                 fg=gold, font=get_sao_font(11, True)).pack(side='left', padx=(4, 0))
+        tk.Label(hdr_inner, text='插件管理', bg=header_bg,
+                 fg=header_fg, font=get_cjk_font(10)).pack(side='left', padx=(8, 0))
+        close_btn = tk.Label(hdr_inner, text='×', bg=header_bg,
+                             fg=label_fg, font=('Consolas', 16),
+                             cursor='hand2', padx=6)
+        close_btn.pack(side='right')
+        close_btn.bind('<Button-1>', lambda e: self.hide())
+        close_btn.bind('<Enter>', lambda e: close_btn.configure(fg=_pc('danger', '#ff707a')))
+        close_btn.bind('<Leave>', lambda e: close_btn.configure(fg=label_fg))
+        tk.Frame(win, bg=border, height=1).pack(fill='x')
+
+        body = tk.Frame(win, bg=body_bg)
         body.pack(fill='both', expand=True, padx=0, pady=0)
 
-        # ── Title bar (title left + controls right, bottom-aligned) ──
-        toolbar = tk.Frame(body, bg=body_bg)
-        toolbar.pack(fill='x', padx=14, pady=(7, 4))
-
-        title_box = tk.Frame(toolbar, bg=body_bg)
-        title_box.pack(side='left', anchor='n')
-        tk.Label(title_box, text='PLUGINS', bg=body_bg,
-                 fg=gold, font=get_sao_font(8, True), anchor='w').pack(fill='x')
-        tk.Label(title_box, text='PLUGIN MANAGER 插件管理', bg=body_bg,
-                 fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
-
-        # All right-side controls in ONE frame, bottom-aligned with title
-        controls = tk.Frame(toolbar, bg=body_bg)
-        controls.pack(side='right', anchor='center')
-        self._controls = controls  # store for re-rendering the badge
-
-        badge_frame = tk.Frame(controls, bg=body_bg)
-        badge_frame.pack(side='left', padx=(0, 8))
+        # ── Row 1: Title + badge ──
+        title_row = tk.Frame(body, bg=body_bg)
+        title_row.pack(fill='x', padx=16, pady=(10, 0))
+        tk.Label(title_row, text='PLUGINS', bg=body_bg,
+                 fg=gold, font=get_sao_font(8, True), anchor='w').pack(side='left')
+        badge_frame = tk.Frame(title_row, bg=body_bg)
+        badge_frame.pack(side='right')
         status_badge(badge_frame, '0/0', kind='gold').pack()
         self._count_badge_parent = badge_frame
 
-        tk.Label(controls, textvariable=self._summary_var, bg=body_bg,
-                 fg=gold, font=get_cjk_font(10, True)).pack(side='left', padx=(0, SP_SM))
+        title2_row = tk.Frame(body, bg=body_bg)
+        title2_row.pack(fill='x', padx=16, pady=(1, 6))
+        tk.Label(title2_row, text='PLUGIN MANAGER', bg=body_bg,
+                 fg=value_fg, font=get_sao_font(15, True), anchor='w').pack(side='left')
+        tk.Label(title2_row, textvariable=self._summary_var, bg=body_bg,
+                 fg=label_fg, font=get_cjk_font(9)).pack(side='right')
+
+        # ── Accent line ──
+        tk.Frame(body, bg=gold, height=1).pack(fill='x', padx=16, pady=(0, 0))
+        tk.Frame(body, bg=sep, height=1).pack(fill='x', padx=16, pady=(1, 6))
+
+        # ── Row 2: Search + action buttons ──
+        toolbar = tk.Frame(body, bg=body_bg)
+        toolbar.pack(fill='x', padx=16, pady=(0, 6))
 
         self._search_var = tk.StringVar()
         self._search_var.trace_add('write', lambda *_a: self._on_search())
-        sao_entry(controls, textvariable=self._search_var, width=16).pack(side='left', padx=(0, SP_SM))
+        sao_entry(toolbar, textvariable=self._search_var, width=20).pack(side='left', padx=(0, SP_SM))
 
-        action_button(controls, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
-        action_button(controls, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
-        action_button(controls, '切换下个', self._cycle_next, kind='normal').pack(side='left', padx=(0, SP_XS))
-        _make_panel_close_button(controls, self.hide, bg=body_bg, flat=True).pack(side='left', padx=(6, 0))
+        action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
+        action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
+        action_button(toolbar, '切换下个', self._cycle_next, kind='normal').pack(side='left', padx=(0, SP_XS))
 
-        # ── Tag pills row ──
+        # ── Tag pills ──
         self._pills_row = tk.Frame(body, bg=body_bg)
-        self._pills_row.pack(fill='x', padx=14, pady=(2, 4))
+        self._pills_row.pack(fill='x', padx=16, pady=(0, 4))
 
-        # ── Tabs ──
-        tabs = tk.Frame(body, bg=body_bg)
-        tabs.pack(fill='x', padx=14, pady=(0, 4))
-        for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels'), ('workshop', '创意工坊 Workshop')):
-            btn = action_button(tabs, label, lambda k=key: self._show_tab(k), kind='normal')
+        # ── Tabs + status ──
+        tab_status = tk.Frame(body, bg=body_bg)
+        tab_status.pack(fill='x', padx=16, pady=(0, 6))
+        for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels')):
+            btn = action_button(tab_status, label, lambda k=key: self._show_tab(k), kind='normal')
             btn.pack(side='left', padx=(0, 6))
             self._tab_buttons[key] = btn
-
-        # ── Status message ──
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=body_bg,
-                 fg=label_fg, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 4))
+        tk.Label(tab_status, textvariable=self._status_var, anchor='e', bg=body_bg,
+                 fg=label_fg, font=get_cjk_font(9)).pack(side='right')
 
         # ── Manage tab: scrollable 3-column plugin card grid ──
         self._manage_wrap = tk.Frame(body, bg=body_bg)
@@ -260,6 +279,7 @@ class PluginManagerPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
         scroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
+        canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
         self._canvas = canvas
 
         # ── Panels tab: auto-redrawing plugin UI panels ──
@@ -275,24 +295,36 @@ class PluginManagerPanel:
         pscroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
         self._panel_list = PluginPanelList(panels_inner, self.owner)
 
+        # ── Resize grip ──
+        grip = tk.Label(win, text='⋱', bg=body_bg, fg=border,
+                        font=('Consolas', 10), cursor='size_nw_se')
+        grip.place(relx=1.0, rely=1.0, anchor='se', x=-2, y=-2)
+
+        def _resize_start(e):
+            self._resize_start = (e.x_root, e.y_root,
+                                  win.winfo_width(), win.winfo_height())
+
+        def _resize_motion(e):
+            rs = getattr(self, '_resize_start', None)
+            if rs is None:
+                return
+            new_w = max(620, rs[2] + (e.x_root - rs[0]))
+            new_h = max(420, rs[3] + (e.y_root - rs[1]))
+            win.geometry(f'{new_w}x{new_h}+{win.winfo_x()}+{win.winfo_y()}')
+
+        grip.bind('<ButtonPress-1>', _resize_start)
+        grip.bind('<B1-Motion>', _resize_motion)
+
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._show_tab(self._active_tab)
 
     def _show_tab(self, name: str) -> None:
-        if name == 'workshop':
-            try:
-                from workshop.app import launch as ws_launch
-                ws_launch(gui_ref=self.owner)
-            except Exception as e:
-                print(f"[PluginManager] workshop launch failed: {e}")
-            return
         self._active_tab = name if name in ('manage', 'panels') else 'manage'
         for key, btn in self._tab_buttons.items():
             try:
                 is_active = (key == self._active_tab)
-                # _RoundedButton uses internal _fg / _border for drawing
-                btn._fg = _pc('gold', _SAO_PANEL_GOLD) if is_active else _pc('value_fg', _SAO_PANEL_VALUE_FG)
-                btn._border = _accent('gold') if is_active else _pc('border', _SAO_PANEL_BORDER)
+                btn._fg = _pc('gold', '#f0c456') if is_active else _pc('value_fg', '#eaf6ff')
+                btn._border = _pc('accent_strong', '#7fe9ff') if is_active else _pc('border', '#2d5e6f')
                 btn._draw()
             except Exception:
                 pass
@@ -396,12 +428,11 @@ class PluginManagerPanel:
     def _render_card(self, parent: tk.Frame, plugin: Mapping[str, Any],
                      row_idx: int, col_idx: int) -> None:
         """Render one plugin card as a rounded panel in the grid."""
-        body_bg = _pc('body_bg', _SAO_PANEL_BODY_BG)
-        card_bg = _pc('card_bg', _SAO_PANEL_BODY_BG)
-        border = _pc('border', _SAO_PANEL_BORDER)
-        gold = _pc('gold', _SAO_PANEL_GOLD)
-        label_fg = _pc('label_fg', _SAO_PANEL_LABEL_FG)
-        value_fg = _pc('value_fg', _SAO_PANEL_VALUE_FG)
+        card_bg = _pc('card_bg', '#162233')
+        border = _pc('border', '#2d5e6f')
+        gold = _pc('gold', '#f0c456')
+        label_fg = _pc('label_fg', '#9fb4c4')
+        value_fg = _pc('value_fg', '#eaf6ff')
 
         plugin_id = str(plugin.get('id') or '')
         enabled = bool(plugin.get('enabled'))
@@ -410,44 +441,45 @@ class PluginManagerPanel:
         name = str(plugin.get('name') or plugin_id)
         version = str(plugin.get('version') or '-')
 
-        # Rail color: green=active, gold=enabled, grey=disabled
         rail = (_pc('ok', '#5cc46a') if active
                 else (gold if enabled
-                      else _pc('sep', '#a0a0a0')))
-        card_border = gold if enabled else _pc('sep', '#a0a0a0')
+                      else _pc('sep', '#c0c0c0')))
+        card_border = gold if enabled else _pc('sep', '#d8d0c0')
 
         card, inner = rounded_panel(parent, bg=card_bg, border=card_border, radius=8,
-                                    rail=rail, rail_w=3, pad=SP_SM)
-        card.grid(row=row_idx, column=col_idx, padx=4, pady=4, sticky='nsew')
+                                    rail=rail, rail_w=3, pad=SP_MD)
+        card.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky='nsew')
 
-        # ── Name + version ──
+        # ── Name + pin star ──
         top = tk.Frame(inner, bg=card_bg)
-        top.pack(fill='x', pady=(0, 2))
+        top.pack(fill='x', pady=(0, 1))
+        if pinned:
+            tk.Label(top, text='★', bg=card_bg, fg=gold,
+                     font=get_cjk_font(10)).pack(side='left', padx=(0, 3))
         tk.Label(top, text=name, bg=card_bg, fg=value_fg,
                  anchor='w', font=get_cjk_font(11, True)).pack(side='left', fill='x', expand=True)
         tk.Label(top, text=f'v{version}', bg=card_bg, fg=label_fg,
-                 anchor='e', font=get_cjk_font(9)).pack(side='right')
+                 anchor='e', font=get_cjk_font(8)).pack(side='right')
 
-        # ── Description / ID subtitle ──
+        # ── Description ──
         desc = str(plugin.get('description') or plugin_id)
         tk.Label(inner, text=desc, bg=card_bg, fg=label_fg,
                  anchor='w', font=get_cjk_font(9), wraplength=260).pack(fill='x', pady=(0, SP_XS))
 
-        # ── Category pill + ON/OFF badge + reload button ──
-        bottom = tk.Frame(inner, bg=card_bg)
-        bottom.pack(fill='x', pady=(SP_XS, 0))
+        # ── Separator ──
+        tk.Frame(inner, bg=border, height=1).pack(fill='x', pady=(SP_XS, SP_XS))
 
-        # Category pill — derive short label from plugin id keywords (webref
-        # shows lowercase tags like core/input/mem/net/beta).
+        # ── Bottom: badges + actions ──
+        bottom = tk.Frame(inner, bg=card_bg)
+        bottom.pack(fill='x')
+
         category, cat_kind = _plugin_category(plugin_id, plugin)
         status_badge(bottom, category, kind=cat_kind).pack(side='left', padx=(0, SP_XS))
 
-        # ON/OFF badge — webref: ON is cyan, OFF is gold (muted)
         state_text = 'ON' if enabled else 'OFF'
         state_kind = 'cyan' if enabled else 'gold'
         status_badge(bottom, state_text, kind=state_kind).pack(side='left', padx=(0, SP_XS))
 
-        # Failure badges (only when errors present)
         failures = _finite_int(plugin.get('failures'), 0, lo=0)
         event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)
         if failures > 0:
@@ -455,7 +487,6 @@ class PluginManagerPanel:
         if event_failures > 0:
             status_badge(bottom, f'EVT {event_failures}', kind='danger').pack(side='left', padx=(0, SP_XS))
 
-        # Reload button (right side) + 更多 dropdown
         dropdown_button(bottom, '更多', [
             ('启用 Enable', lambda pid=plugin_id: self._enable(pid)) if not enabled else
             ('禁用 Disable', lambda pid=plugin_id: self._disable(pid)),
@@ -470,22 +501,17 @@ class PluginManagerPanel:
         action_button(bottom, '重载', lambda pid=plugin_id: self._reload(pid),
                       kind='cyan').pack(side='right', padx=(0, SP_XS))
 
-        # ── Disabled banner (webref: "已停用" strip below buttons) ──
-        if not enabled:
-            tk.Label(inner, text='已停用',
-                     bg=_pc('danger_soft', '#33161f'),
-                     fg=_pc('danger', '#ff707a'),
-                     anchor='w', font=get_cjk_font(9),
-                     padx=6, pady=3).pack(fill='x', pady=(SP_XS, 0))
-
-        # ── Error box (skip when error == disabled banner to avoid duplicate) ──
+        # ── Error box (only when errors present) ──
         error = str(plugin.get('last_error') or '').strip()
-        if error and error != '已停用':
+        if not enabled and not error:
+            error = '已停用'
+        if error:
+            err_bg = '#FFF5F0' if error != '已停用' else '#FFF8EE'
+            err_fg = '#C04030' if error != '已停用' else '#B08040'
             tk.Label(inner, text=error,
-                     bg=_pc('danger_soft', '#33161f'),
-                     fg=_pc('danger', '#ff707a'),
+                     bg=err_bg, fg=err_fg,
                      anchor='w', justify='left', wraplength=260,
-                     font=get_cjk_font(9), padx=6, pady=4).pack(fill='x', pady=(SP_XS, 0))
+                     font=get_cjk_font(9), padx=6, pady=3).pack(fill='x', pady=(SP_XS, 0))
 
     def _import_plugin(self) -> None:
         try:

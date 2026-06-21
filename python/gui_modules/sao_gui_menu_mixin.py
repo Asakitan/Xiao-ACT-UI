@@ -411,6 +411,7 @@ class SAOPlayerGUIMenuMixin:
         {'name': '控制', 'icon': '⚙', 'can_active': True},
         {'name': '工具', 'icon': '⌗', 'can_active': True},
         {'name': '插件', 'icon': '⬢', 'can_active': True},
+        {'name': '创意工坊', 'icon': '◇', 'can_active': True},
         {'name': '皮肤', 'icon': 'P', 'can_active': True},
         {'name': '关于', 'icon': 'ℹ', 'can_active': True},
     ]
@@ -486,6 +487,26 @@ class SAOPlayerGUIMenuMixin:
         factory = self._first_plugin_menu_surface_callable('left_widget_factory')
         return factory if callable(factory) else None
 
+    def _create_workshop_child_preview(self, parent):
+        from gui_modules.sao_gui_workshop import WorkshopChildPreview
+        return WorkshopChildPreview(
+            parent, owner=self,
+            on_open_full=self._open_workshop_panel,
+        )
+
+    def _open_workshop_panel(self):
+        self._dismiss_sao_menu_for_panel()
+        try:
+            self._stop_fisheye_overlay()
+        except Exception:
+            pass
+        panel = getattr(self, '_workshop_panel', None)
+        if panel is None:
+            from gui_modules.sao_gui_workshop import WorkshopPanel
+            panel = WorkshopPanel(self.root, self)
+            self._workshop_panel = panel
+        panel.show()
+
     def _setup_sao_menu(self):
         """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
         try:
@@ -508,6 +529,9 @@ class SAOPlayerGUIMenuMixin:
             external_close=False,
             alt_toggle_close=False,
             on_background_click=self._close_sao_menu_from_background,
+            custom_child_factories={
+                '创意工坊': self._create_workshop_child_preview,
+            },
         )
         self._sao_menu.bind_events()
 

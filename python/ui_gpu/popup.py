@@ -52,7 +52,8 @@ class SAOPopUpMenu:
                  anchor_widget=None,
                  external_close: bool = True,
                  alt_toggle_close: bool = True,
-                 on_background_click: Optional[Callable] = None):
+                 on_background_click: Optional[Callable] = None,
+                 custom_child_factories: Optional[Dict[str, Callable]] = None):
         if not _gow.glfw_supported():
             raise RuntimeError(
                 'SAOPopUpMenu requires GLFW; gpu_overlay_window reports it is unavailable')
@@ -71,11 +72,16 @@ class SAOPopUpMenu:
         self.external_close = bool(external_close)
         self.alt_toggle_close = bool(alt_toggle_close)
         self.on_background_click = on_background_click
+        self._custom_child_factories: Dict[str, Callable] = dict(custom_child_factories or {})
+        self._custom_child_widgets: Dict[str, object] = {}
+        self._active_custom_child: Optional[str] = None
+        self._custom_child_shell: Optional[tk.Toplevel] = None
 
         self._state = PopupState()
         self._state.menu_items = list(icon_arr)
 
         self._gpu_win: Optional[_gow.GpuOverlayWindow] = None
+        self._gpu_pos: Tuple[int, int] = (0, 0)
         self._presenter: Optional[_gow.BgraPresenter] = None
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
         self._last_presented_size: Tuple[int, int] = (0, 0)
@@ -440,6 +446,7 @@ class SAOPopUpMenu:
         # GPU window position: to the right of the left_widget
         gpu_x = base_x + left_w + gap_left_to_gpu
         gpu_y = base_y + (total_h - win_h) // 2
+        self._gpu_pos = (gpu_x, gpu_y)
 
         # Create the GPU window once, then hide/reuse it across normal
         # menu closes. Recreating GLFW/moderngl while WGC is active can
@@ -499,6 +506,19 @@ class SAOPopUpMenu:
         self._raise_to_top()
 
     def _destroy_window(self, keep_gpu: bool = False) -> None:
+        self._hide_all_custom_children()
+        for _cw_name in list(self._custom_child_widgets):
+            try:
+                self._custom_child_widgets[_cw_name].destroy()
+            except Exception:
+                pass
+        self._custom_child_widgets.clear()
+        if self._custom_child_shell is not None:
+            try:
+                self._custom_child_shell.destroy()
+            except Exception:
+                pass
+            self._custom_child_shell = None
         # Stop click drainer first so no more queued clicks fire after
         # widgets are gone.
         self._stop_click_drainer()
@@ -936,7 +956,6 @@ class SAOPopUpMenu:
         if self._state.active_menu_idx == idx:
             _phase_trace('popup.act.deactivate', f'idx={idx}')
             self._state.active_menu_idx = None
-            # Collapse the left player panel back to 0×0.
             lw = self._left_widget
             if lw is not None and hasattr(lw, 'set_active'):
                 _phase_trace('popup.act.lw_off.begin')
@@ -945,6 +964,7 @@ class SAOPopUpMenu:
                 except Exception:
                     pass
                 _phase_trace('popup.act.lw_off.end')
+            self._hide_all_custom_children()
             _phase_trace('popup.act.transition.begin', 'rows=0')
             self._begin_child_transition([])
             _phase_trace('popup.act.transition.end')
@@ -952,11 +972,16 @@ class SAOPopUpMenu:
             _phase_trace('popup.act.activate', f'idx={idx}')
             self._state.active_menu_idx = idx
             name = item.get('name', '')
-            rows = self.child_menus.get(name, [])
-            _phase_trace('popup.act.transition.begin', f'name={name} rows={len(rows)}')
-            self._begin_child_transition(rows)
-            _phase_trace('popup.act.transition.end')
-            # Animate the left player panel in, mirroring legacy.
+            if name in self._custom_child_factories:
+                _phase_trace('popup.act.custom_child', f'name={name}')
+                self._begin_child_transition([])
+                self._show_custom_child(name)
+            else:
+                self._hide_all_custom_children()
+                rows = self.child_menus.get(name, [])
+                _phase_trace('popup.act.transition.begin', f'name={name} rows={len(rows)}')
+                self._begin_child_transition(rows)
+                _phase_trace('popup.act.transition.end')
             lw = self._left_widget
             if lw is not None and hasattr(lw, 'set_active'):
                 _phase_trace('popup.act.lw_on.begin')
@@ -1016,6 +1041,87 @@ class SAOPopUpMenu:
         else:
             self._state.child_fade_t = 1.0
             self._state.child_phase = 'idle'
+
+    # ── custom child factories (mirrors Tk SAOPopUpMenu) ────────────
+
+    def _ensure_custom_child_shell(self) -> tk.Toplevel:
+        if self._custom_child_shell is not None:
+            return self._custom_child_shell
+        shell = tk.Toplevel(self.root)
+        shell.overrideredirect(True)
+        shell.attributes('-topmost', True)
+        shell.configure(bg=_TRANSPARENT_KEY)
+        try:
+            shell.attributes('-transparentcolor', _TRANSPARENT_KEY)
+        except Exception:
+            pass
+        shell.withdraw()
+        self._custom_child_shell = shell
+        return shell
+
+    def _position_custom_child_shell(self) -> None:
+        shell = self._custom_child_shell
+        if shell is None:
+            return
+        from . import composer as _comp
+        gx, gy = self._gpu_pos
+        cx = gx + _comp.CHILD_X
+        cy = gy + _comp.HUD_PAD
+        try:
+            shell.update_idletasks()
+            cw = max(280, shell.winfo_reqwidth())
+            ch = max(200, shell.winfo_reqheight())
+        except Exception:
+            cw, ch = 320, 480
+        shell.geometry(f'{cw}x{ch}+{cx}+{cy}')
+
+    def _show_custom_child(self, name: str) -> bool:
+        self._hide_all_custom_children()
+        if name not in self._custom_child_widgets:
+            factory = self._custom_child_factories.get(name)
+            if not callable(factory):
+                return False
+            shell = self._ensure_custom_child_shell()
+            try:
+                widget = factory(shell)
+                self._custom_child_widgets[name] = widget
+            except Exception:
+                return False
+        else:
+            self._ensure_custom_child_shell()
+        widget = self._custom_child_widgets[name]
+        try:
+            widget.pack(fill=tk.BOTH, expand=True)
+        except Exception:
+            return False
+        self._active_custom_child = name
+        self._position_custom_child_shell()
+        self._custom_child_shell.deiconify()
+        self._custom_child_shell.lift()
+        self._raise_to_top()
+        activate_cb = getattr(widget, 'activate', None)
+        if callable(activate_cb):
+            try:
+                activate_cb()
+            except Exception:
+                pass
+        return True
+
+    def _hide_all_custom_children(self) -> bool:
+        changed = False
+        for _cw_name, widget in self._custom_child_widgets.items():
+            try:
+                widget.pack_forget()
+                changed = True
+            except Exception:
+                pass
+        self._active_custom_child = None
+        if self._custom_child_shell is not None:
+            try:
+                self._custom_child_shell.withdraw()
+            except Exception:
+                pass
+        return changed
 
     def _reset_row_anim(self) -> None:
         n = len(self._state.child_rows)
@@ -1105,18 +1211,19 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            shell = getattr(self, '_shell', None)
-            if shell is not None:
-                try:
-                    shell.update_idletasks()
-                    shell_hwnd = int(user32.GetParent(shell.winfo_id()) or shell.winfo_id())
-                    if shell_hwnd:
-                        user32.SetWindowPos(
-                            wintypes.HWND(shell_hwnd), wintypes.HWND(HWND_TOPMOST),
-                            0, 0, 0, 0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-                except Exception:
-                    pass
+            for tk_shell in (getattr(self, '_shell', None),
+                            getattr(self, '_custom_child_shell', None)):
+                if tk_shell is not None:
+                    try:
+                        tk_shell.update_idletasks()
+                        sh = int(user32.GetParent(tk_shell.winfo_id()) or tk_shell.winfo_id())
+                        if sh:
+                            user32.SetWindowPos(
+                                wintypes.HWND(sh), wintypes.HWND(HWND_TOPMOST),
+                                0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
