@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "sao-ai-editor": {
+      "command": "python",
+      "args": ["-m", "ai_editor.mcp_server"],
+      "cwd": ".",
+      "env": {}
+    }
+  }
+}
