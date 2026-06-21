@@ -435,3 +435,88 @@ async def publish_complete(request: Request, upload_id: str):
     _upsert_catalog(safe_id, meta)
 
     return JSONResponse({"ok": True, "plugin": meta})
+
+
+# ── Management endpoints (auth required) ─────────────────────────
+
+
+@router.delete("/plugin/{plugin_id}")
+def delete_plugin(request: Request, plugin_id: str, version: str = ""):
+    if _AUTH_FN:
+        _AUTH_FN(request)
+
+    safe = _safe_id(plugin_id)
+    pdir = os.path.join(_ws_dir(), safe)
+    if not os.path.isdir(pdir):
+        raise HTTPException(404, f"plugin {safe} not found")
+
+    if version:
+        safe_ver = _safe_ver(version)
+        zip_path = os.path.join(pdir, f"plugin-{safe_ver}.zip")
+        manifest_path = os.path.join(pdir, f"manifest-{safe_ver}.json")
+        for f in (zip_path, manifest_path):
+            if os.path.isfile(f):
+                os.remove(f)
+        versions_path = os.path.join(pdir, "versions.json")
+        versions = _load_json(versions_path)
+        if isinstance(versions, list) and safe_ver in versions:
+            versions.remove(safe_ver)
+            _save_json(versions_path, versions)
+        if versions:
+            latest = versions[-1]
+            latest_manifest = _load_json(os.path.join(pdir, f"manifest-{latest}.json"))
+            if latest_manifest:
+                _save_json(os.path.join(pdir, "manifest.json"), latest_manifest)
+            return JSONResponse({"ok": True, "deleted_version": safe_ver, "remaining": versions})
+
+    shutil.rmtree(pdir, ignore_errors=True)
+    catalog = _load_catalog()
+    catalog = [e for e in catalog if e.get("plugin_id") != safe]
+    _save_catalog(catalog)
+    return JSONResponse({"ok": True, "deleted": safe})
+
+
+@router.get("/manage")
+def manage_list(request: Request):
+    if _AUTH_FN:
+        _AUTH_FN(request)
+
+    result = []
+    ws = _ws_dir()
+    if not os.path.isdir(ws):
+        return JSONResponse({"ok": True, "plugins": []})
+    for name in sorted(os.listdir(ws)):
+        pdir = os.path.join(ws, name)
+        if not os.path.isdir(pdir) or name.startswith("_"):
+            continue
+        meta = _load_json(os.path.join(pdir, "meta.json"))
+        if not isinstance(meta, dict):
+            continue
+        versions = _load_json(os.path.join(pdir, "versions.json"))
+        meta["versions"] = versions if isinstance(versions, list) else []
+        result.append(meta)
+    return JSONResponse({"ok": True, "plugins": result})
+
+
+@router.patch("/plugin/{plugin_id}")
+async def update_plugin_meta(request: Request, plugin_id: str):
+    if _AUTH_FN:
+        _AUTH_FN(request)
+
+    safe = _safe_id(plugin_id)
+    pdir = os.path.join(_ws_dir(), safe)
+    meta_path = os.path.join(pdir, "meta.json")
+    meta = _load_json(meta_path)
+    if not isinstance(meta, dict):
+        raise HTTPException(404, f"plugin {safe} not found")
+
+    body = await request.json()
+    allowed = ("name", "author", "description", "long_description",
+               "game_ids", "tags", "access_level", "language", "minimum_app_version")
+    for key in allowed:
+        if key in body:
+            meta[key] = body[key]
+
+    _save_json(meta_path, meta)
+    _upsert_catalog(safe, meta)
+    return JSONResponse({"ok": True, "plugin": meta})

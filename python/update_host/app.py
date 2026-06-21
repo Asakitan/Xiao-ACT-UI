@@ -819,6 +819,9 @@ def root():
             "POST /api/workshop/publish/init",
             "POST /api/workshop/publish/chunk",
             "POST /api/workshop/publish/complete",
+            "GET /api/workshop/manage",
+            "DELETE /api/workshop/plugin/{plugin_id}",
+            "PATCH /api/workshop/plugin/{plugin_id}",
             "/downloads/*",
         ],
     }

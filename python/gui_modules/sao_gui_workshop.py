@@ -733,7 +733,6 @@ class WorkshopPanel:
         self._pub_games_var = tk.StringVar()
         self._pub_tags_var = tk.StringVar()
 
-        _field(body, '插件 ID', self._pub_id_var)
         _field(body, '显示名称', self._pub_name_var)
 
         row2 = tk.Frame(body, bg=_WG_BODY_BG)
@@ -1258,7 +1257,7 @@ class WorkshopPanel:
                 break
         if plugin is None:
             return
-        self._pub_id_var.set(plugin.get('id', ''))
+        self._pub_id_var.set(plugin.get('id', ''))  # hidden, auto-generated if empty
         self._pub_name_var.set(plugin.get('name', ''))
         self._pub_version_var.set(plugin.get('version', '1.0.0'))
         self._pub_desc_var.set(plugin.get('description', ''))
@@ -1272,8 +1271,16 @@ class WorkshopPanel:
             long_desc = self._pub_long_desc.get('1.0', 'end-1c').strip()
         except Exception:
             pass
+        plugin_name = self._pub_name_var.get().strip()
+        pid = self._pub_id_var.get().strip()
+        if not pid and plugin_name:
+            try:
+                from workshop.app import generate_plugin_id
+                pid = generate_plugin_id(plugin_name)
+            except Exception:
+                pid = plugin_name.lower().replace(' ', '_')
         return {
-            'plugin_id': self._pub_id_var.get().strip(),
+            'plugin_id': pid,
             'name': self._pub_name_var.get().strip(),
             'version': self._pub_version_var.get().strip() or '1.0.0',
             'author': self._pub_author_var.get().strip(),
@@ -1298,8 +1305,8 @@ class WorkshopPanel:
 
     def _do_publish(self):
         meta = self._collect_publish_meta()
-        if not meta.get('plugin_id'):
-            self._publish_status.configure(text='请填写插件 ID', fg=_WG_RED)
+        if not meta.get('name') and not meta.get('plugin_id'):
+            self._publish_status.configure(text='请填写插件名称', fg=_WG_RED)
             return
         if meta.get('access_level') == 'paid' and not _is_paid():
             self._publish_status.configure(text='只有付费用户才能上传高级版专属插件', fg=_WG_RED)

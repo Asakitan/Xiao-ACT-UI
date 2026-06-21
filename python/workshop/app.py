@@ -246,6 +246,23 @@ class WorkshopAPI:
                 pass
 
 
+def _get_hwid() -> str:
+    try:
+        from license.hwid import collect_hwid
+        return collect_hwid()
+    except Exception:
+        pass
+    import hashlib, uuid
+    return hashlib.sha256(str(uuid.getnode()).encode()).hexdigest()
+
+
+def generate_plugin_id(plugin_name: str) -> str:
+    import hashlib
+    hwid = _get_hwid()[:16]
+    name_hash = hashlib.sha256(plugin_name.strip().lower().encode("utf-8")).hexdigest()[:8]
+    return f"{name_hash}-{hwid[:8]}"
+
+
 def _get_api_key() -> str:
     try:
         cfg_path = os.path.join(_ROOT, "dev_publish_config.json")
