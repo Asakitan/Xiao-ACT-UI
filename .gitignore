@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *.pyd
-!_sao_cy*.pyd
 *.pyo
 plan_*
 

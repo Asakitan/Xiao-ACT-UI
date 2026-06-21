@@ -35,6 +35,27 @@ def _plugin_cython_extensions() -> list[Extension]:
         out.append(Extension(name=name, sources=[src]))
     return out
 
+
+def _relocate_plugin_pyds() -> None:
+    """Move plugin .pyd from source root back to their plugin cython/ dirs."""
+    import sysconfig
+    suffix = sysconfig.get_config_var('EXT_SUFFIX') or '.pyd'
+    plugin_srcs = glob(os.path.join(HERE, 'plugins', '*', 'cython', '_sao_cy*.pyx'))
+    plugin_names = {os.path.splitext(os.path.basename(s))[0] for s in plugin_srcs}
+    for name in sorted(plugin_names):
+        root_pyd = os.path.join(HERE, f'{name}{suffix}')
+        if not os.path.isfile(root_pyd):
+            continue
+        for src in plugin_srcs:
+            if os.path.splitext(os.path.basename(src))[0] == name:
+                dst = os.path.join(os.path.dirname(src), f'{name}{suffix}')
+                try:
+                    os.replace(root_pyd, dst)
+                    print(f'  relocated {name}{suffix} -> {os.path.relpath(dst, HERE)}')
+                except Exception as e:
+                    print(f'  relocate {name} failed: {e}')
+                break
+
 try:
     from Cython.Build import cythonize
 except Exception as exc:  # noqa: BLE001
@@ -94,3 +115,6 @@ setup(
         },
     ),
 )
+
+if 'build_ext' in os.sys.argv and '--inplace' in os.sys.argv:
+    _relocate_plugin_pyds()
