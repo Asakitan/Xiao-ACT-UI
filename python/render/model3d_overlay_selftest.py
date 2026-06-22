@@ -28,6 +28,11 @@ from render.model3d_backend import (
     get_retarget_plan,
     probe_model3d_backend,
 )
+from render.model3d_native import (
+    clear_native_model3d_renderers,
+    native_model3d_renderer_status,
+    register_native_model3d_renderer,
+)
 from render.model3d_overlay import render_model3d_node
 
 
@@ -127,6 +132,7 @@ class Model3DSpecTests(unittest.TestCase):
 class Model3DBackendTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
 
     def test_backend_probe_and_diagnostic_are_safe_when_binaries_are_absent(self) -> None:
         status = probe_model3d_backend()
@@ -155,6 +161,51 @@ class Model3DBackendTests(unittest.TestCase):
             self.assertEqual(probe.call_count, 1)
             get_backend_status(force=True)
             self.assertEqual(probe.call_count, 2)
+
+    def test_native_offscreen_renderer_preempts_fallback_without_window(self) -> None:
+        from PIL import Image
+
+        def fake_renderer(node, context):
+            self.assertTrue(context["offscreen"])
+            self.assertEqual(context["presentation"], "existing_compositor_layer")
+            return Image.new("RGBA", (context["width"], context["height"]), (10, 20, 30, 255))
+
+        register_native_model3d_renderer("fake-offscreen", fake_renderer)
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "width": 32,
+            "height": 24,
+            "model": {"path": "missing.fbx"},
+        })["nodes"][0]
+
+        with mock.patch("render.model3d_overlay.evaluate_retarget_pose") as pose:
+            image = render_model3d_node(node)
+
+        self.assertEqual(image.size, (32, 24))
+        self.assertEqual(image.getpixel((1, 1)), (10, 20, 30, 255))
+        self.assertEqual(pose.call_count, 0)
+        self.assertEqual(native_model3d_renderer_status()["renderer"], "fake-offscreen")
+
+    def test_native_offscreen_renderer_failure_falls_back(self) -> None:
+        def failing_renderer(node, context):
+            raise RuntimeError("backend unavailable")
+
+        register_native_model3d_renderer("broken-offscreen", failing_renderer)
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "width": 32,
+            "height": 48,
+            "model": {"path": ""},
+        })["nodes"][0]
+
+        image = render_model3d_node(node)
+
+        self.assertEqual(image.size, (32, 48))
+        self.assertIsNotNone(image.getchannel("A").getbbox())
+        status = native_model3d_renderer_status()
+        self.assertIn("backend unavailable", "\n".join(status.get("errors") or []))
 
     def test_action_metadata_cache_parses_inline_json_text_once_per_hash(self) -> None:
         clear_model3d_metadata_caches()

@@ -36,6 +36,11 @@ except Exception:  # pragma: no cover - imported defensively by overlay host
     get_retarget_plan = None  # type: ignore[assignment]
     resolve_model_path = None  # type: ignore[assignment]
 
+try:
+    from render.model3d_native import try_render_native_model3d_node
+except Exception:  # pragma: no cover - imported defensively by overlay host
+    try_render_native_model3d_node = None  # type: ignore[assignment]
+
 
 def _rgba(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     if ImageColor is None:
@@ -394,6 +399,15 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
     width = max(1, int(node.get("width") or 320))
     height = max(1, int(node.get("height") or 480))
     pal = dict(pal or {})
+
+    if callable(try_render_native_model3d_node):
+        try:
+            native_image = try_render_native_model3d_node(node, palette=pal)
+        except Exception:
+            native_image = None
+        if native_image is not None:
+            return native_image
+
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     accent = _rgba(pal.get("accent") or "#8bdff2", (139, 223, 242, 255))
