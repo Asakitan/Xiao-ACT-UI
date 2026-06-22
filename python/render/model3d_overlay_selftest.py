@@ -26,6 +26,7 @@ from render.model3d_backend import (
     get_model_metadata,
     probe_model3d_backend,
 )
+from render.model3d_overlay import render_model3d_node
 
 
 class Model3DSpecTests(unittest.TestCase):
@@ -239,6 +240,45 @@ class Model3DBackendTests(unittest.TestCase):
             changed_reload = get_model_metadata(reload_node)
 
         self.assertNotEqual(changed_size["cache_key"], changed_reload["cache_key"])
+
+
+class Model3DOverlayRenderTests(unittest.TestCase):
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_fallback_avatar_hides_diagnostics_for_existing_model(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_avatar_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 320,
+                "height": 480,
+                "model": {"path": str(model_path)},
+                "action": {"name": "wave"},
+            })["nodes"][0]
+
+            image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        self.assertIsNotNone(image)
+        crop = image.crop((0, 0, 110, 42))
+        self.assertFalse(crop.getchannel("A").getbbox())
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_fallback_avatar_shows_diagnostics_for_missing_model(self) -> None:
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "width": 320,
+            "height": 480,
+            "model": {"path": "missing/avatar.fbx"},
+            "action": {"name": "wave"},
+        })["nodes"][0]
+
+        image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        self.assertIsNotNone(image)
+        crop = image.crop((0, 0, 110, 42))
+        self.assertTrue(crop.getchannel("A").getbbox())
 
 
 class UnifiedOverlayDrawableTests(unittest.TestCase):

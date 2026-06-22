@@ -155,13 +155,13 @@ def _draw_stylized_avatar(
     elif action_name == "walk":
         step = math.sin(t * 4.1)
 
-    skin = (255, 226, 205, 255)
-    hair = (64, 38, 72, 255)
-    hair_hi = (110, 72, 128, 255)
-    dress = (185, 105, 205, 255)
-    dress_hi = (245, 190, 245, 230)
-    boot = (45, 55, 80, 255)
-    outline = (35, 44, 68, 255)
+    skin = (255, 228, 210, 255)
+    hair = (38, 48, 72, 255)
+    hair_hi = (72, 92, 128, 255)
+    dress = (76, 178, 184, 255)
+    dress_hi = (244, 190, 116, 235)
+    boot = (43, 55, 78, 255)
+    outline = (24, 34, 56, 255)
     glow = (accent[0], accent[1], accent[2], 52)
 
     hip = (cx, h * 0.57 + bob)
@@ -276,17 +276,22 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         now = 0.0
     _draw_stylized_avatar(draw, width, height, now * speed, action_name, action_cfg, accent)
 
-    font_title = _font(13, True)
-    font_body = _font(10, False)
-    if font_title:
-        draw.text((12, 10), "MODEL3D", fill=accent, font=font_title)
     status = "ready"
+    diagnostic = False
     if not path:
         status = "no model_path"
+        diagnostic = True
     elif not os.path.isfile(resolved_path):
         status = "model missing"
+        diagnostic = True
     else:
         status = _backend_status()
+    if action_cfg.get("_load_error"):
+        diagnostic = True
+    try:
+        diagnostic = diagnostic or bool(node.get("diagnostic") or node.get("debug"))
+    except Exception:
+        pass
     lines = [
         status,
         _short_path(path) if path else "set model_path to an FBX/model file",
@@ -297,7 +302,12 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         lines.append(f"retarget: {retarget.get('mode', 'auto')}")
     if action_cfg.get("_load_error"):
         lines.append("action file error")
-    if font_body:
+    if diagnostic:
+        font_title = _font(13, True)
+        if font_title:
+            draw.text((12, 10), "MODEL3D", fill=accent, font=font_title)
+    font_body = _font(10, False)
+    if diagnostic and font_body:
         y = height - 58
         for line in lines[-3:]:
             draw.text((12, y), str(line), fill=muted, font=font_body)
