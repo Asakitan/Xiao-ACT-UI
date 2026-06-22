@@ -334,7 +334,17 @@ def _cache_put(cache: dict[tuple[Any, ...], dict[str, Any]], key: tuple[Any, ...
 
 def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     out = dict(value)
-    for key in ("data", "selected", "model", "action", "sidecar", "retarget", "mesh", "rest_positions"):
+    for key in (
+        "data",
+        "selected",
+        "model",
+        "action",
+        "sidecar",
+        "retarget",
+        "mesh",
+        "rest_positions",
+        "clip_keyframes",
+    ):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = copy.deepcopy(dict(item))
@@ -909,6 +919,166 @@ def _accessor_minmax_points(accessor: Mapping[str, Any]) -> list[tuple[float, fl
         return []
 
 
+def _node_name(nodes: Any, index: Any) -> str:
+    node = _json_index(nodes, index)
+    if node is None:
+        return ""
+    text = str(node.get("name") or "").strip()
+    if text:
+        return text
+    try:
+        return f"node_{int(index)}"
+    except Exception:
+        return ""
+
+
+def _node_translation(nodes: Any, index: int) -> tuple[float, float, float]:
+    node = _json_index(nodes, index)
+    if node is None:
+        return (0.0, 0.0, 0.0)
+    point = _point3(node.get("translation"))
+    return point or (0.0, 0.0, 0.0)
+
+
+def _glb_node_rest_positions(data: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    parent: dict[int, int] = {}
+    for index, node in enumerate(nodes):
+        if not isinstance(node, Mapping):
+            continue
+        children = node.get("children")
+        if not isinstance(children, list):
+            continue
+        for raw_child in children:
+            child = _int_at(raw_child, -1)
+            if 0 <= child < len(nodes) and child not in parent:
+                parent[child] = index
+
+    joint_indices: set[int] = set()
+    skins = data.get("skins")
+    if isinstance(skins, list):
+        for skin in skins:
+            if not isinstance(skin, Mapping):
+                continue
+            joints = skin.get("joints")
+            if isinstance(joints, list):
+                for raw_joint in joints:
+                    joint = _int_at(raw_joint, -1)
+                    if 0 <= joint < len(nodes):
+                        joint_indices.add(joint)
+    if not joint_indices:
+        joint_indices = {
+            index for index in range(len(nodes))
+            if _canonical_from_token(_node_name(nodes, index))
+        }
+
+    world_cache: dict[int, tuple[float, float, float]] = {}
+
+    def world(index: int, seen: set[int] | None = None) -> tuple[float, float, float]:
+        if index in world_cache:
+            return world_cache[index]
+        if seen is None:
+            seen = set()
+        if index in seen:
+            return _node_translation(nodes, index)
+        seen.add(index)
+        local = _node_translation(nodes, index)
+        parent_index = parent.get(index)
+        if parent_index is None:
+            result = local
+        else:
+            result = _vec_add(world(parent_index, seen), local)
+        world_cache[index] = result
+        return result
+
+    out: dict[str, tuple[float, float, float]] = {}
+    for index in sorted(joint_indices):
+        name = _node_name(nodes, index)
+        if not name or not _canonical_from_token(name):
+            continue
+        out[name] = world(index)
+    return out
+
+
+def _glb_animation_keyframes(
+    data: Mapping[str, Any],
+    buffer_views: Any,
+    binary: bytes,
+    errors: list[str],
+) -> dict[str, dict[str, Any]]:
+    animations = data.get("animations")
+    accessors = data.get("accessors")
+    nodes = data.get("nodes")
+    if not isinstance(animations, list) or not isinstance(accessors, list):
+        return {}
+    clips: dict[str, dict[str, Any]] = {}
+    for anim_index, animation in enumerate(animations):
+        if not isinstance(animation, Mapping):
+            continue
+        name = str(animation.get("name") or f"animation_{anim_index}").strip() or f"animation_{anim_index}"
+        samplers = animation.get("samplers")
+        channels = animation.get("channels")
+        if not isinstance(samplers, list) or not isinstance(channels, list):
+            continue
+        frames_by_time: dict[float, dict[str, tuple[float, float, float]]] = {}
+        sample_count = 0
+        for channel in channels:
+            if not isinstance(channel, Mapping):
+                continue
+            target = channel.get("target") if isinstance(channel.get("target"), Mapping) else {}
+            if str((target or {}).get("path") or "").lower() != "translation":
+                continue
+            canonical = _canonical_from_token(_node_name(nodes, (target or {}).get("node")))
+            if not canonical:
+                continue
+            sampler = _json_index(samplers, channel.get("sampler"))
+            if sampler is None:
+                continue
+            time_accessor = _json_index(accessors, sampler.get("input"))
+            value_accessor = _json_index(accessors, sampler.get("output"))
+            if time_accessor is None or value_accessor is None:
+                continue
+            times, total_times, time_err = _read_accessor_values(
+                time_accessor, buffer_views, binary, limit=_MESH_PREVIEW_FACE_LIMIT)
+            values, total_values, value_err = _read_accessor_values(
+                value_accessor, buffer_views, binary, limit=_MESH_PREVIEW_FACE_LIMIT)
+            if time_err:
+                errors.append(f"{name}: {time_err}")
+            if value_err:
+                errors.append(f"{name}: {value_err}")
+            total = min(len(times), len(values))
+            if total <= 0:
+                continue
+            sample_count += min(total_times, total_values)
+            for idx in range(total):
+                row = values[idx]
+                if len(row) < 3 or not all(math.isfinite(v) for v in row[:3]):
+                    continue
+                try:
+                    t = float(times[idx][0])
+                except Exception:
+                    t = float(idx)
+                if not math.isfinite(t):
+                    continue
+                offsets = frames_by_time.setdefault(t, {})
+                offsets[canonical] = (float(row[0]), float(row[1]), float(row[2]))
+        if frames_by_time:
+            frames = [
+                {"time": t, "bone_offsets": {bone: list(offset) for bone, offset in sorted(offsets.items())}}
+                for t, offsets in sorted(frames_by_time.items())
+            ]
+            clips[name] = {
+                "source": "glb",
+                "duration": max(frames_by_time),
+                "loop": True,
+                "keyframes": frames,
+                "sample_count": sample_count,
+            }
+    return clips
+
+
 def _parse_glb_metadata(path: Path) -> dict[str, Any]:
     data, binary, errors = _read_glb(path)
     empty = {"mesh": {"source": "glb", "vertex_count": 0, "face_count": 0, "bbox": {}},
@@ -926,6 +1096,9 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
                 "nodes": _unique_strings(nodes), "materials": _unique_strings(materials),
                 "errors": tuple(errors)}
 
+    clip_keyframes = _glb_animation_keyframes(data, buffer_views, binary, errors)
+    rest_positions = _glb_node_rest_positions(data)
+    bone_names = [name for name in nodes if _canonical_from_token(name)]
     vertices: list[list[float]] = []
     faces: list[list[int]] = []
     bbox_points: list[tuple[float, float, float]] = []
@@ -1005,6 +1178,11 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
         },
         "nodes": _unique_strings(nodes),
         "materials": _unique_strings(materials),
+        "bone_names": _merge_unique(bone_names, rest_positions.keys()),
+        "clips": _merge_unique(_extract_names(data.get("animations")), clip_keyframes.keys()),
+        "clip_keyframes": copy.deepcopy(clip_keyframes),
+        "rest_positions": dict(rest_positions),
+        "rest_positions_source": "glb_nodes" if rest_positions else "",
         "errors": tuple(_unique_strings(errors)),
     }
 
@@ -1104,6 +1282,36 @@ def _is_json_action_file(path: Path, action_file: str) -> bool:
     return bool(action_file and not suffix)
 
 
+def _has_keyframes(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    frames = value.get("keyframes")
+    if not isinstance(frames, (list, tuple)):
+        frames = value.get("frames")
+    return isinstance(frames, (list, tuple)) and bool(frames)
+
+
+def _select_clip_keyframes(model_meta: Mapping[str, Any], action_name: str, clip_name: Any) -> tuple[str, dict[str, Any]]:
+    clips = model_meta.get("clip_keyframes")
+    if not isinstance(clips, Mapping):
+        return "", {}
+    requested = [str(action_name or "")]
+    clip_text = str(clip_name or "").strip()
+    if clip_text:
+        requested.insert(0, clip_text)
+    normalized = {_normalize_action_name(name) for name in requested if str(name or "").strip()}
+    for raw_name, raw_clip in clips.items():
+        clip_key = str(raw_name or "").strip()
+        if not clip_key or _normalize_action_name(clip_key) not in normalized:
+            continue
+        if isinstance(raw_clip, Mapping):
+            selected = copy.deepcopy(dict(raw_clip))
+            selected.setdefault("clip", clip_key)
+            selected.setdefault("name", clip_key)
+            return clip_key, selected
+    return "", {}
+
+
 def clear_model3d_metadata_caches() -> None:
     """Clear model3d probe/metadata caches for focused tests."""
 
@@ -1132,6 +1340,16 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     bone_names = _merge_unique(sidecar_meta.get("bone_names"), file_meta.get("bone_names"))
     clips = _merge_unique(sidecar_meta.get("clips"), file_meta.get("clips"))
     errors = _merge_unique(sidecar_meta.get("errors"), file_meta.get("errors"))
+    clip_keyframes = copy.deepcopy(file_meta.get("clip_keyframes") or {})
+    file_rest = dict(file_meta.get("rest_positions") or {}) if isinstance(file_meta.get("rest_positions"), Mapping) else {}
+    sidecar_rest = dict(sidecar_meta.get("rest_positions") or {}) if isinstance(sidecar_meta.get("rest_positions"), Mapping) else {}
+    rest_positions = dict(file_rest)
+    rest_positions.update(sidecar_rest)
+    rest_source = ""
+    if sidecar_rest:
+        rest_source = "sidecar"
+    elif file_rest:
+        rest_source = str(file_meta.get("rest_positions_source") or "model")
     metadata = {
         "path": path_text,
         "resolved_path": str(resolved),
@@ -1147,7 +1365,9 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "materials": tuple(file_meta.get("materials") or ()),
         "bone_names": bone_names,
         "clips": clips,
-        "rest_positions": dict(sidecar_meta.get("rest_positions") or {}),
+        "clip_keyframes": dict(clip_keyframes) if isinstance(clip_keyframes, Mapping) else {},
+        "rest_positions": rest_positions,
+        "rest_positions_source": rest_source,
         "metadata_errors": errors,
         "cache_key": cache_key,
     }
@@ -1170,6 +1390,8 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     action_file = str(action.get("file") or "").strip()
     action_path = resolve_action_path(action_file, node) if action_file else Path("")
     file_exists, file_size, file_mtime_ns = _file_signature(action_path) if action_file else (False, 0, 0)
+    model_meta = get_model_metadata(node)
+    model_cache_key = tuple(model_meta.get("cache_key") or ())
     cache_key = (
         name,
         _hash_mapping(inline) if inline else "",
@@ -1178,6 +1400,7 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         file_exists,
         file_size,
         file_mtime_ns,
+        model_cache_key,
     )
     cached = _ACTION_METADATA_CACHE.get(cache_key)
     if cached is not None:
@@ -1209,12 +1432,21 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         else:
             errors.append(f"action file is missing: {action_file}")
 
-    selected = data.get(name) if isinstance(data.get(name), Mapping) else {}
+    selected = dict(data.get(name) or {}) if isinstance(data.get(name), Mapping) else {}
+    model_clip_name = ""
+    if not _has_keyframes(selected):
+        model_clip_name, model_selected = _select_clip_keyframes(model_meta, name, action.get("clip"))
+        if model_selected:
+            merged = dict(selected)
+            merged.update(model_selected)
+            selected = merged
+            data.setdefault(name, dict(selected))
     file_kind = "json" if action_file and _is_json_action_file(action_path, action_file) else "motion" if action_file else ""
     metadata = {
         "name": name,
         "data": dict(data),
         "selected": dict(selected or {}),
+        "model_clip": model_clip_name,
         "file": action_file,
         "resolved_file": str(action_path) if action_file else "",
         "file_kind": file_kind,
@@ -1625,21 +1857,24 @@ def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping
 
 
 def _canonical_rest_positions(plan: Mapping[str, Any], model_meta: Mapping[str, Any]) -> tuple[dict[str, tuple[float, float, float]], str]:
-    sidecar_positions = model_meta.get("rest_positions")
-    if not isinstance(sidecar_positions, Mapping):
+    rest_positions = model_meta.get("rest_positions")
+    rest_source = str(model_meta.get("rest_positions_source") or "").strip()
+    if not isinstance(rest_positions, Mapping):
         sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
-        sidecar_positions = sidecar.get("rest_positions") if isinstance(sidecar.get("rest_positions"), Mapping) else {}
+        rest_positions = sidecar.get("rest_positions") if isinstance(sidecar.get("rest_positions"), Mapping) else {}
+        if isinstance(rest_positions, Mapping) and rest_positions:
+            rest_source = "sidecar"
     bone_map = plan.get("bone_map") if isinstance(plan.get("bone_map"), Mapping) else {}
     out: dict[str, tuple[float, float, float]] = {}
     source = "default"
     for canonical in HUMANOID_BONES:
         actual = str(bone_map.get(canonical) or "")
         point = None
-        if isinstance(sidecar_positions, Mapping):
-            point = _point3(sidecar_positions.get(actual)) or _point3(sidecar_positions.get(canonical))
+        if isinstance(rest_positions, Mapping):
+            point = _point3(rest_positions.get(actual)) or _point3(rest_positions.get(canonical))
         if point is not None:
             out[canonical] = point
-            source = "sidecar"
+            source = rest_source or "model"
         elif canonical in _DEFAULT_REST_POSITIONS:
             out[canonical] = _DEFAULT_REST_POSITIONS[canonical]
     return out, source

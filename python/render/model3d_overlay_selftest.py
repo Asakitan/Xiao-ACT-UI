@@ -90,6 +90,70 @@ def _write_cube_glb(path: Path) -> None:
     )
 
 
+def _write_animated_hand_glb(path: Path) -> None:
+    vertices = [(-0.2, 0.0, 0.0), (0.2, 0.0, 0.0), (0.0, 0.4, 0.0)]
+    indices = [0, 1, 2]
+    chunks: list[bytes] = []
+
+    def append(blob: bytes) -> tuple[int, int]:
+        offset = sum(len(item) for item in chunks)
+        padding = (-offset) % 4
+        if padding:
+            chunks.append(b"\0" * padding)
+            offset += padding
+        chunks.append(blob)
+        return offset, len(blob)
+
+    pos_offset, pos_len = append(b"".join(struct.pack("<fff", *point) for point in vertices))
+    idx_offset, idx_len = append(b"".join(struct.pack("<H", item) for item in indices))
+    time_offset, time_len = append(b"".join(struct.pack("<f", item) for item in (0.0, 1.0)))
+    trans_offset, trans_len = append(
+        b"".join(struct.pack("<fff", *point) for point in ((0.0, 0.0, 0.0), (0.0, 0.22, 0.0)))
+    )
+    bin_blob = _pad4(b"".join(chunks), b"\0")
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": pos_offset, "byteLength": pos_len, "target": 34962},
+            {"buffer": 0, "byteOffset": idx_offset, "byteLength": idx_len, "target": 34963},
+            {"buffer": 0, "byteOffset": time_offset, "byteLength": time_len},
+            {"buffer": 0, "byteOffset": trans_offset, "byteLength": trans_len},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(vertices),
+             "type": "VEC3", "min": [-0.2, 0.0, 0.0], "max": [0.2, 0.4, 0.0]},
+            {"bufferView": 1, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+            {"bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR"},
+            {"bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC3"},
+        ],
+        "meshes": [{"name": "HandMarker", "primitives": [
+            {"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}
+        ]}],
+        "nodes": [
+            {"name": "mixamorig:Hips", "children": [1], "translation": [0.0, 0.0, 0.0]},
+            {"name": "mixamorig:Spine", "children": [2], "translation": [0.0, 0.48, 0.0]},
+            {"name": "mixamorig:RightArm", "children": [3], "translation": [0.32, 0.32, 0.0]},
+            {"name": "mixamorig:RightForeArm", "children": [4], "translation": [0.22, -0.20, 0.0]},
+            {"name": "mixamorig:RightHand", "mesh": 0, "translation": [0.14, -0.14, 0.0]},
+        ],
+        "animations": [{"name": "Wave", "samplers": [
+            {"input": 2, "output": 3, "interpolation": "LINEAR"}
+        ], "channels": [
+            {"sampler": 0, "target": {"node": 4, "path": "translation"}}
+        ]}],
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+    }
+    json_blob = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), b" ")
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    path.write_bytes(
+        b"glTF" + struct.pack("<II", 2, total)
+        + struct.pack("<II", len(json_blob), 0x4E4F534A) + json_blob
+        + struct.pack("<II", len(bin_blob), 0x004E4942) + bin_blob
+    )
+
+
 class Model3DSpecTests(unittest.TestCase):
     def test_canvas_position_and_z_are_normalized(self) -> None:
         node = normalize_ui_spec(UI.canvas(
@@ -550,6 +614,39 @@ Objects:  {
         self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 12)
         self.assertIn("CubeNode", meta["nodes"])
         self.assertIn("PreviewMat", meta["materials"])
+
+    def test_model_metadata_extracts_glb_translation_clip_for_retarget(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_anim_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_animated_hand_glb(model_path)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "glb"},
+                "action": {"name": "Wave", "time": 0.5},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.5},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            action = get_action_metadata(node)
+            pose = evaluate_retarget_pose(node)
+
+        self.assertEqual(meta["mesh"]["source"], "glb")
+        self.assertIn("Wave", meta["clips"])
+        self.assertIn("mixamorig:RightHand", meta["bone_names"])
+        self.assertIn("Wave", meta["clip_keyframes"])
+        self.assertEqual(meta["rest_positions_source"], "glb_nodes")
+        rest_hand = meta["rest_positions"]["mixamorig:RightHand"]
+        self.assertAlmostEqual(rest_hand[0], 0.68)
+        self.assertAlmostEqual(rest_hand[1], 0.46)
+        self.assertAlmostEqual(rest_hand[2], 0.0)
+        self.assertEqual(action["model_clip"], "Wave")
+        self.assertEqual(action["selected"]["source"], "glb")
+        self.assertEqual(len(action["selected"]["keyframes"]), 2)
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["rest_source"], "glb_nodes")
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertGreater(pose["positions"]["right_hand"][1], 0.50)
 
     def test_retarget_plan_maps_mixamo_sidecar_bones(self) -> None:
         clear_model3d_metadata_caches()
