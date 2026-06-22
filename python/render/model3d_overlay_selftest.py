@@ -552,6 +552,52 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(fake_overlay.start_calls, 0)
         self.assertEqual(fake_overlay.passthrough_calls, 1)
 
+    def test_clean_tick_idles_until_next_invalidate(self) -> None:
+        class FakeRoot:
+            def __init__(self):
+                self.after_calls = []
+
+            def after(self, delay, callback):
+                self.after_calls.append((delay, callback))
+                return f"after_{len(self.after_calls)}"
+
+        root = FakeRoot()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=root), surface="unioverlay")
+
+        with mock.patch.object(host, "_refresh_now") as refresh:
+            host._tick()
+
+        refresh.assert_called_once()
+        self.assertEqual(root.after_calls, [])
+
+        host.mark_dirty()
+
+        self.assertEqual(len(root.after_calls), 1)
+        self.assertEqual(root.after_calls[0][0], 0)
+
+    def test_tick_reschedules_if_refresh_marks_dirty_again(self) -> None:
+        class FakeRoot:
+            def __init__(self):
+                self.after_calls = []
+
+            def after(self, delay, callback):
+                self.after_calls.append((delay, callback))
+                return f"after_{len(self.after_calls)}"
+
+        root = FakeRoot()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=root), surface="unioverlay")
+
+        def _refresh() -> None:
+            host._dirty = True
+
+        with mock.patch.object(host, "_refresh_now", side_effect=_refresh):
+            host._tick()
+
+        self.assertEqual(len(root.after_calls), 1)
+        self.assertEqual(root.after_calls[0][0], 0)
+
     def test_drawables_preserve_keys_geometry_and_order(self) -> None:
         drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
 
@@ -852,6 +898,112 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(layer.syncs, first_counts[2])
         self.assertEqual(layer.shows, first_counts[3])
         self.assertEqual(len(layer.presenter.frames), first_counts[4])
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_unchanged_layer_skips_rasterize_until_spec_changes(self) -> None:
+        current_spec = {
+            "nodes": [
+                UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="accent")],
+                          x=11, y=22, z=3, id="meter")
+            ],
+        }
+
+        class FakeLayer:
+            def __init__(self, name, w, h, x, y, z, click_through=True):
+                self.name = name
+                self.geometry = (x, y, w, h)
+                self.z_order = z
+                self.click_through = click_through
+                self.redraws = 0
+                self.syncs = 0
+                self.visible = False
+
+            def show(self):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def request_redraw(self):
+                self.redraws += 1
+
+            def set_geometry(self, x, y, w, h):
+                self.geometry = (x, y, w, h)
+
+            def sync_input_proxy(self):
+                self.syncs += 1
+
+            def destroy_input_proxy(self):
+                return None
+
+        class FakeOverlay:
+            def __init__(self):
+                self.created = []
+
+            def create_layer(self, name, w, h, x, y, z, click_through=True, bgra_swizzle=True):
+                layer = FakeLayer(name, w, h, x, y, z, click_through)
+                self.created.append(layer)
+                return layer
+
+            def destroy_layer(self, name):
+                return None
+
+            def force_host_input_passthrough(self):
+                return None
+
+        class FakePresenter:
+            def __init__(self, layer):
+                self.layer = layer
+                self.frames = []
+
+            def set_frame(self, bgra, w, h):
+                self.frames.append((len(bgra), w, h))
+
+        def _overlays(_owner, _surface):
+            return {"overlays": [{
+                "plugin_id": "plug",
+                "surface": "unioverlay",
+                "spec": normalize_ui_spec(current_spec),
+            }]}
+
+        render_calls = []
+
+        def _render(drawable, pal, backend_status=None):
+            render_calls.append(str(drawable.get("key") or ""))
+            width = int(drawable.get("width") or 1)
+            height = int(drawable.get("height") or 1)
+            return f"frame-{len(render_calls)}", bytes(width * height * 4), width, height
+
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+        fake_overlay = FakeOverlay()
+
+        with mock.patch.object(overlay_mod, "get_unified_overlay", lambda _root: fake_overlay), \
+             mock.patch.object(overlay_mod, "CompositorBgraPresenter", FakePresenter), \
+             mock.patch.object(overlay_mod, "render_overlays", _overlays), \
+             mock.patch.object(overlay_mod, "_render_drawable_frame", side_effect=_render):
+            host._refresh_now()
+            first_redraws = fake_overlay.created[0].redraws
+            host._refresh_now()
+            current_spec = {
+                "nodes": [
+                    UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="accent")],
+                              x=31, y=42, z=5, id="meter")
+                ],
+            }
+            host._refresh_now()
+            self.assertEqual(fake_overlay.created[0].geometry, (31, 42, 20, 10))
+            self.assertGreater(fake_overlay.created[0].redraws, first_redraws)
+            current_spec = {
+                "nodes": [
+                    UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="gold")],
+                              x=31, y=42, z=5, id="meter")
+                ],
+            }
+            host._refresh_now()
+
+        self.assertEqual(render_calls, ["canvas:plug/meter", "canvas:plug/meter"])
+        self.assertEqual(len(fake_overlay.created), 1)
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_model3d_layer_drag_updates_position_without_affecting_canvas_clickthrough(self) -> None:

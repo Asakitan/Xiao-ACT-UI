@@ -421,6 +421,48 @@ def _render_drawable_frame(
     return signature, _image_to_bgra(image, width, height), width, height
 
 
+def _backend_status_signature(backend_status: Any) -> dict[str, Any]:
+    if backend_status is None:
+        return {}
+    return {
+        "backend": str(getattr(backend_status, "backend", "") or ""),
+        "files_present": bool(getattr(backend_status, "files_present", False)),
+        "render_available": bool(getattr(backend_status, "render_available", False)),
+        "reason": str(getattr(backend_status, "reason", "") or ""),
+        "managed_files": tuple(getattr(backend_status, "managed_files", ()) or ()),
+        "native_files": tuple(getattr(backend_status, "native_files", ()) or ()),
+    }
+
+
+def _drawable_raster_node(node: Any) -> Any:
+    if not isinstance(node, Mapping):
+        return node
+    out = dict(node)
+    for key in ("x", "y", "z", "draggable", "surface"):
+        out.pop(key, None)
+    return out
+
+
+def _drawable_input_signature(
+    drawable: Mapping[str, Any],
+    pal: Mapping[str, Any],
+    backend_status: Any = None,
+) -> str:
+    kind = str(drawable.get("kind") or "").lower()
+    payload: dict[str, Any] = {
+        "kind": kind,
+        "key": drawable.get("key"),
+        "width": drawable.get("width"),
+        "height": drawable.get("height"),
+        "node": _drawable_raster_node(drawable.get("node")),
+        "pal": dict(pal or {}),
+    }
+    if kind == "model3d":
+        payload["backend"] = _backend_status_signature(backend_status)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), default=str)
+
+
 def _compose_overlay_frame(overlays: list[Mapping[str, Any]]) -> tuple[str, bytes, int, int] | None:
     """Compatibility helper used by focused tests.
 
@@ -826,6 +868,7 @@ class PluginUnifiedOverlayHost:
                         except Exception:
                             pass
                         state["z"] = z
+                        geometry_changed = True
                     state["x"] = x
                     state["y"] = y
                     state["width"] = w
@@ -848,6 +891,7 @@ class PluginUnifiedOverlayHost:
                     if geometry_changed:
                         try:
                             layer.sync_input_proxy()
+                            layer.request_redraw()
                         except Exception:
                             pass
                     if geometry_changed or click_through_changed:
@@ -941,6 +985,34 @@ class PluginUnifiedOverlayHost:
             key = str(drawable.get("key") or "")
             if not key:
                 continue
+            input_signature = _drawable_input_signature(drawable, pal, backend_status)
+            state = self._layers.get(key)
+            if state is not None and state.get("has_frame") and state.get("input_signature") == input_signature:
+                state = self._ensure_layer(
+                    drawable,
+                    max(1, int(drawable.get("width") or 1)),
+                    max(1, int(drawable.get("height") or 1)),
+                )
+                if state is None:
+                    continue
+                active_keys.add(key)
+                layer = state.get("layer")
+                if layer is None:
+                    continue
+                try:
+                    target_visible = not self._hidden
+                    if bool(state.get("visible", False)) != target_visible:
+                        if target_visible:
+                            layer.show()
+                        else:
+                            layer.hide()
+                        state["visible"] = target_visible
+                        layer.sync_input_proxy()
+                        layer.request_redraw()
+                except Exception:
+                    self._destroy_layer(key)
+                    active_keys.discard(key)
+                continue
             frame = _render_drawable_frame(drawable, pal, backend_status)
             if frame is None:
                 continue
@@ -954,12 +1026,17 @@ class PluginUnifiedOverlayHost:
             if layer is None or presenter is None:
                 continue
             try:
-                frame_changed = signature != state.get("last_signature")
+                previous_input_signature = state.get("input_signature")
+                frame_changed = (
+                    signature != state.get("last_signature")
+                    or input_signature != previous_input_signature
+                )
                 target_visible = not self._hidden
                 visible_changed = bool(state.get("visible", False)) != target_visible
                 if frame_changed:
                     presenter.set_frame(bgra, int(width), int(height))
                     state["last_signature"] = signature
+                    state["input_signature"] = input_signature
                 state["has_frame"] = True
                 if visible_changed:
                     if target_visible:
@@ -983,7 +1060,8 @@ class PluginUnifiedOverlayHost:
         if self._dirty:
             self._dirty = False
             self._refresh_now()
-        self._schedule()
+        if self._dirty:
+            self._schedule(0)
 
 
 __all__ = ["PluginUnifiedOverlayHost"]
