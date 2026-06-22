@@ -120,6 +120,35 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         ]}
         return [{"plugin_id": "plug", "surface": "unioverlay", "spec": normalize_ui_spec(spec)}]
 
+    def test_plugin_host_uses_platform_unified_overlay_provider(self) -> None:
+        self.assertEqual(
+            getattr(overlay_mod.get_unified_overlay, "__name__", ""),
+            "_get_unified_overlay",
+        )
+
+    def test_plugin_host_does_not_own_overlay_startup(self) -> None:
+        class FakeOverlay:
+            def __init__(self):
+                self._running = False
+                self.start_calls = 0
+                self.passthrough_calls = 0
+
+            def start(self):
+                self.start_calls += 1
+
+            def force_host_input_passthrough(self):
+                self.passthrough_calls += 1
+
+        fake_overlay = FakeOverlay()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+
+        with mock.patch.object(overlay_mod, "get_unified_overlay", lambda _root: fake_overlay):
+            self.assertIs(host._ensure_overlay(), fake_overlay)
+
+        self.assertEqual(fake_overlay.start_calls, 0)
+        self.assertEqual(fake_overlay.passthrough_calls, 1)
+
     def test_drawables_preserve_keys_geometry_and_order(self) -> None:
         drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
 

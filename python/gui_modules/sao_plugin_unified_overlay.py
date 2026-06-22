@@ -21,7 +21,7 @@ except Exception:
 
 try:
     from render.overlay_adapter import CompositorBgraPresenter
-    from render.overlay_compositor import get_unified_overlay
+    from render.gpu_overlay_window import _get_unified_overlay as get_unified_overlay
 except Exception:
     CompositorBgraPresenter = None  # type: ignore[assignment]
     get_unified_overlay = None  # type: ignore[assignment]
@@ -572,11 +572,6 @@ class PluginUnifiedOverlayHost:
             return None
         try:
             overlay = get_unified_overlay(self.root)
-            if not bool(getattr(overlay, "_running", False)):
-                try:
-                    overlay.start()
-                except Exception:
-                    pass
             self._overlay = overlay
             self._force_host_passthrough()
             return overlay
