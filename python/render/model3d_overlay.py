@@ -327,6 +327,9 @@ def _draw_retarget_pose_avatar(
     dress = (76, 178, 184, 255)
     dress_hi = (244, 190, 116, 235)
     hair = (38, 48, 72, 255)
+    hair_hi = (70, 91, 126, 255)
+    boot = (35, 45, 68, 255)
+    blush = (255, 150, 170, 112)
     glow = (accent[0], accent[1], accent[2], 44)
     line_w = max(3, int(4.5 * scale))
     joint_r = max(2, int(3.5 * scale))
@@ -352,6 +355,8 @@ def _draw_retarget_pose_avatar(
             continue
         color = outline if bool(seg.get("clamped")) else limb
         draw.line((screen[parent][0], screen[parent][1], screen[child][0], screen[child][1]),
+                  fill=outline, width=line_w + max(1, int(1.5 * scale)), joint="curve")
+        draw.line((screen[parent][0], screen[parent][1], screen[child][0], screen[child][1]),
                   fill=color, width=line_w, joint="curve")
 
     chest = screen.get("chest") or screen.get("spine")
@@ -368,6 +373,18 @@ def _draw_retarget_pose_avatar(
             (hip[0] - width * 0.120, hip[1] + height * 0.105),
         )
         draw.polygon(skirt, fill=dress, outline=outline)
+        collar = (
+            (chest[0], chest[1] + height * 0.012),
+            (left_shoulder[0] + (chest[0] - left_shoulder[0]) * 0.34, left_shoulder[1] + height * 0.016),
+            (right_shoulder[0] + (chest[0] - right_shoulder[0]) * 0.34, right_shoulder[1] + height * 0.016),
+        )
+        draw.polygon(collar, fill=skin, outline=outline)
+        waist_y = hip[1] + height * 0.006
+        draw.line((waist_l[0] - width * 0.018, waist_y, waist_r[0] + width * 0.018, waist_y),
+                  fill=dress_hi, width=max(1, int(2 * scale)))
+        hem_y = hip[1] + height * 0.098
+        draw.line((hip[0] - width * 0.100, hem_y, hip[0] + width * 0.100, hem_y),
+                  fill=dress_hi, width=max(1, int(2 * scale)))
         draw.line((left_shoulder[0], left_shoulder[1], right_shoulder[0], right_shoulder[1]),
                   fill=dress_hi, width=max(1, int(2 * scale)))
 
@@ -376,25 +393,71 @@ def _draw_retarget_pose_avatar(
     if head and neck:
         head_r = max(height * 0.045, abs(neck[1] - head[1]) * 0.56)
         hair_r = head_r * 1.20
+        draw.ellipse((head[0] - hair_r * 1.10, head[1] - hair_r * 0.62,
+                      head[0] - head_r * 0.20, head[1] + hair_r * 1.18), fill=hair)
+        draw.ellipse((head[0] + head_r * 0.20, head[1] - hair_r * 0.62,
+                      head[0] + hair_r * 1.10, head[1] + hair_r * 1.18), fill=hair)
         draw.ellipse((head[0] - hair_r, head[1] - hair_r * 1.05,
                       head[0] + hair_r, head[1] + hair_r * 1.08), fill=hair)
+        bow_x = head[0] + head_r * 0.54
+        bow_y = head[1] - hair_r * 1.02
+        bow_s = max(3, head_r * 0.28)
+        draw.polygon(((bow_x, bow_y), (bow_x - bow_s, bow_y - bow_s * 0.55),
+                      (bow_x - bow_s, bow_y + bow_s * 0.55)), fill=dress_hi, outline=outline)
+        draw.polygon(((bow_x, bow_y), (bow_x + bow_s, bow_y - bow_s * 0.55),
+                      (bow_x + bow_s, bow_y + bow_s * 0.55)), fill=dress_hi, outline=outline)
+        draw.ellipse((bow_x - bow_s * 0.26, bow_y - bow_s * 0.24,
+                      bow_x + bow_s * 0.26, bow_y + bow_s * 0.24), fill=dress, outline=outline)
         draw.ellipse((head[0] - head_r, head[1] - head_r * 0.84,
                       head[0] + head_r, head[1] + head_r * 1.02), fill=skin, outline=outline)
+        bangs = (
+            (head[0] - head_r * 0.84, head[1] - head_r * 0.72),
+            (head[0] - head_r * 0.24, head[1] - head_r * 0.96),
+            (head[0] + head_r * 0.28, head[1] - head_r * 0.78),
+            (head[0] + head_r * 0.78, head[1] - head_r * 0.38),
+            (head[0] + head_r * 0.18, head[1] - head_r * 0.46),
+            (head[0] - head_r * 0.32, head[1] - head_r * 0.42),
+        )
+        draw.polygon(bangs, fill=hair_hi)
         eye_r = max(1, int(2.3 * scale))
         for ex in (-0.32, 0.30):
             draw.ellipse((head[0] + ex * head_r - eye_r, head[1] - 0.08 * head_r - eye_r,
                           head[0] + ex * head_r + eye_r, head[1] - 0.08 * head_r + eye_r),
                          fill=outline)
+            shine_r = max(1, int(0.9 * scale))
+            draw.ellipse((head[0] + ex * head_r - shine_r * 0.4, head[1] - 0.12 * head_r - shine_r,
+                          head[0] + ex * head_r + shine_r * 0.8, head[1] - 0.12 * head_r + shine_r * 0.2),
+                         fill=(255, 255, 255, 210))
+        blush_r = max(2, int(3.0 * scale))
+        for bx in (-0.54, 0.52):
+            draw.ellipse((head[0] + bx * head_r - blush_r, head[1] + 0.24 * head_r - blush_r,
+                          head[0] + bx * head_r + blush_r, head[1] + 0.24 * head_r + blush_r),
+                         fill=blush)
+        draw.arc((head[0] - head_r * 0.24, head[1] + head_r * 0.12,
+                  head[0] + head_r * 0.24, head[1] + head_r * 0.46),
+                 start=15, end=165, fill=outline, width=max(1, int(1.4 * scale)))
 
     for key in ("left_hand", "right_hand"):
         if key in screen:
             x, y = screen[key]
-            draw.ellipse((x - joint_r, y - joint_r, x + joint_r, y + joint_r), fill=skin, outline=outline)
+            hand_r = joint_r * 1.25
+            cuff = max(1, int(2.2 * scale))
+            draw.ellipse((x - hand_r - cuff, y - hand_r - cuff,
+                          x + hand_r + cuff, y + hand_r + cuff), fill=dress_hi, outline=outline)
+            draw.ellipse((x - hand_r, y - hand_r, x + hand_r, y + hand_r), fill=skin, outline=outline)
     for key in ("left_foot", "right_foot"):
         if key in screen:
             x, y = screen[key]
-            draw.line((x - joint_r * 2.2, y, x + joint_r * 2.2, y),
-                      fill=outline, width=max(2, int(3 * scale)))
+            boot_w = joint_r * 3.4
+            boot_h = joint_r * 1.9
+            radius = max(1, int(2 * scale))
+            box = (x - boot_w * 0.62, y - boot_h * 0.35, x + boot_w * 0.70, y + boot_h * 0.65)
+            if hasattr(draw, "rounded_rectangle"):
+                draw.rounded_rectangle(box, radius=radius, fill=boot, outline=outline)
+            else:
+                draw.rectangle(box, fill=boot, outline=outline)
+            draw.line((box[0] + boot_w * 0.12, y + boot_h * 0.30, box[2] - boot_w * 0.08, y + boot_h * 0.30),
+                      fill=(255, 255, 255, 76), width=max(1, int(1.4 * scale)))
     return True
 
 
