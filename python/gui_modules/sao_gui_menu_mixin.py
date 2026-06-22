@@ -52,6 +52,7 @@ from act_platform.runtime import (
     act_plugin_reload,
     act_plugin_script_menus,
     act_plugin_status,
+    ensure_act_event_bus,
     ensure_act_plugin_manager,
 )
 from config import DEFAULT_HOTKEYS
@@ -210,6 +211,9 @@ class SAOPlayerGUIMenuMixin:
         return sig
 
     def _get_menu_children_cached(self, force: bool = False):
+        if force:
+            self._last_menu_refresh_sig = None
+            self._last_menu_refresh_sig_time = 0.0
         sig = self._compute_menu_refresh_signature()
         if not force and self._menu_children_cache is not None and self._menu_children_cache_sig == sig:
             return self._menu_children_cache
@@ -238,6 +242,15 @@ class SAOPlayerGUIMenuMixin:
         if not (menu and menu.visible):
             self._update_float_status()
             return
+        icons = self._build_menu_icons()
+        refresh_icons = getattr(menu, 'refresh_icons', None)
+        if callable(refresh_icons):
+            try:
+                if refresh_icons(icons, force=force):
+                    self._menu_icons = icons
+                    force = True
+            except Exception:
+                pass
         children = self._get_menu_children_cached(force=force)
         refresh_all = getattr(menu, 'refresh_child_menus', None)
         if callable(refresh_all):
@@ -483,6 +496,72 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             pass
 
+    def _invalidate_plugin_menu_cache(self) -> None:
+        self._menu_children_cache = None
+        self._menu_children_cache_sig = None
+        self._last_menu_refresh_sig = None
+        self._last_menu_refresh_sig_time = 0.0
+        self._sao_menu_needs_rebuild = True
+
+    def _ensure_plugin_lifecycle_subscription(self) -> bool:
+        if getattr(self, '_act_plugin_lifecycle_token', ''):
+            return True
+        try:
+            token = ensure_act_event_bus(self).subscribe(
+                'plugin_lifecycle',
+                self._handle_plugin_lifecycle,
+                owner_id='sao_menu_plugin_lifecycle',
+            )
+            self._act_plugin_lifecycle_token = token
+            return True
+        except Exception:
+            self._act_plugin_lifecycle_token = ''
+            return False
+
+    def _release_plugin_lifecycle_subscription(self) -> None:
+        token = str(getattr(self, '_act_plugin_lifecycle_token', '') or '')
+        if not token:
+            return
+        try:
+            ensure_act_event_bus(self).unsubscribe(token)
+        except Exception:
+            pass
+        self._act_plugin_lifecycle_token = ''
+
+    def _handle_plugin_lifecycle(self, event: Mapping[str, Any]) -> None:
+        payload = event.get('payload') if isinstance(event, Mapping) else None
+        action = ''
+        plugin_id = ''
+        if isinstance(payload, Mapping):
+            action = str(payload.get('action') or '').lower()
+            plugin_id = str(payload.get('plugin_id') or '')
+        self._invalidate_plugin_menu_cache()
+        if action == 'loaded':
+            host = self._ensure_plugin_unified_overlay_host()
+        else:
+            host = getattr(self, '_plugin_unified_overlay', None)
+        if host is not None:
+            try:
+                if action in {'unloaded', 'disabled', 'load_failed', 'uninstalled', 'forgotten'}:
+                    destroy_layers = getattr(host, '_destroy_plugin_layers', None)
+                    if callable(destroy_layers):
+                        destroy_layers(plugin_id)
+                host.mark_dirty()
+            except Exception:
+                pass
+        panel = getattr(self, '_act_plugin_manager_panel', None)
+        if panel is not None:
+            try:
+                refresh = getattr(panel, 'refresh', None)
+                is_visible = getattr(panel, 'is_visible', None)
+                if callable(refresh) and (not callable(is_visible) or is_visible()):
+                    refresh()
+            except Exception:
+                pass
+        menu = getattr(self, '_sao_menu', None)
+        if menu is not None and getattr(menu, 'visible', False):
+            self._refresh_menu_immediate()
+
     def _wrap_dynamic_plugin_menu_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
         wrapped = dict(item)
         command = wrapped.get('command')
@@ -693,6 +772,7 @@ class SAOPlayerGUIMenuMixin:
 
     def _setup_sao_menu(self):
         """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
+        self._ensure_plugin_lifecycle_subscription()
         self._ensure_plugin_unified_overlay_host()
         try:
             ensure_act_plugin_manager(self, load=True)

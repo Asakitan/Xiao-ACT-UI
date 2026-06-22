@@ -277,6 +277,42 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertFalse(host._layers)
         self.assertTrue(all(layer.destroyed for layer in fake_overlay.created))
 
+    def test_host_lifecycle_unload_event_destroys_plugin_layers_immediately(self) -> None:
+        class FakeLayer:
+            def destroy_input_proxy(self):
+                self.proxy_destroyed = True
+
+        class FakeOverlay:
+            def __init__(self):
+                self.destroyed = []
+
+            def destroy_layer(self, name):
+                self.destroyed.append(name)
+
+            def force_host_input_passthrough(self):
+                return None
+
+        fake_overlay = FakeOverlay()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+        host._overlay = fake_overlay
+        host._layers = {
+            "canvas:plug/meter": {"layer": FakeLayer(), "layer_name": "plugin canvas plug meter"},
+            "model3d:other/avatar": {"layer": FakeLayer(), "layer_name": "plugin model other avatar"},
+        }
+
+        host._handle_plugin_lifecycle({
+            "payload": {
+                "plugin_id": "plug",
+                "action": "unloaded",
+                "surfaces": ["unioverlay"],
+            }
+        })
+
+        self.assertEqual(set(host._layers), {"model3d:other/avatar"})
+        self.assertEqual(fake_overlay.destroyed, ["plugin canvas plug meter"])
+        self.assertTrue(host._dirty)
+
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_canvas_only_noop_refresh_skips_model_probe_and_layer_churn(self) -> None:
         overlays = [{

@@ -212,12 +212,14 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         # ── 配置面板实例 ──
         self._act_plugin_manager_panel = None  # PluginManagerPanel
         self._ai_editor_panel = None  # AIEditorPanel
+        self._act_plugin_lifecycle_token = ""
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()
         self._init_wnd_shield()
         self._set_icon()
         self._create_floating_widget()
         self._setup_hotkeys()
+        self.root.after(0, self._ensure_plugin_lifecycle_subscription)
         self.root.after(0, self._ensure_updater_listener)
 
         # LINK START 入场

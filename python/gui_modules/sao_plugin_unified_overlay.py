@@ -469,6 +469,7 @@ class PluginUnifiedOverlayHost:
         self.interval_ms = max(16, int(interval_ms))
         self._after_id: Any = None
         self._sub_token = ""
+        self._lifecycle_sub_token = ""
         self._dirty = True
         self._destroyed = False
         self._hidden = False
@@ -502,6 +503,12 @@ class PluginUnifiedOverlayHost:
             except Exception:
                 pass
             self._sub_token = ""
+        if self._lifecycle_sub_token:
+            try:
+                ensure_act_event_bus(self.owner).unsubscribe(self._lifecycle_sub_token)
+            except Exception:
+                pass
+            self._lifecycle_sub_token = ""
         self._destroy_all_layers()
 
     def hide_temporarily(self) -> None:
@@ -535,25 +542,36 @@ class PluginUnifiedOverlayHost:
 
     def mark_dirty(self) -> None:
         self._dirty = True
+        self._schedule(0)
 
     def _subscribe(self) -> None:
         try:
+            bus = ensure_act_event_bus(self.owner)
+
             def _on_invalidate(event: Mapping[str, Any]) -> None:
                 payload = event.get("payload") if isinstance(event, Mapping) else None
                 if not isinstance(payload, Mapping):
                     self._dirty = True
+                    self._schedule(0)
                     return
                 surface = str(payload.get("surface") or "")
                 if not surface or surface == self.surface:
                     self._dirty = True
+                    self._schedule(0)
 
-            self._sub_token = ensure_act_event_bus(self.owner).subscribe(
+            self._sub_token = bus.subscribe(
                 "plugin_ui_invalidate",
                 _on_invalidate,
                 owner_id=f"plugin_unified_overlay_{self.surface}",
             )
+            self._lifecycle_sub_token = bus.subscribe(
+                "plugin_lifecycle",
+                self._handle_plugin_lifecycle,
+                owner_id=f"plugin_unified_overlay_lifecycle_{self.surface}",
+            )
         except Exception:
             self._sub_token = ""
+            self._lifecycle_sub_token = ""
 
     def _schedule(self, delay_ms: int | None = None) -> None:
         if self._destroyed or self.root is None:
@@ -618,6 +636,44 @@ class PluginUnifiedOverlayHost:
         for key in list(self._layers):
             if key not in active_keys:
                 self._destroy_layer(key)
+
+    def _plugin_id_from_layer_key(self, key: str) -> str:
+        tail = str(key or "")
+        if ":" in tail:
+            tail = tail.split(":", 1)[1]
+        return tail.split("/", 1)[0] if "/" in tail else ""
+
+    def _destroy_plugin_layers(self, plugin_id: str) -> None:
+        pid = str(plugin_id or "")
+        if not pid:
+            return
+        for key in list(self._layers):
+            if self._plugin_id_from_layer_key(key) == pid:
+                self._destroy_layer(key)
+
+    def _lifecycle_targets_surface(self, payload: Mapping[str, Any]) -> bool:
+        surface = str(payload.get("surface") or "")
+        if surface and surface != self.surface:
+            return False
+        surfaces = payload.get("surfaces")
+        if isinstance(surfaces, (list, tuple, set)):
+            normalized = {str(item or "") for item in surfaces}
+            return not normalized or self.surface in normalized or "" in normalized
+        return True
+
+    def _handle_plugin_lifecycle(self, event: Mapping[str, Any]) -> None:
+        payload = event.get("payload") if isinstance(event, Mapping) else None
+        if not isinstance(payload, Mapping):
+            self._dirty = True
+            self._schedule(0)
+            return
+        if not self._lifecycle_targets_surface(payload):
+            return
+        action = str(payload.get("action") or "").lower()
+        if action in {"unloaded", "disabled", "load_failed", "uninstalled", "forgotten"}:
+            self._destroy_plugin_layers(str(payload.get("plugin_id") or ""))
+        self._dirty = True
+        self._schedule(0)
 
     def _drawable_xy(self, drawable: Mapping[str, Any]) -> tuple[int, int]:
         key = str(drawable.get("key") or "")

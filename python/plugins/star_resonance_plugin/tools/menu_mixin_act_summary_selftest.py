@@ -86,6 +86,7 @@ class _MenuHarness(SAOPlayerGUIMenuMixin):
         self._last_menu_refresh_sig_time = 0.0
         self._sao_menu_close_pending = False
         self._fisheye_close_suppress_until = 0.0
+        self._act_plugin_lifecycle_token = ""
         self._destroyed = False
         self._act_statuses: dict[str, dict] = {}
         self.alerts: list[tuple[str, str, float]] = []
@@ -197,12 +198,20 @@ class MenuMixinActSummaryTests(unittest.TestCase):
 
         with (
             _patched_module_attr('SAOPopUpMenu', _FakePopUpMenu),
+            mock.patch.object(harness, '_ensure_plugin_lifecycle_subscription',
+                              wraps=harness._ensure_plugin_lifecycle_subscription) as ensure_sub,
             _patched_module_attr('ensure_act_plugin_manager', lambda _owner, load=True: None),
+            _patched_module_attr('ensure_act_event_bus', lambda _owner: type(
+                'Bus', (), {
+                    'subscribe': lambda self, *_args, **_kwargs: 'life-token',
+                })()),
             _patched_module_attr('act_plugin_menu_surfaces', lambda _owner, _surface_id: {'surfaces': []}),
             _patched_module_attr('act_plugin_script_menus', lambda _owner: {'items': []}),
         ):
             harness._setup_sao_menu()
 
+        ensure_sub.assert_called_once()
+        self.assertEqual(harness._act_plugin_lifecycle_token, 'life-token')
         self.assertIsNotNone(harness._sao_menu)
         self.assertTrue(harness._sao_menu.bound)
         self.assertEqual([item['name'] for item in harness._menu_icons], ['控制', '工具', '插件', '皮肤', '关于'])
@@ -366,6 +375,67 @@ class MenuMixinActSummaryTests(unittest.TestCase):
         self.assertIn(("refresh", True), calls)
         self.assertIn(("close", True), calls)
         self.assertTrue(harness._sao_menu_needs_rebuild)
+
+    def test_plugin_lifecycle_invalidates_menu_cache_and_refreshes_visible_menu(self) -> None:
+        harness = _MenuHarness()
+        calls: list[tuple] = []
+        harness._sao_menu = type("Menu", (), {"visible": True})()
+        harness._menu_children_cache = {"old": []}
+        harness._menu_children_cache_sig = ("old",)
+        harness._last_menu_refresh_sig = ("old",)
+        harness._last_menu_refresh_sig_time = 123.0
+        harness._refresh_menu_immediate = lambda: calls.append(("immediate",))
+
+        harness._handle_plugin_lifecycle({
+            "payload": {
+                "plugin_id": "script_snake",
+                "action": "loaded",
+            }
+        })
+
+        self.assertIsNone(harness._menu_children_cache)
+        self.assertIsNone(harness._menu_children_cache_sig)
+        self.assertIsNone(harness._last_menu_refresh_sig)
+        self.assertEqual(harness._last_menu_refresh_sig_time, 0.0)
+        self.assertTrue(harness._sao_menu_needs_rebuild)
+        self.assertEqual(calls, [("immediate",)])
+
+    def test_apply_menu_refresh_updates_top_level_script_icons(self) -> None:
+        harness = _MenuHarness()
+        icon_calls: list[tuple] = []
+
+        class Menu:
+            visible = True
+
+            def refresh_icons(self, icons, force=False):
+                icon_calls.append((tuple(item["name"] for item in icons), force))
+                return True
+
+            def refresh_child_menus(self, _children, force=False):
+                icon_calls.append(("children", force))
+
+        harness._sao_menu = Menu()
+        harness._menu_refresh_force = True
+
+        def fake_script_menus(_self):
+            return {
+                "items": [
+                    {
+                        "id": "script_snake",
+                        "enabled": True,
+                        "active": False,
+                        "overlay_enabled": False,
+                        "menu": {"name": "贪吃蛇", "icon_text": "▣", "script_label": "贪吃蛇"},
+                    }
+                ]
+            }
+
+        with _patched_module_attr("act_plugin_script_menus", fake_script_menus):
+            harness._apply_menu_refresh_if_open()
+
+        self.assertIn(("控制", "工具", "插件", "皮肤", "关于", "贪吃蛇"), [call[0] for call in icon_calls])
+        self.assertIn(("children", True), icon_calls)
+        self.assertEqual(harness._menu_icons[-1]["name"], "贪吃蛇")
 
 
 if __name__ == "__main__":

@@ -1214,8 +1214,7 @@ class PluginManager:
         self._data_sources: Dict[str, dict[str, Any]] = {}
 
     def discover(self) -> list[PluginRecord]:
-        self._extensions = {kind: {} for kind in EXTENSION_KINDS}
-        self._extension_handlers.clear()
+        old_records = dict(self._records)
         records: Dict[str, PluginRecord] = {}
         for root in self.plugin_dirs:
             if not os.path.isdir(root):
@@ -1242,15 +1241,45 @@ class PluginManager:
                         last_error=f"manifest: {exc}",
                     )
                 records[record.plugin_id] = record
-        self._records = records
         # Apply the user's persisted enable/disable choices over the manifest
         # default so a plugin the user turned off (or on) stays that way across
         # restarts. Only for validly-parsed plugins.
         persisted = self._persisted_enabled()
         if persisted:
-            for pid, rec in self._records.items():
+            for pid, rec in records.items():
                 if pid in persisted and not rec.last_error:
                     rec.enabled = bool(persisted[pid])
+        for pid, old_record in old_records.items():
+            new_record = records.get(pid)
+            changed = (
+                new_record is None
+                or old_record.path != new_record.path
+                or old_record.entry != new_record.entry
+                or old_record.version != new_record.version
+                or old_record.language != new_record.language
+                or old_record.sao_menu != getattr(new_record, "sao_menu", {})
+                or old_record.settings_schema != getattr(new_record, "settings_schema", {})
+                or old_record.capabilities != getattr(new_record, "capabilities", ())
+                or old_record.requires != getattr(new_record, "requires", ())
+                or old_record.permissions != getattr(new_record, "permissions", ())
+                or old_record.enabled != getattr(new_record, "enabled", old_record.enabled)
+            )
+            if changed and bool(old_record.loaded or old_record.active or old_record.module is not None):
+                try:
+                    self.unload_plugin(pid)
+                except Exception:
+                    pass
+            elif not changed and bool(old_record.loaded or old_record.active or old_record.module is not None):
+                old_record.enabled = bool(getattr(new_record, "enabled", old_record.enabled))
+                records[pid] = old_record
+        self._records = records
+        for pid, old_record in old_records.items():
+            if pid not in self._records:
+                self._publish_plugin_lifecycle(old_record, "forgotten")
+        for pid, record in self._records.items():
+            old_record = old_records.get(pid)
+            if old_record is None or old_record.path != record.path or old_record.version != record.version:
+                self._publish_plugin_lifecycle(record, "discovered")
         return list(self._records.values())
 
     def refresh_plugin(self, plug_dir: str) -> Optional[PluginRecord]:
@@ -1274,6 +1303,7 @@ class PluginManager:
         if existing is not None and existing.loaded:
             self.unload_plugin(record.plugin_id)
         self._records[record.plugin_id] = record
+        self._publish_plugin_lifecycle(record, "discovered")
         return record
 
     def is_user_plugin(self, plugin_id: str) -> bool:
@@ -1355,6 +1385,7 @@ class PluginManager:
             record.active = True
             record.last_loaded_at = time.time()
             record.last_error = ""
+            self._publish_plugin_lifecycle(record, "loaded")
             return True
         except Exception as exc:
             self._record_failure(record.plugin_id, exc)
@@ -1366,12 +1397,14 @@ class PluginManager:
             record.context = None
             record.loaded = False
             record.active = False
+            self._publish_plugin_lifecycle(record, "load_failed", message=str(exc))
             return False
 
     def unload_plugin(self, plugin_id: str) -> bool:
         record = self._records.get(str(plugin_id or ""))
         if record is None:
             return False
+        was_loaded = bool(record.loaded or record.active or record.module is not None)
         if record.module is not None:
             try:
                 self._call_hook(record, "on_disable")
@@ -1396,6 +1429,8 @@ class PluginManager:
         record.context = None
         record.loaded = False
         record.active = False
+        if was_loaded:
+            self._publish_plugin_lifecycle(record, "unloaded")
         return True
 
     def forget_plugin(self, plugin_id: str) -> bool:
@@ -1421,7 +1456,10 @@ class PluginManager:
             return False
         record.enabled = False
         self._set_persisted_enabled(record.plugin_id, False)
+        was_loaded = bool(record.loaded or record.active or record.module is not None)
         self.unload_plugin(record.plugin_id)
+        if not was_loaded:
+            self._publish_plugin_lifecycle(record, "disabled")
         return True
 
     def reload_plugin(self, plugin_id: str) -> bool:
@@ -1783,13 +1821,18 @@ class PluginManager:
     # ── render hooks + overlays ────────────────────────────────────────────
     def _register_render_hook(self, plugin_id: str, surface: str,
                               callback: Callable[[str, dict], Any], priority: float = 0.0) -> str:
-        return self.render_registry.register_hook(plugin_id, surface, callback, priority)
+        token = self.render_registry.register_hook(plugin_id, surface, callback, priority)
+        self._publish_plugin_ui_invalidate(plugin_id, surface, "render_hook_registered")
+        return token
 
     def _set_overlay(self, plugin_id: str, surface: str, spec: Any) -> dict[str, Any]:
-        return self.render_registry.set_overlay(plugin_id, surface, spec)
+        normalized = self.render_registry.set_overlay(plugin_id, surface, spec)
+        self._publish_plugin_ui_invalidate(plugin_id, surface, "overlay_set")
+        return normalized
 
     def _clear_overlay(self, plugin_id: str, surface: Optional[str] = None) -> None:
         self.render_registry.clear_overlay(plugin_id, surface)
+        self._publish_plugin_ui_invalidate(plugin_id, surface or "", "overlay_cleared")
 
     # ── plugin schedulers / loops ──────────────────────────────────────────
     def _add_timer(self, plugin_id: str, fn: Callable[[], Any], seconds: float,
@@ -2096,6 +2139,46 @@ class PluginManager:
                     pass
         else:
             self._enabled_cache = current
+
+    def _publish_plugin_lifecycle(self, record: PluginRecord, action: str,
+                                  **extra: Any) -> None:
+        """Broadcast plugin lifecycle changes to menus and overlay hosts."""
+        payload: dict[str, Any] = {
+            "plugin_id": record.plugin_id,
+            "action": str(action or ""),
+            "enabled": bool(record.enabled),
+            "loaded": bool(record.loaded),
+            "active": bool(record.active),
+            "language": str(record.language or ""),
+        }
+        payload.update(extra)
+        try:
+            self.event_bus.publish(
+                "plugin_lifecycle",
+                payload,
+                source_name="plugin_manager",
+                source_kind="platform",
+            )
+        except Exception:
+            pass
+        self._publish_plugin_ui_invalidate(
+            record.plugin_id, "", f"plugin_{payload['action']}")
+
+    def _publish_plugin_ui_invalidate(self, plugin_id: str, surface: str = "",
+                                      reason: str = "") -> None:
+        try:
+            self.event_bus.publish(
+                "plugin_ui_invalidate",
+                {
+                    "plugin_id": str(plugin_id or ""),
+                    "surface": str(surface or ""),
+                    "reason": str(reason or ""),
+                },
+                source_name="plugin_manager",
+                source_kind="platform",
+            )
+        except Exception:
+            pass
 
     def apply_render_hooks(self, surface: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         def _on_error(plugin_id: str, exc: BaseException) -> None:

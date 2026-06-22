@@ -560,7 +560,7 @@ def act_plugin_import(owner: Any, archive_path: str, *, enable: bool = True) -> 
     if not archive_path:
         return {"ok": False, "message": "未提供插件包路径", "errors": ["no path"]}
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "errors": [str(exc)]}
 
@@ -648,7 +648,7 @@ def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
     if not plugin_id:
         return {"ok": False, "message": "未提供插件 id", "errors": ["no id"]}
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "errors": [str(exc)]}
     if not manager.is_user_plugin(plugin_id):

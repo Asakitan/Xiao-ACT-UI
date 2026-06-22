@@ -916,6 +916,44 @@ class SAOPopUpMenu:
         self._schedule_menu_layout_refresh()
         return True
 
+    def refresh_icons(self, icons: List[Dict], force: bool = False):
+        """Refresh top-level fish-eye buttons while the popup is open."""
+        icons = list(icons or [])
+        old_sig = tuple(
+            (str(item.get('name') or ''), str(item.get('icon') or ''),
+             bool(item.get('can_active', True)))
+            for item in list(self.icon_arr or [])
+        )
+        new_sig = tuple(
+            (str(item.get('name') or ''), str(item.get('icon') or ''),
+             bool(item.get('can_active', True)))
+            for item in icons
+        )
+        if not force and old_sig == new_sig:
+            return False
+        self.icon_arr = icons
+        if not self._menu_bar:
+            return True
+        active_name = ''
+        try:
+            active = getattr(self._menu_bar, '_active_item', None)
+            if isinstance(active, dict):
+                active_name = str(active.get('name') or '')
+        except Exception:
+            active_name = ''
+        try:
+            changed = self._menu_bar.refresh_icons(
+                icons, active_name=active_name, force=force)
+        except Exception:
+            return False
+        if changed:
+            self._hud_cached_dims = None
+            self._content_place_sig = None
+            self._menu_hud_renderer.reset()
+            self._menu_hud_last_sig = None
+            self._schedule_menu_layout_refresh()
+        return bool(changed)
+
     def refresh_child_menu(self, name: str, items: List[Dict]):
         """动态更新某个子菜单的内容"""
         menus = dict(self.child_menus or {})
@@ -1078,5 +1116,4 @@ class SAOPopUpMenu:
         # either — that re-runs Tk's geometry pass on the whole menu and
         # also tears.
         self._draw_menu_hud(dx, dy, phase)
-
 

@@ -21,6 +21,7 @@ both renderers.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
@@ -60,6 +61,7 @@ class RenderHookRegistry:
     """Per-surface render hooks and overlay specs with isolation + cleanup."""
 
     def __init__(self, *, slow_hook_ms: float = 12.0) -> None:
+        self._lock = threading.RLock()
         self._hooks: Dict[str, List[_Hook]] = {}
         self._overlays: Dict[str, Dict[str, dict]] = {}  # surface -> plugin_id -> spec
         self._seq = 0
@@ -70,60 +72,66 @@ class RenderHookRegistry:
                       priority: float = 0.0) -> str:
         if not callable(callback):
             raise TypeError("render hook callback must be callable")
-        self._seq += 1
-        token = f"hook_{self._seq}"
-        hook = _Hook(token, str(plugin_id or ""), _surface_id(surface), callback, float(priority or 0.0))
-        self._hooks.setdefault(hook.surface, []).append(hook)
-        # Highest priority first; stable within equal priority (insertion order).
-        self._hooks[hook.surface].sort(key=lambda h: -h.priority)
-        return token
+        with self._lock:
+            self._seq += 1
+            token = f"hook_{self._seq}"
+            hook = _Hook(token, str(plugin_id or ""), _surface_id(surface), callback, float(priority or 0.0))
+            self._hooks.setdefault(hook.surface, []).append(hook)
+            # Highest priority first; stable within equal priority (insertion order).
+            self._hooks[hook.surface].sort(key=lambda h: -h.priority)
+            return token
 
     def unregister_hook(self, token: str) -> bool:
         token = str(token or "")
-        for surface, hooks in list(self._hooks.items()):
-            kept = [h for h in hooks if h.token != token]
-            if len(kept) != len(hooks):
-                if kept:
-                    self._hooks[surface] = kept
-                else:
-                    self._hooks.pop(surface, None)
-                return True
+        with self._lock:
+            for surface, hooks in list(self._hooks.items()):
+                kept = [h for h in hooks if h.token != token]
+                if len(kept) != len(hooks):
+                    if kept:
+                        self._hooks[surface] = kept
+                    else:
+                        self._hooks.pop(surface, None)
+                    return True
         return False
 
     def set_overlay(self, plugin_id: str, surface: str, spec: Any) -> dict:
         normalized = normalize_ui_spec(spec)
-        self._overlays.setdefault(_surface_id(surface), {})[str(plugin_id or "")] = normalized
+        with self._lock:
+            self._overlays.setdefault(_surface_id(surface), {})[str(plugin_id or "")] = normalized
         return normalized
 
     def clear_overlay(self, plugin_id: str, surface: Optional[str] = None) -> None:
         plugin_id = str(plugin_id or "")
-        if surface is None:
-            for bucket in self._overlays.values():
-                bucket.pop(plugin_id, None)
-        else:
-            bucket = self._overlays.get(_surface_id(surface))
-            if bucket:
-                bucket.pop(plugin_id, None)
+        with self._lock:
+            if surface is None:
+                for bucket in self._overlays.values():
+                    bucket.pop(plugin_id, None)
+            else:
+                bucket = self._overlays.get(_surface_id(surface))
+                if bucket:
+                    bucket.pop(plugin_id, None)
 
     def unregister_plugin(self, plugin_id: str) -> None:
         plugin_id = str(plugin_id or "")
-        for surface, hooks in list(self._hooks.items()):
-            kept = [h for h in hooks if h.plugin_id != plugin_id]
-            if kept:
-                self._hooks[surface] = kept
-            else:
-                self._hooks.pop(surface, None)
-        for surface, bucket in list(self._overlays.items()):
-            bucket.pop(plugin_id, None)
-            if not bucket:
-                self._overlays.pop(surface, None)
+        with self._lock:
+            for surface, hooks in list(self._hooks.items()):
+                kept = [h for h in hooks if h.plugin_id != plugin_id]
+                if kept:
+                    self._hooks[surface] = kept
+                else:
+                    self._hooks.pop(surface, None)
+            for surface, bucket in list(self._overlays.items()):
+                bucket.pop(plugin_id, None)
+                if not bucket:
+                    self._overlays.pop(surface, None)
 
     # ── execution ────────────────────────────────────────────────────────
     def _chain_for(self, surface: str) -> List[_Hook]:
         surface = _surface_id(surface)
-        specific = self._hooks.get(surface, ())
-        wild = self._hooks.get(ALL_SURFACES, ()) if surface != ALL_SURFACES else ()
-        chain = list(specific) + list(wild)
+        with self._lock:
+            specific = self._hooks.get(surface, ())
+            wild = self._hooks.get(ALL_SURFACES, ()) if surface != ALL_SURFACES else ()
+            chain = list(specific) + list(wild)
         chain.sort(key=lambda h: -h.priority)
         return chain
 
@@ -165,38 +173,50 @@ class RenderHookRegistry:
     def overlays(self, surface: str) -> List[dict]:
         surface = _surface_id(surface)
         out: List[dict] = []
-        for src in (surface, ALL_SURFACES):
-            if src == ALL_SURFACES and surface == ALL_SURFACES:
-                continue
-            for plugin_id, spec in sorted((self._overlays.get(src) or {}).items()):
+        with self._lock:
+            buckets = [
+                (src, dict(self._overlays.get(src) or {}))
+                for src in (surface, ALL_SURFACES)
+                if not (src == ALL_SURFACES and surface == ALL_SURFACES)
+            ]
+        for _src, bucket in buckets:
+            for plugin_id, spec in sorted(bucket.items()):
                 out.append({"plugin_id": plugin_id, "surface": surface, "spec": spec})
         return out
 
     def has_overlays(self, surface: str) -> bool:
         surface = _surface_id(surface)
-        return bool(self._overlays.get(surface) or self._overlays.get(ALL_SURFACES))
+        with self._lock:
+            return bool(self._overlays.get(surface) or self._overlays.get(ALL_SURFACES))
 
     def has_hooks(self, surface: str) -> bool:
         surface = _surface_id(surface)
-        return bool(self._hooks.get(surface) or self._hooks.get(ALL_SURFACES))
+        with self._lock:
+            return bool(self._hooks.get(surface) or self._hooks.get(ALL_SURFACES))
 
     # ── introspection ────────────────────────────────────────────────────
     def surfaces(self) -> Dict[str, Any]:
-        ids = set(self._hooks) | set(self._overlays)
+        with self._lock:
+            ids = set(self._hooks) | set(self._overlays)
+            hooks_by_surface = {surface: list(hooks) for surface, hooks in self._hooks.items()}
+            overlays_by_surface = {surface: dict(bucket) for surface, bucket in self._overlays.items()}
         out: Dict[str, Any] = {}
         for surface in sorted(ids):
-            hooks = self._hooks.get(surface, ())
+            hooks = hooks_by_surface.get(surface, ())
             out[surface] = {
                 "hook_count": len(hooks),
                 "hook_plugins": sorted({h.plugin_id for h in hooks}),
-                "overlay_plugins": sorted((self._overlays.get(surface) or {}).keys()),
+                "overlay_plugins": sorted((overlays_by_surface.get(surface) or {}).keys()),
             }
         return out
 
     def status(self) -> Dict[str, Any]:
-        total_hooks = sum(len(v) for v in self._hooks.values())
-        total_overlays = sum(len(v) for v in self._overlays.values())
-        failures = sum(h.failures for hooks in self._hooks.values() for h in hooks)
+        with self._lock:
+            hooks_by_surface = {surface: list(hooks) for surface, hooks in self._hooks.items()}
+            overlays_by_surface = {surface: dict(bucket) for surface, bucket in self._overlays.items()}
+        total_hooks = sum(len(v) for v in hooks_by_surface.values())
+        total_overlays = sum(len(v) for v in overlays_by_surface.values())
+        failures = sum(h.failures for hooks in hooks_by_surface.values() for h in hooks)
         return {
             "hook_count": total_hooks,
             "overlay_count": total_overlays,

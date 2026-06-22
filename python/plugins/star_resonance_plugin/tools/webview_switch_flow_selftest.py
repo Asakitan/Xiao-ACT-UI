@@ -99,6 +99,21 @@ def _build_gui():
 
 
 def main() -> int:
+    surface_gui, _settings, _calls, _switches = _build_gui()
+    win_a = _DummyWindow()
+    win_b = _DummyWindow()
+    surface_gui._plugin_surfaces = {"a": win_a, "b": win_b}
+    surface_gui._plugin_surface_meta = {
+        "a": {"plugin_id": "plug_a"},
+        "b": {"plugin_id": "plug_b"},
+    }
+    surface_gui._plugin_surface_order = ["a", "b"]
+    surface_gui._destroy_plugin_surfaces_for_plugin("plug_a")
+    if win_a.destroy_count != 1 or win_b.destroy_count != 0:
+        raise AssertionError("plugin surface teardown was not scoped by plugin_id")
+    if surface_gui._plugin_surface_order != ["b"]:
+        raise AssertionError(f"stale plugin surface order: {surface_gui._plugin_surface_order}")
+
     gui, settings, calls, hot_switches = _build_gui()
     sleeps = []
     original_sleep = sao_webview.time.sleep

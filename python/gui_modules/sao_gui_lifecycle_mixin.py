@@ -176,6 +176,9 @@ class SAOPlayerGUILifecycleMixin:
             self._updater_mgr = None
             self._update_listener = None
             self._update_listener_installed = False
+        release_plugin_lifecycle = getattr(self, '_release_plugin_lifecycle_subscription', None)
+        if callable(release_plugin_lifecycle):
+            release_plugin_lifecycle()
         self._cleanup_entry_overlay()
         # Keep the exit overlay alive while child GPU windows are torn
         # down. If it is destroyed first, plugin layered windows can

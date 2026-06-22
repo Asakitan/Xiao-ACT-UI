@@ -823,6 +823,7 @@ class SAOWebViewGUI:
         self._vision_engine = None
         self._act_event_bus = None
         self._act_plugin_manager = None
+        self._act_plugin_lifecycle_token = ''
         self._vision_paused_for_death = False
         self._last_dead_state = False
         self._recog_lock = threading.Lock()  # 保护 _recognition_active 切换
@@ -935,6 +936,7 @@ class SAOWebViewGUI:
         if getattr(self, '_cfg_settings_ref', None):
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=False)
+            self._ensure_plugin_lifecycle_subscription()
             return
         try:
             from config import SettingsManager as CfgSettings
@@ -943,8 +945,43 @@ class SAOWebViewGUI:
                 self._cfg_settings_ref = CfgSettings()
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=False)
+            self._ensure_plugin_lifecycle_subscription()
         except Exception as e:
             print(f'[SAO] Runtime state bootstrap failed: {e}')
+
+    def _ensure_plugin_lifecycle_subscription(self) -> bool:
+        if getattr(self, '_act_plugin_lifecycle_token', ''):
+            return True
+        try:
+            token = ensure_act_event_bus(self).subscribe(
+                'plugin_lifecycle',
+                self._handle_plugin_lifecycle,
+                owner_id='sao_webview_plugin_lifecycle',
+            )
+            self._act_plugin_lifecycle_token = token
+            return True
+        except Exception:
+            self._act_plugin_lifecycle_token = ''
+            return False
+
+    def _release_plugin_lifecycle_subscription(self) -> None:
+        token = str(getattr(self, '_act_plugin_lifecycle_token', '') or '')
+        if not token:
+            return
+        try:
+            ensure_act_event_bus(self).unsubscribe(token)
+        except Exception:
+            pass
+        self._act_plugin_lifecycle_token = ''
+
+    def _handle_plugin_lifecycle(self, event) -> None:
+        payload = event.get('payload') if isinstance(event, dict) else None
+        if not isinstance(payload, dict):
+            return
+        action = str(payload.get('action') or '').lower()
+        if action not in {'unloaded', 'disabled', 'load_failed', 'uninstalled', 'forgotten'}:
+            return
+        self._destroy_plugin_surfaces_for_plugin(str(payload.get('plugin_id') or ''))
 
     def _start_packet_engine_early(self):
         try:
@@ -1014,8 +1051,16 @@ class SAOWebViewGUI:
         return hwnd
 
     def _plugin_surface_items(self):
-        for surface in list(self._plugin_surface_order):
-            win = self._plugin_surfaces.get(surface)
+        surfaces = getattr(self, '_plugin_surfaces', None)
+        order = getattr(self, '_plugin_surface_order', None)
+        if not isinstance(surfaces, dict):
+            self._plugin_surfaces = {}
+            surfaces = self._plugin_surfaces
+        if not isinstance(order, list):
+            self._plugin_surface_order = []
+            order = self._plugin_surface_order
+        for surface in list(order):
+            win = surfaces.get(surface)
             if win:
                 yield win, surface
 
@@ -1118,6 +1163,39 @@ class SAOWebViewGUI:
         surfaces.clear()
         meta.clear()
         order.clear()
+
+    def _destroy_plugin_surfaces_for_plugin(self, plugin_id: str):
+        pid = str(plugin_id or '').strip()
+        if not pid:
+            return
+        surfaces = getattr(self, '_plugin_surfaces', None)
+        meta = getattr(self, '_plugin_surface_meta', None)
+        order = getattr(self, '_plugin_surface_order', None)
+        if not isinstance(surfaces, dict) or not isinstance(meta, dict) or not isinstance(order, list):
+            return
+        stale = [
+            surface for surface in list(order)
+            if str((meta.get(surface) or {}).get('plugin_id') or '') == pid
+        ]
+        for surface in stale:
+            try:
+                from render.webview_proxy import unregister_webview_proxy
+                unregister_webview_proxy(surface)
+            except Exception:
+                pass
+            try:
+                win = surfaces.get(surface)
+                if win:
+                    win.destroy()
+            except Exception:
+                pass
+            surfaces.pop(surface, None)
+            meta.pop(surface, None)
+            try:
+                while surface in order:
+                    order.remove(surface)
+            except Exception:
+                pass
 
     def _apply_plugin_surfaces_transparency(self):
         for surface, win in list(self._plugin_surface_items()):
@@ -3211,6 +3289,7 @@ class SAOWebViewGUI:
                 self.plugin_manager_win.destroy()
         except Exception:
             pass
+        self._release_plugin_lifecycle_subscription()
         self._destroy_plugin_surfaces()
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
@@ -3796,4 +3875,5 @@ class SAOWebViewGUI:
                 self.alert_win.destroy()
         except Exception:
             pass
+        self._release_plugin_lifecycle_subscription()
         self._destroy_plugin_surfaces()

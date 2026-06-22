@@ -21,6 +21,10 @@ def on_load(ctx):
     ctx.subscribe('skill', lambda event: events.append(('skill', event['payload'].get('kind'))))
     ctx.subscribe('dungeon', lambda event: events.append(('dungeon', event['payload'].get('dungeon_id'))))
     ctx.subscribe('act_snapshot', lambda event: events.append(('snapshot', event['payload'].get('live', {}).get('total_damage', 0))))
+    ctx.set_overlay('unioverlay', ctx.ui.panel('Demo Overlay', [ctx.ui.text('live')]))
+    ctx.register_ui_panel('demo_panel', {'title': 'Demo Panel'}, lambda _p: ctx.ui.panel('Demo Panel', []))
+    ctx.register_hotkey('demo', lambda: events.append(('hotkey', True)), 'CTRL+F12', 'Demo Hotkey')
+    ctx.set_interval(lambda: events.append(('timer', True)), 60.0)
 
 def on_disable():
     events.append(('disabled', True))
@@ -83,6 +87,8 @@ def run_selftest() -> dict:
         _write_demo_plugin(root)
         _write_script_menu_plugin(root)
         manager = PluginManager(plugin_dirs=[root], event_bus=bus)
+        lifecycle_events = []
+        bus.subscribe("plugin_lifecycle", lifecycle_events.append, owner_id="selftest_lifecycle")
         manager.discover()
         manifest_status = manager.status()
         script_record = next(
@@ -91,6 +97,16 @@ def run_selftest() -> dict:
         )
         assert script_record.get("sao_menu", {}).get("name") == "脚本演示", script_record
         assert manager.load_plugin("capture_demo"), manager.status()
+        assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
+        assert manager.list_ui_panels(), manager.list_ui_panels()
+        assert manager.list_hotkeys(), manager.list_hotkeys()
+        assert manager._timers.get("capture_demo"), manager._timers
+        manager.discover()
+        assert manager._records["capture_demo"].active, manager.status()
+        assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
+        assert manager.list_ui_panels(), manager.list_ui_panels()
+        assert manager.list_hotkeys(), manager.list_hotkeys()
+        assert manager._timers.get("capture_demo"), manager._timers
 
         bus.publish("dungeon", {"kind": "sync_dungeon_data", "dungeon_id": 42001}, source_name="selftest", source_kind="unit")
         bus.publish("skill", {"kind": "server_end", "skill_uuid": 777}, source_name="selftest", source_kind="unit")
@@ -106,6 +122,19 @@ def run_selftest() -> dict:
         assert snap.get("live", {}).get("total_damage") == 1234, snap
         assert manager.disable_plugin("capture_demo"), manager.status()
         assert not manager._records["capture_demo"].active, manager.status()
+        assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
+        assert not manager.list_hotkeys(), manager.list_hotkeys()
+        assert not manager._timers.get("capture_demo"), manager._timers
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "capture_demo"
+            and ev.get("payload", {}).get("action") == "loaded"
+            for ev in lifecycle_events
+        ), lifecycle_events
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "capture_demo"
+            and ev.get("payload", {}).get("action") == "unloaded"
+            for ev in lifecycle_events
+        ), lifecycle_events
         status = manager.status()
         owner = type("Owner", (), {})()
         owner._act_event_bus = bus
@@ -139,6 +168,7 @@ def run_selftest() -> dict:
         "parser_adapter_contract": "plugin_owned",
         "replay_event_bus_contract": True,
         "published": bus.snapshot().get("published"),
+        "lifecycle_events": len(lifecycle_events),
         "plugin_count": status.get("plugin_count"),
         "active_count_after_disable": status.get("active_count"),
         "script_menu_count": len(enabled_script_menus.get("items", [])),

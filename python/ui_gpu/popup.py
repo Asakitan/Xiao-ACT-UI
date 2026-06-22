@@ -335,6 +335,69 @@ class SAOPopUpMenu:
         if self._gpu_win is not None:
             self._gpu_win.request_redraw()
 
+    @staticmethod
+    def _icon_sig(icon_arr: List[Dict]) -> tuple:
+        return tuple(
+            (
+                str(item.get('name') or ''),
+                str(item.get('icon') or ''),
+                bool(item.get('can_active', True)),
+            )
+            for item in list(icon_arr or [])
+        )
+
+    def refresh_icons(self, icons: List[Dict], force: bool = False) -> bool:
+        icons = list(icons or [])
+        if not force and self._icon_sig(icons) == self._icon_sig(self._state.menu_items):
+            return False
+        active_name = ''
+        idx = self._state.active_menu_idx
+        if idx is not None and 0 <= idx < len(self._state.menu_items):
+            active_name = str(self._state.menu_items[idx].get('name') or '')
+        self.icon_arr = icons
+        self._state.menu_items = list(icons)
+        self._state.hover_btn_idx = None
+        self._state.active_menu_idx = None
+        visible = _CY_UI.popup_visible_count(
+            len(self._state.menu_items), menu_bar_layout.MAX_VISIBLE)
+        base_size = max(12.0, float(menu_bar_layout.SIZE) * 0.42)
+        if self._state.is_open:
+            base_size = float(menu_bar_layout.SIZE)
+        self._state.btn_size = [base_size] * visible
+        self._state.btn_hover_t = [0.0] * visible
+        next_idx = None
+        if active_name:
+            for pos, item in enumerate(self._state.menu_items):
+                if str(item.get('name') or '') == active_name and bool(item.get('can_active', True)):
+                    next_idx = pos
+                    break
+        if next_idx is not None:
+            self._state.active_menu_idx = next_idx
+            rows = list(self.child_menus.get(active_name, []))
+            self._state.child_rows = rows
+            self._state.pending_child_rows = []
+            if rows:
+                self._reset_row_anim()
+                self._state.child_fade_t = 1.0
+                self._state.child_phase = 'fadein'
+            else:
+                self._state.row_anim_w = []
+                self._state.row_hover_t = []
+                self._state.child_fade_t = 1.0
+                self._state.child_phase = 'idle'
+        else:
+            self._hide_all_custom_children()
+            self._state.child_rows = []
+            self._state.pending_child_rows = []
+            self._state.row_anim_w = []
+            self._state.row_hover_t = []
+            self._state.hover_row_idx = None
+            self._state.child_fade_t = 1.0
+            self._state.child_phase = 'idle'
+        if self._gpu_win is not None:
+            self._gpu_win.request_redraw()
+        return True
+
     def refresh_child_menu(self, name: str, items: List[Dict]) -> None:
         self.child_menus[name] = list(items)
         idx = self._state.active_menu_idx

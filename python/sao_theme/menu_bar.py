@@ -110,6 +110,47 @@ class SAOMenuBar(tk.Frame):
         # clear the per-button Canvas paint state.
         self._setup_gpu_painter()
 
+    @staticmethod
+    def _icon_sig(icon_arr: List[Dict]) -> tuple:
+        return tuple(
+            (
+                str(item.get('name') or ''),
+                str(item.get('icon') or ''),
+                bool(item.get('can_active', True)),
+            )
+            for item in list(icon_arr or [])
+        )
+
+    def refresh_icons(self, icon_arr: List[Dict], active_name: Optional[str] = None,
+                      force: bool = False) -> bool:
+        """Replace top-level menu buttons without recreating the popup."""
+        new_icons = list(icon_arr or [])
+        if not force and self._icon_sig(new_icons) == self._icon_sig(self.icon_arr):
+            return False
+        if active_name is None and isinstance(self._active_item, dict):
+            active_name = str(self._active_item.get('name') or '')
+        self.icon_arr = new_icons
+        self._active_item = None
+        self._hover_idx = None
+        self._build()
+        next_active = None
+        if active_name:
+            next_active = next(
+                (item for item in self.icon_arr
+                 if str(item.get('name') or '') == str(active_name)
+                 and bool(item.get('can_active', True))),
+                None,
+            )
+        if next_active is not None:
+            self._active_item = next_active
+            for btn in self._buttons:
+                btn.active = (btn.name == next_active.get('name'))
+            if self.on_activate:
+                self.on_activate(next_active)
+        elif self.on_activate:
+            self.on_activate(None)
+        return True
+
     def _setup_gpu_painter(self) -> None:
         # Tear down any prior painter (e.g. on _build re-entry from scroll).
         if self._gpu_painter is not None:
@@ -418,5 +459,4 @@ class SAOMenuBar(tk.Frame):
     def _off_fisheye(self):
         self._hover_idx = None
         self._start_float()
-
 

@@ -799,6 +799,7 @@ class StarResonanceWebViewBridge:
         def _register(surface: str, win, title: str, **meta):
             reg = getattr(o, '_register_plugin_surface', None)
             if callable(reg):
+                meta.setdefault('plugin_id', str(getattr(self.ctx, 'plugin_id', '') or ''))
                 reg(surface, win, title=title, **meta)
             return win
 
