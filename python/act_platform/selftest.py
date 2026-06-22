@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from types import ModuleType
 
@@ -109,6 +110,72 @@ def _write_action_script_plugin(root: str) -> str:
     return plugin_dir
 
 
+def _write_hot_script_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "hot_script_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "hot_script_demo",
+            "name": "Hot Script Demo",
+            "version": "0.1.0",
+            "entry": "plugin.lua",
+            "language": "lua",
+            "enabled": True,
+            "settings_schema": {
+                "overlay_enabled": {"type": "boolean", "default": False},
+            },
+            "sao_menu": {
+                "name": "热加载脚本",
+                "icon_text": "◷",
+                "script_label": "热加载脚本",
+                "priority": 24,
+            },
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
+        fp.write("-- hot discovery must not load this script\n")
+    return plugin_dir
+
+
+HOT_REMOVE_CODE = r'''
+def on_load(ctx):
+    ctx.set_overlay('unioverlay', ctx.ui.panel('Hot Remove', [ctx.ui.text('live')]))
+    ctx.register_action_handler(lambda action, payload: {'action': action})
+'''
+
+
+def _write_hot_remove_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "hot_remove_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "hot_remove_demo",
+            "name": "Hot Remove Demo",
+            "version": "0.1.0",
+            "entry": "plugin.py",
+            "enabled": True,
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as fp:
+        fp.write(HOT_REMOVE_CODE)
+    return plugin_dir
+
+
+def _write_lazy_panel_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "lazy_panel_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "lazy_panel_demo",
+            "name": "Lazy Panel Demo",
+            "version": "0.1.0",
+            "entry": "plugin.py",
+            "enabled": True,
+            "capabilities": [{"id": "ui_panels", "title": "Lazy Panel"}],
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as fp:
+        fp.write("def on_load(ctx):\n    raise RuntimeError('ui panel listing should not load me')\n")
+    return plugin_dir
+
+
 def run_selftest() -> dict:
     bus = EventBus()
     direct_events = []
@@ -176,7 +243,34 @@ def run_selftest() -> dict:
         owner = type("Owner", (), {})()
         owner._act_event_bus = bus
         owner._act_plugin_manager = manager
-        from .runtime import act_plugin_action, act_plugin_menu, act_plugin_script_menus
+        from .runtime import (
+            act_plugin_action,
+            act_plugin_menu,
+            act_plugin_script_menus,
+            act_plugin_status,
+            act_plugin_ui_panels,
+        )
+
+        from . import scripting
+        original_create_runtime = scripting._create_runtime
+        original_runtime_cache = dict(scripting._runtimes)
+        runtime_create_calls = []
+
+        def _unexpected_runtime_create(language):
+            runtime_create_calls.append(language)
+            raise RuntimeError("status must not instantiate script runtimes")
+
+        scripting._runtimes.clear()
+        scripting._create_runtime = _unexpected_runtime_create
+        try:
+            lazy_status = manager.status()
+        finally:
+            scripting._create_runtime = original_create_runtime
+            scripting._runtimes.clear()
+            scripting._runtimes.update(original_runtime_cache)
+        assert not runtime_create_calls, runtime_create_calls
+        assert lazy_status.get("script_runtimes", {}).get("lua", {}).get("loaded") is False, lazy_status
+
         script_menus = act_plugin_script_menus(owner)
         assert script_menus.get("ok"), script_menus
         assert not any(
@@ -199,6 +293,40 @@ def run_selftest() -> dict:
             item.get("id") == "script_menu_demo"
             for item in menu_summary.get("script_menus", [])
         ), menu_summary.get("script_menus")
+
+        _write_hot_script_plugin(root)
+        hot_script_menus = act_plugin_script_menus(owner)
+        assert any(
+            item.get("id") == "hot_script_demo"
+            for item in hot_script_menus.get("items", [])
+        ), hot_script_menus
+        assert manager._records["hot_script_demo"].loaded is False, manager.status()
+
+        hot_remove_dir = _write_hot_remove_plugin(root)
+        manager.sync_discovery(force=True)
+        assert manager.load_plugin("hot_remove_demo"), manager.status()
+        assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
+        shutil.rmtree(hot_remove_dir)
+        removed_status = act_plugin_status(owner)
+        assert removed_status.get("ok"), removed_status
+        assert "hot_remove_demo" not in manager._records, manager.status()
+        assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "hot_remove_demo"
+            and ev.get("payload", {}).get("action") == "forgotten"
+            for ev in lifecycle_events
+        ), lifecycle_events
+
+        _write_lazy_panel_plugin(root)
+        lazy_panels = act_plugin_ui_panels(owner)
+        assert lazy_panels.get("ok"), lazy_panels
+        assert "lazy_panel_demo" in manager._records, manager.status()
+        assert manager._records["lazy_panel_demo"].loaded is False, manager.status()
+        assert manager._records["lazy_panel_demo"].failures == 0, manager.status()
+        assert not any(
+            panel.get("plugin_id") == "lazy_panel_demo"
+            for panel in lazy_panels.get("panels", [])
+        ), lazy_panels
 
         class FakeLuaRuntime:
             def __init__(self) -> None:
@@ -227,7 +355,6 @@ def run_selftest() -> dict:
             def unload_script(self, record) -> None:
                 self.unloaded.append(record.plugin_id)
 
-        from . import scripting
         original_get_runtime = scripting.get_runtime
         fake_runtime = FakeLuaRuntime()
         scripting.get_runtime = (
@@ -247,10 +374,17 @@ def run_selftest() -> dict:
             assert manager._records["action_script_demo"].loaded, manager.status()
             assert not manager._records["failing_script_demo"].loaded, manager.status()
             assert not manager.load_plugin("failing_script_demo"), manager.status()
+            assert manager.forget_plugin("action_script_demo"), manager.status()
+            assert fake_runtime.unloaded[-1:] == ["action_script_demo"], fake_runtime.unloaded
+            assert not manager.dispatch_plugin_action(
+                "script.overlay.set_enabled",
+                {"enabled": False},
+                plugin_id="action_script_demo",
+            ).get("ok")
         finally:
             scripting.get_runtime = original_get_runtime
         assert fake_runtime.loaded == ["action_script_demo", "failing_script_demo"], fake_runtime.loaded
-        assert fake_runtime.unloaded == ["failing_script_demo"], fake_runtime.unloaded
+        assert fake_runtime.unloaded == ["failing_script_demo", "action_script_demo"], fake_runtime.unloaded
         assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
         assert not manager._timers.get("failing_script_demo"), manager._timers
         assert not any(
@@ -260,6 +394,11 @@ def run_selftest() -> dict:
         assert any(
             ev.get("payload", {}).get("plugin_id") == "failing_script_demo"
             and ev.get("payload", {}).get("action") == "load_failed"
+            for ev in lifecycle_events
+        ), lifecycle_events
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "action_script_demo"
+            and ev.get("payload", {}).get("action") == "forgotten"
             for ev in lifecycle_events
         ), lifecycle_events
 

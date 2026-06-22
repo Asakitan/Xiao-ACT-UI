@@ -68,6 +68,38 @@ def get_runtime(language: str) -> "ScriptRuntime":
     return rt
 
 
+def release_runtime(language: str) -> bool:
+    """Drop a cached language runtime after its last plugin unloads.
+
+    Per-plugin resources are released by ``runtime.unload_script(record)``.
+    This function releases the shared wrapper so status/menu reads do not keep
+    a language runtime alive after all scripts using it were disabled/unloaded.
+    """
+    lang = _normalize(language)
+    if lang == LANGUAGE_PYTHON:
+        return False
+    rt = _runtimes.pop(lang, None)
+    if rt is None:
+        return False
+    for name in ("dispose", "shutdown", "close"):
+        fn = getattr(rt, name, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            break
+    return True
+
+
+def runtime_loaded(language: str) -> bool:
+    """Return whether a non-Python runtime wrapper is currently cached."""
+    lang = _normalize(language)
+    if lang == LANGUAGE_PYTHON:
+        return True
+    return lang in _runtimes
+
+
 def runtime_available(language: str) -> bool:
     """Check whether *language*'s runtime can be instantiated."""
     lang = _normalize(language)
@@ -93,19 +125,45 @@ def detect_language(entry: str, manifest_language: str = "") -> str:
     return ENTRY_EXTENSIONS.get(ext.lower(), LANGUAGE_PYTHON)
 
 
-def list_runtimes() -> dict[str, dict]:
-    """Return status of all language runtimes."""
+def list_runtimes(*, probe: bool = False) -> dict[str, dict]:
+    """Return status of language runtimes.
+
+    By default this is introspection-only: it reports cached runtimes without
+    instantiating Lua/C#/AngelScript/Emma.  Pass ``probe=True`` from an explicit
+    diagnostics UI when dependency availability should be tested.
+    """
     out = {}
     for lang in SUPPORTED_LANGUAGES:
         if lang == LANGUAGE_PYTHON:
             out[lang] = {"available": True, "loaded": True, "error": ""}
             continue
+        cached = _runtimes.get(lang)
+        if cached is not None:
+            out[lang] = {
+                "available": True,
+                "loaded": True,
+                "error": "",
+                "engine": cached.engine_name,
+                "probed": True,
+            }
+            continue
+        if not probe:
+            out[lang] = {
+                "available": None,
+                "loaded": False,
+                "error": "",
+                "engine": "",
+                "probed": False,
+                "lazy": True,
+            }
+            continue
         try:
             rt = get_runtime(lang)
             out[lang] = {"available": True, "loaded": True, "error": "",
-                         "engine": rt.engine_name}
+                         "engine": rt.engine_name, "probed": True}
         except (RuntimeError, ImportError, ValueError) as exc:
-            out[lang] = {"available": False, "loaded": False, "error": str(exc)}
+            out[lang] = {"available": False, "loaded": False, "error": str(exc),
+                         "engine": "", "probed": True}
     return out
 
 

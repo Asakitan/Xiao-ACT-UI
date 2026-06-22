@@ -1214,6 +1214,61 @@ class PluginManager:
         self._plugin_engine_owners: Dict[str, str] = {}
         #: Plugin-contributed data sources: source_id -> {plugin_id, metadata, start_fn, stop_fn, running}.
         self._data_sources: Dict[str, dict[str, Any]] = {}
+        #: Lightweight filesystem signature for manifest hot-add/remove/change.
+        self._discovery_signature_cache: tuple[Any, ...] | None = None
+
+    def _discovery_signature(self) -> tuple[Any, ...]:
+        """Return a cheap signature of plugin manifests under all roots."""
+        rows: list[Any] = []
+        for root in self.plugin_dirs:
+            root_abs = os.path.abspath(str(root or ""))
+            try:
+                root_stat = os.stat(root_abs)
+                rows.append(("root", root_abs, int(root_stat.st_mtime_ns), int(root_stat.st_size)))
+                names = sorted(os.listdir(root_abs))
+            except OSError:
+                rows.append(("missing", root_abs))
+                continue
+            for name in names:
+                plug_dir = os.path.join(root_abs, name)
+                manifest_path = os.path.join(plug_dir, MANIFEST_FILE)
+                if not os.path.isdir(plug_dir):
+                    continue
+                try:
+                    dir_stat = os.stat(plug_dir)
+                except OSError:
+                    rows.append(("dir_gone", plug_dir))
+                    continue
+                if not os.path.isfile(manifest_path):
+                    rows.append(("dir", plug_dir, int(dir_stat.st_mtime_ns), 0, 0))
+                    continue
+                try:
+                    manifest_stat = os.stat(manifest_path)
+                    rows.append((
+                        "plugin",
+                        plug_dir,
+                        int(dir_stat.st_mtime_ns),
+                        int(manifest_stat.st_mtime_ns),
+                        int(manifest_stat.st_size),
+                    ))
+                except OSError:
+                    rows.append(("manifest_gone", plug_dir))
+        return tuple(rows)
+
+    def sync_discovery(self, *, force: bool = False) -> list[PluginRecord]:
+        """Refresh manifest records when plugin roots changed, without loading plugins."""
+        try:
+            signature = self._discovery_signature()
+        except Exception:
+            signature = None
+        if force or self._discovery_signature_cache != signature:
+            records = self.discover()
+            try:
+                self._discovery_signature_cache = self._discovery_signature()
+            except Exception:
+                self._discovery_signature_cache = signature
+            return records
+        return list(self._records.values())
 
     def discover(self) -> list[PluginRecord]:
         old_records = dict(self._records)
@@ -1275,6 +1330,10 @@ class PluginManager:
                 old_record.enabled = bool(getattr(new_record, "enabled", old_record.enabled))
                 records[pid] = old_record
         self._records = records
+        try:
+            self._discovery_signature_cache = self._discovery_signature()
+        except Exception:
+            self._discovery_signature_cache = None
         for pid, old_record in old_records.items():
             if pid not in self._records:
                 self._publish_plugin_lifecycle(old_record, "forgotten")
@@ -1306,6 +1365,10 @@ class PluginManager:
             self.unload_plugin(record.plugin_id)
         self._records[record.plugin_id] = record
         self._publish_plugin_lifecycle(record, "discovered")
+        try:
+            self._discovery_signature_cache = self._discovery_signature()
+        except Exception:
+            self._discovery_signature_cache = None
         return record
 
     def is_user_plugin(self, plugin_id: str) -> bool:
@@ -1358,6 +1421,29 @@ class PluginManager:
                         continue
                 self.load_plugin(plugin_id)
         self._initial_loaded = True
+        return self.status()
+
+    def load_pending_enabled(self) -> dict[str, Any]:
+        """Load enabled plugins that are not currently active.
+
+        Used after hot discovery so newly dropped or manifest-changed enabled
+        plugins become available without restarting already active plugins.
+        """
+        if not self._records:
+            self.discover()
+        for plugin_id in self._topo_sorted_ids():
+            record = self._records[plugin_id]
+            if not record.enabled:
+                continue
+            if record.loaded and record.active and record.module is not None:
+                continue
+            if record.requires:
+                missing = [r for r in record.requires
+                           if r not in self._records or not self._records[r].loaded]
+                if missing:
+                    record.last_error = f"missing prerequisites: {', '.join(missing)}"
+                    continue
+            self.load_plugin(plugin_id)
         return self.status()
 
     def load_plugin(self, plugin_id: str) -> bool:
@@ -1433,10 +1519,16 @@ class PluginManager:
     def forget_plugin(self, plugin_id: str) -> bool:
         """Unload and drop a plugin's record entirely (used after uninstall)."""
         plugin_id = str(plugin_id or "")
-        if plugin_id not in self._records:
+        record = self._records.get(plugin_id)
+        if record is None:
             return False
         self.unload_plugin(plugin_id)
         self._records.pop(plugin_id, None)
+        self._publish_plugin_lifecycle(record, "forgotten")
+        try:
+            self._discovery_signature_cache = self._discovery_signature()
+        except Exception:
+            self._discovery_signature_cache = None
         return True
 
     def enable_plugin(self, plugin_id: str) -> bool:
@@ -2421,7 +2513,8 @@ class PluginManager:
 
     def _unload_script_runtime(self, record: PluginRecord) -> None:
         """Release a script runtime even after a partial or failed load."""
-        if str(record.language or "").lower() == "python":
+        language = str(record.language or "").lower()
+        if language == "python":
             return
         if not bool(getattr(record, "script_runtime_active", False)):
             return
@@ -2435,6 +2528,17 @@ class PluginManager:
             pass
         finally:
             record.script_runtime_active = False
+            if not any(
+                other is not record
+                and str(getattr(other, "language", "") or "").lower() == language
+                and bool(getattr(other, "script_runtime_active", False))
+                for other in self._records.values()
+            ):
+                try:
+                    from .scripting import release_runtime
+                    release_runtime(language)
+                except Exception:
+                    pass
 
     def _call_hook(self, record: PluginRecord, name: str, *args: Any) -> Any:
         module = record.module

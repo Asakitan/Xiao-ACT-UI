@@ -315,6 +315,8 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "skeleton": skeleton,
         "background": _s(node.get("background") or "transparent", 40),
         "fallback": _s(node.get("fallback"), 400),
+        "debug": bool(node.get("debug", False)),
+        "diagnostic": bool(node.get("diagnostic", False)),
     }
 
 
@@ -620,7 +622,10 @@ class UI:
                 animation_json: Any = None,
                 camera: Optional[Mapping[str, Any]] = None,
                 transform: Optional[Mapping[str, Any]] = None,
-                phase: float = 0.0) -> dict:
+                phase: float = 0.0,
+                fallback: Any = "",
+                debug: bool = False,
+                diagnostic: bool = False) -> dict:
         return {
             "type": "model3d",
             "id": _s(id, 120),
@@ -639,6 +644,9 @@ class UI:
             "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
             "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},
             "background": "transparent",
+            "fallback": _s(fallback, 400),
+            "debug": bool(debug),
+            "diagnostic": bool(diagnostic),
         }
 
     @staticmethod

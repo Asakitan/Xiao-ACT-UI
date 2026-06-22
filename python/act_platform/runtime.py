@@ -386,7 +386,20 @@ def ensure_act_plugin_manager(owner: Any, *, load: bool = False,
     # plugin, resetting state and killing engines a stateful plugin owns.
     if load and not getattr(manager, "_initial_loaded", False):
         manager.load_all()
+    elif load:
+        sync = getattr(manager, "sync_discovery", None)
+        if callable(sync):
+            sync()
+        load_pending = getattr(manager, "load_pending_enabled", None)
+        if callable(load_pending):
+            load_pending()
     return manager
+
+
+def _sync_plugin_discovery(manager: PluginManager) -> None:
+    sync = getattr(manager, "sync_discovery", None)
+    if callable(sync):
+        sync()
 
 
 def shutdown_act_plugin_manager(owner: Any) -> None:
@@ -509,7 +522,9 @@ def act_selective_parsing_clear(owner: Any) -> dict[str, Any]:
 
 def act_plugin_status(owner: Any) -> dict[str, Any]:
     try:
-        return ensure_act_plugin_manager(owner).status()
+        manager = ensure_act_plugin_manager(owner)
+        _sync_plugin_discovery(manager)
+        return manager.status()
     except Exception as exc:
         return {"ok": False, "message": str(exc), "plugins": []}
 
@@ -522,6 +537,7 @@ def act_plugin_list(owner: Any) -> dict[str, Any]:
 def act_plugin_enable(owner: Any, plugin_id: str) -> dict[str, Any]:
     try:
         manager = ensure_act_plugin_manager(owner)
+        _sync_plugin_discovery(manager)
         ok = manager.enable_plugin(plugin_id)
         return {"ok": bool(ok), "status": manager.status()}
     except Exception as exc:
@@ -531,6 +547,7 @@ def act_plugin_enable(owner: Any, plugin_id: str) -> dict[str, Any]:
 def act_plugin_disable(owner: Any, plugin_id: str) -> dict[str, Any]:
     try:
         manager = ensure_act_plugin_manager(owner)
+        _sync_plugin_discovery(manager)
         ok = manager.disable_plugin(plugin_id)
         return {"ok": bool(ok), "status": manager.status()}
     except Exception as exc:
@@ -540,6 +557,7 @@ def act_plugin_disable(owner: Any, plugin_id: str) -> dict[str, Any]:
 def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
     try:
         manager = ensure_act_plugin_manager(owner)
+        _sync_plugin_discovery(manager)
         if plugin_id:
             ok = manager.reload_plugin(plugin_id)
             return {"ok": bool(ok), "status": manager.status()}
@@ -561,6 +579,7 @@ def act_plugin_import(owner: Any, archive_path: str, *, enable: bool = True) -> 
         return {"ok": False, "message": "未提供插件包路径", "errors": ["no path"]}
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "errors": [str(exc)]}
 
@@ -780,6 +799,7 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
     """
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "items": [], "plugins": []}
     status = manager.status()
@@ -838,6 +858,7 @@ def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
     """Return script-plugin SAO popup descriptors for enabled plugins."""
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return {"ok": True, "items": manager.list_script_menu_entries()}
     except Exception as exc:
         return {"ok": False, "message": str(exc), "items": []}
@@ -847,6 +868,7 @@ def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]
     """Return active plugin-owned descriptors for a generic menu surface."""
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return {"ok": True, "surfaces": manager.get_menu_surfaces(str(surface_id or ""))}
     except Exception as exc:
         return {"ok": False, "message": str(exc), "surfaces": []}
@@ -857,6 +879,7 @@ def act_plugin_action(owner: Any, action_id: str, payload: Any = None,
     """Dispatch an opaque plugin action without platform-side action knowledge."""
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return manager.dispatch_plugin_action(
             str(action_id or ""), _coerce_payload(payload), str(plugin_id or ""))
     except Exception as exc:
@@ -880,6 +903,7 @@ def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
     """
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return {"ok": True, "hotkeys": manager.list_hotkeys(),
                 "occupied": manager.occupied_hotkeys()}
     except Exception as exc:
@@ -922,7 +946,8 @@ def _coerce_payload(payload: Any) -> dict[str, Any]:
 def act_plugin_ui_panels(owner: Any) -> dict[str, Any]:
     """List redrawable plugin UI panels registered by active plugins."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return {"ok": True, "panels": manager.list_ui_panels()}
     except Exception as exc:
         return {"ok": False, "message": str(exc), "panels": []}
@@ -931,7 +956,8 @@ def act_plugin_ui_panels(owner: Any) -> dict[str, Any]:
 def act_plugin_ui_render(owner: Any, panel_id: str, payload: Any = None) -> dict[str, Any]:
     """Render a single plugin UI panel to a normalized spec for the host."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return manager.render_ui_panel(str(panel_id or ""), _coerce_payload(payload))
     except Exception as exc:
         return {"ok": False, "panel_id": str(panel_id or ""), "message": str(exc),
@@ -941,7 +967,8 @@ def act_plugin_ui_render(owner: Any, panel_id: str, payload: Any = None) -> dict
 def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any = None) -> dict[str, Any]:
     """Dispatch a button action from a rendered plugin UI panel."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return manager.invoke_ui_action(str(panel_id or ""), str(action_id or ""), _coerce_payload(payload))
     except Exception as exc:
         return {"ok": False, "panel_id": str(panel_id or ""), "message": str(exc)}
@@ -952,7 +979,8 @@ def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any
 def render_surfaces(owner: Any) -> dict[str, Any]:
     """Report which surfaces have plugin hooks/overlays attached."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
+        _sync_plugin_discovery(manager)
         return {"ok": True, **manager.render_status()}
     except Exception as exc:
         return {"ok": False, "message": str(exc), "surfaces": {}}
