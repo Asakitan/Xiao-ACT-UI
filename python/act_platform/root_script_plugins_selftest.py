@@ -97,6 +97,23 @@ def run_selftest() -> dict[str, Any]:
                         "expected": expected,
                         "state": positioned,
                     }
+            partial_target = {"x": target_pos["x"] + 10}
+            failure, partial = _require_action(
+                owner, plugin_id, "script.overlay.set_position", partial_target, "position_partial")
+            if failure:
+                return failure
+            if int(float(partial.get("x", -999999))) != partial_target["x"]:
+                return {"ok": False, "plugin_id": plugin_id, "stage": "position_partial_x", "state": partial}
+            for axis in ("y", "z"):
+                if int(float(partial.get(axis, -999999))) != target_pos[axis]:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "position_partial_preserve",
+                        "axis": axis,
+                        "state": partial,
+                    }
+            positioned = partial
 
             if plugin_id == "script_flappy_emma":
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
