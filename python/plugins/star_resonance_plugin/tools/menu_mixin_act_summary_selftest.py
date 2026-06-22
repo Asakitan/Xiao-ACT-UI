@@ -85,8 +85,10 @@ class _MenuHarness(SAOPlayerGUIMenuMixin):
         self._last_menu_refresh_sig = None
         self._last_menu_refresh_sig_time = 0.0
         self._sao_menu_close_pending = False
+        self._sao_menu_needs_rebuild = False
         self._fisheye_close_suppress_until = 0.0
         self._act_plugin_lifecycle_token = ""
+        self._act_plugin_ui_invalidate_token = ""
         self._destroyed = False
         self._act_statuses: dict[str, dict] = {}
         self.alerts: list[tuple[str, str, float]] = []
@@ -203,7 +205,7 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             _patched_module_attr('ensure_act_plugin_manager', lambda _owner, load=True: None),
             _patched_module_attr('ensure_act_event_bus', lambda _owner: type(
                 'Bus', (), {
-                    'subscribe': lambda self, *_args, **_kwargs: 'life-token',
+                    'subscribe': lambda self, topic, *_args, **_kwargs: f'{topic}-token',
                 })()),
             _patched_module_attr('act_plugin_menu_surfaces', lambda _owner, _surface_id: {'surfaces': []}),
             _patched_module_attr('act_plugin_script_menus', lambda _owner: {'items': []}),
@@ -211,7 +213,8 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             harness._setup_sao_menu()
 
         ensure_sub.assert_called_once()
-        self.assertEqual(harness._act_plugin_lifecycle_token, 'life-token')
+        self.assertEqual(harness._act_plugin_lifecycle_token, 'plugin_lifecycle-token')
+        self.assertEqual(harness._act_plugin_ui_invalidate_token, 'plugin_ui_invalidate-token')
         self.assertIsNotNone(harness._sao_menu)
         self.assertTrue(harness._sao_menu.bound)
         self.assertEqual([item['name'] for item in harness._menu_icons], ['控制', '工具', '插件', '皮肤', '关于'])
@@ -399,6 +402,56 @@ class MenuMixinActSummaryTests(unittest.TestCase):
         self.assertEqual(harness._last_menu_refresh_sig_time, 0.0)
         self.assertTrue(harness._sao_menu_needs_rebuild)
         self.assertEqual(calls, [("immediate",)])
+
+    def test_plugin_menu_invalidate_refreshes_visible_menu_only_for_menu_surface(self) -> None:
+        harness = _MenuHarness()
+        calls: list[tuple] = []
+        harness._sao_menu = type("Menu", (), {"visible": True})()
+        harness._menu_children_cache = {"old": []}
+        harness._menu_children_cache_sig = ("old",)
+        harness._last_menu_refresh_sig = ("old",)
+        harness._last_menu_refresh_sig_time = 123.0
+        harness._refresh_menu_immediate = lambda: calls.append(("immediate",))
+
+        harness._handle_plugin_ui_invalidate({
+            "payload": {
+                "plugin_id": "script_clock",
+                "surface": "menu",
+                "reason": "menu_state",
+            }
+        })
+
+        self.assertIsNone(harness._menu_children_cache)
+        self.assertIsNone(harness._menu_children_cache_sig)
+        self.assertIsNone(harness._last_menu_refresh_sig)
+        self.assertEqual(harness._last_menu_refresh_sig_time, 0.0)
+        self.assertTrue(harness._sao_menu_needs_rebuild)
+        self.assertEqual(calls, [("immediate",)])
+
+    def test_plugin_unioverlay_invalidate_does_not_refresh_menu(self) -> None:
+        harness = _MenuHarness()
+        calls: list[tuple] = []
+        harness._sao_menu = type("Menu", (), {"visible": True})()
+        harness._menu_children_cache = {"old": []}
+        harness._menu_children_cache_sig = ("old",)
+        harness._last_menu_refresh_sig = ("old",)
+        harness._last_menu_refresh_sig_time = 123.0
+        harness._refresh_menu_immediate = lambda: calls.append(("immediate",))
+
+        harness._handle_plugin_ui_invalidate({
+            "payload": {
+                "plugin_id": "script_stickwoman",
+                "surface": "unioverlay",
+                "reason": "animation_frame",
+            }
+        })
+
+        self.assertEqual(harness._menu_children_cache, {"old": []})
+        self.assertEqual(harness._menu_children_cache_sig, ("old",))
+        self.assertEqual(harness._last_menu_refresh_sig, ("old",))
+        self.assertEqual(harness._last_menu_refresh_sig_time, 123.0)
+        self.assertFalse(getattr(harness, '_sao_menu_needs_rebuild', False))
+        self.assertEqual(calls, [])
 
     def test_apply_menu_refresh_updates_top_level_script_icons(self) -> None:
         harness = _MenuHarness()

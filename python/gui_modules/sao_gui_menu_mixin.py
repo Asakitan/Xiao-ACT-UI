@@ -518,15 +518,48 @@ class SAOPlayerGUIMenuMixin:
             self._act_plugin_lifecycle_token = ''
             return False
 
+    def _ensure_plugin_ui_invalidate_subscription(self) -> bool:
+        if getattr(self, '_act_plugin_ui_invalidate_token', ''):
+            return True
+        try:
+            token = ensure_act_event_bus(self).subscribe(
+                'plugin_ui_invalidate',
+                self._handle_plugin_ui_invalidate,
+                owner_id='sao_menu_plugin_ui_invalidate',
+            )
+            self._act_plugin_ui_invalidate_token = token
+            return True
+        except Exception:
+            self._act_plugin_ui_invalidate_token = ''
+            return False
+
     def _release_plugin_lifecycle_subscription(self) -> None:
         token = str(getattr(self, '_act_plugin_lifecycle_token', '') or '')
-        if not token:
-            return
-        try:
-            ensure_act_event_bus(self).unsubscribe(token)
-        except Exception:
-            pass
+        if token:
+            try:
+                ensure_act_event_bus(self).unsubscribe(token)
+            except Exception:
+                pass
         self._act_plugin_lifecycle_token = ''
+        token = str(getattr(self, '_act_plugin_ui_invalidate_token', '') or '')
+        if token:
+            try:
+                ensure_act_event_bus(self).unsubscribe(token)
+            except Exception:
+                pass
+        self._act_plugin_ui_invalidate_token = ''
+
+    def _handle_plugin_ui_invalidate(self, event: Mapping[str, Any]) -> None:
+        payload = event.get('payload') if isinstance(event, Mapping) else None
+        surface = ''
+        if isinstance(payload, Mapping):
+            surface = str(payload.get('surface') or '').strip().lower()
+        if surface not in {'', 'menu'}:
+            return
+        self._invalidate_plugin_menu_cache()
+        menu = getattr(self, '_sao_menu', None)
+        if menu is not None and getattr(menu, 'visible', False):
+            self._refresh_menu_immediate()
 
     def _handle_plugin_lifecycle(self, event: Mapping[str, Any]) -> None:
         payload = event.get('payload') if isinstance(event, Mapping) else None
@@ -773,6 +806,7 @@ class SAOPlayerGUIMenuMixin:
     def _setup_sao_menu(self):
         """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
         self._ensure_plugin_lifecycle_subscription()
+        self._ensure_plugin_ui_invalidate_subscription()
         self._ensure_plugin_unified_overlay_host()
         try:
             ensure_act_plugin_manager(self, load=False)
