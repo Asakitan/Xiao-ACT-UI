@@ -133,7 +133,7 @@ class MenuHudOverlay:
             self._win = self  # type: ignore[assignment]  # sentinel
             _ghwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
             self._hwnd = _ghwnd
-            if _ghwnd:
+            if _ghwnd and not getattr(gpu_win, '_unified', False):
                 _ac_ok = False
                 try:
                     from mem_probe._dc import apply as _dc_apply
