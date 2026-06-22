@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -23,6 +24,7 @@ _NATIVE_NAMES = (
     "libassimp.dll",
 )
 _CACHE_LIMIT = 128
+_MODEL_PARSE_LIMIT = 4 * 1024 * 1024
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -282,11 +284,11 @@ def _cache_put(cache: dict[tuple[Any, ...], dict[str, Any]], key: tuple[Any, ...
 
 def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     out = dict(value)
-    for key in ("data", "selected", "model", "action", "sidecar", "retarget"):
+    for key in ("data", "selected", "model", "action", "sidecar", "retarget", "mesh"):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = dict(item)
-    for key in ("bone_names", "clips", "warnings", "unresolved"):
+    for key in ("bone_names", "clips", "warnings", "unresolved", "nodes", "materials", "metadata_errors"):
         item = out.get(key)
         if isinstance(item, tuple):
             out[key] = list(item)
@@ -403,6 +405,261 @@ def _json_safe_scalar(value: Any) -> Any:
     return str(value)
 
 
+def _unique_strings(values: Any) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    if isinstance(values, (list, tuple, set)):
+        items = values
+    else:
+        items = ()
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return tuple(out)
+
+
+def _merge_unique(*groups: Any) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in _unique_strings(group):
+            if item not in seen:
+                seen.add(item)
+                out.append(item)
+    return tuple(out)
+
+
+def _bbox(points: list[tuple[float, float, float]]) -> dict[str, list[float]]:
+    if not points:
+        return {}
+    mins = [min(point[idx] for point in points) for idx in range(3)]
+    maxs = [max(point[idx] for point in points) for idx in range(3)]
+    center = [(mins[idx] + maxs[idx]) / 2.0 for idx in range(3)]
+    extent = [maxs[idx] - mins[idx] for idx in range(3)]
+    return {
+        "min": [float(x) for x in mins],
+        "max": [float(x) for x in maxs],
+        "center": [float(x) for x in center],
+        "extent": [float(x) for x in extent],
+    }
+
+
+def _float_triplet(values: list[str]) -> tuple[float, float, float] | None:
+    if len(values) < 3:
+        return None
+    try:
+        return float(values[0]), float(values[1]), float(values[2])
+    except Exception:
+        return None
+
+
+def _parse_obj_metadata(path: Path) -> dict[str, Any]:
+    points: list[tuple[float, float, float]] = []
+    face_count = 0
+    nodes: list[str] = []
+    materials: list[str] = []
+    errors: list[str] = []
+    consumed = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fp:
+            for raw in fp:
+                consumed += len(raw.encode("utf-8", errors="replace"))
+                if consumed > _MODEL_PARSE_LIMIT:
+                    errors.append("model metadata parse limit reached")
+                    break
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("v "):
+                    point = _float_triplet(line.split()[1:4])
+                    if point is not None:
+                        points.append(point)
+                elif line.startswith("f "):
+                    if len(line.split()) >= 4:
+                        face_count += 1
+                elif line.startswith(("o ", "g ")):
+                    name = line[2:].strip()
+                    if name:
+                        nodes.append(name)
+                elif line.startswith("usemtl "):
+                    name = line[7:].strip()
+                    if name:
+                        materials.append(name)
+    except Exception as exc:
+        errors.append(str(exc))
+    return {
+        "mesh": {
+            "source": "obj",
+            "vertex_count": len(points),
+            "face_count": face_count,
+            "bbox": _bbox(points),
+        },
+        "nodes": _unique_strings(nodes),
+        "materials": _unique_strings(materials),
+        "errors": tuple(errors),
+    }
+
+
+_NUMBER_RE = re.compile(r"[-+]?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def _numbers(text: str, *, limit: int = 200000) -> list[float]:
+    out: list[float] = []
+    for match in _NUMBER_RE.finditer(text):
+        try:
+            out.append(float(match.group(0)))
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        raw = path.read_bytes()[:_MODEL_PARSE_LIMIT + 1]
+    except Exception as exc:
+        return {"mesh": {}, "nodes": (), "bone_names": (), "clips": (), "errors": (str(exc),)}
+    if len(raw) > _MODEL_PARSE_LIMIT:
+        errors.append("model metadata parse limit reached")
+        raw = raw[:_MODEL_PARSE_LIMIT]
+    text = raw.decode("utf-8", errors="replace")
+    if text.startswith("Kaydara FBX Binary"):
+        return {
+            "mesh": {"source": "fbx_binary", "vertex_count": 0, "face_count": 0, "bbox": {}},
+            "nodes": (),
+            "bone_names": (),
+            "clips": (),
+            "errors": ("binary FBX metadata requires native backend",),
+        }
+
+    points: list[tuple[float, float, float]] = []
+    vertices_match = re.search(r"Vertices:\s*\*\d+\s*{\s*a:\s*([^}]*)}", text, re.S)
+    if vertices_match:
+        values = _numbers(vertices_match.group(1))
+        for idx in range(0, len(values) - 2, 3):
+            points.append((values[idx], values[idx + 1], values[idx + 2]))
+
+    face_count = 0
+    pvi_match = re.search(r"PolygonVertexIndex:\s*\*\d+\s*{\s*a:\s*([^}]*)}", text, re.S)
+    if pvi_match:
+        for value in _NUMBER_RE.finditer(pvi_match.group(1)):
+            try:
+                if int(float(value.group(0))) < 0:
+                    face_count += 1
+            except Exception:
+                continue
+
+    nodes: list[str] = []
+    bones: list[str] = []
+    for match in re.finditer(r'Model:\s*[^"\n]*"([^"]+)"\s*,\s*"([^"]+)"', text):
+        raw_name = str(match.group(1) or "")
+        kind = str(match.group(2) or "")
+        name = raw_name.split("::", 1)[-1].strip()
+        if not name:
+            continue
+        nodes.append(name)
+        if "limb" in kind.lower() or "bone" in kind.lower():
+            bones.append(name)
+
+    clips: list[str] = []
+    for match in re.finditer(r'AnimationStack:\s*[^"\n]*"([^"]+)"', text):
+        raw_name = str(match.group(1) or "")
+        name = raw_name.split("::", 1)[-1].strip()
+        if name:
+            clips.append(name)
+    for match in re.finditer(r'Current:\s*"([^"]+)"', text):
+        name = str(match.group(1) or "").strip()
+        if name:
+            clips.append(name)
+
+    return {
+        "mesh": {
+            "source": "fbx_ascii",
+            "vertex_count": len(points),
+            "face_count": face_count,
+            "bbox": _bbox(points),
+        },
+        "nodes": _unique_strings(nodes),
+        "bone_names": _unique_strings(bones),
+        "clips": _unique_strings(clips),
+        "errors": tuple(errors),
+    }
+
+
+def _parse_gltf_metadata(path: Path) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        if path.stat().st_size > _MODEL_PARSE_LIMIT:
+            errors.append("model metadata parse limit reached")
+            return {"mesh": {"source": "gltf", "vertex_count": 0, "face_count": 0, "bbox": {}},
+                    "nodes": (), "materials": (), "errors": tuple(errors)}
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except Exception as exc:
+        return {"mesh": {"source": "gltf", "vertex_count": 0, "face_count": 0, "bbox": {}},
+                "nodes": (), "materials": (), "errors": (str(exc),)}
+    if not isinstance(data, Mapping):
+        return {"mesh": {"source": "gltf", "vertex_count": 0, "face_count": 0, "bbox": {}},
+                "nodes": (), "materials": (), "errors": ("gltf root is not an object",)}
+    nodes = _extract_names(data.get("nodes"))
+    materials = _extract_names(data.get("materials"))
+    bbox_points: list[tuple[float, float, float]] = []
+    accessors = data.get("accessors")
+    if isinstance(accessors, list):
+        for accessor in accessors:
+            if not isinstance(accessor, Mapping):
+                continue
+            mins = accessor.get("min")
+            maxs = accessor.get("max")
+            if isinstance(mins, list) and isinstance(maxs, list) and len(mins) >= 3 and len(maxs) >= 3:
+                try:
+                    bbox_points.append((float(mins[0]), float(mins[1]), float(mins[2])))
+                    bbox_points.append((float(maxs[0]), float(maxs[1]), float(maxs[2])))
+                except Exception:
+                    pass
+    mesh_count = len(data.get("meshes") or []) if isinstance(data.get("meshes"), list) else 0
+    return {
+        "mesh": {
+            "source": "gltf",
+            "mesh_count": mesh_count,
+            "vertex_count": 0,
+            "face_count": 0,
+            "bbox": _bbox(bbox_points),
+        },
+        "nodes": _unique_strings(nodes),
+        "materials": _unique_strings(materials),
+        "errors": tuple(errors),
+    }
+
+
+def _read_model_file_metadata(path: Path, fmt: str, exists: bool) -> dict[str, Any]:
+    if not exists or not str(path):
+        return {}
+    suffix = path.suffix.lower()
+    chosen = fmt if fmt and fmt != "auto" else suffix.lstrip(".")
+    try:
+        if chosen == "obj" or suffix == ".obj":
+            return _parse_obj_metadata(path)
+        if chosen == "fbx" or suffix == ".fbx":
+            return _parse_ascii_fbx_metadata(path)
+        if chosen == "gltf" or suffix == ".gltf":
+            return _parse_gltf_metadata(path)
+        if chosen == "glb" or suffix == ".glb":
+            return {
+                "mesh": {"source": "glb", "vertex_count": 0, "face_count": 0, "bbox": {}},
+                "nodes": (),
+                "materials": (),
+                "errors": ("glb metadata requires native backend",),
+            }
+    except Exception as exc:
+        return {"mesh": {}, "nodes": (), "materials": (), "errors": (str(exc),)}
+    return {}
+
+
 def _model_sidecar_signature(path: Path, exists: bool) -> tuple[Path, tuple[str, bool, int, int]]:
     if not exists:
         return Path(""), ("", False, 0, 0)
@@ -455,6 +712,10 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     if cached is not None:
         return _copy_metadata(cached)
     sidecar_meta = _read_model_sidecar(sidecar_path, bool(sidecar_signature[1]))
+    file_meta = _read_model_file_metadata(resolved, fmt, exists)
+    bone_names = _merge_unique(sidecar_meta.get("bone_names"), file_meta.get("bone_names"))
+    clips = _merge_unique(sidecar_meta.get("clips"), file_meta.get("clips"))
+    errors = _merge_unique(sidecar_meta.get("errors"), file_meta.get("errors"))
     metadata = {
         "path": path_text,
         "resolved_path": str(resolved),
@@ -465,8 +726,12 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "mtime_ns": mtime_ns,
         "extension": resolved.suffix.lower(),
         "sidecar": dict(sidecar_meta),
-        "bone_names": tuple(sidecar_meta.get("bone_names") or ()),
-        "clips": tuple(sidecar_meta.get("clips") or ()),
+        "mesh": dict(file_meta.get("mesh") or {}),
+        "nodes": tuple(file_meta.get("nodes") or ()),
+        "materials": tuple(file_meta.get("materials") or ()),
+        "bone_names": bone_names,
+        "clips": clips,
+        "metadata_errors": errors,
         "cache_key": cache_key,
     }
     _cache_put(_MODEL_METADATA_CACHE, cache_key, metadata)

@@ -289,6 +289,110 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(first["sidecar"]["path"], str(sidecar_path))
         self.assertEqual(second["clips"], ["Wave"])
 
+    def test_model_metadata_extracts_obj_mesh_bounds(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_obj_meta_") as root:
+            model_path = Path(root) / "avatar.obj"
+            model_path.write_text(
+                "\n".join([
+                    "o CuteAvatar",
+                    "v -1.0 -2.0 0.0",
+                    "v 2.0 0.5 4.0",
+                    "v 0.0 3.0 1.0",
+                    "v 1.0 1.0 2.0",
+                    "usemtl body",
+                    "f 1 2 3",
+                    "f 1 3 4",
+                ]),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+
+        self.assertEqual(meta["mesh"]["source"], "obj")
+        self.assertEqual(meta["mesh"]["vertex_count"], 4)
+        self.assertEqual(meta["mesh"]["face_count"], 2)
+        self.assertEqual(meta["mesh"]["bbox"]["min"], [-1.0, -2.0, 0.0])
+        self.assertEqual(meta["mesh"]["bbox"]["max"], [2.0, 3.0, 4.0])
+        self.assertIn("CuteAvatar", meta["nodes"])
+        self.assertIn("body", meta["materials"])
+
+    def test_model_metadata_extracts_ascii_fbx_mesh_bones_and_clips(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_fbx_meta_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text(
+                """
+; FBX 7.4.0 project file
+Objects:  {
+    Model: 1, "Model::mixamorig:Hips", "LimbNode" {}
+    Model: 2, "Model::mixamorig:Spine", "LimbNode" {}
+    Model: 3, "Model::mixamorig:Head", "LimbNode" {}
+    Model: 4, "Model::BodyMesh", "Mesh" {
+        Vertices: *9 {
+            a: 0,0,0, 1,2,3, -1,0,2
+        }
+        PolygonVertexIndex: *4 {
+            a: 0,1,2,-3
+        }
+    }
+    AnimationStack: 5, "AnimStack::Wave", "" {}
+}
+""",
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            plan = get_retarget_plan(node)
+
+        self.assertEqual(meta["mesh"]["source"], "fbx_ascii")
+        self.assertEqual(meta["mesh"]["vertex_count"], 3)
+        self.assertEqual(meta["mesh"]["face_count"], 1)
+        self.assertEqual(meta["mesh"]["bbox"]["max"], [1.0, 2.0, 3.0])
+        self.assertIn("mixamorig:Hips", meta["bone_names"])
+        self.assertIn("Wave", meta["clips"])
+        self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
+        self.assertEqual(plan["bone_map"]["head"], "mixamorig:Head")
+
+    def test_model_metadata_extracts_gltf_json_names_and_bounds(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_gltf_meta_") as root:
+            model_path = Path(root) / "avatar.gltf"
+            model_path.write_text(
+                json.dumps({
+                    "nodes": [{"name": "Root"}, {"name": "Head"}],
+                    "materials": [{"name": "skin"}, {"name": "dress"}],
+                    "meshes": [{"name": "bodyMesh"}],
+                    "accessors": [
+                        {"min": [-0.25, 0.0, -0.5], "max": [0.25, 1.75, 0.5]},
+                        {"min": [-0.5, 0.1, -0.25], "max": [0.5, 1.2, 0.25]},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+
+        self.assertEqual(meta["mesh"]["source"], "gltf")
+        self.assertEqual(meta["mesh"]["mesh_count"], 1)
+        self.assertEqual(meta["mesh"]["bbox"]["min"], [-0.5, 0.0, -0.5])
+        self.assertEqual(meta["mesh"]["bbox"]["max"], [0.5, 1.75, 0.5])
+        self.assertIn("Head", meta["nodes"])
+        self.assertIn("dress", meta["materials"])
+
     def test_retarget_plan_maps_mixamo_sidecar_bones(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_retarget_") as root:
