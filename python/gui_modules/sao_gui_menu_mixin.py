@@ -50,6 +50,7 @@ from act_platform.runtime import (
     act_plugin_menu_surfaces,
     act_plugin_pin,
     act_plugin_reload,
+    act_plugin_script_menus,
     act_plugin_status,
     ensure_act_plugin_manager,
 )
@@ -177,6 +178,21 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             plugin_sig = (0, 0, (), ())
         plugin_menu_cat_count = len(self._collect_plugin_menu_categories())
+        try:
+            script_data = act_plugin_script_menus(self)
+            script_entries = _mapping_items(script_data.get('items'))
+            script_sig = tuple(
+                (
+                    str(item.get('id') or ''),
+                    bool(item.get('enabled')),
+                    bool(item.get('active')),
+                    bool(item.get('overlay_enabled')),
+                    str((_mapping(item.get('menu'))).get('name') or ''),
+                )
+                for item in script_entries
+            )
+        except Exception:
+            script_sig = ()
 
         sig = (
             hotkey_sig,
@@ -186,6 +202,7 @@ class SAOPlayerGUIMenuMixin:
             update_label,
             plugin_sig,
             plugin_menu_cat_count,
+            script_sig,
             self._is_nervgear_mode(),
         )
         self._last_menu_refresh_sig = sig
@@ -289,6 +306,10 @@ class SAOPlayerGUIMenuMixin:
                         children[name] = items
                 except Exception:
                     pass
+        active_plugin_names = set(children)
+        for name, items in self._build_script_plugin_menu_children(active_plugin_names).items():
+            if name not in children:
+                children[name] = items
         return children
 
     def _get_act_plugin_menu_status(self):
@@ -428,6 +449,12 @@ class SAOPlayerGUIMenuMixin:
             if name and name not in platform_names:
                 icons.append({'name': name, 'icon': str(cat.get('icon') or '◇'), 'can_active': True})
                 platform_names.add(name)
+        for entry in self._collect_script_plugin_menu_entries():
+            meta = _mapping(entry.get('menu'))
+            name = str(meta.get('name') or '').strip()
+            if name and name not in platform_names:
+                icons.append({'name': name, 'icon': str(meta.get('icon_text') or meta.get('icon') or '◇'), 'can_active': True})
+                platform_names.add(name)
         return icons
 
     def _ensure_plugin_unified_overlay_host(self):
@@ -489,6 +516,84 @@ class SAOPlayerGUIMenuMixin:
             if isinstance(item, Mapping):
                 wrapped_items.append(self._wrap_dynamic_plugin_menu_item(item))
         return wrapped_items
+
+    def _collect_script_plugin_menu_entries(self) -> list[dict[str, Any]]:
+        data = act_plugin_script_menus(self)
+        entries = data.get('items') if isinstance(data, dict) else None
+        return [
+            dict(item)
+            for item in _mapping_items(entries)
+            if not (bool(item.get('enabled')) and bool(item.get('active')))
+        ]
+
+    def _build_script_plugin_menu_children(self, active_names: set[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+        active_names = set(active_names or set())
+        children: dict[str, list[dict[str, Any]]] = {}
+        for entry in self._collect_script_plugin_menu_entries():
+            meta = _mapping(entry.get('menu'))
+            name = str(meta.get('name') or '').strip()
+            if not name or name in active_names:
+                continue
+            pid = str(entry.get('id') or '').strip()
+            if not pid:
+                continue
+            label_name = str(meta.get('script_label') or meta.get('toggle_label') or meta.get('label') or name).strip()
+            is_on = bool(entry.get('overlay_enabled'))
+            target = not is_on
+            row_label = ('关闭' if is_on else '开启') + label_name
+            icon = str(meta.get('row_icon') or meta.get('icon_text') or meta.get('icon') or '◇')
+            children[name] = [self._wrap_dynamic_plugin_menu_item({
+                'icon': icon,
+                'label': row_label,
+                'command': lambda entry=dict(entry), target=target: self._set_script_plugin_overlay_from_menu(entry, target),
+            })]
+        return children
+
+    def _set_script_plugin_overlay_from_menu(self, entry: Mapping[str, Any] | str, enabled: bool):
+        if isinstance(entry, Mapping):
+            data = entry
+            pid = str(data.get('id') or data.get('plugin_id') or '').strip()
+            meta = _mapping(data.get('menu'))
+        else:
+            data = {}
+            pid = str(entry or '').strip()
+            meta = {}
+        if not pid:
+            return {'ok': False, 'message': 'plugin id is required'}
+        result: Any = None
+        setting_key = str(data.get('setting') or meta.get('setting') or meta.get('overlay_setting') or 'overlay_enabled')
+        action_id = str(data.get('action_id') or meta.get('action_id') or 'script.overlay.set_enabled')
+        surface = str(data.get('surface') or meta.get('surface') or 'unioverlay')
+        try:
+            needs_enable = bool(enabled)
+            if isinstance(data, Mapping) and data:
+                needs_enable = not (bool(data.get('enabled')) and bool(data.get('active')))
+            if needs_enable:
+                act_plugin_enable(self, pid)
+            result = act_plugin_action(
+                self,
+                action_id,
+                {'enabled': bool(enabled), 'setting': setting_key, 'surface': surface},
+                plugin_id=pid,
+            )
+            # If the plugin was not loaded yet but enable failed silently, fall
+            # back to the manager setting so the next load gets the requested
+            # state. The action handler remains the normal path.
+            if not (isinstance(result, dict) and result.get('ok')):
+                pm = getattr(self, '_act_plugin_manager', None)
+                if pm is None:
+                    pm = ensure_act_plugin_manager(self, load=False)
+                setter = getattr(pm, 'set_plugin_setting', None)
+                if callable(setter):
+                    setter(pid, setting_key, bool(enabled))
+        except Exception as exc:
+            result = {'ok': False, 'message': str(exc)}
+        self._menu_children_cache = None
+        self._menu_children_cache_sig = None
+        self._last_menu_refresh_sig = None
+        self._sao_menu_needs_rebuild = True
+        self._refresh_menu_if_open(force=True)
+        return result
 
     def _collect_plugin_menu_categories(self):
         """从 PluginManager 拉取所有插件贡献的菜单分类。"""
@@ -609,9 +714,21 @@ class SAOPlayerGUIMenuMixin:
             cascade_mode=not nervgear,
         )
         self._sao_menu.bind_events()
+        self._sao_menu_needs_rebuild = False
 
     def _toggle_sao_menu(self, allow_close: bool = False):
         # Lazy-init: build menu on first toggle (deferred from __init__)
+        if (self._sao_menu is not None
+                and not getattr(self._sao_menu, 'visible', False)
+                and bool(getattr(self, '_sao_menu_needs_rebuild', False))):
+            try:
+                destroy = getattr(self._sao_menu, 'force_destroy_overlay', None)
+                if callable(destroy):
+                    destroy(invoke_callback=False)
+            except Exception:
+                pass
+            self._sao_menu = None
+            self._sao_menu_needs_rebuild = False
         if self._sao_menu is None:
             try:
                 self._setup_sao_menu()

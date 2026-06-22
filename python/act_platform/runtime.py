@@ -675,6 +675,100 @@ def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
             "status": status, "errors": []}
 
 
+_SCRIPT_MENU_LANGUAGES = {"lua", "csharp", "angelscript", "emma"}
+_SCRIPT_MENU_ACTION = "script.overlay.set_enabled"
+_SCRIPT_MENU_SETTING = "overlay_enabled"
+
+
+def _bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return bool(default)
+
+
+def _record_setting_default(manager: PluginManager, plugin_id: str,
+                            key: str, default: bool = False) -> bool:
+    records = getattr(manager, "_records", {})
+    record = records.get(str(plugin_id or "")) if isinstance(records, Mapping) else None
+    schema = getattr(record, "settings_schema", {}) if record is not None else {}
+    if isinstance(schema, Mapping):
+        item = schema.get(str(key or ""))
+        if isinstance(item, Mapping) and "default" in item:
+            return _bool_value(item.get("default"), default)
+    return bool(default)
+
+
+def _script_menu_summary(manager: PluginManager,
+                         plug: Mapping[str, Any]) -> dict[str, Any]:
+    pid = str(plug.get("id") or "")
+    language = str(plug.get("language") or "").lower()
+    raw_menu = plug.get("sao_menu")
+    sao_menu = raw_menu if isinstance(raw_menu, Mapping) else {}
+    if not pid or language not in _SCRIPT_MENU_LANGUAGES or not sao_menu:
+        return {}
+
+    title = str(
+        sao_menu.get("name")
+        or sao_menu.get("title")
+        or sao_menu.get("label")
+        or sao_menu.get("script_label")
+        or plug.get("label")
+        or pid
+    ).strip()
+    if not title:
+        return {}
+    icon = str(sao_menu.get("icon_text") or sao_menu.get("icon") or "▣")
+    row_icon = str(sao_menu.get("row_icon") or icon or "▣")
+    setting_key = str(
+        sao_menu.get("setting")
+        or sao_menu.get("overlay_setting")
+        or _SCRIPT_MENU_SETTING
+    ).strip() or _SCRIPT_MENU_SETTING
+    default_enabled = _record_setting_default(
+        manager,
+        pid,
+        setting_key,
+        _bool_value(sao_menu.get("default_enabled"), False),
+    )
+    current_enabled = _bool_value(
+        manager.get_plugin_setting(pid, setting_key, default_enabled),
+        default_enabled,
+    )
+    try:
+        priority = float(sao_menu.get("priority") or 50.0)
+    except Exception:
+        priority = 0.0
+    return {
+        "type": "script_menu",
+        "id": pid,
+        "plugin_id": pid,
+        "plugin_label": str(plug.get("label") or pid),
+        "language": language,
+        "name": title,
+        "label": str(sao_menu.get("script_label") or sao_menu.get("toggle_label") or sao_menu.get("label") or title),
+        "icon": icon,
+        "row_icon": row_icon,
+        "enabled": bool(plug.get("enabled")),
+        "active": bool(plug.get("active")),
+        "loaded": bool(plug.get("loaded")),
+        "overlay_enabled": current_enabled,
+        "default_enabled": default_enabled,
+        "setting": setting_key,
+        "action_id": str(sao_menu.get("action_id") or _SCRIPT_MENU_ACTION),
+        "surface": str(sao_menu.get("surface") or "unioverlay"),
+        "priority": priority,
+        "sao_menu": dict(sao_menu),
+    }
+
+
 def act_plugin_menu(owner: Any) -> dict[str, Any]:
     """Data for the dedicated plugin menu (Entity + WebView).
 
@@ -692,20 +786,30 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
         panels_by_plugin.setdefault(str(panel.get("plugin_id") or ""), []).append(str(panel.get("id") or ""))
 
     plugins: list[dict[str, Any]] = []
+    script_menus: list[dict[str, Any]] = []
     for plug in status.get("plugins", []):
         pid = str(plug.get("id") or "")
-        plugins.append({
+        sao_menu = plug.get("sao_menu") if isinstance(plug.get("sao_menu"), Mapping) else {}
+        item = {
             "type": "plugin",
             "id": pid,
             "label": str(plug.get("name") or pid),
+            "language": str(plug.get("language") or "python"),
             "enabled": bool(plug.get("enabled")),
+            "loaded": bool(plug.get("loaded")),
             "active": bool(plug.get("active")),
             "pinned": bool(plug.get("pinned")),
             "declares_panel": bool(plug.get("declares_panel")),
             "panels": panels_by_plugin.get(pid, []),
             "hotkey_count": int(plug.get("hotkey_count") or 0),
             "last_error": str(plug.get("last_error") or ""),
-        })
+            "sao_menu": dict(sao_menu),
+        }
+        script_menu = _script_menu_summary(manager, item)
+        if script_menu:
+            item["script_menu"] = dict(script_menu)
+            script_menus.append(script_menu)
+        plugins.append(item)
     # Pinned first (preserving pin order), then the rest alphabetically.
     pin_order = {pid: i for i, pid in enumerate(status.get("pinned", []) or [])}
     plugins.sort(key=lambda p: (0, pin_order.get(p["id"], 0), p["label"]) if p["pinned"]
@@ -723,8 +827,18 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
         "pinned": list(status.get("pinned", []) or []),
         "items": items,
         "plugins": plugins,
+        "script_menus": sorted(script_menus, key=lambda m: (float(m.get("priority") or 0.0), str(m.get("name") or ""))),
         "hotkeys": status.get("hotkeys", []),
     }
+
+
+def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
+    """Return script-plugin SAO popup descriptors, including disabled plugins."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=False)
+        return {"ok": True, "items": manager.list_script_menu_entries()}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "items": []}
 
 
 def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]:
@@ -4316,6 +4430,7 @@ __all__ = [
     "act_plugin_uninstall",
     "act_open_workshop",
     "act_plugin_menu",
+    "act_plugin_script_menus",
     "act_plugin_menu_surfaces",
     "act_plugin_action",
     "act_plugin_pin",

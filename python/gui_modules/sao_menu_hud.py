@@ -778,6 +778,85 @@ class MenuCircleButtonRenderer:
                           cx + ring_r * 0.48, cy + ring_r * 0.48),
                          fill=(255, 255, 255, 0))
             return True
+        # Script world clock: clock face + hands + detached world tick.
+        if icon_text == '◷':
+            r = canvas * 0.22
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=color, width=stroke)
+            draw.line((cx, cy, cx, cy - r * 0.55), fill=color, width=stroke)
+            draw.line((cx, cy, cx + r * 0.48, cy + r * 0.18), fill=color, width=stroke)
+            dot = max(scale * 1.1, 2)
+            draw.ellipse((cx - dot, cy - dot, cx + dot, cy + dot), fill=color)
+            sr = max(scale * 1.3, 2)
+            draw.arc((cx - r * 1.35, cy - r * 1.15, cx - r * 0.45, cy - r * 0.25),
+                     205, 340, fill=color, width=stroke)
+            draw.ellipse((cx - r * 1.38 - sr, cy - r * 0.62 - sr,
+                          cx - r * 1.38 + sr, cy - r * 0.62 + sr), fill=color)
+            return True
+        # Script 3D stickwoman: small feminine stick figure silhouette.
+        if icon_text == '♀':
+            head_r = canvas * 0.075
+            head_y = cy - canvas * 0.21
+            draw.ellipse((cx - head_r, head_y - head_r, cx + head_r, head_y + head_r),
+                         outline=color, width=stroke)
+            body_top = head_y + head_r + scale
+            body_mid = cy + canvas * 0.05
+            body_bottom = cy + canvas * 0.22
+            draw.line((cx, body_top, cx, body_bottom), fill=color, width=stroke)
+            skirt_w = canvas * 0.15
+            draw.polygon(
+                ((cx, body_mid - canvas * 0.02),
+                 (cx - skirt_w, body_bottom),
+                 (cx + skirt_w, body_bottom)),
+                outline=color,
+            )
+            draw.line((cx - canvas * 0.15, cy - canvas * 0.02,
+                       cx + canvas * 0.15, cy - canvas * 0.02),
+                      fill=color, width=stroke)
+            draw.line((cx, body_bottom, cx - canvas * 0.12, cy + canvas * 0.30),
+                      fill=color, width=stroke)
+            draw.line((cx, body_bottom, cx + canvas * 0.12, cy + canvas * 0.30),
+                      fill=color, width=stroke)
+            return True
+        # Script Flappy: angular bird/wing token.
+        if icon_text == '◥':
+            wing = [
+                (cx - canvas * 0.24, cy + canvas * 0.03),
+                (cx - canvas * 0.03, cy - canvas * 0.24),
+                (cx + canvas * 0.20, cy + canvas * 0.04),
+                (cx + canvas * 0.02, cy + canvas * 0.00),
+                (cx - canvas * 0.07, cy + canvas * 0.20),
+            ]
+            draw.polygon(wing, fill=color)
+            beak = [
+                (cx + canvas * 0.19, cy + canvas * 0.02),
+                (cx + canvas * 0.29, cy - canvas * 0.03),
+                (cx + canvas * 0.21, cy + canvas * 0.10),
+            ]
+            draw.polygon(beak, fill=color)
+            eye = max(scale * 0.9, 1.5)
+            draw.ellipse((cx + canvas * 0.08 - eye, cy - canvas * 0.08 - eye,
+                          cx + canvas * 0.08 + eye, cy - canvas * 0.08 + eye),
+                         fill=(255, 255, 255, 0))
+            return True
+        # Script Snake: coiled grid/snake token.
+        if icon_text == '▣':
+            step = canvas * 0.095
+            pts = [
+                (cx - step * 2.2, cy - step * 1.6),
+                (cx + step * 1.4, cy - step * 1.6),
+                (cx + step * 1.4, cy - step * 0.2),
+                (cx - step * 1.4, cy - step * 0.2),
+                (cx - step * 1.4, cy + step * 1.4),
+                (cx + step * 2.0, cy + step * 1.4),
+            ]
+            draw.line(pts, fill=color, width=max(stroke + scale, 3), joint='curve')
+            head_r = max(scale * 2.0, 3)
+            hx, hy = pts[-1]
+            draw.ellipse((hx - head_r, hy - head_r, hx + head_r, hy + head_r), fill=color)
+            tongue = max(scale, 1)
+            draw.line((hx + head_r * 0.6, hy, hx + head_r * 1.6, hy - tongue),
+                      fill=color, width=max(1, scale))
+            return True
         if icon_text == '⚔':
             blade = max(scale + 1, 2)
             draw.line((cx - canvas * 0.18, cy + canvas * 0.16,

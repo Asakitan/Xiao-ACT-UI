@@ -199,20 +199,24 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             _patched_module_attr('SAOPopUpMenu', _FakePopUpMenu),
             _patched_module_attr('ensure_act_plugin_manager', lambda _owner, load=True: None),
             _patched_module_attr('act_plugin_menu_surfaces', lambda _owner, _surface_id: {'surfaces': []}),
+            _patched_module_attr('act_plugin_script_menus', lambda _owner: {'items': []}),
         ):
             harness._setup_sao_menu()
 
         self.assertIsNotNone(harness._sao_menu)
         self.assertTrue(harness._sao_menu.bound)
         self.assertEqual([item['name'] for item in harness._menu_icons], ['控制', '工具', '插件', '皮肤', '关于'])
-        self.assertEqual(_labels(harness._sao_menu.child_menus, '工具'), ['AI Editor (LLM)'])
+        self.assertEqual(
+            _labels(harness._sao_menu.child_menus, '工具'),
+            ['AI Editor (LLM)', 'Workshop', 'Process Selector'],
+        )
 
     def test_platform_tool_menu_excludes_mem_scope(self) -> None:
         harness = _MenuHarness()
 
         labels = _labels(harness._build_menu_children(), "工具")
 
-        self.assertEqual(labels, ["AI Editor (LLM)"])
+        self.assertEqual(labels, ["AI Editor (LLM)", "Workshop", "Process Selector"])
 
     def test_act_menu_counts_ignore_malformed_list_payloads(self) -> None:
         harness = _MenuHarness()
@@ -271,6 +275,79 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             ]
 
         self.assertIn("Sample Plugin", labels)
+
+    def test_script_sao_menu_synthesizes_disabled_manifest_button(self) -> None:
+        harness = _MenuHarness()
+
+        def fake_script_menus(_self):
+            return {
+                "items": [
+                    {
+                        "id": "script_snake",
+                        "enabled": False,
+                        "active": False,
+                        "overlay_enabled": False,
+                        "menu": {"name": "贪吃蛇", "icon_text": "▣", "script_label": "贪吃蛇"},
+                    }
+                ]
+            }
+
+        with _patched_module_attr("act_plugin_script_menus", fake_script_menus):
+            icons = harness._build_menu_icons()
+            children = harness._build_menu_children()
+
+        self.assertIn({"name": "贪吃蛇", "icon": "▣", "can_active": True}, icons)
+        self.assertEqual(_labels(children, "贪吃蛇"), ["开启贪吃蛇"])
+
+    def test_script_sao_menu_click_enables_dispatches_refresh_and_closes(self) -> None:
+        harness = _MenuHarness()
+        calls: list[tuple] = []
+        harness._sao_menu = type("Menu", (), {"visible": True})()
+        harness._refresh_menu_if_open = lambda force=False: calls.append(("refresh", force))
+        harness._toggle_sao_menu = lambda allow_close=False: calls.append(("close", allow_close))
+
+        entry = {
+            "id": "script_clock",
+            "enabled": False,
+            "active": False,
+            "overlay_enabled": True,
+            "setting": "overlay_enabled",
+            "surface": "unioverlay",
+            "action_id": "script.overlay.set_enabled",
+            "menu": {"name": "世界时钟", "icon_text": "◷", "script_label": "世界时钟"},
+        }
+
+        def fake_script_menus(_self):
+            return {"items": [entry]}
+
+        def fake_enable(_self, plugin_id):
+            calls.append(("enable", plugin_id))
+            return {"ok": True}
+
+        def fake_action(_self, action_id, payload=None, plugin_id=""):
+            calls.append(("action", action_id, dict(payload or {}), plugin_id))
+            return {"ok": True}
+
+        with (
+            _patched_module_attr("act_plugin_script_menus", fake_script_menus),
+            _patched_module_attr("act_plugin_enable", fake_enable),
+            _patched_module_attr("act_plugin_action", fake_action),
+        ):
+            row = harness._build_script_plugin_menu_children()["世界时钟"][0]
+            self.assertEqual(row["label"], "关闭世界时钟")
+            result = row["command"]()
+
+        self.assertEqual(result, {"ok": True})
+        self.assertIn(("enable", "script_clock"), calls)
+        self.assertIn(
+            ("action", "script.overlay.set_enabled",
+             {"enabled": False, "setting": "overlay_enabled", "surface": "unioverlay"},
+             "script_clock"),
+            calls,
+        )
+        self.assertIn(("refresh", True), calls)
+        self.assertIn(("close", True), calls)
+        self.assertTrue(harness._sao_menu_needs_rebuild)
 
 
 if __name__ == "__main__":

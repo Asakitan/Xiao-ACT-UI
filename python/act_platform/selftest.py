@@ -44,6 +44,32 @@ def _write_demo_plugin(root: str) -> str:
     return plugin_dir
 
 
+def _write_script_menu_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "script_menu_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "script_menu_demo",
+            "name": "Script Menu Demo",
+            "version": "0.1.0",
+            "entry": "plugin.lua",
+            "language": "lua",
+            "enabled": False,
+            "settings_schema": {
+                "overlay_enabled": {"type": "boolean", "default": True},
+            },
+            "sao_menu": {
+                "name": "脚本演示",
+                "icon_text": "▣",
+                "script_label": "脚本演示",
+                "priority": 25,
+            },
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
+        fp.write("-- disabled manifest-only script menu selftest\n")
+    return plugin_dir
+
+
 def run_selftest() -> dict:
     bus = EventBus()
     direct_events = []
@@ -55,8 +81,15 @@ def run_selftest() -> dict:
 
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
         _write_demo_plugin(root)
+        _write_script_menu_plugin(root)
         manager = PluginManager(plugin_dirs=[root], event_bus=bus)
         manager.discover()
+        manifest_status = manager.status()
+        script_record = next(
+            item for item in manifest_status.get("plugins", [])
+            if item.get("id") == "script_menu_demo"
+        )
+        assert script_record.get("sao_menu", {}).get("name") == "脚本演示", script_record
         assert manager.load_plugin("capture_demo"), manager.status()
 
         bus.publish("dungeon", {"kind": "sync_dungeon_data", "dungeon_id": 42001}, source_name="selftest", source_kind="unit")
@@ -74,6 +107,23 @@ def run_selftest() -> dict:
         assert manager.disable_plugin("capture_demo"), manager.status()
         assert not manager._records["capture_demo"].active, manager.status()
         status = manager.status()
+        owner = type("Owner", (), {})()
+        owner._act_event_bus = bus
+        owner._act_plugin_manager = manager
+        from .runtime import act_plugin_menu, act_plugin_script_menus
+        script_menus = act_plugin_script_menus(owner)
+        assert script_menus.get("ok"), script_menus
+        script_item = next(
+            item for item in script_menus.get("items", [])
+            if item.get("id") == "script_menu_demo"
+        )
+        assert script_item.get("enabled") is False, script_item
+        assert script_item.get("overlay_enabled") is True, script_item
+        menu_summary = act_plugin_menu(owner)
+        assert any(
+            item.get("id") == "script_menu_demo"
+            for item in menu_summary.get("script_menus", [])
+        ), menu_summary.get("script_menus")
 
     return {
         "ok": True,
@@ -84,6 +134,7 @@ def run_selftest() -> dict:
         "published": bus.snapshot().get("published"),
         "plugin_count": status.get("plugin_count"),
         "active_count_after_disable": status.get("active_count"),
+        "script_menu_count": len(script_menus.get("items", [])),
         "captured_events": len(captured),
         "built_in_parser_adapters": len(built_in_parser_adapters()),
     }

@@ -156,6 +156,75 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _normalize_sao_menu(value: Any) -> dict[str, Any]:
+    """Normalize optional manifest-declared SAO menu metadata."""
+    if not isinstance(value, Mapping):
+        return {}
+    safe = _json_safe(value)
+    if not isinstance(safe, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for key, val in safe.items():
+        text_key = str(key or "").strip()
+        if not text_key or val is None:
+            continue
+        out[text_key] = val
+    for key in (
+        "name",
+        "category",
+        "title",
+        "label",
+        "icon",
+        "icon_text",
+        "row_icon",
+        "script_label",
+        "toggle_label",
+        "enable_label",
+        "disable_label",
+        "action_id",
+        "setting",
+        "overlay_setting",
+        "surface",
+    ):
+        if key in out:
+            out[key] = str(out.get(key) or "")
+    if out.get("icon_text") and not out.get("icon"):
+        out["icon"] = str(out.get("icon_text") or "")
+    if out.get("icon") and not out.get("icon_text"):
+        out["icon_text"] = str(out.get("icon") or "")
+    if out.get("category") and not out.get("name"):
+        out["name"] = str(out.get("category") or "")
+    if not out.get("script_label"):
+        label = out.get("toggle_label") or out.get("label") or out.get("name") or out.get("title")
+        if label:
+            out["script_label"] = str(label)
+
+    def _as_bool(raw: Any, default: bool = False) -> bool:
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        if isinstance(raw, str):
+            text = raw.strip().lower()
+            if text in {"1", "true", "yes", "on", "enabled"}:
+                return True
+            if text in {"0", "false", "no", "off", "disabled"}:
+                return False
+        return bool(default)
+
+    for key in ("default_enabled", "keep_menu_open"):
+        if key in out:
+            out[key] = _as_bool(out.get(key), False)
+    if "priority" in out:
+        try:
+            out["priority"] = float(out.get("priority") or 0.0)
+        except Exception:
+            out["priority"] = 50.0
+    else:
+        out["priority"] = 50.0
+    return out
+
+
 def _normalize_engine_name(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(".", "_")
 
@@ -260,6 +329,7 @@ class PluginRecord:
     permissions: tuple[str, ...] = ()
     capabilities: tuple[dict[str, Any], ...] = ()
     settings_schema: Mapping[str, Any] = field(default_factory=dict)
+    sao_menu: Mapping[str, Any] = field(default_factory=dict)
     module: Optional[ModuleType] = None
     context: Optional["PluginContext"] = None
     loaded: bool = False
@@ -294,6 +364,7 @@ class PluginRecord:
             "permissions": list(self.permissions),
             "capabilities": [dict(cap) for cap in self.capabilities],
             "capability_ids": [str(cap.get("id")) for cap in self.capabilities if cap.get("id")],
+            "sao_menu": _json_safe(self.sao_menu) if isinstance(self.sao_menu, Mapping) else {},
             # A plugin only "has a panel" if it DECLARES one — the manifest must
             # list a ``ui_panels`` capability. Lets the menu/manager know even
             # while the plugin is disabled (and so not yet runtime-registered).
@@ -618,6 +689,9 @@ class PluginContext:
             else:
                 return default
         return value
+
+    def time(self) -> float:
+        return time.time()
 
     def recent_events(self, limit: int = 20, topic: str = "") -> list[dict[str, Any]]:
         events = self._manager.event_bus.recent_events(limit)
@@ -1328,6 +1402,68 @@ class PluginManager:
             status["user_installed"] = self._is_user_path(self._records[key].path)
             out.append(status)
         return out
+
+    def list_script_menu_entries(self) -> list[dict[str, Any]]:
+        """Return manifest-declared SAO popup buttons for script-like plugins.
+
+        The entries intentionally include disabled plugins so the SAO popup can
+        offer a first-class "开启XX" row before a script has registered runtime
+        menu categories.
+        """
+        entries: list[dict[str, Any]] = []
+        script_languages = {"lua", "csharp", "angelscript", "emma"}
+
+        def _boolish(value: Any, default: bool = False) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                text = value.strip().lower()
+                if text in {"1", "true", "yes", "on", "enabled"}:
+                    return True
+                if text in {"0", "false", "no", "off", "disabled"}:
+                    return False
+            return bool(default)
+
+        for key in sorted(self._records):
+            record = self._records[key]
+            if str(record.language or "").lower() not in script_languages:
+                continue
+            meta = dict(record.sao_menu or {})
+            if not meta:
+                continue
+            schema = record.settings_schema if isinstance(record.settings_schema, Mapping) else {}
+            setting_key = str(meta.get("setting") or meta.get("overlay_setting") or "overlay_enabled")
+            overlay_schema = schema.get(setting_key)
+            default_enabled = _boolish(meta.get("default_enabled"), False)
+            if isinstance(overlay_schema, Mapping):
+                default_enabled = _boolish(overlay_schema.get("default"), default_enabled)
+            overlay_enabled = _boolish(
+                self.get_plugin_setting(record.plugin_id, setting_key, default_enabled),
+                default_enabled,
+            )
+            entries.append({
+                "id": record.plugin_id,
+                "plugin_id": record.plugin_id,
+                "name": record.name,
+                "plugin_label": record.name,
+                "language": record.language,
+                "enabled": bool(record.enabled),
+                "loaded": bool(record.loaded),
+                "active": bool(record.active and record.enabled),
+                "overlay_enabled": overlay_enabled,
+                "default_enabled": default_enabled,
+                "setting": setting_key,
+                "action_id": str(meta.get("action_id") or "script.overlay.set_enabled"),
+                "surface": str(meta.get("surface") or "unioverlay"),
+                "menu": meta,
+            })
+        entries.sort(key=lambda item: (
+            float((item.get("menu") or {}).get("priority") or 50.0),
+            str((item.get("menu") or {}).get("name") or item.get("id") or ""),
+        ))
+        return entries
 
     def list_extensions(self, kind: str = "") -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
         if kind:
@@ -2095,6 +2231,7 @@ class PluginManager:
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
+            sao_menu=_normalize_sao_menu(manifest.get("sao_menu")),
         )
 
     def _prepare_plugin_sys_path(self, record: PluginRecord) -> None:
