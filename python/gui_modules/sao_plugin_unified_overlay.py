@@ -20,10 +20,11 @@ except Exception:
     _premultiply_bgra_bytes_floor = None  # type: ignore[assignment]
 
 try:
-    from render.overlay_adapter import CompositorBgraPresenter, create_overlay_window
+    from render.overlay_adapter import CompositorBgraPresenter
+    from render.overlay_compositor import get_unified_overlay
 except Exception:
     CompositorBgraPresenter = None  # type: ignore[assignment]
-    create_overlay_window = None  # type: ignore[assignment]
+    get_unified_overlay = None  # type: ignore[assignment]
 
 try:
     from render.model3d_backend import diagnose_model3d_node, probe_model3d_backend
@@ -471,12 +472,15 @@ class PluginUnifiedOverlayHost:
         self._dirty = True
         self._destroyed = False
         self._hidden = False
+        self._overlay: Any = None
         self._layers: dict[str, dict[str, Any]] = {}
         self._position_overrides: dict[str, tuple[int, int]] = {}
         self._drag_state: dict[str, dict[str, int]] = {}
 
     def start(self) -> bool:
-        if self.root is None or create_overlay_window is None or CompositorBgraPresenter is None:
+        if self.root is None or get_unified_overlay is None or CompositorBgraPresenter is None:
+            return False
+        if self._ensure_overlay() is None:
             return False
         self._subscribe()
         self._schedule(0)
@@ -503,11 +507,12 @@ class PluginUnifiedOverlayHost:
     def hide_temporarily(self) -> None:
         self._hidden = True
         for state in list(self._layers.values()):
-            window = state.get("window")
-            if window is None:
+            layer = state.get("layer")
+            if layer is None:
                 continue
             try:
-                window.hide()
+                layer.hide()
+                layer.sync_input_proxy()
             except Exception:
                 pass
 
@@ -517,14 +522,16 @@ class PluginUnifiedOverlayHost:
         for state in list(self._layers.values()):
             if not state.get("has_frame"):
                 continue
-            window = state.get("window")
-            if window is None:
+            layer = state.get("layer")
+            if layer is None:
                 continue
             try:
-                window.show()
-                window.request_redraw()
+                layer.show()
+                layer.sync_input_proxy()
+                layer.request_redraw()
             except Exception:
                 pass
+        self._force_host_passthrough()
 
     def mark_dirty(self) -> None:
         self._dirty = True
@@ -558,16 +565,53 @@ class PluginUnifiedOverlayHost:
         except Exception:
             self._after_id = None
 
+    def _ensure_overlay(self) -> Any:
+        if self._overlay is not None:
+            return self._overlay
+        if get_unified_overlay is None:
+            return None
+        try:
+            overlay = get_unified_overlay(self.root)
+            if not bool(getattr(overlay, "_running", False)):
+                try:
+                    overlay.start()
+                except Exception:
+                    pass
+            self._overlay = overlay
+            self._force_host_passthrough()
+            return overlay
+        except Exception:
+            self._overlay = None
+            return None
+
+    def _force_host_passthrough(self) -> None:
+        overlay = self._overlay
+        if overlay is None:
+            return
+        fn = getattr(overlay, "force_host_input_passthrough", None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+
     def _destroy_layer(self, key: str) -> None:
         state = self._layers.pop(str(key), None)
         self._position_overrides.pop(str(key), None)
         self._drag_state.pop(str(key), None)
         if not state:
             return
-        window = state.get("window")
-        if window is not None:
+        layer = state.get("layer")
+        if layer is not None:
             try:
-                window.destroy()
+                layer.destroy_input_proxy()
+            except Exception:
+                pass
+        overlay = self._ensure_overlay()
+        layer_name = str(state.get("layer_name") or "")
+        if overlay is not None and layer_name:
+            try:
+                overlay.destroy_layer(layer_name)
             except Exception:
                 pass
 
@@ -596,8 +640,8 @@ class PluginUnifiedOverlayHost:
         return bool(node.get("draggable", True))
 
     def _install_drag_callbacks(self, key: str, state: dict[str, Any]) -> None:
-        window = state.get("window")
-        if window is None or not hasattr(window, "set_input_callbacks"):
+        layer = state.get("layer")
+        if layer is None or not hasattr(layer, "set_input_callbacks"):
             return
 
         def _motion(local_x: float, local_y: float) -> None:
@@ -613,13 +657,14 @@ class PluginUnifiedOverlayHost:
             state["x"] = new_x
             state["y"] = new_y
             try:
-                window.set_geometry(
+                layer.set_geometry(
                     new_x,
                     new_y,
                     max(1, int(state.get("width") or 1)),
                     max(1, int(state.get("height") or 1)),
                 )
-                window.request_redraw()
+                layer.sync_input_proxy()
+                layer.request_redraw()
             except Exception:
                 pass
 
@@ -638,12 +683,17 @@ class PluginUnifiedOverlayHost:
                 self._drag_state.pop(key, None)
 
         try:
-            window.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
+            layer.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
+            if hasattr(layer, "create_input_proxy"):
+                layer.create_input_proxy(self.root)
+            if hasattr(layer, "sync_input_proxy"):
+                layer.sync_input_proxy()
         except Exception:
             pass
 
     def _ensure_layer(self, drawable: Mapping[str, Any], width: int, height: int) -> dict[str, Any] | None:
-        if create_overlay_window is None or CompositorBgraPresenter is None:
+        overlay = self._ensure_overlay()
+        if overlay is None or CompositorBgraPresenter is None:
             return None
         key = str(drawable.get("key") or "")
         if not key:
@@ -654,19 +704,27 @@ class PluginUnifiedOverlayHost:
         click_through = not draggable
         state = self._layers.get(key)
         if state is not None:
-            window = state.get("window")
-            if window is not None:
+            layer = state.get("layer")
+            if layer is not None:
                 try:
-                    window.set_geometry(x, y, max(1, int(width)), max(1, int(height)))
+                    layer.set_geometry(x, y, max(1, int(width)), max(1, int(height)))
                     if bool(state.get("click_through", True)) != click_through:
                         try:
-                            window.set_click_through(click_through)
+                            layer.click_through = click_through
+                            if click_through:
+                                layer.destroy_input_proxy()
+                            else:
+                                layer.create_input_proxy(self.root)
+                            layer.sync_input_proxy()
                         except Exception:
                             pass
                         state["click_through"] = click_through
                     if int(state.get("z") or 0) != z:
                         try:
-                            window.set_z(z)
+                            layer.z_order = z
+                            set_layer_z = getattr(overlay, "set_layer_z", None)
+                            if callable(set_layer_z):
+                                set_layer_z(str(state.get("layer_name") or ""), z)
                         except Exception:
                             pass
                         state["z"] = z
@@ -676,26 +734,33 @@ class PluginUnifiedOverlayHost:
                     state["height"] = max(1, int(height))
                     if draggable:
                         self._install_drag_callbacks(key, state)
+                    else:
+                        try:
+                            layer.set_input_callbacks()
+                        except Exception:
+                            pass
+                    self._force_host_passthrough()
                     return state
                 except Exception:
                     self._destroy_layer(key)
         try:
-            window = create_overlay_window(
-                root=self.root,
-                w=max(1, int(width)),
-                h=max(1, int(height)),
-                x=x,
-                y=y,
-                render_fn=None,
+            layer_name = _layer_title(str(drawable.get("kind") or "overlay"), key)
+            layer = overlay.create_layer(
+                layer_name,
+                max(1, int(width)),
+                max(1, int(height)),
+                x,
+                y,
+                z,
                 click_through=click_through,
-                title=_layer_title(str(drawable.get("kind") or "overlay"), key),
-                z=z,
             )
-            presenter = CompositorBgraPresenter(window.layer)
+            presenter = CompositorBgraPresenter(layer)
             if not self._hidden:
-                window.show()
+                layer.show()
+                layer.sync_input_proxy()
             state = {
-                "window": window,
+                "layer": layer,
+                "layer_name": layer_name,
                 "presenter": presenter,
                 "last_signature": "",
                 "has_frame": False,
@@ -709,6 +774,7 @@ class PluginUnifiedOverlayHost:
             self._layers[key] = state
             if draggable:
                 self._install_drag_callbacks(key, state)
+            self._force_host_passthrough()
             return state
         except Exception:
             self._destroy_layer(key)
@@ -718,17 +784,19 @@ class PluginUnifiedOverlayHost:
         for state in list(self._layers.values()):
             state["has_frame"] = False
             state["last_signature"] = ""
-            window = state.get("window")
-            if window is None:
+            layer = state.get("layer")
+            if layer is None:
                 continue
             try:
-                window.request_redraw()
+                layer.request_redraw()
             except Exception:
                 pass
             try:
-                window.hide()
+                layer.hide()
+                layer.sync_input_proxy()
             except Exception:
                 pass
+        self._force_host_passthrough()
 
     def _refresh_now(self) -> None:
         try:
@@ -758,9 +826,9 @@ class PluginUnifiedOverlayHost:
             if state is None:
                 continue
             active_keys.add(key)
-            window = state.get("window")
+            layer = state.get("layer")
             presenter = state.get("presenter")
-            if window is None or presenter is None:
+            if layer is None or presenter is None:
                 continue
             try:
                 if signature != state.get("last_signature"):
@@ -768,14 +836,16 @@ class PluginUnifiedOverlayHost:
                     state["last_signature"] = signature
                 state["has_frame"] = True
                 if not self._hidden:
-                    window.show()
+                    layer.show()
                 else:
-                    window.hide()
-                window.request_redraw()
+                    layer.hide()
+                layer.sync_input_proxy()
+                layer.request_redraw()
             except Exception:
                 self._destroy_layer(key)
                 active_keys.discard(key)
         self._destroy_stale_layers(active_keys)
+        self._force_host_passthrough()
 
     def _tick(self) -> None:
         self._after_id = None

@@ -899,6 +899,56 @@ class PluginContext:
             "height": max(0, int(height or 0)),
         })
 
+    def open_file(self, filters: Any = None, title: str = "选择文件",
+                  initial_dir: str = "", hwnd_owner: int = 0) -> str:
+        """Open a platform-native file picker and return the selected path.
+
+        ``filters`` accepts ``[(label, pattern), ...]`` or small mappings with
+        ``label``/``pattern`` keys. An empty string means cancelled or failed.
+        """
+        try:
+            from . import native_dialog
+        except Exception as exc:
+            self._manager._record_failure(self._record.plugin_id, exc)
+            return ""
+
+        norm_filters: list[tuple[str, str]] = []
+        try:
+            source = filters
+            if isinstance(source, Mapping):
+                source = source.items()
+            if source is not None and not isinstance(source, (str, bytes)):
+                for item in source:
+                    label: Any = ""
+                    pattern: Any = ""
+                    if isinstance(item, Mapping):
+                        label = item.get("label") or item.get("name") or item.get("title")
+                        pattern = item.get("pattern") or item.get("glob") or item.get("filter")
+                    else:
+                        try:
+                            seq = list(item)
+                        except Exception:
+                            seq = []
+                        if len(seq) >= 2:
+                            label, pattern = seq[0], seq[1]
+                    if str(label or "").strip() and str(pattern or "").strip():
+                        norm_filters.append((str(label), str(pattern)))
+        except Exception:
+            norm_filters = []
+
+        try:
+            owner_hwnd = int(hwnd_owner or 0) or native_dialog.foreground_hwnd()
+            path = native_dialog.open_file(
+                filters=norm_filters or None,
+                title=str(title or "选择文件"),
+                initial_dir=str(initial_dir or ""),
+                hwnd_owner=owner_hwnd,
+            )
+            return str(path or "")
+        except Exception as exc:
+            self._manager._record_failure(self._record.plugin_id, exc)
+            return ""
+
     # ── schedulers / loops (timing primitives for heavy plugins) ──────────
     def set_interval(self, callback: Callable[[], Any], seconds: float) -> str:
         """Call ``callback`` every ``seconds`` on a daemon thread until cleared."""

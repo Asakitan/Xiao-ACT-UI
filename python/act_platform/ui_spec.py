@@ -287,6 +287,7 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "width": width,
         "height": height,
         "draggable": bool(node.get("draggable", True)),
+        "phase": _cf(node.get("phase", 0.0), 0.0, lo=-1.0e9, hi=1.0e9),
         "model": normalized_model,
         "action": normalized_action,
         "camera": normalized_camera,
@@ -596,7 +597,8 @@ class UI:
                 animation_name: Any = "", animation_file: Any = "",
                 animation_json: Optional[Mapping[str, Any]] = None,
                 camera: Optional[Mapping[str, Any]] = None,
-                transform: Optional[Mapping[str, Any]] = None) -> dict:
+                transform: Optional[Mapping[str, Any]] = None,
+                phase: float = 0.0) -> dict:
         return {
             "type": "model3d",
             "id": _s(id, 120),
@@ -604,6 +606,7 @@ class UI:
             "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
             "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 480))),
             "draggable": True,
+            "phase": _cf(phase, 0.0, lo=-1.0e9, hi=1.0e9),
             "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
             "action": {
                 "name": _s(animation_name, 120),

@@ -87,6 +87,7 @@ class ContextProxy:
         "register_menu_surface", "register_action_handler",
         "register_engine", "register_data_source",
         "request_redraw", "open_window",
+        "open_file",
         "set_interval", "set_timeout", "clear_timer", "run_on_ui",
         "notify", "dismiss_notify", "toast",
         "ensure_requirements", "load_local",

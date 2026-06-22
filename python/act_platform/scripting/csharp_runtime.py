@@ -121,6 +121,46 @@ def _python_runtime_reference() -> str | None:
         return None
 
 
+def _default_target_framework() -> str:
+    """Return the TFM used for temporary C# source projects.
+
+    The previous hard-coded net8.0 target fails on machines that only carry a
+    newer offline SDK/ref-pack. Keep an env override for packaged runtimes.
+    """
+    override = str(os.environ.get("SAO_CSHARP_TARGET_FRAMEWORK") or "").strip()
+    if override:
+        return override
+    try:
+        if _System is not None:
+            runtime_major = int(_System.Environment.Version.Major)
+            if runtime_major >= 6:
+                return f"net{runtime_major}.0"
+    except Exception:
+        pass
+    dotnet = shutil.which("dotnet") or shutil.which("dotnet.exe")
+    if dotnet:
+        try:
+            proc = subprocess.run(
+                [dotnet, "--list-sdks"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            majors: list[int] = []
+            for line in str(proc.stdout or "").splitlines():
+                head = line.strip().split()[0] if line.strip() else ""
+                major_text = head.split(".", 1)[0]
+                if major_text.isdigit():
+                    major = int(major_text)
+                    if major >= 6:
+                        majors.append(major)
+            if majors:
+                return f"net{max(majors)}.0"
+        except Exception:
+            pass
+    return "net8.0"
+
+
 def _compile_cs(source_path: str, output_dir: str, references: list[str] | None = None) -> str:
     """Compile a .cs file to a .dll assembly. Returns the output path."""
     stem = os.path.splitext(os.path.basename(source_path))[0]
@@ -185,9 +225,11 @@ def _generate_csproj(name: str, source_path: str,
             refs_xml += "    </Reference>\n"
         refs_xml += "  </ItemGroup>\n"
 
+    target_framework = _default_target_framework()
+
     return f"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>{target_framework}</TargetFramework>
     <AssemblyName>{name}</AssemblyName>
     <OutputType>Library</OutputType>
         <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -391,6 +433,14 @@ class _CSharpProxy:
 
     def open_window(self, panel_id="", width=0, height=0) -> dict:
         return self._ctx.open_window(str(panel_id or ""), int(width), int(height))
+
+    def open_file(self, filters=None, title="选择文件", initial_dir="", hwnd_owner=0) -> str:
+        return self._ctx.open_file(
+            self._to_python(filters),
+            str(title or "选择文件"),
+            str(initial_dir or ""),
+            int(hwnd_owner or 0),
+        )
 
     def set_interval(self, callback, seconds) -> str:
         return self._ctx.set_interval(self._wrap_cs_callback(callback), float(seconds))
