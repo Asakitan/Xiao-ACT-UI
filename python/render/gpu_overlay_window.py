@@ -256,29 +256,6 @@ if sys.platform == 'win32':
             ('fTransitionOnMaximized', wintypes.BOOL),
         ]
 
-    class _ACCENT_POLICY(ctypes.Structure):
-        _fields_ = [
-            ('AccentState', ctypes.c_uint),
-            ('AccentFlags', ctypes.c_uint),
-            ('GradientColor', ctypes.c_uint),
-            ('AnimationId', ctypes.c_uint),
-        ]
-
-    class _WINCOMPATTRDATA(ctypes.Structure):
-        _fields_ = [
-            ('Attribute', ctypes.c_int),
-            ('Data', ctypes.c_void_p),
-            ('SizeOfData', ctypes.c_size_t),
-        ]
-
-    try:
-        _SetWindowCompositionAttribute = _user32.SetWindowCompositionAttribute
-        _SetWindowCompositionAttribute.restype = wintypes.BOOL
-        _SetWindowCompositionAttribute.argtypes = [
-            wintypes.HWND, ctypes.POINTER(_WINCOMPATTRDATA)]
-    except AttributeError:
-        _SetWindowCompositionAttribute = None
-
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
@@ -344,26 +321,11 @@ def _apply_dwm_transparency(hwnd: int) -> None:
             _gdi32.DeleteObject(bb.hRgnBlur)
     except Exception:
         pass
-    # L3 — ACCENT_ENABLE_TRANSPARENTGRADIENT (2) with fully transparent
-    # gradient colour.  Enables the DWM composition pipeline for
-    # per-pixel alpha without adding a visible blur effect.
-    # ACCENT_ENABLE_BLURBEHIND (3) must NOT be used — it literally
-    # Gaussian-blurs the entire desktop behind the overlay.
-    if _SetWindowCompositionAttribute is not None:
-        try:
-            _WCA_ACCENT_POLICY = 19
-            accent = _ACCENT_POLICY()
-            accent.AccentState = 2  # ACCENT_ENABLE_TRANSPARENTGRADIENT
-            accent.GradientColor = 0x00000000
-            data = _WINCOMPATTRDATA()
-            data.Attribute = _WCA_ACCENT_POLICY
-            data.Data = ctypes.cast(
-                ctypes.pointer(accent), ctypes.c_void_p)
-            data.SizeOfData = ctypes.sizeof(accent)
-            _SetWindowCompositionAttribute(
-                hwnd, ctypes.byref(data))
-        except Exception:
-            pass
+    # L3 removed — SetWindowCompositionAttribute accent policies
+    # (BLURBEHIND=3, TRANSPARENTGRADIENT=2) all add visible overlays
+    # on some driver/DWM combinations.  L1+L2 are the proven path;
+    # the real AMD fix is removing DisplayAffinity from the compositor
+    # host (commit a62c13b), not DWM accent tricks.
 
 
 _overlay_creation_lock = threading.Lock()

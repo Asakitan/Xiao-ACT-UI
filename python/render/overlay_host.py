@@ -661,39 +661,9 @@ class OverlayHost:
         except Exception:
             pass
 
-        # L3: SetWindowCompositionAttribute — Win10+ undocumented
-        # fallback for 25H2+ where legacy DWM blur-behind semantics
-        # may have changed.  gpu_overlay_window.py already carries
-        # this escalation for GLFW windows; mirror it here for the
-        # compositor host.
-        try:
-            class _ACCENT_POLICY(ctypes.Structure):
-                _fields_ = [
-                    ('AccentState', ctypes.c_uint),
-                    ('AccentFlags', ctypes.c_uint),
-                    ('GradientColor', ctypes.c_uint),
-                    ('AnimationId', ctypes.c_uint),
-                ]
-            class _WINCOMPATTRDATA(ctypes.Structure):
-                _fields_ = [
-                    ('Attribute', ctypes.c_int),
-                    ('Data', ctypes.c_void_p),
-                    ('SizeOfData', ctypes.c_size_t),
-                ]
-            _swca = _user32.SetWindowCompositionAttribute
-            _swca.restype = wt.BOOL
-            _swca.argtypes = [wt.HWND, ctypes.POINTER(_WINCOMPATTRDATA)]
-            accent = _ACCENT_POLICY()
-            accent.AccentState = 2  # ACCENT_ENABLE_TRANSPARENTGRADIENT
-            accent.GradientColor = 0x00000000
-            data = _WINCOMPATTRDATA()
-            data.Attribute = 19  # WCA_ACCENT_POLICY
-            data.Data = ctypes.cast(
-                ctypes.pointer(accent), ctypes.c_void_p)
-            data.SizeOfData = ctypes.sizeof(accent)
-            _swca(self.hwnd, byref(data))
-        except Exception:
-            pass
+        # L3 removed — SetWindowCompositionAttribute accent policies
+        # all add visible overlays on some driver/DWM combinations.
+        # L1+L2 are the proven path for per-pixel alpha.
 
     # ── public API ───────────────────────────────────────────────
 
