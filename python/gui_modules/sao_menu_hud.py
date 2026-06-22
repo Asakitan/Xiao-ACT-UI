@@ -778,106 +778,124 @@ class MenuCircleButtonRenderer:
                           cx + ring_r * 0.48, cy + ring_r * 0.48),
                          fill=(255, 255, 255, 0))
             return True
-        # Script world clock: clock face + hands + detached world tick.
+        # Script world clock: layered clock face with a small world meridian.
         if icon_text == '◷':
-            r = canvas * 0.24
-            draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=color, width=stroke)
+            r = canvas * 0.235
             tick_w = max(1, stroke - scale)
-            for idx in range(4):
-                ang = -math.pi / 2.0 + idx * math.pi / 2.0
-                inner = r * 0.66
-                outer = r * 0.92
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=color, width=stroke)
+            draw.arc((cx - r * 0.72, cy - r * 0.72, cx + r * 0.72, cy + r * 0.72),
+                     205, 335, fill=color, width=tick_w)
+            for idx in range(12):
+                ang = -math.pi / 2.0 + idx * math.pi / 6.0
+                inner = r * (0.72 if idx % 3 else 0.61)
+                outer = r * 0.88
+                width = max(1, tick_w + (1 if idx % 3 == 0 else 0))
                 draw.line((cx + math.cos(ang) * inner, cy + math.sin(ang) * inner,
                            cx + math.cos(ang) * outer, cy + math.sin(ang) * outer),
-                          fill=color, width=tick_w)
-            draw.line((cx, cy, cx, cy - r * 0.58), fill=color, width=stroke)
-            draw.line((cx, cy, cx + r * 0.50, cy + r * 0.20), fill=color, width=stroke)
-            dot = max(scale * 1.1, 2)
+                          fill=color, width=width)
+            draw.line((cx, cy, cx + r * 0.02, cy - r * 0.58), fill=color, width=stroke)
+            draw.line((cx, cy, cx + r * 0.50, cy + r * 0.18), fill=color, width=stroke)
+            dot = max(scale * 1.15, 2)
             draw.ellipse((cx - dot, cy - dot, cx + dot, cy + dot), fill=color)
-            globe_r = r * 0.36
+            globe_r = r * 0.34
             gx = cx - r * 0.90
-            gy = cy + r * 0.72
+            gy = cy + r * 0.70
             draw.ellipse((gx - globe_r, gy - globe_r, gx + globe_r, gy + globe_r),
                          outline=color, width=tick_w)
-            draw.arc((gx - globe_r, gy - globe_r * 0.55, gx + globe_r, gy + globe_r * 0.55),
+            draw.arc((gx - globe_r, gy - globe_r * 0.52, gx + globe_r, gy + globe_r * 0.52),
                      180, 360, fill=color, width=tick_w)
+            draw.line((gx - globe_r * 0.56, gy, gx + globe_r * 0.56, gy),
+                      fill=color, width=tick_w)
             draw.line((gx, gy - globe_r, gx, gy + globe_r), fill=color, width=tick_w)
             return True
-        # Script 3D stickwoman: small feminine stick figure silhouette.
+        # Script 3D stickwoman: posed model silhouette on a tiny stage base.
         if icon_text == '♀':
-            head_r = canvas * 0.075
-            head_y = cy - canvas * 0.19
-            hair_r = head_r * 1.24
-            draw.ellipse((cx - hair_r, head_y - hair_r * 1.04,
-                          cx + hair_r, head_y + hair_r * 1.16),
+            base_w = canvas * 0.34
+            base_h = canvas * 0.09
+            draw.ellipse((cx - base_w, cy + canvas * 0.25 - base_h,
+                          cx + base_w, cy + canvas * 0.25 + base_h),
                          outline=color, width=max(1, stroke - scale))
+            head_r = canvas * 0.072
+            head_y = cy - canvas * 0.205
+            hair_r = head_r * 1.22
+            draw.arc((cx - hair_r, head_y - hair_r * 1.05,
+                      cx + hair_r, head_y + hair_r * 1.18),
+                     190, 350, fill=color, width=max(1, stroke - scale))
             draw.ellipse((cx - head_r * 0.82, head_y - head_r * 0.72,
                           cx + head_r * 0.82, head_y + head_r * 0.82),
                          fill=color)
-            body_top = head_y + head_r * 1.10
-            waist_y = cy + canvas * 0.05
-            skirt_y = cy + canvas * 0.22
-            shoulder_w = canvas * 0.17
-            draw.line((cx - shoulder_w, body_top + canvas * 0.055,
-                       cx + shoulder_w, body_top + canvas * 0.055),
+            neck_y = head_y + head_r * 1.25
+            hip_y = cy + canvas * 0.085
+            shoulder_y = neck_y + canvas * 0.05
+            draw.line((cx, neck_y, cx, hip_y), fill=color, width=max(stroke, scale * 2))
+            draw.line((cx - canvas * 0.17, shoulder_y,
+                       cx + canvas * 0.17, shoulder_y), fill=color, width=stroke)
+            draw.line((cx - canvas * 0.15, shoulder_y,
+                       cx - canvas * 0.25, cy + canvas * 0.01), fill=color, width=stroke)
+            draw.line((cx + canvas * 0.15, shoulder_y,
+                       cx + canvas * 0.23, cy - canvas * 0.13), fill=color, width=stroke)
+            draw.line((cx - canvas * 0.07, hip_y, cx - canvas * 0.18, cy + canvas * 0.25),
                       fill=color, width=stroke)
-            draw.line((cx, body_top, cx, waist_y), fill=color, width=max(stroke, scale * 2))
-            draw.polygon(((cx, waist_y - canvas * 0.02),
-                          (cx - canvas * 0.145, skirt_y),
-                          (cx + canvas * 0.145, skirt_y)),
-                         fill=color)
-            draw.line((cx - canvas * 0.12, body_top + canvas * 0.065,
-                       cx - canvas * 0.23, cy + canvas * 0.02), fill=color, width=stroke)
-            draw.line((cx + canvas * 0.12, body_top + canvas * 0.065,
-                       cx + canvas * 0.22, cy - canvas * 0.11), fill=color, width=stroke)
-            draw.line((cx - canvas * 0.055, skirt_y, cx - canvas * 0.14, cy + canvas * 0.30),
+            draw.line((cx + canvas * 0.07, hip_y, cx + canvas * 0.14, cy + canvas * 0.25),
                       fill=color, width=stroke)
-            draw.line((cx + canvas * 0.055, skirt_y, cx + canvas * 0.14, cy + canvas * 0.30),
-                      fill=color, width=stroke)
+            hand_r = max(scale * 1.0, 2)
+            draw.ellipse((cx + canvas * 0.23 - hand_r, cy - canvas * 0.13 - hand_r,
+                          cx + canvas * 0.23 + hand_r, cy - canvas * 0.13 + hand_r), fill=color)
             foot = max(scale, 2)
-            draw.line((cx - canvas * 0.165, cy + canvas * 0.30,
-                       cx - canvas * 0.075, cy + canvas * 0.30), fill=color, width=foot)
-            draw.line((cx + canvas * 0.075, cy + canvas * 0.30,
-                       cx + canvas * 0.165, cy + canvas * 0.30), fill=color, width=foot)
+            draw.line((cx - canvas * 0.205, cy + canvas * 0.25,
+                       cx - canvas * 0.105, cy + canvas * 0.25), fill=color, width=foot)
+            draw.line((cx + canvas * 0.095, cy + canvas * 0.25,
+                       cx + canvas * 0.195, cy + canvas * 0.25), fill=color, width=foot)
             return True
-        # Script Flappy: angular bird/wing token.
+        # Script Flappy: bird in motion with a tiny pipe silhouette.
         if icon_text == '◥':
-            body = (cx - canvas * 0.20, cy - canvas * 0.11,
-                    cx + canvas * 0.18, cy + canvas * 0.16)
+            pipe_w = canvas * 0.055
+            px = cx + canvas * 0.275
+            draw.rounded_rectangle((px, cy - canvas * 0.29, px + pipe_w, cy - canvas * 0.11),
+                                   radius=max(1, scale), fill=color)
+            draw.rounded_rectangle((px, cy + canvas * 0.11, px + pipe_w, cy + canvas * 0.29),
+                                   radius=max(1, scale), fill=color)
+            body = (cx - canvas * 0.22, cy - canvas * 0.105,
+                    cx + canvas * 0.14, cy + canvas * 0.15)
             draw.ellipse(body, fill=color)
             wing = [
-                (cx - canvas * 0.13, cy + canvas * 0.02),
-                (cx - canvas * 0.01, cy - canvas * 0.28),
-                (cx + canvas * 0.11, cy + canvas * 0.03),
-                (cx - canvas * 0.02, cy + canvas * 0.12),
+                (cx - canvas * 0.13, cy + canvas * 0.01),
+                (cx - canvas * 0.02, cy - canvas * 0.285),
+                (cx + canvas * 0.095, cy + canvas * 0.015),
+                (cx - canvas * 0.02, cy + canvas * 0.115),
             ]
-            draw.line(wing + [wing[0]], fill=color, width=max(stroke, scale * 2), joint='curve')
+            draw.polygon(wing, outline=color, fill=None)
+            draw.line((wing[0][0], wing[0][1], wing[1][0], wing[1][1],
+                       wing[2][0], wing[2][1]), fill=color, width=max(stroke, scale * 2))
             beak = [
-                (cx + canvas * 0.15, cy - canvas * 0.02),
-                (cx + canvas * 0.29, cy - canvas * 0.06),
-                (cx + canvas * 0.17, cy + canvas * 0.08),
+                (cx + canvas * 0.125, cy - canvas * 0.02),
+                (cx + canvas * 0.245, cy - canvas * 0.06),
+                (cx + canvas * 0.145, cy + canvas * 0.07),
             ]
             draw.polygon(beak, fill=color)
             tail = [
-                (cx - canvas * 0.18, cy + canvas * 0.01),
-                (cx - canvas * 0.30, cy - canvas * 0.08),
-                (cx - canvas * 0.26, cy + canvas * 0.10),
+                (cx - canvas * 0.205, cy + canvas * 0.00),
+                (cx - canvas * 0.31, cy - canvas * 0.09),
+                (cx - canvas * 0.275, cy + canvas * 0.105),
             ]
             draw.polygon(tail, fill=color)
             eye = max(scale * 1.0, 2)
-            draw.ellipse((cx + canvas * 0.075 - eye, cy - canvas * 0.055 - eye,
-                          cx + canvas * 0.075 + eye, cy - canvas * 0.055 + eye),
+            draw.ellipse((cx + canvas * 0.060 - eye, cy - canvas * 0.050 - eye,
+                          cx + canvas * 0.060 + eye, cy - canvas * 0.050 + eye),
                          outline=color, width=max(1, scale))
             return True
-        # Script Snake: coiled grid/snake token.
+        # Script Snake: board, food, and a readable coiled path.
         if icon_text == '▣':
             board_r = canvas * 0.235
             draw.rounded_rectangle((cx - board_r, cy - board_r, cx + board_r, cy + board_r),
                                    radius=max(scale * 3, 3), outline=color,
                                    width=max(1, stroke - scale))
             grid_w = max(1, scale)
-            draw.line((cx - board_r, cy, cx + board_r, cy), fill=color, width=grid_w)
-            draw.line((cx, cy - board_r, cx, cy + board_r), fill=color, width=grid_w)
+            for off in (-board_r / 3.0, board_r / 3.0):
+                draw.line((cx - board_r, cy + off, cx + board_r, cy + off),
+                          fill=color, width=grid_w)
+                draw.line((cx + off, cy - board_r, cx + off, cy + board_r),
+                          fill=color, width=grid_w)
             step = canvas * 0.088
             pts = [
                 (cx - step * 1.9, cy - step * 1.15),
@@ -891,6 +909,11 @@ class MenuCircleButtonRenderer:
             head_r = max(scale * 2.0, 3)
             hx, hy = pts[-1]
             draw.ellipse((hx - head_r, hy - head_r, hx + head_r, hy + head_r), fill=color)
+            food_r = max(scale * 1.7, 3)
+            fx = cx - board_r * 0.55
+            fy = cy + board_r * 0.58
+            draw.ellipse((fx - food_r, fy - food_r, fx + food_r, fy + food_r),
+                         outline=color, width=max(1, scale))
             tongue = max(scale, 1)
             draw.line((hx + head_r * 0.6, hy, hx + head_r * 1.6, hy - tongue),
                       fill=color, width=max(1, scale))
