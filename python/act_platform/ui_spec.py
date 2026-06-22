@@ -216,6 +216,7 @@ def _normalize_canvas(node: Mapping[str, Any]) -> dict:
         "z": _cz(node.get("z"), 0),
         "width": width,
         "height": height,
+        "draggable": bool(node.get("draggable", False)),
         "bg": _canvas_color(node.get("bg"), "body"),
         "ops": ops,
     }
@@ -278,6 +279,16 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "position": _num_list(transform.get("position"), 3, (0.0, -1.0, 0.0)),
     }
 
+    raw_retarget = node.get("retarget")
+    retarget = _json_safe_map(raw_retarget) if isinstance(raw_retarget, Mapping) else {}
+    if retarget:
+        retarget.setdefault("mode", "humanoid_auto")
+        retarget.setdefault("rest_pose", "auto")
+        retarget.setdefault("preserve_proportions", True)
+
+    raw_skeleton = node.get("skeleton")
+    skeleton = _json_safe_map(raw_skeleton) if isinstance(raw_skeleton, Mapping) else {}
+
     return {
         "type": "model3d",
         "id": _s(node.get("id"), 120),
@@ -292,6 +303,8 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "action": normalized_action,
         "camera": normalized_camera,
         "transform": normalized_transform,
+        "retarget": retarget,
+        "skeleton": skeleton,
         "background": _s(node.get("background") or "transparent", 40),
         "fallback": _s(node.get("fallback"), 400),
     }
@@ -580,7 +593,7 @@ class UI:
     @staticmethod
     def canvas(width: int, height: int, ops: Optional[Iterable[Any]] = None,
                bg: str = "body", x: int = 0, y: int = 0, z: int = 0,
-               id: Any = "") -> dict:
+               id: Any = "", draggable: bool = False) -> dict:
         """A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
         :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
         ``#hex``. Rendered identically on Tk and WebView."""
@@ -589,6 +602,7 @@ class UI:
                 "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
                 "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
                 "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 160))),
+                "draggable": bool(draggable),
                 "bg": bg, "ops": list(ops or [])}
 
     @staticmethod

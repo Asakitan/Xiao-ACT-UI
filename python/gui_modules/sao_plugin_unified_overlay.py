@@ -632,12 +632,13 @@ class PluginUnifiedOverlayHost:
         return int(drawable.get("x") or 0), int(drawable.get("y") or 0)
 
     def _drawable_draggable(self, drawable: Mapping[str, Any]) -> bool:
-        if str(drawable.get("kind") or "").lower() != "model3d":
-            return False
+        kind = str(drawable.get("kind") or "").lower()
         node = drawable.get("node")
         if not isinstance(node, Mapping):
-            return True
-        return bool(node.get("draggable", True))
+            return kind == "model3d"
+        if "draggable" in node:
+            return bool(node.get("draggable"))
+        return kind == "model3d"
 
     def _install_drag_callbacks(self, key: str, state: dict[str, Any]) -> None:
         layer = state.get("layer")
@@ -688,7 +689,9 @@ class PluginUnifiedOverlayHost:
                 layer.create_input_proxy(self.root)
             if hasattr(layer, "sync_input_proxy"):
                 layer.sync_input_proxy()
+            state["input_ready"] = True
         except Exception:
+            state["input_ready"] = False
             pass
 
     def _ensure_layer(self, drawable: Mapping[str, Any], width: int, height: int) -> dict[str, Any] | None:
@@ -707,8 +710,18 @@ class PluginUnifiedOverlayHost:
             layer = state.get("layer")
             if layer is not None:
                 try:
-                    layer.set_geometry(x, y, max(1, int(width)), max(1, int(height)))
-                    if bool(state.get("click_through", True)) != click_through:
+                    w = max(1, int(width))
+                    h = max(1, int(height))
+                    geometry_changed = (
+                        int(state.get("x") or 0) != x
+                        or int(state.get("y") or 0) != y
+                        or int(state.get("width") or 1) != w
+                        or int(state.get("height") or 1) != h
+                    )
+                    if geometry_changed:
+                        layer.set_geometry(x, y, w, h)
+                    click_through_changed = bool(state.get("click_through", True)) != click_through
+                    if click_through_changed:
                         try:
                             layer.click_through = click_through
                             if click_through:
@@ -730,16 +743,27 @@ class PluginUnifiedOverlayHost:
                         state["z"] = z
                     state["x"] = x
                     state["y"] = y
-                    state["width"] = max(1, int(width))
-                    state["height"] = max(1, int(height))
-                    if draggable:
+                    state["width"] = w
+                    state["height"] = h
+                    if bool(state.get("draggable", False)) != draggable:
+                        state["draggable"] = draggable
+                        if draggable:
+                            self._install_drag_callbacks(key, state)
+                        else:
+                            try:
+                                layer.set_input_callbacks()
+                            except Exception:
+                                pass
+                            state["input_ready"] = False
+                    elif draggable and not state.get("input_ready"):
                         self._install_drag_callbacks(key, state)
-                    else:
+                    if geometry_changed:
                         try:
-                            layer.set_input_callbacks()
+                            layer.sync_input_proxy()
                         except Exception:
                             pass
-                    self._force_host_passthrough()
+                    if geometry_changed or click_through_changed:
+                        self._force_host_passthrough()
                     return state
                 except Exception:
                     self._destroy_layer(key)
@@ -770,6 +794,9 @@ class PluginUnifiedOverlayHost:
                 "width": max(1, int(width)),
                 "height": max(1, int(height)),
                 "click_through": click_through,
+                "draggable": draggable,
+                "input_ready": False,
+                "visible": False,
             }
             self._layers[key] = state
             if draggable:
@@ -812,7 +839,12 @@ class PluginUnifiedOverlayHost:
             self._destroy_all_layers()
             return
         pal = _pal()
-        backend_status = probe_model3d_backend() if callable(probe_model3d_backend) else None
+        needs_model3d = any(str(item.get("kind") or "").lower() == "model3d" for item in drawables)
+        backend_status = (
+            probe_model3d_backend()
+            if needs_model3d and callable(probe_model3d_backend)
+            else None
+        )
         active_keys: set[str] = set()
         for drawable in drawables:
             key = str(drawable.get("key") or "")
@@ -831,16 +863,22 @@ class PluginUnifiedOverlayHost:
             if layer is None or presenter is None:
                 continue
             try:
-                if signature != state.get("last_signature"):
+                frame_changed = signature != state.get("last_signature")
+                target_visible = not self._hidden
+                visible_changed = bool(state.get("visible", False)) != target_visible
+                if frame_changed:
                     presenter.set_frame(bgra, int(width), int(height))
                     state["last_signature"] = signature
                 state["has_frame"] = True
-                if not self._hidden:
-                    layer.show()
-                else:
-                    layer.hide()
-                layer.sync_input_proxy()
-                layer.request_redraw()
+                if visible_changed:
+                    if target_visible:
+                        layer.show()
+                    else:
+                        layer.hide()
+                    state["visible"] = target_visible
+                if frame_changed or visible_changed:
+                    layer.sync_input_proxy()
+                    layer.request_redraw()
             except Exception:
                 self._destroy_layer(key)
                 active_keys.discard(key)

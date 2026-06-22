@@ -28,6 +28,12 @@ class Model3DSpecTests(unittest.TestCase):
         self.assertEqual(node["x"], 123)
         self.assertEqual(node["y"], -9)
         self.assertEqual(node["z"], 7)
+        self.assertIs(node["draggable"], False)
+
+        drag_node = normalize_ui_spec(UI.canvas(
+            64, 32, [], bg="transparent", x=1, y=2, z=3,
+            id="drag_meter", draggable=True))["nodes"][0]
+        self.assertIs(drag_node["draggable"], True)
 
         clamped = normalize_ui_spec({
             "type": "canvas",
@@ -51,6 +57,8 @@ class Model3DSpecTests(unittest.TestCase):
             "action": {"speed": "fast", "json": {"ok": True}},
             "camera": {"fov": 999},
             "transform": {"scale": -4},
+            "retarget": {"mode": "humanoid_auto", "preserve_proportions": True},
+            "skeleton": {"bone_map": {"hips": "mixamorig:Hips"}},
             "x": 12,
             "y": 34,
             "z": -5,
@@ -64,6 +72,9 @@ class Model3DSpecTests(unittest.TestCase):
         self.assertEqual(node["action"]["speed"], 1.0)
         self.assertEqual(node["camera"]["fov"], 120.0)
         self.assertEqual(node["transform"]["scale"], 0.001)
+        self.assertEqual(node["retarget"]["mode"], "humanoid_auto")
+        self.assertIs(node["retarget"]["preserve_proportions"], True)
+        self.assertEqual(node["skeleton"]["bone_map"]["hips"], "mixamorig:Hips")
         self.assertEqual((node["x"], node["y"], node["z"]), (12, 34, -5))
         self.assertIs(node["draggable"], True)
         self.assertEqual(node["phase"], 0.0)
@@ -236,6 +247,111 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
 
         self.assertFalse(host._layers)
         self.assertTrue(all(layer.destroyed for layer in fake_overlay.created))
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_canvas_only_noop_refresh_skips_model_probe_and_layer_churn(self) -> None:
+        overlays = [{
+            "plugin_id": "plug",
+            "surface": "unioverlay",
+            "spec": normalize_ui_spec({
+                "nodes": [
+                    UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="accent")],
+                              x=11, y=22, z=3, id="meter")
+                ],
+            }),
+        }]
+
+        class FakeLayer:
+            def __init__(self, name, w, h, x, y, z, click_through=True):
+                self.name = name
+                self.geometry = (x, y, w, h)
+                self.z_order = z
+                self.click_through = click_through
+                self.visible = False
+                self.geometry_calls = 0
+                self.redraws = 0
+                self.syncs = 0
+                self.shows = 0
+
+            def show(self):
+                self.visible = True
+                self.shows += 1
+
+            def hide(self):
+                self.visible = False
+
+            def request_redraw(self):
+                self.redraws += 1
+
+            def set_geometry(self, x, y, w, h):
+                self.geometry = (x, y, w, h)
+                self.geometry_calls += 1
+
+            def set_input_callbacks(self, cursor_pos_fn=None, cursor_leave_fn=None,
+                                    mouse_button_fn=None, scroll_fn=None):
+                return None
+
+            def create_input_proxy(self, _root):
+                return None
+
+            def sync_input_proxy(self):
+                self.syncs += 1
+
+            def destroy_input_proxy(self):
+                return None
+
+        class FakeOverlay:
+            def __init__(self):
+                self._running = True
+                self.created = []
+
+            def create_layer(self, name, w, h, x, y, z, click_through=True, bgra_swizzle=True):
+                layer = FakeLayer(name, w, h, x, y, z, click_through)
+                self.created.append(layer)
+                return layer
+
+            def destroy_layer(self, name):
+                return None
+
+            def force_host_input_passthrough(self):
+                return None
+
+        class FakePresenter:
+            def __init__(self, layer):
+                self.layer = layer
+                self.frames = []
+                layer.presenter = self
+
+            def set_frame(self, bgra, w, h):
+                self.frames.append((len(bgra), w, h))
+
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+        fake_overlay = FakeOverlay()
+
+        with mock.patch.object(overlay_mod, "get_unified_overlay", lambda _root: fake_overlay), \
+             mock.patch.object(overlay_mod, "CompositorBgraPresenter", FakePresenter), \
+             mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": overlays}), \
+             mock.patch.object(overlay_mod, "probe_model3d_backend",
+                               side_effect=AssertionError("canvas refresh should not probe model3d backend")):
+            host._refresh_now()
+            layer = fake_overlay.created[0]
+            first_counts = (
+                layer.geometry_calls,
+                layer.redraws,
+                layer.syncs,
+                layer.shows,
+                len(layer.presenter.frames),
+            )
+            host._refresh_now()
+
+        self.assertEqual(layer.geometry, (11, 22, 20, 10))
+        self.assertEqual(layer.geometry_calls, first_counts[0])
+        self.assertEqual(layer.redraws, first_counts[1])
+        self.assertEqual(layer.syncs, first_counts[2])
+        self.assertEqual(layer.shows, first_counts[3])
+        self.assertEqual(len(layer.presenter.frames), first_counts[4])
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_model3d_layer_drag_updates_position_without_affecting_canvas_clickthrough(self) -> None:
