@@ -383,14 +383,20 @@ class Model3DBackendTests(unittest.TestCase):
             })["nodes"][0]
 
             meta = get_model_metadata(node)
+            preview_face = list(meta["mesh"]["preview"]["faces"][0])
+            meta["mesh"]["preview"]["vertices"][0][0] = 999.0
+            again_preview_x = get_model_metadata(node)["mesh"]["preview"]["vertices"][0][0]
 
         self.assertEqual(meta["mesh"]["source"], "obj")
         self.assertEqual(meta["mesh"]["vertex_count"], 4)
         self.assertEqual(meta["mesh"]["face_count"], 2)
         self.assertEqual(meta["mesh"]["bbox"]["min"], [-1.0, -2.0, 0.0])
         self.assertEqual(meta["mesh"]["bbox"]["max"], [2.0, 3.0, 4.0])
+        self.assertEqual(len(meta["mesh"]["preview"]["vertices"]), 4)
+        self.assertEqual(preview_face, [0, 1, 2])
         self.assertIn("CuteAvatar", meta["nodes"])
         self.assertIn("body", meta["materials"])
+        self.assertEqual(again_preview_x, -1.0)
 
     def test_model_metadata_extracts_ascii_fbx_mesh_bones_and_clips(self) -> None:
         clear_model3d_metadata_caches()
@@ -429,6 +435,7 @@ Objects:  {
         self.assertEqual(meta["mesh"]["vertex_count"], 3)
         self.assertEqual(meta["mesh"]["face_count"], 1)
         self.assertEqual(meta["mesh"]["bbox"]["max"], [1.0, 2.0, 3.0])
+        self.assertEqual(meta["mesh"]["preview"]["faces"], [[0, 1, 2]])
         self.assertIn("mixamorig:Hips", meta["bone_names"])
         self.assertIn("Wave", meta["clips"])
         self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
@@ -461,6 +468,8 @@ Objects:  {
         self.assertEqual(meta["mesh"]["mesh_count"], 1)
         self.assertEqual(meta["mesh"]["bbox"]["min"], [-0.5, 0.0, -0.5])
         self.assertEqual(meta["mesh"]["bbox"]["max"], [0.5, 1.75, 0.5])
+        self.assertEqual(meta["mesh"]["preview"]["source"], "bbox")
+        self.assertEqual(len(meta["mesh"]["preview"]["vertices"]), 8)
         self.assertIn("Head", meta["nodes"])
         self.assertIn("dress", meta["materials"])
 
@@ -847,6 +856,42 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertIsNotNone(image)
         crop = image.crop((0, 0, 110, 42))
         self.assertTrue(crop.getchannel("A").getbbox())
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_software_mesh_preview_renders_before_avatar_fallback(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_software_") as root:
+            model_path = Path(root) / "avatar.obj"
+            model_path.write_text(
+                "\n".join([
+                    "o PreviewAvatar",
+                    "v -1 0 0",
+                    "v 1 0 0",
+                    "v 1 2 0",
+                    "v -1 2 0",
+                    "v -1 0 1",
+                    "v 1 0 1",
+                    "v 1 2 1",
+                    "v -1 2 1",
+                    "f 1 2 3 4",
+                    "f 5 6 7 8",
+                    "f 1 2 6 5",
+                    "f 2 3 7 6",
+                ]),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "width": 96,
+                "height": 128,
+                "model": {"path": str(model_path), "format": "obj"},
+            })["nodes"][0]
+
+            with mock.patch("render.model3d_overlay.evaluate_retarget_pose") as pose:
+                image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        self.assertEqual(image.size, (96, 128))
+        self.assertIsNotNone(image.getchannel("A").getbbox())
+        self.assertEqual(pose.call_count, 0)
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_retarget_pose_preview_animates_existing_model_without_extra_window(self) -> None:

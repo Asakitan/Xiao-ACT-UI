@@ -7,6 +7,7 @@ can stay safe when model3d assets or AssimpNet files are absent.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -26,6 +27,8 @@ _NATIVE_NAMES = (
 )
 _CACHE_LIMIT = 128
 _MODEL_PARSE_LIMIT = 4 * 1024 * 1024
+_MESH_PREVIEW_VERTEX_LIMIT = 2048
+_MESH_PREVIEW_FACE_LIMIT = 4096
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -333,7 +336,7 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     for key in ("data", "selected", "model", "action", "sidecar", "retarget", "mesh", "rest_positions"):
         item = out.get(key)
         if isinstance(item, Mapping):
-            out[key] = dict(item)
+            out[key] = copy.deepcopy(dict(item))
     for key in ("bone_names", "clips", "warnings", "unresolved", "nodes", "materials", "metadata_errors"):
         item = out.get(key)
         if isinstance(item, tuple):
@@ -524,6 +527,54 @@ def _bbox(points: list[tuple[float, float, float]]) -> dict[str, list[float]]:
     }
 
 
+def _preview_vertices(points: list[tuple[float, float, float]]) -> list[list[float]]:
+    out: list[list[float]] = []
+    for x, y, z in points:
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            continue
+        out.append([float(x), float(y), float(z)])
+        if len(out) >= _MESH_PREVIEW_VERTEX_LIMIT:
+            break
+    return out
+
+
+def _bbox_preview(box: Mapping[str, Any]) -> dict[str, Any]:
+    mins = box.get("min") if isinstance(box, Mapping) else None
+    maxs = box.get("max") if isinstance(box, Mapping) else None
+    if not isinstance(mins, list) or not isinstance(maxs, list) or len(mins) < 3 or len(maxs) < 3:
+        return {}
+    try:
+        min_x, min_y, min_z = float(mins[0]), float(mins[1]), float(mins[2])
+        max_x, max_y, max_z = float(maxs[0]), float(maxs[1]), float(maxs[2])
+        if not all(math.isfinite(v) for v in (min_x, min_y, min_z, max_x, max_y, max_z)):
+            return {}
+    except Exception:
+        return {}
+    vertices = [
+        [min_x, min_y, min_z], [max_x, min_y, min_z],
+        [max_x, max_y, min_z], [min_x, max_y, min_z],
+        [min_x, min_y, max_z], [max_x, min_y, max_z],
+        [max_x, max_y, max_z], [min_x, max_y, max_z],
+    ]
+    faces = [
+        [0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4],
+        [2, 3, 7, 6], [1, 2, 6, 5], [0, 3, 7, 4],
+    ]
+    return {"vertices": vertices, "faces": faces, "source": "bbox"}
+
+
+def _obj_index(token: str, vertex_count: int) -> int | None:
+    head = str(token or "").split("/", 1)[0].strip()
+    if not head:
+        return None
+    try:
+        raw = int(head)
+    except Exception:
+        return None
+    index = raw - 1 if raw > 0 else vertex_count + raw
+    return index if 0 <= index < vertex_count else None
+
+
 def _float_triplet(values: list[str]) -> tuple[float, float, float] | None:
     if len(values) < 3:
         return None
@@ -535,6 +586,7 @@ def _float_triplet(values: list[str]) -> tuple[float, float, float] | None:
 
 def _parse_obj_metadata(path: Path) -> dict[str, Any]:
     points: list[tuple[float, float, float]] = []
+    faces: list[list[int]] = []
     face_count = 0
     nodes: list[str] = []
     materials: list[str] = []
@@ -555,8 +607,13 @@ def _parse_obj_metadata(path: Path) -> dict[str, Any]:
                     if point is not None:
                         points.append(point)
                 elif line.startswith("f "):
-                    if len(line.split()) >= 4:
+                    parts = line.split()[1:]
+                    if len(parts) >= 3:
                         face_count += 1
+                        if len(faces) < _MESH_PREVIEW_FACE_LIMIT:
+                            face = [idx for idx in (_obj_index(part, len(points)) for part in parts) if idx is not None]
+                            if len(face) >= 3 and all(idx < _MESH_PREVIEW_VERTEX_LIMIT for idx in face):
+                                faces.append(face[:8])
                 elif line.startswith(("o ", "g ")):
                     name = line[2:].strip()
                     if name:
@@ -567,12 +624,19 @@ def _parse_obj_metadata(path: Path) -> dict[str, Any]:
                         materials.append(name)
     except Exception as exc:
         errors.append(str(exc))
+    box = _bbox(points)
     return {
         "mesh": {
             "source": "obj",
             "vertex_count": len(points),
             "face_count": face_count,
-            "bbox": _bbox(points),
+            "bbox": box,
+            "preview": {
+                "vertices": _preview_vertices(points),
+                "faces": faces,
+                "source": "obj",
+                "truncated": len(points) > _MESH_PREVIEW_VERTEX_LIMIT or face_count > _MESH_PREVIEW_FACE_LIMIT,
+            },
         },
         "nodes": _unique_strings(nodes),
         "materials": _unique_strings(materials),
@@ -622,12 +686,26 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
             points.append((values[idx], values[idx + 1], values[idx + 2]))
 
     face_count = 0
+    faces: list[list[int]] = []
     pvi_match = re.search(r"PolygonVertexIndex:\s*\*\d+\s*{\s*a:\s*([^}]*)}", text, re.S)
     if pvi_match:
+        current: list[int] = []
         for value in _NUMBER_RE.finditer(pvi_match.group(1)):
             try:
-                if int(float(value.group(0))) < 0:
+                raw_index = int(float(value.group(0)))
+                end_face = raw_index < 0
+                index = (-raw_index - 1) if end_face else raw_index
+                if 0 <= index < len(points) and (not end_face or not current or current[-1] != index):
+                    current.append(index)
+                if end_face:
                     face_count += 1
+                    if (
+                        len(current) >= 3
+                        and len(faces) < _MESH_PREVIEW_FACE_LIMIT
+                        and all(idx < _MESH_PREVIEW_VERTEX_LIMIT for idx in current)
+                    ):
+                        faces.append(current[:8])
+                    current = []
             except Exception:
                 continue
 
@@ -654,12 +732,19 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
         if name:
             clips.append(name)
 
+    box = _bbox(points)
     return {
         "mesh": {
             "source": "fbx_ascii",
             "vertex_count": len(points),
             "face_count": face_count,
-            "bbox": _bbox(points),
+            "bbox": box,
+            "preview": {
+                "vertices": _preview_vertices(points),
+                "faces": faces,
+                "source": "fbx_ascii",
+                "truncated": len(points) > _MESH_PREVIEW_VERTEX_LIMIT or face_count > _MESH_PREVIEW_FACE_LIMIT,
+            },
         },
         "nodes": _unique_strings(nodes),
         "bone_names": _unique_strings(bones),
@@ -700,13 +785,15 @@ def _parse_gltf_metadata(path: Path) -> dict[str, Any]:
                 except Exception:
                     pass
     mesh_count = len(data.get("meshes") or []) if isinstance(data.get("meshes"), list) else 0
+    box = _bbox(bbox_points)
     return {
         "mesh": {
             "source": "gltf",
             "mesh_count": mesh_count,
             "vertex_count": 0,
             "face_count": 0,
-            "bbox": _bbox(bbox_points),
+            "bbox": box,
+            "preview": _bbox_preview(box),
         },
         "nodes": _unique_strings(nodes),
         "materials": _unique_strings(materials),

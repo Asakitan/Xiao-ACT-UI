@@ -41,6 +41,11 @@ try:
 except Exception:  # pragma: no cover - imported defensively by overlay host
     try_render_native_model3d_node = None  # type: ignore[assignment]
 
+try:
+    from render.model3d_software import render_software_model3d_preview
+except Exception:  # pragma: no cover - imported defensively by overlay host
+    render_software_model3d_preview = None  # type: ignore[assignment]
+
 
 def _rgba(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     if ImageColor is None:
@@ -407,6 +412,14 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
             native_image = None
         if native_image is not None:
             return native_image
+
+    if callable(render_software_model3d_preview):
+        try:
+            software_image = render_software_model3d_preview(node, pal)
+        except Exception:
+            software_image = None
+        if software_image is not None:
+            return software_image
 
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
