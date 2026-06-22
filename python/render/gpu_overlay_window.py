@@ -344,13 +344,17 @@ def _apply_dwm_transparency(hwnd: int) -> None:
             _gdi32.DeleteObject(bb.hRgnBlur)
     except Exception:
         pass
-    # L3
+    # L3 — ACCENT_ENABLE_TRANSPARENTGRADIENT (2) with fully transparent
+    # gradient colour.  Enables the DWM composition pipeline for
+    # per-pixel alpha without adding a visible blur effect.
+    # ACCENT_ENABLE_BLURBEHIND (3) must NOT be used — it literally
+    # Gaussian-blurs the entire desktop behind the overlay.
     if _SetWindowCompositionAttribute is not None:
         try:
             _WCA_ACCENT_POLICY = 19
-            _ACCENT_ENABLE_BLURBEHIND = 3
             accent = _ACCENT_POLICY()
-            accent.AccentState = _ACCENT_ENABLE_BLURBEHIND
+            accent.AccentState = 2  # ACCENT_ENABLE_TRANSPARENTGRADIENT
+            accent.GradientColor = 0x00000000
             data = _WINCOMPATTRDATA()
             data.Attribute = _WCA_ACCENT_POLICY
             data.Data = ctypes.cast(

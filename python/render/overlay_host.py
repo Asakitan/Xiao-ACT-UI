@@ -684,7 +684,8 @@ class OverlayHost:
             _swca.restype = wt.BOOL
             _swca.argtypes = [wt.HWND, ctypes.POINTER(_WINCOMPATTRDATA)]
             accent = _ACCENT_POLICY()
-            accent.AccentState = 3  # ACCENT_ENABLE_BLURBEHIND
+            accent.AccentState = 2  # ACCENT_ENABLE_TRANSPARENTGRADIENT
+            accent.GradientColor = 0x00000000
             data = _WINCOMPATTRDATA()
             data.Attribute = 19  # WCA_ACCENT_POLICY
             data.Data = ctypes.cast(
