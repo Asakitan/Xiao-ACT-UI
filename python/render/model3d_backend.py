@@ -27,6 +27,59 @@ _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
+HUMANOID_BONES = (
+    "root",
+    "hips",
+    "spine",
+    "chest",
+    "neck",
+    "head",
+    "left_shoulder",
+    "left_arm",
+    "left_forearm",
+    "left_hand",
+    "right_shoulder",
+    "right_arm",
+    "right_forearm",
+    "right_hand",
+    "left_leg",
+    "left_knee",
+    "left_foot",
+    "right_leg",
+    "right_knee",
+    "right_foot",
+)
+
+_BONE_ALIASES: dict[str, tuple[str, ...]] = {
+    "root": ("root", "armature", "scene", "origin"),
+    "hips": ("hips", "hip", "pelvis", "pelvisbone", "waist", "mixamorig:hips", "bip001pelvis"),
+    "spine": ("spine", "spine1", "spine01", "spine_01", "torso", "body"),
+    "chest": ("chest", "upperchest", "spine2", "spine02", "spine_02", "breast"),
+    "neck": ("neck", "neck1", "neck01"),
+    "head": ("head", "headtop", "head_end"),
+    "left_shoulder": ("leftshoulder", "lshoulder", "shoulder_l", "l_clavicle", "leftclavicle", "clavicle_l"),
+    "left_arm": ("leftarm", "leftupperarm", "upperarm_l", "lupperarm", "arm_l", "l_arm"),
+    "left_forearm": ("leftforearm", "leftlowerarm", "forearm_l", "lowerarm_l", "lelbow", "l_forearm"),
+    "left_hand": ("lefthand", "hand_l", "lhand", "l_hand", "leftwrist", "wrist_l"),
+    "right_shoulder": ("rightshoulder", "rshoulder", "shoulder_r", "r_clavicle", "rightclavicle", "clavicle_r"),
+    "right_arm": ("rightarm", "rightupperarm", "upperarm_r", "rupperarm", "arm_r", "r_arm"),
+    "right_forearm": ("rightforearm", "rightlowerarm", "forearm_r", "lowerarm_r", "relbow", "r_forearm"),
+    "right_hand": ("righthand", "hand_r", "rhand", "r_hand", "rightwrist", "wrist_r"),
+    "left_leg": ("leftupleg", "leftupperleg", "leftleg", "thigh_l", "upleg_l", "lthigh", "l_leg"),
+    "left_knee": ("leftleg", "leftlowerleg", "calf_l", "leg_l", "lknee", "shin_l"),
+    "left_foot": ("leftfoot", "foot_l", "lfoot", "l_foot", "leftankle", "ankle_l"),
+    "right_leg": ("rightupleg", "rightupperleg", "rightleg", "thigh_r", "upleg_r", "rthigh", "r_leg"),
+    "right_knee": ("rightleg", "rightlowerleg", "calf_r", "leg_r", "rknee", "shin_r"),
+    "right_foot": ("rightfoot", "foot_r", "rfoot", "r_foot", "rightankle", "ankle_r"),
+}
+
+_COARSE_BONE_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "left_arm": ("left_arm", "left_upper_arm"),
+    "right_arm": ("right_arm", "right_upper_arm"),
+    "left_leg": ("left_leg", "left_upper_leg"),
+    "right_leg": ("right_leg", "right_upper_leg"),
+}
+
 
 @dataclass(frozen=True)
 class Model3DBackendStatus:
@@ -166,7 +219,7 @@ def resolve_model_path(path_text: Any) -> Path:
 
 
 def resolve_action_path(path_text: Any, node: Mapping[str, Any] | None = None) -> Path:
-    """Resolve an action JSON path relative to cwd, model dir, and workspace.
+    """Resolve an action config or motion path relative to cwd/model dirs.
 
     Script plugins commonly keep model and action files side-by-side.  Relative
     action files therefore try the resolved model directory before falling back
@@ -229,14 +282,153 @@ def _cache_put(cache: dict[tuple[Any, ...], dict[str, Any]], key: tuple[Any, ...
 
 def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     out = dict(value)
-    for key in ("data", "selected", "model", "action"):
+    for key in ("data", "selected", "model", "action", "sidecar", "retarget"):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = dict(item)
+    for key in ("bone_names", "clips", "warnings", "unresolved"):
+        item = out.get(key)
+        if isinstance(item, tuple):
+            out[key] = list(item)
     errors = out.get("errors")
     if isinstance(errors, tuple):
         out["errors"] = list(errors)
     return out
+
+
+def _sidecar_candidates(model_path: Path) -> tuple[Path, ...]:
+    if not str(model_path):
+        return ()
+    candidates: list[Path] = []
+    try:
+        if model_path.suffix:
+            candidates.append(model_path.with_suffix(model_path.suffix + ".model3d.json"))
+            candidates.append(model_path.with_suffix(model_path.suffix + ".skeleton.json"))
+        candidates.append(model_path.with_suffix(".model3d.json"))
+        candidates.append(model_path.with_suffix(".skeleton.json"))
+        candidates.append(model_path.parent / "model3d.json")
+    except Exception:
+        return ()
+    out: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(candidate)
+    return tuple(out)
+
+
+def _first_existing_sidecar(model_path: Path) -> tuple[Path, bool, int, int]:
+    for candidate in _sidecar_candidates(model_path):
+        exists, size, mtime_ns = _file_signature(candidate)
+        if exists:
+            return candidate, exists, size, mtime_ns
+    candidates = _sidecar_candidates(model_path)
+    candidate = candidates[0] if candidates else Path("")
+    return candidate, False, 0, 0
+
+
+def _extract_names(value: Any) -> list[str]:
+    out: list[str] = []
+
+    def _visit(item: Any) -> None:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                out.append(text)
+            return
+        if isinstance(item, Mapping):
+            for key in ("name", "bone", "id"):
+                text = str(item.get(key) or "").strip()
+                if text:
+                    out.append(text)
+                    return
+            nested = item.get("children")
+            if isinstance(nested, (list, tuple)):
+                for child in nested:
+                    _visit(child)
+            return
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                _visit(child)
+
+    _visit(value)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in out:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+    return unique
+
+
+def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    src = dict(value)
+    skeleton = src.get("skeleton") if isinstance(src.get("skeleton"), Mapping) else {}
+    bones = (
+        _extract_names(src.get("bones"))
+        or _extract_names(src.get("bone_names"))
+        or _extract_names((skeleton or {}).get("bones"))
+        or _extract_names((skeleton or {}).get("bone_names"))
+        or _extract_names(src.get("nodes"))
+    )
+    clips = (
+        _extract_names(src.get("clips"))
+        or _extract_names(src.get("animations"))
+        or _extract_names(src.get("actions"))
+    )
+    out: dict[str, Any] = {}
+    if bones:
+        out["bone_names"] = tuple(bones)
+    if clips:
+        out["clips"] = tuple(clips)
+    if skeleton:
+        bone_map = skeleton.get("bone_map")
+        if isinstance(bone_map, Mapping):
+            out["bone_map"] = {str(k): str(v) for k, v in bone_map.items()}
+    for key in ("profile", "up_axis", "unit_scale", "rest_pose"):
+        if key in src:
+            out[key] = _json_safe_scalar(src.get(key))
+        elif skeleton and key in skeleton:
+            out[key] = _json_safe_scalar(skeleton.get(key))
+    return out
+
+
+def _json_safe_scalar(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _model_sidecar_signature(path: Path, exists: bool) -> tuple[Path, tuple[str, bool, int, int]]:
+    if not exists:
+        return Path(""), ("", False, 0, 0)
+    sidecar, sidecar_exists, size, mtime_ns = _first_existing_sidecar(path)
+    signature = (str(sidecar) if sidecar else "", sidecar_exists, size, mtime_ns)
+    return sidecar, signature
+
+
+def _read_model_sidecar(sidecar: Path, exists: bool) -> dict[str, Any]:
+    if not exists or not str(sidecar):
+        return {}
+    try:
+        with open(sidecar, "r", encoding="utf-8") as fp:
+            raw = json.load(fp)
+        meta = _extract_sidecar_metadata(raw)
+        meta["path"] = str(sidecar)
+        return meta
+    except Exception as exc:
+        return {"path": str(sidecar), "errors": (str(exc),)}
+
+
+def _is_json_action_file(path: Path, action_file: str) -> bool:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return True
+    return bool(action_file and not suffix)
 
 
 def clear_model3d_metadata_caches() -> None:
@@ -257,10 +449,12 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
     reload_key = str((model or {}).get("reload_key") or node.get("reload_key") or "")
     resolved = resolve_model_path(path_text)
     exists, size, mtime_ns = _file_signature(resolved) if path_text else (False, 0, 0)
-    cache_key = (str(resolved), fmt, reload_key, exists, size, mtime_ns)
+    sidecar_path, sidecar_signature = _model_sidecar_signature(resolved, exists)
+    cache_key = (str(resolved), fmt, reload_key, exists, size, mtime_ns, sidecar_signature)
     cached = _MODEL_METADATA_CACHE.get(cache_key)
     if cached is not None:
         return _copy_metadata(cached)
+    sidecar_meta = _read_model_sidecar(sidecar_path, bool(sidecar_signature[1]))
     metadata = {
         "path": path_text,
         "resolved_path": str(resolved),
@@ -270,6 +464,9 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "size": size,
         "mtime_ns": mtime_ns,
         "extension": resolved.suffix.lower(),
+        "sidecar": dict(sidecar_meta),
+        "bone_names": tuple(sidecar_meta.get("bone_names") or ()),
+        "clips": tuple(sidecar_meta.get("clips") or ()),
         "cache_key": cache_key,
     }
     _cache_put(_MODEL_METADATA_CACHE, cache_key, metadata)
@@ -317,25 +514,32 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
             errors.append(str(exc))
     if action_file:
         if file_exists:
-            try:
-                with open(action_path, "r", encoding="utf-8") as fp:
-                    loaded = json.load(fp)
-                if isinstance(loaded, Mapping):
-                    data.update(dict(loaded))
-                else:
-                    errors.append("action file must decode to an object")
-            except Exception as exc:
-                errors.append(str(exc))
+            if _is_json_action_file(action_path, action_file):
+                try:
+                    with open(action_path, "r", encoding="utf-8") as fp:
+                        loaded = json.load(fp)
+                    if isinstance(loaded, Mapping):
+                        data.update(dict(loaded))
+                    else:
+                        errors.append("action file must decode to an object")
+                except Exception as exc:
+                    errors.append(str(exc))
         else:
             errors.append(f"action file is missing: {action_file}")
 
     selected = data.get(name) if isinstance(data.get(name), Mapping) else {}
+    file_kind = "json" if action_file and _is_json_action_file(action_path, action_file) else "motion" if action_file else ""
     metadata = {
         "name": name,
         "data": dict(data),
         "selected": dict(selected or {}),
         "file": action_file,
         "resolved_file": str(action_path) if action_file else "",
+        "file_kind": file_kind,
+        "motion_file": action_file if file_kind == "motion" else "",
+        "resolved_motion_file": str(action_path) if file_kind == "motion" else "",
+        "motion_exists": bool(file_exists) if file_kind == "motion" else False,
+        "motion_format": action_path.suffix.lower().lstrip(".") if file_kind == "motion" else "",
         "errors": tuple(errors),
         "cache_key": cache_key,
     }
@@ -343,6 +547,169 @@ def get_action_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         metadata["selected"]["_load_error"] = "; ".join(errors)
     _cache_put(_ACTION_METADATA_CACHE, cache_key, metadata)
     return _copy_metadata(metadata)
+
+
+def _normalize_bone_token(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    for prefix in (
+        "mixamorig:",
+        "mixamorig",
+        "cc_base_",
+        "ccbase_",
+        "bip001 ",
+        "bip001_",
+        "bip001",
+        "bip ",
+        "bip_",
+        "bip",
+        "armature|",
+        "armature:",
+        "def-",
+        "jnt_",
+    ):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    out = []
+    for ch in text:
+        if ch.isalnum():
+            out.append(ch)
+    return "".join(out)
+
+
+def _bone_index(names: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name in names:
+        norm = _normalize_bone_token(name)
+        if norm and norm not in out:
+            out[norm] = name
+    return out
+
+
+def _explicit_bone_requests(node: Mapping[str, Any]) -> dict[str, str]:
+    requests: dict[str, str] = {}
+    skeleton = node.get("skeleton") if isinstance(node.get("skeleton"), Mapping) else {}
+    retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
+    for source in (skeleton, retarget):
+        if not isinstance(source, Mapping):
+            continue
+        bone_map = source.get("bone_map")
+        if isinstance(bone_map, Mapping):
+            for key, value in bone_map.items():
+                requests[str(key)] = str(value)
+        for key, value in source.items():
+            if key in {"bone_map", "aliases", "profile"}:
+                continue
+            if isinstance(value, (str, int, float)):
+                requests[str(key)] = str(value)
+    for coarse, aliases in _COARSE_BONE_FALLBACKS.items():
+        if coarse in requests:
+            for alias in aliases:
+                requests.setdefault(alias, requests[coarse])
+    return requests
+
+
+def _sidecar_bone_map(model_meta: Mapping[str, Any]) -> dict[str, str]:
+    sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
+    bone_map = sidecar.get("bone_map") if isinstance(sidecar.get("bone_map"), Mapping) else {}
+    return {str(k): str(v) for k, v in bone_map.items()}
+
+
+def _resolve_bone(
+    canonical: str,
+    request: str,
+    names: list[str],
+    index: Mapping[str, str],
+) -> tuple[str, str]:
+    raw = str(request or "").strip()
+    if raw and raw.lower() != "auto":
+        norm = _normalize_bone_token(raw)
+        return str(index.get(norm) or raw), "explicit"
+    for alias in (canonical, *_BONE_ALIASES.get(canonical, ())):
+        norm = _normalize_bone_token(alias)
+        if norm in index:
+            return str(index[norm]), "alias"
+    if names:
+        return "", "unresolved"
+    return "", "pending_backend"
+
+
+def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Build an offline humanoid retarget plan for a model3d node.
+
+    The native renderer will eventually consume this plan directly.  Until then
+    it gives script plugins deterministic diagnostics and lets users provide a
+    sidecar skeleton map for arbitrary FBX/model files without loading Assimp.
+    """
+
+    retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
+    model_meta = get_model_metadata(node)
+    sidecar_map = _sidecar_bone_map(model_meta)
+    requests = dict(sidecar_map)
+    requests.update(_explicit_bone_requests(node))
+    bone_names = list(model_meta.get("bone_names") or [])
+    index = _bone_index(bone_names)
+
+    resolved: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    unresolved: list[str] = []
+    pending_backend: list[str] = []
+    for canonical in HUMANOID_BONES:
+        mapped, source = _resolve_bone(canonical, requests.get(canonical, "auto"), bone_names, index)
+        if mapped:
+            resolved[canonical] = mapped
+            sources[canonical] = source
+        elif source == "pending_backend":
+            pending_backend.append(canonical)
+        else:
+            unresolved.append(canonical)
+
+    required = ("hips", "spine", "head")
+    warnings: list[str] = []
+    missing_required = [name for name in required if name not in resolved]
+    if missing_required and bone_names:
+        warnings.append("missing required humanoid bones: " + ", ".join(missing_required))
+    if pending_backend and not bone_names:
+        warnings.append("no offline bone list; native backend will resolve bones at load time")
+    if unresolved:
+        warnings.append("unresolved optional bones: " + ", ".join(unresolved[:6]))
+
+    stretch_limit = _float_from_mapping(retarget, "stretch_limit", 0.08, lo=0.0, hi=0.5)
+    twist_limit = _float_from_mapping(retarget, "twist_limit", 0.35, lo=0.0, hi=1.5)
+    total = len(HUMANOID_BONES)
+    coverage = len(resolved) / float(total) if total else 0.0
+    return {
+        "mode": str(retarget.get("mode") or "humanoid_auto"),
+        "profile": str(retarget.get("profile") or retarget.get("mode") or "humanoid_auto"),
+        "rest_pose": str(retarget.get("rest_pose") or "auto"),
+        "preserve_proportions": bool(retarget.get("preserve_proportions", True)),
+        "adaptive_ik": bool(retarget.get("adaptive_ik", True)),
+        "prefer_model_clips": bool(retarget.get("prefer_model_clips", True)),
+        "stretch_limit": stretch_limit,
+        "twist_limit": twist_limit,
+        "bone_map": resolved,
+        "sources": sources,
+        "unresolved": tuple(unresolved),
+        "pending_backend": tuple(pending_backend),
+        "coverage": coverage,
+        "resolved_count": len(resolved),
+        "total_count": total,
+        "bone_names": tuple(bone_names),
+        "clips": tuple(model_meta.get("clips") or ()),
+        "warnings": tuple(warnings),
+    }
+
+
+def _float_from_mapping(src: Mapping[str, Any], key: str, default: float,
+                        *, lo: float, hi: float) -> float:
+    try:
+        value = float(src.get(key, default))
+        if value != value:
+            raise ValueError("nan")
+    except Exception:
+        value = default
+    return max(lo, min(hi, value))
 
 
 def diagnose_model3d_node(
@@ -367,6 +734,16 @@ def diagnose_model3d_node(
         lines.append("model path is empty")
     if not backend.render_available:
         lines.append(backend.reason)
+    retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
+    if retarget:
+        plan = get_retarget_plan(node)
+        if plan.get("mode"):
+            lines.append(
+                f"retarget {plan.get('mode')}: "
+                f"{int(plan.get('resolved_count') or 0)}/{int(plan.get('total_count') or 0)} bones"
+            )
+        for warning in list(plan.get("warnings") or ())[:2]:
+            lines.append(str(warning))
     return key, tuple(lines)
 
 
@@ -377,6 +754,8 @@ __all__ = [
     "get_action_metadata",
     "get_backend_status",
     "get_model_metadata",
+    "get_retarget_plan",
+    "HUMANOID_BONES",
     "model3d_node_key",
     "model3d_path",
     "resolve_action_path",

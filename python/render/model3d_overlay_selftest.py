@@ -24,6 +24,7 @@ from render.model3d_backend import (
     get_action_metadata,
     get_backend_status,
     get_model_metadata,
+    get_retarget_plan,
     probe_model3d_backend,
 )
 from render.model3d_overlay import render_model3d_node
@@ -192,6 +193,33 @@ class Model3DBackendTests(unittest.TestCase):
 
         self.assertEqual(meta["selected"]["speed"], 1.8)
         self.assertTrue(str(meta["resolved_file"]).endswith("wave.json"))
+        self.assertEqual(meta["file_kind"], "json")
+
+    def test_action_metadata_treats_non_json_file_as_motion_file(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_motion_") as root:
+            base = Path(root)
+            model_path = base / "avatar.fbx"
+            motion_path = base / "wave.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            motion_path.write_bytes(b"Kaydara FBX Binary fixture")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "model": {"path": str(model_path)},
+                "action": {"name": "wave", "file": "wave.fbx"},
+            })["nodes"][0]
+
+            with mock.patch.object(json, "load", wraps=json.load) as load:
+                first = get_action_metadata(node)
+                second = get_action_metadata(node)
+
+        self.assertEqual(load.call_count, 0)
+        self.assertEqual(first["file_kind"], "motion")
+        self.assertEqual(second["motion_format"], "fbx")
+        self.assertTrue(first["motion_exists"])
+        self.assertTrue(str(first["resolved_motion_file"]).endswith("wave.fbx"))
+        self.assertEqual(first["errors"], [])
 
     def test_action_metadata_prefers_model_dir_over_cwd_for_relative_file(self) -> None:
         clear_model3d_metadata_caches()
@@ -240,6 +268,106 @@ class Model3DBackendTests(unittest.TestCase):
             changed_reload = get_model_metadata(reload_node)
 
         self.assertNotEqual(changed_size["cache_key"], changed_reload["cache_key"])
+
+    def test_model_metadata_cache_parses_sidecar_once_per_signature(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_sidecar_cache_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            sidecar_path = Path(root) / "avatar.model3d.json"
+            model_path.write_text("fixture", encoding="utf-8")
+            sidecar_path.write_text(json.dumps({"bones": ["Hips"], "clips": ["Wave"]}), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+            })["nodes"][0]
+
+            with mock.patch.object(json, "load", wraps=json.load) as load:
+                first = get_model_metadata(node)
+                second = get_model_metadata(node)
+
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(first["sidecar"]["path"], str(sidecar_path))
+        self.assertEqual(second["clips"], ["Wave"])
+
+    def test_retarget_plan_maps_mixamo_sidecar_bones(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_retarget_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            sidecar_path = Path(root) / "avatar.model3d.json"
+            sidecar_path.write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Spine2",
+                        "mixamorig:Neck",
+                        "mixamorig:Head",
+                        "mixamorig:LeftArm",
+                        "mixamorig:LeftForeArm",
+                        "mixamorig:LeftHand",
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                        "mixamorig:LeftUpLeg",
+                        "mixamorig:LeftLeg",
+                        "mixamorig:LeftFoot",
+                        "mixamorig:RightUpLeg",
+                        "mixamorig:RightLeg",
+                        "mixamorig:RightFoot",
+                    ],
+                },
+                "clips": ["Idle", "Wave"],
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.2},
+                "skeleton": {"hips": "auto", "left_arm": "auto"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            plan = get_retarget_plan(node)
+
+        self.assertEqual(meta["sidecar"]["path"], str(sidecar_path))
+        self.assertIn("Wave", plan["clips"])
+        self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
+        self.assertEqual(plan["bone_map"]["left_arm"], "mixamorig:LeftArm")
+        self.assertEqual(plan["bone_map"]["right_foot"], "mixamorig:RightFoot")
+        self.assertGreater(plan["coverage"], 0.75)
+        self.assertAlmostEqual(plan["stretch_limit"], 0.2)
+
+    def test_retarget_plan_keeps_explicit_bone_map_without_sidecar(self) -> None:
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "model": {"path": "missing/avatar.fbx"},
+            "retarget": {"mode": "humanoid_auto"},
+            "skeleton": {"bone_map": {"hips": "CustomPelvis", "head": "CustomHead"}},
+        })["nodes"][0]
+
+        plan = get_retarget_plan(node)
+
+        self.assertEqual(plan["bone_map"]["hips"], "CustomPelvis")
+        self.assertEqual(plan["bone_map"]["head"], "CustomHead")
+        self.assertIn("spine", plan["pending_backend"])
+        self.assertTrue(plan["warnings"])
+
+    def test_diagnose_model3d_node_includes_retarget_coverage(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_diag_retarget_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.skeleton.json").write_text(json.dumps({
+                "bones": ["Hips", "Spine", "Head"],
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto"},
+            })["nodes"][0]
+
+            _key, lines = diagnose_model3d_node("plug", node)
+
+        self.assertTrue(any("retarget humanoid_auto" in line for line in lines), lines)
 
 
 class Model3DOverlayRenderTests(unittest.TestCase):

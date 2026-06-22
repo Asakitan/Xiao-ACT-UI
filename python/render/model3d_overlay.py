@@ -22,10 +22,16 @@ except Exception:  # pragma: no cover - imported defensively by overlay host
     ImageFont = None  # type: ignore[assignment]
 
 try:
-    from render.model3d_backend import get_action_metadata, get_backend_status, resolve_model_path
+    from render.model3d_backend import (
+        get_action_metadata,
+        get_backend_status,
+        get_retarget_plan,
+        resolve_model_path,
+    )
 except Exception:  # pragma: no cover - imported defensively by overlay host
     get_action_metadata = None  # type: ignore[assignment]
     get_backend_status = None  # type: ignore[assignment]
+    get_retarget_plan = None  # type: ignore[assignment]
     resolve_model_path = None  # type: ignore[assignment]
 
 
@@ -65,7 +71,11 @@ def _backend_status() -> str:
     if callable(get_backend_status):
         try:
             status = get_backend_status()
-            return "AssimpNet backend present" if status.files_present else "AssimpNet backend not bundled"
+            if getattr(status, "render_available", False):
+                return "AssimpNet renderer ready"
+            if getattr(status, "files_present", False):
+                return "AssimpNet files present; render unavailable"
+            return "AssimpNet backend not bundled"
         except Exception:
             pass
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -73,7 +83,7 @@ def _backend_status() -> str:
     managed = os.path.join(vendor, "AssimpNet.dll")
     native = os.path.join(vendor, "runtimes", "win-x64", "native", "assimp.dll")
     if os.path.isfile(managed) and os.path.isfile(native):
-        return "AssimpNet backend present"
+        return "AssimpNet files present; render unavailable"
     return "AssimpNet backend not bundled"
 
 
@@ -299,7 +309,19 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
     ]
     retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
     if retarget:
-        lines.append(f"retarget: {retarget.get('mode', 'auto')}")
+        plan = None
+        if callable(get_retarget_plan):
+            try:
+                plan = get_retarget_plan(node)
+            except Exception:
+                plan = None
+        if isinstance(plan, Mapping):
+            lines.append(
+                f"retarget: {plan.get('mode', 'auto')} "
+                f"{int(plan.get('resolved_count') or 0)}/{int(plan.get('total_count') or 0)}"
+            )
+        else:
+            lines.append(f"retarget: {retarget.get('mode', 'auto')}")
     if action_cfg.get("_load_error"):
         lines.append("action file error")
     if diagnostic:
