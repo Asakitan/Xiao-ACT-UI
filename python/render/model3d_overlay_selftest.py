@@ -2,7 +2,9 @@
 """Focused selftests for plugin unioverlay canvas/model3d support."""
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +17,15 @@ if str(_PY_ROOT) not in sys.path:
 
 from act_platform.ui_spec import MAX_LAYER_POS, MAX_LAYER_Z, UI, normalize_ui_spec
 from gui_modules import sao_plugin_unified_overlay as overlay_mod
-from render.model3d_backend import diagnose_model3d_node, probe_model3d_backend
+from render import model3d_backend
+from render.model3d_backend import (
+    clear_model3d_metadata_caches,
+    diagnose_model3d_node,
+    get_action_metadata,
+    get_backend_status,
+    get_model_metadata,
+    probe_model3d_backend,
+)
 
 
 class Model3DSpecTests(unittest.TestCase):
@@ -93,8 +103,28 @@ class Model3DSpecTests(unittest.TestCase):
         })["nodes"][0]
         self.assertIs(fixed["draggable"], False)
 
+    def test_model3d_preserves_action_json_text_from_csharp_plugin(self) -> None:
+        raw = '{"wave":{"speed":1.7,"rightArmLift":0.8}}'
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "action": {"name": "wave", "json": raw},
+        })["nodes"][0]
+
+        self.assertEqual(node["action"]["json"]["wave"]["speed"], 1.7)
+        self.assertEqual(node["action"]["json_text"], raw)
+
+        helper = normalize_ui_spec(UI.model3d(
+            "helper", "avatar.fbx", animation_name="wave",
+            animation_json=raw,
+        ))["nodes"][0]
+        self.assertEqual(helper["action"]["json_text"], raw)
+
 
 class Model3DBackendTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        clear_model3d_metadata_caches()
+
     def test_backend_probe_and_diagnostic_are_safe_when_binaries_are_absent(self) -> None:
         status = probe_model3d_backend()
         self.assertEqual(status.backend, "assimpnet")
@@ -108,6 +138,107 @@ class Model3DBackendTests(unittest.TestCase):
         }, status=status)
         self.assertEqual(key, "plug/avatar")
         self.assertTrue(any("model path is empty" in line for line in lines))
+
+    def test_backend_probe_cache_avoids_repeated_directory_scans(self) -> None:
+        clear_model3d_metadata_caches()
+        with mock.patch.object(
+            model3d_backend,
+            "probe_model3d_backend",
+            wraps=model3d_backend.probe_model3d_backend,
+        ) as probe:
+            first = get_backend_status()
+            second = get_backend_status()
+            self.assertIs(first, second)
+            self.assertEqual(probe.call_count, 1)
+            get_backend_status(force=True)
+            self.assertEqual(probe.call_count, 2)
+
+    def test_action_metadata_cache_parses_inline_json_text_once_per_hash(self) -> None:
+        clear_model3d_metadata_caches()
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "action": {
+                "name": "wave",
+                "json": '{"wave":{"speed":2.25,"bounce":0.1}}',
+            },
+        })["nodes"][0]
+
+        with mock.patch.object(json, "loads", wraps=json.loads) as loads:
+            first = get_action_metadata(node)
+            second = get_action_metadata(node)
+
+        self.assertEqual(first["selected"]["speed"], 2.25)
+        self.assertEqual(second["selected"]["bounce"], 0.1)
+        self.assertEqual(loads.call_count, 1)
+
+    def test_action_metadata_cache_loads_resolved_relative_action_file(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_action_") as root:
+            base = Path(root)
+            model_path = base / "avatar.fbx"
+            action_path = base / "wave.json"
+            model_path.write_text("fixture", encoding="utf-8")
+            action_path.write_text(json.dumps({"wave": {"speed": 1.8}}), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "model": {"path": str(model_path)},
+                "action": {"name": "wave", "file": "wave.json"},
+            })["nodes"][0]
+
+            meta = get_action_metadata(node)
+
+        self.assertEqual(meta["selected"]["speed"], 1.8)
+        self.assertTrue(str(meta["resolved_file"]).endswith("wave.json"))
+
+    def test_action_metadata_prefers_model_dir_over_cwd_for_relative_file(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_action_priority_") as root:
+            base = Path(root)
+            model_dir = base / "model"
+            cwd_dir = base / "cwd"
+            model_dir.mkdir()
+            cwd_dir.mkdir()
+            model_path = model_dir / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (model_dir / "wave.json").write_text(json.dumps({"wave": {"speed": 3.0}}), encoding="utf-8")
+            (cwd_dir / "wave.json").write_text(json.dumps({"wave": {"speed": 0.25}}), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "action": {"name": "wave", "file": "wave.json"},
+            })["nodes"][0]
+
+            with mock.patch.object(model3d_backend.Path, "cwd", return_value=cwd_dir):
+                meta = get_action_metadata(node)
+
+        self.assertEqual(meta["selected"]["speed"], 3.0)
+
+    def test_model_metadata_cache_invalidates_on_size_or_reload_key(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_model_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("one", encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "reload_key": "a"},
+            })["nodes"][0]
+            first = get_model_metadata(node)
+            second = get_model_metadata(node)
+            self.assertEqual(first["cache_key"], second["cache_key"])
+
+            model_path.write_text("one-two", encoding="utf-8")
+            changed_size = get_model_metadata(node)
+            self.assertNotEqual(first["cache_key"], changed_size["cache_key"])
+
+            reload_node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "reload_key": "b"},
+            })["nodes"][0]
+            changed_reload = get_model_metadata(reload_node)
+
+        self.assertNotEqual(changed_size["cache_key"], changed_reload["cache_key"])
 
 
 class UnifiedOverlayDrawableTests(unittest.TestCase):
@@ -161,6 +292,38 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(drawables[1]["x"], 44)
         self.assertEqual(drawables[1]["y"], 55)
         self.assertEqual(drawables[1]["z"], 8)
+
+    def test_model3d_drawable_key_does_not_probe_backend_or_touch_files(self) -> None:
+        with mock.patch.object(
+            overlay_mod,
+            "diagnose_model3d_node",
+            side_effect=AssertionError("key path should not diagnose"),
+        ), mock.patch.object(
+            overlay_mod,
+            "probe_model3d_backend",
+            side_effect=AssertionError("key path should not probe"),
+        ):
+            drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
+
+        self.assertEqual(drawables[1]["key"], "model3d:plug/avatar")
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_model3d_successful_render_signature_does_not_diagnose(self) -> None:
+        drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
+        image = overlay_mod.Image.new("RGBA", (40, 30), (1, 2, 3, 4))
+        with mock.patch.object(
+            overlay_mod,
+            "render_model3d_node",
+            return_value=image,
+        ), mock.patch.object(
+            overlay_mod,
+            "diagnose_model3d_node",
+            side_effect=AssertionError("successful render should not diagnose"),
+        ):
+            frame = overlay_mod._render_drawable_frame(
+                drawables[1], overlay_mod._pal(), probe_model3d_backend())
+
+        self.assertIsNotNone(frame)
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_model3d_diagnostic_frame_is_visible_bgra(self) -> None:
@@ -490,7 +653,8 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
              mock.patch.object(overlay_mod, "render_overlays",
                                lambda _owner, _surface: {"overlays": self._sample_overlays()}), \
              mock.patch.object(overlay_mod, "_cursor_screen_pos",
-                               side_effect=[(100, 100), (130, 150)]):
+                               side_effect=[(100, 100), (130, 150)]), \
+             mock.patch("act_platform.runtime.act_plugin_action") as action:
             host._refresh_now()
             self.assertEqual(fake_overlay.created[0].geometry, (11, 22, 20, 10))
             self.assertIs(fake_overlay.created[0].click_through, True)
@@ -499,6 +663,12 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
             fake_overlay.created[1].cursor_pos_fn(40.0, 70.0)
             fake_overlay.created[1].mouse_button_fn(0, 0, 0, 40.0, 70.0)
             self.assertEqual(fake_overlay.created[1].geometry, (74, 105, 40, 30))
+            action.assert_called_once()
+            args, kwargs = action.call_args
+            self.assertEqual(args[1], "script.overlay.set_position")
+            self.assertEqual(kwargs.get("plugin_id"), "plug")
+            self.assertEqual(args[2]["x"], 74)
+            self.assertEqual(args[2]["y"], 105)
 
         with mock.patch.object(overlay_mod, "render_overlays",
                                lambda _owner, _surface: {"overlays": self._sample_overlays()}):

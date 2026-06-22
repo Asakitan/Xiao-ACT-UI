@@ -8,7 +8,6 @@ produces a transparent diagnostic frame instead of failing plugin load.
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from collections.abc import Mapping
@@ -23,8 +22,10 @@ except Exception:  # pragma: no cover - imported defensively by overlay host
     ImageFont = None  # type: ignore[assignment]
 
 try:
-    from render.model3d_backend import resolve_model_path
+    from render.model3d_backend import get_action_metadata, get_backend_status, resolve_model_path
 except Exception:  # pragma: no cover - imported defensively by overlay host
+    get_action_metadata = None  # type: ignore[assignment]
+    get_backend_status = None  # type: ignore[assignment]
     resolve_model_path = None  # type: ignore[assignment]
 
 
@@ -61,6 +62,12 @@ def _short_path(path: str, limit: int = 46) -> str:
 
 
 def _backend_status() -> str:
+    if callable(get_backend_status):
+        try:
+            status = get_backend_status()
+            return "AssimpNet backend present" if status.files_present else "AssimpNet backend not bundled"
+        except Exception:
+            pass
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     vendor = os.path.join(base, "vendor", "model3d", "assimpnet")
     managed = os.path.join(vendor, "AssimpNet.dll")
@@ -71,20 +78,17 @@ def _backend_status() -> str:
 
 
 def _load_action(node: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    if callable(get_action_metadata):
+        try:
+            meta = get_action_metadata(node)
+            selected = meta.get("selected") if isinstance(meta.get("selected"), Mapping) else {}
+            return str(meta.get("name") or "idle"), dict(selected or {})
+        except Exception:
+            pass
     action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
     action = dict(action or {})
     name = str(action.get("name") or "idle")
     data = action.get("json") if isinstance(action.get("json"), Mapping) else {}
-    data = dict(data or {})
-    action_file = str(action.get("file") or "").strip()
-    if action_file and os.path.isfile(action_file):
-        try:
-            with open(action_file, "r", encoding="utf-8") as fp:
-                loaded = json.load(fp)
-            if isinstance(loaded, Mapping):
-                data.update(dict(loaded))
-        except Exception as exc:
-            data["_load_error"] = str(exc)
     selected = data.get(name) if isinstance(data.get(name), Mapping) else {}
     return name, dict(selected or {})
 

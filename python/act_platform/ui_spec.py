@@ -254,11 +254,19 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
 
     raw_action = node.get("action")
     action = dict(raw_action or {}) if isinstance(raw_action, Mapping) else {}
+    action_json_raw = action.get("json", node.get("animation_json", {}))
+    action_json_text_raw = (
+        action.get("json_text")
+        if isinstance(action.get("json_text"), str)
+        else (action_json_raw if isinstance(action_json_raw, str) else "")
+    )
+    action_json = _json_safe_map(action_json_raw)
     normalized_action = {
         "name": _s(action.get("name", node.get("animation_name", "")), 120),
         "clip": _s(action.get("clip", ""), 120),
         "file": _s(action.get("file", node.get("animation_file", "")), MAX_MODEL_PATH_LEN),
-        "json": _json_safe_map(action.get("json", node.get("animation_json", {}))),
+        "json": action_json,
+        "json_text": _s(action_json_text_raw, MAX_MODEL_PATH_LEN * 4),
         "speed": _cf(action.get("speed", 1.0), 1.0, lo=0.0, hi=8.0),
         "loop": bool(action.get("loop", True)),
     }
@@ -609,7 +617,7 @@ class UI:
     def model3d(id: Any, model_path: Any, width: int = 320, height: int = 480,
                 x: int = 0, y: int = 0, z: int = 0,
                 animation_name: Any = "", animation_file: Any = "",
-                animation_json: Optional[Mapping[str, Any]] = None,
+                animation_json: Any = None,
                 camera: Optional[Mapping[str, Any]] = None,
                 transform: Optional[Mapping[str, Any]] = None,
                 phase: float = 0.0) -> dict:
@@ -626,6 +634,7 @@ class UI:
                 "name": _s(animation_name, 120),
                 "file": _s(animation_file, MAX_MODEL_PATH_LEN),
                 "json": _json_safe_map(animation_json or {}),
+                "json_text": _s(animation_json, MAX_MODEL_PATH_LEN * 4) if isinstance(animation_json, str) else "",
             },
             "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
             "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},

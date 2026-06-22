@@ -27,9 +27,16 @@ except Exception:
     get_unified_overlay = None  # type: ignore[assignment]
 
 try:
-    from render.model3d_backend import diagnose_model3d_node, probe_model3d_backend
+    from render.model3d_backend import (
+        diagnose_model3d_node,
+        get_backend_status,
+        model3d_node_key,
+        probe_model3d_backend,
+    )
 except Exception:
     diagnose_model3d_node = None  # type: ignore[assignment]
+    get_backend_status = None  # type: ignore[assignment]
+    model3d_node_key = None  # type: ignore[assignment]
     probe_model3d_backend = None  # type: ignore[assignment]
 
 from act_platform.runtime import ensure_act_event_bus, render_overlays
@@ -156,9 +163,9 @@ def _layer_title(kind: str, layer_key: str) -> str:
 
 
 def _drawable_key(plugin_id: str, kind: str, node: Mapping[str, Any], order: int) -> tuple[str, str]:
-    if kind == "model3d" and callable(diagnose_model3d_node):
+    if kind == "model3d" and callable(model3d_node_key):
         try:
-            display_key, _lines = diagnose_model3d_node(plugin_id, node, order=order)
+            display_key = model3d_node_key(plugin_id, node, order=order)
             return f"model3d:{display_key}", display_key
         except Exception:
             pass
@@ -389,16 +396,6 @@ def _render_drawable_frame(
                 rendered = None
         if rendered is not None:
             image = rendered
-            try:
-                if callable(diagnose_model3d_node):
-                    _key, diagnostic_lines = diagnose_model3d_node(
-                        str(drawable.get("plugin_id") or ""),
-                        node,
-                        order=int(drawable.get("order") or 0),
-                        status=backend_status,
-                    )
-            except Exception:
-                diagnostic_lines = ()
         else:
             diagnostic_lines = _draw_model_diagnostic(
                 draw,
@@ -433,7 +430,9 @@ def _compose_overlay_frame(overlays: list[Mapping[str, Any]]) -> tuple[str, byte
     drawables = _iter_layer_drawables(overlays)
     if not drawables:
         return None
-    backend_status = probe_model3d_backend() if callable(probe_model3d_backend) else None
+    backend_status = get_backend_status() if callable(get_backend_status) else (
+        probe_model3d_backend() if callable(probe_model3d_backend) else None
+    )
     return _render_drawable_frame(drawables[0], _pal(), backend_status)
 
 
@@ -733,6 +732,7 @@ class PluginUnifiedOverlayHost:
                 }
             else:
                 self._drag_state.pop(key, None)
+                self._persist_drag_position(key, state)
 
         try:
             layer.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
@@ -744,6 +744,40 @@ class PluginUnifiedOverlayHost:
         except Exception:
             state["input_ready"] = False
             pass
+
+    def _persist_drag_position(self, key: str, state: Mapping[str, Any]) -> None:
+        plugin_id = str(state.get("plugin_id") or "")
+        if not plugin_id:
+            return
+        payload = {
+            "x": int(state.get("x") or 0),
+            "y": int(state.get("y") or 0),
+            "z": int(state.get("node_z") or 0),
+            "key": str(key or ""),
+            "display_key": str(state.get("display_key") or ""),
+            "surface": self.surface,
+        }
+
+        def _dispatch() -> None:
+            try:
+                from act_platform.runtime import act_plugin_action
+                act_plugin_action(
+                    self.owner,
+                    "script.overlay.set_position",
+                    payload,
+                    plugin_id=plugin_id,
+                )
+            except Exception:
+                pass
+
+        try:
+            after = getattr(self.root, "after", None)
+            if callable(after):
+                after(0, _dispatch)
+                return
+        except Exception:
+            pass
+        _dispatch()
 
     def _ensure_layer(self, drawable: Mapping[str, Any], width: int, height: int) -> dict[str, Any] | None:
         overlay = self._ensure_overlay()
@@ -796,6 +830,9 @@ class PluginUnifiedOverlayHost:
                     state["y"] = y
                     state["width"] = w
                     state["height"] = h
+                    state["plugin_id"] = str(drawable.get("plugin_id") or "")
+                    state["display_key"] = str(drawable.get("display_key") or "")
+                    state["node_z"] = int(drawable.get("z") or 0)
                     if bool(state.get("draggable", False)) != draggable:
                         state["draggable"] = draggable
                         if draggable:
@@ -846,6 +883,9 @@ class PluginUnifiedOverlayHost:
                 "height": max(1, int(height)),
                 "click_through": click_through,
                 "draggable": draggable,
+                "plugin_id": str(drawable.get("plugin_id") or ""),
+                "display_key": str(drawable.get("display_key") or ""),
+                "node_z": int(drawable.get("z") or 0),
                 "input_ready": False,
                 "visible": False,
             }
@@ -891,11 +931,11 @@ class PluginUnifiedOverlayHost:
             return
         pal = _pal()
         needs_model3d = any(str(item.get("kind") or "").lower() == "model3d" for item in drawables)
-        backend_status = (
-            probe_model3d_backend()
-            if needs_model3d and callable(probe_model3d_backend)
-            else None
-        )
+        backend_status = None
+        if needs_model3d:
+            backend_status = get_backend_status() if callable(get_backend_status) else (
+                probe_model3d_backend() if callable(probe_model3d_backend) else None
+            )
         active_keys: set[str] = set()
         for drawable in drawables:
             key = str(drawable.get("key") or "")
