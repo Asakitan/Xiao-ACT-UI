@@ -259,7 +259,10 @@ class _AngelScriptInterpreter:
                 var_name = tokens[i]
                 i += 2
                 expr, i = self._parse_expr_until(tokens, i, ";")
-                scope[var_name] = self._eval_expr(expr, scope)
+                value = self._eval_expr(expr, scope)
+                scope[var_name] = value
+                if var_name in self._globals:
+                    self._globals[var_name] = value
                 if i < len(tokens) and tokens[i] == ";":
                     i += 1
             elif i + 1 < len(tokens) and tokens[i + 1] in (".", "(", "["):
@@ -396,7 +399,7 @@ class _AngelScriptInterpreter:
             return self._eval_expr(tokens[1:-1], scope)
 
         if tokens[0] == "{" and tokens[-1] == "}":
-            return self._parse_dict_literal(tokens[1:-1], scope)
+            return self._parse_brace_literal(tokens[1:-1], scope)
 
         dot_chain = self._try_dot_chain(tokens, scope)
         if dot_chain is not _SENTINEL:
@@ -478,31 +481,50 @@ class _AngelScriptInterpreter:
             i += 1
         return args, i
 
-    def _parse_dict_literal(self, tokens, scope):
-        d = {}
-        i = 0
-        while i < len(tokens):
-            if tokens[i] == ",":
-                i += 1
+    def _parse_brace_literal(self, tokens, scope):
+        parts = self._split_top_level(tokens, ",")
+        has_dict_pairs = any(self._find_top_level(part, ":") >= 0 for part in parts)
+        if not has_dict_pairs:
+            return [self._eval_expr(part, scope) for part in parts if part]
+
+        out = {}
+        for part in parts:
+            colon = self._find_top_level(part, ":")
+            if colon <= 0:
                 continue
-            if i + 2 < len(tokens) and tokens[i + 1] == ":":
-                key = self._eval_atom(tokens[i], scope)
-                i += 2
-                val_expr = []
-                depth = 0
-                while i < len(tokens):
-                    if tokens[i] in ("(", "{", "["):
-                        depth += 1
-                    elif tokens[i] in (")", "}", "]"):
-                        depth -= 1
-                    if depth == 0 and tokens[i] == ",":
-                        break
-                    val_expr.append(tokens[i])
-                    i += 1
-                d[key] = self._eval_expr(val_expr, scope)
+            key = self._eval_expr(part[:colon], scope)
+            out[key] = self._eval_expr(part[colon + 1:], scope)
+        return out
+
+    def _find_top_level(self, tokens, needle):
+        depth = 0
+        for idx, token in enumerate(tokens):
+            if token in ("(", "{", "["):
+                depth += 1
+            elif token in (")", "}", "]"):
+                depth -= 1
+            elif depth == 0 and token == needle:
+                return idx
+        return -1
+
+    def _split_top_level(self, tokens, separator):
+        parts = []
+        current = []
+        depth = 0
+        for token in tokens:
+            if token in ("(", "{", "["):
+                depth += 1
+                current.append(token)
+            elif token in (")", "}", "]"):
+                depth -= 1
+                current.append(token)
+            elif depth == 0 and token == separator:
+                parts.append(current)
+                current = []
             else:
-                i += 1
-        return d
+                current.append(token)
+        parts.append(current)
+        return parts
 
     def _eval_atom(self, token: str, scope: dict) -> Any:
         if token == "true":

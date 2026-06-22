@@ -64,10 +64,66 @@ from .selective_parsing import normalize_policy, should_record_event
 
 
 def default_plugin_dirs(base_dir: str) -> list[str]:
-    return [
-        os.path.join(base_dir, "plugins"),
-        os.path.join(base_dir, "user_plugins"),
-    ]
+    base_dir = os.path.abspath(str(base_dir or ""))
+    current_plugins = os.path.abspath(os.path.join(base_dir, "plugins"))
+    current_user_plugins = os.path.abspath(os.path.join(base_dir, "user_plugins"))
+    root_plugins = _discover_workspace_root_plugins_dir(base_dir)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in (current_plugins, current_user_plugins, root_plugins):
+        if not path:
+            continue
+        norm = os.path.abspath(path)
+        if norm in seen:
+            continue
+        if os.path.isdir(norm) or norm == root_plugins:
+            out.append(norm)
+            seen.add(norm)
+    return out
+
+
+def _discover_workspace_root_plugins_dir(base_dir: str) -> str | None:
+    """Best-effort upward scan for a workspace-root ``plugins`` directory.
+
+    Keeps the existing ``python/plugins`` + ``python/user_plugins`` roots, then
+    adds one extra root-level ``plugins`` directory when the current base dir
+    lives inside a larger workspace checkout (e.g. ``E:/VC/SAO-UI/plugins``).
+    Missing intermediate parents are ignored; a missing workspace-root plugins
+    dir is still returned when the parent clearly looks like the workspace root
+    so future drop-in script plugins are discovered without changing code.
+    """
+    current_plugin_dir = os.path.abspath(os.path.join(base_dir, "plugins"))
+    current_user_dir = os.path.abspath(os.path.join(base_dir, "user_plugins"))
+    workspace_candidate: str | None = None
+    current = os.path.abspath(str(base_dir or ""))
+
+    while current:
+        candidate = os.path.abspath(os.path.join(current, "plugins"))
+        if candidate not in (current_plugin_dir, current_user_dir):
+            if os.path.isdir(candidate):
+                return candidate
+            if workspace_candidate is None and _looks_like_workspace_root(current):
+                workspace_candidate = candidate
+        parent = os.path.dirname(current)
+        if not parent or parent == current:
+            break
+        current = parent
+    return workspace_candidate
+
+
+def _looks_like_workspace_root(path: str) -> bool:
+    markers = (
+        "sao_auto",
+        ".git",
+        ".github",
+        ".vscode",
+        "tools",
+    )
+    try:
+        return any(os.path.exists(os.path.join(path, marker)) for marker in markers)
+    except Exception:
+        return False
 
 
 def project_base_dir() -> str:

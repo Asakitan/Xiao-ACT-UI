@@ -109,6 +109,18 @@ def _find_csc() -> str | None:
     return None
 
 
+def _python_runtime_reference() -> str | None:
+    try:
+        _ensure_pythonnet()
+        py_object_type = _System.Type.GetType("Python.Runtime.PyObject, Python.Runtime")
+        if py_object_type is None:
+            return None
+        path = str(py_object_type.Assembly.Location or "")
+        return path if path and os.path.isfile(path) else None
+    except Exception:
+        return None
+
+
 def _compile_cs(source_path: str, output_dir: str, references: list[str] | None = None) -> str:
     """Compile a .cs file to a .dll assembly. Returns the output path."""
     stem = os.path.splitext(os.path.basename(source_path))[0]
@@ -163,6 +175,7 @@ def _compile_cs(source_path: str, output_dir: str, references: list[str] | None 
 
 def _generate_csproj(name: str, source_path: str,
                      references: list[str] | None = None) -> str:
+    source_name = os.path.basename(source_path)
     refs_xml = ""
     if references:
         refs_xml = "\n  <ItemGroup>\n"
@@ -177,9 +190,13 @@ def _generate_csproj(name: str, source_path: str,
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>{name}</AssemblyName>
     <OutputType>Library</OutputType>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>disable</Nullable>
   </PropertyGroup>
+    <ItemGroup>
+        <Compile Include="{source_name}" />
+    </ItemGroup>
 {refs_xml}</Project>
 """
 
@@ -482,25 +499,30 @@ class CSharpRuntime(ScriptRuntime):
             if os.path.isdir(refs_dir):
                 references = [os.path.join(refs_dir, f) for f in os.listdir(refs_dir)
                               if f.endswith(".dll")]
+            runtime_ref = _python_runtime_reference()
+            if runtime_ref and runtime_ref not in references:
+                references.append(runtime_ref)
             dll_path = _compile_cs(entry_path, build_dir, references or None)
         elif ext == ".dll":
             dll_path = entry_path
         else:
             raise ValueError(f"C# runtime: unsupported entry extension {ext!r}")
 
-        assembly = _clr.System.Reflection.Assembly.LoadFile(os.path.abspath(dll_path))
+        assembly = _System.Reflection.Assembly.LoadFile(os.path.abspath(dll_path))
         self._assemblies[record.plugin_id] = assembly
 
+        exported_types = list(assembly.GetExportedTypes())
+        candidate_types = exported_types or list(assembly.GetTypes())
+
         plugin_type = None
-        for t in assembly.GetExportedTypes():
+        for t in candidate_types:
             name = str(t.Name)
             if name.lower() in ("plugin", "pluginentry", record.plugin_id.replace("-", "").replace("_", "")):
                 plugin_type = t
                 break
         if plugin_type is None:
-            types = assembly.GetExportedTypes()
-            if types and len(types) > 0:
-                plugin_type = types[0]
+            if candidate_types:
+                plugin_type = candidate_types[0]
         if plugin_type is None:
             raise RuntimeError("C# assembly has no public types")
 

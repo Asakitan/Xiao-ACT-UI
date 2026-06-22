@@ -284,8 +284,8 @@ class SAOPlayerGUIMenuMixin:
             builder = cat.get('builder')
             if name and name not in children and callable(builder):
                 try:
-                    items = builder()
-                    if isinstance(items, list) and items:
+                    items = self._wrap_dynamic_plugin_menu_items(builder())
+                    if items:
                         children[name] = items
                 except Exception:
                     pass
@@ -430,6 +430,66 @@ class SAOPlayerGUIMenuMixin:
                 platform_names.add(name)
         return icons
 
+    def _ensure_plugin_unified_overlay_host(self):
+        host = getattr(self, '_plugin_unified_overlay', None)
+        if host is not None:
+            return host
+        try:
+            from gui_modules.sao_plugin_unified_overlay import PluginUnifiedOverlayHost
+            host = PluginUnifiedOverlayHost(self)
+            if host.start():
+                self._plugin_unified_overlay = host
+                return host
+        except Exception:
+            pass
+        return None
+
+    def _set_plugin_unified_overlay_visible(self, visible: bool) -> None:
+        host = self._ensure_plugin_unified_overlay_host()
+        if host is None:
+            return
+        try:
+            if visible:
+                host.restore()
+            else:
+                host.hide_temporarily()
+        except Exception:
+            pass
+
+    def _wrap_dynamic_plugin_menu_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        wrapped = dict(item)
+        command = wrapped.get('command')
+        keep_menu_open = bool(wrapped.get('keep_menu_open'))
+        if not callable(command):
+            return wrapped
+
+        def _wrapped_command(command=command, keep_menu_open=keep_menu_open):
+            should_close = False
+            if not keep_menu_open:
+                menu = getattr(self, '_sao_menu', None)
+                should_close = bool(menu is not None and getattr(menu, 'visible', False))
+            result = command()
+            if should_close:
+                menu = getattr(self, '_sao_menu', None)
+                if menu is not None and getattr(menu, 'visible', False):
+                    try:
+                        self._toggle_sao_menu(allow_close=True)
+                    except Exception:
+                        pass
+            return result
+
+        wrapped['command'] = _wrapped_command
+        return wrapped
+
+    def _wrap_dynamic_plugin_menu_items(self, items: Any) -> list[dict[str, Any]]:
+        if not isinstance(items, list):
+            return []
+        wrapped_items: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, Mapping):
+                wrapped_items.append(self._wrap_dynamic_plugin_menu_item(item))
+        return wrapped_items
+
     def _collect_plugin_menu_categories(self):
         """从 PluginManager 拉取所有插件贡献的菜单分类。"""
         pm = getattr(self, '_act_plugin_manager', None)
@@ -524,6 +584,7 @@ class SAOPlayerGUIMenuMixin:
 
     def _setup_sao_menu(self):
         """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
+        self._ensure_plugin_unified_overlay_host()
         try:
             ensure_act_plugin_manager(self, load=True)
         except Exception:
@@ -721,6 +782,7 @@ class SAOPlayerGUIMenuMixin:
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
         self._stop_float_breath()
         self._lift_loop_active = False
+        self._set_plugin_unified_overlay_visible(False)
         try:
             self.root.after(140, lambda: self._start_fisheye_with_retry(retries=12, delay=100))
         except Exception:
@@ -737,6 +799,7 @@ class SAOPlayerGUIMenuMixin:
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
         self._notify_plugin_menu_surfaces('on_close')
+        self._set_plugin_unified_overlay_visible(True)
         self._maybe_stop_fisheye()
         if not self._destroyed:
             pass  # 呼吸动画已禁用 (固定位置)
