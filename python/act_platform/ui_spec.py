@@ -25,6 +25,7 @@ misbehaving plugin cannot bloat or crash the UI thread.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Iterable, List, Mapping, Optional
 
@@ -39,6 +40,9 @@ MAX_TEXT_LEN = 4000
 MAX_TITLE_LEN = 200
 MAX_CANVAS_OPS = 4000
 MAX_CANVAS_DIM = 4096
+MAX_MODEL_PATH_LEN = 2000
+MAX_LAYER_POS = 32768
+MAX_LAYER_Z = 10000
 
 # Style tokens understood by *both* renderers (Tk maps to colors, web to CSS classes).
 TEXT_STYLES = (
@@ -54,7 +58,10 @@ MAX_INPUT_VAL = 2000
 
 # Container + leaf node kinds.
 CONTAINER_KINDS = ("panel", "section", "card", "row", "group")
-LEAF_KINDS = ("text", "kv", "bar", "badge", "divider", "spacer", "button", "input", "table", "canvas")
+LEAF_KINDS = (
+    "text", "kv", "bar", "badge", "divider", "spacer",
+    "button", "input", "table", "canvas", "model3d",
+)
 NODE_KINDS = CONTAINER_KINDS + LEAF_KINDS
 
 # Free-form 2D drawing (piano keyboards, note rolls, meters…). Ops are a tiny
@@ -65,6 +72,7 @@ CANVAS_COLOR_TOKENS = set(TEXT_STYLES) | set(BAR_COLORS) | {
     "white", "black", "bg", "body", "border", "sep", "grid", "header", "transparent",
 }
 CANVAS_ANCHORS = ("nw", "n", "ne", "w", "center", "e", "sw", "s", "se")
+MODEL_FORMATS = ("auto", "fbx", "obj", "gltf", "glb", "dae", "3ds", "blend")
 
 
 def _s(value: Any, limit: int = MAX_TEXT_LEN) -> str:
@@ -84,6 +92,21 @@ def _clamp01(value: Any) -> float:
     return max(0.0, min(1.0, num))
 
 
+def _cf(value: Any, default: float = 0.0,
+        *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        num = float(value)
+        if num != num:
+            raise ValueError("nan")
+    except Exception:
+        num = float(default)
+    if lo is not None:
+        num = max(lo, num)
+    if hi is not None:
+        num = min(hi, num)
+    return num
+
+
 def _choice(value: Any, allowed: Iterable[str], default: str) -> str:
     text = str(value or "").strip().lower()
     return text if text in allowed else default
@@ -97,6 +120,28 @@ def _json_scalar(value: Any) -> Any:
     return _s(value)
 
 
+def _json_safe_map(value: Any, *, max_items: int = 64, depth: int = 0) -> dict:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > MAX_TEXT_LEN:
+            return {}
+        try:
+            value = json.loads(text)
+        except Exception:
+            return {}
+    if depth > 4 or not isinstance(value, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for key, val in list(value.items())[:max_items]:
+        if isinstance(val, Mapping):
+            out[str(key)] = _json_safe_map(val, max_items=max_items, depth=depth + 1)
+        elif isinstance(val, (list, tuple)):
+            out[str(key)] = [_json_scalar(item) for item in list(val)[:max_items]]
+        else:
+            out[str(key)] = _json_scalar(val)
+    return out
+
+
 def _ci(value: Any, default: int = 0) -> int:
     try:
         num = float(value)
@@ -105,6 +150,14 @@ def _ci(value: Any, default: int = 0) -> int:
         return int(round(num))
     except Exception:
         return default
+
+
+def _cpos(value: Any, default: int = 0) -> int:
+    return max(-MAX_LAYER_POS, min(MAX_LAYER_POS, _ci(value, default)))
+
+
+def _cz(value: Any, default: int = 0) -> int:
+    return max(-MAX_LAYER_Z, min(MAX_LAYER_Z, _ci(value, default)))
 
 
 def _canvas_color(value: Any, default: str = "") -> str:
@@ -155,8 +208,91 @@ def _normalize_canvas(node: Mapping[str, Any]) -> dict:
                     "anchor": _choice(op.get("anchor"), CANVAS_ANCHORS, "nw"),
                     "bold": bool(op.get("bold")),
                 })
-    return {"type": "canvas", "width": width, "height": height,
-            "bg": _canvas_color(node.get("bg"), "body"), "ops": ops}
+    return {
+        "type": "canvas",
+        "id": _s(node.get("id"), 120),
+        "x": _cpos(node.get("x"), 0),
+        "y": _cpos(node.get("y"), 0),
+        "z": _cz(node.get("z"), 0),
+        "width": width,
+        "height": height,
+        "bg": _canvas_color(node.get("bg"), "body"),
+        "ops": ops,
+    }
+
+
+def _num_list(value: Any, length: int, default: Iterable[float],
+              lo: float = -100000.0, hi: float = 100000.0) -> list[float]:
+    src = list(value) if isinstance(value, (list, tuple)) else list(default)
+    out: list[float] = []
+    defaults = list(default)
+    for idx in range(length):
+        try:
+            num = float(src[idx])
+            if num != num:
+                raise ValueError("nan")
+        except Exception:
+            num = float(defaults[idx] if idx < len(defaults) else 0.0)
+        out.append(max(lo, min(hi, num)))
+    return out
+
+
+def _normalize_model3d(node: Mapping[str, Any]) -> dict:
+    width = max(1, min(MAX_CANVAS_DIM, _ci(node.get("width"), 320)))
+    height = max(1, min(MAX_CANVAS_DIM, _ci(node.get("height"), 480)))
+
+    raw_model = node.get("model")
+    model = dict(raw_model or {}) if isinstance(raw_model, Mapping) else {}
+    path = model.get("path", node.get("model_path", ""))
+    fmt = _choice(model.get("format", node.get("format", "auto")), MODEL_FORMATS, "auto")
+    normalized_model = {
+        "path": _s(path, MAX_MODEL_PATH_LEN),
+        "format": fmt,
+        "reload_key": _s(model.get("reload_key", node.get("reload_key", "")), 200),
+    }
+
+    raw_action = node.get("action")
+    action = dict(raw_action or {}) if isinstance(raw_action, Mapping) else {}
+    normalized_action = {
+        "name": _s(action.get("name", node.get("animation_name", "")), 120),
+        "clip": _s(action.get("clip", ""), 120),
+        "file": _s(action.get("file", node.get("animation_file", "")), MAX_MODEL_PATH_LEN),
+        "json": _json_safe_map(action.get("json", node.get("animation_json", {}))),
+        "speed": _cf(action.get("speed", 1.0), 1.0, lo=0.0, hi=8.0),
+        "loop": bool(action.get("loop", True)),
+    }
+
+    raw_camera = node.get("camera")
+    camera = dict(raw_camera or {}) if isinstance(raw_camera, Mapping) else {}
+    normalized_camera = {
+        "fov": _cf(camera.get("fov", 35.0), 35.0, lo=5.0, hi=120.0),
+        "orbit": _num_list(camera.get("orbit"), 3, (0.0, 12.0, 0.0), lo=-360.0, hi=360.0),
+        "distance": _cf(camera.get("distance", 3.2), 3.2, lo=0.1, hi=100.0),
+    }
+
+    raw_transform = node.get("transform")
+    transform = dict(raw_transform or {}) if isinstance(raw_transform, Mapping) else {}
+    normalized_transform = {
+        "scale": _cf(transform.get("scale", 1.0), 1.0, lo=0.001, hi=100.0),
+        "rotation": _num_list(transform.get("rotation"), 3, (0.0, 180.0, 0.0), lo=-360.0, hi=360.0),
+        "position": _num_list(transform.get("position"), 3, (0.0, -1.0, 0.0)),
+    }
+
+    return {
+        "type": "model3d",
+        "id": _s(node.get("id"), 120),
+        "x": _cpos(node.get("x"), 0),
+        "y": _cpos(node.get("y"), 0),
+        "z": _cz(node.get("z"), 0),
+        "width": width,
+        "height": height,
+        "model": normalized_model,
+        "action": normalized_action,
+        "camera": normalized_camera,
+        "transform": normalized_transform,
+        "background": _s(node.get("background") or "transparent", 40),
+        "fallback": _s(node.get("fallback"), 400),
+    }
 
 
 # ── Normalization ────────────────────────────────────────────────────────────
@@ -307,6 +443,8 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
         return _normalize_table(node)
     if kind == "canvas":
         return _normalize_canvas(node)
+    if kind == "model3d":
+        return _normalize_model3d(node)
     return None
 
 
@@ -439,14 +577,41 @@ class UI:
     # ── free-form 2D drawing (piano keyboards, note rolls, meters…) ──────────
     @staticmethod
     def canvas(width: int, height: int, ops: Optional[Iterable[Any]] = None,
-               bg: str = "body") -> dict:
+               bg: str = "body", x: int = 0, y: int = 0, z: int = 0,
+               id: Any = "") -> dict:
         """A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
         :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
         ``#hex``. Rendered identically on Tk and WebView."""
         return {"type": "canvas",
+                "id": _s(id, 120),
+                "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
                 "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
                 "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 160))),
                 "bg": bg, "ops": list(ops or [])}
+
+    @staticmethod
+    def model3d(id: Any, model_path: Any, width: int = 320, height: int = 480,
+                x: int = 0, y: int = 0, z: int = 0,
+                animation_name: Any = "", animation_file: Any = "",
+                animation_json: Optional[Mapping[str, Any]] = None,
+                camera: Optional[Mapping[str, Any]] = None,
+                transform: Optional[Mapping[str, Any]] = None) -> dict:
+        return {
+            "type": "model3d",
+            "id": _s(id, 120),
+            "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
+            "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
+            "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 480))),
+            "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
+            "action": {
+                "name": _s(animation_name, 120),
+                "file": _s(animation_file, MAX_MODEL_PATH_LEN),
+                "json": _json_safe_map(animation_json or {}),
+            },
+            "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
+            "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},
+            "background": "transparent",
+        }
 
     @staticmethod
     def rect(x, y, w, h, fill: str = "", outline: str = "", width: int = 0) -> dict:

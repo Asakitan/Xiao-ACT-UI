@@ -1,0 +1,186 @@
+# -*- coding: utf-8 -*-
+"""Focused selftests for plugin unioverlay canvas/model3d support."""
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+
+_PY_ROOT = Path(__file__).resolve().parents[1]
+if str(_PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PY_ROOT))
+
+from act_platform.ui_spec import MAX_LAYER_POS, MAX_LAYER_Z, UI, normalize_ui_spec
+from gui_modules import sao_plugin_unified_overlay as overlay_mod
+from render.model3d_backend import diagnose_model3d_node, probe_model3d_backend
+
+
+class Model3DSpecTests(unittest.TestCase):
+    def test_canvas_position_and_z_are_normalized(self) -> None:
+        node = normalize_ui_spec(UI.canvas(
+            64, 32, [], bg="body", x=123.4, y=-9, z=7, id="meter"))["nodes"][0]
+
+        self.assertEqual(node["type"], "canvas")
+        self.assertEqual(node["id"], "meter")
+        self.assertEqual(node["x"], 123)
+        self.assertEqual(node["y"], -9)
+        self.assertEqual(node["z"], 7)
+
+        clamped = normalize_ui_spec({
+            "type": "canvas",
+            "width": 16,
+            "height": 16,
+            "x": 999999,
+            "y": -999999,
+            "z": 999999,
+        })["nodes"][0]
+        self.assertEqual(clamped["x"], MAX_LAYER_POS)
+        self.assertEqual(clamped["y"], -MAX_LAYER_POS)
+        self.assertEqual(clamped["z"], MAX_LAYER_Z)
+
+    def test_model3d_normalizes_invalid_inputs_without_loading_assets(self) -> None:
+        node = normalize_ui_spec({
+            "type": "model3d",
+            "id": "avatar",
+            "width": "bad",
+            "height": -1,
+            "model": {"path": "missing/avatar.fbx", "format": "fbx"},
+            "action": {"speed": "fast", "json": {"ok": True}},
+            "camera": {"fov": 999},
+            "transform": {"scale": -4},
+            "x": 12,
+            "y": 34,
+            "z": -5,
+        })["nodes"][0]
+
+        self.assertEqual(node["type"], "model3d")
+        self.assertEqual(node["id"], "avatar")
+        self.assertEqual(node["width"], 320)
+        self.assertEqual(node["height"], 1)
+        self.assertEqual(node["model"]["format"], "fbx")
+        self.assertEqual(node["action"]["speed"], 1.0)
+        self.assertEqual(node["camera"]["fov"], 120.0)
+        self.assertEqual(node["transform"]["scale"], 0.001)
+        self.assertEqual((node["x"], node["y"], node["z"]), (12, 34, -5))
+
+
+class Model3DBackendTests(unittest.TestCase):
+    def test_backend_probe_and_diagnostic_are_safe_when_binaries_are_absent(self) -> None:
+        status = probe_model3d_backend()
+        self.assertEqual(status.backend, "assimpnet")
+        self.assertFalse(status.render_available)
+        self.assertTrue(status.reason)
+
+        key, lines = diagnose_model3d_node("plug", {
+            "type": "model3d",
+            "id": "avatar",
+            "model": {"path": ""},
+        }, status=status)
+        self.assertEqual(key, "plug/avatar")
+        self.assertTrue(any("model path is empty" in line for line in lines))
+
+
+class UnifiedOverlayDrawableTests(unittest.TestCase):
+    def _sample_overlays(self):
+        spec = {"nodes": [
+            UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="accent")],
+                      x=11, y=22, z=3, id="meter"),
+            UI.model3d("avatar", "missing/avatar.fbx", width=40, height=30,
+                       x=44, y=55, z=8),
+        ]}
+        return [{"plugin_id": "plug", "surface": "unioverlay", "spec": normalize_ui_spec(spec)}]
+
+    def test_drawables_preserve_keys_geometry_and_order(self) -> None:
+        drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
+
+        self.assertEqual([d["kind"] for d in drawables], ["canvas", "model3d"])
+        self.assertEqual(drawables[0]["key"], "canvas:plug/meter")
+        self.assertEqual(drawables[0]["x"], 11)
+        self.assertEqual(drawables[0]["y"], 22)
+        self.assertEqual(drawables[0]["z"], 3)
+        self.assertEqual(drawables[1]["key"], "model3d:plug/avatar")
+        self.assertEqual(drawables[1]["x"], 44)
+        self.assertEqual(drawables[1]["y"], 55)
+        self.assertEqual(drawables[1]["z"], 8)
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_model3d_diagnostic_frame_is_visible_bgra(self) -> None:
+        drawables = overlay_mod._iter_layer_drawables(self._sample_overlays())
+        frame = overlay_mod._render_drawable_frame(
+            drawables[1], overlay_mod._pal(), probe_model3d_backend())
+
+        self.assertIsNotNone(frame)
+        signature, bgra, width, height = frame
+        self.assertIn("model3d", signature)
+        self.assertEqual((width, height), (40, 30))
+        self.assertEqual(len(bgra), width * height * 4)
+        self.assertTrue(any(bgra[idx] for idx in range(3, len(bgra), 4)))
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_host_refresh_creates_positioned_keyed_layers_and_clears_stale(self) -> None:
+        created = []
+
+        class FakeWindow:
+            def __init__(self, **kw):
+                self.kw = kw
+                self.layer = object()
+                self.destroyed = False
+                self.geometry = (kw["x"], kw["y"], kw["w"], kw["h"])
+                self.z = kw["z"]
+                created.append(self)
+
+            def show(self):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def destroy(self):
+                self.destroyed = True
+
+            def request_redraw(self):
+                self.redrawn = True
+
+            def set_geometry(self, x, y, w, h):
+                self.geometry = (x, y, w, h)
+
+            def set_z(self, z):
+                self.z = z
+
+        class FakePresenter:
+            def __init__(self, layer):
+                self.layer = layer
+                self.frames = []
+
+            def set_frame(self, bgra, w, h):
+                self.frames.append((len(bgra), w, h))
+
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+
+        with mock.patch.object(overlay_mod, "create_overlay_window", lambda **kw: FakeWindow(**kw)), \
+             mock.patch.object(overlay_mod, "CompositorBgraPresenter", FakePresenter), \
+             mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": self._sample_overlays()}):
+            host._refresh_now()
+
+        self.assertEqual(len(created), 2)
+        self.assertEqual(created[0].geometry, (11, 22, 20, 10))
+        self.assertEqual(created[0].z, overlay_mod._BASE_Z + 3)
+        self.assertEqual(created[1].geometry, (44, 55, 40, 30))
+        self.assertEqual(created[1].z, overlay_mod._BASE_Z + 8)
+        self.assertEqual(set(host._layers), {"canvas:plug/meter", "model3d:plug/avatar"})
+
+        with mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": []}):
+            host._refresh_now()
+
+        self.assertFalse(host._layers)
+        self.assertTrue(all(window.destroyed for window in created))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
