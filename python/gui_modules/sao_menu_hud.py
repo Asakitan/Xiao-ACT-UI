@@ -725,6 +725,7 @@ class MenuCircleButtonRenderer:
         cx = canvas * 0.5
         cy = canvas * 0.5
         stroke = max(scale + 1, 2)
+        compact = canvas <= 96
         if icon_text == '⚡':
             pts = [
                 (cx - canvas * 0.10, cy - canvas * 0.26),
@@ -785,11 +786,13 @@ class MenuCircleButtonRenderer:
             draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=color, width=stroke)
             draw.arc((cx - r * 0.72, cy - r * 0.72, cx + r * 0.72, cy + r * 0.72),
                      205, 335, fill=color, width=tick_w)
-            for idx in range(12):
-                ang = -math.pi / 2.0 + idx * math.pi / 6.0
-                inner = r * (0.72 if idx % 3 else 0.61)
+            tick_count = 4 if compact else 12
+            for idx in range(tick_count):
+                ang = -math.pi / 2.0 + idx * (math.pi * 2.0 / tick_count)
+                is_cardinal = compact or idx % 3 == 0
+                inner = r * (0.64 if is_cardinal else 0.74)
                 outer = r * 0.88
-                width = max(1, tick_w + (1 if idx % 3 == 0 else 0))
+                width = max(1, tick_w + (1 if is_cardinal else 0))
                 draw.line((cx + math.cos(ang) * inner, cy + math.sin(ang) * inner,
                            cx + math.cos(ang) * outer, cy + math.sin(ang) * outer),
                           fill=color, width=width)
@@ -797,13 +800,14 @@ class MenuCircleButtonRenderer:
             draw.line((cx, cy, cx + r * 0.50, cy + r * 0.18), fill=color, width=stroke)
             dot = max(scale * 1.15, 2)
             draw.ellipse((cx - dot, cy - dot, cx + dot, cy + dot), fill=color)
-            globe_r = r * 0.34
-            gx = cx - r * 0.90
-            gy = cy + r * 0.70
+            globe_r = r * (0.31 if compact else 0.34)
+            gx = cx + r * 0.82
+            gy = cy + r * 0.72
             draw.ellipse((gx - globe_r, gy - globe_r, gx + globe_r, gy + globe_r),
                          outline=color, width=tick_w)
-            draw.arc((gx - globe_r, gy - globe_r * 0.52, gx + globe_r, gy + globe_r * 0.52),
-                     180, 360, fill=color, width=tick_w)
+            if not compact:
+                draw.arc((gx - globe_r, gy - globe_r * 0.52, gx + globe_r, gy + globe_r * 0.52),
+                         180, 360, fill=color, width=tick_w)
             draw.line((gx - globe_r * 0.56, gy, gx + globe_r * 0.56, gy),
                       fill=color, width=tick_w)
             draw.line((gx, gy - globe_r, gx, gy + globe_r), fill=color, width=tick_w)
@@ -811,10 +815,15 @@ class MenuCircleButtonRenderer:
         # Script 3D stickwoman: posed model silhouette on a tiny stage base.
         if icon_text == '♀':
             base_w = canvas * 0.34
-            base_h = canvas * 0.09
-            draw.ellipse((cx - base_w, cy + canvas * 0.25 - base_h,
-                          cx + base_w, cy + canvas * 0.25 + base_h),
-                         outline=color, width=max(1, stroke - scale))
+            base_y = cy + canvas * 0.265
+            base_h = canvas * 0.075
+            base = [
+                (cx, base_y - base_h),
+                (cx + base_w, base_y),
+                (cx, base_y + base_h),
+                (cx - base_w, base_y),
+            ]
+            draw.line(base + [base[0]], fill=color, width=max(1, stroke - scale))
             head_r = canvas * 0.072
             head_y = cy - canvas * 0.205
             hair_r = head_r * 1.22
@@ -846,10 +855,19 @@ class MenuCircleButtonRenderer:
                        cx - canvas * 0.105, cy + canvas * 0.25), fill=color, width=foot)
             draw.line((cx + canvas * 0.095, cy + canvas * 0.25,
                        cx + canvas * 0.195, cy + canvas * 0.25), fill=color, width=foot)
+            joint_r = max(scale * 0.8, 2)
+            for jx, jy in (
+                (cx - canvas * 0.15, shoulder_y),
+                (cx + canvas * 0.15, shoulder_y),
+                (cx - canvas * 0.18, cy + canvas * 0.25),
+                (cx + canvas * 0.14, cy + canvas * 0.25),
+            ):
+                draw.ellipse((jx - joint_r, jy - joint_r, jx + joint_r, jy + joint_r),
+                             fill=color)
             return True
         # Script Flappy: bird in motion with a tiny pipe silhouette.
         if icon_text == '◥':
-            pipe_w = canvas * 0.055
+            pipe_w = canvas * 0.07
             px = cx + canvas * 0.275
             draw.rounded_rectangle((px, cy - canvas * 0.29, px + pipe_w, cy - canvas * 0.11),
                                    radius=max(1, scale), fill=color)
@@ -860,13 +878,11 @@ class MenuCircleButtonRenderer:
             draw.ellipse(body, fill=color)
             wing = [
                 (cx - canvas * 0.13, cy + canvas * 0.01),
-                (cx - canvas * 0.02, cy - canvas * 0.285),
-                (cx + canvas * 0.095, cy + canvas * 0.015),
-                (cx - canvas * 0.02, cy + canvas * 0.115),
+                (cx - canvas * 0.035, cy - canvas * 0.25),
+                (cx + canvas * 0.09, cy + canvas * 0.02),
+                (cx - canvas * 0.035, cy + canvas * 0.10),
             ]
-            draw.polygon(wing, outline=color, fill=None)
-            draw.line((wing[0][0], wing[0][1], wing[1][0], wing[1][1],
-                       wing[2][0], wing[2][1]), fill=color, width=max(stroke, scale * 2))
+            draw.polygon(wing, outline=color, fill=(color[0], color[1], color[2], max(96, color[3] // 2)))
             beak = [
                 (cx + canvas * 0.125, cy - canvas * 0.02),
                 (cx + canvas * 0.245, cy - canvas * 0.06),
@@ -882,7 +898,7 @@ class MenuCircleButtonRenderer:
             eye = max(scale * 1.0, 2)
             draw.ellipse((cx + canvas * 0.060 - eye, cy - canvas * 0.050 - eye,
                           cx + canvas * 0.060 + eye, cy - canvas * 0.050 + eye),
-                         outline=color, width=max(1, scale))
+                         fill=(0, 0, 0, 0))
             return True
         # Script Snake: board, food, and a readable coiled path.
         if icon_text == '▣':
@@ -891,7 +907,8 @@ class MenuCircleButtonRenderer:
                                    radius=max(scale * 3, 3), outline=color,
                                    width=max(1, stroke - scale))
             grid_w = max(1, scale)
-            for off in (-board_r / 3.0, board_r / 3.0):
+            grid_offsets = () if compact else (-board_r * 0.35, board_r * 0.35)
+            for off in grid_offsets:
                 draw.line((cx - board_r, cy + off, cx + board_r, cy + off),
                           fill=color, width=grid_w)
                 draw.line((cx + off, cy - board_r, cx + off, cy + board_r),
@@ -913,7 +930,7 @@ class MenuCircleButtonRenderer:
             fx = cx - board_r * 0.55
             fy = cy + board_r * 0.58
             draw.ellipse((fx - food_r, fy - food_r, fx + food_r, fy + food_r),
-                         outline=color, width=max(1, scale))
+                         fill=color)
             tongue = max(scale, 1)
             draw.line((hx + head_r * 0.6, hy, hx + head_r * 1.6, hy - tongue),
                       fill=color, width=max(1, scale))
