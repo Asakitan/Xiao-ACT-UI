@@ -35,6 +35,10 @@ def _require_action(owner: Any, plugin_id: str, action_id: str,
     return None, _state(result)
 
 
+def _plugin_timer_active(manager: PluginManager, plugin_id: str) -> bool:
+    return bool(manager._timers.get(plugin_id) or {})
+
+
 def run_selftest() -> dict[str, Any]:
     root_plugins = _workspace_root() / "plugins"
     if not root_plugins.is_dir():
@@ -47,6 +51,7 @@ def run_selftest() -> dict[str, Any]:
     owner = SimpleNamespace(root=None)
     manager = PluginManager(plugin_dirs=[str(root_plugins)], owner_provider=lambda: owner)
     owner.act_plugin_manager = manager
+    owner._act_plugin_manager = manager
     records = {record.plugin_id: record for record in manager.discover()}
     required = (
         "script_world_clock_angelscript",
@@ -120,15 +125,45 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
                 if state.get("started") is not False:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "ready_state", "state": state}
+                if state.get("timer_active") is not False or _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_ready_timer_idle", "state": state}
                 action = act_plugin_action(owner, "script.game.flap", {}, plugin_id=plugin_id)
                 action_state = _state(action)
                 if action_state.get("started") is not True:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "flap_started", "state": action_state}
+                if action_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_flap_timer_active", "state": action_state}
+                paused_action = act_plugin_action(
+                    owner, "script.game.pause", {"paused": True}, plugin_id=plugin_id)
+                paused_state = _state(paused_action)
+                if paused_state.get("paused") is not True:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_pause_state", "state": paused_state}
+                if paused_state.get("timer_active") is not False or _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_pause_timer_idle", "state": paused_state}
+                action = act_plugin_action(
+                    owner, "script.game.pause", {"paused": False}, plugin_id=plugin_id)
+                action_state = _state(action)
+                if action_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "flappy_resume_timer_active", "state": action_state}
             else:
                 action: dict[str, Any] = {"ok": True}
             if plugin_id == "script_snake_lua":
                 if not state.get("level") or not state.get("tick_interval"):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "difficulty_state", "state": state}
+                if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_running_timer_active", "state": state}
+                paused_action = act_plugin_action(
+                    owner, "script.game.pause", {"paused": True}, plugin_id=plugin_id)
+                paused_state = _state(paused_action)
+                if paused_state.get("paused") is not True:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_pause_state", "state": paused_state}
+                if paused_state.get("timer_active") is not False or _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_pause_timer_idle", "state": paused_state}
+                resume_action = act_plugin_action(
+                    owner, "script.game.pause", {"paused": False}, plugin_id=plugin_id)
+                resume_state = _state(resume_action)
+                if resume_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_resume_timer_active", "state": resume_state}
                 action = act_plugin_action(
                     owner, "script.game.direction", {"direction": "down"}, plugin_id=plugin_id)
             elif plugin_id == "script_stickwoman_csharp":
@@ -156,6 +191,7 @@ def run_selftest() -> dict[str, Any]:
                 "pipe_speed": state.get("pipe_speed"),
                 "gap_half": state.get("gap_half"),
                 "tick_interval": state.get("tick_interval"),
+                "timer_active": state.get("timer_active"),
                 "draggable": state.get("draggable"),
                 "x": positioned.get("x"),
                 "y": positioned.get("y"),
