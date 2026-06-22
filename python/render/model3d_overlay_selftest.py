@@ -65,6 +65,14 @@ class Model3DSpecTests(unittest.TestCase):
         self.assertEqual(node["camera"]["fov"], 120.0)
         self.assertEqual(node["transform"]["scale"], 0.001)
         self.assertEqual((node["x"], node["y"], node["z"]), (12, 34, -5))
+        self.assertIs(node["draggable"], True)
+
+        fixed = normalize_ui_spec({
+            "type": "model3d",
+            "id": "fixed",
+            "draggable": False,
+        })["nodes"][0]
+        self.assertIs(fixed["draggable"], False)
 
 
 class Model3DBackendTests(unittest.TestCase):
@@ -130,6 +138,9 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
                 self.destroyed = False
                 self.geometry = (kw["x"], kw["y"], kw["w"], kw["h"])
                 self.z = kw["z"]
+                self.click_through = kw["click_through"]
+                self.cursor_pos_fn = None
+                self.mouse_button_fn = None
                 created.append(self)
 
             def show(self):
@@ -150,6 +161,14 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
             def set_z(self, z):
                 self.z = z
 
+            def set_click_through(self, click_through):
+                self.click_through = click_through
+
+            def set_input_callbacks(self, cursor_pos_fn=None, cursor_leave_fn=None,
+                                    mouse_button_fn=None, scroll_fn=None):
+                self.cursor_pos_fn = cursor_pos_fn
+                self.mouse_button_fn = mouse_button_fn
+
         class FakePresenter:
             def __init__(self, layer):
                 self.layer = layer
@@ -169,8 +188,12 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
 
         self.assertEqual(len(created), 2)
         self.assertEqual(created[0].geometry, (11, 22, 20, 10))
+        self.assertIs(created[0].click_through, True)
         self.assertEqual(created[0].z, overlay_mod._BASE_Z + 3)
         self.assertEqual(created[1].geometry, (44, 55, 40, 30))
+        self.assertIs(created[1].click_through, False)
+        self.assertIsNotNone(created[1].cursor_pos_fn)
+        self.assertIsNotNone(created[1].mouse_button_fn)
         self.assertEqual(created[1].z, overlay_mod._BASE_Z + 8)
         self.assertEqual(set(host._layers), {"canvas:plug/meter", "model3d:plug/avatar"})
 
@@ -180,6 +203,79 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
 
         self.assertFalse(host._layers)
         self.assertTrue(all(window.destroyed for window in created))
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_model3d_layer_drag_updates_position_without_affecting_canvas_clickthrough(self) -> None:
+        created = []
+
+        class FakeWindow:
+            def __init__(self, **kw):
+                self.kw = kw
+                self.layer = object()
+                self.destroyed = False
+                self.geometry = (kw["x"], kw["y"], kw["w"], kw["h"])
+                self.z = kw["z"]
+                self.click_through = kw["click_through"]
+                self.cursor_pos_fn = None
+                self.mouse_button_fn = None
+                created.append(self)
+
+            def show(self):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def destroy(self):
+                self.destroyed = True
+
+            def request_redraw(self):
+                self.redrawn = True
+
+            def set_geometry(self, x, y, w, h):
+                self.geometry = (x, y, w, h)
+
+            def set_z(self, z):
+                self.z = z
+
+            def set_click_through(self, click_through):
+                self.click_through = click_through
+
+            def set_input_callbacks(self, cursor_pos_fn=None, cursor_leave_fn=None,
+                                    mouse_button_fn=None, scroll_fn=None):
+                self.cursor_pos_fn = cursor_pos_fn
+                self.mouse_button_fn = mouse_button_fn
+
+        class FakePresenter:
+            def __init__(self, layer):
+                self.layer = layer
+
+            def set_frame(self, bgra, w, h):
+                return None
+
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+
+        with mock.patch.object(overlay_mod, "create_overlay_window", lambda **kw: FakeWindow(**kw)), \
+             mock.patch.object(overlay_mod, "CompositorBgraPresenter", FakePresenter), \
+             mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": self._sample_overlays()}), \
+             mock.patch.object(overlay_mod, "_cursor_screen_pos",
+                               side_effect=[(100, 100), (130, 150)]):
+            host._refresh_now()
+            self.assertEqual(created[0].geometry, (11, 22, 20, 10))
+            self.assertIs(created[0].click_through, True)
+            self.assertIs(created[1].click_through, False)
+            created[1].mouse_button_fn(0, 1, 0, 10.0, 20.0)
+            created[1].cursor_pos_fn(40.0, 70.0)
+            created[1].mouse_button_fn(0, 0, 0, 40.0, 70.0)
+            self.assertEqual(created[1].geometry, (74, 105, 40, 30))
+
+        with mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": self._sample_overlays()}):
+            host._refresh_now()
+
+        self.assertEqual(created[1].geometry, (74, 105, 40, 30))
 
 
 if __name__ == "__main__":

@@ -51,6 +51,19 @@ _BASE_Z = 140
 _TITLE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
+def _cursor_screen_pos(fallback_x: int = 0, fallback_y: int = 0) -> tuple[int, int]:
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        pt = wt.POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            return int(pt.x), int(pt.y)
+    except Exception:
+        pass
+    return int(fallback_x), int(fallback_y)
+
+
 def _load_font(size: int, bold: bool) -> Any:
     key = (int(size), bool(bold))
     cached = _FONT_CACHE.get(key)
@@ -459,6 +472,8 @@ class PluginUnifiedOverlayHost:
         self._destroyed = False
         self._hidden = False
         self._layers: dict[str, dict[str, Any]] = {}
+        self._position_overrides: dict[str, tuple[int, int]] = {}
+        self._drag_state: dict[str, dict[str, int]] = {}
 
     def start(self) -> bool:
         if self.root is None or create_overlay_window is None or CompositorBgraPresenter is None:
@@ -545,6 +560,8 @@ class PluginUnifiedOverlayHost:
 
     def _destroy_layer(self, key: str) -> None:
         state = self._layers.pop(str(key), None)
+        self._position_overrides.pop(str(key), None)
+        self._drag_state.pop(str(key), None)
         if not state:
             return
         window = state.get("window")
@@ -563,27 +580,102 @@ class PluginUnifiedOverlayHost:
             if key not in active_keys:
                 self._destroy_layer(key)
 
+    def _drawable_xy(self, drawable: Mapping[str, Any]) -> tuple[int, int]:
+        key = str(drawable.get("key") or "")
+        override = self._position_overrides.get(key)
+        if override is not None:
+            return int(override[0]), int(override[1])
+        return int(drawable.get("x") or 0), int(drawable.get("y") or 0)
+
+    def _drawable_draggable(self, drawable: Mapping[str, Any]) -> bool:
+        if str(drawable.get("kind") or "").lower() != "model3d":
+            return False
+        node = drawable.get("node")
+        if not isinstance(node, Mapping):
+            return True
+        return bool(node.get("draggable", True))
+
+    def _install_drag_callbacks(self, key: str, state: dict[str, Any]) -> None:
+        window = state.get("window")
+        if window is None or not hasattr(window, "set_input_callbacks"):
+            return
+
+        def _motion(local_x: float, local_y: float) -> None:
+            drag = self._drag_state.get(key)
+            if not drag:
+                return
+            cur_x = int(state.get("x") or 0) + int(round(local_x))
+            cur_y = int(state.get("y") or 0) + int(round(local_y))
+            sx, sy = _cursor_screen_pos(cur_x, cur_y)
+            new_x = sx - int(drag.get("offset_x") or 0)
+            new_y = sy - int(drag.get("offset_y") or 0)
+            self._position_overrides[key] = (new_x, new_y)
+            state["x"] = new_x
+            state["y"] = new_y
+            try:
+                window.set_geometry(
+                    new_x,
+                    new_y,
+                    max(1, int(state.get("width") or 1)),
+                    max(1, int(state.get("height") or 1)),
+                )
+                window.request_redraw()
+            except Exception:
+                pass
+
+        def _mouse(button: int, action: int, _mods: int, local_x: float, local_y: float) -> None:
+            if int(button or 0) != 0:
+                return
+            if int(action or 0):
+                cur_x = int(state.get("x") or 0) + int(round(local_x))
+                cur_y = int(state.get("y") or 0) + int(round(local_y))
+                sx, sy = _cursor_screen_pos(cur_x, cur_y)
+                self._drag_state[key] = {
+                    "offset_x": sx - int(state.get("x") or 0),
+                    "offset_y": sy - int(state.get("y") or 0),
+                }
+            else:
+                self._drag_state.pop(key, None)
+
+        try:
+            window.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
+        except Exception:
+            pass
+
     def _ensure_layer(self, drawable: Mapping[str, Any], width: int, height: int) -> dict[str, Any] | None:
         if create_overlay_window is None or CompositorBgraPresenter is None:
             return None
         key = str(drawable.get("key") or "")
         if not key:
             return None
-        x = int(drawable.get("x") or 0)
-        y = int(drawable.get("y") or 0)
+        x, y = self._drawable_xy(drawable)
         z = _BASE_Z + int(drawable.get("z") or 0)
+        draggable = self._drawable_draggable(drawable)
+        click_through = not draggable
         state = self._layers.get(key)
         if state is not None:
             window = state.get("window")
             if window is not None:
                 try:
                     window.set_geometry(x, y, max(1, int(width)), max(1, int(height)))
+                    if bool(state.get("click_through", True)) != click_through:
+                        try:
+                            window.set_click_through(click_through)
+                        except Exception:
+                            pass
+                        state["click_through"] = click_through
                     if int(state.get("z") or 0) != z:
                         try:
                             window.set_z(z)
                         except Exception:
                             pass
                         state["z"] = z
+                    state["x"] = x
+                    state["y"] = y
+                    state["width"] = max(1, int(width))
+                    state["height"] = max(1, int(height))
+                    if draggable:
+                        self._install_drag_callbacks(key, state)
                     return state
                 except Exception:
                     self._destroy_layer(key)
@@ -595,7 +687,7 @@ class PluginUnifiedOverlayHost:
                 x=x,
                 y=y,
                 render_fn=None,
-                click_through=True,
+                click_through=click_through,
                 title=_layer_title(str(drawable.get("kind") or "overlay"), key),
                 z=z,
             )
@@ -608,8 +700,15 @@ class PluginUnifiedOverlayHost:
                 "last_signature": "",
                 "has_frame": False,
                 "z": z,
+                "x": x,
+                "y": y,
+                "width": max(1, int(width)),
+                "height": max(1, int(height)),
+                "click_through": click_through,
             }
             self._layers[key] = state
+            if draggable:
+                self._install_drag_callbacks(key, state)
             return state
         except Exception:
             self._destroy_layer(key)

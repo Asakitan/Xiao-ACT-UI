@@ -100,9 +100,15 @@ class CompositorOverlayWindow:
     # ── Lifecycle ────────────────────────────────────────────
 
     def show(self, async_create: bool = False) -> None:
+        was_visible = self._visible
         self._visible = True
         self._layer.show()
         self._layer.sync_input_proxy()
+        if not was_visible:
+            try:
+                self._compositor.force_host_input_passthrough()
+            except Exception:
+                pass
         try:
             self._compositor.lift_all_input_proxies()
         except Exception:
@@ -155,6 +161,11 @@ class CompositorOverlayWindow:
     def set_click_through(self, ct: bool) -> None:
         self._click_through = ct
         self._layer.click_through = ct
+        self._layer.sync_input_proxy()
+        try:
+            self._compositor.force_host_input_passthrough()
+        except Exception:
+            pass
 
     def set_input_callbacks(
         self,

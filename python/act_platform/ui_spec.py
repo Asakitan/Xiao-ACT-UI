@@ -286,6 +286,7 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "z": _cz(node.get("z"), 0),
         "width": width,
         "height": height,
+        "draggable": bool(node.get("draggable", True)),
         "model": normalized_model,
         "action": normalized_action,
         "camera": normalized_camera,
@@ -602,6 +603,7 @@ class UI:
             "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
             "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
             "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 480))),
+            "draggable": True,
             "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
             "action": {
                 "name": _s(animation_name, 120),

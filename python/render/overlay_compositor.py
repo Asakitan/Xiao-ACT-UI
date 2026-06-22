@@ -567,6 +567,18 @@ class UnifiedOverlay:
                 self._host.set_capture_mode(exclude)
         self._cmd_q.put(_set)
 
+    def force_host_input_passthrough(self) -> None:
+        """Keep the fullscreen compositor host from becoming a mouse shield.
+
+        Interactive layers use small Tk input proxies. The OpenGL host itself
+        should always pass mouse input through to the game/desktop.
+        """
+
+        def _set():
+            if self._host:
+                self._host.set_input_passthrough(True)
+        self._cmd_q.put(_set)
+
     # ── Tk callback bridge ───────────────────────────────────
 
     def _start_tk_poller(self) -> None:
@@ -672,6 +684,7 @@ class UnifiedOverlay:
             self._init_gl()
             print('[Compositor] GL ready, showing window', flush=True)
             self._host.show()
+            self._host.set_input_passthrough(True)
             self._ready.set()
             print('[Compositor] running', flush=True)
             try:
@@ -709,6 +722,7 @@ class UnifiedOverlay:
             now = time.perf_counter()
             if now - self._last_topmost >= self._topmost_interval:
                 self._host.raise_topmost()
+                self._host.set_input_passthrough(True)
                 self._last_topmost = now
 
             # Tick layer fades + check if any layer needs rendering
