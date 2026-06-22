@@ -388,9 +388,15 @@ class _AngelScriptInterpreter:
                         return (left or 0) * (right or 0)
                     if op == "/":
                         r = right or 0
+                        if (r != 0 and isinstance(left, int) and isinstance(right, int)
+                                and not isinstance(left, bool) and not isinstance(right, bool)):
+                            return int((left or 0) / r)
                         return (left or 0) / r if r != 0 else 0
                     r = right or 0
                     return (left or 0) % r if r != 0 else 0
+
+        if tokens[0] == "-" and len(tokens) > 1:
+            return -(self._eval_expr(tokens[1:], scope) or 0)
 
         if tokens[0] == "!" and len(tokens) > 1:
             return not self._eval_expr(tokens[1:], scope)
@@ -641,6 +647,9 @@ class _AngelScriptProxy:
 
     def snapshot_value(self, path, default=None):
         return self._ctx.snapshot_value(str(path), default)
+
+    def time(self):
+        return self._ctx.time()
 
     def recent_events(self, limit=20, topic="") -> list:
         return self._ctx.recent_events(int(limit), str(topic or ""))

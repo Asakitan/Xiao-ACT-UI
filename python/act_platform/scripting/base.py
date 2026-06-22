@@ -76,7 +76,7 @@ class ContextProxy:
         "log", "subscribe", "subscribe_once", "unsubscribe",
         "on_damage", "on_heal", "on_skill", "on_boss",
         "on_snapshot", "on_encounter_finalized",
-        "emit", "get_snapshot", "snapshot_value", "recent_events",
+        "emit", "get_snapshot", "snapshot_value", "time", "recent_events",
         "get_setting", "setting", "set_setting", "set_defaults",
         "register_parser_adapter", "register_exporter",
         "register_formatter", "register_trigger_type",

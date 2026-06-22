@@ -965,6 +965,9 @@ class _EmmaProxy:
     def snapshot_value(self, path, default=None):
         return self._ctx.snapshot_value(str(path), default)
 
+    def time(self):
+        return self._ctx.time()
+
     def recent_events(self, limit=20, topic=""):
         return self._ctx.recent_events(int(limit), str(topic or ""))
 
