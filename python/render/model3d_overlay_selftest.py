@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,59 @@ from render.model3d_native import (
     register_native_model3d_renderer,
 )
 from render.model3d_overlay import render_model3d_node
+
+
+def _pad4(data: bytes, pad: bytes = b" ") -> bytes:
+    extra = (-len(data)) % 4
+    return data + pad * extra
+
+
+def _write_cube_glb(path: Path) -> None:
+    vertices = [
+        (-1.0, -1.0, -1.0), (1.0, -1.0, -1.0),
+        (1.0, 1.0, -1.0), (-1.0, 1.0, -1.0),
+        (-1.0, -1.0, 1.0), (1.0, -1.0, 1.0),
+        (1.0, 1.0, 1.0), (-1.0, 1.0, 1.0),
+    ]
+    indices = [
+        0, 1, 2, 0, 2, 3,
+        4, 6, 5, 4, 7, 6,
+        0, 4, 5, 0, 5, 1,
+        2, 6, 7, 2, 7, 3,
+        1, 5, 6, 1, 6, 2,
+        0, 3, 7, 0, 7, 4,
+    ]
+    position_blob = b"".join(struct.pack("<fff", *point) for point in vertices)
+    index_offset = len(position_blob)
+    index_blob = b"".join(struct.pack("<H", item) for item in indices)
+    bin_blob = _pad4(position_blob + index_blob, b"\0")
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(position_blob), "target": 34962},
+            {"buffer": 0, "byteOffset": index_offset, "byteLength": len(index_blob), "target": 34963},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(vertices),
+             "type": "VEC3", "min": [-1, -1, -1], "max": [1, 1, 1]},
+            {"bufferView": 1, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+        ],
+        "meshes": [{"name": "CubeMesh", "primitives": [
+            {"attributes": {"POSITION": 0}, "indices": 1, "mode": 4, "material": 0}
+        ]}],
+        "materials": [{"name": "PreviewMat"}],
+        "nodes": [{"name": "CubeNode", "mesh": 0}],
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+    }
+    json_blob = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), b" ")
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    path.write_bytes(
+        b"glTF" + struct.pack("<II", 2, total)
+        + struct.pack("<II", len(json_blob), 0x4E4F534A) + json_blob
+        + struct.pack("<II", len(bin_blob), 0x004E4942) + bin_blob
+    )
 
 
 class Model3DSpecTests(unittest.TestCase):
@@ -473,6 +527,30 @@ Objects:  {
         self.assertIn("Head", meta["nodes"])
         self.assertIn("dress", meta["materials"])
 
+    def test_model_metadata_extracts_glb_mesh_preview(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_meta_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_cube_glb(model_path)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "glb"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+
+        self.assertEqual(meta["mesh"]["source"], "glb")
+        self.assertEqual(meta["mesh"]["mesh_count"], 1)
+        self.assertEqual(meta["mesh"]["vertex_count"], 8)
+        self.assertEqual(meta["mesh"]["face_count"], 12)
+        self.assertEqual(meta["mesh"]["bbox"]["min"], [-1.0, -1.0, -1.0])
+        self.assertEqual(meta["mesh"]["bbox"]["max"], [1.0, 1.0, 1.0])
+        self.assertEqual(meta["mesh"]["preview"]["source"], "glb")
+        self.assertEqual(len(meta["mesh"]["preview"]["vertices"]), 8)
+        self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 12)
+        self.assertIn("CubeNode", meta["nodes"])
+        self.assertIn("PreviewMat", meta["materials"])
+
     def test_retarget_plan_maps_mixamo_sidecar_bones(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_retarget_") as root:
@@ -884,6 +962,25 @@ class Model3DOverlayRenderTests(unittest.TestCase):
                 "width": 96,
                 "height": 128,
                 "model": {"path": str(model_path), "format": "obj"},
+            })["nodes"][0]
+
+            with mock.patch("render.model3d_overlay.evaluate_retarget_pose") as pose:
+                image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        self.assertEqual(image.size, (96, 128))
+        self.assertIsNotNone(image.getchannel("A").getbbox())
+        self.assertEqual(pose.call_count, 0)
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_glb_software_preview_renders_without_native_window(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_render_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_cube_glb(model_path)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "width": 96,
+                "height": 128,
+                "model": {"path": str(model_path), "format": "glb"},
             })["nodes"][0]
 
             with mock.patch("render.model3d_overlay.evaluate_retarget_pose") as pose:

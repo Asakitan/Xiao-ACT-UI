@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -753,6 +754,261 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
     }
 
 
+_GLB_MAGIC = b"glTF"
+_GLB_JSON_CHUNK = 0x4E4F534A
+_GLB_BIN_CHUNK = 0x004E4942
+_GLTF_COMPONENTS: dict[int, tuple[str, int]] = {
+    5120: ("b", 1),
+    5121: ("B", 1),
+    5122: ("h", 2),
+    5123: ("H", 2),
+    5125: ("I", 4),
+    5126: ("f", 4),
+}
+_GLTF_TYPE_COUNTS = {
+    "SCALAR": 1,
+    "VEC2": 2,
+    "VEC3": 3,
+    "VEC4": 4,
+}
+
+
+def _int_at(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _json_index(items: Any, index: Any) -> Mapping[str, Any] | None:
+    if not isinstance(items, list):
+        return None
+    idx = _int_at(index, -1)
+    if 0 <= idx < len(items) and isinstance(items[idx], Mapping):
+        return items[idx]
+    return None
+
+
+def _read_glb(path: Path) -> tuple[dict[str, Any] | None, bytes, list[str]]:
+    errors: list[str] = []
+    try:
+        size = path.stat().st_size
+        if size > _MODEL_PARSE_LIMIT:
+            errors.append("model metadata parse limit reached")
+            return None, b"", errors
+        raw = path.read_bytes()
+    except Exception as exc:
+        return None, b"", [str(exc)]
+    if len(raw) < 20 or raw[:4] != _GLB_MAGIC:
+        return None, b"", ["invalid glb header"]
+    try:
+        version, declared_len = struct.unpack_from("<II", raw, 4)
+    except Exception as exc:
+        return None, b"", [str(exc)]
+    if version != 2:
+        errors.append(f"unsupported glb version {version}")
+        return None, b"", errors
+    if declared_len > len(raw):
+        errors.append("truncated glb file")
+        return None, b"", errors
+
+    pos = 12
+    json_data: dict[str, Any] | None = None
+    bin_chunk = b""
+    while pos + 8 <= declared_len:
+        try:
+            chunk_len, chunk_type = struct.unpack_from("<II", raw, pos)
+        except Exception as exc:
+            errors.append(str(exc))
+            break
+        pos += 8
+        end = pos + chunk_len
+        if end > declared_len:
+            errors.append("truncated glb chunk")
+            break
+        chunk = raw[pos:end]
+        pos = end
+        if chunk_type == _GLB_JSON_CHUNK:
+            try:
+                loaded = json.loads(chunk.decode("utf-8").rstrip(" \t\r\n\0"))
+                if isinstance(loaded, Mapping):
+                    json_data = dict(loaded)
+                else:
+                    errors.append("glb JSON chunk root is not an object")
+            except Exception as exc:
+                errors.append(str(exc))
+        elif chunk_type == _GLB_BIN_CHUNK and not bin_chunk:
+            bin_chunk = bytes(chunk)
+    if json_data is None:
+        errors.append("glb JSON chunk missing")
+    return json_data, bin_chunk, errors
+
+
+def _accessor_byte_layout(
+    accessor: Mapping[str, Any],
+    buffer_views: Any,
+) -> tuple[int, int, int, int, str] | None:
+    view = _json_index(buffer_views, accessor.get("bufferView"))
+    if view is None:
+        return None
+    component_type = _int_at(accessor.get("componentType"), -1)
+    comp = _GLTF_COMPONENTS.get(component_type)
+    if comp is None:
+        return None
+    fmt, comp_size = comp
+    type_name = str(accessor.get("type") or "SCALAR").upper()
+    comp_count = _GLTF_TYPE_COUNTS.get(type_name)
+    if comp_count is None:
+        return None
+    base = _int_at(view.get("byteOffset")) + _int_at(accessor.get("byteOffset"))
+    stride = _int_at(view.get("byteStride"), comp_size * comp_count)
+    if stride < comp_size * comp_count:
+        return None
+    return base, stride, comp_count, comp_size, fmt
+
+
+def _read_accessor_values(
+    accessor: Mapping[str, Any],
+    buffer_views: Any,
+    binary: bytes,
+    *,
+    limit: int,
+) -> tuple[list[tuple[float, ...]], int, str]:
+    layout = _accessor_byte_layout(accessor, buffer_views)
+    if layout is None:
+        return [], _int_at(accessor.get("count")), "unsupported accessor layout"
+    base, stride, comp_count, comp_size, fmt = layout
+    count = max(0, _int_at(accessor.get("count")))
+    read_count = min(count, max(0, limit))
+    row_fmt = "<" + (fmt * comp_count)
+    row_size = comp_size * comp_count
+    rows: list[tuple[float, ...]] = []
+    for idx in range(read_count):
+        offset = base + idx * stride
+        if offset < 0 or offset + row_size > len(binary):
+            return rows, count, "accessor exceeds binary chunk"
+        try:
+            raw = struct.unpack_from(row_fmt, binary, offset)
+        except Exception as exc:
+            return rows, count, str(exc)
+        rows.append(tuple(float(v) for v in raw))
+    return rows, count, ""
+
+
+def _accessor_minmax_points(accessor: Mapping[str, Any]) -> list[tuple[float, float, float]]:
+    mins = accessor.get("min")
+    maxs = accessor.get("max")
+    if not isinstance(mins, list) or not isinstance(maxs, list) or len(mins) < 3 or len(maxs) < 3:
+        return []
+    try:
+        return [
+            (float(mins[0]), float(mins[1]), float(mins[2])),
+            (float(maxs[0]), float(maxs[1]), float(maxs[2])),
+        ]
+    except Exception:
+        return []
+
+
+def _parse_glb_metadata(path: Path) -> dict[str, Any]:
+    data, binary, errors = _read_glb(path)
+    empty = {"mesh": {"source": "glb", "vertex_count": 0, "face_count": 0, "bbox": {}},
+             "nodes": (), "materials": (), "errors": tuple(errors)}
+    if not isinstance(data, Mapping):
+        return empty
+    accessors = data.get("accessors")
+    buffer_views = data.get("bufferViews")
+    meshes = data.get("meshes")
+    nodes = _extract_names(data.get("nodes"))
+    materials = _extract_names(data.get("materials"))
+    if not isinstance(accessors, list) or not isinstance(buffer_views, list) or not isinstance(meshes, list):
+        errors.append("glb mesh metadata is incomplete")
+        return {"mesh": {"source": "glb", "vertex_count": 0, "face_count": 0, "bbox": {}},
+                "nodes": _unique_strings(nodes), "materials": _unique_strings(materials),
+                "errors": tuple(errors)}
+
+    vertices: list[list[float]] = []
+    faces: list[list[int]] = []
+    bbox_points: list[tuple[float, float, float]] = []
+    vertex_count = 0
+    face_count = 0
+    for mesh in meshes:
+        if not isinstance(mesh, Mapping):
+            continue
+        primitives = mesh.get("primitives")
+        if not isinstance(primitives, list):
+            continue
+        for primitive in primitives:
+            if not isinstance(primitive, Mapping):
+                continue
+            attrs = primitive.get("attributes")
+            if not isinstance(attrs, Mapping) or "POSITION" not in attrs:
+                continue
+            pos_accessor = _json_index(accessors, attrs.get("POSITION"))
+            if pos_accessor is None:
+                continue
+            remaining_vertices = max(0, _MESH_PREVIEW_VERTEX_LIMIT - len(vertices))
+            rows, total_positions, err = _read_accessor_values(
+                pos_accessor, buffer_views, binary, limit=remaining_vertices)
+            if err:
+                errors.append(err)
+            vertex_count += total_positions
+            bbox_points.extend(_accessor_minmax_points(pos_accessor))
+            points: list[tuple[float, float, float]] = []
+            for row in rows:
+                if len(row) >= 3 and all(math.isfinite(v) for v in row[:3]):
+                    point = (float(row[0]), float(row[1]), float(row[2]))
+                    points.append(point)
+                    bbox_points.append(point)
+            base_index = len(vertices)
+            vertices.extend([list(point) for point in points])
+
+            mode = _int_at(primitive.get("mode"), 4)
+            if mode != 4:
+                errors.append(f"unsupported glb primitive mode {mode}")
+                continue
+            index_accessor = _json_index(accessors, primitive.get("indices")) if "indices" in primitive else None
+            if index_accessor is not None:
+                remaining_indices = max(0, (_MESH_PREVIEW_FACE_LIMIT - len(faces)) * 3)
+                idx_rows, total_indices, idx_err = _read_accessor_values(
+                    index_accessor, buffer_views, binary, limit=remaining_indices)
+                if idx_err:
+                    errors.append(idx_err)
+                face_count += total_indices // 3
+                flat_indices = [int(row[0]) for row in idx_rows if row]
+            else:
+                total_indices = total_positions
+                face_count += total_indices // 3
+                flat_indices = list(range(min(len(points), (_MESH_PREVIEW_FACE_LIMIT - len(faces)) * 3)))
+            for idx in range(0, len(flat_indices) - 2, 3):
+                tri = flat_indices[idx:idx + 3]
+                if all(0 <= item < len(points) for item in tri) and len(faces) < _MESH_PREVIEW_FACE_LIMIT:
+                    faces.append([base_index + item for item in tri])
+    box = _bbox(bbox_points)
+    preview = {
+        "vertices": vertices,
+        "faces": faces,
+        "source": "glb",
+        "truncated": vertex_count > _MESH_PREVIEW_VERTEX_LIMIT or face_count > _MESH_PREVIEW_FACE_LIMIT,
+    }
+    if not vertices or not faces:
+        preview = _bbox_preview(box)
+        if preview:
+            preview["source"] = "glb_bbox"
+    return {
+        "mesh": {
+            "source": "glb",
+            "mesh_count": len(meshes),
+            "vertex_count": vertex_count,
+            "face_count": face_count,
+            "bbox": box,
+            "preview": preview,
+        },
+        "nodes": _unique_strings(nodes),
+        "materials": _unique_strings(materials),
+        "errors": tuple(_unique_strings(errors)),
+    }
+
+
 def _parse_gltf_metadata(path: Path) -> dict[str, Any]:
     errors: list[str] = []
     try:
@@ -814,12 +1070,7 @@ def _read_model_file_metadata(path: Path, fmt: str, exists: bool) -> dict[str, A
         if chosen == "gltf" or suffix == ".gltf":
             return _parse_gltf_metadata(path)
         if chosen == "glb" or suffix == ".glb":
-            return {
-                "mesh": {"source": "glb", "vertex_count": 0, "face_count": 0, "bbox": {}},
-                "nodes": (),
-                "materials": (),
-                "errors": ("glb metadata requires native backend",),
-            }
+            return _parse_glb_metadata(path)
     except Exception as exc:
         return {"mesh": {}, "nodes": (), "materials": (), "errors": (str(exc),)}
     return {}
