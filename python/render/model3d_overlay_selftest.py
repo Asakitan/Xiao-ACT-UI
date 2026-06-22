@@ -21,6 +21,7 @@ from render import model3d_backend
 from render.model3d_backend import (
     clear_model3d_metadata_caches,
     diagnose_model3d_node,
+    evaluate_retarget_pose,
     get_action_metadata,
     get_backend_status,
     get_model_metadata,
@@ -456,6 +457,213 @@ Objects:  {
         self.assertIn("spine", plan["pending_backend"])
         self.assertTrue(plan["warnings"])
 
+    def test_evaluate_retarget_pose_preserves_rest_lengths_and_clamps_offsets(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_clamp_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            sidecar_path = Path(root) / "avatar.model3d.json"
+            sidecar_path.write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Spine2",
+                        "mixamorig:Neck",
+                        "mixamorig:Head",
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                    ],
+                    "bone_map": {
+                        "hips": "mixamorig:Hips",
+                        "spine": "mixamorig:Spine",
+                        "chest": "mixamorig:Spine2",
+                        "neck": "mixamorig:Neck",
+                        "head": "mixamorig:Head",
+                        "right_arm": "mixamorig:RightArm",
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:Hips": [0.0, 0.0, 0.0],
+                        "mixamorig:Spine": [0.0, 0.45, 0.0],
+                        "mixamorig:Spine2": [0.0, 0.84, 0.0],
+                        "mixamorig:Neck": [0.0, 1.04, 0.0],
+                        "mixamorig:Head": [0.0, 1.28, 0.0],
+                        "mixamorig:RightArm": [0.32, 0.82, 0.0],
+                        "mixamorig:RightForeArm": [0.58, 0.58, 0.0],
+                        "mixamorig:RightHand": [0.76, 0.36, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "preserve_proportions": True,
+                    "stretch_limit": 0.05,
+                },
+                "action": {
+                    "name": "wave",
+                    "json": json.dumps({
+                        "wave": {
+                            "pose_offsets": {
+                                "right_hand": [5.0, 5.0, 0.0],
+                            },
+                        },
+                    }),
+                },
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            pose = evaluate_retarget_pose(node)
+
+        self.assertIn("mixamorig:RightHand", meta["rest_positions"])
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["rest_source"], "sidecar")
+        self.assertGreater(pose["clamped_count"], 0)
+        self.assertLessEqual(pose["max_stretch"], 0.050001)
+        right_hand = next(
+            item for item in pose["segments"]
+            if item["parent"] == "right_forearm" and item["child"] == "right_hand"
+        )
+        self.assertTrue(right_hand["clamped"])
+        self.assertLessEqual(right_hand["length"], right_hand["rest_length"] * 1.050001)
+
+    def test_evaluate_retarget_pose_procedural_wave_moves_hand(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_wave_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.skeleton.json").write_text(json.dumps({
+                "bones": [
+                    "mixamorig:Hips",
+                    "mixamorig:Spine",
+                    "mixamorig:Head",
+                    "mixamorig:RightArm",
+                    "mixamorig:RightForeArm",
+                    "mixamorig:RightHand",
+                ],
+            }), encoding="utf-8")
+            first = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.12},
+                "action": {"name": "wave"},
+                "phase": 0.0,
+            })["nodes"][0]
+            second = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.12},
+                "action": {"name": "wave"},
+                "phase": 0.45,
+            })["nodes"][0]
+
+            pose_a = evaluate_retarget_pose(first)
+            pose_b = evaluate_retarget_pose(second)
+
+        self.assertTrue(pose_a["ok"], pose_a)
+        self.assertTrue(pose_b["ok"], pose_b)
+        self.assertNotEqual(pose_a["positions"]["right_hand"], pose_b["positions"]["right_hand"])
+        self.assertLessEqual(pose_b["max_stretch"], 0.120001)
+
+    def test_evaluate_retarget_pose_clamps_shortened_segment_to_lower_bound(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_short_clamp_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["mixamorig:RightForeArm", "mixamorig:RightHand"],
+                    "bone_map": {
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:RightForeArm": [0.50, 0.50, 0.0],
+                        "mixamorig:RightHand": [0.90, 0.50, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "preserve_proportions": True,
+                    "stretch_limit": 0.2,
+                },
+                "action": {
+                    "name": "idle",
+                    "json": json.dumps({
+                        "idle": {
+                            "pose_offsets": {
+                                "right_hand": [-0.39, 0.0, 0.0],
+                            },
+                        },
+                    }),
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        segment = next(
+            item for item in pose["segments"]
+            if item["parent"] == "right_forearm" and item["child"] == "right_hand"
+        )
+        self.assertTrue(segment["clamped"])
+        self.assertGreaterEqual(segment["length"], segment["rest_length"] * 0.799999)
+
+    def test_evaluate_retarget_pose_preserve_false_does_not_clamp(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_no_clamp_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["mixamorig:RightForeArm", "mixamorig:RightHand"],
+                    "bone_map": {
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:RightForeArm": [0.50, 0.50, 0.0],
+                        "mixamorig:RightHand": [0.90, 0.50, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "preserve_proportions": False,
+                    "stretch_limit": 0.05,
+                },
+                "action": {
+                    "name": "idle",
+                    "json": json.dumps({
+                        "idle": {
+                            "pose_offsets": {
+                                "right_hand": [2.0, 0.0, 0.0],
+                            },
+                        },
+                    }),
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        segment = next(
+            item for item in pose["segments"]
+            if item["parent"] == "right_forearm" and item["child"] == "right_hand"
+        )
+        self.assertEqual(pose["clamped_count"], 0)
+        self.assertGreater(segment["stretch"], pose["stretch_limit"])
+
     def test_diagnose_model3d_node_includes_retarget_coverage(self) -> None:
         with tempfile.TemporaryDirectory(prefix="model3d_diag_retarget_") as root:
             model_path = Path(root) / "avatar.fbx"
@@ -511,6 +719,70 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertIsNotNone(image)
         crop = image.crop((0, 0, 110, 42))
         self.assertTrue(crop.getchannel("A").getbbox())
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_retarget_pose_preview_animates_existing_model_without_extra_window(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_render_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Spine2",
+                        "mixamorig:Neck",
+                        "mixamorig:Head",
+                        "mixamorig:LeftArm",
+                        "mixamorig:LeftForeArm",
+                        "mixamorig:LeftHand",
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                    ],
+                    "rest_positions": {
+                        "mixamorig:Hips": [0.0, 0.0, 0.0],
+                        "mixamorig:Spine": [0.0, 0.42, 0.0],
+                        "mixamorig:Spine2": [0.0, 0.78, 0.0],
+                        "mixamorig:Neck": [0.0, 1.02, 0.0],
+                        "mixamorig:Head": [0.0, 1.28, 0.0],
+                        "mixamorig:LeftArm": [-0.34, 0.76, 0.0],
+                        "mixamorig:LeftForeArm": [-0.56, 0.53, 0.0],
+                        "mixamorig:LeftHand": [-0.68, 0.34, 0.0],
+                        "mixamorig:RightArm": [0.34, 0.76, 0.0],
+                        "mixamorig:RightForeArm": [0.56, 0.53, 0.0],
+                        "mixamorig:RightHand": [0.68, 0.34, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            first = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 240,
+                "height": 320,
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.1},
+                "action": {"name": "wave"},
+                "phase": 0.0,
+            })["nodes"][0]
+            second = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 240,
+                "height": 320,
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.1},
+                "action": {"name": "wave"},
+                "phase": 0.45,
+            })["nodes"][0]
+
+            image_a = render_model3d_node(first, {"accent": "#7dd3fc"})
+            image_b = render_model3d_node(second, {"accent": "#7dd3fc"})
+
+        self.assertIsNotNone(image_a)
+        self.assertIsNotNone(image_b)
+        self.assertTrue(image_a.getchannel("A").getbbox())
+        self.assertNotEqual(image_a.tobytes(), image_b.tobytes())
 
 
 class UnifiedOverlayDrawableTests(unittest.TestCase):

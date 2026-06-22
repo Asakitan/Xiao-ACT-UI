@@ -23,12 +23,14 @@ except Exception:  # pragma: no cover - imported defensively by overlay host
 
 try:
     from render.model3d_backend import (
+        evaluate_retarget_pose,
         get_action_metadata,
         get_backend_status,
         get_retarget_plan,
         resolve_model_path,
     )
 except Exception:  # pragma: no cover - imported defensively by overlay host
+    evaluate_retarget_pose = None  # type: ignore[assignment]
     get_action_metadata = None  # type: ignore[assignment]
     get_backend_status = None  # type: ignore[assignment]
     get_retarget_plan = None  # type: ignore[assignment]
@@ -258,6 +260,134 @@ def _draw_stylized_avatar(
                   head[0] + head_r * 0.55 + blush_r, head[1] + head_r * 0.18 + blush_r), fill=blush)
 
 
+def _pose_points(pose: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
+    points: dict[str, tuple[float, float, float]] = {}
+    raw = pose.get("positions") if isinstance(pose.get("positions"), Mapping) else {}
+    for key, value in dict(raw or {}).items():
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                points[str(key)] = (
+                    float(value[0]),
+                    float(value[1]),
+                    float(value[2]) if len(value) >= 3 else 0.0,
+                )
+            except Exception:
+                continue
+    return points
+
+
+def _screen_points(points: Mapping[str, tuple[float, float, float]],
+                   width: int, height: int) -> dict[str, tuple[float, float]]:
+    if not points:
+        return {}
+    xs = [point[0] for point in points.values()]
+    ys = [point[1] for point in points.values()]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    extent_x = max(0.1, max_x - min_x)
+    extent_y = max(0.1, max_y - min_y)
+    scale = min(width * 0.62 / extent_x, height * 0.72 / extent_y)
+    cx = (min_x + max_x) * 0.5
+    floor_y = height * 0.83
+    screen: dict[str, tuple[float, float]] = {}
+    for key, point in points.items():
+        x = width * 0.52 + (point[0] - cx) * scale
+        y = floor_y - (point[1] - min_y) * scale
+        screen[key] = (x, y)
+    return screen
+
+
+def _draw_retarget_pose_avatar(
+    draw: Any,
+    width: int,
+    height: int,
+    pose: Mapping[str, Any],
+    accent: tuple[int, int, int, int],
+) -> bool:
+    points = _pose_points(pose)
+    screen = _screen_points(points, width, height)
+    required = ("hips", "spine", "head", "right_hand", "left_hand")
+    if not all(key in screen for key in required):
+        return False
+
+    scale = min(width, height) / 420.0
+    outline = (24, 34, 56, 255)
+    limb = (41, 58, 88, 255)
+    skin = (255, 228, 210, 255)
+    dress = (76, 178, 184, 255)
+    dress_hi = (244, 190, 116, 235)
+    hair = (38, 48, 72, 255)
+    glow = (accent[0], accent[1], accent[2], 44)
+    line_w = max(3, int(4.5 * scale))
+    joint_r = max(2, int(3.5 * scale))
+
+    hip = screen.get("hips")
+    left_foot = screen.get("left_foot", hip)
+    right_foot = screen.get("right_foot", hip)
+    if hip:
+        shadow_y = max(left_foot[1] if left_foot else hip[1], right_foot[1] if right_foot else hip[1])
+        draw.ellipse((hip[0] - width * 0.20, shadow_y + height * 0.030,
+                      hip[0] + width * 0.20, shadow_y + height * 0.080), fill=(0, 0, 0, 60))
+        draw.ellipse((hip[0] - width * 0.23, height * 0.10,
+                      hip[0] + width * 0.23, shadow_y + height * 0.08),
+                     outline=glow, width=max(1, int(2 * scale)))
+
+    segments = pose.get("segments") if isinstance(pose.get("segments"), (list, tuple)) else ()
+    for seg in segments:
+        if not isinstance(seg, Mapping):
+            continue
+        parent = str(seg.get("parent") or "")
+        child = str(seg.get("child") or "")
+        if parent not in screen or child not in screen:
+            continue
+        color = outline if bool(seg.get("clamped")) else limb
+        draw.line((screen[parent][0], screen[parent][1], screen[child][0], screen[child][1]),
+                  fill=color, width=line_w, joint="curve")
+
+    chest = screen.get("chest") or screen.get("spine")
+    left_shoulder = screen.get("left_shoulder") or screen.get("left_arm")
+    right_shoulder = screen.get("right_shoulder") or screen.get("right_arm")
+    if hip and chest and left_shoulder and right_shoulder:
+        waist_l = (hip[0] - width * 0.055, hip[1])
+        waist_r = (hip[0] + width * 0.055, hip[1])
+        draw.polygon((left_shoulder, right_shoulder, waist_r, waist_l), fill=dress, outline=outline)
+        skirt = (
+            waist_l,
+            waist_r,
+            (hip[0] + width * 0.120, hip[1] + height * 0.105),
+            (hip[0] - width * 0.120, hip[1] + height * 0.105),
+        )
+        draw.polygon(skirt, fill=dress, outline=outline)
+        draw.line((left_shoulder[0], left_shoulder[1], right_shoulder[0], right_shoulder[1]),
+                  fill=dress_hi, width=max(1, int(2 * scale)))
+
+    head = screen.get("head")
+    neck = screen.get("neck") or screen.get("chest") or screen.get("spine")
+    if head and neck:
+        head_r = max(height * 0.045, abs(neck[1] - head[1]) * 0.56)
+        hair_r = head_r * 1.20
+        draw.ellipse((head[0] - hair_r, head[1] - hair_r * 1.05,
+                      head[0] + hair_r, head[1] + hair_r * 1.08), fill=hair)
+        draw.ellipse((head[0] - head_r, head[1] - head_r * 0.84,
+                      head[0] + head_r, head[1] + head_r * 1.02), fill=skin, outline=outline)
+        eye_r = max(1, int(2.3 * scale))
+        for ex in (-0.32, 0.30):
+            draw.ellipse((head[0] + ex * head_r - eye_r, head[1] - 0.08 * head_r - eye_r,
+                          head[0] + ex * head_r + eye_r, head[1] - 0.08 * head_r + eye_r),
+                         fill=outline)
+
+    for key in ("left_hand", "right_hand"):
+        if key in screen:
+            x, y = screen[key]
+            draw.ellipse((x - joint_r, y - joint_r, x + joint_r, y + joint_r), fill=skin, outline=outline)
+    for key in ("left_foot", "right_foot"):
+        if key in screen:
+            x, y = screen[key]
+            draw.line((x - joint_r * 2.2, y, x + joint_r * 2.2, y),
+                      fill=outline, width=max(2, int(3 * scale)))
+    return True
+
+
 def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None = None) -> Any:
     if Image is None or ImageDraw is None:
         return None
@@ -284,7 +414,17 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         now = float(action.get("time", node.get("phase", 0.0)) or 0.0)
     except Exception:
         now = 0.0
-    _draw_stylized_avatar(draw, width, height, now * speed, action_name, action_cfg, accent)
+    pose = None
+    if callable(evaluate_retarget_pose):
+        try:
+            pose = evaluate_retarget_pose(node)
+        except Exception:
+            pose = None
+    used_pose = False
+    if isinstance(pose, Mapping) and pose.get("ok"):
+        used_pose = _draw_retarget_pose_avatar(draw, width, height, pose, accent)
+    if not used_pose:
+        _draw_stylized_avatar(draw, width, height, now * speed, action_name, action_cfg, accent)
 
     status = "ready"
     diagnostic = False
@@ -320,6 +460,11 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
                 f"retarget: {plan.get('mode', 'auto')} "
                 f"{int(plan.get('resolved_count') or 0)}/{int(plan.get('total_count') or 0)}"
             )
+            if isinstance(pose, Mapping) and pose.get("ok"):
+                lines.append(
+                    f"pose: {pose.get('rest_source', 'auto')} "
+                    f"stretch {float(pose.get('max_stretch') or 0.0):.2f}"
+                )
         else:
             lines.append(f"retarget: {retarget.get('mode', 'auto')}")
     if action_cfg.get("_load_error"):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,51 @@ _COARSE_BONE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "right_arm": ("right_arm", "right_upper_arm"),
     "left_leg": ("left_leg", "left_upper_leg"),
     "right_leg": ("right_leg", "right_upper_leg"),
+}
+
+HUMANOID_SEGMENTS = (
+    ("root", "hips"),
+    ("hips", "spine"),
+    ("spine", "chest"),
+    ("chest", "neck"),
+    ("neck", "head"),
+    ("chest", "left_shoulder"),
+    ("left_shoulder", "left_arm"),
+    ("left_arm", "left_forearm"),
+    ("left_forearm", "left_hand"),
+    ("chest", "right_shoulder"),
+    ("right_shoulder", "right_arm"),
+    ("right_arm", "right_forearm"),
+    ("right_forearm", "right_hand"),
+    ("hips", "left_leg"),
+    ("left_leg", "left_knee"),
+    ("left_knee", "left_foot"),
+    ("hips", "right_leg"),
+    ("right_leg", "right_knee"),
+    ("right_knee", "right_foot"),
+)
+
+_DEFAULT_REST_POSITIONS: dict[str, tuple[float, float, float]] = {
+    "root": (0.0, 0.0, 0.0),
+    "hips": (0.0, 0.12, 0.0),
+    "spine": (0.0, 0.55, 0.0),
+    "chest": (0.0, 0.88, 0.0),
+    "neck": (0.0, 1.12, 0.0),
+    "head": (0.0, 1.35, 0.0),
+    "left_shoulder": (-0.18, 0.98, 0.0),
+    "left_arm": (-0.40, 0.84, 0.0),
+    "left_forearm": (-0.58, 0.60, 0.0),
+    "left_hand": (-0.68, 0.38, 0.0),
+    "right_shoulder": (0.18, 0.98, 0.0),
+    "right_arm": (0.40, 0.84, 0.0),
+    "right_forearm": (0.58, 0.60, 0.0),
+    "right_hand": (0.68, 0.38, 0.0),
+    "left_leg": (-0.15, -0.26, 0.0),
+    "left_knee": (-0.17, -0.72, 0.0),
+    "left_foot": (-0.18, -1.08, 0.08),
+    "right_leg": (0.15, -0.26, 0.0),
+    "right_knee": (0.17, -0.72, 0.0),
+    "right_foot": (0.18, -1.08, 0.08),
 }
 
 
@@ -284,7 +330,7 @@ def _cache_put(cache: dict[tuple[Any, ...], dict[str, Any]], key: tuple[Any, ...
 
 def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     out = dict(value)
-    for key in ("data", "selected", "model", "action", "sidecar", "retarget", "mesh"):
+    for key in ("data", "selected", "model", "action", "sidecar", "retarget", "mesh", "rest_positions"):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = dict(item)
@@ -365,6 +411,31 @@ def _extract_names(value: Any) -> list[str]:
     return unique
 
 
+def _point3(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return None
+    try:
+        x = float(value[0])
+        y = float(value[1])
+        z = float(value[2]) if len(value) >= 3 else 0.0
+        if x != x or y != y or z != z:
+            raise ValueError("nan")
+        return x, y, z
+    except Exception:
+        return None
+
+
+def _extract_rest_positions(value: Any) -> dict[str, tuple[float, float, float]]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, tuple[float, float, float]] = {}
+    for key, raw in value.items():
+        point = _point3(raw)
+        if point is not None:
+            out[str(key)] = point
+    return out
+
+
 def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
@@ -391,6 +462,13 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
         bone_map = skeleton.get("bone_map")
         if isinstance(bone_map, Mapping):
             out["bone_map"] = {str(k): str(v) for k, v in bone_map.items()}
+    rest_positions = (
+        _extract_rest_positions(src.get("rest_positions"))
+        or _extract_rest_positions((skeleton or {}).get("rest_positions"))
+        or _extract_rest_positions((skeleton or {}).get("rest_offsets"))
+    )
+    if rest_positions:
+        out["rest_positions"] = dict(rest_positions)
     for key in ("profile", "up_axis", "unit_scale", "rest_pose"):
         if key in src:
             out[key] = _json_safe_scalar(src.get(key))
@@ -731,6 +809,7 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "materials": tuple(file_meta.get("materials") or ()),
         "bone_names": bone_names,
         "clips": clips,
+        "rest_positions": dict(sidecar_meta.get("rest_positions") or {}),
         "metadata_errors": errors,
         "cache_key": cache_key,
     }
@@ -977,6 +1056,234 @@ def _float_from_mapping(src: Mapping[str, Any], key: str, default: float,
     return max(lo, min(hi, value))
 
 
+def _vec_add(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return a[0] + b[0], a[1] + b[1], a[2] + b[2]
+
+
+def _vec_sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return a[0] - b[0], a[1] - b[1], a[2] - b[2]
+
+
+def _vec_scale(a: tuple[float, float, float], scale: float) -> tuple[float, float, float]:
+    return a[0] * scale, a[1] * scale, a[2] * scale
+
+
+def _vec_len(a: tuple[float, float, float]) -> float:
+    return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+
+
+def _normalize_action_name(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
+
+
+def _canonical_from_token(token: Any) -> str:
+    raw = str(token or "").strip()
+    if raw in HUMANOID_BONES:
+        return raw
+    norm = _normalize_bone_token(raw)
+    for canonical in HUMANOID_BONES:
+        if norm == _normalize_bone_token(canonical):
+            return canonical
+        for alias in _BONE_ALIASES.get(canonical, ()):
+            if norm == _normalize_bone_token(alias):
+                return canonical
+    return raw if raw in HUMANOID_BONES else ""
+
+
+def _pose_offsets_from_mapping(value: Any) -> dict[str, tuple[float, float, float]]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, tuple[float, float, float]] = {}
+    for key, raw in value.items():
+        canonical = _canonical_from_token(key)
+        point = _point3(raw)
+        if canonical and point is not None:
+            out[canonical] = point
+    return out
+
+
+def _merge_offsets(*groups: Mapping[str, tuple[float, float, float]]) -> dict[str, tuple[float, float, float]]:
+    out: dict[str, tuple[float, float, float]] = {}
+    for group in groups:
+        for key, value in group.items():
+            old = out.get(key, (0.0, 0.0, 0.0))
+            out[key] = _vec_add(old, value)
+    return out
+
+
+def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
+    name = _normalize_action_name(action_name)
+    speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
+    t = float(phase or 0.0) * speed
+    arm = _float_from_mapping(selected, "armSwing", 0.16, lo=0.0, hi=1.2)
+    leg = _float_from_mapping(selected, "legSwing", 0.14, lo=0.0, hi=1.2)
+    bounce = _float_from_mapping(selected, "bounce", 0.03, lo=0.0, hi=0.4)
+    wave = math.sin(t * 3.0)
+    step = math.sin(t * 4.0)
+    offsets: dict[str, tuple[float, float, float]] = {}
+
+    if "jump" in name:
+        lift = abs(math.sin(t * 2.1)) * max(0.16, bounce)
+        for bone in ("hips", "spine", "chest", "neck", "head", "left_shoulder", "right_shoulder"):
+            offsets[bone] = (0.0, lift, 0.0)
+        offsets["left_foot"] = (-0.03, lift * 0.25, 0.02)
+        offsets["right_foot"] = (0.03, lift * 0.25, 0.02)
+    elif "walk" in name or "run" in name:
+        offsets["left_arm"] = (0.0, -arm * step * 0.18, 0.0)
+        offsets["left_forearm"] = (0.0, -arm * step * 0.26, 0.0)
+        offsets["left_hand"] = (0.0, -arm * step * 0.34, 0.0)
+        offsets["right_arm"] = (0.0, arm * step * 0.18, 0.0)
+        offsets["right_forearm"] = (0.0, arm * step * 0.26, 0.0)
+        offsets["right_hand"] = (0.0, arm * step * 0.34, 0.0)
+        offsets["left_knee"] = (leg * step * 0.10, abs(step) * 0.06, 0.0)
+        offsets["left_foot"] = (leg * step * 0.18, abs(step) * 0.08, 0.03)
+        offsets["right_knee"] = (-leg * step * 0.10, abs(step) * 0.04, 0.0)
+        offsets["right_foot"] = (-leg * step * 0.18, abs(step) * 0.05, -0.03)
+        offsets["hips"] = (0.0, abs(step) * bounce, 0.0)
+    elif "wave" in name:
+        lift = _float_from_mapping(selected, "rightArmLift", 0.52, lo=0.0, hi=1.5)
+        offsets["right_arm"] = (-0.05, lift * 0.16, 0.0)
+        offsets["right_forearm"] = (-0.18, lift * 0.36 + wave * 0.05, 0.0)
+        offsets["right_hand"] = (-0.28, lift * 0.58 + wave * 0.10, 0.0)
+        offsets["left_hand"] = (0.03, -0.04, 0.0)
+    else:
+        idle = math.sin(t * 1.6)
+        offsets["hips"] = (0.0, idle * bounce * 0.5, 0.0)
+        offsets["chest"] = (idle * 0.015, idle * bounce, 0.0)
+        offsets["head"] = (idle * 0.02, idle * bounce * 1.2, 0.0)
+        offsets["right_hand"] = (0.0, idle * 0.025, 0.0)
+        offsets["left_hand"] = (0.0, -idle * 0.020, 0.0)
+    return offsets
+
+
+def _canonical_rest_positions(plan: Mapping[str, Any], model_meta: Mapping[str, Any]) -> tuple[dict[str, tuple[float, float, float]], str]:
+    sidecar_positions = model_meta.get("rest_positions")
+    if not isinstance(sidecar_positions, Mapping):
+        sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
+        sidecar_positions = sidecar.get("rest_positions") if isinstance(sidecar.get("rest_positions"), Mapping) else {}
+    bone_map = plan.get("bone_map") if isinstance(plan.get("bone_map"), Mapping) else {}
+    out: dict[str, tuple[float, float, float]] = {}
+    source = "default"
+    for canonical in HUMANOID_BONES:
+        actual = str(bone_map.get(canonical) or "")
+        point = None
+        if isinstance(sidecar_positions, Mapping):
+            point = _point3(sidecar_positions.get(actual)) or _point3(sidecar_positions.get(canonical))
+        if point is not None:
+            out[canonical] = point
+            source = "sidecar"
+        elif canonical in _DEFAULT_REST_POSITIONS:
+            out[canonical] = _DEFAULT_REST_POSITIONS[canonical]
+    return out, source
+
+
+def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Evaluate a safe humanoid pose for a model3d node.
+
+    This is an offline-safe retargeting stage: it uses sidecar/model metadata,
+    action JSON, and the declared stretch limit to produce bone positions that
+    preserve the target rest proportions.  Native importers can later feed real
+    rest positions and clip samples into the same contract.
+    """
+
+    model_meta = get_model_metadata(node)
+    if not bool(model_meta.get("exists")):
+        return {
+            "ok": False,
+            "reason": "model missing",
+            "positions": {},
+            "segments": (),
+        }
+    plan = get_retarget_plan(node)
+    action_meta = get_action_metadata(node)
+    action_name = str(action_meta.get("name") or "idle")
+    selected = action_meta.get("selected") if isinstance(action_meta.get("selected"), Mapping) else {}
+    action = node.get("action") if isinstance(node.get("action"), Mapping) else {}
+    try:
+        phase = float(action.get("time", node.get("phase", 0.0)) or 0.0)
+    except Exception:
+        phase = 0.0
+
+    rest, rest_source = _canonical_rest_positions(plan, model_meta)
+    if not rest:
+        return {
+            "ok": False,
+            "reason": "no rest pose",
+            "positions": {},
+            "segments": (),
+        }
+    explicit_offsets = _merge_offsets(
+        _pose_offsets_from_mapping(selected.get("pose_offsets")),
+        _pose_offsets_from_mapping(selected.get("bone_offsets")),
+        _pose_offsets_from_mapping(selected.get("offsets")),
+    )
+    offsets = _merge_offsets(
+        _procedural_action_offsets(action_name, phase, selected),
+        explicit_offsets,
+    )
+    stretch_limit = float(plan.get("stretch_limit") or 0.0)
+    preserve = bool(plan.get("preserve_proportions", True))
+
+    pose: dict[str, tuple[float, float, float]] = {
+        bone: _vec_add(point, offsets.get(bone, (0.0, 0.0, 0.0)))
+        for bone, point in rest.items()
+    }
+    clamped: list[str] = []
+    segment_infos: list[dict[str, Any]] = []
+    max_stretch = 0.0
+    for parent, child in HUMANOID_SEGMENTS:
+        if parent not in rest or child not in rest or parent not in pose:
+            continue
+        rest_vec = _vec_sub(rest[child], rest[parent])
+        rest_len = _vec_len(rest_vec)
+        if rest_len <= 0.000001:
+            continue
+        target = pose.get(child, rest[child])
+        vec = _vec_sub(target, pose[parent])
+        length = _vec_len(vec)
+        was_clamped = False
+        if preserve:
+            lo = rest_len * max(0.0, 1.0 - stretch_limit)
+            hi = rest_len * (1.0 + stretch_limit)
+            clipped = max(lo, min(hi, length))
+            if abs(clipped - length) > 0.000001:
+                direction = _vec_scale(vec, 1.0 / length) if length > 0.000001 else _vec_scale(rest_vec, 1.0 / rest_len)
+                target = _vec_add(pose[parent], _vec_scale(direction, clipped))
+                pose[child] = target
+                length = clipped
+                was_clamped = True
+                clamped.append(f"{parent}->{child}")
+        stretch = abs((length / rest_len) - 1.0)
+        max_stretch = max(max_stretch, stretch)
+        segment_infos.append({
+            "parent": parent,
+            "child": child,
+            "rest_length": rest_len,
+            "length": length,
+            "stretch": stretch,
+            "clamped": was_clamped,
+        })
+
+    return {
+        "ok": True,
+        "mode": plan.get("mode"),
+        "profile": plan.get("profile"),
+        "action": action_name,
+        "phase": phase,
+        "coverage": plan.get("coverage"),
+        "stretch_limit": stretch_limit,
+        "preserve_proportions": preserve,
+        "rest_source": rest_source,
+        "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},
+        "positions": {key: [float(x) for x in value] for key, value in pose.items()},
+        "segments": tuple(segment_infos),
+        "clamped_segments": tuple(clamped),
+        "clamped_count": len(clamped),
+        "max_stretch": max_stretch,
+        "warnings": tuple(plan.get("warnings") or ()),
+    }
+
+
 def diagnose_model3d_node(
     plugin_id: Any,
     node: Mapping[str, Any],
@@ -1016,11 +1323,13 @@ __all__ = [
     "Model3DBackendStatus",
     "clear_model3d_metadata_caches",
     "diagnose_model3d_node",
+    "evaluate_retarget_pose",
     "get_action_metadata",
     "get_backend_status",
     "get_model_metadata",
     "get_retarget_plan",
     "HUMANOID_BONES",
+    "HUMANOID_SEGMENTS",
     "model3d_node_key",
     "model3d_path",
     "resolve_action_path",
