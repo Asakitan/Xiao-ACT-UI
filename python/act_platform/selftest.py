@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from types import ModuleType
 
 from .adapters import built_in_parser_adapters
 from .event_bus import EventBus
@@ -74,6 +75,40 @@ def _write_script_menu_plugin(root: str) -> str:
     return plugin_dir
 
 
+def _write_failing_script_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "failing_script_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "failing_script_demo",
+            "name": "Failing Script Demo",
+            "version": "0.1.0",
+            "entry": "plugin.lua",
+            "language": "lua",
+            "enabled": True,
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
+        fp.write("-- fake runtime raises after partial registration\n")
+    return plugin_dir
+
+
+def _write_action_script_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "action_script_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "action_script_demo",
+            "name": "Action Script Demo",
+            "version": "0.1.0",
+            "entry": "plugin.lua",
+            "language": "lua",
+            "enabled": True,
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
+        fp.write("-- fake runtime registers action lazily\n")
+    return plugin_dir
+
+
 def run_selftest() -> dict:
     bus = EventBus()
     direct_events = []
@@ -86,6 +121,8 @@ def run_selftest() -> dict:
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
         _write_demo_plugin(root)
         _write_script_menu_plugin(root)
+        _write_failing_script_plugin(root)
+        _write_action_script_plugin(root)
         manager = PluginManager(plugin_dirs=[root], event_bus=bus)
         lifecycle_events = []
         bus.subscribe("plugin_lifecycle", lifecycle_events.append, owner_id="selftest_lifecycle")
@@ -139,7 +176,7 @@ def run_selftest() -> dict:
         owner = type("Owner", (), {})()
         owner._act_event_bus = bus
         owner._act_plugin_manager = manager
-        from .runtime import act_plugin_menu, act_plugin_script_menus
+        from .runtime import act_plugin_action, act_plugin_menu, act_plugin_script_menus
         script_menus = act_plugin_script_menus(owner)
         assert script_menus.get("ok"), script_menus
         assert not any(
@@ -156,10 +193,75 @@ def run_selftest() -> dict:
         assert script_item.get("overlay_enabled") is True, script_item
         manager._records["script_menu_demo"].enabled = False
         menu_summary = act_plugin_menu(owner)
+        assert not manager._records["failing_script_demo"].loaded, manager.status()
+        assert not manager._records["action_script_demo"].loaded, manager.status()
         assert not any(
             item.get("id") == "script_menu_demo"
             for item in menu_summary.get("script_menus", [])
         ), menu_summary.get("script_menus")
+
+        class FakeLuaRuntime:
+            def __init__(self) -> None:
+                self.loaded = []
+                self.unloaded = []
+
+            def load_script(self, _entry_path, record, ctx):
+                self.loaded.append(record.plugin_id)
+                if record.plugin_id == "action_script_demo":
+                    module = ModuleType(f"act_plugin_lua_{record.plugin_id}")
+
+                    def on_load(_ctx):
+                        _ctx.register_action_handler(
+                            lambda action, payload: {
+                                "action": action,
+                                "enabled": bool(payload.get("enabled")),
+                            })
+
+                    module.on_load = on_load
+                    return module
+                ctx.set_overlay("unioverlay", ctx.ui.panel("Failing Overlay", []))
+                ctx.register_hotkey("fail", lambda: None, "CTRL+F11", "Fail Hotkey")
+                ctx.set_interval(lambda: None, 60.0)
+                raise RuntimeError("script load failed after partial registration")
+
+            def unload_script(self, record) -> None:
+                self.unloaded.append(record.plugin_id)
+
+        from . import scripting
+        original_get_runtime = scripting.get_runtime
+        fake_runtime = FakeLuaRuntime()
+        scripting.get_runtime = (
+            lambda language: fake_runtime
+            if str(language or "").lower() == "lua"
+            else original_get_runtime(language)
+        )
+        try:
+            action_result = act_plugin_action(
+                owner,
+                "script.overlay.set_enabled",
+                {"enabled": True},
+                plugin_id="action_script_demo",
+            )
+            assert action_result.get("ok"), action_result
+            assert fake_runtime.loaded == ["action_script_demo"], fake_runtime.loaded
+            assert manager._records["action_script_demo"].loaded, manager.status()
+            assert not manager._records["failing_script_demo"].loaded, manager.status()
+            assert not manager.load_plugin("failing_script_demo"), manager.status()
+        finally:
+            scripting.get_runtime = original_get_runtime
+        assert fake_runtime.loaded == ["action_script_demo", "failing_script_demo"], fake_runtime.loaded
+        assert fake_runtime.unloaded == ["failing_script_demo"], fake_runtime.unloaded
+        assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
+        assert not manager._timers.get("failing_script_demo"), manager._timers
+        assert not any(
+            item.get("plugin_id") == "failing_script_demo"
+            for item in manager.list_hotkeys()
+        ), manager.list_hotkeys()
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "failing_script_demo"
+            and ev.get("payload", {}).get("action") == "load_failed"
+            for ev in lifecycle_events
+        ), lifecycle_events
 
     return {
         "ok": True,

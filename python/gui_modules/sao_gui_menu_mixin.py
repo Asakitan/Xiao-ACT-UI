@@ -775,7 +775,7 @@ class SAOPlayerGUIMenuMixin:
         self._ensure_plugin_lifecycle_subscription()
         self._ensure_plugin_unified_overlay_host()
         try:
-            ensure_act_plugin_manager(self, load=True)
+            ensure_act_plugin_manager(self, load=False)
         except Exception:
             pass
         self._menu_icons = self._build_menu_icons()

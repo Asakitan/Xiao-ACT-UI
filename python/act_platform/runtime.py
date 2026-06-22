@@ -779,7 +779,7 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
     hotkey count so the host can build a rich, toggle-able plugin board.
     """
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
     except Exception as exc:
         return {"ok": False, "message": str(exc), "items": [], "plugins": []}
     status = manager.status()
@@ -846,7 +846,7 @@ def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
 def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]:
     """Return active plugin-owned descriptors for a generic menu surface."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
         return {"ok": True, "surfaces": manager.get_menu_surfaces(str(surface_id or ""))}
     except Exception as exc:
         return {"ok": False, "message": str(exc), "surfaces": []}
@@ -856,7 +856,7 @@ def act_plugin_action(owner: Any, action_id: str, payload: Any = None,
                       plugin_id: str = "") -> dict[str, Any]:
     """Dispatch an opaque plugin action without platform-side action knowledge."""
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
         return manager.dispatch_plugin_action(
             str(action_id or ""), _coerce_payload(payload), str(plugin_id or ""))
     except Exception as exc:
@@ -879,7 +879,7 @@ def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
     插件键现值 (调用方需把动作自身的现值豁免)。
     """
     try:
-        manager = ensure_act_plugin_manager(owner, load=True)
+        manager = ensure_act_plugin_manager(owner, load=False)
         return {"ok": True, "hotkeys": manager.list_hotkeys(),
                 "occupied": manager.occupied_hotkeys()}
     except Exception as exc:

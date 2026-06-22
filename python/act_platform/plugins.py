@@ -334,6 +334,8 @@ class PluginRecord:
     context: Optional["PluginContext"] = None
     loaded: bool = False
     active: bool = False
+    #: True once a non-Python ScriptRuntime has begun loading this record.
+    script_runtime_active: bool = False
     failures: int = 0
     event_failures: int = 0
     last_error: str = ""
@@ -1393,6 +1395,7 @@ class PluginManager:
                 self.event_bus.unsubscribe(token)
             record.subscriptions.clear()
             self._unregister_plugin_extensions(record.plugin_id)
+            self._unload_script_runtime(record)
             record.module = None
             record.context = None
             record.loaded = False
@@ -1414,13 +1417,7 @@ class PluginManager:
                 self._call_hook(record, "on_unload")
             except Exception:
                 pass
-        if record.language != "python" and record.module is not None:
-            try:
-                from .scripting import get_runtime
-                runtime = get_runtime(record.language)
-                runtime.unload_script(record)
-            except Exception:
-                pass
+        self._unload_script_runtime(record)
         for token in list(record.subscriptions):
             self.event_bus.unsubscribe(token)
         record.subscriptions.clear()
@@ -1629,7 +1626,13 @@ class PluginManager:
         action = str(action_id or "")
         if not action:
             return {"ok": False, "message": "action id is required", "errors": ["action id is required"]}
-        candidates = [str(plugin_id or "")] if plugin_id else list(self._action_handlers)
+        target_plugin = str(plugin_id or "")
+        if target_plugin:
+            record = self._records.get(target_plugin)
+            if record is not None and record.enabled and not (
+                    record.loaded and record.active and record.module is not None):
+                self.load_plugin(target_plugin)
+        candidates = [target_plugin] if target_plugin else list(self._action_handlers)
         errors: list[str] = []
         for pid in candidates:
             handler = self._action_handlers.get(pid)
@@ -2412,8 +2415,26 @@ class PluginManager:
         from .scripting import get_runtime
         runtime = get_runtime(record.language)
         entry_path = os.path.abspath(os.path.join(record.path, record.entry))
+        record.script_runtime_active = True
         module = runtime.load_script(entry_path, record, record.context)
         return module
+
+    def _unload_script_runtime(self, record: PluginRecord) -> None:
+        """Release a script runtime even after a partial or failed load."""
+        if str(record.language or "").lower() == "python":
+            return
+        if not bool(getattr(record, "script_runtime_active", False)):
+            return
+        try:
+            from .scripting import get_runtime
+            runtime = get_runtime(record.language)
+            unload = getattr(runtime, "unload_script", None)
+            if callable(unload):
+                unload(record)
+        except Exception:
+            pass
+        finally:
+            record.script_runtime_active = False
 
     def _call_hook(self, record: PluginRecord, name: str, *args: Any) -> Any:
         module = record.module
