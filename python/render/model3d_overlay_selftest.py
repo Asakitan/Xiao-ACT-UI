@@ -101,8 +101,10 @@ class Model3DSpecTests(unittest.TestCase):
             "type": "model3d",
             "id": "animated",
             "phase": 12.5,
+            "action": {"time": 9.25},
         })["nodes"][0]
         self.assertEqual(animated["phase"], 12.5)
+        self.assertEqual(animated["action"]["time"], 9.25)
 
         fixed = normalize_ui_spec({
             "type": "model3d",
@@ -127,6 +129,23 @@ class Model3DSpecTests(unittest.TestCase):
             animation_json=raw,
         ))["nodes"][0]
         self.assertEqual(helper["action"]["json_text"], raw)
+
+        keyframed = normalize_ui_spec({
+            "type": "model3d",
+            "id": "keyframed",
+            "action": {
+                "name": "wave",
+                "json": {
+                    "wave": {
+                        "keyframes": [
+                            {"time": 0.0, "offsets": {"right_hand": [0, 0, 0]}},
+                            {"time": 0.5, "offsets": {"right_hand": [0, 0.4, 0]}},
+                        ],
+                    },
+                },
+            },
+        })["nodes"][0]
+        self.assertEqual(keyframed["action"]["json"]["wave"]["keyframes"][1]["offsets"]["right_hand"][1], 0.4)
 
 
 class Model3DBackendTests(unittest.TestCase):
@@ -620,6 +639,64 @@ Objects:  {
         self.assertTrue(pose_b["ok"], pose_b)
         self.assertNotEqual(pose_a["positions"]["right_hand"], pose_b["positions"]["right_hand"])
         self.assertLessEqual(pose_b["max_stretch"], 0.120001)
+
+    def test_evaluate_retarget_pose_samples_looped_keyframes(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_keyframes_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:Hips",
+                        "mixamorig:Spine",
+                        "mixamorig:Spine2",
+                        "mixamorig:Neck",
+                        "mixamorig:Head",
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                    ],
+                    "rest_positions": {
+                        "mixamorig:Hips": [0, 0.0, 0],
+                        "mixamorig:Spine": [0, 0.5, 0],
+                        "mixamorig:Spine2": [0, 0.9, 0],
+                        "mixamorig:Neck": [0, 1.1, 0],
+                        "mixamorig:Head": [0, 1.35, 0],
+                        "mixamorig:RightArm": [0.35, 0.85, 0],
+                        "mixamorig:RightForeArm": [0.55, 0.62, 0],
+                        "mixamorig:RightHand": [0.68, 0.42, 0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "preserve_proportions": False},
+                "action": {
+                    "name": "wave",
+                    "time": 1.25,
+                    "json": {
+                        "wave": {
+                            "duration": 1.0,
+                            "loop": True,
+                            "keyframes": [
+                                {"time": 0.0, "offsets": {"right_hand": [0.0, 0.0, 0.0]}},
+                                {"time": 0.5, "offsets": {"right_hand": [0.0, 0.4, 0.0]}},
+                                {"time": 1.0, "offsets": {"right_hand": [0.0, 0.0, 0.0]}},
+                            ],
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertAlmostEqual(pose["motion_sample"]["sample_time"], 0.25)
+        self.assertAlmostEqual(pose["motion_sample"]["blend"], 0.5)
+        self.assertAlmostEqual(pose["positions"]["right_hand"][1], 0.62, places=4)
 
     def test_evaluate_retarget_pose_clamps_shortened_segment_to_lower_bound(self) -> None:
         clear_model3d_metadata_caches()

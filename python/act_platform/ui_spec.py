@@ -120,6 +120,19 @@ def _json_scalar(value: Any) -> Any:
     return _s(value)
 
 
+def _json_safe_value(value: Any, *, max_items: int = 64, depth: int = 0) -> Any:
+    if isinstance(value, Mapping):
+        return _json_safe_map(value, max_items=max_items, depth=depth + 1)
+    if isinstance(value, (list, tuple)):
+        if depth > 4:
+            return []
+        return [
+            _json_safe_value(item, max_items=max_items, depth=depth + 1)
+            for item in list(value)[:max_items]
+        ]
+    return _json_scalar(value)
+
+
 def _json_safe_map(value: Any, *, max_items: int = 64, depth: int = 0) -> dict:
     if isinstance(value, str):
         text = value.strip()
@@ -133,12 +146,7 @@ def _json_safe_map(value: Any, *, max_items: int = 64, depth: int = 0) -> dict:
         return {}
     out: dict[str, Any] = {}
     for key, val in list(value.items())[:max_items]:
-        if isinstance(val, Mapping):
-            out[str(key)] = _json_safe_map(val, max_items=max_items, depth=depth + 1)
-        elif isinstance(val, (list, tuple)):
-            out[str(key)] = [_json_scalar(item) for item in list(val)[:max_items]]
-        else:
-            out[str(key)] = _json_scalar(val)
+        out[str(key)] = _json_safe_value(val, max_items=max_items, depth=depth)
     return out
 
 
@@ -269,6 +277,7 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         "json_text": _s(action_json_text_raw, MAX_MODEL_PATH_LEN * 4),
         "speed": _cf(action.get("speed", 1.0), 1.0, lo=0.0, hi=8.0),
         "loop": bool(action.get("loop", True)),
+        "time": _cf(action.get("time", node.get("phase", 0.0)), 0.0, lo=-1.0e9, hi=1.0e9),
     }
 
     raw_camera = node.get("camera")

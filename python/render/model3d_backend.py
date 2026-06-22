@@ -1111,6 +1111,136 @@ def _merge_offsets(*groups: Mapping[str, tuple[float, float, float]]) -> dict[st
     return out
 
 
+def _bool_from_mapping(src: Mapping[str, Any], key: str, default: bool) -> bool:
+    try:
+        value = src.get(key, default)
+    except Exception:
+        return bool(default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"0", "false", "no", "off"}:
+            return False
+        if text in {"1", "true", "yes", "on"}:
+            return True
+    return bool(value)
+
+
+def _frame_time(frame: Mapping[str, Any], fallback: float) -> float:
+    for key in ("time", "t", "phase", "frame"):
+        try:
+            value = frame.get(key)
+            if value is not None:
+                result = float(value)
+                if result == result:
+                    return result
+        except Exception:
+            continue
+    return float(fallback)
+
+
+def _frame_offsets(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
+    direct = {
+        key: value for key, value in frame.items()
+        if key not in {"time", "t", "phase", "frame", "offsets", "pose_offsets", "bone_offsets", "bones"}
+    }
+    return _merge_offsets(
+        _pose_offsets_from_mapping(frame.get("pose_offsets")),
+        _pose_offsets_from_mapping(frame.get("bone_offsets")),
+        _pose_offsets_from_mapping(frame.get("offsets")),
+        _pose_offsets_from_mapping(frame.get("bones")),
+        _pose_offsets_from_mapping(direct),
+    )
+
+
+def _lerp_offsets(
+    a: Mapping[str, tuple[float, float, float]],
+    b: Mapping[str, tuple[float, float, float]],
+    amount: float,
+) -> dict[str, tuple[float, float, float]]:
+    t = max(0.0, min(1.0, float(amount or 0.0)))
+    out: dict[str, tuple[float, float, float]] = {}
+    for key in set(a) | set(b):
+        av = a.get(key, (0.0, 0.0, 0.0))
+        bv = b.get(key, (0.0, 0.0, 0.0))
+        out[key] = (
+            av[0] + (bv[0] - av[0]) * t,
+            av[1] + (bv[1] - av[1]) * t,
+            av[2] + (bv[2] - av[2]) * t,
+        )
+    return out
+
+
+def _sample_keyframe_offsets(
+    selected: Mapping[str, Any],
+    phase: float,
+) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
+    raw_frames = selected.get("keyframes")
+    if not isinstance(raw_frames, (list, tuple)):
+        raw_frames = selected.get("frames")
+    if not isinstance(raw_frames, (list, tuple)):
+        return {}, {}
+
+    frames: list[tuple[float, dict[str, tuple[float, float, float]]]] = []
+    for index, raw in enumerate(raw_frames):
+        if not isinstance(raw, Mapping):
+            continue
+        offsets = _frame_offsets(raw)
+        if offsets:
+            frames.append((_frame_time(raw, float(index)), offsets))
+    frames.sort(key=lambda item: item[0])
+    if not frames:
+        return {}, {}
+
+    speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
+    t = float(phase or 0.0) * speed
+    try:
+        duration = float(selected.get("duration") or 0.0)
+    except Exception:
+        duration = 0.0
+    if duration <= 0.0:
+        duration = max(frames[-1][0], 0.0)
+    loop = _bool_from_mapping(selected, "loop", True)
+    if loop and duration > 0.0:
+        t = t % duration
+    elif frames:
+        t = max(frames[0][0], min(frames[-1][0], t))
+
+    if len(frames) == 1:
+        return dict(frames[0][1]), {
+            "motion_source": "keyframes",
+            "sample_time": t,
+            "keyframe_count": 1,
+            "duration": duration,
+            "loop": loop,
+        }
+
+    prev = frames[0]
+    nxt = frames[-1]
+    for index in range(1, len(frames)):
+        if t <= frames[index][0]:
+            prev = frames[index - 1]
+            nxt = frames[index]
+            break
+
+    span = max(0.000001, nxt[0] - prev[0])
+    amount = (t - prev[0]) / span
+    interpolation = str(selected.get("interpolation") or "linear").strip().lower()
+    if interpolation in {"step", "hold", "nearest"}:
+        sampled = dict(prev[1] if amount < 1.0 else nxt[1])
+    else:
+        sampled = _lerp_offsets(prev[1], nxt[1], amount)
+    return sampled, {
+        "motion_source": "keyframes",
+        "sample_time": t,
+        "keyframe_count": len(frames),
+        "duration": duration,
+        "loop": loop,
+        "frame_a": prev[0],
+        "frame_b": nxt[0],
+        "blend": max(0.0, min(1.0, amount)),
+    }
+
+
 def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
     name = _normalize_action_name(action_name)
     speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
@@ -1217,8 +1347,11 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         _pose_offsets_from_mapping(selected.get("bone_offsets")),
         _pose_offsets_from_mapping(selected.get("offsets")),
     )
+    keyframe_offsets, keyframe_info = _sample_keyframe_offsets(selected, phase)
+    use_procedural = not keyframe_offsets or _bool_from_mapping(selected, "procedural", False)
     offsets = _merge_offsets(
-        _procedural_action_offsets(action_name, phase, selected),
+        _procedural_action_offsets(action_name, phase, selected) if use_procedural else {},
+        keyframe_offsets,
         explicit_offsets,
     )
     stretch_limit = float(plan.get("stretch_limit") or 0.0)
@@ -1274,6 +1407,8 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "stretch_limit": stretch_limit,
         "preserve_proportions": preserve,
         "rest_source": rest_source,
+        "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
+        "motion_sample": dict(keyframe_info),
         "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},
         "positions": {key: [float(x) for x in value] for key, value in pose.items()},
         "segments": tuple(segment_infos),
