@@ -3633,6 +3633,13 @@ class SAOWebViewGUI:
             threading.Thread(target=fn, daemon=True).start()
 
     def _menu_action(self, action: str):
+        action = str(action or "")
+        if action in {'show_plugins', 'toggle_plugin_manager', 'show_license_panel', 'switch_to_entity'}:
+            try:
+                if self._menu_visible:
+                    self._close_menu()
+            except Exception:
+                pass
         _map = {
             'toggle_recognition': self._toggle_recognition,
             'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),

@@ -113,14 +113,21 @@ def run_selftest() -> dict:
         from .runtime import act_plugin_menu, act_plugin_script_menus
         script_menus = act_plugin_script_menus(owner)
         assert script_menus.get("ok"), script_menus
+        assert not any(
+            item.get("id") == "script_menu_demo"
+            for item in script_menus.get("items", [])
+        ), script_menus
+        manager._records["script_menu_demo"].enabled = True
+        enabled_script_menus = act_plugin_script_menus(owner)
         script_item = next(
-            item for item in script_menus.get("items", [])
+            item for item in enabled_script_menus.get("items", [])
             if item.get("id") == "script_menu_demo"
         )
-        assert script_item.get("enabled") is False, script_item
+        assert script_item.get("enabled") is True, script_item
         assert script_item.get("overlay_enabled") is True, script_item
+        manager._records["script_menu_demo"].enabled = False
         menu_summary = act_plugin_menu(owner)
-        assert any(
+        assert not any(
             item.get("id") == "script_menu_demo"
             for item in menu_summary.get("script_menus", [])
         ), menu_summary.get("script_menus")
@@ -134,7 +141,7 @@ def run_selftest() -> dict:
         "published": bus.snapshot().get("published"),
         "plugin_count": status.get("plugin_count"),
         "active_count_after_disable": status.get("active_count"),
-        "script_menu_count": len(script_menus.get("items", [])),
+        "script_menu_count": len(enabled_script_menus.get("items", [])),
         "captured_events": len(captured),
         "built_in_parser_adapters": len(built_in_parser_adapters()),
     }

@@ -9,6 +9,7 @@ plan_*
 player_profile.json
 player_cache.json
 settings.json
+settings.json.corrupt*
 
 # ── Debug / log files ─────────────────────────────
 packet_debug.jsonl

@@ -523,7 +523,7 @@ class SAOPlayerGUIMenuMixin:
         return [
             dict(item)
             for item in _mapping_items(entries)
-            if not (bool(item.get('enabled')) and bool(item.get('active')))
+            if bool(item.get('enabled')) and not bool(item.get('active'))
         ]
 
     def _build_script_plugin_menu_children(self, active_names: set[str] | None = None) -> dict[str, list[dict[str, Any]]]:
@@ -564,22 +564,26 @@ class SAOPlayerGUIMenuMixin:
         setting_key = str(data.get('setting') or meta.get('setting') or meta.get('overlay_setting') or 'overlay_enabled')
         action_id = str(data.get('action_id') or meta.get('action_id') or 'script.overlay.set_enabled')
         surface = str(data.get('surface') or meta.get('surface') or 'unioverlay')
+        action_attempted = False
         try:
-            needs_enable = bool(enabled)
-            if isinstance(data, Mapping) and data:
-                needs_enable = not (bool(data.get('enabled')) and bool(data.get('active')))
-            if needs_enable:
-                act_plugin_enable(self, pid)
-            result = act_plugin_action(
-                self,
-                action_id,
-                {'enabled': bool(enabled), 'setting': setting_key, 'surface': surface},
-                plugin_id=pid,
-            )
+            if isinstance(data, Mapping) and data and not bool(data.get('enabled')):
+                result = {
+                    'ok': False,
+                    'message': 'plugin is disabled; enable it in Plugin Manager first',
+                    'plugin_id': pid,
+                }
+            else:
+                action_attempted = True
+                result = act_plugin_action(
+                    self,
+                    action_id,
+                    {'enabled': bool(enabled), 'setting': setting_key, 'surface': surface},
+                    plugin_id=pid,
+                )
             # If the plugin was not loaded yet but enable failed silently, fall
             # back to the manager setting so the next load gets the requested
             # state. The action handler remains the normal path.
-            if not (isinstance(result, dict) and result.get('ok')):
+            if action_attempted and not (isinstance(result, dict) and result.get('ok')):
                 pm = getattr(self, '_act_plugin_manager', None)
                 if pm is None:
                     pm = ensure_act_plugin_manager(self, load=False)

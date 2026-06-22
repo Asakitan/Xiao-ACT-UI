@@ -4,6 +4,7 @@
 import filecmp
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -599,8 +600,21 @@ class SettingsManager:
     def __init__(self, path: Optional[str] = None):
         self._path = path or os.path.join(BASE_DIR, "settings.json")
         self._data: dict = {}
+        self._load_error: str = ""
         self._lock = threading.Lock()
         self._load()
+
+    def _backup_corrupt_file(self, exc: Exception) -> None:
+        try:
+            if not os.path.exists(self._path):
+                return
+            backup = f"{self._path}.corrupt"
+            if os.path.exists(backup):
+                backup = f"{self._path}.corrupt.{os.getpid()}"
+            shutil.copy2(self._path, backup)
+            print(f"[Settings] Invalid settings JSON backed up to {backup}: {exc}")
+        except Exception as backup_exc:
+            print(f"[Settings] Invalid settings JSON; backup failed: {backup_exc} ({exc})")
 
     def _load(self):
         # Clean up stale temp files from interrupted atomic saves
@@ -618,7 +632,12 @@ class SettingsManager:
             if os.path.exists(self._path):
                 with open(self._path, "r", encoding="utf-8") as handle:
                     self._data = json.load(handle)
-        except Exception:
+                if not isinstance(self._data, dict):
+                    raise ValueError("settings root must be an object")
+                self._load_error = ""
+        except Exception as exc:
+            self._load_error = str(exc)
+            self._backup_corrupt_file(exc)
             self._data = {}
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -655,22 +674,14 @@ class SettingsManager:
                 os.fsync(tmp.fileno())
                 tmp_path = tmp.name
             os.replace(tmp_path, self._path)
+            self._load_error = ""
         except Exception as e:
-            print(f"[Settings] Save failed: {e} (path={self._path})")
+            print(f"[Settings] Save failed: {e} (path={self._path}); previous settings kept")
             try:
                 if tmp_path and os.path.exists(tmp_path):
                     os.remove(tmp_path)
             except Exception:
                 pass
-            try:
-                dir_name = os.path.dirname(self._path) or os.getcwd()
-                os.makedirs(dir_name, exist_ok=True)
-                with open(self._path, "w", encoding="utf-8") as handle:
-                    handle.write(blob)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            except Exception as e2:
-                print(f"[Settings] Fallback write also failed: {e2} (path={self._path}); settings NOT saved")
 
     def get_roi(self, name: str) -> dict:
         return self._data.get("roi", {}).get(name, {})

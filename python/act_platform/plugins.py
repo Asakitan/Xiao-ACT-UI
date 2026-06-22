@@ -1456,9 +1456,8 @@ class PluginManager:
     def list_script_menu_entries(self) -> list[dict[str, Any]]:
         """Return manifest-declared SAO popup buttons for script-like plugins.
 
-        The entries intentionally include disabled plugins so the SAO popup can
-        offer a first-class "开启XX" row before a script has registered runtime
-        menu categories.
+        Only enabled plugins are exposed here. Disabled scripts stay
+        discoverable/manageable without being launchable from the popup.
         """
         entries: list[dict[str, Any]] = []
         script_languages = {"lua", "csharp", "angelscript", "emma"}
@@ -1479,6 +1478,8 @@ class PluginManager:
         for key in sorted(self._records):
             record = self._records[key]
             if str(record.language or "").lower() not in script_languages:
+                continue
+            if not bool(record.enabled):
                 continue
             meta = dict(record.sao_menu or {})
             if not meta:

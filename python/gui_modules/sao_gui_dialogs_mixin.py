@@ -47,6 +47,18 @@ from sao_theme import SAODialog
 class SAOPlayerGUIDialogsMixin:
     """Mixin bundling player-panel factory + dialogs + small UI helpers."""
 
+    def _dismiss_menu_before_window(self):
+        dismiss = getattr(self, '_dismiss_sao_menu_for_panel', None)
+        if callable(dismiss):
+            dismiss()
+            return
+        try:
+            menu = getattr(self, '_sao_menu', None)
+            if menu is not None and getattr(menu, 'visible', False):
+                menu.close()
+        except Exception:
+            pass
+
     def _show_welcome_then_menu(self):
         """首次启动: 平台只打开菜单；游戏资料由插件注入。"""
         self.root.after(300, self._toggle_sao_menu)
@@ -113,6 +125,8 @@ class SAOPlayerGUIDialogsMixin:
 
     def _switch_to_webview_ui(self):
         """切换到 WebView UI — fresh process restart."""
+        self._dismiss_menu_before_window()
+
         def _do_switch():
             self._run_exit_animation(
                 after_shutdown=self._spawn_webview_process,
@@ -126,8 +140,7 @@ class SAOPlayerGUIDialogsMixin:
                       on_ok=_do_switch)
 
     def _show_about(self):
-        if self._sao_menu is not None and self._sao_menu.visible:
-            self._sao_menu.close()
+        self._dismiss_menu_before_window()
         try:
             from updater.sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
             st = get_manager().snapshot()
@@ -152,8 +165,7 @@ class SAOPlayerGUIDialogsMixin:
             "右键悬浮按钮查看更多选项"))
 
     def _show_license_panel_from_menu(self):
-        if self._sao_menu is not None and self._sao_menu.visible:
-            self._sao_menu.close()
+        self._dismiss_menu_before_window()
         from gui_modules.sao_gui_license import reset_license_dialog_dismissed, show_license_dialog
         reset_license_dialog_dismissed()
         self.root.after(400, show_license_dialog, self._float)

@@ -276,7 +276,7 @@ class MenuMixinActSummaryTests(unittest.TestCase):
 
         self.assertIn("Sample Plugin", labels)
 
-    def test_script_sao_menu_synthesizes_disabled_manifest_button(self) -> None:
+    def test_script_sao_menu_ignores_disabled_manifest_button(self) -> None:
         harness = _MenuHarness()
 
         def fake_script_menus(_self):
@@ -296,10 +296,33 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             icons = harness._build_menu_icons()
             children = harness._build_menu_children()
 
+        self.assertNotIn({"name": "贪吃蛇", "icon": "▣", "can_active": True}, icons)
+        self.assertEqual(_labels(children, "贪吃蛇"), [])
+
+    def test_script_sao_menu_synthesizes_enabled_manifest_button(self) -> None:
+        harness = _MenuHarness()
+
+        def fake_script_menus(_self):
+            return {
+                "items": [
+                    {
+                        "id": "script_snake",
+                        "enabled": True,
+                        "active": False,
+                        "overlay_enabled": False,
+                        "menu": {"name": "贪吃蛇", "icon_text": "▣", "script_label": "贪吃蛇"},
+                    }
+                ]
+            }
+
+        with _patched_module_attr("act_plugin_script_menus", fake_script_menus):
+            icons = harness._build_menu_icons()
+            children = harness._build_menu_children()
+
         self.assertIn({"name": "贪吃蛇", "icon": "▣", "can_active": True}, icons)
         self.assertEqual(_labels(children, "贪吃蛇"), ["开启贪吃蛇"])
 
-    def test_script_sao_menu_click_enables_dispatches_refresh_and_closes(self) -> None:
+    def test_script_sao_menu_click_dispatches_refresh_and_closes(self) -> None:
         harness = _MenuHarness()
         calls: list[tuple] = []
         harness._sao_menu = type("Menu", (), {"visible": True})()
@@ -308,7 +331,7 @@ class MenuMixinActSummaryTests(unittest.TestCase):
 
         entry = {
             "id": "script_clock",
-            "enabled": False,
+            "enabled": True,
             "active": False,
             "overlay_enabled": True,
             "setting": "overlay_enabled",
@@ -320,17 +343,12 @@ class MenuMixinActSummaryTests(unittest.TestCase):
         def fake_script_menus(_self):
             return {"items": [entry]}
 
-        def fake_enable(_self, plugin_id):
-            calls.append(("enable", plugin_id))
-            return {"ok": True}
-
         def fake_action(_self, action_id, payload=None, plugin_id=""):
             calls.append(("action", action_id, dict(payload or {}), plugin_id))
             return {"ok": True}
 
         with (
             _patched_module_attr("act_plugin_script_menus", fake_script_menus),
-            _patched_module_attr("act_plugin_enable", fake_enable),
             _patched_module_attr("act_plugin_action", fake_action),
         ):
             row = harness._build_script_plugin_menu_children()["世界时钟"][0]
@@ -338,7 +356,7 @@ class MenuMixinActSummaryTests(unittest.TestCase):
             result = row["command"]()
 
         self.assertEqual(result, {"ok": True})
-        self.assertIn(("enable", "script_clock"), calls)
+        self.assertNotIn(("enable", "script_clock"), calls)
         self.assertIn(
             ("action", "script.overlay.set_enabled",
              {"enabled": False, "setting": "overlay_enabled", "surface": "unioverlay"},

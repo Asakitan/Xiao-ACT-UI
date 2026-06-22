@@ -714,6 +714,8 @@ def _script_menu_summary(manager: PluginManager,
     sao_menu = raw_menu if isinstance(raw_menu, Mapping) else {}
     if not pid or language not in _SCRIPT_MENU_LANGUAGES or not sao_menu:
         return {}
+    if not bool(plug.get("enabled")):
+        return {}
 
     title = str(
         sao_menu.get("name")
@@ -833,7 +835,7 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
-    """Return script-plugin SAO popup descriptors, including disabled plugins."""
+    """Return script-plugin SAO popup descriptors for enabled plugins."""
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         return {"ok": True, "items": manager.list_script_menu_entries()}
