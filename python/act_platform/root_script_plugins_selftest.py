@@ -167,13 +167,44 @@ def run_selftest() -> dict[str, Any]:
                 action = act_plugin_action(
                     owner, "script.game.direction", {"direction": "down"}, plugin_id=plugin_id)
             elif plugin_id == "script_stickwoman_csharp":
+                if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_timer_active", "state": state}
+                if abs(float(state.get("tick_interval") or 0.0) - 0.05) > 0.0001:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_tick_interval", "state": state}
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
                 if action_state.get("action") != "walk":
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_action", "state": action_state}
+                if int(action_state.get("render_count") or 0) < 1:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_render_count", "state": action_state}
+                spec_build_count = int(action_state.get("spec_build_count") or 0)
+                redraw = act_plugin_action(owner, "script.model3d.redraw", {}, plugin_id=plugin_id)
+                redraw_state = _state(redraw)
+                if int(redraw_state.get("spec_build_count") or 0) != spec_build_count:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_spec_cache_reuse",
+                        "before": action_state,
+                        "after": redraw_state,
+                    }
+                if int(redraw_state.get("render_count") or 0) <= int(action_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_redraw_count",
+                        "before": action_state,
+                        "after": redraw_state,
+                    }
+                action_state = redraw_state
                 state = dict(state)
                 state["action"] = action_state.get("action")
+                state["timer_active"] = action_state.get("timer_active")
+                state["tick_interval"] = action_state.get("tick_interval")
+                state["tick_count"] = action_state.get("tick_count")
+                state["render_count"] = action_state.get("render_count")
+                state["spec_build_count"] = action_state.get("spec_build_count")
                 overlays = render_overlays(owner, "unioverlay").get("overlays") or []
                 overlay_text = json.dumps(overlays, ensure_ascii=False, sort_keys=True, default=str)
                 if "keyframes" not in overlay_text or '"time"' not in overlay_text:
@@ -198,6 +229,8 @@ def run_selftest() -> dict[str, Any]:
                 "z": positioned.get("z"),
                 "action": state.get("action"),
                 "tick_count": state.get("tick_count"),
+                "render_count": state.get("render_count"),
+                "spec_build_count": state.get("spec_build_count"),
             }
         finally:
             act_plugin_action(

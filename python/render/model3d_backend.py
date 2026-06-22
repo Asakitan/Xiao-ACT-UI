@@ -33,6 +33,7 @@ _MESH_PREVIEW_FACE_LIMIT = 4096
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_RETARGET_PLAN_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 HUMANOID_BONES = (
     "root",
@@ -355,6 +356,15 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
     errors = out.get("errors")
     if isinstance(errors, tuple):
         out["errors"] = list(errors)
+    return out
+
+
+def _copy_retarget_plan(value: dict[str, Any]) -> dict[str, Any]:
+    out = dict(value)
+    for key in ("bone_map", "sources"):
+        item = out.get(key)
+        if isinstance(item, Mapping):
+            out[key] = dict(item)
     return out
 
 
@@ -1319,6 +1329,7 @@ def clear_model3d_metadata_caches() -> None:
     _BACKEND_STATUS_CACHE = None
     _MODEL_METADATA_CACHE.clear()
     _ACTION_METADATA_CACHE.clear()
+    _RETARGET_PLAN_CACHE.clear()
 
 
 def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
@@ -1559,6 +1570,16 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
 
     retarget = node.get("retarget") if isinstance(node.get("retarget"), Mapping) else {}
     model_meta = get_model_metadata(node)
+    skeleton = node.get("skeleton") if isinstance(node.get("skeleton"), Mapping) else {}
+    cache_key = (
+        tuple(model_meta.get("cache_key") or ()),
+        _hash_mapping(retarget) if retarget else "",
+        _hash_mapping(skeleton) if skeleton else "",
+    )
+    cached = _RETARGET_PLAN_CACHE.get(cache_key)
+    if cached is not None:
+        return _copy_retarget_plan(cached)
+
     sidecar_map = _sidecar_bone_map(model_meta)
     requests = dict(sidecar_map)
     requests.update(_explicit_bone_requests(node))
@@ -1593,7 +1614,7 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
     twist_limit = _float_from_mapping(retarget, "twist_limit", 0.35, lo=0.0, hi=1.5)
     total = len(HUMANOID_BONES)
     coverage = len(resolved) / float(total) if total else 0.0
-    return {
+    plan = {
         "mode": str(retarget.get("mode") or "humanoid_auto"),
         "profile": str(retarget.get("profile") or retarget.get("mode") or "humanoid_auto"),
         "rest_pose": str(retarget.get("rest_pose") or "auto"),
@@ -1613,6 +1634,8 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
         "clips": tuple(model_meta.get("clips") or ()),
         "warnings": tuple(warnings),
     }
+    _cache_put(_RETARGET_PLAN_CACHE, cache_key, plan)
+    return _copy_retarget_plan(plan)
 
 
 def _float_from_mapping(src: Mapping[str, Any], key: str, default: float,

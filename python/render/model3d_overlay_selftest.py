@@ -696,6 +696,52 @@ Objects:  {
         self.assertGreater(plan["coverage"], 0.75)
         self.assertAlmostEqual(plan["stretch_limit"], 0.2)
 
+    def test_retarget_plan_cache_copies_and_invalidates_on_inputs(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_retarget_cache_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "Hips", "Spine", "Head",
+                        "LeftArm", "LeftForeArm", "LeftHand",
+                        "RightArm", "RightForeArm", "RightHand",
+                    ],
+                },
+                "clips": ["Idle"],
+            }), encoding="utf-8")
+
+            def node(**overrides):
+                payload = {
+                    "type": "model3d",
+                    "model": {"path": str(model_path), "reload_key": "a"},
+                    "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.2},
+                }
+                payload.update(overrides)
+                return normalize_ui_spec(payload)["nodes"][0]
+
+            first = get_retarget_plan(node())
+            first["bone_map"]["hips"] = "Mutated"
+            second = get_retarget_plan(node())
+            self.assertEqual(second["bone_map"]["hips"], "Hips")
+            self.assertEqual(len(model3d_backend._RETARGET_PLAN_CACHE), 1)
+
+            changed_retarget = get_retarget_plan(node(
+                retarget={"mode": "humanoid_auto", "stretch_limit": 0.3}))
+            self.assertAlmostEqual(changed_retarget["stretch_limit"], 0.3)
+            self.assertEqual(len(model3d_backend._RETARGET_PLAN_CACHE), 2)
+
+            changed_skeleton = get_retarget_plan(node(
+                skeleton={"bone_map": {"hips": "CustomHips", "head": "Head"}}))
+            self.assertEqual(changed_skeleton["bone_map"]["hips"], "CustomHips")
+            self.assertEqual(len(model3d_backend._RETARGET_PLAN_CACHE), 3)
+
+            changed_reload = get_retarget_plan(node(
+                model={"path": str(model_path), "reload_key": "b"}))
+            self.assertEqual(changed_reload["bone_map"]["hips"], "Hips")
+            self.assertEqual(len(model3d_backend._RETARGET_PLAN_CACHE), 4)
+
     def test_retarget_plan_keeps_explicit_bone_map_without_sidecar(self) -> None:
         node = normalize_ui_spec({
             "type": "model3d",
