@@ -1592,6 +1592,10 @@ class NodeExtensionHost:
         self._language_providers: List[Dict[str, Any]] = []
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
+        self._custom_editor_lifecycle_lock = threading.Lock()
+        self._custom_editor_lifecycle_requests: Dict[str, Dict[str, Any]] = {}
+        self._custom_editor_state_lock = threading.Lock()
+        self._custom_editor_states: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -1801,6 +1805,64 @@ class NodeExtensionHost:
         except Exception:
             pass
 
+    def _custom_editor_state_key(self, payload: Dict[str, Any]) -> str:
+        view_id = str(payload.get("viewId") or payload.get("view_id") or "")
+        if view_id:
+            return f"view:{view_id}"
+        view_type = str(payload.get("viewType") or payload.get("view_type") or "")
+        uri = str(payload.get("uri") or payload.get("resource") or payload.get("path") or "")
+        return f"doc:{view_type}|{uri}"
+
+    def _normalize_custom_editor_state(
+            self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        view_id = str(payload.get("viewId") or payload.get("view_id") or "")
+        view_type = str(payload.get("viewType") or payload.get("view_type") or "")
+        state = dict(payload)
+        state["viewId"] = view_id
+        state["view_id"] = view_id
+        state["viewType"] = view_type
+        state["view_type"] = view_type
+        state["uri"] = str(payload.get("uri") or "")
+        state["dirty"] = bool(payload.get("dirty", False))
+        state["editable"] = bool(payload.get("editable", False))
+        state["kind"] = str(payload.get("kind") or "")
+        state["label"] = str(payload.get("label") or "")
+        state["backupId"] = str(payload.get("backupId") or payload.get("backup_id") or "")
+        state["backup_id"] = state["backupId"]
+        for key in ("supportsSave", "supportsSaveAs", "supportsRevert", "supportsBackup"):
+            if key in payload:
+                state[key] = bool(payload.get(key))
+        return state
+
+    def _store_custom_editor_state(
+            self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        state = self._normalize_custom_editor_state(payload)
+        key = self._custom_editor_state_key(state)
+        with self._custom_editor_state_lock:
+            previous = self._custom_editor_states.get(key, {})
+            merged = {**previous, **state}
+            self._custom_editor_states[key] = merged
+            return dict(merged)
+
+    def _find_custom_editor_state(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Optional[Dict[str, Any]]:
+        normalized_view = str(view_id or "")
+        normalized_type = str(view_type or "")
+        normalized_uri = str(uri or "")
+        with self._custom_editor_state_lock:
+            states = [dict(item) for item in self._custom_editor_states.values()]
+        for state in states:
+            if normalized_view and state.get("viewId") == normalized_view:
+                return state
+            if normalized_type and normalized_uri:
+                if (state.get("viewType") == normalized_type
+                        and state.get("uri") == normalized_uri):
+                    return state
+            if normalized_uri and state.get("uri") == normalized_uri:
+                return state
+        return None
+
     def _on_message(self, msg: Dict[str, Any]) -> None:
         """Dispatch an incoming message from the Node subprocess."""
         msg_type = str(msg.get("type", ""))
@@ -2005,9 +2067,37 @@ class NodeExtensionHost:
                     event.set()
 
         elif msg_type == "custom_editor_resolved":
+            if msg.get("ok"):
+                self._store_custom_editor_state(msg)
             request_id = str(msg.get("requestId", ""))
             with self._custom_editor_request_lock:
                 pending = self._custom_editor_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type == "custom_editor_changed":
+            state = self._store_custom_editor_state(msg)
+            if self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "custom_editor_changed", None)
+                    if callable(handler):
+                        handler(state)
+                except Exception:
+                    _log.exception("[NodeExtHost] custom_editor_changed bridge failed")
+
+        elif msg_type == "custom_editor_lifecycle_response":
+            if msg.get("ok"):
+                state_payload = msg.get("state")
+                if isinstance(state_payload, dict):
+                    self._store_custom_editor_state(state_payload)
+                else:
+                    self._store_custom_editor_state(msg)
+            request_id = str(msg.get("requestId", ""))
+            with self._custom_editor_lifecycle_lock:
+                pending = self._custom_editor_lifecycle_requests.get(request_id)
             if pending:
                 pending["response"] = msg
                 event = pending.get("event")
@@ -2409,6 +2499,79 @@ class NodeExtensionHost:
                 error=error,
             )
 
+    def request_custom_editor_lifecycle(
+            self, action: str, view_type: str = "", uri: str = "",
+            view_id: str = "", target: str = "",
+            timeout: float = 2.0) -> Dict[str, Any]:
+        """Ask Node to run a custom editor save/revert/backup lifecycle hook."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(action or "")
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "custom_editor_lifecycle", 0, ok=False,
+                detail=detail, error=error)
+            return {"ok": False, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._custom_editor_lifecycle_lock:
+            self._custom_editor_lifecycle_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "custom_editor_lifecycle",
+                "requestId": request_id,
+                "action": str(action or ""),
+                "viewType": str(view_type or ""),
+                "uri": str(uri or ""),
+                "viewId": str(view_id or ""),
+                "target": str(target or ""),
+            })
+            if not sent:
+                error = "Node custom editor lifecycle request could not be sent"
+                return {"ok": False, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node custom editor lifecycle request timed out"
+                return {"ok": False, "error": error, "timeout": True}
+            with self._custom_editor_lifecycle_lock:
+                pending = self._custom_editor_lifecycle_requests.get(
+                    request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return dict(response)
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node custom editor lifecycle failed")
+            return {"ok": False, "error": error}
+        finally:
+            with self._custom_editor_lifecycle_lock:
+                self._custom_editor_lifecycle_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "custom_editor_lifecycle",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
+    def list_custom_editor_states(self) -> List[Dict[str, Any]]:
+        """Return resolved custom editor dirty/lifecycle state snapshots."""
+        with self._custom_editor_state_lock:
+            return [dict(item) for item in self._custom_editor_states.values()]
+
+    def custom_editor_state(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict[str, Any]:
+        """Return one custom editor state snapshot when known."""
+        state = self._find_custom_editor_state(view_id, view_type, uri)
+        return dict(state or {})
+
     # -- Webview message relay -----------------------------------------------
 
     def relay_webview_message(self, view_id: str, message: Any) -> bool:
@@ -2476,6 +2639,8 @@ class NodeExtensionHost:
                 "tree": len(self._tree_requests),
                 "language": len(self._language_requests),
                 "customEditors": len(self._custom_editor_requests),
+                "customEditorLifecycle": len(
+                    self._custom_editor_lifecycle_requests),
             },
             "categories": categories,
         }

@@ -18,6 +18,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const readline = require('node:readline');
 const fsp = require('node:fs/promises');
+const os = require('node:os');
 const util = require('node:util');
 
 // -------------------------------------------------------------------------
@@ -697,6 +698,125 @@ function _safeViewIdPart(value) {
         .slice(0, 80) || 'custom';
 }
 
+function _customEditorDocumentKey(viewType, uriLike) {
+    const uri = uriLike instanceof Uri ? uriLike : _workspaceUriFromInput(uriLike);
+    return `${String(viewType || '')}|${uri.toString()}`;
+}
+
+function _customEditorEntryForMessage(msg) {
+    const viewId = String(msg.viewId || msg.view_id || '');
+    if (viewId && _customEditorViewKeys.has(viewId)) {
+        return _customEditorDocuments.get(_customEditorViewKeys.get(viewId)) || null;
+    }
+    const viewType = String(msg.viewType || msg.view_type || msg.customEditorId || '');
+    const uriText = msg.uri || msg.resource || msg.path;
+    if (viewType && uriText) {
+        const key = _customEditorDocumentKey(viewType, uriText);
+        return _customEditorDocuments.get(key) || null;
+    }
+    if (uriText) {
+        const uri = _workspaceUriFromInput(uriText).toString();
+        for (const entry of _customEditorDocuments.values()) {
+            if (entry.uri.toString() === uri) return entry;
+        }
+    }
+    return null;
+}
+
+function _customEditorStatePayload(entry, kind, extra = {}) {
+    if (!entry) return {};
+    const provider = entry.provider || {};
+    return {
+        viewType: entry.viewType,
+        viewId: entry.viewId,
+        uri: entry.uri.toString(),
+        dirty: !!entry.dirty,
+        editable: !!entry.editable,
+        supportsSave: typeof provider.saveCustomDocument === 'function',
+        supportsSaveAs: typeof provider.saveCustomDocumentAs === 'function',
+        supportsRevert: typeof provider.revertCustomDocument === 'function',
+        supportsBackup: typeof provider.backupCustomDocument === 'function',
+        kind: kind || entry.lastKind || '',
+        label: entry.lastLabel || '',
+        editId: entry.lastEditId || 0,
+        edits: entry.edits.length,
+        backupId: entry.backupId || '',
+        ...extra,
+    };
+}
+
+function _sendCustomEditorState(entry, kind, extra = {}) {
+    send({
+        type: 'custom_editor_changed',
+        ..._customEditorStatePayload(entry, kind, extra),
+    });
+}
+
+function _isCustomEditorEditEvent(event) {
+    return !!(
+        event
+        && event.document
+        && typeof event.undo === 'function'
+        && typeof event.redo === 'function'
+    );
+}
+
+function _customEditorEntryForDocument(viewType, document) {
+    if (document && document.uri) {
+        const key = _customEditorDocumentKey(viewType, document.uri);
+        const entry = _customEditorDocuments.get(key);
+        if (entry) return entry;
+    }
+    for (const entry of _customEditorDocuments.values()) {
+        if (entry.viewType === viewType && entry.document === document) return entry;
+    }
+    return null;
+}
+
+function _handleCustomDocumentChange(viewType, event) {
+    const entry = _customEditorEntryForDocument(viewType, event?.document);
+    if (!entry) return;
+    const editEvent = _isCustomEditorEditEvent(event);
+    entry.dirty = true;
+    entry.lastKind = editEvent ? 'edit' : 'content';
+    entry.lastLabel = String(event?.label || '');
+    if (editEvent) {
+        const editId = _nextCustomEditorEditHandle++;
+        entry.lastEditId = editId;
+        entry.edits.push({
+            id: editId,
+            label: entry.lastLabel,
+            undo: event.undo,
+            redo: event.redo,
+        });
+    }
+    _sendCustomEditorState(entry, entry.lastKind);
+}
+
+async function _disposeCustomEditorBackup(entry) {
+    const backup = entry?.backup;
+    entry.backup = null;
+    entry.backupId = '';
+    if (backup && typeof backup.delete === 'function') {
+        try {
+            await Promise.resolve(backup.delete());
+        } catch (err) {
+            log(`custom editor backup delete failed: ${err?.message || err}`);
+        }
+    }
+}
+
+async function _customEditorBackupDestination(entry) {
+    const backupDir = path.join(os.tmpdir(), 'sao-ai-editor-custom-editor-backups');
+    try { await fsp.mkdir(backupDir, { recursive: true }); } catch {}
+    const name = [
+        _safeViewIdPart(entry.viewId || entry.viewType),
+        Date.now(),
+        Math.floor(Math.random() * 1000000),
+    ].join('-') + '.bak';
+    return Uri.file(path.join(backupDir, name));
+}
+
 // -------------------------------------------------------------------------
 // OutputChannel
 // -------------------------------------------------------------------------
@@ -726,6 +846,8 @@ const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, tim
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
+const _customEditorDocuments = new Map(); // viewType|uri -> resolved custom document state
+const _customEditorViewKeys = new Map();  // viewId -> viewType|uri
 const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
 const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
@@ -748,6 +870,7 @@ const _hierarchyItemCache = new Map(); // handle -> { provider, item, kind }
 let _nextHierarchyItemHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
+let _nextCustomEditorEditHandle = 1;
 const _debugAdapterFactories = new Map();   // type -> factory
 const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
@@ -1952,11 +2075,18 @@ function buildVscodeModule(extDesc, extensionPath) {
             },
             registerCustomEditorProvider(viewType, provider, options) {
                 const normalized = String(viewType || '');
+                let changeSubscription = null;
+                if (provider && typeof provider.onDidChangeCustomDocument === 'function') {
+                    changeSubscription = provider.onDidChangeCustomDocument((event) => {
+                        _handleCustomDocumentChange(normalized, event);
+                    });
+                }
                 _customEditorProviders.set(normalized, {
                     provider,
                     options: options || {},
                     extensionId: extDesc.extensionId || '',
                     extensionPath,
+                    changeSubscription,
                 });
                 send({
                     type: 'custom_editor_provider_registered',
@@ -1966,7 +2096,14 @@ function buildVscodeModule(extDesc, extensionPath) {
                 });
                 log(`registered CustomEditorProvider: ${normalized}`);
                 return new Disposable(() => {
+                    changeSubscription?.dispose?.();
                     _customEditorProviders.delete(normalized);
+                    for (const [key, entry] of [..._customEditorDocuments.entries()]) {
+                        if (entry.viewType !== normalized) continue;
+                        _customEditorDocuments.delete(key);
+                        if (entry.viewId) _customEditorViewKeys.delete(entry.viewId);
+                        try { entry.document?.dispose?.(); } catch {}
+                    }
                     send({
                         type: 'custom_editor_provider_disposed',
                         viewType: normalized,
@@ -2847,6 +2984,7 @@ async function resolveCustomEditor(msg) {
     };
     try {
         let document = null;
+        let customEntry = null;
         if (typeof reg.provider.resolveCustomTextEditor === 'function') {
             document = await _workspaceOpenTextDocument(uri);
             await reg.provider.resolveCustomTextEditor(document, panel, token);
@@ -2861,6 +2999,30 @@ async function resolveCustomEditor(msg) {
                 throw new Error(`custom editor provider ${viewType} has no resolver`);
             }
             await reg.provider.resolveCustomEditor(document, panel, token);
+            if (!document.uri) document.uri = uri;
+            const key = _customEditorDocumentKey(viewType, document.uri);
+            customEntry = {
+                viewType,
+                uri: _workspaceUriFromInput(document.uri),
+                viewId,
+                provider: reg.provider,
+                document,
+                dirty: false,
+                editable: typeof reg.provider.onDidChangeCustomDocument === 'function',
+                lastKind: 'resolved',
+                lastLabel: '',
+                lastEditId: 0,
+                edits: [],
+                backup: null,
+                backupId: msg.backupId ? String(msg.backupId) : '',
+            };
+            _customEditorDocuments.set(key, customEntry);
+            _customEditorViewKeys.set(viewId, key);
+            panel.onDidDispose(() => {
+                _customEditorDocuments.delete(key);
+                _customEditorViewKeys.delete(viewId);
+                try { document?.dispose?.(); } catch {}
+            });
         }
         send({
             type: 'custom_editor_resolved',
@@ -2869,6 +3031,14 @@ async function resolveCustomEditor(msg) {
             viewId,
             uri: uri.toString(),
             ok: true,
+            ...(customEntry ? _customEditorStatePayload(customEntry, 'resolved') : {
+                editable: false,
+                supportsSave: false,
+                supportsSaveAs: false,
+                supportsRevert: false,
+                supportsBackup: false,
+                dirty: false,
+            }),
         });
     } catch (err) {
         const error = err && err.message ? err.message : String(err);
@@ -2876,6 +3046,92 @@ async function resolveCustomEditor(msg) {
         log(`resolveCustomEditor error for ${viewType}: ${error}`);
         send({ type: 'custom_editor_resolved', requestId: msg.requestId, viewType, viewId, uri: uri.toString(), ok: false, error });
         send({ type: 'error', extensionId: viewType, error });
+    }
+}
+
+async function handleCustomEditorLifecycle(msg) {
+    const requestId = msg.requestId || '';
+    const action = String(msg.action || '').trim();
+    try {
+        const entry = _customEditorEntryForMessage(msg);
+        if (!entry) throw new Error('Custom editor document is not resolved');
+        const provider = entry.provider || {};
+        const token = {
+            isCancellationRequested: false,
+            onCancellationRequested: new EventEmitter().event,
+        };
+        let value = null;
+        if (action === 'save') {
+            if (typeof provider.saveCustomDocument !== 'function') {
+                throw new Error('Custom editor provider does not implement saveCustomDocument');
+            }
+            await provider.saveCustomDocument(entry.document, token);
+            await _disposeCustomEditorBackup(entry);
+            entry.dirty = false;
+            entry.edits.length = 0;
+            entry.lastKind = 'save';
+            _sendCustomEditorState(entry, 'save', { dirty: false });
+            value = _customEditorStatePayload(entry, 'save');
+        } else if (action === 'saveAs') {
+            if (typeof provider.saveCustomDocumentAs !== 'function') {
+                throw new Error('Custom editor provider does not implement saveCustomDocumentAs');
+            }
+            const targetInput = msg.target || msg.targetUri || msg.target_uri || '';
+            if (!targetInput) throw new Error('Custom editor saveAs target is required');
+            const target = _workspaceUriFromInput(targetInput);
+            await provider.saveCustomDocumentAs(entry.document, target, token);
+            await _disposeCustomEditorBackup(entry);
+            entry.dirty = false;
+            entry.edits.length = 0;
+            entry.lastKind = 'saveAs';
+            _sendCustomEditorState(entry, 'saveAs', { dirty: false, target: target.toString() });
+            value = _customEditorStatePayload(entry, 'saveAs', { target: target.toString() });
+        } else if (action === 'revert') {
+            if (typeof provider.revertCustomDocument !== 'function') {
+                throw new Error('Custom editor provider does not implement revertCustomDocument');
+            }
+            await provider.revertCustomDocument(entry.document, token);
+            await _disposeCustomEditorBackup(entry);
+            entry.dirty = false;
+            entry.edits.length = 0;
+            entry.lastKind = 'revert';
+            _sendCustomEditorState(entry, 'revert', { dirty: false });
+            value = _customEditorStatePayload(entry, 'revert');
+        } else if (action === 'backup') {
+            if (typeof provider.backupCustomDocument !== 'function') {
+                throw new Error('Custom editor provider does not implement backupCustomDocument');
+            }
+            const destination = await _customEditorBackupDestination(entry);
+            const backup = await provider.backupCustomDocument(
+                entry.document, { destination }, token);
+            entry.backup = backup || null;
+            entry.backupId = backup && backup.id ? String(backup.id) : '';
+            entry.lastKind = 'backup';
+            _sendCustomEditorState(entry, 'backup', { backupId: entry.backupId });
+            value = _customEditorStatePayload(entry, 'backup');
+        } else if (action === 'state') {
+            value = _customEditorStatePayload(entry, 'state');
+        } else {
+            throw new Error(`Unsupported custom editor lifecycle action: ${action}`);
+        }
+        send({
+            type: 'custom_editor_lifecycle_response',
+            requestId,
+            ok: true,
+            action,
+            state: value,
+            ...value,
+        });
+    } catch (err) {
+        const error = err && err.message ? err.message : String(err);
+        log(`custom editor lifecycle ${action || '?'} failed: ${error}`);
+        send({
+            type: 'custom_editor_lifecycle_response',
+            requestId,
+            ok: false,
+            action,
+            error,
+        });
     }
 }
 
@@ -3835,6 +4091,9 @@ async function handleMessage(msg) {
             break;
         case 'resolve_custom_editor':
             await resolveCustomEditor(msg);
+            break;
+        case 'custom_editor_lifecycle':
+            await handleCustomEditorLifecycle(msg);
             break;
         case 'command':
         case 'executeCommand':

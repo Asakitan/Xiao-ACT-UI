@@ -339,6 +339,35 @@ class _FakeNodeCustomEditorHost:
             "uri": f"file:///{os.path.basename(str(uri))}",
         }
 
+    def custom_editor_state(self, view_id="", view_type="", uri=""):
+        return {
+            "viewId": view_id or "custom-selftest-1",
+            "viewType": view_type or "selftest.customNbt",
+            "uri": uri or "file:///fake.nbt",
+            "dirty": False,
+        }
+
+    def list_custom_editor_states(self):
+        return [self.custom_editor_state()]
+
+    def request_custom_editor_lifecycle(
+            self, action, view_type="", uri="", view_id="", target="",
+            timeout=2.0):
+        return {
+            "ok": True,
+            "action": action,
+            "viewId": view_id or "custom-selftest-1",
+            "viewType": view_type or "selftest.customNbt",
+            "uri": uri or "file:///fake.nbt",
+            "dirty": False,
+            "state": {
+                "viewId": view_id or "custom-selftest-1",
+                "viewType": view_type or "selftest.customNbt",
+                "uri": uri or "file:///fake.nbt",
+                "dirty": False,
+            },
+        }
+
 
 def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
@@ -365,6 +394,9 @@ def test_app_settings_parity() -> None:
         "set_extension_setting", "reset_extension_setting",
         "get_extension_host_diagnostics", "set_extension_host_diagnostics",
         "resolve_extension_custom_editor",
+        "custom_editor_state", "list_custom_editor_states",
+        "save_extension_custom_editor", "revert_extension_custom_editor",
+        "backup_extension_custom_editor", "save_extension_custom_editor_as",
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
@@ -2487,7 +2519,11 @@ console.log("frontend auto-close behavior ok");
            and "editor-custom-webview-host" in html
            and "function isExtensionCustomEditorTab(tab)" in html
            and "customEditorWebviewIdFromOpenResult(res)" in html
-           and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html)
+           and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html
+           and "function saveCustomEditorTab(tab)" in html
+           and "call('save_extension_custom_editor',viewId,viewType,uri)" in html
+           and "event==='custom_editor_changed'" in html
+           and "applyCustomEditorState(data)" in html)
     with tempfile.TemporaryDirectory() as webview_tmp, \
             tempfile.TemporaryDirectory() as outside_tmp:
         script_path = os.path.join(webview_tmp, "panel.js")
@@ -5926,6 +5962,8 @@ def test_app_extension_runtime_support() -> None:
 const vscode = require('vscode');
 const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
+const lifecycleEvents = new vscode.EventEmitter();
+const lifecycleDocs = new Map();
 
 function activate(context) {
   console.log('node console probe', { source: 'selftest' });
@@ -6404,6 +6442,63 @@ function activate(context) {
     },
     { supportsMultipleEditorsPerDocument: true },
   ));
+  context.subscriptions.push(vscode.window.registerCustomEditorProvider(
+    'selftest.node.lifecycleEditor',
+    {
+      onDidChangeCustomDocument: lifecycleEvents.event,
+      async openCustomDocument(uri, openContext, token) {
+        const doc = {
+          uri,
+          backupId: openContext && openContext.backupId,
+          dispose() {
+            output.appendLine('life:dispose:' + uri.fsPath);
+          },
+        };
+        lifecycleDocs.set(uri.toString(), doc);
+        return doc;
+      },
+      async resolveCustomEditor(document, panel, token) {
+        panel.webview.options = { enableScripts: true };
+        panel.webview.html = '<main data-view="lifecycle-editor">' + document.uri.fsPath + '</main>';
+      },
+      async saveCustomDocument(document, token) {
+        output.appendLine('life:save:' + document.uri.fsPath);
+      },
+      async saveCustomDocumentAs(document, target, token) {
+        output.appendLine('life:saveAs:' + target.fsPath);
+      },
+      async revertCustomDocument(document, token) {
+        output.appendLine('life:revert:' + document.uri.fsPath);
+      },
+      async backupCustomDocument(document, context, token) {
+        output.appendLine('life:backup:' + context.destination.fsPath);
+        return {
+          id: 'life-backup-id',
+          delete() {
+            output.appendLine('life:backup-delete');
+          },
+        };
+      },
+    },
+    { supportsMultipleEditorsPerDocument: true },
+  ));
+  vscode.commands.registerCommand('selftest.node.lifecycleContentChange', uriText => {
+    const doc = lifecycleDocs.get(String(uriText || ''));
+    if (!doc) return false;
+    lifecycleEvents.fire({ document: doc });
+    return true;
+  });
+  vscode.commands.registerCommand('selftest.node.lifecycleEdit', uriText => {
+    const doc = lifecycleDocs.get(String(uriText || ''));
+    if (!doc) return false;
+    lifecycleEvents.fire({
+      document: doc,
+      label: 'Life Edit',
+      undo() { output.appendLine('life:undo'); },
+      redo() { output.appendLine('life:redo'); },
+    });
+    return true;
+  });
   context.subscriptions.push(view);
 }
 
@@ -6440,6 +6535,11 @@ module.exports = { activate, deactivate };
                         "viewType": "selftest.node.customEditor",
                         "displayName": "Node Custom Editor",
                         "selector": [{"filenamePattern": "*.txt"}],
+                        "priority": "default",
+                    }, {
+                        "viewType": "selftest.node.lifecycleEditor",
+                        "displayName": "Node Lifecycle Editor",
+                        "selector": [{"filenamePattern": "*.life"}],
                         "priority": "default",
                     }],
                 },
@@ -6755,6 +6855,75 @@ module.exports = { activate, deactivate };
                 if node_custom_editor.get("viewId"):
                     node_host.relay_webview_message(
                         node_custom_editor.get("viewId"), {"type": "ping"})
+                lifecycle_editor_file = os.path.join(
+                    node_tree_tmp, "custom-editor.life")
+                with open(lifecycle_editor_file, "w", encoding="utf-8") as fh:
+                    fh.write("life-doc")
+                node_lifecycle_editor = api.resolve_extension_custom_editor(
+                    "selftest.node.lifecycleEditor",
+                    lifecycle_editor_file,
+                    "Node Lifecycle Editor")
+                node_lifecycle_view_id = str(
+                    node_lifecycle_editor.get("viewId", ""))
+                node_lifecycle_uri = str(node_lifecycle_editor.get("uri", ""))
+                node_lifecycle_html = node_ui_bridge.webviews.get(
+                    node_lifecycle_view_id, "")
+                node_lifecycle_initial_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                try:
+                    node_lifecycle_content_command = api._ext_host.commands.execute(
+                        "selftest.node.lifecycleContentChange",
+                        node_lifecycle_uri)
+                except Exception as exc:
+                    node_lifecycle_content_command = {"_error": str(exc)}
+                node_lifecycle_content_dirty = _wait_until(
+                    lambda: node_host.custom_editor_state(
+                        view_id=node_lifecycle_view_id).get("dirty") is True,
+                    timeout=3.0)
+                node_lifecycle_content_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                try:
+                    node_lifecycle_edit_command = api._ext_host.commands.execute(
+                        "selftest.node.lifecycleEdit",
+                        node_lifecycle_uri)
+                except Exception as exc:
+                    node_lifecycle_edit_command = {"_error": str(exc)}
+                node_lifecycle_edit_dirty = _wait_until(
+                    lambda: (
+                        node_host.custom_editor_state(
+                            view_id=node_lifecycle_view_id).get("kind")
+                        == "edit"),
+                    timeout=3.0)
+                node_lifecycle_edit_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                node_lifecycle_save = api.save_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_saved_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                try:
+                    api._ext_host.commands.execute(
+                        "selftest.node.lifecycleContentChange",
+                        node_lifecycle_uri)
+                except Exception:
+                    pass
+                _wait_until(
+                    lambda: node_host.custom_editor_state(
+                        view_id=node_lifecycle_view_id).get("dirty") is True,
+                    timeout=3.0)
+                node_lifecycle_backup = api.backup_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_backup_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                node_lifecycle_revert = api.revert_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_reverted_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -7031,6 +7200,47 @@ module.exports = { activate, deactivate };
                            "result": node_custom_editor,
                            "html": node_custom_editor_html,
                            "roots": node_custom_editor_roots,
+                           "output": node_host._output_channels.get(
+                               "node-tree-selftest", []),
+                       }, ensure_ascii=False))
+                node_lifecycle_output = "".join(
+                    node_host._output_channels.get("node-tree-selftest", []))
+                _check("node host bridges custom editor save lifecycle",
+                       node_lifecycle_editor.get("ok") is True
+                       and node_lifecycle_view_id
+                       and 'data-view="lifecycle-editor"' in node_lifecycle_html
+                       and node_lifecycle_initial_state.get("dirty") is False
+                       and node_lifecycle_initial_state.get("supportsSave") is True
+                       and node_lifecycle_content_command is True
+                       and node_lifecycle_content_dirty
+                       and node_lifecycle_content_state.get("kind") == "content"
+                       and node_lifecycle_edit_command is True
+                       and node_lifecycle_edit_dirty
+                       and node_lifecycle_edit_state.get("kind") == "edit"
+                       and node_lifecycle_edit_state.get("label") == "Life Edit"
+                       and int(node_lifecycle_edit_state.get("edits") or 0) >= 1
+                       and node_lifecycle_save.get("ok") is True
+                       and node_lifecycle_saved_state.get("dirty") is False
+                       and node_lifecycle_backup.get("ok") is True
+                       and node_lifecycle_backup_state.get("backupId")
+                       == "life-backup-id"
+                       and node_lifecycle_revert.get("ok") is True
+                       and node_lifecycle_reverted_state.get("dirty") is False
+                       and "life:save:" in node_lifecycle_output
+                       and "life:backup:" in node_lifecycle_output
+                       and "life:revert:" in node_lifecycle_output
+                       and "life:backup-delete" in node_lifecycle_output,
+                       json.dumps({
+                           "result": node_lifecycle_editor,
+                           "initial": node_lifecycle_initial_state,
+                           "content": node_lifecycle_content_state,
+                           "edit": node_lifecycle_edit_state,
+                           "save": node_lifecycle_save,
+                           "saved": node_lifecycle_saved_state,
+                           "backup": node_lifecycle_backup,
+                           "backup_state": node_lifecycle_backup_state,
+                           "revert": node_lifecycle_revert,
+                           "reverted": node_lifecycle_reverted_state,
                            "output": node_host._output_channels.get(
                                "node-tree-selftest", []),
                        }, ensure_ascii=False))

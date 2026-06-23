@@ -768,6 +768,10 @@ class _AIEditorUIBridge:
             "data": message,
         })
 
+    def custom_editor_changed(self, state: Dict[str, Any]) -> None:
+        """Notify the frontend that a Node custom editor dirty state changed."""
+        self._api._emit("custom_editor_changed", state)
+
     def receive_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the webview back to the extension."""
         self._api.webview_post_message(view_id, message)
@@ -3019,6 +3023,12 @@ class AIEditorAPI:
                     or view_type),
                 "priority": contribution.get("priority", ""),
                 "extension_id": contribution.get("_extensionId", ""),
+                "dirty": bool(result.get("dirty", False)),
+                "editable": bool(result.get("editable", False)),
+                "supports_save": bool(result.get("supportsSave", False)),
+                "supports_save_as": bool(result.get("supportsSaveAs", False)),
+                "supports_revert": bool(result.get("supportsRevert", False)),
+                "supports_backup": bool(result.get("supportsBackup", False)),
             },
             "webview": {
                 "view_id": view_id,
@@ -6194,6 +6204,73 @@ class AIEditorAPI:
         timeout_value = max(0.5, min(timeout_value, 30.0))
         return host.request_custom_editor_result(
             view_type, uri, title=title, timeout=timeout_value)
+
+    def custom_editor_state(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Return a resolved extension custom editor state snapshot."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        state = host.custom_editor_state(view_id, view_type, uri)
+        if not state:
+            return {"ok": False, "error": "Custom editor state not found"}
+        state["ok"] = True
+        return state
+
+    def list_custom_editor_states(self) -> Dict:
+        """Return state snapshots for Node extension custom editors."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {"ok": False, "states": [],
+                    "error": "Node extension host is not running"}
+        return {"ok": True, "states": host.list_custom_editor_states()}
+
+    def _extension_custom_editor_lifecycle(
+            self, action: str, view_id: str = "", view_type: str = "",
+            uri: str = "", target: str = "", timeout: float = 5.0) -> Dict:
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError):
+            timeout_value = 5.0
+        timeout_value = max(0.5, min(timeout_value, 30.0))
+        return host.request_custom_editor_lifecycle(
+            action, view_type=view_type, uri=uri, view_id=view_id,
+            target=target, timeout=timeout_value)
+
+    def save_extension_custom_editor(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Run saveCustomDocument for a Node extension custom editor."""
+        return self._extension_custom_editor_lifecycle(
+            "save", view_id=view_id, view_type=view_type, uri=uri)
+
+    def revert_extension_custom_editor(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Run revertCustomDocument for a Node extension custom editor."""
+        return self._extension_custom_editor_lifecycle(
+            "revert", view_id=view_id, view_type=view_type, uri=uri)
+
+    def backup_extension_custom_editor(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Run backupCustomDocument for a Node extension custom editor."""
+        return self._extension_custom_editor_lifecycle(
+            "backup", view_id=view_id, view_type=view_type, uri=uri)
+
+    def save_extension_custom_editor_as(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "", target: str = "") -> Dict:
+        """Run saveCustomDocumentAs for a Node extension custom editor."""
+        if not str(target or "").strip():
+            return {"ok": False, "error": "Custom editor save target is required"}
+        return self._extension_custom_editor_lifecycle(
+            "saveAs", view_id=view_id, view_type=view_type,
+            uri=uri, target=target)
 
     def get_extension_settings(self, ext_id: str = "") -> Dict:
         """EXT-10: Return extension-contributed configuration schema and values.

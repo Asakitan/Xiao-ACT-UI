@@ -7173,8 +7173,8 @@ function openExtensionCustomEditorFile(res,relPath){
   const absolutePath=res.absolute_path||res.absolutePath||'';
   const workspacePath=res.path||relPath||'';
   const viewId=customEditorWebviewIdFromOpenResult(res);
-  const customEditor=res.custom_editor||res.customEditor||{};
   const webview={...(res.webview||{}),view_id:viewId};
+  const customEditor={...(res.custom_editor||res.customEditor||{}),view_id:viewId,uri:webview.uri||''};
   const existing=tabs.find(t=>(absolutePath&&t.filePath===absolutePath)||(workspacePath&&t.workspacePath===workspacePath));
   const meta={
     filePath:absolutePath,workspacePath:workspacePath,
@@ -7600,6 +7600,15 @@ function customEditorWebviewIdFromTab(tab){
     webview.view_id||webview.viewId||
     webview.id)||'').trim();
 }
+function customEditorViewTypeFromTab(tab){
+  const ce=tab&&tab.customEditor||{};
+  return String(ce.view_type||ce.viewType||'').trim();
+}
+function customEditorUriFromTab(tab){
+  const webview=tab&&tab.webview||{};
+  const ce=tab&&tab.customEditor||{};
+  return String(webview.uri||ce.uri||tab&&tab.uri||tab&&tab.filePath||'').trim();
+}
 function customEditorWebviewIdFromOpenResult(res){
   const webview=res&&res.webview||{};
   return String(res&&(
@@ -7617,6 +7626,42 @@ function findCustomEditorTabByViewId(viewId){
   const id=String(viewId||'').trim();
   if(!id||typeof tabs==='undefined'||!Array.isArray(tabs))return null;
   return tabs.find(tab=>isExtensionCustomEditorTab(tab)&&customEditorWebviewIdFromTab(tab)===id)||null;
+}
+function findCustomEditorTabByState(data){
+  const viewId=data&&(data.view_id||data.viewId);
+  const byView=findCustomEditorTabByViewId(viewId);
+  if(byView)return byView;
+  const uri=String(data&&(data.uri||data.resource||data.path)||'').trim();
+  const viewType=String(data&&(data.view_type||data.viewType)||'').trim();
+  if(!uri||typeof tabs==='undefined'||!Array.isArray(tabs))return null;
+  return tabs.find(tab=>{
+    if(!isExtensionCustomEditorTab(tab))return false;
+    if(viewType&&customEditorViewTypeFromTab(tab)!==viewType)return false;
+    return customEditorUriFromTab(tab)===uri;
+  })||null;
+}
+function applyCustomEditorState(data){
+  if(!data)return false;
+  const tab=findCustomEditorTabByState(data);
+  if(!tab)return false;
+  const ce={...(tab.customEditor||{})};
+  ce.view_type=ce.view_type||data.view_type||data.viewType||'';
+  ce.dirty=!!data.dirty;
+  ce.editable=!!data.editable;
+  ce.kind=data.kind||ce.kind||'';
+  ce.label=data.label||'';
+  ce.backup_id=data.backup_id||data.backupId||'';
+  ['supportsSave','supportsSaveAs','supportsRevert','supportsBackup'].forEach(key=>{
+    if(Object.prototype.hasOwnProperty.call(data,key)){
+      ce[key]=!!data[key];
+      ce[key.replace(/[A-Z]/g,m=>'_'+m.toLowerCase())]=!!data[key];
+    }
+  });
+  tab.customEditor=ce;
+  const viewId=customEditorWebviewIdFromTab(tab);
+  if(viewId&&data.uri)tab.webview={...(tab.webview||{}),uri:data.uri};
+  renderTabs();
+  return true;
 }
 function showCustomEditorPlaceholder(host,tab){
   if(!host)return;
@@ -8154,6 +8199,10 @@ function postExtensionMessageToWebview(iframe,msg){
 window._onEditorEvent=function(event,data){
   if(event==='extension_tree_changed'){
     scheduleExtensionActivityRefresh();
+    return;
+  }
+  if(event==='custom_editor_changed'){
+    applyCustomEditorState(data);
     return;
   }
   if(event==='provider_tabs_changed'||event==='extension_views_changed'){
@@ -10021,7 +10070,8 @@ function renderTabs(){
   const bar=$('tab-bar');bar.innerHTML='';
   tabs.forEach(t=>{
     const el=document.createElement('div');
-    el.className='tab'+(t.id===activeTab?' active':'');
+    const customDirty=isExtensionCustomEditorTab(t)&&t.customEditor&&t.customEditor.dirty;
+    el.className='tab'+(t.id===activeTab?' active':'')+(customDirty?' dirty':'');
     el.dataset.tabId=t.id;
     el.innerHTML=esc(t.name)+'<span class="dot"></span> <span class="close" onclick="closeTab('+t.id+',event)">×</span>';
     el.onclick=()=>switchTab(t.id);
@@ -10975,8 +11025,25 @@ async function openFileDialog(){
     reader.readAsText(file);
   };input.click();
 }
+async function saveCustomEditorTab(tab){
+  const viewId=customEditorWebviewIdFromTab(tab);
+  const viewType=customEditorViewTypeFromTab(tab);
+  const uri=customEditorUriFromTab(tab);
+  const r=await call('save_extension_custom_editor',viewId,viewType,uri);
+  if(!callSucceeded(r)){
+    showToast('Save failed: '+callFailedMessage(r,'custom editor provider unavailable'),'error');
+    return r||{error:'custom editor provider unavailable'};
+  }
+  applyCustomEditorState((r&&r.state)||r);
+  showToast('Saved: '+(tab.name||uri||viewType||'custom editor'),'success',1500);
+  return r;
+}
 async function saveFile(){
   const tab=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(tab)){
+    await saveCustomEditorTab(tab);
+    return;
+  }
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
