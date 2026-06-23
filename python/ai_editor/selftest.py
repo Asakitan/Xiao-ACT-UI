@@ -1902,6 +1902,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
+           and "editor:{formatOnType:false}" in html
+           and "id=\"s-editor-format-on-type\"" in html
+           and "function editorFormatOnTypeEnabled()" in html
+           and "async function requestEditorOnTypeFormatting(ch,quiet)" in html
+           and "editorProviderPayload('onTypeFormatting'" in html
+           and "requestEditorOnTypeFormatting(ch,true)" in html
+           and "setCheckedValue('s-editor-format-on-type',editor.formatOnType===true)" in html
+           and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
            and "async function formatSelection()" in html
            and "editorProviderPayload('rangeFormatting'" in html
            and "Format Selection" in html

@@ -1522,6 +1522,11 @@ pre.code-block { overflow:visible; }
     </div>
 
     <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
+      <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
+    </div>
+
+    <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Claude Code</div>
       <div class="settings-grid">
         <div><label>CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
@@ -1696,6 +1701,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands']},
+  editor:{formatOnType:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const SETTINGS_DEFAULTS={
@@ -3548,6 +3554,7 @@ function _editorInputWithUndo(e){
   scheduleEditorFoldingRanges();
   clearEditorDocumentColors();
   scheduleEditorDocumentColors();
+  requestEditorOnTypeFormatting(ch,true);
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3567,6 +3574,7 @@ let currentSemanticTokenRules=[];
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorColorPresentationMenu=null;
+let _editorFormatOnTypeRequest=0;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
@@ -5393,6 +5401,22 @@ function deleteLine(){
 
 // ── Format document ──
 function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
+function editorFormatOnTypeEnabled(){
+  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  return editor.formatOnType===true;
+}
+async function requestEditorOnTypeFormatting(ch,quiet){
+  if(!editorFormatOnTypeEnabled()||typeof ch!=='string'||ch.length!==1)return false;
+  const requestId=++_editorFormatOnTypeRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('onTypeFormatting',{triggerCharacter:ch,options:editorFormatOptions()}));
+  if(requestId!==_editorFormatOnTypeRequest)return false;
+  if(res&&res.error){if(!quiet)setStatus('Format on type failed: '+res.error);return false}
+  if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
+    _undoPush(true);
+    if(editorApplyTextEdits(res.edits)){if(!quiet)setStatus('Formatted on type');return true}
+  }
+  return false;
+}
 async function formatDocument(){
   const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:editorFormatOptions()}));
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
@@ -7485,6 +7509,8 @@ function openSettings(){
   renderEditorIconThemeOptions();
   const selectedIconThemeOption=($('s-file-icon-theme').selectedOptions||[])[0];
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
+  const editor=settingSection('editor');
+  setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -7718,6 +7744,7 @@ async function saveSettings(){
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
+  config.editor={...settingSection('editor'),formatOnType:readCheckedValue('s-editor-format-on-type')};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());
