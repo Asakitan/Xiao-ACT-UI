@@ -1545,6 +1545,7 @@ class NodeExtensionHost:
     Protocol (Node -> Python, one JSON object per line on stdout):
         {"type": "activated",           "extensionId": "..."}
         {"type": "error",               "extensionId": "...", "message": "..."}
+        {"type": "execute_command",     "requestId": "...", "commandId": "...", "args": [...]}
         {"type": "webview_html",        "viewId": "...", "html": "..."}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
@@ -1864,6 +1865,39 @@ class NodeExtensionHost:
                 event = pending.get("event")
                 if isinstance(event, threading.Event):
                     event.set()
+
+        elif msg_type == "execute_command":
+            request_id = str(msg.get("requestId", ""))
+            command_id = str(msg.get("commandId", ""))
+            args = msg.get("args") or []
+            if not isinstance(args, list):
+                args = [args]
+            if not self._command_service:
+                if request_id:
+                    self._send({
+                        "type": "execute_command_response",
+                        "requestId": request_id,
+                        "ok": False,
+                        "error": "Command service is not available",
+                    })
+            else:
+                try:
+                    value = self._command_service.execute(command_id, *args)
+                    if request_id:
+                        self._send({
+                            "type": "execute_command_response",
+                            "requestId": request_id,
+                            "ok": True,
+                            "value": value,
+                        })
+                except Exception as exc:
+                    if request_id:
+                        self._send({
+                            "type": "execute_command_response",
+                            "requestId": request_id,
+                            "ok": False,
+                            "error": str(exc),
+                        })
 
         elif msg_type == "output":
             channel = str(

@@ -6197,6 +6197,16 @@ function activate(context) {
       editText: editedDoc.getText(),
     };
   });
+  vscode.commands.registerCommand('selftest.node.pythonCommandProbe', async () => {
+    const nested = await vscode.commands.executeCommand(
+      'selftest.python.echo',
+      { text: 'from-node' },
+    );
+    return {
+      nested,
+      hasLocalProbe: (await vscode.commands.getCommands()).includes('selftest.node.workspaceProbe'),
+    };
+  });
   context.subscriptions.push(view);
 }
 
@@ -6243,6 +6253,12 @@ module.exports = { activate, deactivate };
             api._node_ext_host = node_host
             node_host.set_command_service(api._ext_host.commands)
             node_host.on_tree_event(api._handle_node_tree_event)
+            python_echo_dispose = api._ext_host.commands.register(
+                "selftest.python.echo",
+                lambda payload=None: {
+                    "echo": (payload or {}).get("text"),
+                    "answer": 42,
+                })
             try:
                 node_started = node_host.start()
                 sent = node_host.activate(node_tree_tmp, node_tree_desc.id, {
@@ -6262,6 +6278,10 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_workspace_command_registered = _wait_until(
                     lambda: "selftest.node.workspaceProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_python_command_registered = _wait_until(
+                    lambda: "selftest.node.pythonCommandProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_language_registered = _wait_until(
@@ -6423,6 +6443,11 @@ module.exports = { activate, deactivate };
                         "selftest.node.workspaceProbe")
                 except Exception as exc:
                     node_workspace_probe = {"_error": str(exc)}
+                try:
+                    node_python_command_probe = api._ext_host.commands.execute(
+                        "selftest.node.pythonCommandProbe")
+                except Exception as exc:
+                    node_python_command_probe = {"_error": str(exc)}
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -6616,6 +6641,13 @@ module.exports = { activate, deactivate };
                        and isinstance(node_workspace_probe, dict)
                        and node_workspace_probe.get("editText") == "say hello SAO",
                        json.dumps(node_workspace_probe, ensure_ascii=False))
+                _check("node host JS command awaits Python command result",
+                       node_python_command_registered
+                       and isinstance(node_python_command_probe, dict)
+                       and node_python_command_probe.get("hasLocalProbe") is True
+                       and node_python_command_probe.get("nested", {}).get("echo") == "from-node"
+                       and node_python_command_probe.get("nested", {}).get("answer") == 42,
+                       json.dumps(node_python_command_probe, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
                        and isinstance(node_workspace_probe, dict)
@@ -6696,6 +6728,10 @@ module.exports = { activate, deactivate };
                        action_result.get("ok") is True and output_seen)
             finally:
                 api._vscode_ns.set_language_provider_request_callback(None)
+                try:
+                    python_echo_dispose()
+                except Exception:
+                    pass
                 node_host.stop(timeout=1.0)
                 api._node_ext_host = previous_node_host
 

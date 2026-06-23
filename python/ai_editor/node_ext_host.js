@@ -602,6 +602,7 @@ class OutputChannel {
 // -------------------------------------------------------------------------
 const _extensions = new Map();           // extensionId -> { desc, module, context, deactivate }
 const _commands = new Map();             // commandId -> handler
+const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
 const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
@@ -610,6 +611,7 @@ const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
+let _nextPythonCommandRequestHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
 const _workspaceRoot = path.resolve(process.cwd());
@@ -840,6 +842,36 @@ function _deserializeArgFromPython(value) {
         return result;
     }
     return value;
+}
+
+function _executePythonCommand(commandId, args) {
+    const requestId = `pycmd-${_nextPythonCommandRequestHandle++}`;
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            _pythonCommandRequests.delete(requestId);
+            reject(new Error(`Python command timed out: ${commandId}`));
+        }, 3000);
+        _pythonCommandRequests.set(requestId, { resolve, reject, timer });
+        send({
+            type: 'execute_command',
+            requestId,
+            commandId,
+            args: (args || []).map(item => _serializeArgForPython(item)),
+        });
+    });
+}
+
+function handleExecuteCommandResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _pythonCommandRequests.get(requestId);
+    if (!pending) return;
+    _pythonCommandRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    if (msg.ok) {
+        pending.resolve(_deserializeArgFromPython(msg.value));
+    } else {
+        pending.reject(new Error(msg.error || 'Python command failed'));
+    }
 }
 
 function _serializeLanguagePosition(value) {
@@ -1549,12 +1581,7 @@ function buildVscodeModule(extDesc, extensionPath) {
             executeCommand(id, ...args) {
                 const handler = _commands.get(id);
                 if (handler) return Promise.resolve(handler(...args));
-                // Forward to Python for commands we don't own
-                return new Promise((resolve) => {
-                    // Fire-and-forget for now; full RPC tracking can be added later
-                    send({ type: 'execute_command', commandId: id, args });
-                    resolve(undefined);
-                });
+                return _executePythonCommand(id, args);
             },
             registerTextEditorCommand(id, handler) {
                 return vscode.commands.registerCommand(id, handler);
@@ -3305,6 +3332,9 @@ async function handleMessage(msg) {
         case 'command':
         case 'executeCommand':
             await executeCommand(msg.commandId, msg.args, msg.requestId);
+            break;
+        case 'execute_command_response':
+            handleExecuteCommandResponse(msg);
             break;
         case 'tree_request':
             await handleTreeRequest(msg);
