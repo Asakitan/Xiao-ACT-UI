@@ -2105,6 +2105,21 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorReferences(quiet)" in html
            and "function showEditorReferences(references,position)" in html
            and "function handleEditorReferencesKey(e)" in html
+           and "id=\"editor-hierarchy\"" in html
+           and "function requestEditorCallHierarchy(quiet)" in html
+           and "function requestEditorTypeHierarchy(quiet)" in html
+           and "function openEditorHierarchyPeek(mode,items,direction,position)" in html
+           and "function refreshEditorHierarchyChildren(quiet)" in html
+           and "function handleEditorHierarchyKey(e)" in html
+           and "editorProviderPayload('prepareCallHierarchy'" in html
+           and "editorProviderPayload('prepareTypeHierarchy'" in html
+           and "callHierarchyIncoming" in html
+           and "callHierarchyOutgoing" in html
+           and "typeHierarchySupertypes" in html
+           and "typeHierarchySubtypes" in html
+           and "Peek Call Hierarchy" in html
+           and "Peek Type Hierarchy" in html
+           and "Shift+Alt+H" in html
            and "function requestEditorDocumentLinks(quiet,openAtCursor)" in html
            and "function showEditorDocumentLinks(links,position)" in html
            and "function openEditorDocumentLink(link)" in html

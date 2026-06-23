@@ -272,11 +272,11 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
 }
 .editor-textarea::selection { background:var(--selection); }
-.editor-suggest,.editor-hover,.editor-signature-help,.editor-code-actions,.editor-references,.editor-links { position:absolute; z-index:8; border:1px solid var(--border);
+.editor-suggest,.editor-hover,.editor-signature-help,.editor-code-actions,.editor-references,.editor-hierarchy,.editor-links { position:absolute; z-index:8; border:1px solid var(--border);
   background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px rgba(0,0,0,.32);
   border-radius:6px; opacity:0; transform:translateY(-4px); pointer-events:none;
   transition:opacity .12s ease,transform .12s ease; }
-.editor-suggest.open,.editor-hover.open,.editor-signature-help.open,.editor-code-actions.open,.editor-references.open,.editor-links.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+.editor-suggest.open,.editor-hover.open,.editor-signature-help.open,.editor-code-actions.open,.editor-references.open,.editor-hierarchy.open,.editor-links.open { opacity:1; transform:translateY(0); pointer-events:auto; }
 .editor-suggest { min-width:240px; max-width:420px; max-height:260px; overflow:auto; padding:4px; }
 .editor-suggest-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:5px 7px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
@@ -307,6 +307,36 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-reference-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-reference-preview { grid-column:1/-1; color:var(--fg-dim); font:11px/1.35 var(--mono);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-hierarchy { min-width:340px; width:min(700px,calc(100% - 72px)); max-width:720px;
+  max-height:min(380px,calc(100% - 42px)); overflow:hidden; padding:0; }
+.editor-hierarchy-header { display:flex; align-items:center; gap:8px; min-height:36px; padding:7px 10px;
+  border-bottom:1px solid var(--border); background:linear-gradient(180deg,var(--bg3),var(--bg2)); }
+.editor-hierarchy-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font:600 12px/1.3 var(--ui); color:var(--fg-bright); }
+.editor-hierarchy-tabs { display:flex; gap:3px; flex:0 0 auto; }
+.editor-hierarchy-tab,.editor-hierarchy-close { border:1px solid var(--border); background:var(--bg2); color:var(--fg-dim);
+  border-radius:4px; min-height:22px; padding:2px 7px; font:11px/1.2 var(--ui); cursor:pointer; }
+.editor-hierarchy-tab.active { color:var(--fg-bright); border-color:var(--fg-accent);
+  background:color-mix(in srgb,var(--fg-accent) 18%,var(--bg2)); }
+.editor-hierarchy-close { width:24px; padding:0; font-size:14px; }
+.editor-hierarchy-tab:hover,.editor-hierarchy-close:hover { color:var(--fg-bright); background:var(--bg-hover); }
+.editor-hierarchy-root { border-bottom:1px solid var(--border); padding:7px 10px; background:var(--bg-editor); }
+.editor-hierarchy-root-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 12px/1.3 var(--ui); }
+.editor-hierarchy-root-detail { margin-top:2px; color:var(--fg-dim); overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font:11px/1.3 var(--ui); }
+.editor-hierarchy-list { max-height:278px; overflow:auto; padding:4px; }
+.editor-hierarchy-empty { padding:12px 10px; color:var(--fg-dim); font:12px/1.35 var(--ui); }
+.editor-hierarchy-item { display:grid; grid-template-columns:18px minmax(0,1fr) auto; gap:7px; align-items:center;
+  padding:6px 8px; border-radius:4px; border:1px solid transparent; cursor:pointer; font:12px/1.35 var(--ui); }
+.editor-hierarchy-item:hover { background:var(--bg-hover); }
+.editor-hierarchy-item.active { background:var(--selection); border-color:var(--border-bright); }
+.editor-hierarchy-kind { color:var(--fg-accent); text-align:center; font:13px/1 var(--mono); }
+.editor-hierarchy-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-hierarchy-detail { grid-column:2/-1; color:var(--fg-dim); overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font:11px/1.35 var(--ui); }
+.editor-hierarchy-refocus { border:0; background:transparent; color:var(--fg-dim); border-radius:4px;
+  width:22px; height:22px; cursor:pointer; }
+.editor-hierarchy-refocus:hover { background:var(--bg-hover); color:var(--fg-bright); }
 .editor-links { min-width:300px; max-width:520px; max-height:280px; overflow:auto; padding:4px; }
 .editor-link-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:6px 8px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
@@ -1286,6 +1316,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-signature-help" id="editor-signature-help" role="tooltip"></div>
         <div class="editor-code-actions" id="editor-code-actions" role="listbox"></div>
         <div class="editor-references" id="editor-references" role="listbox"></div>
+        <div class="editor-hierarchy" id="editor-hierarchy" role="tree"></div>
         <div class="editor-links" id="editor-links" role="listbox"></div>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
@@ -2530,6 +2561,7 @@ function openInEditor(code,lang){
   if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
   if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
   if(typeof closeEditorReferences==='function')closeEditorReferences();
+  if(typeof closeEditorHierarchy==='function')closeEditorHierarchy();
   if(typeof closeEditorLinks==='function')closeEditorLinks();
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
@@ -3546,6 +3578,7 @@ function _editorInputWithUndo(e){
   closeEditorHover();
   closeEditorCodeActions();
   closeEditorReferences();
+  closeEditorHierarchy();
   const ch=e&&typeof e.data==='string'?e.data:'';
   if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
   else closeEditorSuggest();
@@ -3579,6 +3612,7 @@ let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
+let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
 let _workspaceSymbols=[],_workspaceSymbolIndex=0,_workspaceSymbolRequest=0,_workspaceSymbolTimer=null;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
@@ -4632,6 +4666,200 @@ function handleEditorReferencesKey(e){
   if(e.key==='Escape'){e.preventDefault();closeEditorReferences();return true}
   return false;
 }
+function isEditorHierarchyOpen(){
+  const box=$('editor-hierarchy');return !!(box&&box.classList.contains('open'));
+}
+function closeEditorHierarchy(){
+  const box=$('editor-hierarchy');if(!box)return;
+  _editorHierarchyRequest++;
+  box.classList.remove('open');box.style.display='none';
+  _editorHierarchyMode='';_editorHierarchyDirection='';_editorHierarchyRoot=null;_editorHierarchyRows=[];_editorHierarchyIndex=0;
+}
+function editorHierarchyItemTarget(item){
+  if(!item||typeof item!=='object')return null;
+  const uri=item.uri||item.targetUri;
+  const range=item.selectionRange||item.range||item.targetSelectionRange||item.targetRange;
+  return uri||range?{uri,range}:null;
+}
+function editorHierarchyItemName(item){
+  return String((item&&item.name)||'Symbol');
+}
+function editorHierarchyItemDetail(item){
+  if(!item||typeof item!=='object')return '';
+  const bits=[];
+  if(item.detail)bits.push(String(item.detail));
+  const target=editorHierarchyItemTarget(item),range=target&&target.range,start=range&&range.start;
+  if(start)bits.push('Ln '+((Number(start.line)||0)+1)+', Col '+((Number(start.character)||0)+1));
+  const path=target&&target.uri?editorWorkspaceRelativePath(editorDocumentUriToPath(target.uri))||editorDocumentUriToPath(target.uri):'';
+  if(path)bits.push(path);
+  return bits.join(' · ');
+}
+function editorHierarchyGlyph(kind){
+  const n=Number(kind);
+  if(n===4)return 'C';
+  if(n===5)return 'M';
+  if(n===6)return 'P';
+  if(n===11)return 'ƒ';
+  if(n===12)return 'm';
+  return '◇';
+}
+function editorHierarchyDirectionLabel(direction){
+  if(direction==='incoming')return 'Incoming';
+  if(direction==='outgoing')return 'Outgoing';
+  if(direction==='supertypes')return 'Supertypes';
+  if(direction==='subtypes')return 'Subtypes';
+  return 'Hierarchy';
+}
+function editorHierarchyTitle(){
+  return _editorHierarchyMode==='type'?'Peek Type Hierarchy':'Peek Call Hierarchy';
+}
+function editorHierarchyChildKind(){
+  if(_editorHierarchyMode==='type')return _editorHierarchyDirection==='supertypes'?'typeHierarchySupertypes':'typeHierarchySubtypes';
+  return _editorHierarchyDirection==='outgoing'?'callHierarchyOutgoing':'callHierarchyIncoming';
+}
+function editorHierarchyCallItem(call){
+  if(!call||typeof call!=='object')return null;
+  return _editorHierarchyDirection==='outgoing'?(call.to||call.item):(call.from||call.from_||call.item);
+}
+function editorHierarchyRowsFromResponse(res){
+  if(_editorHierarchyMode==='type'){
+    const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
+    return items.filter(item=>editorHierarchyItemTarget(item)).map(item=>({item,meta:''}));
+  }
+  const calls=res&&res.ok&&Array.isArray(res.calls)?res.calls:[];
+  return calls.map(call=>{
+    const item=editorHierarchyCallItem(call);
+    const ranges=Array.isArray(call&&call.fromRanges)?call.fromRanges:[];
+    return item&&editorHierarchyItemTarget(item)?{item,meta:ranges.length?(ranges.length+' call site'+(ranges.length===1?'':'s')):''}:null;
+  }).filter(Boolean);
+}
+function setEditorHierarchyIndex(index){
+  if(!_editorHierarchyRows.length)return;
+  _editorHierarchyIndex=(index+_editorHierarchyRows.length)%_editorHierarchyRows.length;
+  document.querySelectorAll('#editor-hierarchy .editor-hierarchy-item').forEach((el,i)=>{
+    const selected=i===_editorHierarchyIndex;
+    el.classList.toggle('active',selected);
+    el.setAttribute('aria-selected',selected?'true':'false');
+    if(selected)el.scrollIntoView({block:'nearest'});
+  });
+}
+function renderEditorHierarchy(message){
+  const box=$('editor-hierarchy');if(!box)return;
+  box.innerHTML='';
+  const header=document.createElement('div');header.className='editor-hierarchy-header';
+  const title=document.createElement('div');title.className='editor-hierarchy-title';title.textContent=editorHierarchyTitle();
+  const tabs=document.createElement('div');tabs.className='editor-hierarchy-tabs';
+  const directions=_editorHierarchyMode==='type'
+    ?[['supertypes','Supertypes'],['subtypes','Subtypes']]
+    :[['incoming','Incoming'],['outgoing','Outgoing']];
+  directions.forEach(([direction,label])=>{
+    const btn=document.createElement('button');btn.type='button';
+    btn.className='editor-hierarchy-tab'+(direction===_editorHierarchyDirection?' active':'');
+    btn.textContent=label;btn.title=label;
+    btn.onmousedown=e=>{e.preventDefault();e.stopPropagation();setEditorHierarchyDirection(direction)};
+    tabs.appendChild(btn);
+  });
+  const close=document.createElement('button');close.type='button';close.className='editor-hierarchy-close';close.title='Close';close.textContent='×';
+  close.onmousedown=e=>{e.preventDefault();closeEditorHierarchy();ed.focus()};
+  header.appendChild(title);header.appendChild(tabs);header.appendChild(close);box.appendChild(header);
+  const root=document.createElement('div');root.className='editor-hierarchy-root';
+  const rootName=document.createElement('div');rootName.className='editor-hierarchy-root-name';
+  rootName.textContent=editorHierarchyItemName(_editorHierarchyRoot);
+  const rootDetail=document.createElement('div');rootDetail.className='editor-hierarchy-root-detail';
+  rootDetail.textContent=editorHierarchyItemDetail(_editorHierarchyRoot)||editorHierarchyDirectionLabel(_editorHierarchyDirection);
+  root.appendChild(rootName);root.appendChild(rootDetail);
+  root.onmousedown=e=>{e.preventDefault();navigateEditorHierarchyItem(_editorHierarchyRoot)};
+  box.appendChild(root);
+  const list=document.createElement('div');list.className='editor-hierarchy-list';list.setAttribute('role','tree');
+  if(message||!_editorHierarchyRows.length){
+    const empty=document.createElement('div');empty.className='editor-hierarchy-empty';
+    empty.textContent=message||('No '+editorHierarchyDirectionLabel(_editorHierarchyDirection).toLowerCase()+' results');
+    list.appendChild(empty);
+  }else{
+    _editorHierarchyRows.forEach((row,index)=>{
+      const item=row.item;
+      const el=document.createElement('div');el.className='editor-hierarchy-item'+(index===_editorHierarchyIndex?' active':'');
+      el.setAttribute('role','treeitem');el.setAttribute('aria-level','2');el.setAttribute('aria-selected',index===_editorHierarchyIndex?'true':'false');
+      const glyph=document.createElement('div');glyph.className='editor-hierarchy-kind';glyph.textContent=editorHierarchyGlyph(item.kind);
+      const name=document.createElement('div');name.className='editor-hierarchy-name';name.textContent=editorHierarchyItemName(item);
+      const refocus=document.createElement('button');refocus.type='button';refocus.className='editor-hierarchy-refocus';refocus.title='Refocus';refocus.textContent='↳';
+      const detail=document.createElement('div');detail.className='editor-hierarchy-detail';
+      detail.textContent=[row.meta,editorHierarchyItemDetail(item)].filter(Boolean).join(' · ');
+      el.appendChild(glyph);el.appendChild(name);el.appendChild(refocus);el.appendChild(detail);
+      el.onmouseenter=()=>setEditorHierarchyIndex(index);
+      el.onmousedown=e=>{e.preventDefault();navigateEditorHierarchyItem(item)};
+      refocus.onmousedown=e=>{e.preventDefault();e.stopPropagation();refocusEditorHierarchyItem(item)};
+      list.appendChild(el);
+    });
+  }
+  box.appendChild(list);
+}
+async function refreshEditorHierarchyChildren(quiet){
+  if(!_editorHierarchyRoot)return;
+  const requestId=++_editorHierarchyRequest;
+  _editorHierarchyRows=[];_editorHierarchyIndex=0;renderEditorHierarchy('Loading...');
+  const itemKey=_editorHierarchyMode==='type'?'typeHierarchyItem':'callHierarchyItem';
+  const res=await call('editor_language_provider',editorProviderPayload(editorHierarchyChildKind(),{[itemKey]:_editorHierarchyRoot,item:_editorHierarchyRoot}));
+  if(requestId!==_editorHierarchyRequest)return;
+  if(res&&res.error){renderEditorHierarchy('Hierarchy failed: '+res.error);if(!quiet)setStatus('Hierarchy failed: '+res.error);return}
+  _editorHierarchyRows=editorHierarchyRowsFromResponse(res);_editorHierarchyIndex=0;renderEditorHierarchy();
+  if(!quiet)setStatus(editorHierarchyDirectionLabel(_editorHierarchyDirection)+': '+_editorHierarchyRows.length+' result'+(_editorHierarchyRows.length===1?'':'s'));
+}
+function setEditorHierarchyDirection(direction){
+  if(!_editorHierarchyRoot||direction===_editorHierarchyDirection)return;
+  _editorHierarchyDirection=direction;
+  refreshEditorHierarchyChildren(false);
+}
+function openEditorHierarchyPeek(mode,items,direction,position){
+  const box=$('editor-hierarchy');if(!box)return;
+  _editorHierarchyMode=mode;_editorHierarchyDirection=direction;
+  _editorHierarchyRoot=(Array.isArray(items)?items:[]).find(item=>editorHierarchyItemTarget(item))||null;
+  _editorHierarchyRows=[];_editorHierarchyIndex=0;
+  if(!_editorHierarchyRoot)return;
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();
+  renderEditorHierarchy('Loading...');
+  box.style.display='block';placeEditorOverlay(box,position);requestAnimationFrame(()=>box.classList.add('open'));
+  refreshEditorHierarchyChildren(true);
+}
+async function navigateEditorHierarchyItem(item){
+  const target=editorHierarchyItemTarget(item);
+  if(target)await navigateEditorDefinition(target,editorHierarchyItemName(item));
+  ed.focus();
+}
+function refocusEditorHierarchyItem(item){
+  if(!item||!editorHierarchyItemTarget(item))return;
+  _editorHierarchyRoot=item;_editorHierarchyRows=[];_editorHierarchyIndex=0;
+  renderEditorHierarchy('Loading...');
+  refreshEditorHierarchyChildren(false);
+}
+async function requestEditorCallHierarchy(quiet){
+  const requestId=++_editorHierarchyRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('prepareCallHierarchy'));
+  if(requestId!==_editorHierarchyRequest)return;
+  if(res&&res.error){closeEditorHierarchy();if(!quiet)setStatus('Call hierarchy failed: '+res.error);return}
+  const items=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>editorHierarchyItemTarget(item));
+  if(items.length){openEditorHierarchyPeek('call',items,'incoming',position);if(!quiet)setStatus('Call hierarchy ready');return}
+  closeEditorHierarchy();if(!quiet)setStatus('No call hierarchy found');
+}
+async function requestEditorTypeHierarchy(quiet){
+  const requestId=++_editorHierarchyRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('prepareTypeHierarchy'));
+  if(requestId!==_editorHierarchyRequest)return;
+  if(res&&res.error){closeEditorHierarchy();if(!quiet)setStatus('Type hierarchy failed: '+res.error);return}
+  const items=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>editorHierarchyItemTarget(item));
+  if(items.length){openEditorHierarchyPeek('type',items,'subtypes',position);if(!quiet)setStatus('Type hierarchy ready');return}
+  closeEditorHierarchy();if(!quiet)setStatus('No type hierarchy found');
+}
+function handleEditorHierarchyKey(e){
+  if(!isEditorHierarchyOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setEditorHierarchyIndex(_editorHierarchyIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setEditorHierarchyIndex(_editorHierarchyIndex-1);return true}
+  if(e.key==='ArrowRight'){e.preventDefault();refocusEditorHierarchyItem((_editorHierarchyRows[_editorHierarchyIndex]||{}).item);return true}
+  if(e.key==='Enter'){e.preventDefault();navigateEditorHierarchyItem((_editorHierarchyRows[_editorHierarchyIndex]||{}).item||_editorHierarchyRoot);return true}
+  if(e.key==='Tab'){e.preventDefault();refocusEditorHierarchyItem((_editorHierarchyRows[_editorHierarchyIndex]||{}).item);return true}
+  if(e.key==='Escape'){e.preventDefault();closeEditorHierarchy();return true}
+  return false;
+}
 function normalizeEditorDocumentHighlight(item){
   if(!item||typeof item!=='object'||!item.range||!item.range.start||!item.range.end)return null;
   return {range:item.range,kind:Number(item.kind)||0};
@@ -4770,7 +4998,7 @@ function scheduleWorkspaceSymbolSearch(delay){
 function openWorkspaceSymbolPicker(){
   showEditorArea();
   closeCommandPalette();
-  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();
   const box=$('workspace-symbol-palette'),input=$('workspace-symbol-input');if(!box||!input)return;
   box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
   input.value='';input.focus();renderWorkspaceSymbols([], '');
@@ -4898,7 +5126,7 @@ async function requestEditorDocumentLinks(quiet,openAtCursor){
     if(current&&await openEditorDocumentLink(current))return;
   }
   if(links.length){
-    closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();
+    closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();
     showEditorDocumentLinks(links,position);setStatus(links.length+' document link'+(links.length===1?'':'s'));return;
   }
   closeEditorLinks();if(!quiet)setStatus('No document links');
@@ -5019,7 +5247,7 @@ function confirmEditorRenameApply(newName,summary){
   );
 }
 async function requestEditorRename(quiet){
-  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();
+  closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();
   const offset=ed.selectionStart,position=editorPositionFromOffset(ed.value,offset);
   const basePayload={offset,position};
   const prepRes=await call('editor_language_provider',editorProviderPayload('prepareRename',basePayload));
@@ -5172,10 +5400,11 @@ ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();closeEditorColorPresentationMenu()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorLinksKey(e))return;
   if(handleEditorReferencesKey(e))return;
+  if(handleEditorHierarchyKey(e))return;
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
@@ -5184,6 +5413,7 @@ ed.addEventListener('keydown',function(e){
   if(e.key==='F12'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorImplementation(false);return}
   if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
   if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
+  if((e.key==='h'||e.key==='H')&&e.shiftKey&&!e.ctrlKey&&e.altKey){e.preventDefault();requestEditorCallHierarchy(false);return}
   if(e.key==='ArrowRight'&&e.shiftKey&&!e.ctrlKey&&e.altKey){e.preventDefault();expandEditorSelection(false);return}
   if(e.key==='ArrowLeft'&&e.shiftKey&&!e.ctrlKey&&e.altKey){e.preventDefault();shrinkEditorSelection(false);return}
   if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
@@ -5289,6 +5519,8 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Go to Declaration',shortcut:'',action:()=>requestEditorDeclaration(false)},
     {label:'Go to Implementation',shortcut:'Ctrl+F12',action:()=>requestEditorImplementation(false)},
     {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
+    {label:'Peek Call Hierarchy',shortcut:'Shift+Alt+H',action:()=>requestEditorCallHierarchy(false)},
+    {label:'Peek Type Hierarchy',shortcut:'',action:()=>requestEditorTypeHierarchy(false)},
     {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
@@ -5308,7 +5540,7 @@ document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
   if(e.target.closest&&!e.target.closest('#workspace-symbol-palette')&&!e.target.closest('#cmd-palette')&&!e.target.closest('#ctx-menu'))closeWorkspaceSymbolPicker();
   if(e.target.closest&&!e.target.closest('.editor-color-presentation-menu')&&!e.target.closest('.editor-color-swatch'))closeEditorColorPresentationMenu();
-  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks()}
+  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks()}
 });
 
 // ── Find/Replace ──
@@ -9142,6 +9374,7 @@ function switchTab(id){
     if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
     if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
     if(typeof closeEditorReferences==='function')closeEditorReferences();
+    if(typeof closeEditorHierarchy==='function')closeEditorHierarchy();
     if(typeof closeEditorLinks==='function')closeEditorLinks();
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
     if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
@@ -9579,6 +9812,8 @@ const COMMANDS=[
   {label:'Go to Declaration',shortcut:'',action:()=>requestEditorDeclaration(false)},
   {label:'Go to Implementation',shortcut:'Ctrl+F12',action:()=>requestEditorImplementation(false)},
   {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
+  {label:'Peek Call Hierarchy',shortcut:'Shift+Alt+H',action:()=>requestEditorCallHierarchy(false)},
+  {label:'Peek Type Hierarchy',shortcut:'',action:()=>requestEditorTypeHierarchy(false)},
   {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
