@@ -9,6 +9,7 @@ directory is absent.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -70,6 +71,21 @@ def _find_model3d_node(value: Any) -> dict[str, Any]:
             if found:
                 return found
     return {}
+
+
+def _native_unity_curve_floor(ref: str) -> int:
+    normalized = ref.replace("\\", "/").lower()
+    if "blink_disable" in normalized or "facial/other/dummy" in normalized:
+        return 0
+    if "/handsign/" in normalized:
+        return 40
+    if "/facial/" in normalized:
+        return 79
+    if "mouthmorph" in normalized:
+        return 20
+    if "blink_enable" in normalized:
+        return 1
+    return 0
 
 
 def _find_canvas_nodes(value: Any) -> list[dict[str, Any]]:
@@ -699,14 +715,25 @@ def run_selftest() -> dict[str, Any]:
                     if isinstance(default_procedural.get("actions"), dict)
                     else {}
                 )
-                required_default_actions = {
+                compatible_action_names = (
                     "tomurai_idle", "moe_idle", "shy_wave", "double_peace", "heart_pose",
                     "cat_paw", "head_tilt", "hand_on_cheek", "wink_pose", "sparkle_pose",
                     "pout", "happy_hop", "twirl", "curtsy", "sleepy_rub", "surprised",
                     "please_pose", "giggle", "blush_hide", "walk", "jog", "run",
-                    "sprint", "sneak", "dance", "cheer", "victory", "think", "yawn",
-                    "sleepy", "scared", "guard", "dodge_left", "dodge_right", "kick",
-                    "punch", "stumble", "crouch", "tap_react", "drag_react",
+                    "sprint", "sneak", "back_step", "strafe_left", "strafe_right",
+                    "turn_left", "turn_right", "turn_around", "jump", "hop", "spin",
+                    "dance", "clap", "cheer", "victory", "bow", "stretch", "point",
+                    "shrug", "think", "yawn", "sleepy", "scared", "guard",
+                    "dodge_left", "dodge_right",
+                )
+                moe_action_names = {
+                    "moe_idle", "shy_wave", "double_peace", "heart_pose", "cat_paw",
+                    "head_tilt", "hand_on_cheek", "wink_pose", "sparkle_pose", "pout",
+                    "happy_hop", "twirl", "curtsy", "sleepy_rub", "surprised",
+                    "please_pose", "giggle", "blush_hide",
+                }
+                required_default_actions = set(compatible_action_names) | moe_action_names | {
+                    "kick", "punch", "stumble", "crouch", "tap_react", "drag_react",
                     "drop_react", "happy",
                 }
                 missing_default_actions = sorted(required_default_actions - set(default_actions))
@@ -719,6 +746,80 @@ def run_selftest() -> dict[str, Any]:
                         "missing": missing_default_actions,
                         "procedural_action": default_procedural,
                     }
+                profile = str(default_procedural.get("character_profile") or "").lower()
+                basis = default_procedural.get("public_motion_basis")
+                basis_text = json.dumps(basis if isinstance(basis, list) else [], ensure_ascii=False).lower()
+                missing_moe_actions = sorted(moe_action_names - set(default_actions))
+                if "anime_girl" not in profile or "moe" not in basis_text or missing_moe_actions:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_moe_action_profile",
+                        "character_profile": default_procedural.get("character_profile"),
+                        "public_motion_basis": basis,
+                        "missing_moe_actions": missing_moe_actions,
+                    }
+                runtime_spec_keys = (
+                    "native_unity", "effectors", "targets", "gait", "body", "head",
+                    "keyframes", "pose_offsets", "bone_offsets", "offsets",
+                )
+                compatible_failures: list[dict[str, Any]] = []
+                compatible_metadata_count = 0
+                compatible_pose_count = 0
+                for action_name in compatible_action_names:
+                    action_cfg = default_actions.get(action_name)
+                    if not isinstance(action_cfg, dict):
+                        compatible_failures.append({"action": action_name, "reason": "missing_config"})
+                        continue
+                    probe_node = dict(default_model_node)
+                    probe_node["action"] = {
+                        "name": action_name,
+                        "clip": str(action_cfg.get("clip") or action_name),
+                        "time": 0.37,
+                        "speed": 1.0,
+                        "loop": True,
+                    }
+                    if callable(get_action_metadata):
+                        action_meta = get_action_metadata(probe_node)
+                        selected = action_meta.get("selected") if isinstance(action_meta.get("selected"), dict) else {}
+                        errors = list(action_meta.get("errors") or ())
+                        errors.extend(str(item) for item in selected.get("unity_errors") or ())
+                        if errors or not any(key in selected for key in runtime_spec_keys):
+                            compatible_failures.append({
+                                "action": action_name,
+                                "reason": "metadata",
+                                "errors": errors,
+                                "selected_keys": sorted(str(key) for key in selected),
+                            })
+                        else:
+                            compatible_metadata_count += 1
+                    if callable(evaluate_retarget_pose):
+                        pose = evaluate_retarget_pose(probe_node)
+                        procedural_info = (
+                            pose.get("procedural_action")
+                            if isinstance(pose.get("procedural_action"), dict)
+                            else {}
+                        )
+                        if procedural_info.get("enabled") is not True:
+                            compatible_failures.append({
+                                "action": action_name,
+                                "reason": "retarget_pose",
+                                "pose": pose,
+                            })
+                        else:
+                            compatible_pose_count += 1
+                if compatible_failures:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_compatible_action_set",
+                        "failures": compatible_failures[:8],
+                        "failure_count": len(compatible_failures),
+                    }
+                state["compatible_action_count"] = len(compatible_action_names)
+                state["compatible_action_metadata_count"] = compatible_metadata_count
+                state["compatible_action_pose_count"] = compatible_pose_count
+                state["moe_action_count"] = len(moe_action_names)
                 for action_name, required_refs in {
                     "tomurai_idle": ("Unity/HandSign/K_Idle.anim",),
                     "double_peace": ("Unity/HandSign/K_Peace.anim", "Unity/Animation/Facial/ウィンク.anim"),
@@ -886,17 +987,93 @@ def run_selftest() -> dict[str, Any]:
                         "state": procedural_state,
                     }
                 model_path = str(motion_scale_state.get("model_path") or "")
-                reload_action = act_plugin_action(
-                    owner, "script.model.set_path", {"path": model_path}, plugin_id=plugin_id)
-                reload_state = _state(reload_action)
-                if int(reload_state.get("model_reload_nonce") or 0) <= initial_reload_nonce:
+                if not model_path:
                     return {
                         "ok": False,
                         "plugin_id": plugin_id,
-                        "stage": "stickwoman_model_reload_nonce",
-                        "before": state,
-                        "after": reload_state,
+                        "stage": "stickwoman_default_model_path",
+                        "state": motion_scale_state,
                     }
+                model_switch_alt_vertex_count = 0
+                model_switch_alt_face_count = 0
+                with tempfile.TemporaryDirectory(prefix="stickwoman_model_switch_") as temp_dir:
+                    alt_model = Path(temp_dir) / "triangle.obj"
+                    alt_model.write_text(
+                        "v -0.5 0.0 0.0\nv 0.5 0.0 0.0\nv 0.0 1.0 0.0\nf 1 2 3\n",
+                        encoding="utf-8",
+                    )
+                    switch_action = act_plugin_action(
+                        owner, "script.model.set_path", {"path": str(alt_model)}, plugin_id=plugin_id)
+                    switch_state = _state(switch_action)
+                    if (
+                        not switch_action.get("ok")
+                        or int(switch_state.get("model_reload_nonce") or 0) <= initial_reload_nonce
+                        or Path(str(switch_state.get("model_path") or "")).resolve() != alt_model.resolve()
+                    ):
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_model_switch_alt_state",
+                            "result": switch_action,
+                            "state": switch_state,
+                            "alt_model": str(alt_model),
+                        }
+                    switch_node = _find_model3d_node(
+                        render_overlays(owner, "unioverlay").get("overlays") or [])
+                    switch_model = switch_node.get("model") if isinstance(switch_node.get("model"), dict) else {}
+                    if Path(str(switch_model.get("path") or "")).resolve() != alt_model.resolve():
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_model_switch_alt_overlay",
+                            "model": switch_model,
+                            "alt_model": str(alt_model),
+                        }
+                    if callable(get_model_metadata):
+                        alt_meta = get_model_metadata(switch_node)
+                        alt_mesh = alt_meta.get("mesh") if isinstance(alt_meta.get("mesh"), dict) else {}
+                        model_switch_alt_vertex_count = int(alt_mesh.get("vertex_count") or 0)
+                        model_switch_alt_face_count = int(alt_mesh.get("face_count") or 0)
+                        if (
+                            alt_meta.get("exists") is not True
+                            or model_switch_alt_vertex_count < 3
+                            or model_switch_alt_face_count < 1
+                        ):
+                            return {
+                                "ok": False,
+                                "plugin_id": plugin_id,
+                                "stage": "stickwoman_model_switch_alt_metadata",
+                                "metadata": alt_meta,
+                            }
+                    reload_action = act_plugin_action(
+                        owner, "script.model.set_path", {"path": model_path}, plugin_id=plugin_id)
+                    reload_state = _state(reload_action)
+                    if (
+                        not reload_action.get("ok")
+                        or int(reload_state.get("model_reload_nonce") or 0)
+                        <= int(switch_state.get("model_reload_nonce") or 0)
+                    ):
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_model_switch_restore_state",
+                            "result": reload_action,
+                            "before": switch_state,
+                            "after": reload_state,
+                        }
+                    restored_node = _find_model3d_node(
+                        render_overlays(owner, "unioverlay").get("overlays") or [])
+                    restored_model = (
+                        restored_node.get("model") if isinstance(restored_node.get("model"), dict) else {}
+                    )
+                    if "tomurai_1_00" not in str(restored_model.get("path") or "").lower():
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_model_switch_restore_overlay",
+                            "model": restored_model,
+                            "expected_path": model_path,
+                        }
                 state = dict(state)
                 state["animation_fps"] = fps_state.get("animation_fps")
                 state["tick_interval"] = reload_state.get("tick_interval")
@@ -906,6 +1083,8 @@ def run_selftest() -> dict[str, Any]:
                 state["retarget_motion_scale_max"] = motion_scale_state.get("retarget_motion_scale_max")
                 state["procedural_action_json_hash"] = procedural_state.get("procedural_action_json_hash")
                 state["model_reload_nonce"] = reload_state.get("model_reload_nonce")
+                state["model_switch_alt_vertex_count"] = model_switch_alt_vertex_count
+                state["model_switch_alt_face_count"] = model_switch_alt_face_count
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
@@ -922,6 +1101,21 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_same_action_no_extra_render",
                         "before": action_state,
                         "after": same_action_state,
+                    }
+                press_feedback = act_plugin_action(
+                    owner,
+                    "script.overlay.pointer",
+                    {"event": "press", "local_x": 92, "local_y": 112, "x": 18, "y": 26, "z": 40},
+                    plugin_id=plugin_id,
+                )
+                press_state = _state(press_feedback)
+                if not press_feedback.get("ok") or press_state.get("action") != "walk" or press_state.get("effective_action") != "press_react":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_press_feedback",
+                        "result": press_feedback,
+                        "state": press_state,
                     }
                 click_feedback = act_plugin_action(
                     owner,
@@ -969,7 +1163,7 @@ def run_selftest() -> dict[str, Any]:
                     not release_feedback.get("ok")
                     or release_state.get("action") != "walk"
                     or release_state.get("effective_action") != "drop_react"
-                    or int(release_state.get("pointer_event_count") or 0) < 3
+                    or int(release_state.get("pointer_event_count") or 0) < 4
                 ):
                     return {
                         "ok": False,
@@ -1200,6 +1394,67 @@ def run_selftest() -> dict[str, Any]:
                                 "texture_batch_count": texture_batch_count,
                             },
                         }
+                    native_unity_probe_file_count = 0
+                    native_unity_probe_curve_count = 0
+                    native_unity_probe_failures: list[dict[str, Any]] = []
+                    if callable(get_action_metadata):
+                        for native_index, native_ref in enumerate(native_files):
+                            probe_name = f"native_unity_probe_{native_index}"
+                            probe_node = dict(model_node)
+                            probe_node["action"] = {
+                                "name": probe_name,
+                                "clip": Path(str(native_ref)).stem,
+                                "time": 0.0,
+                                "speed": 1.0,
+                                "loop": True,
+                            }
+                            probe_node["procedural_action"] = {
+                                "schema": "sao.humanoid.procedural.v1",
+                                "enabled": True,
+                                "default_action": probe_name,
+                                "actions": {
+                                    probe_name: {
+                                        "native_unity": [str(native_ref)],
+                                    },
+                                },
+                            }
+                            action_meta = get_action_metadata(probe_node)
+                            selected = (
+                                action_meta.get("selected")
+                                if isinstance(action_meta.get("selected"), dict)
+                                else {}
+                            )
+                            unity_clips = (
+                                selected.get("unity_clips")
+                                if isinstance(selected.get("unity_clips"), list)
+                                else []
+                            )
+                            curve_count = sum(
+                                int(clip.get("curve_count") or 0)
+                                for clip in unity_clips
+                                if isinstance(clip, dict)
+                            )
+                            errors = [str(item) for item in action_meta.get("errors") or ()]
+                            errors.extend(str(item) for item in selected.get("unity_errors") or ())
+                            expected_curve_floor = _native_unity_curve_floor(str(native_ref))
+                            native_unity_probe_file_count += 1
+                            native_unity_probe_curve_count += curve_count
+                            if errors or len(unity_clips) < 1 or curve_count < expected_curve_floor:
+                                native_unity_probe_failures.append({
+                                    "path": str(native_ref),
+                                    "clip_count": len(unity_clips),
+                                    "curve_count": curve_count,
+                                    "expected_curve_floor": expected_curve_floor,
+                                    "errors": errors,
+                                })
+                    if native_unity_probe_failures:
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_native_unity_sidecar_probe",
+                            "failure_count": len(native_unity_probe_failures),
+                            "failures": native_unity_probe_failures[:8],
+                        }
                     if callable(render_model3d_node):
                         image = render_model3d_node(model_node, {"accent": "#7dd3fc"})
                         alpha = image.getchannel("A") if image is not None and hasattr(image, "getchannel") else None
@@ -1248,6 +1503,8 @@ def run_selftest() -> dict[str, Any]:
                     state["default_texture_batch_count"] = texture_batch_count
                     state["default_bone_count"] = len(bone_names)
                     state["default_native_unity_file_count"] = len(native_files)
+                    state["native_unity_probe_file_count"] = native_unity_probe_file_count
+                    state["native_unity_probe_curve_count"] = native_unity_probe_curve_count
             if not action.get("ok"):
                 return {"ok": False, "plugin_id": plugin_id, "stage": "game_action", "result": action}
             summaries[plugin_id] = {
@@ -1279,6 +1536,12 @@ def run_selftest() -> dict[str, Any]:
                 "retarget_stretch_limit": state.get("retarget_stretch_limit"),
                 "retarget_motion_scale_min": state.get("retarget_motion_scale_min"),
                 "retarget_motion_scale_max": state.get("retarget_motion_scale_max"),
+                "compatible_action_count": state.get("compatible_action_count"),
+                "compatible_action_metadata_count": state.get("compatible_action_metadata_count"),
+                "compatible_action_pose_count": state.get("compatible_action_pose_count"),
+                "moe_action_count": state.get("moe_action_count"),
+                "model_switch_alt_vertex_count": state.get("model_switch_alt_vertex_count"),
+                "model_switch_alt_face_count": state.get("model_switch_alt_face_count"),
                 "default_vertex_count": state.get("default_vertex_count"),
                 "default_face_count": state.get("default_face_count"),
                 "default_preview_vertex_count": state.get("default_preview_vertex_count"),
@@ -1287,6 +1550,8 @@ def run_selftest() -> dict[str, Any]:
                 "default_preview_face_material_count": state.get("default_preview_face_material_count"),
                 "default_preview_uv_count": state.get("default_preview_uv_count"),
                 "default_texture_batch_count": state.get("default_texture_batch_count"),
+                "native_unity_probe_file_count": state.get("native_unity_probe_file_count"),
+                "native_unity_probe_curve_count": state.get("native_unity_probe_curve_count"),
                 "representative_unity_clip_count": state.get("representative_unity_clip_count"),
                 "representative_unity_curve_count": state.get("representative_unity_curve_count"),
                 "representative_unity_blendshape_count": state.get("representative_unity_blendshape_count"),
