@@ -152,7 +152,53 @@ def run_selftest() -> dict[str, Any]:
                         "before": refresh_state,
                         "after": redraw_state,
                     }
-                state = dict(redraw_state)
+                detail = act_plugin_action(
+                    owner, "script.clock.set_detail_mode", {"mode": "minute"}, plugin_id=plugin_id)
+                if not detail.get("ok"):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_detail_mode_action", "result": detail}
+                detail_state = _state(detail)
+                if detail_state.get("detail_mode") != "minute":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_detail_mode_state", "state": detail_state}
+                if detail_state.get("signature_granularity") != "minute":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_detail_mode_granularity", "state": detail_state}
+                if int(detail_state.get("render_count") or 0) <= int(redraw_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "clock_detail_mode_force_render",
+                        "before": redraw_state,
+                        "after": detail_state,
+                    }
+                minute_redraw = act_plugin_action(
+                    owner, "script.clock.redraw", {}, plugin_id=plugin_id)
+                minute_redraw_state = _state(minute_redraw)
+                minute_redraw_result = (
+                    minute_redraw.get("result") if isinstance(minute_redraw.get("result"), dict) else {})
+                if minute_redraw_result.get("redraw_changed") is not False:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "clock_minute_redraw_cache_flag",
+                        "result": minute_redraw,
+                    }
+                if int(minute_redraw_state.get("cache_hit_count") or 0) <= int(detail_state.get("cache_hit_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "clock_minute_redraw_cache_hit",
+                        "before": detail_state,
+                        "after": minute_redraw_state,
+                    }
+                seconds = act_plugin_action(
+                    owner, "script.clock.set_detail_mode", {"mode": "seconds"}, plugin_id=plugin_id)
+                if not seconds.get("ok"):
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_mode_action", "result": seconds}
+                seconds_state = _state(seconds)
+                if seconds_state.get("detail_mode") != "seconds":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_mode_state", "state": seconds_state}
+                if seconds_state.get("signature_granularity") != "second":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_mode_granularity", "state": seconds_state}
+                state = dict(seconds_state)
 
             if plugin_id == "script_flappy_emma":
                 if not state.get("level") or not state.get("pipe_speed") or not state.get("gap_half"):
