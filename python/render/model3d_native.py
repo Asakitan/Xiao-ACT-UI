@@ -273,7 +273,10 @@ def try_render_native_model3d_node(
         _set_status(available=False, reason="PIL unavailable", errors=[])
         return None
 
-    bootstrap_builtin_native_model3d_renderers()
+    with _LOCK:
+        has_explicit_renderers = bool(_RENDERERS)
+    if not has_explicit_renderers:
+        bootstrap_builtin_native_model3d_renderers()
 
     with _LOCK:
         renderers = list(_RENDERERS)

@@ -588,15 +588,186 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(native_model3d_renderer_status()["renderer"], "builtin-fake-offscreen")
 
+    def test_explicit_native_renderer_is_not_preempted_by_builtin_bootstrap(self) -> None:
+        from PIL import Image
+
+        fake_module = ModuleType("render.model3d_native_moderngl")
+        bootstrap_calls = []
+
+        def register_builtin_renderers(register):
+            bootstrap_calls.append("called")
+
+            def fake_renderer(_node, context):
+                return Image.new("RGBA", (context["width"], context["height"]), (50, 60, 70, 255))
+
+            register("builtin-should-not-run", fake_renderer)
+            return ("builtin-should-not-run",)
+
+        def explicit_renderer(_node, context):
+            return Image.new("RGBA", (context["width"], context["height"]), (9, 8, 7, 255))
+
+        fake_module.register_builtin_renderers = register_builtin_renderers
+        register_native_model3d_renderer("explicit-offscreen", explicit_renderer)
+        with mock.patch.dict(sys.modules, {"render.model3d_native_moderngl": fake_module}):
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 8,
+                "height": 6,
+                "model": {"path": "missing.fbx"},
+            })["nodes"][0]
+            image = render_model3d_node(node)
+
+        self.assertEqual(bootstrap_calls, [])
+        self.assertEqual(image.getpixel((0, 0)), (9, 8, 7, 255))
+        self.assertEqual(native_model3d_renderer_status()["renderer"], "explicit-offscreen")
+
+    def test_builtin_moderngl_provider_renders_preview_without_window(self) -> None:
+        from render import model3d_native_moderngl as provider
+
+        class DummyLock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class FakeUniform:
+            def __init__(self):
+                self.value = None
+
+        class FakeProgram:
+            def __init__(self):
+                self.uniforms = {}
+
+            def __getitem__(self, name):
+                self.uniforms.setdefault(name, FakeUniform())
+                return self.uniforms[name]
+
+            def __setitem__(self, name, value):
+                self[name].value = value
+
+        class FakeBuffer:
+            def __init__(self, data):
+                self.data = data
+
+            def release(self):
+                pass
+
+        class FakeVertexArray:
+            def render(self, _mode):
+                pass
+
+            def release(self):
+                pass
+
+        class FakeTexture:
+            def __init__(self, size):
+                self.size = size
+
+            def release(self):
+                pass
+
+        class FakeFramebuffer:
+            def __init__(self, size):
+                self.size = size
+
+            def use(self):
+                pass
+
+            def clear(self, *_rgba):
+                pass
+
+            def read(self, *, components=4, alignment=1):
+                width, height = self.size
+                assert components == 4
+                assert alignment == 1
+                return bytes((18, 48, 88, 220)) * width * height
+
+            def release(self):
+                pass
+
+        class FakeContext:
+            def __init__(self):
+                self.line_width = 1.0
+                self.blend_func = None
+
+            def program(self, **_kwargs):
+                return FakeProgram()
+
+            def texture(self, size, components, **_kwargs):
+                assert components == 4
+                return FakeTexture(size)
+
+            def framebuffer(self, *, color_attachments):
+                return FakeFramebuffer(color_attachments[0].size)
+
+            def buffer(self, data):
+                return FakeBuffer(data)
+
+            def simple_vertex_array(self, _program, _vbo, *_attrs):
+                return FakeVertexArray()
+
+            def enable(self, _flag):
+                pass
+
+        fake_moderngl = SimpleNamespace(
+            create_standalone_context=lambda **_kwargs: FakeContext(),
+            BLEND=1,
+            TRIANGLES=4,
+            LINES=1,
+            SRC_ALPHA=770,
+            ONE_MINUS_SRC_ALPHA=771,
+        )
+        provider._reset_for_tests()
+        with tempfile.TemporaryDirectory(prefix="model3d_moderngl_provider_") as root:
+            model_path = Path(root) / "avatar.obj"
+            model_path.write_text(
+                "\n".join([
+                    "o PreviewAvatar",
+                    "v -1 0 0",
+                    "v 1 0 0",
+                    "v 1 2 0",
+                    "v -1 2 0",
+                    "v -1 0 1",
+                    "v 1 0 1",
+                    "v 1 2 1",
+                    "v -1 2 1",
+                    "f 1 2 3 4",
+                    "f 5 6 7 8",
+                    "f 1 2 6 5",
+                    "f 2 3 7 6",
+                ]),
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "width": 48,
+                "height": 64,
+                "model": {"path": str(model_path), "format": "obj"},
+            })["nodes"][0]
+            context = build_native_model3d_context(node, palette={"accent": "#7dd3fc"})
+            with mock.patch.dict(sys.modules, {"moderngl": fake_moderngl}):
+                with mock.patch.object(provider, "_get_wgl_serialize_lock", return_value=DummyLock()):
+                    image = provider.render_moderngl_model3d(node, context)
+        provider._reset_for_tests()
+
+        self.assertEqual(image.size, (48, 64))
+        self.assertEqual(image.getpixel((0, 0)), (18, 48, 88, 220))
+
     def test_missing_builtin_native_renderer_bootstrap_is_quiet(self) -> None:
         clear_native_model3d_renderers()
         modules = {
             key: value
             for key, value in sys.modules.items()
-            if key != "render.model3d_native_moderngl"
+            if key != "render.model3d_native_missing_provider"
         }
         with mock.patch.object(sys, "modules", modules):
-            result = bootstrap_builtin_native_model3d_renderers(force=True)
+            with mock.patch(
+                "render.model3d_native._BUILTIN_PROVIDER_MODULES",
+                ("render.model3d_native_missing_provider",),
+            ):
+                result = bootstrap_builtin_native_model3d_renderers(force=True)
 
         self.assertEqual(result["renderer_count"], 0)
         self.assertEqual(result["errors"], [])
