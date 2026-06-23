@@ -3634,6 +3634,7 @@ let _editorColorPresentationMenu=null;
 let _editorFormatOnTypeRequest=0;
 let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
+let _editorPasteDropRequest=0;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -5468,6 +5469,190 @@ async function editorApplyWorkspaceEdit(edit,summary){
   }
   return {changed,tabApplied,workspaceApplied,skipped,errors};
 }
+const EDITOR_TRANSFER_FILE_LIMIT=1024*1024;
+function editorRangePayloadFromOffsets(value,start,end){
+  const a=Math.max(0,Math.min(String(value||'').length,Number(start)||0));
+  const b=Math.max(0,Math.min(String(value||'').length,Number(end)||0));
+  return {start:editorPositionFromOffset(value,Math.min(a,b)),end:editorPositionFromOffset(value,Math.max(a,b))};
+}
+function editorDropPasteSnapshot(start,end){
+  const value=String(ed.value||''),a=Math.min(start,end),b=Math.max(start,end);
+  return {value,start:a,end:b,range:editorRangePayloadFromOffsets(value,a,b),dirty:editorDirty};
+}
+function editorDropPasteProviderPayload(kind,snapshot,extra){
+  return editorProviderPayload(kind,Object.assign({
+    content:snapshot.value,dirty:snapshot.dirty,offset:snapshot.start,
+    position:snapshot.range.start,range:snapshot.range,ranges:[snapshot.range]
+  },extra||{}));
+}
+function editorPlainTextFromTransfer(payload){
+  const text=payload&&payload['text/plain'];
+  return text===undefined||text===null?'':String(text);
+}
+function editorSnippetPlainText(value){
+  if(value&&typeof value==='object')value=value.value??value.snippet??value.text??'';
+  return String(value??'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
+}
+function editorDropPasteStateChanged(snapshot){
+  if(!snapshot)return true;
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  return ed.value!==snapshot.value||start!==snapshot.start||end!==snapshot.end;
+}
+async function editorDataTransferPayload(source){
+  const payload={};
+  if(!source)return payload;
+  const types=Array.from(source.types||[]);
+  types.forEach(type=>{
+    try{
+      const value=source.getData&&source.getData(type);
+      if(value!==undefined&&value!==null&&value!=='')payload[String(type).toLowerCase()]=String(value);
+    }catch{}
+  });
+  const items=Array.from(source.items||[]);
+  for(const item of items){
+    const type=String(item.type||'').toLowerCase();
+    if(!type||payload[type]!==undefined)continue;
+    if(item.kind==='string'&&typeof item.getAsString==='function'){
+      try{
+        const value=await new Promise(resolve=>item.getAsString(resolve));
+        if(value!==undefined&&value!==null&&value!=='')payload[type]=String(value);
+      }catch{}
+    }
+  }
+  const files=Array.from(source.files||[]);
+  if(files.length){
+    const metadata=[];
+    for(const file of files){
+      const mime=String(file.type||'application/octet-stream').toLowerCase();
+      const entry={name:file.name||'',type:file.type||'',size:Number(file.size)||0};
+      metadata.push(entry);
+      if(payload[mime]===undefined){
+        const filePayload=Object.assign({},entry);
+        if(file.size<=EDITOR_TRANSFER_FILE_LIMIT&&typeof file.arrayBuffer==='function'){
+          try{filePayload.data=Array.from(new Uint8Array(await file.arrayBuffer()))}catch{}
+        }
+        payload[mime]=filePayload;
+      }
+    }
+    payload['application/x-sao-files']=metadata;
+  }
+  return payload;
+}
+function editorDropOffsetFromEvent(e){
+  const rect=ed.getBoundingClientRect(),style=getComputedStyle(ed);
+  const lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5||18;
+  const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
+  const paddingTop=parseFloat(style.paddingTop)||0,paddingLeft=parseFloat(style.paddingLeft)||0;
+  const y=e.clientY-rect.top+ed.scrollTop-paddingTop;
+  const x=e.clientX-rect.left+ed.scrollLeft-paddingLeft;
+  const lines=String(ed.value||'').split('\n');
+  const line=Math.max(0,Math.min(lines.length-1,Math.floor(y/lineHeight)));
+  const character=Math.max(0,Math.min(lines[line].length,Math.round(x/charWidth)));
+  return editorOffsetFromPosition(ed.value,{line,character});
+}
+function editorDropPasteEditSummary(edit,ranges){
+  const summary={edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
+  const insertText=editorSnippetPlainText(edit&&edit.insertText);
+  if(insertText){
+    (ranges||[]).forEach(range=>summary.edits.push({range,newText:insertText}));
+  }
+  const additional=edit&&(edit.additionalEdit||edit.additionalEdits);
+  if(additional){
+    const extra=editorCodeActionEdits({edit:additional});
+    summary.edits=summary.edits.concat(extra.edits||[]);
+    summary.tabEdits=summary.tabEdits.concat(extra.tabEdits||[]);
+    summary.workspaceEdits=summary.workspaceEdits.concat(extra.workspaceEdits||[]);
+    summary.skipped+=(extra.skipped||0);
+  }
+  return summary;
+}
+function editorDropPasteEditCount(summary){
+  return (summary.edits||[]).length+(summary.tabEdits||[]).length+(summary.workspaceEdits||[]).length;
+}
+function editorDropPasteEditsFromResponse(res,key){
+  if(!res||res.error||!res.ok)return [];
+  const value=res[key]!==undefined?res[key]:(res.value!==undefined?res.value:null);
+  if(Array.isArray(value))return value.filter(Boolean);
+  if(value&&Array.isArray(value.edits))return value.edits.filter(Boolean);
+  return value?[value]:[];
+}
+async function editorApplyDropPasteEdit(edit,ranges,label){
+  if(!edit)return false;
+  const summary=editorDropPasteEditSummary(edit,ranges);
+  const editCount=editorDropPasteEditCount(summary);
+  if(!editCount){
+    if(summary.skipped)setStatus(String(label||'Edit')+' edits outside the active editor were skipped');
+    else setStatus(String(label||'Edit')+' edit produced no local edits');
+    return true;
+  }
+  if((summary.tabEdits.length||summary.workspaceEdits.length)&&
+      !(await confirmEditorWorkspaceEditApply('Apply '+label+' Edit',summary,'Apply extension '+String(label||'paste').toLowerCase()+' edit.'))){
+    ed.focus();return false;
+  }
+  _undoPush(true);
+  const applied=await editorApplyWorkspaceEdit({edits:[]},summary);
+  if(applied.changed||applied.tabApplied||applied.workspaceApplied){
+    const title=String(edit.title||label||'Edit');
+    setStatus('Applied '+String(label||'edit').toLowerCase()+': '+title);
+    return true;
+  }
+  if(applied.skipped)setStatus(String(label||'Edit')+' edits outside the active editor were skipped');
+  else setStatus(String(label||'Edit')+' edit produced no local edits');
+  return true;
+}
+function editorInsertPlainTextAtRange(text,range){
+  if(!text)return false;
+  _undoPush(true);
+  return editorApplyTextEdits([{range,newText:String(text)}]);
+}
+async function handleEditorDocumentPaste(e){
+  if(!e||!e.clipboardData)return;
+  e.preventDefault();e.stopPropagation();
+  const snapshot=editorDropPasteSnapshot(ed.selectionStart,ed.selectionEnd);
+  let dataTransfer=await editorDataTransferPayload(e.clipboardData);
+  const fallbackText=editorPlainTextFromTransfer(dataTransfer);
+  const requestId=++_editorPasteDropRequest;
+  try{
+    const prepared=await call('editor_language_provider',editorDropPasteProviderPayload('prepareDocumentPaste',snapshot,{
+      dataTransfer,pasteText:fallbackText,clipboardText:fallbackText
+    }));
+    if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
+    if(prepared&&prepared.ok&&prepared.dataTransfer)dataTransfer=prepared.dataTransfer;
+    const res=await call('editor_language_provider',editorDropPasteProviderPayload('documentPaste',snapshot,{
+      dataTransfer,pasteText:fallbackText,clipboardText:fallbackText,
+      context:{triggerKind:0},pasteResolveCount:1
+    }));
+    if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
+    const edit=editorDropPasteEditsFromResponse(res,'pasteEdits')[0];
+    if(await editorApplyDropPasteEdit(edit,[snapshot.range],'Paste'))return;
+  }catch(err){setStatus('Paste handlers failed: '+(err&&err.message?err.message:String(err)))}
+  if(!editorDropPasteStateChanged(snapshot))editorInsertPlainTextAtRange(fallbackText,snapshot.range);
+}
+function handleEditorDocumentDragOver(e){
+  if(!e||!e.dataTransfer)return;
+  e.preventDefault();e.stopPropagation();
+  e.dataTransfer.dropEffect='copy';
+}
+async function handleEditorDocumentDrop(e){
+  if(!e||!e.dataTransfer)return;
+  e.preventDefault();e.stopPropagation();
+  const overlay=$('drag-overlay');if(overlay)overlay.classList.remove('active');
+  const offset=editorDropOffsetFromEvent(e);
+  ed.setSelectionRange(offset,offset,'forward');updateCursorPos();
+  const snapshot=editorDropPasteSnapshot(offset,offset);
+  const dataTransfer=await editorDataTransferPayload(e.dataTransfer);
+  const fallbackText=editorPlainTextFromTransfer(dataTransfer);
+  const requestId=++_editorPasteDropRequest;
+  try{
+    const res=await call('editor_language_provider',editorDropPasteProviderPayload('documentDrop',snapshot,{
+      dataTransfer,dropText:fallbackText,dropResolveCount:1
+    }));
+    if(requestId!==_editorPasteDropRequest||editorDropPasteStateChanged(snapshot))return;
+    const edit=editorDropPasteEditsFromResponse(res,'dropEdits')[0];
+    if(await editorApplyDropPasteEdit(edit,[snapshot.range],'Drop'))return;
+  }catch(err){setStatus('Drop handlers failed: '+(err&&err.message?err.message:String(err)))}
+  if(!editorDropPasteStateChanged(snapshot))editorInsertPlainTextAtRange(fallbackText,snapshot.range);
+}
 async function runEditorCodeActionCommand(command){
   if(!command)return null;
   let id='',args=[];
@@ -5520,6 +5705,10 @@ const ed=$('editor-text');
 _undoPush(true);
 ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore);
 ed.addEventListener('input',_editorInputWithUndo);
+ed.addEventListener('paste',handleEditorDocumentPaste);
+ed.addEventListener('dragenter',handleEditorDocumentDragOver);
+ed.addEventListener('dragover',handleEditorDocumentDragOver);
+ed.addEventListener('drop',handleEditorDocumentDrop);
 ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});

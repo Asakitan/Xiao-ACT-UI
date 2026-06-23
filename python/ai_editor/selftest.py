@@ -2166,6 +2166,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "async function formatSelection()" in html
            and "editorProviderPayload('rangeFormatting'" in html
            and "Format Selection" in html
+           and "async function handleEditorDocumentPaste(e)" in html
+           and "async function handleEditorDocumentDrop(e)" in html
+           and "function editorDataTransferPayload(source)" in html
+           and "function editorApplyDropPasteEdit(edit,ranges,label)" in html
+           and "editorDropPasteProviderPayload('prepareDocumentPaste'" in html
+           and "editorDropPasteProviderPayload('documentPaste'" in html
+           and "editorDropPasteProviderPayload('documentDrop'" in html
+           and "ed.addEventListener('paste',handleEditorDocumentPaste)" in html
+           and "ed.addEventListener('drop',handleEditorDocumentDrop)" in html
            and "function requestEditorCodeLenses(quiet)" in html
            and "function renderEditorCodeLenses(lenses)" in html
            and "function runEditorCodeLens(lens)" in html
