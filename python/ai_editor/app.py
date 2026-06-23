@@ -10,8 +10,9 @@ the pywebview window in a background thread if not already running.
 
 from __future__ import annotations
 
-import json
+import fnmatch
 import inspect
+import json
 import math
 import os
 import re
@@ -2705,6 +2706,138 @@ class AIEditorAPI:
         return self._editor_language_by_ext().get(
             os.path.splitext(path)[1].lower(), "plaintext")
 
+    @staticmethod
+    def _expand_custom_editor_glob(pattern: str) -> List[str]:
+        """Expand simple VS Code-style brace globs such as ``*.{png,jpg}``."""
+        text = str(pattern or "").strip().replace("\\", "/")
+        if not text:
+            return []
+        match = re.search(r"\{([^{}]+)\}", text)
+        if not match:
+            return [text]
+        expanded: List[str] = []
+        prefix, suffix = text[:match.start()], text[match.end():]
+        for part in match.group(1).split(","):
+            expanded.extend(
+                AIEditorAPI._expand_custom_editor_glob(
+                    f"{prefix}{part.strip()}{suffix}"))
+        return expanded
+
+    @staticmethod
+    def _custom_editor_glob_matches(pattern: str, rel_path: str,
+                                    filename: str) -> bool:
+        candidates = [
+            rel_path.replace("\\", "/"),
+            filename.replace("\\", "/"),
+        ]
+        for raw_pattern in AIEditorAPI._expand_custom_editor_glob(pattern):
+            patterns = [raw_pattern]
+            if raw_pattern.startswith("**/"):
+                patterns.append(raw_pattern[3:])
+            for pat in patterns:
+                normalized_pat = pat.casefold()
+                for candidate in candidates:
+                    if fnmatch.fnmatchcase(
+                            candidate.casefold(), normalized_pat):
+                        return True
+        return False
+
+    def _custom_editor_match_score(self, editor: Dict[str, Any],
+                                   full: str, rel: str) -> int:
+        selectors = editor.get("selector")
+        if not isinstance(selectors, list):
+            selectors = [selectors] if isinstance(selectors, dict) else []
+        if not selectors:
+            return -1
+        filename = os.path.basename(full)
+        best = -1
+        for selector in selectors:
+            if not isinstance(selector, dict):
+                continue
+            scheme = str(selector.get("scheme") or "file").strip().lower()
+            if scheme not in {"", "*", "file"}:
+                continue
+            pattern = selector.get("filenamePattern") or selector.get("pattern")
+            if not pattern:
+                continue
+            for glob_pattern in self._expand_custom_editor_glob(str(pattern)):
+                if self._custom_editor_glob_matches(glob_pattern, rel, filename):
+                    priority = str(editor.get("priority") or "").casefold()
+                    priority_score = {"default": 2000, "option": 1000}.get(
+                        priority, 500)
+                    specificity = min(len(glob_pattern), 999)
+                    best = max(best, priority_score + specificity)
+        return best
+
+    def _matching_custom_editor(self, full: str,
+                                rel: str) -> Optional[Dict[str, Any]]:
+        ext_host = getattr(self, "_ext_host", None)
+        if ext_host is None:
+            return None
+        ext_points = getattr(ext_host, "ext_points", None)
+        contributions = getattr(ext_points, "all_contributions", {}) or {}
+        custom_editors = contributions.get("customEditors", [])
+        if not isinstance(custom_editors, list):
+            return None
+        matches: List[tuple[int, Dict[str, Any]]] = []
+        for editor in custom_editors:
+            if not isinstance(editor, dict) or not editor.get("viewType"):
+                continue
+            score = self._custom_editor_match_score(editor, full, rel)
+            if score >= 0:
+                matches.append((score, editor))
+        if not matches:
+            return None
+        matches.sort(key=lambda item: item[0], reverse=True)
+        return dict(matches[0][1])
+
+    def _open_extension_custom_editor(
+            self, full: str, rel: str) -> Optional[Dict[str, Any]]:
+        contribution = self._matching_custom_editor(full, rel)
+        if not contribution:
+            return None
+        view_type = str(contribution.get("viewType") or "").strip()
+        if not view_type:
+            return None
+        ext_host = getattr(self, "_ext_host", None)
+        if ext_host is not None:
+            try:
+                ext_host.activate_event(f"onCustomEditor:{view_type}")
+            except Exception:
+                pass
+        result = self.resolve_extension_custom_editor(
+            view_type, full, title=os.path.basename(full))
+        if not result.get("ok"):
+            return None
+        view_id = result.get("viewId") or result.get("view_id") or ""
+        if not view_id:
+            return None
+        return {
+            "name": os.path.basename(full),
+            "path": rel,
+            "absolute_path": full,
+            "content": "",
+            "language": self._editor_language_for_path(full),
+            "truncated": False,
+            "runtime_mode": "extension-custom-editor",
+            "custom_editor": {
+                "view_type": view_type,
+                "display_name": (
+                    contribution.get("displayName")
+                    or contribution.get("display_name")
+                    or contribution.get("name")
+                    or view_type),
+                "priority": contribution.get("priority", ""),
+                "extension_id": contribution.get("_extensionId", ""),
+            },
+            "webview": {
+                "view_id": view_id,
+                "uri": result.get("uri", ""),
+                "html": result.get("html", ""),
+            },
+            "view_id": view_id,
+        }
+
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()
         try:
@@ -2747,6 +2880,10 @@ class AIEditorAPI:
             return {"error": str(exc)}
         if not os.path.isfile(full):
             return {"error": f"File not found: {rel_path}"}
+        rel = self._workspace_rel_path(root, full)
+        custom_editor = self._open_extension_custom_editor(full, rel)
+        if custom_editor:
+            return custom_editor
         try:
             with open(full, "rb") as fh:
                 data = fh.read(_WORKSPACE_FILE_PREVIEW_BYTES + 1)
@@ -2754,7 +2891,6 @@ class AIEditorAPI:
             return {"error": str(exc)}
         truncated = len(data) > _WORKSPACE_FILE_PREVIEW_BYTES
         text = data[:_WORKSPACE_FILE_PREVIEW_BYTES].decode("utf-8", errors="replace")
-        rel = self._workspace_rel_path(root, full)
         return {
             "name": os.path.basename(full),
             "path": rel,

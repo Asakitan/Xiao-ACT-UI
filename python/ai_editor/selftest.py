@@ -287,8 +287,10 @@ class _FakeExtensionHost:
         self.registry = _FakeRegistry(
             self._build_fake_extensions(all_contributions)
         )
+        self.activated_events = []
 
     def activate_event(self, event):
+        self.activated_events.append(event)
         return []
 
     @staticmethod
@@ -313,6 +315,28 @@ class _FakeExtensionHost:
                 contributes={"views": loc_views},
             ))
         return result
+
+
+class _FakeNodeCustomEditorHost:
+    is_running = True
+
+    def __init__(self):
+        self.requests = []
+
+    def request_custom_editor_result(
+            self, view_type, uri, title="", view_id="", timeout=2.0):
+        self.requests.append({
+            "view_type": view_type,
+            "uri": uri,
+            "title": title,
+            "view_id": view_id,
+            "timeout": timeout,
+        })
+        return {
+            "ok": True,
+            "viewId": "custom-selftest-1",
+            "uri": f"file:///{os.path.basename(str(uri))}",
+        }
 
 
 def test_app_settings_parity() -> None:
@@ -1615,6 +1639,32 @@ def test_app_settings_parity() -> None:
                and opened.get("absolute_path") == sample_file
                and opened.get("language") == "python"
                and "print('tree')" in opened.get("content", ""))
+        os.makedirs(os.path.join(tmpdir, "assets"), exist_ok=True)
+        custom_file = os.path.join(tmpdir, "assets", "tree.nbt")
+        with open(custom_file, "wb") as fh:
+            fh.write(b"\x0a\x00\x04root")
+        tree_api._ext_host = _FakeExtensionHost({
+            "customEditors": [{
+                "viewType": "selftest.customNbt",
+                "displayName": "Selftest NBT",
+                "selector": [{"filenamePattern": "**/*.{nbt,dat}"}],
+                "priority": "default",
+                "_extensionId": "selftest.custom",
+            }],
+        })
+        tree_api._node_ext_host = _FakeNodeCustomEditorHost()
+        opened_custom = tree_api.open_workspace_file("assets/tree.nbt")
+        _check("open_workspace_file resolves contributed custom editors",
+               opened_custom.get("runtime_mode") == "extension-custom-editor"
+               and opened_custom.get("path") == "assets/tree.nbt"
+               and opened_custom.get("view_id") == "custom-selftest-1"
+               and opened_custom.get("custom_editor", {}).get("view_type")
+               == "selftest.customNbt"
+               and tree_api._node_ext_host.requests
+               and tree_api._node_ext_host.requests[0].get("uri") == custom_file
+               and "onCustomEditor:selftest.customNbt"
+               in tree_api._ext_host.activated_events,
+               json.dumps(opened_custom, ensure_ascii=False))
         edit_result = tree_api.apply_workspace_text_edits([{
             "uri": "src/sample.py",
             "range": {
@@ -2429,6 +2479,13 @@ console.log("frontend auto-close behavior ok");
            and "call('list_workspace_tree',entry.path||'')" in html
            and "openWorkspaceFile(entry.path)" in html
            and "call('open_workspace_file',relPath||'')" in html)
+    _check("frontend routes custom editor files into editor tabs",
+           "function openExtensionCustomEditorFile(res,relPath)" in html
+           and "runtimeMode:'extension-custom-editor'" in html
+           and "editor-custom-webview-host" in html
+           and "function isExtensionCustomEditorTab(tab)" in html
+           and "customEditorWebviewIdFromOpenResult(res)" in html
+           and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html)
     _check("inline HTML handlers are exported to window",
            all(token in html for token in (
                "window.refreshExplorer=refreshExplorer",
@@ -6309,6 +6366,12 @@ module.exports = { activate, deactivate };
                         "id": "selftest.node.tree",
                         "name": "Node Tree",
                     }]},
+                    "customEditors": [{
+                        "viewType": "selftest.node.customEditor",
+                        "displayName": "Node Custom Editor",
+                        "selector": [{"filenamePattern": "*.txt"}],
+                        "priority": "default",
+                    }],
                 },
             }, node_tree_tmp)
             api._ext_host.ext_points.process(node_tree_desc)
@@ -6552,6 +6615,13 @@ module.exports = { activate, deactivate };
                     "Node Custom Editor")
                 node_custom_editor_html = node_ui_bridge.webviews.get(
                     node_custom_editor.get("viewId", ""), "")
+                previous_workspace_root = api._workspace_root
+                api._workspace_root = lambda: node_tree_tmp
+                try:
+                    node_opened_custom_editor = api.open_workspace_file(
+                        "custom-editor.txt")
+                finally:
+                    api._workspace_root = previous_workspace_root
                 if node_custom_editor.get("viewId"):
                     node_host.relay_webview_message(
                         node_custom_editor.get("viewId"), {"type": "ping"})
@@ -6808,6 +6878,15 @@ module.exports = { activate, deactivate };
                            "output": node_host._output_channels.get(
                                "node-tree-selftest", []),
                        }, ensure_ascii=False))
+                _check("workspace open flow uses custom editor contribution",
+                       node_opened_custom_editor.get("runtime_mode")
+                       == "extension-custom-editor"
+                       and node_opened_custom_editor.get("custom_editor", {})
+                       .get("view_type") == "selftest.node.customEditor"
+                       and node_opened_custom_editor.get("webview", {})
+                       .get("view_id"),
+                       json.dumps(node_opened_custom_editor,
+                                  ensure_ascii=False))
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {

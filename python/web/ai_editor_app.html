@@ -265,6 +265,18 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
+.editor-custom-webview-host { position:absolute; inset:0; z-index:24; display:none; flex-direction:column;
+  background:var(--bg-editor); overflow:hidden; }
+.editor-custom-webview-host.active { display:flex; }
+.editor-container.custom-editor .line-numbers,
+.editor-container.custom-editor .editor-textarea,
+.editor-container.custom-editor .editor-syntax-layer,
+.editor-container.custom-editor .editor-highlight-layer,
+.editor-container.custom-editor .editor-inlay-layer,
+.editor-container.custom-editor .editor-ghost-layer,
+.editor-container.custom-editor .editor-codelens-layer,
+.editor-container.custom-editor .editor-color-layer,
+.editor-container.custom-editor .minimap-container { opacity:0; pointer-events:none; }
 .editor-container.syntax-on .editor-textarea {
   background:transparent; color:transparent; -webkit-text-fill-color:transparent;
 }
@@ -1319,6 +1331,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-codelens-layer" id="editor-codelens-layer" aria-hidden="true"></div>
         <div class="editor-color-layer" id="editor-color-layer" aria-hidden="true"></div>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
+        <div class="editor-custom-webview-host" id="editor-custom-webview-host"></div>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
         <div class="editor-signature-help" id="editor-signature-help" role="tooltip"></div>
@@ -2566,6 +2579,7 @@ function renderToolResult(container,name,result,callId){
 // ── Editor ──
 function openInEditor(code,lang){
   showEditorArea();
+  if(typeof hideCustomEditorSurface==='function')hideCustomEditorSurface();
   $('editor-welcome').style.display='none';
   $('editor-container').style.display='flex';
   $('editor-text').value=code;
@@ -7151,12 +7165,48 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
   return node;
 }
 
+function isExtensionCustomEditorOpenResult(res){
+  return !!(res&&isExtensionCustomEditorMode(res.runtime_mode||res.runtimeMode));
+}
+function openExtensionCustomEditorFile(res,relPath){
+  explorerSelectedPath=res.path||relPath||'';
+  const absolutePath=res.absolute_path||res.absolutePath||'';
+  const workspacePath=res.path||relPath||'';
+  const viewId=customEditorWebviewIdFromOpenResult(res);
+  const customEditor=res.custom_editor||res.customEditor||{};
+  const webview={...(res.webview||{}),view_id:viewId};
+  const existing=tabs.find(t=>(absolutePath&&t.filePath===absolutePath)||(workspacePath&&t.workspacePath===workspacePath));
+  const meta={
+    filePath:absolutePath,workspacePath:workspacePath,
+    runtimeMode:'extension-custom-editor',
+    customEditor:customEditor,
+    webview:webview,
+    viewId:viewId
+  };
+  if(existing){
+    existing.name=res.name||existing.name;
+    existing.filePath=absolutePath||existing.filePath;
+    existing.workspacePath=workspacePath||existing.workspacePath||'';
+    existing.language=res.language||existing.language||'plaintext';
+    existing.runtimeMode=meta.runtimeMode;
+    existing.customEditor=customEditor;
+    existing.webview=webview;
+    existing.viewId=viewId;
+    switchTab(existing.id);
+  }else{
+    addTab(res.name||pathBaseName(res.path),'',res.language||'plaintext',meta);
+  }
+  if(viewId&&webviewRuntimeCache[viewId])injectCustomEditorWebview(viewId,webviewRuntimeCache[viewId]);
+  highlightExplorerSelection();
+  return res;
+}
 async function openWorkspaceFile(relPath){
   const res=await call('open_workspace_file',relPath||'');
   if(!res||res.error){
     showToast((res&&res.error)||t('workspace_load_failed'),'error',2500);
     return null;
   }
+  if(isExtensionCustomEditorOpenResult(res))return openExtensionCustomEditorFile(res,relPath);
   explorerSelectedPath=res.path||relPath||'';
   const absolutePath=res.absolute_path||'';
   const workspacePath=res.path||relPath||'';
@@ -7539,6 +7589,69 @@ function rememberWebviewRuntime(viewId,data){
   const id=String(viewId||'').trim();if(!id||!data||!data.html)return null;
   webviewRuntimeCache[id]={html:data.html,state:data.state,source:data.source||'event',retainContextWhenHidden:!!data.retainContextWhenHidden};
   return webviewRuntimeCache[id];
+}
+function isExtensionCustomEditorMode(mode){
+  return markerKey(mode)==='extensioncustomeditor';
+}
+function customEditorWebviewIdFromTab(tab){
+  const webview=tab&&tab.webview||{};
+  return String(tab&&(
+    tab.viewId||tab.view_id||
+    webview.view_id||webview.viewId||
+    webview.id)||'').trim();
+}
+function customEditorWebviewIdFromOpenResult(res){
+  const webview=res&&res.webview||{};
+  return String(res&&(
+    res.view_id||res.viewId||
+    webview.view_id||webview.viewId||
+    webview.id)||'').trim();
+}
+function isExtensionCustomEditorTab(tab){
+  return !!(tab&&isExtensionCustomEditorMode(tab.runtimeMode||tab.runtime_mode));
+}
+function isLikelyCustomEditorViewId(viewId){
+  return String(viewId||'').startsWith('custom-');
+}
+function findCustomEditorTabByViewId(viewId){
+  const id=String(viewId||'').trim();
+  if(!id||typeof tabs==='undefined'||!Array.isArray(tabs))return null;
+  return tabs.find(tab=>isExtensionCustomEditorTab(tab)&&customEditorWebviewIdFromTab(tab)===id)||null;
+}
+function showCustomEditorPlaceholder(host,tab){
+  if(!host)return;
+  const label=(tab&&tab.customEditor&&(tab.customEditor.display_name||tab.customEditor.view_type))||'Custom editor';
+  host.innerHTML='<div class="provider-empty"><div class="provider-empty-title">'+esc(label)+'</div><div class="provider-empty-subtitle">Loading extension webview...</div></div>';
+}
+function injectCustomEditorWebview(viewId,data){
+  const tab=findCustomEditorTabByViewId(viewId);
+  if(!tab)return false;
+  const runtime=(data&&data.html)?rememberWebviewRuntime(viewId,data):(webviewRuntimeCache[viewId]||null);
+  if(runtime){
+    tab.webview={...(tab.webview||{}),view_id:viewId,html:runtime.html,state:runtime.state,retainContextWhenHidden:!!runtime.retainContextWhenHidden};
+  }
+  if(tab.id===activeTab){
+    const host=$('editor-custom-webview-host');
+    if(runtime&&runtime.html)_injectWebviewHtml(host,viewId,runtime.html,runtime.state);
+    else showCustomEditorPlaceholder(host,tab);
+  }
+  return true;
+}
+function showCustomEditorSurface(tab){
+  const container=$('editor-container'),host=$('editor-custom-webview-host');
+  if(!container||!host)return;
+  $('editor-welcome').style.display='none';
+  container.style.display='flex';
+  container.classList.add('custom-editor');
+  host.classList.add('active');
+  const viewId=customEditorWebviewIdFromTab(tab);
+  if(viewId&&injectCustomEditorWebview(viewId,null))return;
+  showCustomEditorPlaceholder(host,tab);
+}
+function hideCustomEditorSurface(){
+  const container=$('editor-container'),host=$('editor-custom-webview-host');
+  if(container)container.classList.remove('custom-editor');
+  if(host)host.classList.remove('active');
 }
 function cachedWebviewForProvider(p){
   const ids=providerCandidateViewIds(p);ids.push('provider.'+String(p&&p.id||''));
@@ -8062,6 +8175,7 @@ window._onEditorEvent=function(event,data){
     const viewId=data&&data.view_id,html=data&&data.html;
     if(!viewId||!html)return;
     rememberWebviewRuntime(viewId,data);
+    if(injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId))return;
     // Runtime view ids are usually `provider.<id>`, but real extensions often
     // use their own ids (for example `chatgpt.sidebarView`). Prefer the exact
     // data-view-id match, then map provider.<id> back to the provider panel.
@@ -8088,6 +8202,13 @@ window._onEditorEvent=function(event,data){
     const frameId='webview-frame-'+providerDomKey(viewId);
     const iframe=document.getElementById(frameId);
     if(iframe)iframe.remove();
+    const customTab=findCustomEditorTabByViewId(viewId);
+    if(customTab){
+      delete webviewRuntimeCache[viewId];
+      customTab.webview={...(customTab.webview||{}),html:''};
+      if(customTab.id===activeTab)showCustomEditorPlaceholder($('editor-custom-webview-host'),customTab);
+      return;
+    }
     // Find the panel container by view_id and clear it
     const viewSelector=(window.CSS&&CSS.escape)?CSS.escape(viewId):String(viewId).replace(/["\\]/g,'\\$&');
     const panelEl=document.querySelector('.right-panel[data-view-id="'+viewSelector+'"]');
@@ -9799,14 +9920,17 @@ setTimeout(renderRecommendedExts,200);
 // (switchSidebar already handles extensions auto-search in its single definition above)
 
 // ── Multi-tab editor ──
-let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0,filePath:'',workspacePath:''}];
+let tabs=[{id:0,name:'untitled',content:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
 let activeTab=0, nextTabId=1;
 
 function addTab(name,content,lang,meta){
   showEditorArea();
   const tabMeta=isPlainObject(meta)?meta:{};
   const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
-    filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||''};
+    filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||'',
+    runtimeMode:tabMeta.runtimeMode||tabMeta.runtime_mode||'text',
+    customEditor:tabMeta.customEditor||tabMeta.custom_editor||null,
+    webview:tabMeta.webview||null,viewId:tabMeta.viewId||tabMeta.view_id||''};
   tabs.push(tab);
   renderTabs();
   switchTab(tab.id);
@@ -9822,12 +9946,41 @@ function closeTab(id,event){
   renderTabs();
 }
 
+function closeEditorTransientUi(){
+  if(typeof closeEditorSuggest==='function')closeEditorSuggest();
+  if(typeof closeEditorHover==='function')closeEditorHover();
+  if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
+  if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
+  if(typeof closeEditorReferences==='function')closeEditorReferences();
+  if(typeof closeDocumentSymbolPicker==='function')closeDocumentSymbolPicker();
+  if(typeof closeEditorHierarchy==='function')closeEditorHierarchy();
+  if(typeof closeEditorLinks==='function')closeEditorLinks();
+  if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
+  if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
+  if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+  if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+  if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+  if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
+}
+
 function switchTab(id){
   saveCurrentTab();
   activeTab=id;
   const tab=tabs.find(t=>t.id===id);
   if(tab){
     editorFileName=tab.filePath||tab.name||'untitled';
+    if(isExtensionCustomEditorTab(tab)){
+      $('editor-text').value=tab.content||'';
+      setEditorLanguage(tab.language||'plaintext');
+      $('editor-text').selectionStart=$('editor-text').selectionEnd=0;
+      _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+      closeEditorTransientUi();
+      updateLineNums();updateCursorPos();
+      showCustomEditorSurface(tab);
+      renderTabs();
+      return;
+    }
+    hideCustomEditorSurface();
     $('editor-text').value=tab.content;
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
@@ -9860,6 +10013,7 @@ function switchTab(id){
 
 function saveCurrentTab(){
   const tab=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(tab))return;
   if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart}
 }
 
@@ -9902,7 +10056,11 @@ function _renderEditorTitleActions(){
 const _origOpenInEditor=openInEditor;
 openInEditor=function(code,lang){
   saveCurrentTab();
-  const tab=tabs.find(t=>t.id===activeTab);
+  let tab=tabs.find(t=>t.id===activeTab);
+  if(tab&&isExtensionCustomEditorTab(tab)){
+    addTab('untitled','',lang||'plaintext',{runtimeMode:'text'});
+    tab=tabs.find(t=>t.id===activeTab);
+  }
   if(tab){
     tab.content=code;
     tab.language=lang||tab.language||'plaintext';
