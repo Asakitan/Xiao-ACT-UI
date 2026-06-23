@@ -266,6 +266,93 @@ def _normalize_layout_state(value: Any) -> Dict[str, Any]:
     return state
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    out: List[str] = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if ch == "/" and nxt == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i < len(text):
+                if text[i] in "\r\n":
+                    out.append(text[i])
+                if text[i] == "*" and i + 1 < len(text) and text[i + 1] == "/":
+                    i += 2
+                    break
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _strip_json_trailing_commas(text: str) -> str:
+    out: List[str] = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(text) and text[j] in " \t\r\n":
+                j += 1
+            if j < len(text) and text[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _load_jsonc_file(path: str) -> Any:
+    with open(path, "r", encoding="utf-8-sig") as f:
+        text = f.read()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        normalized = _strip_json_trailing_commas(_strip_jsonc_comments(text))
+        return json.loads(normalized)
+
+
 def _normalize_ai_editor_config(raw: Any) -> Dict[str, Any]:
     """Return a backward-compatible AI Editor config dict.
 
@@ -945,8 +1032,7 @@ class AIEditorAPI:
         if not path or not os.path.isabs(path) or not os.path.exists(path):
             return {"error": "Theme file is not available", "theme": theme}
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            payload = _load_jsonc_file(path)
         except Exception as exc:
             return {"error": f"Failed to read theme JSON: {exc}", "theme": theme}
         if not isinstance(payload, dict):
@@ -987,8 +1073,7 @@ class AIEditorAPI:
         if not path or not os.path.isabs(path) or not os.path.exists(path):
             return {"error": "Icon theme file is not available", "theme": theme}
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            payload = _load_jsonc_file(path)
         except Exception as exc:
             return {"error": f"Failed to read icon theme JSON: {exc}", "theme": theme}
         if not isinstance(payload, dict):

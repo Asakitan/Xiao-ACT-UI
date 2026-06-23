@@ -2983,33 +2983,41 @@ def test_app_extension_runtime_support() -> None:
         os.makedirs(os.path.join(language_tmp, "themes"), exist_ok=True)
         with open(os.path.join(language_tmp, "themes", "self-dark.json"),
                   "w", encoding="utf-8") as f:
-            json.dump({
-                "name": "Self Dark",
-                "type": "dark",
-                "colors": {
-                    "editor.background": "#101820",
-                    "editor.foreground": "#f0f3f8",
-                    "statusBar.background": "#203040",
-                },
-            }, f)
+            f.write("""
+{
+  // VS Code theme files commonly use JSONC.
+  "name": "Self Dark",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#101820",
+    "editor.foreground": "#f0f3f8",
+    "statusBar.background": "#203040",
+  },
+}
+""")
         with open(os.path.join(language_tmp, "themes", "self-icons.json"),
                   "w", encoding="utf-8") as f:
-            json.dump({
-                "name": "Self Icons",
-                "showLanguageModeIcons": True,
-                "iconDefinitions": {
-                    "_file": {"fontCharacter": "F"},
-                    "_self": {"fontCharacter": "S", "fontColor": "#68e4ff"},
-                    "_folder": {"fontCharacter": "D"},
-                    "_folder_open": {"fontCharacter": "O"},
-                },
-                "file": "_file",
-                "folder": "_folder",
-                "folderExpanded": "_folder_open",
-                "fileExtensions": {"self": "_self"},
-                "fileNames": {"SELFFILE": "_self"},
-                "languageIds": {"selflang": "_self"},
-            }, f)
+            f.write("""
+{
+  "name": "Self Icons",
+  "showLanguageModeIcons": true,
+  "iconDefinitions": {
+    "_file": {"fontCharacter": "F"},
+    "_self": {"fontCharacter": "S", "fontColor": "#68e4ff"},
+    "_folder": {"fontCharacter": "D"},
+    "_folder_open": {"fontCharacter": "O"},
+  },
+  /*
+    Keep a trailing comma after each map to exercise JSONC theme parsing.
+  */
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder_open",
+  "fileExtensions": {"self": "_self",},
+  "fileNames": {"SELFFILE": "_self",},
+  "languageIds": {"selflang": "_self",},
+}
+""")
         language_desc = ExtensionDescription.from_package_json({
             "name": "language-pack",
             "publisher": "selftest",
