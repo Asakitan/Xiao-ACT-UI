@@ -194,12 +194,20 @@ def run_selftest() -> dict[str, Any]:
             positioned = partial
 
             if plugin_id == "script_world_clock_angelscript":
+                split_failure = _require_canvas_split(
+                    owner, plugin_id, "world_clock_static", "world_clock", "clock_canvas_split")
+                if split_failure:
+                    return split_failure
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_timer_active", "state": state}
                 if abs(float(state.get("tick_interval") or 0.0) - 1.0) > 0.0001:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_tick_interval", "state": state}
                 if int(state.get("render_count") or 0) < 1:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_render_count", "state": state}
+                if int(state.get("static_ops_count") or 0) <= 0 or int(state.get("dynamic_ops_count") or 0) <= 0:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_split_layer_ops", "state": state}
+                if int(state.get("dynamic_ops_count") or 999) > 16:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_dynamic_ops_budget", "state": state}
                 refresh = act_plugin_action(
                     owner, "script.clock.refresh", {}, plugin_id=plugin_id)
                 refresh_state = _state(refresh)
