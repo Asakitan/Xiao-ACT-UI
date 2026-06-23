@@ -324,6 +324,7 @@ class _FakeNodeCustomEditorHost:
 
     def __init__(self):
         self.requests = []
+        self.relayed = []
 
     def request_custom_editor_result(
             self, view_type, uri, title="", view_id="", timeout=2.0):
@@ -372,6 +373,10 @@ class _FakeNodeCustomEditorHost:
                 "canRedo": action == "undo",
             },
         }
+
+    def relay_webview_message(self, view_id, message):
+        self.relayed.append((view_id, message))
+        return True
 
 
 def test_app_settings_parity() -> None:
@@ -2703,6 +2708,17 @@ console.log("frontend auto-close behavior ok");
     _check("webview postMessage uses vscode namespace bridge",
            post_result.get("ok") is True
             and runtime_ns.delivered == [("chatgpt.sidebarView", {"type": "send", "text": "hi"})])
+    fallback_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    fallback_api._vscode_ns = _FakeVscodeNamespace({})
+    fallback_api._node_ext_host = _FakeNodeCustomEditorHost()
+    fallback_post = fallback_api.webview_post_message(
+        "custom-selftest-1", {"type": "ready"})
+    _check("webview postMessage falls back to node custom editor bridge",
+           fallback_post.get("ok") is True
+           and fallback_post.get("transport") == "node_ext_host"
+           and fallback_api._node_ext_host.relayed == [
+               ("custom-selftest-1", {"type": "ready"})
+           ])
 
     manifest_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     manifest_api._controller = object()

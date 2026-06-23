@@ -2140,9 +2140,20 @@ class AIEditorAPI:
                 if expected is None or not vscode_ns.verify_webview_token(view_id, str(token)):
                     return {"error": "Invalid webview token", "view_id": view_id}
         delivered = vscode_ns.deliver_webview_message(view_id, message)
-        if not delivered:
-            return {"error": f"No webview receiver found for: {view_id}"}
-        return {"ok": True, "view_id": view_id}
+        if delivered:
+            return {"ok": True, "view_id": view_id}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is not None and getattr(node_host, "is_running", False):
+            try:
+                if node_host.relay_webview_message(view_id, message):
+                    return {
+                        "ok": True,
+                        "view_id": view_id,
+                        "transport": "node_ext_host",
+                    }
+            except Exception:
+                pass
+        return {"error": f"No webview receiver found for: {view_id}"}
 
     def get_provider_webview(self, provider_id: str) -> Dict:
         """Return the real provider webview surface when the runtime exposes one."""
@@ -3276,7 +3287,7 @@ class AIEditorAPI:
         if (ext_id and node_host is not None
                 and getattr(node_host, "is_running", False)
                 and callable(is_activated)):
-            deadline = time.time() + 2.0
+            deadline = time.time() + 8.0
             while (time.time() < deadline
                    and not is_activated(ext_id)):
                 time.sleep(0.05)

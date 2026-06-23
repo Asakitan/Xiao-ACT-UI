@@ -89,6 +89,26 @@ def _wait_for_render(
     return rendered.get(view_id)
 
 
+def _wait_for_webview_message(
+        events: List[Dict[str, Any]], view_id: str,
+        message_type: str, timeout: float = 3.0) -> Optional[Dict[str, Any]]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for item in events:
+            if item.get("event") != "webview_message":
+                continue
+            payload = item.get("data", {})
+            if not isinstance(payload, dict):
+                continue
+            message = payload.get("message", {})
+            if (payload.get("view_id") == view_id
+                    and isinstance(message, dict)
+                    and message.get("type") == message_type):
+                return dict(payload)
+        time.sleep(0.05)
+    return None
+
+
 def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
     if not os.path.isdir(extension_dir):
         return {"ok": False, "error": f"Extension directory not found: {extension_dir}"}
@@ -170,6 +190,23 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                 html = str(render_payload.get("html", ""))
 
             state = api.custom_editor_state(view_id=view_id)
+            ready_result = api.webview_post_message(view_id, {"type": "ready"})
+            init_message = _wait_for_webview_message(events, view_id, "init")
+            backup_result = api.backup_extension_custom_editor(
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+            )
+            save_result = api.save_extension_custom_editor(
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+            )
+            revert_result = api.revert_extension_custom_editor(
+                view_id,
+                state.get("viewType", ""),
+                state.get("uri", ""),
+            )
 
             result = {
                 "ok": True,
@@ -183,6 +220,13 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                 "installed": installed,
                 "diagnostics_enabled": diagnostics_enabled,
                 "diagnostics": diagnostics,
+                "readyResult": ready_result,
+                "initMessage": init_message,
+                "lifecycle": {
+                    "backup": backup_result,
+                    "save": save_result,
+                    "revert": revert_result,
+                },
                 "attempts": attempts,
                 "render": {
                     "viewId": view_id,
