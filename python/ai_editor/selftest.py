@@ -2089,6 +2089,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorDeclaration(quiet)" in html
            and "function requestEditorImplementation(quiet)" in html
            and "function requestEditorLocationProvider(kind,resultKey,label,quiet)" in html
+           and "function openEditorLocationPeek(title,references,position)" in html
+           and "function buildEditorReferenceGroups(items)" in html
+           and "function referenceGroupLabel(ref)" in html
+           and "targets.length>1" in html
+           and "openEditorLocationPeek(label,targets,position)" in html
+           and "editor-reference-header" in html
+           and "editor-reference-group" in html
+           and "editor-reference-preview" in html
            and "function navigateEditorDefinition(target,label)" in html
            and "requestEditorLocationProvider('typeDefinition','typeDefinitions','Type definition',quiet)" in html
            and "requestEditorLocationProvider('declaration','declarations','Declaration',quiet)" in html
