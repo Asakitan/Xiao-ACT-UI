@@ -1162,6 +1162,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDocumentLinkProvider(selector, provider) {
                     return _registerLangProvider('documentLink', selector, provider);
                 },
+                registerInlayHintsProvider(selector, provider) {
+                    return _registerLangProvider('inlayHint', selector, provider);
+                },
                 registerInlineCompletionItemProvider(selector, provider) {
                     return _registerLangProvider('inlineCompletion', selector, provider);
                 },
@@ -1326,6 +1329,9 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        InlayHintLabelPart: class { constructor(value) { this.value = value === undefined || value === null ? '' : String(value); } },
+        InlayHint: class { constructor(position, label, kind) { this.position = position; this.label = label; this.kind = kind; } },
+        InlayHintKind: { Type: 1, Parameter: 2 },
         TextEdit: class { static replace(range, text) { return { range, newText: text }; }; static insert(pos, text) { return { range: new Range(pos, pos), newText: text }; }; static delete(range) { return { range, newText: '' }; } },
         WorkspaceEdit: class { constructor() { this._edits = []; } replace(uri, range, text) { this._edits.push({ uri, range, text }); } insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); } delete(uri, range) { this._edits.push({ uri, range, text: '' }); } set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); } },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
@@ -1636,6 +1642,7 @@ function _languageProviderMethod(kind) {
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',
+        inlayHint: 'provideInlayHints',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1852,6 +1859,8 @@ async function handleLanguageProviderRequest(msg) {
                     }, msg.context || {}), token);
                 } else if (kind === 'formatting') {
                     value = await fn.call(provider, document, msg.options || {}, token);
+                } else if (kind === 'inlayHint') {
+                    value = await fn.call(provider, document, range, token);
                 } else if (kind === 'documentSymbol') {
                     value = await fn.call(provider, document, token);
                 } else {

@@ -488,7 +488,8 @@ _LANGUAGE_RESULT_ATTRS = (
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
-    "placeholder", "rejectReason", "target", "tooltip",
+    "placeholder", "rejectReason", "target", "tooltip", "textEdits",
+    "paddingLeft", "paddingRight", "location",
 )
 
 
@@ -2735,6 +2736,9 @@ class AIEditorAPI:
             "documentLink": "documentLink",
             "documentLinks": "documentLink",
             "links": "documentLink",
+            "inlayHint": "inlayHint",
+            "inlayHints": "inlayHint",
+            "hints": "inlayHint",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2894,6 +2898,23 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "links": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "inlayHint":
+                hint_range = _editor_provider_range(
+                    payload.get("range"), content)
+                result = self._ext_host.commands.execute(
+                    "vscode.executeInlayHintProvider",
+                    document.uri,
+                    hint_range,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "hints": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "documentSymbol":

@@ -788,6 +788,25 @@ class DocumentLink:
         self.tooltip = None
 
 
+class InlayHintLabelPart:
+    def __init__(self, value: Any) -> None:
+        self.value = "" if value is None else str(value)
+        self.tooltip = None
+        self.location = None
+        self.command = None
+
+
+class InlayHint:
+    def __init__(self, position: Any, label: Any, kind: Any = None) -> None:
+        self.position = position
+        self.label = label
+        self.kind = kind
+        self.tooltip = None
+        self.textEdits = None
+        self.paddingLeft = None
+        self.paddingRight = None
+
+
 @dataclass
 class Diagnostic:
     range: Range
@@ -1087,6 +1106,8 @@ class VscodeNamespace:
             "vscode.executePrepareRenameProvider": self._execute_prepare_rename_provider,
             "_executeLinkProvider": self._execute_link_provider,
             "vscode.executeLinkProvider": self._execute_link_provider,
+            "_executeInlayHintProvider": self._execute_inlay_hint_provider,
+            "vscode.executeInlayHintProvider": self._execute_inlay_hint_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1468,6 +1489,20 @@ class VscodeNamespace:
         results.extend(self._provider_values(external))
         return results
 
+    def _execute_inlay_hint_provider(
+            self, uri: Any, range: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        hint_range = _coerce_range(range)
+        results = self._collect_language_provider_results(
+            "inlayHint", document, "provideInlayHints",
+            (document, hint_range, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "inlayHint",
+                document,
+                range=self._range_payload(hint_range))))
+        return results
+
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
         results = self._collect_language_provider_results(
@@ -1643,6 +1678,8 @@ class VscodeNamespace:
             "SignatureHelp": SignatureHelp,
             "CodeAction": CodeAction,
             "DocumentLink": DocumentLink,
+            "InlayHint": InlayHint,
+            "InlayHintLabelPart": InlayHintLabelPart,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
@@ -1656,6 +1693,7 @@ class VscodeNamespace:
             "ChatLocation": {"Panel": 1, "Terminal": 2, "Notebook": 3, "Editor": 4},
             "ChatSessionStatus": {"Failed": 0, "Completed": 1, "InProgress": 2},
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
+            "InlayHintKind": {"Type": 1, "Parameter": 2},
             "CompletionItemKind": {
                 "Text": 0, "Method": 1, "Function": 2, "Constructor": 3,
                 "Field": 4, "Variable": 5, "Class": 6, "Interface": 7,
@@ -2489,6 +2527,7 @@ class VscodeNamespace:
             "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),
             "registerCodeLensProvider": lambda selector, provider: self._register_language_provider("codeLens", selector, provider),
             "registerDocumentLinkProvider": lambda selector, provider: self._register_language_provider("documentLink", selector, provider),
+            "registerInlayHintsProvider": lambda selector, provider: self._register_language_provider("inlayHint", selector, provider),
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
         }

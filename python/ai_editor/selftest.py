@@ -356,7 +356,7 @@ def test_app_settings_parity() -> None:
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
-        CodeAction, DocumentLink, WorkspaceEdit, Location,
+        CodeAction, DocumentLink, InlayHint, WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -424,6 +424,12 @@ def test_app_settings_parity() -> None:
             link.tooltip = "buffer link"
             return [link]
 
+        def provideInlayHints(self, document, range, token):
+            hint = InlayHint(Position(0, 6), ": str", 1)
+            hint.tooltip = "buffer inlay"
+            hint.paddingLeft = True
+            return [hint]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -447,6 +453,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerDefinitionProvider"]("python", editor_provider)
     lang_api["registerReferenceProvider"]("python", editor_provider)
     lang_api["registerDocumentLinkProvider"]("python", editor_provider)
+    lang_api["registerInlayHintsProvider"]("python", editor_provider)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -477,6 +484,11 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="references", includeDeclaration=False))
         document_link_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentLink", linkResolveCount=10))
+        inlay_hint_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="inlayHint", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -531,6 +543,14 @@ def test_app_settings_parity() -> None:
                and link.get("tooltip") == "buffer link"
                and link.get("range", {}).get("end", {})
                .get("character") == 6)
+        hint = inlay_hint_result.get("hints", [{}])[0]
+        _check("editor_language_provider serializes inlay hints",
+               inlay_hint_result.get("ok") is True
+               and hint.get("label") == ": str"
+               and hint.get("kind") == 1
+               and hint.get("tooltip") == "buffer inlay"
+               and hint.get("paddingLeft") is True
+               and hint.get("position", {}).get("character") == 6)
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
                and prepare_rename_result.get("prepareRename", {})
@@ -1546,6 +1566,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-code-actions\"" in html
            and "id=\"editor-references\"" in html
            and "id=\"editor-links\"" in html
+           and "id=\"editor-inlay-layer\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1569,6 +1590,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorDocumentLinks(quiet,openAtCursor)" in html
            and "function showEditorDocumentLinks(links,position)" in html
            and "function openEditorDocumentLink(link)" in html
+           and "function requestEditorInlayHints(quiet)" in html
+           and "function renderEditorInlayHints(hints)" in html
+           and "function scheduleEditorInlayHints(delay)" in html
+           and "editorProviderPayload('inlayHint'" in html
            and "call('open_external_uri'" in html
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
@@ -2797,8 +2822,8 @@ def test_vscode_api() -> None:
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
-        DocumentLink, TextEdit, Location, SignatureHelp, SignatureInformation,
-        ParameterInformation,
+        DocumentLink, InlayHint, InlayHintLabelPart, TextEdit, Location,
+        SignatureHelp, SignatureInformation, ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -3183,6 +3208,18 @@ def test_vscode_api() -> None:
                 link.tooltip = "resolved link"
                 return link
 
+        class _InlayHintProvider:
+            def provideInlayHints(self, document, range, token):
+                part = InlayHintLabelPart(": int")
+                part.tooltip = "type label"
+                hint = InlayHint(
+                    Position(0, 4),
+                    [part],
+                    api["InlayHintKind"]["Type"],
+                )
+                hint.paddingRight = True
+                return [hint]
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -3230,6 +3267,8 @@ def test_vscode_api() -> None:
         document_link_provider = _DocumentLinkProvider()
         api["languages"]["registerDocumentLinkProvider"](
             "python", document_link_provider)
+        api["languages"]["registerInlayHintsProvider"](
+            "python", _InlayHintProvider())
         rename_provider = _RenameProvider()
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
@@ -3254,6 +3293,10 @@ def test_vscode_api() -> None:
             "vscode.executeLinkProvider", doc.uri)
         document_links = api["commands"]["executeCommand"](
             "vscode.executeLinkProvider", doc.uri, 1)
+        inlay_hints = api["commands"]["executeCommand"](
+            "vscode.executeInlayHintProvider",
+            doc.uri,
+            Range(Position(0, 0), Position(0, 5)))
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -3287,6 +3330,12 @@ def test_vscode_api() -> None:
                and document_links[0].target == doc.uri
                and document_links[0].tooltip == "resolved link"
                and document_link_provider.resolved == 1)
+        _check("executeInlayHintProvider invokes matching providers",
+               inlay_hints
+               and inlay_hints[0].label[0].value == ": int"
+               and inlay_hints[0].label[0].tooltip == "type label"
+               and inlay_hints[0].kind == api["InlayHintKind"]["Type"]
+               and inlay_hints[0].paddingRight is True)
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -3306,6 +3355,8 @@ def test_vscode_api() -> None:
                and "vscode.executeReferenceProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeLinkProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeInlayHintProvider"
                in api["commands"]["getCommands"]()
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
@@ -4553,6 +4604,18 @@ function activate(context) {
       return link;
     },
   });
+  vscode.languages.registerInlayHintsProvider('python', {
+    provideInlayHints(document, range, token) {
+      const hint = new vscode.InlayHint(
+        new vscode.Position(0, 4),
+        'node hint',
+        vscode.InlayHintKind.Parameter,
+      );
+      hint.paddingLeft = true;
+      hint.tooltip = 'node inlay';
+      return [hint];
+    },
+  });
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
       return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
@@ -4678,6 +4741,10 @@ module.exports = { activate, deactivate };
                     "vscode.executeReferenceProvider", node_uri, Position(0, 1))
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
+                node_inlay_hints = api._ext_host.commands.execute(
+                    "vscode.executeInlayHintProvider",
+                    node_uri,
+                    Range(Position(0, 0), Position(0, 12)))
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -4730,6 +4797,12 @@ module.exports = { activate, deactivate };
                        node_document_links
                        and node_document_links[0].get("target", "").endswith("node-link.py")
                        and node_document_links[0].get("tooltip") == "node resolved link")
+                _check("node host language provider invokes JS inlay hints",
+                       node_inlay_hints
+                       and node_inlay_hints[0].get("label") == "node hint"
+                       and node_inlay_hints[0].get("kind") == 2
+                       and node_inlay_hints[0].get("paddingLeft") is True
+                       and node_inlay_hints[0].get("tooltip") == "node inlay")
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")
