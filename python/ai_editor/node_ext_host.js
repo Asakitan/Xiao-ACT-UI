@@ -144,6 +144,128 @@ class Location {
 }
 
 // -------------------------------------------------------------------------
+// Semantic tokens
+// -------------------------------------------------------------------------
+class SemanticTokensLegend {
+    constructor(tokenTypes, tokenModifiers) {
+        this.tokenTypes = Array.isArray(tokenTypes) ? tokenTypes.map(String) : [];
+        this.tokenModifiers = Array.isArray(tokenModifiers) ? tokenModifiers.map(String) : [];
+    }
+}
+
+class SemanticTokens {
+    constructor(data, resultId) {
+        this.data = data instanceof Uint32Array ? data : Uint32Array.from(Array.isArray(data) ? data : []);
+        this.resultId = resultId;
+    }
+}
+
+class SemanticTokensEdit {
+    constructor(start, deleteCount, data) {
+        this.start = Math.max(0, Number(start || 0));
+        this.deleteCount = Math.max(0, Number(deleteCount || 0));
+        this.data = data === undefined || data === null
+            ? undefined
+            : (data instanceof Uint32Array ? data : Uint32Array.from(Array.isArray(data) ? data : []));
+    }
+}
+
+class SemanticTokensEdits {
+    constructor(edits, resultId) {
+        this.edits = Array.isArray(edits) ? edits : [];
+        this.resultId = resultId;
+    }
+}
+
+class SemanticTokensBuilder {
+    constructor(legend) {
+        this._legend = legend instanceof SemanticTokensLegend
+            ? legend
+            : new SemanticTokensLegend(legend?.tokenTypes || [], legend?.tokenModifiers || []);
+        this._tokens = [];
+    }
+    push(...args) {
+        let line, char, length, tokenType, tokenModifiers;
+        if (args[0] instanceof Range || (args[0] && typeof args[0] === 'object' && args[0].start)) {
+            const range = args[0] instanceof Range ? args[0] : _rangeFromPayload(args[0]);
+            if (Number(range.start.line || 0) !== Number(range.end.line || 0)) return;
+            line = Number(range.start.line || 0);
+            char = Number(range.start.character || 0);
+            length = Math.max(0, Number(range.end.character || 0) - char);
+            tokenType = args[1];
+            tokenModifiers = args[2];
+        } else {
+            line = Number(args[0] || 0);
+            char = Number(args[1] || 0);
+            length = Number(args[2] || 0);
+            tokenType = args[3];
+            tokenModifiers = args[4];
+        }
+        if (!Number.isFinite(length) || length <= 0) return;
+        this._tokens.push([
+            Math.max(0, line),
+            Math.max(0, char),
+            Math.max(0, length),
+            this._tokenTypeIndex(tokenType),
+            this._tokenModifierBits(tokenModifiers),
+        ]);
+    }
+    _tokenTypeIndex(tokenType) {
+        if (typeof tokenType === 'string') {
+            let index = this._legend.tokenTypes.indexOf(tokenType);
+            if (index < 0) {
+                this._legend.tokenTypes.push(tokenType);
+                index = this._legend.tokenTypes.length - 1;
+            }
+            return index;
+        }
+        const n = Number(tokenType || 0);
+        return Number.isFinite(n) ? Math.max(0, n) : 0;
+    }
+    _tokenModifierBits(tokenModifiers) {
+        if (tokenModifiers === undefined || tokenModifiers === null) return 0;
+        const modifiers = typeof tokenModifiers === 'string' ? [tokenModifiers] : tokenModifiers;
+        if (Array.isArray(modifiers)) {
+            let bits = 0;
+            for (const modifier of modifiers) {
+                const name = String(modifier);
+                let index = this._legend.tokenModifiers.indexOf(name);
+                if (index < 0) {
+                    this._legend.tokenModifiers.push(name);
+                    index = this._legend.tokenModifiers.length - 1;
+                }
+                bits |= (1 << index);
+            }
+            return bits;
+        }
+        const n = Number(tokenModifiers || 0);
+        return Number.isFinite(n) ? Math.max(0, n) : 0;
+    }
+    build(resultId) {
+        const data = [];
+        let previousLine = 0;
+        let previousChar = 0;
+        this._tokens
+            .slice()
+            .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+            .forEach(([line, char, length, tokenType, tokenModifiers]) => {
+                const deltaLine = line - previousLine;
+                const deltaChar = deltaLine ? char : char - previousChar;
+                data.push(
+                    Math.max(0, deltaLine),
+                    Math.max(0, deltaChar),
+                    Math.max(0, length),
+                    Math.max(0, tokenType),
+                    Math.max(0, tokenModifiers)
+                );
+                previousLine = line;
+                previousChar = char;
+            });
+        return new SemanticTokens(Uint32Array.from(data), resultId);
+    }
+}
+
+// -------------------------------------------------------------------------
 // CancellationToken
 // -------------------------------------------------------------------------
 class CancellationTokenSource {
@@ -511,6 +633,7 @@ function _serializeLanguageValue(value) {
             range: _serializeLanguageRange(value.range),
         };
     }
+    if (ArrayBuffer.isView(value)) return Array.from(value);
     if (Array.isArray(value)) return value.map(_serializeLanguageValue);
     if (typeof value === 'object') {
         const result = {};
@@ -1168,6 +1291,16 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerInlineCompletionItemProvider(selector, provider) {
                     return _registerLangProvider('inlineCompletion', selector, provider);
                 },
+                registerDocumentSemanticTokensProvider(selector, provider, legend) {
+                    return _registerLangProvider('semanticTokens', selector, provider, {
+                        metadata: legend || new SemanticTokensLegend([], []),
+                    });
+                },
+                registerDocumentRangeSemanticTokensProvider(selector, provider, legend) {
+                    return _registerLangProvider('semanticTokensRange', selector, provider, {
+                        metadata: legend || new SemanticTokensLegend([], []),
+                    });
+                },
                 getLanguages() { return Promise.resolve([]); },
             };
         })(),
@@ -1336,6 +1469,11 @@ function buildVscodeModule(extDesc, extensionPath) {
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
         CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } get isResolved() { return !!this.command; } },
+        SemanticTokensLegend,
+        SemanticTokensBuilder,
+        SemanticTokens,
+        SemanticTokensEdit,
+        SemanticTokensEdits,
         TextEdit: class { static replace(range, text) { return { range, newText: text }; }; static insert(pos, text) { return { range: new Range(pos, pos), newText: text }; }; static delete(range) { return { range, newText: '' }; } },
         WorkspaceEdit: class { constructor() { this._edits = []; } replace(uri, range, text) { this._edits.push({ uri, range, text }); } insert(uri, pos, text) { this._edits.push({ uri, range: new Range(pos, pos), text }); } delete(uri, range) { this._edits.push({ uri, range, text: '' }); } set(uri, edits) { for (const e of edits) this._edits.push({ uri, ...e }); } },
         RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
@@ -1649,6 +1787,10 @@ function _languageProviderMethod(kind) {
         inlayHint: 'provideInlayHints',
         inlineCompletion: 'provideInlineCompletionItems',
         codeLens: 'provideCodeLenses',
+        semanticTokens: 'provideDocumentSemanticTokens',
+        semanticTokensLegend: 'provideDocumentSemanticTokens',
+        semanticTokensRange: 'provideDocumentRangeSemanticTokens',
+        semanticTokensRangeLegend: 'provideDocumentRangeSemanticTokens',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1703,13 +1845,29 @@ async function handleLanguageProviderRequest(msg) {
         } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
         }
-        const providerKind = (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
+        const providerKind = kind === 'semanticTokensLegend'
+            ? 'semanticTokens'
+            : kind === 'semanticTokensRangeLegend'
+                ? 'semanticTokensRange'
+                : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = _languageProviders
             .filter(entry => entry.kind === providerKind)
             .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
             .filter(item => item.score > 0)
             .sort((a, b) => b.score - a.score)
             .map(item => item.entry);
+
+        if (kind === 'semanticTokensLegend' || kind === 'semanticTokensRangeLegend') {
+            const entry = providers.find(item => item.metadata);
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: entry ? _serializeLanguageValue(entry.metadata) : null,
+            });
+            return;
+        }
 
         if (kind === 'completion') {
             const items = [];
@@ -1876,6 +2034,42 @@ async function handleLanguageProviderRequest(msg) {
                 ok: true,
                 kind,
                 value: _serializeLanguageValue(values),
+            });
+            return;
+        }
+
+        if (kind === 'semanticTokens' || kind === 'semanticTokensRange') {
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = kind === 'semanticTokensRange'
+                        ? await fn.call(provider, document, range, token)
+                        : await fn.call(provider, document, token);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: {
+                                tokens: _serializeLanguageValue(value),
+                                legend: _serializeLanguageValue(entry.metadata || null),
+                            },
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
             });
             return;
         }

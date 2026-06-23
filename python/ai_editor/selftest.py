@@ -357,7 +357,8 @@ def test_app_settings_parity() -> None:
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
-        CodeLens, WorkspaceEdit, Location,
+        CodeLens, SemanticTokensLegend, SemanticTokensBuilder,
+        WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -451,6 +452,11 @@ def test_app_settings_parity() -> None:
             }
             return lens
 
+        def provideDocumentSemanticTokens(self, document, token):
+            builder = SemanticTokensBuilder(self.semantic_legend)
+            builder.push(0, 0, 6, "function")
+            return builder.build("editor-semantic-1")
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -465,6 +471,8 @@ def test_app_settings_parity() -> None:
             return edit
 
     editor_provider = _EditorProvider()
+    editor_provider.semantic_legend = SemanticTokensLegend(
+        ["function", "variable"], ["readonly"])
     lang_api = provider_api._vscode_ns.build()["languages"]
     lang_api["registerCompletionItemProvider"]("python", editor_provider)
     lang_api["registerHoverProvider"]("python", editor_provider)
@@ -477,6 +485,8 @@ def test_app_settings_parity() -> None:
     lang_api["registerInlayHintsProvider"]("python", editor_provider)
     lang_api["registerInlineCompletionItemProvider"]("python", editor_provider)
     lang_api["registerCodeLensProvider"]("python", editor_provider)
+    lang_api["registerDocumentSemanticTokensProvider"](
+        "python", editor_provider, editor_provider.semantic_legend)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -516,6 +526,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="inlineCompletion", triggerKind=0))
         code_lens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="codeLens", itemResolveCount=10))
+        semantic_tokens_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="semanticTokens"))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -592,6 +604,14 @@ def test_app_settings_parity() -> None:
                and lens.get("command", {}).get("arguments") == ["lens-ok"]
                and lens.get("range", {}).get("end", {})
                .get("character") == 6)
+        _check("editor_language_provider serializes semantic tokens",
+               semantic_tokens_result.get("ok") is True
+               and semantic_tokens_result.get("legend", {})
+               .get("tokenTypes", [None])[0] == "function"
+               and semantic_tokens_result.get("tokens", {})
+               .get("resultId") == "editor-semantic-1"
+               and semantic_tokens_result.get("tokens", {})
+               .get("data") == [0, 0, 6, 0, 0])
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
                and prepare_rename_result.get("prepareRename", {})
@@ -1588,7 +1608,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function languageHighlightFamily(lang)" in html
             and "meta.tokenizer==='textmate'||scopes" in html
             and "wrap.classList.toggle('syntax-on'" in html
-            and "highlightCode(ta.value||'',editorLang)" in html
+            and "highlightCodeWithSemanticTokens(code,editorLang,_editorSemanticTokens)" in html
+            and "highlightCode(code,editorLang)" in html
             and "syncEditorSyntaxScroll()" in html
             and "EXTENSION_ICON_THEME" in html
             and "function extensionIconThemes()" in html
@@ -1648,6 +1669,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function runEditorCodeLens(lens)" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
+           and "function requestEditorSemanticTokens(quiet)" in html
+           and "function decodeEditorSemanticTokens(data,legend)" in html
+           and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
+           and "function scheduleEditorSemanticTokens(delay)" in html
+           and "editorProviderPayload('semanticTokens'" in html
+           and "Refresh Semantic Tokens" in html
+           and ".sem-function" in html
            and "call('open_external_uri'" in html
            and "function requestEditorRename(quiet)" in html
            and "function promptEditorRenameName(seed)" in html
@@ -2877,8 +2905,8 @@ def test_vscode_api() -> None:
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
-        CodeLens, TextEdit, Location, SignatureHelp, SignatureInformation,
-        ParameterInformation,
+        CodeLens, SemanticTokensLegend, SemanticTokensBuilder, TextEdit,
+        Location, SignatureHelp, SignatureInformation, ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -2910,6 +2938,8 @@ def test_vscode_api() -> None:
     _check("api.Hover", api["Hover"] is Hover)
     _check("api.SignatureHelp", api["SignatureHelp"] is SignatureHelp)
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
+    _check("api.SemanticTokensBuilder",
+           api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
     _check("api.SignatureHelpTriggerKind",
            api["SignatureHelpTriggerKind"]["TriggerCharacter"] == 2)
@@ -3303,6 +3333,14 @@ def test_vscode_api() -> None:
                 }
                 return lens
 
+        class _SemanticTokensProvider:
+            def provideDocumentSemanticTokens(self, document, token):
+                builder = SemanticTokensBuilder(semantic_legend)
+                builder.push(0, 0, 4, "function")
+                builder.push(Range(Position(0, 5), Position(0, 11)),
+                             "variable", ["readonly"])
+                return builder.build("semantic-result")
+
         class _RenameProvider:
             def __init__(self):
                 self.names = []
@@ -3358,6 +3396,10 @@ def test_vscode_api() -> None:
         code_lens_provider = _CodeLensProvider()
         api["languages"]["registerCodeLensProvider"](
             "python", code_lens_provider)
+        semantic_legend = SemanticTokensLegend(
+            ["function", "variable"], ["readonly"])
+        api["languages"]["registerDocumentSemanticTokensProvider"](
+            "python", _SemanticTokensProvider(), semantic_legend)
         rename_provider = _RenameProvider()
         api["languages"]["registerRenameProvider"](
             "python", rename_provider)
@@ -3395,6 +3437,10 @@ def test_vscode_api() -> None:
             "vscode.executeCodeLensProvider", doc.uri)
         code_lenses = api["commands"]["executeCommand"](
             "vscode.executeCodeLensProvider", doc.uri, 1)
+        semantic_legend_result = api["commands"]["executeCommand"](
+            "vscode.provideDocumentSemanticTokensLegend", doc.uri)
+        semantic_tokens = api["commands"]["executeCommand"](
+            "vscode.provideDocumentSemanticTokens", doc.uri)
         prepare_rename = api["commands"]["executeCommand"](
             "_executePrepareRename", doc.uri, Position(0, 0))
         rename_edit = api["commands"]["executeCommand"](
@@ -3446,6 +3492,11 @@ def test_vscode_api() -> None:
                and code_lenses
                and code_lenses[0].command["title"] == "Selftest Lens"
                and code_lens_provider.resolved == 1)
+        _check("provideDocumentSemanticTokens invokes matching providers",
+               semantic_legend_result
+               and semantic_legend_result.tokenTypes == ["function", "variable"]
+               and semantic_tokens.resultId == "semantic-result"
+               and semantic_tokens.data == [0, 0, 4, 0, 0, 0, 5, 6, 1, 1])
         _check("executePrepareRename invokes matching providers",
                prepare_rename.get("placeholder") == "prin")
         _check("executeDocumentRenameProvider invokes matching providers",
@@ -3471,6 +3522,10 @@ def test_vscode_api() -> None:
                and "_executeInlineCompletionProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeCodeLensProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideDocumentSemanticTokens"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideDocumentSemanticTokensLegend"
                in api["commands"]["getCommands"]()
                and "_executeDocumentRenameProvider"
                in api["commands"]["getCommands"]()
@@ -4753,6 +4808,18 @@ function activate(context) {
       return lens;
     },
   });
+  const semanticLegend = new vscode.SemanticTokensLegend(
+    ['function', 'variable'],
+    ['readonly'],
+  );
+  vscode.languages.registerDocumentSemanticTokensProvider('python', {
+    provideDocumentSemanticTokens(document, token) {
+      const builder = new vscode.SemanticTokensBuilder(semanticLegend);
+      builder.push(0, 0, 4, 'function');
+      builder.push(new vscode.Range(0, 5, 0, 9), 'variable', ['readonly']);
+      return builder.build('node-semantic');
+    },
+  }, semanticLegend);
   vscode.languages.registerRenameProvider('python', {
     prepareRename(document, position, token) {
       return { range: new vscode.Range(0, 0, 0, 4), placeholder: 'node' };
@@ -4889,6 +4956,10 @@ module.exports = { activate, deactivate };
                     {"triggerKind": 0})
                 node_code_lenses = api._ext_host.commands.execute(
                     "vscode.executeCodeLensProvider", node_uri, 1)
+                node_semantic_legend = api._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokensLegend", node_uri)
+                node_semantic_tokens = api._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokens", node_uri)
                 node_prepare_rename = api._ext_host.commands.execute(
                     "_executePrepareRename", node_uri, Position(0, 1))
                 node_rename_edit = api._ext_host.commands.execute(
@@ -4959,6 +5030,14 @@ module.exports = { activate, deactivate };
                        .get("title") == "Node Lens"
                        and node_code_lenses[0].get("command", {})
                        .get("arguments", [{}])[0].get("id") == "lens-root")
+                _check("node host language provider invokes JS semantic tokens",
+                       node_semantic_legend
+                       and node_semantic_legend.get("tokenTypes", [None])[0]
+                       == "function"
+                       and node_semantic_tokens
+                       and node_semantic_tokens.get("resultId") == "node-semantic"
+                       and node_semantic_tokens.get("data")
+                       == [0, 0, 4, 0, 0, 0, 5, 4, 1, 1])
                 _check("node host language provider invokes JS prepare rename",
                        node_prepare_rename
                        and node_prepare_rename.get("placeholder") == "node")

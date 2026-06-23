@@ -489,7 +489,9 @@ _LANGUAGE_RESULT_ATTRS = (
     "isPreferred", "disabled", "newText", "position", "value",
     "signatures", "activeSignature", "activeParameter", "parameters",
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
-    "paddingLeft", "paddingRight", "location", "isResolved",
+    "paddingLeft", "paddingRight", "location", "isResolved", "data",
+    "resultId", "edits", "start", "deleteCount", "tokenTypes",
+    "tokenModifiers",
 )
 
 
@@ -2746,6 +2748,12 @@ class AIEditorAPI:
             "codeLenses": "codeLens",
             "lens": "codeLens",
             "lenses": "codeLens",
+            "semanticToken": "semanticTokens",
+            "semanticTokens": "semanticTokens",
+            "documentSemanticTokens": "semanticTokens",
+            "semanticTokenRange": "semanticTokensRange",
+            "semanticTokensRange": "semanticTokensRange",
+            "documentRangeSemanticTokens": "semanticTokensRange",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2976,6 +2984,55 @@ class AIEditorAPI:
                     "version": document.version,
                     "lenses": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "semanticTokens":
+                legend = self._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokensLegend",
+                    document.uri,
+                )
+                result = self._ext_host.commands.execute(
+                    "vscode.provideDocumentSemanticTokens",
+                    document.uri,
+                )
+                legend_value = _json_ready_language_value(legend)
+                value = _json_ready_language_value(result)
+                if isinstance(value, dict) and "tokens" in value:
+                    if not legend_value and value.get("legend") is not None:
+                        legend_value = value.get("legend")
+                    value = value.get("tokens")
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "legend": legend_value,
+                    "tokens": value,
+                }
+            if kind == "semanticTokensRange":
+                token_range = _editor_provider_range(
+                    payload.get("range"), content)
+                legend = self._ext_host.commands.execute(
+                    "vscode.provideDocumentRangeSemanticTokensLegend",
+                    document.uri,
+                )
+                result = self._ext_host.commands.execute(
+                    "vscode.provideDocumentRangeSemanticTokens",
+                    document.uri,
+                    token_range,
+                )
+                legend_value = _json_ready_language_value(legend)
+                value = _json_ready_language_value(result)
+                if isinstance(value, dict) and "tokens" in value:
+                    if not legend_value and value.get("legend") is not None:
+                        legend_value = value.get("legend")
+                    value = value.get("tokens")
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "legend": legend_value,
+                    "tokens": value,
                 }
             if kind == "documentSymbol":
                 result = self._ext_host.commands.execute(

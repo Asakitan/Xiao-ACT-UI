@@ -832,6 +832,169 @@ class CodeLens:
         return self.command is not None
 
 
+class SemanticTokensLegend:
+    def __init__(
+            self,
+            token_types: Sequence[Any],
+            token_modifiers: Optional[Sequence[Any]] = None) -> None:
+        self.tokenTypes = [str(item) for item in (token_types or [])]
+        self.tokenModifiers = [
+            str(item) for item in (token_modifiers or [])]
+
+
+class SemanticTokens:
+    def __init__(self, data: Any, result_id: Any = None) -> None:
+        self.data = _semantic_tokens_data(data)
+        self.resultId = None if result_id is None else str(result_id)
+
+
+class SemanticTokensEdit:
+    def __init__(
+            self, start: Any, delete_count: Any, data: Any = None) -> None:
+        try:
+            self.start = max(0, int(start or 0))
+        except Exception:
+            self.start = 0
+        try:
+            self.deleteCount = max(0, int(delete_count or 0))
+        except Exception:
+            self.deleteCount = 0
+        self.data = None if data is None else _semantic_tokens_data(data)
+
+
+class SemanticTokensEdits:
+    def __init__(self, edits: Any, result_id: Any = None) -> None:
+        self.edits = list(edits or [])
+        self.resultId = None if result_id is None else str(result_id)
+
+
+def _semantic_tokens_data(value: Any) -> List[int]:
+    if value is None:
+        return []
+    if isinstance(value, (bytes, bytearray)):
+        return [int(item) for item in value]
+    try:
+        return [max(0, int(item)) for item in value]
+    except Exception:
+        return []
+
+
+def _semantic_legend_payload(value: Any) -> Optional[Dict[str, List[str]]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        token_types = value.get("tokenTypes") or value.get("token_types") or []
+        token_modifiers = (
+            value.get("tokenModifiers")
+            or value.get("token_modifiers")
+            or [])
+    else:
+        token_types = (
+            getattr(value, "tokenTypes", None)
+            or getattr(value, "token_types", None)
+            or [])
+        token_modifiers = (
+            getattr(value, "tokenModifiers", None)
+            or getattr(value, "token_modifiers", None)
+            or [])
+    return {
+        "tokenTypes": [str(item) for item in token_types],
+        "tokenModifiers": [str(item) for item in token_modifiers],
+    }
+
+
+class SemanticTokensBuilder:
+    def __init__(self, legend: Any = None) -> None:
+        payload = _semantic_legend_payload(legend) or {
+            "tokenTypes": [],
+            "tokenModifiers": [],
+        }
+        self._legend = payload
+        self._tokens: List[tuple[int, int, int, int, int]] = []
+
+    def push(self, *args: Any) -> None:
+        if not args:
+            return
+        if len(args) >= 2 and not isinstance(args[0], (int, float)):
+            rng = _coerce_range(args[0])
+            line = int(getattr(rng.start, "line", 0))
+            char = int(getattr(rng.start, "character", 0))
+            if int(getattr(rng.end, "line", line)) != line:
+                return
+            length = max(0, int(getattr(rng.end, "character", char)) - char)
+            token_type = args[1]
+            token_modifiers = args[2] if len(args) > 2 else 0
+        elif len(args) >= 4:
+            line = int(args[0] or 0)
+            char = int(args[1] or 0)
+            length = int(args[2] or 0)
+            token_type = args[3]
+            token_modifiers = args[4] if len(args) > 4 else 0
+        else:
+            return
+        if length <= 0:
+            return
+        self._tokens.append((
+            max(0, line),
+            max(0, char),
+            max(0, length),
+            self._token_type_index(token_type),
+            self._token_modifier_bits(token_modifiers),
+        ))
+
+    def _token_type_index(self, token_type: Any) -> int:
+        if isinstance(token_type, str):
+            try:
+                return self._legend["tokenTypes"].index(token_type)
+            except ValueError:
+                self._legend["tokenTypes"].append(token_type)
+                return len(self._legend["tokenTypes"]) - 1
+        try:
+            return max(0, int(token_type or 0))
+        except Exception:
+            return 0
+
+    def _token_modifier_bits(self, token_modifiers: Any) -> int:
+        if token_modifiers is None:
+            return 0
+        if isinstance(token_modifiers, str):
+            token_modifiers = [token_modifiers]
+        if isinstance(token_modifiers, (list, tuple, set)):
+            bits = 0
+            for modifier in token_modifiers:
+                name = str(modifier)
+                try:
+                    index = self._legend["tokenModifiers"].index(name)
+                except ValueError:
+                    self._legend["tokenModifiers"].append(name)
+                    index = len(self._legend["tokenModifiers"]) - 1
+                bits |= 1 << index
+            return bits
+        try:
+            return max(0, int(token_modifiers or 0))
+        except Exception:
+            return 0
+
+    def build(self, result_id: Any = None) -> SemanticTokens:
+        data: List[int] = []
+        previous_line = 0
+        previous_char = 0
+        for line, char, length, token_type, token_modifiers in sorted(
+                self._tokens, key=lambda item: (item[0], item[1])):
+            delta_line = line - previous_line
+            delta_char = char if delta_line else char - previous_char
+            data.extend([
+                max(0, delta_line),
+                max(0, delta_char),
+                max(0, length),
+                max(0, token_type),
+                max(0, token_modifiers),
+            ])
+            previous_line = line
+            previous_char = char
+        return SemanticTokens(data, result_id)
+
+
 @dataclass
 class Diagnostic:
     range: Range
@@ -1136,6 +1299,14 @@ class VscodeNamespace:
             "_executeInlineCompletionProvider": self._execute_inline_completion_provider,
             "_executeCodeLensProvider": self._execute_code_lens_provider,
             "vscode.executeCodeLensProvider": self._execute_code_lens_provider,
+            "_provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
+            "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
+            "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
+            "vscode.provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
+            "_provideDocumentRangeSemanticTokensLegend": self._execute_document_range_semantic_tokens_legend,
+            "vscode.provideDocumentRangeSemanticTokensLegend": self._execute_document_range_semantic_tokens_legend,
+            "_provideDocumentRangeSemanticTokens": self._execute_document_range_semantic_tokens_provider,
+            "vscode.provideDocumentRangeSemanticTokens": self._execute_document_range_semantic_tokens_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1616,6 +1787,68 @@ class VscodeNamespace:
         results.extend(self._provider_values(external))
         return results
 
+    def _execute_document_semantic_tokens_legend(self, uri: Any) -> Any:
+        document = self._resolve_language_document(uri)
+        for entry in self._matching_language_providers(
+                "semanticTokens", document):
+            legend = _semantic_legend_payload(entry.get("metadata"))
+            if legend is not None:
+                return SemanticTokensLegend(
+                    legend.get("tokenTypes", []),
+                    legend.get("tokenModifiers", []))
+        external = self._request_external_language_provider(
+            "semanticTokensLegend", document)
+        return external
+
+    def _execute_document_range_semantic_tokens_legend(self, uri: Any) -> Any:
+        document = self._resolve_language_document(uri)
+        for entry in self._matching_language_providers(
+                "semanticTokensRange", document):
+            legend = _semantic_legend_payload(entry.get("metadata"))
+            if legend is not None:
+                return SemanticTokensLegend(
+                    legend.get("tokenTypes", []),
+                    legend.get("tokenModifiers", []))
+        external = self._request_external_language_provider(
+            "semanticTokensRangeLegend", document)
+        return external
+
+    def _execute_document_semantic_tokens_provider(self, uri: Any) -> Any:
+        document = self._resolve_language_document(uri)
+        for entry in self._matching_language_providers(
+                "semanticTokens", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideDocumentSemanticTokens",
+                (document, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return value
+        external = self._request_external_language_provider(
+            "semanticTokens", document)
+        if isinstance(external, dict) and "tokens" in external:
+            return external.get("tokens")
+        return external
+
+    def _execute_document_range_semantic_tokens_provider(
+            self, uri: Any, range: Any = None) -> Any:
+        document = self._resolve_language_document(uri)
+        token_range = _coerce_range(range)
+        for entry in self._matching_language_providers(
+                "semanticTokensRange", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideDocumentRangeSemanticTokens",
+                (document, token_range, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return value
+        external = self._request_external_language_provider(
+            "semanticTokensRange",
+            document,
+            range=self._range_payload(token_range))
+        if isinstance(external, dict) and "tokens" in external:
+            return external.get("tokens")
+        return external
+
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
         results = self._collect_language_provider_results(
@@ -1796,6 +2029,11 @@ class VscodeNamespace:
             "InlineCompletionItem": InlineCompletionItem,
             "InlineCompletionList": InlineCompletionList,
             "CodeLens": CodeLens,
+            "SemanticTokensLegend": SemanticTokensLegend,
+            "SemanticTokensBuilder": SemanticTokensBuilder,
+            "SemanticTokens": SemanticTokens,
+            "SemanticTokensEdit": SemanticTokensEdit,
+            "SemanticTokensEdits": SemanticTokensEdits,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
@@ -2646,6 +2884,8 @@ class VscodeNamespace:
             "registerDocumentLinkProvider": lambda selector, provider: self._register_language_provider("documentLink", selector, provider),
             "registerInlayHintsProvider": lambda selector, provider: self._register_language_provider("inlayHint", selector, provider),
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
+            "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
+            "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
         }
 

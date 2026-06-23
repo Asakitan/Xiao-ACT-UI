@@ -439,6 +439,24 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-syntax-layer .cmt { color:var(--fg-cmt); }
 .editor-syntax-layer .fn { color:var(--fg-fn); }
 .editor-syntax-layer .type { color:var(--fg-type); }
+.editor-syntax-layer .sem-keyword,
+.editor-syntax-layer .sem-operator { color:var(--fg-kw); }
+.editor-syntax-layer .sem-string { color:var(--fg-str); }
+.editor-syntax-layer .sem-number { color:var(--fg-num); }
+.editor-syntax-layer .sem-comment { color:var(--fg-cmt); font-style:italic; }
+.editor-syntax-layer .sem-function,
+.editor-syntax-layer .sem-method,
+.editor-syntax-layer .sem-macro { color:var(--fg-fn); }
+.editor-syntax-layer .sem-class,
+.editor-syntax-layer .sem-type,
+.editor-syntax-layer .sem-interface,
+.editor-syntax-layer .sem-enum,
+.editor-syntax-layer .sem-namespace { color:var(--fg-type); }
+.editor-syntax-layer .sem-parameter,
+.editor-syntax-layer .sem-variable,
+.editor-syntax-layer .sem-property { color:var(--fg-code); }
+.editor-syntax-layer .sem-deprecated { opacity:.62; text-decoration:line-through; }
+.editor-syntax-layer .sem-readonly { font-style:italic; }
 
 /* Chat input */
 .chat-input-area { flex-shrink:0; background:var(--bg); padding:4px 12px; max-width:950px;
@@ -2445,6 +2463,7 @@ function openInEditor(code,lang){
   if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+  if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -2452,6 +2471,7 @@ function openInEditor(code,lang){
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(260);
+  if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(300);
 }
 function showEditorArea(){
   _editorVis=true;
@@ -3203,10 +3223,12 @@ function setEditorLanguage(lang){
   if(cfg.folding&&cfg.folding.markers)configBits.push('folding.markers');
   if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
+  if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   scheduleEditorSyntaxHighlight();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(220);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(320);
+  if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(360);
 }
 
 let _editorSyntaxRaf=0;
@@ -3231,7 +3253,8 @@ function updateEditorSyntaxHighlight(){
   const meta=LANGUAGE_META[editorLang]||{};
   const enabled=editorLang!=='plaintext'||meta.tokenizer==='textmate'||(meta.grammarScopes&&meta.grammarScopes.length);
   wrap.classList.toggle('syntax-on',!!enabled);
-  layer.innerHTML=enabled?(highlightCode(ta.value||'',editorLang)||'&nbsp;'):'';
+  const code=ta.value||'';
+  layer.innerHTML=enabled?((highlightCodeWithSemanticTokens(code,editorLang,_editorSemanticTokens)||highlightCode(code,editorLang))||'&nbsp;'):'';
   syncEditorSyntaxScroll();
 }
 
@@ -3262,6 +3285,8 @@ function editorUndo(){
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
+  if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+  if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
 }
 function editorRedo(){
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
@@ -3275,6 +3300,8 @@ function editorRedo(){
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
+  if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+  if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
@@ -3296,6 +3323,8 @@ function _editorInputWithUndo(e){
   scheduleEditorInlineCompletions();
   clearEditorCodeLenses();
   scheduleEditorCodeLenses();
+  clearEditorSemanticTokens();
+  scheduleEditorSemanticTokens();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3308,6 +3337,7 @@ let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
+let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3363,6 +3393,114 @@ function editorFullRangePayload(){
   const lines=String(ed.value||'').split('\n');
   const lastLine=Math.max(0,lines.length-1);
   return {start:{line:0,character:0},end:{line:lastLine,character:lines[lastLine].length}};
+}
+function editorSemanticTokensData(payload){
+  const tokens=payload&&payload.tokens!==undefined?payload.tokens:payload;
+  if(Array.isArray(tokens))return tokens;
+  if(tokens&&Array.isArray(tokens.data))return tokens.data;
+  return null;
+}
+function editorSemanticTokensLegend(payload){
+  const tokens=payload&&payload.tokens!==undefined?payload.tokens:payload;
+  return (payload&&payload.legend)||(tokens&&tokens.legend)||{};
+}
+function decodeEditorSemanticTokens(data,legend){
+  if(!Array.isArray(data)||data.length<5)return [];
+  const tokenTypes=Array.isArray(legend&&legend.tokenTypes)?legend.tokenTypes:[];
+  const tokenModifiers=Array.isArray(legend&&legend.tokenModifiers)?legend.tokenModifiers:[];
+  const decoded=[];
+  let line=0,start=0;
+  for(let i=0;i+4<data.length;i+=5){
+    const deltaLine=Number(data[i])||0,deltaStart=Number(data[i+1])||0;
+    const length=Number(data[i+2])||0,typeIndex=Number(data[i+3])||0,modifierBits=Number(data[i+4])||0;
+    line+=deltaLine;
+    start=deltaLine?deltaStart:start+deltaStart;
+    if(length<=0||line<0||start<0)continue;
+    const modifiers=[];
+    tokenModifiers.forEach((name,index)=>{if((modifierBits&(1<<index))!==0)modifiers.push(String(name))});
+    decoded.push({line,start,length,type:String(tokenTypes[typeIndex]||''),modifiers});
+  }
+  return decoded;
+}
+function editorSemanticTokenClass(token){
+  const type=String((token&&token.type)||'').toLowerCase();
+  let base='sem-variable';
+  if(type==='keyword'||type==='modifier')base='sem-keyword';
+  else if(type==='operator')base='sem-operator';
+  else if(type==='string'||type==='regexp')base='sem-string';
+  else if(type==='number')base='sem-number';
+  else if(type==='comment')base='sem-comment';
+  else if(type==='function')base='sem-function';
+  else if(type==='method')base='sem-method';
+  else if(type==='macro'||type==='decorator')base='sem-macro';
+  else if(type==='class')base='sem-class';
+  else if(type==='namespace'||type==='module')base='sem-namespace';
+  else if(type==='interface')base='sem-interface';
+  else if(type==='enum'||type==='enummember')base='sem-enum';
+  else if(type==='type'||type==='struct'||type==='typeparameter')base='sem-type';
+  else if(type==='parameter')base='sem-parameter';
+  else if(type==='property')base='sem-property';
+  const classes=[base];
+  const modifiers=(token&&Array.isArray(token.modifiers))?token.modifiers.map(v=>String(v).toLowerCase()):[];
+  if(modifiers.includes('deprecated'))classes.push('sem-deprecated');
+  if(modifiers.includes('readonly')||modifiers.includes('static'))classes.push('sem-readonly');
+  return classes.join(' ');
+}
+function highlightCodeWithSemanticTokens(code,lang,payload){
+  if(!payload||_editorSemanticTokensContentLength!==String(code||'').length)return '';
+  const data=editorSemanticTokensData(payload),legend=editorSemanticTokensLegend(payload);
+  const decoded=decodeEditorSemanticTokens(data,legend);
+  if(!decoded.length)return '';
+  const lines=String(code||'').split('\n'),byLine=Object.create(null);
+  decoded.forEach(token=>{
+    const line=Number(token.line)||0;
+    if(line<0||line>=lines.length)return;
+    (byLine[line]||(byLine[line]=[])).push(token);
+  });
+  return lines.map((lineText,lineNo)=>{
+    const tokens=(byLine[lineNo]||[]).slice().sort((a,b)=>a.start-b.start||b.length-a.length);
+    if(!tokens.length)return esc(lineText);
+    let out='',cursor=0;
+    tokens.forEach(token=>{
+      const start=Math.max(0,Math.min(lineText.length,Number(token.start)||0));
+      const end=Math.max(start,Math.min(lineText.length,start+(Number(token.length)||0)));
+      if(end<=cursor)return;
+      if(start>cursor)out+=esc(lineText.slice(cursor,start));
+      const safeStart=Math.max(start,cursor);
+      out+='<span class="'+editorSemanticTokenClass(token)+'">'+esc(lineText.slice(safeStart,end))+'</span>';
+      cursor=end;
+    });
+    if(cursor<lineText.length)out+=esc(lineText.slice(cursor));
+    return out;
+  }).join('\n');
+}
+function clearEditorSemanticTokens(){
+  _editorSemanticTokensRequest++;
+  clearTimeout(_editorSemanticTokensTimer);
+  _editorSemanticTokens=null;
+  _editorSemanticTokensContentLength=-1;
+  scheduleEditorSyntaxHighlight();
+}
+async function requestEditorSemanticTokens(quiet){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorSemanticTokensRequest;
+  const contentLength=String(ed.value||'').length;
+  const res=await call('editor_language_provider',editorProviderPayload('semanticTokens'));
+  if(requestId!==_editorSemanticTokensRequest||contentLength!==String(ed.value||'').length)return;
+  if(res&&res.error){_editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens failed: '+res.error);return}
+  const payload=res&&res.ok?{tokens:res.tokens,legend:res.legend}:null;
+  _editorSemanticTokens=(payload&&editorSemanticTokensData(payload)&&editorSemanticTokensLegend(payload))?payload:null;
+  _editorSemanticTokensContentLength=_editorSemanticTokens?contentLength:-1;
+  scheduleEditorSyntaxHighlight();
+  if(!quiet){
+    const count=(_editorSemanticTokens&&editorSemanticTokensData(_editorSemanticTokens)||[]).length/5;
+    setStatus(Math.floor(count)+' semantic token'+(count===1?'':'s'));
+  }
+}
+function scheduleEditorSemanticTokens(delay){
+  clearTimeout(_editorSemanticTokensTimer);
+  _editorSemanticTokensTimer=setTimeout(()=>requestEditorSemanticTokens(true),delay==null?780:delay);
 }
 function editorInlayHintLabelText(label){
   if(label==null)return '';
@@ -8208,11 +8346,13 @@ function switchTab(id){
     if(typeof clearEditorInlayHints==='function')clearEditorInlayHints();
     if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
     if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
+    if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
+    if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(340);
   }
   renderTabs();
 }
@@ -8577,6 +8717,7 @@ const COMMANDS=[
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Refresh Inlay Hints',shortcut:'',action:()=>requestEditorInlayHints(false)},
   {label:'Refresh CodeLens',shortcut:'',action:()=>requestEditorCodeLenses(false)},
+  {label:'Refresh Semantic Tokens',shortcut:'',action:()=>requestEditorSemanticTokens(false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
   {label:'Open Link',shortcut:'Ctrl+Click',action:()=>requestEditorDocumentLinks(false,true)},
   {label:'Rename Symbol',shortcut:'F2',action:()=>requestEditorRename(false)},
