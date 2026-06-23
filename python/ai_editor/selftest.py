@@ -283,6 +283,7 @@ def test_app_settings_parity() -> None:
         "set_chat_controls",
         "get_extension_contributions",
         "list_editor_languages",
+        "list_extension_activity_bar_items",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "get_model_info", "test_connection", "set_mode", "save_config",
@@ -1167,6 +1168,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function applyEditorLanguages(rows)" in html
             and "LANGUAGE_BY_EXT" in html
             and "languageForFileName(name)" in html)
+    _check("frontend renders extension activity bar views dynamically",
+            "function renderExtensionContainerContent(item)" in html
+            and "function renderExtensionTreeView(view)" in html
+            and "function renderExtensionWebviewView(view)" in html
+            and "_injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state)" in html
+            and "renderExtensionContainerContent(item)" in html)
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
@@ -3000,6 +3007,41 @@ def test_app_extension_runtime_support() -> None:
                command_webview_result.get("handledBy") == "runtimeFallback"
                and command_webview_result.get("fallbackKind") == "webviewView"
                and "command-webview" in command_webview_result.get("html", ""))
+
+        activity_desc = ExtensionDescription.from_package_json({
+            "name": "activity-container",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "contributes": {
+                "viewsContainers": {"activitybar": [{
+                    "id": "selftest.activity",
+                    "title": "Selftest Activity",
+                }]},
+                "views": {"selftest.activity": [
+                    {"id": "selftest.activity.tree", "name": "Activity Tree"},
+                    {"id": "selftest.activity.webview", "name": "Activity Webview", "type": "webview"},
+                ]},
+            },
+        }, "/tmp/selftest-activity")
+        api._ext_host.ext_points.process(activity_desc)
+        api._vscode_ns.build(activity_desc)["window"]["registerTreeDataProvider"](
+            "selftest.activity.tree", _TreeProvider())
+        api._vscode_ns.build(activity_desc)["window"]["registerWebviewViewProvider"](
+            "selftest.activity.webview", _CommandWebviewProvider())
+        activity_items = {
+            item.get("id"): item
+            for item in api.list_extension_activity_bar_items().get("items", [])
+        }
+        activity_views = {
+            item.get("id"): item
+            for item in activity_items.get("selftest.activity", {}).get("views", [])
+        }
+        _check("activity bar containers include runtime extension views",
+               activity_items.get("selftest.activity", {}).get("view_count") == 2
+               and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("kind") == "treeView"
+               and activity_views.get("selftest.activity.tree", {}).get("runtimeState", {}).get("children") == ["node-a", "node-b"]
+               and activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("kind") == "webviewView"
+               and "command-webview" in activity_views.get("selftest.activity.webview", {}).get("runtimeState", {}).get("html", ""))
 
         contribs = api.get_extension_contributions().get("contributions", {})
         command_items = {

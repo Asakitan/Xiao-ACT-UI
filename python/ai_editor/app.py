@@ -4563,6 +4563,13 @@ class AIEditorAPI:
                     continue
                 ext_id = str(vc.get("_extensionId", ""))
                 title = str(vc.get("title", vc_id))
+                raw_views = self._ext_host.ext_points.all_contributions.get(
+                    "views", {}).get(vc_id, [])
+                views = [
+                    self._decorate_extension_view(view)
+                    for view in raw_views
+                    if isinstance(view, dict)
+                ]
                 # Resolve icon: use extension's emoji-style icon or default
                 icon_text = ""
                 ext_desc = self._ext_host.registry.get(ext_id)
@@ -4578,6 +4585,8 @@ class AIEditorAPI:
                     "title": title,
                     "icon_text": icon_text,
                     "extension_id": ext_id,
+                    "views": views,
+                    "view_count": len(views),
                 })
         except Exception:
             pass

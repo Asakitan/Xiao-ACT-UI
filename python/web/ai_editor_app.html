@@ -5419,6 +5419,64 @@ async function refreshInstalledExts(){
 
 // Extension-contributed activity bar icons
 let _extActBarItems=[];
+function extensionViewTitle(view){
+  return view.name||view.title||view.id||'Extension View';
+}
+function renderExtensionTreeView(view){
+  const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
+  const title=document.createElement('div');title.className='tool-header open';
+  title.textContent=extensionViewTitle(view);
+  const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
+  const state=view.runtimeState||{};
+  const children=Array.isArray(state.children)?state.children:[];
+  if(children.length){
+    children.forEach(child=>{
+      const row=document.createElement('div');row.className='sb-item';row.style.padding='4px 0';
+      row.textContent=String(child);body.appendChild(row);
+    });
+  }else{
+    body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'Tree view provider registered; no root items reported.')+'</div>';
+  }
+  card.appendChild(title);card.appendChild(body);return card;
+}
+function renderExtensionManifestView(view){
+  const card=document.createElement('div');card.className='tool-call';card.style.margin='0 0 8px 0';
+  const title=document.createElement('div');title.className='tool-header open';
+  title.textContent=extensionViewTitle(view);
+  const body=document.createElement('div');body.className='tool-body open';body.style.whiteSpace='normal';
+  body.innerHTML='<div style="color:var(--fg-dim);font-size:11px">'+esc(view.runtimeMessage||'View manifest is present, but no runtime provider is registered yet.')+'</div>';
+  card.appendChild(title);card.appendChild(body);return card;
+}
+function renderExtensionWebviewView(view){
+  const state=view.runtimeState||{};
+  const host=document.createElement('div');host.className='tool-call';host.style.margin='0 0 8px 0';
+  const html=state.html||view.html||'';
+  if(html){
+    _injectWebviewHtml(host,view.id||state.view_id||state.viewId,html,state.state);
+    return host;
+  }
+  return renderExtensionManifestView(view);
+}
+function renderExtensionContainerContent(item){
+  const contentEl=$('ext-vc-content');if(!contentEl)return;
+  const views=Array.isArray(item.views)?item.views:[];
+  contentEl.innerHTML='';
+  const meta=document.createElement('div');
+  meta.style.cssText='color:var(--fg-dim);font-size:11px;margin-bottom:8px';
+  meta.textContent='Extension: '+(item.extension_id||'unknown')+' · '+views.length+' view'+(views.length===1?'':'s');
+  contentEl.appendChild(meta);
+  if(!views.length){
+    const empty=document.createElement('div');empty.style.cssText='color:var(--fg-dim);font-size:12px;padding:4px 0';
+    empty.textContent='No views registered for this container.';
+    contentEl.appendChild(empty);return;
+  }
+  views.forEach(view=>{
+    const kind=view.runtimeKind||(view.runtimeState&&view.runtimeState.kind)||view.type||'view';
+    if(kind==='webviewView')contentEl.appendChild(renderExtensionWebviewView(view));
+    else if(kind==='treeView')contentEl.appendChild(renderExtensionTreeView(view));
+    else contentEl.appendChild(renderExtensionManifestView(view));
+  });
+}
 async function renderExtensionActivityBar(){
   try{
     const r=await call('list_extension_activity_bar_items');
@@ -5448,12 +5506,7 @@ async function renderExtensionActivityBar(){
         view.style.display='flex';
         const titleEl=$('ext-vc-title');
         if(titleEl)titleEl.textContent=item.title;
-        const contentEl=$('ext-vc-content');
-        if(contentEl){
-          // Look for registered views for this container
-          contentEl.innerHTML='<div style="color:var(--fg-dim);font-size:12px;padding:4px 0">'+esc(item.title)+'</div>'
-            +'<div style="color:var(--fg-dim);font-size:11px;margin-top:4px">Extension: '+esc(item.extension_id)+'</div>';
-        }
+        renderExtensionContainerContent(item);
       }
       $('sidebar').classList.remove('hidden');
     });
