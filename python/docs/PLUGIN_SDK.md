@@ -252,6 +252,7 @@ capabilities 数组中的每个元素可以是字符串或对象：
 **安装**：将插件文件夹放入 `user_plugins/`，或通过 `.zip` 包一键导入。
 
 **发现**：程序启动时扫描 `plugins/` 和 `user_plugins/`，读取每个目录下的 `plugin.json`。
+热刷新也会重新读取清单；同版本的菜单、设置、本地化、权限等清单变化会发布 `plugin_lifecycle` 事件 `manifest_changed`，让菜单、设置面板和 overlay host 立即刷新，但不会因此加载仍处于禁用状态的脚本插件。
 
 **加载 (on_load)**：平台按 `requires` 依赖顺序加载。`on_load(ctx)` 是插件初始化的入口，在这里注册面板、订阅事件、声明引擎。此时收到的 `ctx` 是 `PluginContext` 实例，贯穿插件的整个生命周期。
 

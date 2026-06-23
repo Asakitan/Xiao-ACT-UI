@@ -500,13 +500,35 @@ dictionary@ state()
             for item in menu_summary.get("script_menus", [])
         ), menu_summary.get("script_menus")
 
-        _write_hot_script_plugin(root)
+        hot_script_dir = _write_hot_script_plugin(root)
         hot_script_menus = act_plugin_script_menus(owner)
         assert any(
             item.get("id") == "hot_script_demo"
             for item in hot_script_menus.get("items", [])
         ), hot_script_menus
         assert manager._records["hot_script_demo"].loaded is False, manager.status()
+        hot_manifest = os.path.join(hot_script_dir, "plugin.json")
+        with open(hot_manifest, "r", encoding="utf-8") as fp:
+            hot_data = json.load(fp)
+        hot_data["sao_menu"]["name"] = "热加载脚本已更新"
+        hot_data["settings_schema"]["overlay_enabled"]["description"] = "更新后的热加载描述"
+        with open(hot_manifest, "w", encoding="utf-8") as fp:
+            json.dump(hot_data, fp, ensure_ascii=False, indent=2)
+        manager.sync_discovery(force=True)
+        hot_updated_menus = act_plugin_script_menus(owner)
+        hot_updated = next(
+            item for item in hot_updated_menus.get("items", [])
+            if item.get("id") == "hot_script_demo"
+        )
+        assert hot_updated.get("menu", {}).get("name") == "热加载脚本已更新", hot_updated
+        assert manager._records["hot_script_demo"].loaded is False, manager.status()
+        assert manager._records["hot_script_demo"].localized_settings_schema().get(
+            "overlay_enabled", {}).get("description") == "更新后的热加载描述", manager.status()
+        assert any(
+            ev.get("payload", {}).get("plugin_id") == "hot_script_demo"
+            and ev.get("payload", {}).get("action") == "manifest_changed"
+            for ev in lifecycle_events
+        ), lifecycle_events
 
         hot_remove_dir = _write_hot_remove_plugin(root)
         manager.sync_discovery(force=True)

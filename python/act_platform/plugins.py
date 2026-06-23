@@ -1653,6 +1653,7 @@ class PluginManager:
     def discover(self) -> list[PluginRecord]:
         old_records = dict(self._records)
         records: Dict[str, PluginRecord] = {}
+        changed_ids: set[str] = set()
         for root in self.plugin_dirs:
             if not os.path.isdir(root):
                 continue
@@ -1704,6 +1705,8 @@ class PluginManager:
                 or old_record.permissions != getattr(new_record, "permissions", ())
                 or old_record.enabled != getattr(new_record, "enabled", old_record.enabled)
             )
+            if changed:
+                changed_ids.add(pid)
             if changed and bool(old_record.loaded or old_record.active or old_record.module is not None):
                 try:
                     self.unload_plugin(pid)
@@ -1722,8 +1725,13 @@ class PluginManager:
                 self._publish_plugin_lifecycle(old_record, "forgotten")
         for pid, record in self._records.items():
             old_record = old_records.get(pid)
-            if old_record is None or old_record.path != record.path or old_record.version != record.version:
+            if old_record is None:
                 self._publish_plugin_lifecycle(record, "discovered")
+            elif pid in changed_ids:
+                if old_record.path != record.path or old_record.version != record.version:
+                    self._publish_plugin_lifecycle(record, "discovered")
+                else:
+                    self._publish_plugin_lifecycle(record, "manifest_changed")
         return list(self._records.values())
 
     def refresh_plugin(self, plug_dir: str) -> Optional[PluginRecord]:

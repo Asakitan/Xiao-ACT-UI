@@ -198,6 +198,8 @@ my_plugin/
 平台启动 → 发现插件 → on_load(ctx) → on_enable() → [运行中] → on_disable() → on_unload()
 ```
 
+热发现会在清单新增、删除或同版本内容变化时发布 `plugin_lifecycle` 事件。新增插件使用 `discovered`，删除插件使用 `forgotten`，同版本 manifest 菜单/设置/本地化等变化使用 `manifest_changed`；菜单、插件管理面板和统一 overlay host 通过这些事件即时刷新，禁用脚本插件不会因为刷新清单而被加载。
+
 完整的入口示例：
 
 ```python
