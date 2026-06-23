@@ -1097,7 +1097,112 @@ Objects:  {
         self.assertEqual(pose["motion_source"], "keyframes")
         self.assertAlmostEqual(pose["motion_sample"]["sample_time"], 0.25)
         self.assertAlmostEqual(pose["motion_sample"]["blend"], 0.5)
-        self.assertAlmostEqual(pose["positions"]["right_hand"][1], 0.62, places=4)
+        self.assertEqual(pose["motion_scale"]["scaled_count"], 1)
+        self.assertGreater(pose["motion_scale"]["scales"]["right_hand"], 0.98)
+        self.assertLess(pose["motion_scale"]["scales"]["right_hand"], 1.0)
+        self.assertGreater(pose["positions"]["right_hand"][1], 0.61)
+        self.assertLess(pose["positions"]["right_hand"][1], 0.62)
+
+    def test_evaluate_retarget_pose_scales_motion_to_target_limb_length(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_motion_scale_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            default_parent = model3d_backend._DEFAULT_REST_POSITIONS["right_forearm"]
+            default_child = model3d_backend._DEFAULT_REST_POSITIONS["right_hand"]
+            half_vec = tuple((default_child[index] - default_parent[index]) * 0.5 for index in range(3))
+            target_hand = [default_parent[index] + half_vec[index] for index in range(3)]
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["mixamorig:RightForeArm", "mixamorig:RightHand"],
+                    "bone_map": {
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:RightForeArm": list(default_parent),
+                        "mixamorig:RightHand": target_hand,
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "preserve_proportions": False,
+                },
+                "action": {
+                    "name": "wave",
+                    "json": {
+                        "wave": {
+                            "duration": 1.0,
+                            "loop": False,
+                            "keyframes": [
+                                {"time": 0.0, "offsets": {"right_hand": [0.0, 0.0, 0.0]}},
+                                {"time": 1.0, "offsets": {"right_hand": [0.0, 0.4, 0.0]}},
+                            ],
+                        },
+                    },
+                    "time": 1.0,
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertAlmostEqual(pose["motion_scale"]["scales"]["right_hand"], 0.5)
+        self.assertAlmostEqual(pose["positions"]["right_hand"][1], target_hand[1] + 0.2)
+
+    def test_evaluate_retarget_pose_can_disable_motion_scaling(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_pose_no_motion_scale_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            default_parent = model3d_backend._DEFAULT_REST_POSITIONS["right_forearm"]
+            default_child = model3d_backend._DEFAULT_REST_POSITIONS["right_hand"]
+            half_vec = tuple((default_child[index] - default_parent[index]) * 0.5 for index in range(3))
+            target_hand = [default_parent[index] + half_vec[index] for index in range(3)]
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["mixamorig:RightForeArm", "mixamorig:RightHand"],
+                    "bone_map": {
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:RightForeArm": list(default_parent),
+                        "mixamorig:RightHand": target_hand,
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "preserve_proportions": False,
+                    "adaptive_motion_scale": False,
+                },
+                "action": {
+                    "name": "wave",
+                    "json": {
+                        "wave": {
+                            "keyframes": [
+                                {"time": 0.0, "offsets": {"right_hand": [0.0, 0.4, 0.0]}},
+                            ],
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertFalse(pose["motion_scale"]["enabled"])
+        self.assertEqual(pose["motion_scale"]["scaled_count"], 0)
+        self.assertAlmostEqual(pose["positions"]["right_hand"][1], target_hand[1] + 0.4)
 
     def test_evaluate_retarget_pose_clamps_shortened_segment_to_lower_bound(self) -> None:
         clear_model3d_metadata_caches()
@@ -1169,7 +1274,7 @@ Objects:  {
                 "model": {"path": str(model_path)},
                 "retarget": {
                     "mode": "humanoid_auto",
-                    "preserve_proportions": False,
+                    "preserve_proportions": "false",
                     "stretch_limit": 0.05,
                 },
                 "action": {
@@ -1186,6 +1291,7 @@ Objects:  {
 
             pose = evaluate_retarget_pose(node)
 
+        self.assertFalse(pose["preserve_proportions"])
         segment = next(
             item for item in pose["segments"]
             if item["parent"] == "right_forearm" and item["child"] == "right_hand"

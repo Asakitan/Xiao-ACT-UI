@@ -110,6 +110,8 @@ HUMANOID_SEGMENTS = (
     ("right_knee", "right_foot"),
 )
 
+_HUMANOID_PARENT_BY_CHILD = {child: parent for parent, child in HUMANOID_SEGMENTS}
+
 _DEFAULT_REST_POSITIONS: dict[str, tuple[float, float, float]] = {
     "root": (0.0, 0.0, 0.0),
     "hips": (0.0, 0.12, 0.0),
@@ -1739,17 +1741,24 @@ def get_retarget_plan(node: Mapping[str, Any]) -> dict[str, Any]:
 
     stretch_limit = _float_from_mapping(retarget, "stretch_limit", 0.08, lo=0.0, hi=0.5)
     twist_limit = _float_from_mapping(retarget, "twist_limit", 0.35, lo=0.0, hi=1.5)
+    motion_scale_min = _float_from_mapping(retarget, "motion_scale_min", 0.25, lo=0.05, hi=1.0)
+    motion_scale_max = _float_from_mapping(retarget, "motion_scale_max", 4.0, lo=1.0, hi=8.0)
+    if motion_scale_min > motion_scale_max:
+        motion_scale_min, motion_scale_max = motion_scale_max, motion_scale_min
     total = len(HUMANOID_BONES)
     coverage = len(resolved) / float(total) if total else 0.0
     plan = {
         "mode": str(retarget.get("mode") or "humanoid_auto"),
         "profile": str(retarget.get("profile") or retarget.get("mode") or "humanoid_auto"),
         "rest_pose": str(retarget.get("rest_pose") or "auto"),
-        "preserve_proportions": bool(retarget.get("preserve_proportions", True)),
-        "adaptive_ik": bool(retarget.get("adaptive_ik", True)),
-        "prefer_model_clips": bool(retarget.get("prefer_model_clips", True)),
+        "preserve_proportions": _bool_from_mapping(retarget, "preserve_proportions", True),
+        "adaptive_ik": _bool_from_mapping(retarget, "adaptive_ik", True),
+        "adaptive_motion_scale": _bool_from_mapping(retarget, "adaptive_motion_scale", True),
+        "prefer_model_clips": _bool_from_mapping(retarget, "prefer_model_clips", True),
         "stretch_limit": stretch_limit,
         "twist_limit": twist_limit,
+        "motion_scale_min": motion_scale_min,
+        "motion_scale_max": motion_scale_max,
         "bone_map": resolved,
         "sources": sources,
         "unresolved": tuple(unresolved),
@@ -2111,6 +2120,58 @@ def _rotation_offsets_from_samples(
     return out
 
 
+def _motion_scale_for_bone(
+    bone: str,
+    rest: Mapping[str, tuple[float, float, float]],
+    model_rest_bones: set[str],
+    plan: Mapping[str, Any],
+) -> float:
+    if not bool(plan.get("adaptive_motion_scale", True)):
+        return 1.0
+    parent = _HUMANOID_PARENT_BY_CHILD.get(bone)
+    if not parent or parent not in model_rest_bones or bone not in model_rest_bones:
+        return 1.0
+    if parent not in rest or bone not in rest:
+        return 1.0
+    default_parent = _DEFAULT_REST_POSITIONS.get(parent)
+    default_child = _DEFAULT_REST_POSITIONS.get(bone)
+    if default_parent is None or default_child is None:
+        return 1.0
+    default_len = _vec_len(_vec_sub(default_child, default_parent))
+    target_len = _vec_len(_vec_sub(rest[bone], rest[parent]))
+    if default_len <= 0.000001 or target_len <= 0.000001:
+        return 1.0
+    lo = float(plan.get("motion_scale_min") or 0.25)
+    hi = float(plan.get("motion_scale_max") or 4.0)
+    if lo > hi:
+        lo, hi = hi, lo
+    return max(lo, min(hi, target_len / default_len))
+
+
+def _scale_motion_offsets(
+    offsets: Mapping[str, tuple[float, float, float]],
+    rest: Mapping[str, tuple[float, float, float]],
+    model_rest_bones: set[str],
+    plan: Mapping[str, Any],
+) -> tuple[dict[str, tuple[float, float, float]], dict[str, Any]]:
+    if not offsets:
+        return {}, {"enabled": bool(plan.get("adaptive_motion_scale", True)), "scaled_count": 0}
+    out: dict[str, tuple[float, float, float]] = {}
+    scales: dict[str, float] = {}
+    for bone, offset in offsets.items():
+        scale = _motion_scale_for_bone(bone, rest, model_rest_bones, plan)
+        scales[bone] = scale
+        out[bone] = _vec_scale(offset, scale)
+    changed = {bone: value for bone, value in scales.items() if abs(value - 1.0) > 0.000001}
+    return out, {
+        "enabled": bool(plan.get("adaptive_motion_scale", True)),
+        "scaled_count": len(changed),
+        "scales": {bone: float(value) for bone, value in sorted(changed.items())},
+        "min": float(plan.get("motion_scale_min") or 0.25),
+        "max": float(plan.get("motion_scale_max") or 4.0),
+    }
+
+
 def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
     name = _normalize_action_name(action_name)
     speed = _float_from_mapping(selected, "speed", 1.0, lo=0.05, hi=5.0)
@@ -2156,7 +2217,10 @@ def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping
     return offsets
 
 
-def _canonical_rest_positions(plan: Mapping[str, Any], model_meta: Mapping[str, Any]) -> tuple[dict[str, tuple[float, float, float]], str]:
+def _canonical_rest_positions(
+    plan: Mapping[str, Any],
+    model_meta: Mapping[str, Any],
+) -> tuple[dict[str, tuple[float, float, float]], str, set[str]]:
     rest_positions = model_meta.get("rest_positions")
     rest_source = str(model_meta.get("rest_positions_source") or "").strip()
     if not isinstance(rest_positions, Mapping):
@@ -2166,6 +2230,7 @@ def _canonical_rest_positions(plan: Mapping[str, Any], model_meta: Mapping[str, 
             rest_source = "sidecar"
     bone_map = plan.get("bone_map") if isinstance(plan.get("bone_map"), Mapping) else {}
     out: dict[str, tuple[float, float, float]] = {}
+    model_rest_bones: set[str] = set()
     source = "default"
     for canonical in HUMANOID_BONES:
         actual = str(bone_map.get(canonical) or "")
@@ -2174,10 +2239,11 @@ def _canonical_rest_positions(plan: Mapping[str, Any], model_meta: Mapping[str, 
             point = _point3(rest_positions.get(actual)) or _point3(rest_positions.get(canonical))
         if point is not None:
             out[canonical] = point
+            model_rest_bones.add(canonical)
             source = rest_source or "model"
         elif canonical in _DEFAULT_REST_POSITIONS:
             out[canonical] = _DEFAULT_REST_POSITIONS[canonical]
-    return out, source
+    return out, source, model_rest_bones
 
 
 def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
@@ -2207,7 +2273,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
     except Exception:
         phase = 0.0
 
-    rest, rest_source = _canonical_rest_positions(plan, model_meta)
+    rest, rest_source, model_rest_bones = _canonical_rest_positions(plan, model_meta)
     if not rest:
         return {
             "ok": False,
@@ -2230,12 +2296,13 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         not has_keyframe_motion
         or _bool_from_mapping(selected, "procedural", False)
     )
-    offsets = _merge_offsets(
+    raw_offsets = _merge_offsets(
         _procedural_action_offsets(action_name, phase, selected) if use_procedural else {},
         rotation_offsets,
         keyframe_offsets,
         explicit_offsets,
     )
+    offsets, motion_scale = _scale_motion_offsets(raw_offsets, rest, model_rest_bones, plan)
     stretch_limit = float(plan.get("stretch_limit") or 0.0)
     preserve = bool(plan.get("preserve_proportions", True))
 
@@ -2291,6 +2358,8 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "rest_source": rest_source,
         "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
         "motion_sample": dict(keyframe_info),
+        "motion_scale": dict(motion_scale),
+        "model_rest_bones": tuple(sorted(model_rest_bones)),
         "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},
         "positions": {key: [float(x) for x in value] for key, value in pose.items()},
         "segments": tuple(segment_infos),
