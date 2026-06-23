@@ -86,7 +86,7 @@ def _driver_status() -> dict:
         from mem_probe import rt_io as _drv
         return _drv.status()
     except Exception:
-        return {"driver_available": False}
+        return {"backend_ready": False}
 
 
 def backend_info() -> dict:
@@ -108,7 +108,7 @@ def backend_info() -> dict:
         "bytes_copy_required": (_fast is not None) and (not _READONLY_OK),
         "read_backend": mem_read_backend(),
         "slab_read": has_slab_read(),
-        "driver_available": ds.get("driver_available", False),
+        "backend_ready": ds.get("backend_ready", False),
         "driver_pid": ds.get("attached_pid", 0),
     }
 
@@ -179,7 +179,7 @@ def mem_read_backend() -> str:
     if _fast is not None and hasattr(_fast, "mem_read_backend"):
         return _fast.mem_read_backend()
     ds = _driver_status()
-    if ds.get("driver_available") and ds.get("attached_pid"):
+    if ds.get("backend_ready") and ds.get("attached_pid"):
         return "driver"
     return "rpm-python"
 
