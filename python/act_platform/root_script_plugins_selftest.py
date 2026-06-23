@@ -456,10 +456,44 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_retarget_twist_limit",
                         "state": twist_state,
                     }
+                stretch_action = act_plugin_action(
+                    owner, "script.retarget.set_stretch_limit", {"stretch_limit": 0.06}, plugin_id=plugin_id)
+                stretch_state = _state(stretch_action)
+                if abs(float(stretch_state.get("retarget_stretch_limit") or 0.0) - 0.06) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_retarget_stretch_limit",
+                        "state": stretch_state,
+                    }
+                motion_scale_action = act_plugin_action(
+                    owner,
+                    "script.retarget.set_motion_scale",
+                    {"motion_scale_min": 0.4, "motion_scale_max": 2.5},
+                    plugin_id=plugin_id,
+                )
+                motion_scale_state = _state(motion_scale_action)
+                if abs(float(motion_scale_state.get("retarget_motion_scale_min") or 0.0) - 0.4) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_retarget_motion_scale_min",
+                        "state": motion_scale_state,
+                    }
+                if abs(float(motion_scale_state.get("retarget_motion_scale_max") or 0.0) - 2.5) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_retarget_motion_scale_max",
+                        "state": motion_scale_state,
+                    }
                 state = dict(state)
                 state["animation_fps"] = fps_state.get("animation_fps")
-                state["tick_interval"] = twist_state.get("tick_interval")
+                state["tick_interval"] = motion_scale_state.get("tick_interval")
                 state["retarget_twist_limit"] = twist_state.get("retarget_twist_limit")
+                state["retarget_stretch_limit"] = stretch_state.get("retarget_stretch_limit")
+                state["retarget_motion_scale_min"] = motion_scale_state.get("retarget_motion_scale_min")
+                state["retarget_motion_scale_max"] = motion_scale_state.get("retarget_motion_scale_max")
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
@@ -520,6 +554,27 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_overlay_twist_limit",
                         "retarget": retarget,
                     }
+                if abs(float(retarget.get("stretch_limit") or 0.0) - 0.06) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_stretch_limit",
+                        "retarget": retarget,
+                    }
+                if abs(float(retarget.get("motion_scale_min") or 0.0) - 0.4) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_motion_scale_min",
+                        "retarget": retarget,
+                    }
+                if abs(float(retarget.get("motion_scale_max") or 0.0) - 2.5) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_motion_scale_max",
+                        "retarget": retarget,
+                    }
                 if callable(get_model_metadata):
                     meta = get_model_metadata(model_node)
                     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
@@ -564,6 +619,9 @@ def run_selftest() -> dict[str, Any]:
                 "spec_build_count": state.get("spec_build_count"),
                 "animation_fps": state.get("animation_fps"),
                 "retarget_twist_limit": state.get("retarget_twist_limit"),
+                "retarget_stretch_limit": state.get("retarget_stretch_limit"),
+                "retarget_motion_scale_min": state.get("retarget_motion_scale_min"),
+                "retarget_motion_scale_max": state.get("retarget_motion_scale_max"),
                 "default_vertex_count": state.get("default_vertex_count"),
                 "default_face_count": state.get("default_face_count"),
                 "default_preview_skin_count": state.get("default_preview_skin_count"),
