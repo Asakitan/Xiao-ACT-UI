@@ -766,6 +766,7 @@ class AIEditorAPI:
         from ai_editor.extension_host import get_extension_host
         self._ext_host = get_extension_host()
         self._node_ext_host = None  # NodeExtensionHost, created lazily in _init_extension_host
+        self._node_tree_disposables: Dict[str, Any] = {}
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -3252,13 +3253,14 @@ class AIEditorAPI:
             ui_bridge=ui_bridge,
         )
         host.set_command_service(self._ext_host.commands)
+        host.on_tree_event(self._handle_node_tree_event)
 
         if not host.start():
             print("[NodeExtHost] Failed to start Node subprocess.")
             return
 
-        activated = host.activate_all(node_exts)
         self._node_ext_host = host
+        activated = host.activate_all(node_exts)
         print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
               "sent for activation.")
 
@@ -3341,8 +3343,67 @@ class AIEditorAPI:
             print(f"[NodeExtHost] Failed to persist config_set "
                   f"{section}.{key}: {exc}")
 
+    def _handle_node_tree_event(
+            self, event: str, view_id: str, payload: Dict[str, Any]) -> None:
+        """Bridge Node TreeDataProvider events into the Python VSCode API."""
+        normalized_view_id = str(view_id or "")
+        if not normalized_view_id:
+            return
+        try:
+            from ai_editor.extension_host import (
+                NodeTreeDataProvider, NodeTreeElement)
+            if event == "tree_data_provider_registered":
+                disposable = self._node_tree_disposables.pop(
+                    normalized_view_id, None)
+                if disposable is not None and hasattr(disposable, "dispose"):
+                    disposable.dispose()
+                host = self._node_ext_host
+                if host is None:
+                    return
+                provider = NodeTreeDataProvider(host, normalized_view_id)
+                self._node_tree_disposables[normalized_view_id] = (
+                    self._vscode_ns._register_tree_data_provider(
+                        normalized_view_id, provider))
+            elif event == "tree_data_provider_disposed":
+                disposable = self._node_tree_disposables.pop(
+                    normalized_view_id, None)
+                if disposable is not None and hasattr(disposable, "dispose"):
+                    disposable.dispose()
+            elif event == "tree_data_changed":
+                provider = self._vscode_ns._tree_data_providers.get(
+                    normalized_view_id)
+                refresh = getattr(provider, "refresh", None)
+                if callable(refresh):
+                    element = payload.get("element")
+                    refresh(NodeTreeElement(element) if isinstance(
+                        element, dict) else None)
+            elif event == "tree_view_reveal":
+                element = payload.get("element")
+                if not isinstance(element, dict):
+                    return
+                view = self._vscode_ns._tree_views.get(normalized_view_id)
+                provider = self._vscode_ns._tree_data_providers.get(
+                    normalized_view_id)
+                if view is None and provider is not None:
+                    view = self._vscode_ns._create_tree_view(
+                        normalized_view_id, treeDataProvider=provider)
+                reveal = getattr(view, "reveal", None)
+                if callable(reveal):
+                    reveal(NodeTreeElement(element))
+        except Exception as exc:
+            print(f"[NodeExtHost] Failed to bridge tree event "
+                  f"{event}:{normalized_view_id}: {exc}")
+
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""
+        for disposable in list(self._node_tree_disposables.values()):
+            try:
+                dispose = getattr(disposable, "dispose", None)
+                if callable(dispose):
+                    dispose()
+            except Exception:
+                pass
+        self._node_tree_disposables.clear()
         host = self._node_ext_host
         if host is not None:
             host.stop()
@@ -3897,6 +3958,8 @@ class AIEditorAPI:
                 "view_id": normalized_view_id,
                 "handle": normalized_handle,
             }
+        self._notify_node_tree_view_event(
+            normalized_view_id, "selection", view, normalized_handle)
         snapshot = self._extension_view_snapshot(normalized_view_id)
         return {
             "ok": True,
@@ -3968,6 +4031,9 @@ class AIEditorAPI:
                 "view_id": normalized_view_id,
                 "handle": normalized_handle,
             }
+        self._notify_node_tree_view_event(
+            normalized_view_id, "expand" if expanded else "collapse",
+            view, normalized_handle)
         return {
             "ok": True,
             "view_id": normalized_view_id,
@@ -3993,6 +4059,8 @@ class AIEditorAPI:
                 "view_id": normalized_view_id,
                 "handle": normalized_handle,
             }
+        self._notify_node_tree_view_event(
+            normalized_view_id, "selection", view, normalized_handle)
         selection = list(getattr(view, "selection", []) or [])
         element = selection[0] if selection else None
         try:
@@ -4013,6 +4081,33 @@ class AIEditorAPI:
             return {"error": f"Command not found: {normalized_command}"}
         except Exception as exc:
             return {"error": str(exc), "command": normalized_command}
+
+    def _notify_node_tree_view_event(
+            self, view_id: str, event: str, view: Any, handle: str) -> None:
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return
+        provider = getattr(view, "provider", None)
+        if provider is None:
+            provider = self._vscode_ns._tree_data_providers.get(view_id)
+        try:
+            from ai_editor.extension_host import NodeTreeDataProvider
+        except Exception:
+            NodeTreeDataProvider = None
+        if (provider is None
+                or NodeTreeDataProvider is None
+                or not isinstance(provider, NodeTreeDataProvider)):
+            return
+        lookup = getattr(view, "element_for_handle", None)
+        element = lookup(handle) if callable(lookup) else None
+        if element is None:
+            return
+        try:
+            host.send_tree_view_event(
+                view_id, event, element=element,
+                selection=list(getattr(view, "selection", []) or []))
+        except Exception:
+            pass
 
     def list_commands(self) -> Dict:
         self._ensure_engine()

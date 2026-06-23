@@ -249,6 +249,9 @@ const _extensions = new Map();           // extensionId -> { desc, module, conte
 const _commands = new Map();             // commandId -> handler
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
+const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
+const _treeViews = new Map();            // viewId -> TreeView-like object
+const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
@@ -258,6 +261,297 @@ const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
 const _scmProviders = new Map();            // id -> SourceControl
 const _onDidChangeConfigurationEmitter = new EventEmitter();
+
+function _treeStore(viewId) {
+    const key = String(viewId || '');
+    let store = _treeElementStores.get(key);
+    if (!store) {
+        store = {
+            next: 1,
+            byHandle: new Map(),
+            weak: new WeakMap(),
+            primitive: new Map(),
+        };
+        _treeElementStores.set(key, store);
+    }
+    return store;
+}
+
+function _primitiveTreeKey(element) {
+    return `${typeof element}:${String(element)}`;
+}
+
+function _treeElementHandle(viewId, element) {
+    const store = _treeStore(viewId);
+    if (element && (typeof element === 'object' || typeof element === 'function')) {
+        const existing = store.weak.get(element);
+        if (existing) return existing;
+        const handle = `n${store.next++}`;
+        store.weak.set(element, handle);
+        store.byHandle.set(handle, element);
+        return handle;
+    }
+    const primitiveKey = _primitiveTreeKey(element);
+    const existing = store.primitive.get(primitiveKey);
+    if (existing) return existing;
+    const handle = `n${store.next++}`;
+    store.primitive.set(primitiveKey, handle);
+    store.byHandle.set(handle, element);
+    return handle;
+}
+
+function _treeElementForHandle(viewId, handle) {
+    if (!handle) return undefined;
+    const store = _treeElementStores.get(String(viewId || ''));
+    return store ? store.byHandle.get(String(handle)) : undefined;
+}
+
+function _treeElementLabel(element) {
+    if (element === undefined || element === null) return '';
+    if (typeof element === 'string') return element;
+    if (typeof element === 'number' || typeof element === 'boolean') return String(element);
+    if (typeof element === 'object') {
+        return String(element.label || element.name || element.id || element.resourceUri || '');
+    }
+    return String(element);
+}
+
+function _serializeTreeElement(viewId, element) {
+    if (element === undefined || element === null) return null;
+    return {
+        _nodeTreeViewId: String(viewId || ''),
+        _nodeTreeHandle: _treeElementHandle(viewId, element),
+        label: _treeElementLabel(element),
+    };
+}
+
+function _serializeTreeUri(value) {
+    if (!value) return undefined;
+    if (typeof value === 'string') return value;
+    if (value instanceof Uri) {
+        return {
+            scheme: value.scheme,
+            authority: value.authority,
+            path: value.path,
+            query: value.query,
+            fragment: value.fragment,
+        };
+    }
+    if (typeof value === 'object' && value.scheme && value.path !== undefined) {
+        return {
+            scheme: value.scheme,
+            authority: value.authority || '',
+            path: value.path || '',
+            query: value.query || '',
+            fragment: value.fragment || '',
+        };
+    }
+    return String(value);
+}
+
+function _serializeTreeText(value) {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'object' && value.value !== undefined) return String(value.value);
+    return String(value);
+}
+
+function _serializeThemeColor(color) {
+    if (!color) return undefined;
+    if (typeof color === 'string') return color;
+    if (typeof color === 'object') return color.id || color.value || String(color);
+    return String(color);
+}
+
+function _serializeTreeIconPath(iconPath) {
+    if (!iconPath) return undefined;
+    if (typeof iconPath === 'string') return iconPath;
+    if (iconPath instanceof Uri) return _serializeTreeUri(iconPath);
+    if (typeof iconPath === 'object') {
+        if (typeof iconPath.id === 'string') {
+            const result = { id: iconPath.id };
+            const color = _serializeThemeColor(iconPath.color);
+            if (color) result.color = { id: color };
+            return result;
+        }
+        const result = {};
+        if (iconPath.light) result.light = _serializeTreeUri(iconPath.light);
+        if (iconPath.dark) result.dark = _serializeTreeUri(iconPath.dark);
+        if (iconPath.path) result.path = _serializeTreeUri(iconPath.path);
+        if (Object.keys(result).length) return result;
+    }
+    return String(iconPath);
+}
+
+function _serializeTreeCommand(command, viewId) {
+    if (!command || typeof command !== 'object') return undefined;
+    const result = {
+        command: String(command.command || command.id || ''),
+        title: String(command.title || command.command || command.id || ''),
+    };
+    if (Array.isArray(command.arguments)) {
+        result.arguments = command.arguments.map(arg => _serializeArgForPython(arg, viewId));
+    }
+    return result.command ? result : undefined;
+}
+
+function _serializeAccessibility(value) {
+    if (!value || typeof value !== 'object') return undefined;
+    const result = {};
+    if (value.label) result.label = String(value.label);
+    if (value.role) result.role = String(value.role);
+    return Object.keys(result).length ? result : undefined;
+}
+
+function _serializeCheckboxState(value) {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'number') return value;
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (typeof value === 'object') {
+        const result = {};
+        if (value.state !== undefined) result.state = value.state;
+        if (value.tooltip !== undefined) result.tooltip = String(value.tooltip);
+        const accessibility = _serializeAccessibility(value.accessibilityInformation);
+        if (accessibility) result.accessibilityInformation = accessibility;
+        return result;
+    }
+    return value;
+}
+
+function _serializeTreeItem(viewId, item, element) {
+    if (!item || typeof item !== 'object') {
+        return { label: _treeElementLabel(item ?? element), collapsibleState: 0 };
+    }
+    const result = {};
+    if (item.id !== undefined) result.id = String(item.id);
+    if (item.label !== undefined) result.label = item.label;
+    else result.label = _treeElementLabel(element);
+    if (item.description !== undefined) result.description = item.description;
+    const tooltip = _serializeTreeText(item.tooltip);
+    if (tooltip !== undefined) result.tooltip = tooltip;
+    if (item.resourceUri) result.resourceUri = _serializeTreeUri(item.resourceUri);
+    const iconPath = _serializeTreeIconPath(item.iconPath);
+    if (iconPath !== undefined) result.iconPath = iconPath;
+    const command = _serializeTreeCommand(item.command, viewId);
+    if (command) result.command = command;
+    if (item.contextValue !== undefined) result.contextValue = String(item.contextValue);
+    if (item.collapsibleState !== undefined) result.collapsibleState = item.collapsibleState;
+    const checkbox = _serializeCheckboxState(item.checkboxState);
+    if (checkbox !== undefined) result.checkboxState = checkbox;
+    const accessibility = _serializeAccessibility(item.accessibilityInformation);
+    if (accessibility) result.accessibilityInformation = accessibility;
+    return result;
+}
+
+function _serializeArgForPython(value, viewId) {
+    if (value === undefined || value === null) return value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+    for (const [candidateViewId, store] of _treeElementStores) {
+        if (value && (typeof value === 'object' || typeof value === 'function') && store.weak.has(value)) {
+            return _serializeTreeElement(candidateViewId, value);
+        }
+    }
+    if (value instanceof Uri) return _serializeTreeUri(value);
+    if (Array.isArray(value)) return value.map(item => _serializeArgForPython(item, viewId));
+    if (typeof value === 'object') {
+        const result = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (typeof item !== 'function') result[key] = _serializeArgForPython(item, viewId);
+        }
+        return result;
+    }
+    return String(value);
+}
+
+function _deserializeArgFromPython(value) {
+    if (Array.isArray(value)) return value.map(_deserializeArgFromPython);
+    if (value && typeof value === 'object') {
+        if (value._nodeTreeViewId && value._nodeTreeHandle) {
+            const element = _treeElementForHandle(value._nodeTreeViewId, value._nodeTreeHandle);
+            if (element !== undefined) return element;
+        }
+        const result = {};
+        for (const [key, item] of Object.entries(value)) result[key] = _deserializeArgFromPython(item);
+        return result;
+    }
+    return value;
+}
+
+function _subscribeTreeDataChanges(viewId, provider) {
+    const event = provider && provider.onDidChangeTreeData;
+    if (typeof event !== 'function') return undefined;
+    try {
+        return event((element) => {
+            send({
+                type: 'tree_data_changed',
+                viewId,
+                element: _serializeTreeElement(viewId, element),
+            });
+        });
+    } catch (err) {
+        log(`tree data change subscription failed for ${viewId}: ${err.message}`);
+        return undefined;
+    }
+}
+
+function registerTreeDataProviderInternal(viewId, treeDataProvider) {
+    const normalized = String(viewId || '');
+    if (!normalized || !treeDataProvider) return new Disposable(() => {});
+    const previous = _treeDataProviders.get(normalized);
+    try { previous?.disposable?.dispose?.(); } catch {}
+    const disposable = _subscribeTreeDataChanges(normalized, treeDataProvider);
+    _treeDataProviders.set(normalized, { provider: treeDataProvider, disposable });
+    send({ type: 'tree_data_provider_registered', viewId: normalized });
+    return new Disposable(() => {
+        const current = _treeDataProviders.get(normalized);
+        if (current?.provider === treeDataProvider) {
+            try { current.disposable?.dispose?.(); } catch {}
+            _treeDataProviders.delete(normalized);
+            _treeElementStores.delete(normalized);
+            send({ type: 'tree_data_provider_disposed', viewId: normalized });
+        }
+    });
+}
+
+function createTreeViewObject(viewId, treeDataProvider) {
+    const normalized = String(viewId || '');
+    const expandEmitter = new EventEmitter();
+    const collapseEmitter = new EventEmitter();
+    const selectionEmitter = new EventEmitter();
+    const visibilityEmitter = new EventEmitter();
+    const providerDisposable = treeDataProvider
+        ? registerTreeDataProviderInternal(normalized, treeDataProvider)
+        : undefined;
+    const view = {
+        id: normalized,
+        visible: true,
+        selection: [],
+        onDidExpandElement: expandEmitter.event,
+        onDidCollapseElement: collapseEmitter.event,
+        onDidChangeSelection: selectionEmitter.event,
+        onDidChangeVisibility: visibilityEmitter.event,
+        reveal(element, options) {
+            send({
+                type: 'tree_view_reveal',
+                viewId: normalized,
+                element: _serializeTreeElement(normalized, element),
+                options: options || {},
+            });
+            return Promise.resolve();
+        },
+        dispose() {
+            try { providerDisposable?.dispose?.(); } catch {}
+            _treeViews.delete(normalized);
+            visibilityEmitter.fire({ visible: false });
+        },
+        _onDidExpandElement: expandEmitter,
+        _onDidCollapseElement: collapseEmitter,
+        _onDidChangeSelection: selectionEmitter,
+        _onDidChangeVisibility: visibilityEmitter,
+    };
+    _treeViews.set(normalized, view);
+    return view;
+}
 
 // -------------------------------------------------------------------------
 // Build the mock vscode module for a given extension
@@ -457,21 +751,17 @@ function buildVscodeModule(extDesc, extensionPath) {
                 return item;
             },
             registerTreeDataProvider(viewId, treeDataProvider) {
-                log(`stub: registerTreeDataProvider ${viewId}`);
-                return new Disposable(() => {});
+                log(`registerTreeDataProvider ${viewId}`);
+                const d = registerTreeDataProviderInternal(viewId, treeDataProvider);
+                subscriptions.push(d);
+                return d;
             },
             createTreeView(viewId, options) {
-                log(`stub: createTreeView ${viewId}`);
-                return {
-                    onDidExpandElement: new EventEmitter().event,
-                    onDidCollapseElement: new EventEmitter().event,
-                    onDidChangeSelection: new EventEmitter().event,
-                    onDidChangeVisibility: new EventEmitter().event,
-                    visible: true,
-                    selection: [],
-                    reveal() { return Promise.resolve(); },
-                    dispose() {},
-                };
+                log(`createTreeView ${viewId}`);
+                const view = createTreeViewObject(viewId, options?.treeDataProvider);
+                const d = new Disposable(() => view.dispose());
+                subscriptions.push(d);
+                return view;
             },
             get activeTextEditor() { return undefined; },
             get visibleTextEditors() { return []; },
@@ -1102,11 +1392,75 @@ async function executeCommand(commandId, args) {
         return;
     }
     try {
-        const result = handler(...(args || []));
+        const result = handler(...(args || []).map(_deserializeArgFromPython));
         if (result && typeof result.then === 'function') await result;
     } catch (err) {
         log(`command error ${commandId}: ${err.message}`);
         send({ type: 'error', extensionId: '', error: `command ${commandId}: ${err.message}` });
+    }
+}
+
+async function handleTreeRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const viewId = String(msg.viewId || '');
+    const op = String(msg.op || '');
+    const reg = _treeDataProviders.get(viewId);
+    const provider = reg?.provider;
+    try {
+        if (!provider) throw new Error(`Tree data provider not found: ${viewId}`);
+        const element = msg.elementHandle
+            ? _treeElementForHandle(viewId, msg.elementHandle)
+            : undefined;
+        let value;
+        if (op === 'getChildren') {
+            const fn = provider.getChildren;
+            const raw = typeof fn === 'function' ? await fn.call(provider, element) : [];
+            const children = raw === undefined || raw === null
+                ? []
+                : (Array.isArray(raw) ? raw : Array.from(raw));
+            value = children.map(child => _serializeTreeElement(viewId, child));
+        } else if (op === 'getTreeItem') {
+            const raw = typeof provider.getTreeItem === 'function'
+                ? await provider.getTreeItem(element)
+                : element;
+            value = _serializeTreeItem(viewId, raw, element);
+        } else if (op === 'getParent') {
+            const raw = typeof provider.getParent === 'function'
+                ? await provider.getParent(element)
+                : undefined;
+            value = _serializeTreeElement(viewId, raw);
+        } else {
+            throw new Error(`Unsupported tree request op: ${op}`);
+        }
+        send({ type: 'tree_response', requestId, ok: true, value });
+    } catch (err) {
+        send({
+            type: 'tree_response',
+            requestId,
+            ok: false,
+            error: err?.message || String(err),
+        });
+    }
+}
+
+function handleTreeViewEvent(msg) {
+    const viewId = String(msg.viewId || '');
+    const view = _treeViews.get(viewId);
+    if (!view) return;
+    const event = String(msg.event || '');
+    const element = _treeElementForHandle(viewId, msg.elementHandle);
+    if (event === 'selection') {
+        const selection = Array.isArray(msg.selectionHandles)
+            ? msg.selectionHandles
+                .map(handle => _treeElementForHandle(viewId, handle))
+                .filter(item => item !== undefined)
+            : (element !== undefined ? [element] : []);
+        view.selection = selection;
+        view._onDidChangeSelection.fire({ selection });
+    } else if (event === 'expand' && element !== undefined) {
+        view._onDidExpandElement.fire({ element });
+    } else if (event === 'collapse' && element !== undefined) {
+        view._onDidCollapseElement.fire({ element });
     }
 }
 
@@ -1140,7 +1494,14 @@ async function handleMessage(msg) {
             resolveWebviewView(msg.viewType, msg.state);
             break;
         case 'command':
+        case 'executeCommand':
             await executeCommand(msg.commandId, msg.args);
+            break;
+        case 'tree_request':
+            await handleTreeRequest(msg);
+            break;
+        case 'tree_view_event':
+            handleTreeViewEvent(msg);
             break;
         case 'settings_sync':
             // Full settings replacement from Python

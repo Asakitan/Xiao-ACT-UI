@@ -1303,6 +1303,75 @@ class EventEmitter:
         self._listeners.clear()
 
 
+class NodeTreeElement(dict):
+    """Serializable handle for an element owned by the Node extension host."""
+
+    def __str__(self) -> str:
+        return str(
+            self.get("label")
+            or self.get("_nodeTreeHandle")
+            or self.get("handle")
+            or "")
+
+    @property
+    def view_id(self) -> str:
+        return str(self.get("_nodeTreeViewId") or "")
+
+    @property
+    def handle(self) -> str:
+        return str(self.get("_nodeTreeHandle") or "")
+
+
+class NodeTreeDataProvider:
+    """TreeDataProvider adapter that proxies calls to ``node_ext_host.js``."""
+
+    def __init__(self, host: Any, view_id: str) -> None:
+        self._host = host
+        self.view_id = str(view_id or "")
+        self._emitter = EventEmitter()
+
+    @property
+    def onDidChangeTreeData(self):
+        return self._emitter.event
+
+    def refresh(self, element: Any = None) -> None:
+        self._emitter.fire(element)
+
+    def getChildren(self, element: Any = None) -> List[NodeTreeElement]:
+        value = self._host.request_tree_data(
+            self.view_id, "getChildren",
+            self._element_handle(element), default=[])
+        if not isinstance(value, list):
+            return []
+        return [
+            self._coerce_element(item)
+            for item in value
+            if isinstance(item, dict)
+        ]
+
+    def getTreeItem(self, element: Any) -> Dict[str, Any]:
+        value = self._host.request_tree_data(
+            self.view_id, "getTreeItem",
+            self._element_handle(element), default={})
+        return value if isinstance(value, dict) else {}
+
+    def getParent(self, element: Any) -> Optional[NodeTreeElement]:
+        value = self._host.request_tree_data(
+            self.view_id, "getParent",
+            self._element_handle(element), default=None)
+        return self._coerce_element(value) if isinstance(value, dict) else None
+
+    @staticmethod
+    def _coerce_element(value: Dict[str, Any]) -> NodeTreeElement:
+        return NodeTreeElement(value)
+
+    @staticmethod
+    def _element_handle(element: Any) -> str:
+        if isinstance(element, dict):
+            return str(element.get("_nodeTreeHandle") or element.get("handle") or "")
+        return str(getattr(element, "handle", "") or "")
+
+
 # ---------------------------------------------------------------------------
 # ExtensionHost — top-level orchestrator (Loading Pipeline)
 # ---------------------------------------------------------------------------
@@ -1489,6 +1558,11 @@ class NodeExtensionHost:
         self._on_config_set_callbacks: List[
             Callable[[str, str, Any], None]
         ] = []
+        self._on_tree_callbacks: List[
+            Callable[[str, str, Dict[str, Any]], None]
+        ] = []
+        self._tree_request_lock = threading.Lock()
+        self._tree_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
         self._shutting_down = False
 
@@ -1762,7 +1836,10 @@ class NodeExtensionHost:
                           command_id, ext_id)
 
         elif msg_type == "output":
-            channel = str(msg.get("channel", "Extension Output"))
+            channel = str(
+                msg.get("channel")
+                or msg.get("channelName")
+                or "Extension Output")
             text = str(msg.get("text", ""))
             self._output_channels.setdefault(channel, []).append(text)
             if self._ui_bridge:
@@ -1791,6 +1868,30 @@ class NodeExtensionHost:
             })
             _log.info("[NodeExtHost] Language provider registered: %s "
                       "selector=%s", kind, selector)
+
+        elif msg_type == "tree_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._tree_request_lock:
+                pending = self._tree_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        elif msg_type in {
+                "tree_data_provider_registered",
+                "tree_data_provider_disposed",
+                "tree_data_changed",
+                "tree_view_reveal"}:
+            view_id = str(msg.get("viewId", ""))
+            payload = dict(msg)
+            payload.pop("type", None)
+            for cb in self._on_tree_callbacks:
+                try:
+                    cb(msg_type, view_id, payload)
+                except Exception:
+                    _log.exception("[NodeExtHost] on_tree callback error")
 
         elif msg_type == "config_set":
             section = str(msg.get("section", ""))
@@ -1853,6 +1954,61 @@ class NodeExtensionHost:
         for persisting the change on the Python side.
         """
         self._on_config_set_callbacks.append(callback)
+
+    def on_tree_event(
+            self,
+            callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
+        """Register a callback for Node TreeDataProvider lifecycle events."""
+        self._on_tree_callbacks.append(callback)
+
+    def request_tree_data(
+            self, view_id: str, op: str, element_handle: str = "",
+            default: Any = None, timeout: float = 0.85) -> Any:
+        """Synchronously request TreeDataProvider data from the Node host."""
+        if not self.is_running:
+            return default
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._tree_request_lock:
+            self._tree_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "tree_request",
+                "requestId": request_id,
+                "viewId": str(view_id or ""),
+                "op": str(op or ""),
+                "elementHandle": str(element_handle or ""),
+            })
+            if not sent:
+                return default
+            if not event.wait(timeout):
+                return default
+            with self._tree_request_lock:
+                pending = self._tree_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                return response.get("value", default)
+            return default
+        finally:
+            with self._tree_request_lock:
+                self._tree_requests.pop(request_id, None)
+
+    def send_tree_view_event(
+            self, view_id: str, event: str, element: Any = None,
+            selection: Optional[List[Any]] = None) -> bool:
+        """Notify the Node TreeView object about frontend selection/expand."""
+        element_handle = NodeTreeDataProvider._element_handle(element)
+        selection_handles = [
+            NodeTreeDataProvider._element_handle(item)
+            for item in (selection or [])
+        ]
+        return self._send({
+            "type": "tree_view_event",
+            "viewId": str(view_id or ""),
+            "event": str(event or ""),
+            "elementHandle": element_handle,
+            "selectionHandles": selection_handles,
+        })
 
     # -- Webview message relay -----------------------------------------------
 

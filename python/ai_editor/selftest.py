@@ -2897,12 +2897,14 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.app import AIEditorAPI
     from ai_editor.chat_providers import ChatProviderDef
     from ai_editor.extension_host import (
-        EventEmitter, ExtensionDescription, ExtensionHost)
+        EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost)
+    from ai_editor.node_runtime import get_node_path
     from ai_editor.vscode_api import LanguageModelToolResult
 
     previous_host = extension_host_module._host
     language_tmp = ""
     settings_tmp = ""
+    node_tree_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
@@ -3513,6 +3515,170 @@ def test_app_extension_runtime_support() -> None:
                decorated_views.get("selftest.command.tree.view", {}).get("runtimeState", {}).get("kind") == "treeView"
                and decorated_views.get("selftest.command.webview.view", {}).get("runtimeState", {}).get("kind") == "webviewView")
 
+        node_path = get_node_path()
+        if not node_path:
+            _check("node extension host tree provider bridge skipped without Node.js", True)
+        else:
+            node_tree_tmp = tempfile.mkdtemp(prefix="sao_node_tree_ext_")
+            node_extension_js = r"""
+const vscode = require('vscode');
+const output = vscode.window.createOutputChannel('node-tree-selftest');
+
+function activate(context) {
+  const root = {
+    id: 'root',
+    label: 'Node Root',
+    description: 'from-js',
+    children: [{ id: 'leaf', label: 'Node Leaf' }],
+  };
+  const emitter = new vscode.EventEmitter();
+  const provider = {
+    onDidChangeTreeData: emitter.event,
+    getChildren(element) {
+      if (!element) return [root];
+      return element.children || [];
+    },
+    getParent(element) {
+      return element && element.id === 'leaf' ? root : undefined;
+    },
+    getTreeItem(element) {
+      const item = new vscode.TreeItem(
+        element.label,
+        element.children ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+      );
+      item.description = element.description || 'leaf-desc';
+      item.tooltip = 'tooltip:' + element.id;
+      item.contextValue = element.children ? 'nodeRoot' : 'nodeLeaf';
+      item.resourceUri = vscode.Uri.file('/workspace/' + element.id + '.txt');
+      item.iconPath = new vscode.ThemeIcon(element.children ? 'folder' : 'file');
+      return item;
+    },
+  };
+  const view = vscode.window.createTreeView('selftest.node.tree', { treeDataProvider: provider });
+  view.onDidChangeSelection(evt => output.appendLine('selection:' + evt.selection.map(item => item.id).join(',')));
+  view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
+  view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
+  vscode.commands.registerCommand('selftest.node.openItem', element => {
+    output.appendLine('open:' + (element && element.id));
+  });
+  context.subscriptions.push(view);
+}
+
+function deactivate() {}
+module.exports = { activate, deactivate };
+"""
+            with open(os.path.join(node_tree_tmp, "extension.js"),
+                      "w", encoding="utf-8") as fh:
+                fh.write(node_extension_js)
+            node_tree_desc = ExtensionDescription.from_package_json({
+                "name": "node-tree",
+                "publisher": "selftest",
+                "version": "0.0.1",
+                "main": "./extension.js",
+                "activationEvents": ["*"],
+                "contributes": {
+                    "commands": [{
+                        "command": "selftest.node.openItem",
+                        "title": "Open Node Item",
+                    }],
+                    "menus": {"view/item/context": [{
+                        "command": "selftest.node.openItem",
+                        "when": "view == selftest.node.tree && viewItem == nodeRoot",
+                    }]},
+                    "viewsContainers": {"activitybar": [{
+                        "id": "selftest.node",
+                        "title": "Node Activity",
+                    }]},
+                    "views": {"selftest.node": [{
+                        "id": "selftest.node.tree",
+                        "name": "Node Tree",
+                    }]},
+                },
+            }, node_tree_tmp)
+            api._ext_host.ext_points.process(node_tree_desc)
+            node_host = NodeExtensionHost(
+                node_path=node_path,
+                script_path=os.path.join(
+                    os.path.dirname(extension_host_module.__file__),
+                    "node_ext_host.js"),
+                ui_bridge=None,
+            )
+            previous_node_host = api._node_ext_host
+            api._node_ext_host = node_host
+            node_host.set_command_service(api._ext_host.commands)
+            node_host.on_tree_event(api._handle_node_tree_event)
+            try:
+                node_started = node_host.start()
+                sent = node_host.activate(node_tree_tmp, node_tree_desc.id, {
+                    "name": node_tree_desc.name,
+                    "publisher": node_tree_desc.publisher,
+                    "version": node_tree_desc.version,
+                    "main": node_tree_desc.main,
+                    "activationEvents": node_tree_desc.activation_events,
+                    "contributes": node_tree_desc.contributes,
+                }) if node_started else False
+                node_registered = _wait_until(
+                    lambda: "selftest.node.tree" in api._vscode_ns._tree_data_providers,
+                    timeout=3.0)
+                node_command_registered = _wait_until(
+                    lambda: "selftest.node.openItem"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_items = {
+                    item.get("id"): item
+                    for item in api.list_extension_activity_bar_items().get("items", [])
+                }
+                node_views = {
+                    view.get("id"): view
+                    for view in node_items.get("selftest.node", {}).get("views", [])
+                }
+                node_nodes = node_views.get(
+                    "selftest.node.tree", {}).get(
+                        "runtimeState", {}).get("nodes", [])
+                _check("node host tree provider registers dynamic activity view",
+                       node_started is True
+                       and sent is True
+                       and node_registered
+                       and node_command_registered
+                       and node_nodes
+                       and node_nodes[0].get("label") == "Node Root"
+                       and node_nodes[0].get("description") == "from-js"
+                       and node_nodes[0].get("tooltip") == "tooltip:root"
+                       and node_nodes[0].get("contextValue") == "nodeRoot"
+                       and node_nodes[0].get("themeIcon", {}).get("id") == "folder"
+                       and node_nodes[0].get("resourceUri") == "file:///workspace/root.txt"
+                       and node_nodes[0].get("actions", [{}])[0].get("command") == "selftest.node.openItem")
+                node_handle = node_nodes[0].get("handle", "") if node_nodes else ""
+                loaded_node_children = api.load_extension_tree_children(
+                    "selftest.node.tree", node_handle)
+                _check("node host tree provider lazy loads JS children",
+                       loaded_node_children.get("ok") is True
+                       and loaded_node_children.get("nodes", [{}])[0].get("label") == "Node Leaf"
+                       and loaded_node_children.get("nodes", [{}])[0].get("contextValue") == "nodeLeaf"
+                       and loaded_node_children.get("nodes", [{}])[0].get("themeIcon", {}).get("id") == "file")
+                api.select_extension_tree_item("selftest.node.tree", node_handle)
+                api.set_extension_tree_item_expanded(
+                    "selftest.node.tree", node_handle, True)
+                api.set_extension_tree_item_expanded(
+                    "selftest.node.tree", node_handle, False)
+                action_result = api.execute_extension_tree_item_action(
+                    "selftest.node.tree", node_handle, "selftest.node.openItem")
+                output_seen = _wait_until(
+                    lambda: "selection:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "expand:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "collapse:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", []))
+                    and "open:root" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", [])),
+                    timeout=3.0)
+                _check("node host tree view events and item actions receive JS element",
+                       action_result.get("ok") is True and output_seen)
+            finally:
+                node_host.stop(timeout=1.0)
+                api._node_ext_host = previous_node_host
+
         provider = ChatProviderDef(
             id="selftest-provider",
             name="Selftest Provider",
@@ -3559,6 +3725,8 @@ def test_app_extension_runtime_support() -> None:
             shutil.rmtree(language_tmp, ignore_errors=True)
         if settings_tmp:
             shutil.rmtree(settings_tmp, ignore_errors=True)
+        if node_tree_tmp:
+            shutil.rmtree(node_tree_tmp, ignore_errors=True)
 
 
 def test_auth() -> None:
