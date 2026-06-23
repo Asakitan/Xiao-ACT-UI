@@ -619,6 +619,104 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_retarget_motion_scale_max",
                         "state": motion_scale_state,
                     }
+                default_model_node = _find_model3d_node(
+                    render_overlays(owner, "unioverlay").get("overlays") or [])
+                if not default_model_node:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_model3d_node",
+                    }
+                default_retarget = (
+                    default_model_node.get("retarget")
+                    if isinstance(default_model_node.get("retarget"), dict)
+                    else {}
+                )
+                default_aliases = (
+                    default_retarget.get("aliases")
+                    if isinstance(default_retarget.get("aliases"), dict)
+                    else {}
+                )
+                for canonical in ("hips", "head", "left_hand", "right_hand", "left_foot", "right_foot"):
+                    if not default_aliases.get(canonical):
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_default_retarget_aliases",
+                            "canonical": canonical,
+                            "retarget": default_retarget,
+                        }
+                if default_retarget.get("adaptive_motion_scale") is not True:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_adaptive_motion_scale",
+                        "retarget": default_retarget,
+                    }
+                if default_retarget.get("prefer_model_clips") is not True:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_prefer_model_clips",
+                        "retarget": default_retarget,
+                    }
+                default_procedural = (
+                    default_model_node.get("procedural_action")
+                    if isinstance(default_model_node.get("procedural_action"), dict)
+                    else {}
+                )
+                default_actions = (
+                    default_procedural.get("actions")
+                    if isinstance(default_procedural.get("actions"), dict)
+                    else {}
+                )
+                required_default_actions = {
+                    "idle", "walk", "jog", "run", "sprint", "sneak", "salute", "beckon",
+                    "dance", "cheer", "victory", "think", "yawn", "sleepy", "scared",
+                    "guard", "dodge_left", "dodge_right", "kick", "punch", "stumble",
+                    "crouch", "tap_react", "drag_react", "drop_react", "happy",
+                }
+                missing_default_actions = sorted(required_default_actions - set(default_actions))
+                if default_procedural.get("default_action") != "idle" or len(default_actions) < 48 or missing_default_actions:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_action_set",
+                        "action_count": len(default_actions),
+                        "missing": missing_default_actions,
+                        "procedural_action": default_procedural,
+                    }
+                common = default_procedural.get("common") if isinstance(default_procedural.get("common"), dict) else {}
+                adaptation = (
+                    default_procedural.get("adaptation")
+                    if isinstance(default_procedural.get("adaptation"), dict)
+                    else {}
+                )
+                rigs = adaptation.get("rigs") if isinstance(adaptation.get("rigs"), list) else []
+                if "custom_aliases" not in rigs or not isinstance(common.get("body"), dict):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_adaptation",
+                        "procedural_action": default_procedural,
+                    }
+                for default_action_name in ("sprint", "guard", "cheer", "crouch"):
+                    representative_action = act_plugin_action(
+                        owner,
+                        "script.avatar.action",
+                        {"name": default_action_name},
+                        plugin_id=plugin_id,
+                    )
+                    representative_state = _state(representative_action)
+                    if representative_state.get("action") != default_action_name:
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_representative_action",
+                            "action": default_action_name,
+                            "state": representative_state,
+                            "result": representative_action,
+                        }
                 procedural_json = json.dumps({
                     "schema": "sao.humanoid.procedural.v1",
                     "enabled": True,
