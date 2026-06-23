@@ -449,6 +449,21 @@ def _point3(value: Any) -> tuple[float, float, float] | None:
         return None
 
 
+def _quat4(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return None
+    try:
+        x = float(value[0])
+        y = float(value[1])
+        z = float(value[2])
+        w = float(value[3])
+        if not all(math.isfinite(v) for v in (x, y, z, w)):
+            raise ValueError("non-finite quaternion")
+        return x, y, z, w
+    except Exception:
+        return None
+
+
 def _extract_rest_positions(value: Any) -> dict[str, tuple[float, float, float]]:
     if not isinstance(value, Mapping):
         return {}
@@ -1032,13 +1047,14 @@ def _glb_animation_keyframes(
         channels = animation.get("channels")
         if not isinstance(samplers, list) or not isinstance(channels, list):
             continue
-        frames_by_time: dict[float, dict[str, tuple[float, float, float]]] = {}
+        frames_by_time: dict[float, dict[str, dict[str, tuple[float, ...]]]] = {}
         sample_count = 0
         for channel in channels:
             if not isinstance(channel, Mapping):
                 continue
             target = channel.get("target") if isinstance(channel.get("target"), Mapping) else {}
-            if str((target or {}).get("path") or "").lower() != "translation":
+            target_path = str((target or {}).get("path") or "").lower()
+            if target_path not in {"translation", "rotation"}:
                 continue
             canonical = _canonical_from_token(_node_name(nodes, (target or {}).get("node")))
             if not canonical:
@@ -1064,21 +1080,33 @@ def _glb_animation_keyframes(
             sample_count += min(total_times, total_values)
             for idx in range(total):
                 row = values[idx]
-                if len(row) < 3 or not all(math.isfinite(v) for v in row[:3]):
-                    continue
                 try:
                     t = float(times[idx][0])
                 except Exception:
                     t = float(idx)
                 if not math.isfinite(t):
                     continue
-                offsets = frames_by_time.setdefault(t, {})
-                offsets[canonical] = (float(row[0]), float(row[1]), float(row[2]))
+                if target_path == "translation":
+                    if len(row) < 3 or not all(math.isfinite(v) for v in row[:3]):
+                        continue
+                    frame = frames_by_time.setdefault(t, {"offsets": {}, "rotations": {}})
+                    frame["offsets"][canonical] = (float(row[0]), float(row[1]), float(row[2]))
+                elif target_path == "rotation":
+                    quat = _quat4(row)
+                    if quat is not None:
+                        frame = frames_by_time.setdefault(t, {"offsets": {}, "rotations": {}})
+                        frame["rotations"][canonical] = quat
         if frames_by_time:
-            frames = [
-                {"time": t, "bone_offsets": {bone: list(offset) for bone, offset in sorted(offsets.items())}}
-                for t, offsets in sorted(frames_by_time.items())
-            ]
+            frames: list[dict[str, Any]] = []
+            for t, groups in sorted(frames_by_time.items()):
+                frame: dict[str, Any] = {"time": t}
+                offsets = groups.get("offsets") if isinstance(groups.get("offsets"), Mapping) else {}
+                rotations = groups.get("rotations") if isinstance(groups.get("rotations"), Mapping) else {}
+                if offsets:
+                    frame["bone_offsets"] = {bone: list(offset) for bone, offset in sorted(offsets.items())}
+                if rotations:
+                    frame["bone_rotations"] = {bone: list(rotation) for bone, rotation in sorted(rotations.items())}
+                frames.append(frame)
             clips[name] = {
                 "source": "glb",
                 "duration": max(frames_by_time),
@@ -1665,6 +1693,52 @@ def _vec_len(a: tuple[float, float, float]) -> float:
     return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 
 
+def _vec_cross(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _quat_normalize(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    length = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
+    if length <= 0.000001:
+        return 0.0, 0.0, 0.0, 1.0
+    return q[0] / length, q[1] / length, q[2] / length, q[3] / length
+
+
+def _quat_rotate_vec(
+    q: tuple[float, float, float, float],
+    v: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    x, y, z, w = _quat_normalize(q)
+    u = (x, y, z)
+    uv = _vec_cross(u, v)
+    uuv = _vec_cross(u, uv)
+    return _vec_add(v, _vec_add(_vec_scale(uv, 2.0 * w), _vec_scale(uuv, 2.0)))
+
+
+def _lerp_quat(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    amount: float,
+) -> tuple[float, float, float, float]:
+    t = max(0.0, min(1.0, float(amount or 0.0)))
+    dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+    if dot < 0.0:
+        b = (-b[0], -b[1], -b[2], -b[3])
+    return _quat_normalize((
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ))
+
+
 def _normalize_action_name(value: Any) -> str:
     return str(value or "").strip().lower().replace(" ", "_")
 
@@ -1692,6 +1766,18 @@ def _pose_offsets_from_mapping(value: Any) -> dict[str, tuple[float, float, floa
         point = _point3(raw)
         if canonical and point is not None:
             out[canonical] = point
+    return out
+
+
+def _pose_rotations_from_mapping(value: Any) -> dict[str, tuple[float, float, float, float]]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for key, raw in value.items():
+        canonical = _canonical_from_token(key)
+        quat = _quat4(raw)
+        if canonical and quat is not None:
+            out[canonical] = _quat_normalize(quat)
     return out
 
 
@@ -1734,7 +1820,11 @@ def _frame_time(frame: Mapping[str, Any], fallback: float) -> float:
 def _frame_offsets(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
     direct = {
         key: value for key, value in frame.items()
-        if key not in {"time", "t", "phase", "frame", "offsets", "pose_offsets", "bone_offsets", "bones"}
+        if key not in {
+            "time", "t", "phase", "frame",
+            "offsets", "pose_offsets", "bone_offsets", "bones",
+            "rotations", "pose_rotations", "bone_rotations",
+        }
     }
     return _merge_offsets(
         _pose_offsets_from_mapping(frame.get("pose_offsets")),
@@ -1743,6 +1833,17 @@ def _frame_offsets(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, fl
         _pose_offsets_from_mapping(frame.get("bones")),
         _pose_offsets_from_mapping(direct),
     )
+
+
+def _frame_rotations(frame: Mapping[str, Any]) -> dict[str, tuple[float, float, float, float]]:
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for group in (
+        _pose_rotations_from_mapping(frame.get("pose_rotations")),
+        _pose_rotations_from_mapping(frame.get("bone_rotations")),
+        _pose_rotations_from_mapping(frame.get("rotations")),
+    ):
+        out.update(group)
+    return out
 
 
 def _lerp_offsets(
@@ -1763,6 +1864,32 @@ def _lerp_offsets(
     return out
 
 
+def _lerp_rotations(
+    a: Mapping[str, tuple[float, float, float, float]],
+    b: Mapping[str, tuple[float, float, float, float]],
+    amount: float,
+) -> dict[str, tuple[float, float, float, float]]:
+    t = max(0.0, min(1.0, float(amount or 0.0)))
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for key in set(a) | set(b):
+        av = a.get(key)
+        bv = b.get(key)
+        if av is None and bv is not None:
+            av = bv
+        if bv is None and av is not None:
+            bv = av
+        if av is None or bv is None:
+            continue
+        out[key] = _lerp_quat(av, bv, t)
+    return out
+
+
+def _json_rotations(
+    rotations: Mapping[str, tuple[float, float, float, float]],
+) -> dict[str, list[float]]:
+    return {key: [float(x) for x in value] for key, value in sorted(rotations.items())}
+
+
 def _sample_keyframe_offsets(
     selected: Mapping[str, Any],
     phase: float,
@@ -1773,13 +1900,18 @@ def _sample_keyframe_offsets(
     if not isinstance(raw_frames, (list, tuple)):
         return {}, {}
 
-    frames: list[tuple[float, dict[str, tuple[float, float, float]]]] = []
+    frames: list[tuple[
+        float,
+        dict[str, tuple[float, float, float]],
+        dict[str, tuple[float, float, float, float]],
+    ]] = []
     for index, raw in enumerate(raw_frames):
         if not isinstance(raw, Mapping):
             continue
         offsets = _frame_offsets(raw)
-        if offsets:
-            frames.append((_frame_time(raw, float(index)), offsets))
+        rotations = _frame_rotations(raw)
+        if offsets or rotations:
+            frames.append((_frame_time(raw, float(index)), offsets, rotations))
     frames.sort(key=lambda item: item[0])
     if not frames:
         return {}, {}
@@ -1805,6 +1937,8 @@ def _sample_keyframe_offsets(
             "keyframe_count": 1,
             "duration": duration,
             "loop": loop,
+            "rotations": _json_rotations(frames[0][2]),
+            "rotation_count": len(frames[0][2]),
         }
 
     prev = frames[0]
@@ -1820,8 +1954,10 @@ def _sample_keyframe_offsets(
     interpolation = str(selected.get("interpolation") or "linear").strip().lower()
     if interpolation in {"step", "hold", "nearest"}:
         sampled = dict(prev[1] if amount < 1.0 else nxt[1])
+        rotations = dict(prev[2] if amount < 1.0 else nxt[2])
     else:
         sampled = _lerp_offsets(prev[1], nxt[1], amount)
+        rotations = _lerp_rotations(prev[2], nxt[2], amount)
     return sampled, {
         "motion_source": "keyframes",
         "sample_time": t,
@@ -1831,7 +1967,49 @@ def _sample_keyframe_offsets(
         "frame_a": prev[0],
         "frame_b": nxt[0],
         "blend": max(0.0, min(1.0, amount)),
+        "rotations": _json_rotations(rotations),
+        "rotation_count": len(rotations),
     }
+
+
+def _humanoid_descendants(root: str) -> tuple[str, ...]:
+    children: dict[str, list[str]] = {}
+    for parent, child in HUMANOID_SEGMENTS:
+        children.setdefault(parent, []).append(child)
+    out: list[str] = []
+    stack = list(children.get(root, ()))
+    seen: set[str] = set()
+    while stack:
+        bone = stack.pop(0)
+        if bone in seen:
+            continue
+        seen.add(bone)
+        out.append(bone)
+        stack.extend(children.get(bone, ()))
+    return tuple(out)
+
+
+def _rotation_offsets_from_samples(
+    rest: Mapping[str, tuple[float, float, float]],
+    rotations: Mapping[str, Any],
+) -> dict[str, tuple[float, float, float]]:
+    out: dict[str, tuple[float, float, float]] = {}
+    for bone, raw_quat in rotations.items():
+        canonical = _canonical_from_token(bone)
+        quat = _quat4(raw_quat)
+        if not canonical or quat is None or canonical not in rest:
+            continue
+        anchor = rest[canonical]
+        for child in _humanoid_descendants(canonical):
+            if child not in rest:
+                continue
+            rest_vec = _vec_sub(rest[child], anchor)
+            if _vec_len(rest_vec) <= 0.000001:
+                continue
+            rotated = _vec_add(anchor, _quat_rotate_vec(quat, rest_vec))
+            delta = _vec_sub(rotated, rest[child])
+            out[child] = _vec_add(out.get(child, (0.0, 0.0, 0.0)), delta)
+    return out
 
 
 def _procedural_action_offsets(action_name: str, phase: float, selected: Mapping[str, Any]) -> dict[str, tuple[float, float, float]]:
@@ -1944,9 +2122,18 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         _pose_offsets_from_mapping(selected.get("offsets")),
     )
     keyframe_offsets, keyframe_info = _sample_keyframe_offsets(selected, phase)
-    use_procedural = not keyframe_offsets or _bool_from_mapping(selected, "procedural", False)
+    keyframe_rotations = (
+        keyframe_info.get("rotations") if isinstance(keyframe_info.get("rotations"), Mapping) else {}
+    )
+    rotation_offsets = _rotation_offsets_from_samples(rest, keyframe_rotations)
+    has_keyframe_motion = keyframe_info.get("motion_source") == "keyframes"
+    use_procedural = (
+        not has_keyframe_motion
+        or _bool_from_mapping(selected, "procedural", False)
+    )
     offsets = _merge_offsets(
         _procedural_action_offsets(action_name, phase, selected) if use_procedural else {},
+        rotation_offsets,
         keyframe_offsets,
         explicit_offsets,
     )
