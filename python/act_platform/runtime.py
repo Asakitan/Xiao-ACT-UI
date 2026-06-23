@@ -1000,6 +1000,7 @@ def render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[st
     except Exception as exc:
         return {"ok": False, "message": str(exc), "surface": str(surface or ""),
                 "payload": _coerce_payload(payload), "override": None}
+    _sync_plugin_discovery(manager)
     if not manager.render_registry.has_hooks(surface):
         return {"ok": True, "surface": str(surface or ""),
                 "payload": _coerce_payload(payload), "override": None, "hooked": False}
@@ -1016,6 +1017,7 @@ def render_overlays(owner: Any, surface: str) -> dict[str, Any]:
     """Return plugin overlay specs for ``surface`` (drawn over native content)."""
     try:
         manager = ensure_act_plugin_manager(owner)
+        _sync_plugin_discovery(manager)
         return {"ok": True, "surface": str(surface or ""),
                 "overlays": manager.surface_overlays(surface)}
     except Exception as exc:

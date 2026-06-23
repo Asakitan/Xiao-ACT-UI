@@ -279,6 +279,7 @@ dictionary@ state()
             act_plugin_script_menus,
             act_plugin_status,
             act_plugin_ui_panels,
+            render_overlays,
         )
 
         from . import scripting
@@ -337,8 +338,9 @@ dictionary@ state()
         assert manager.load_plugin("hot_remove_demo"), manager.status()
         assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
         shutil.rmtree(hot_remove_dir)
-        removed_status = act_plugin_status(owner)
-        assert removed_status.get("ok"), removed_status
+        removed_overlays = render_overlays(owner, "unioverlay")
+        assert removed_overlays.get("ok"), removed_overlays
+        assert removed_overlays.get("overlays") == [], removed_overlays
         assert "hot_remove_demo" not in manager._records, manager.status()
         assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
         assert any(
