@@ -930,6 +930,7 @@ pre.code-block { overflow:visible; }
 </div>
 <div class="tb-dropdown" id="dd-selection">
   <div class="dd-item" onclick="document.execCommand('selectAll')"><span data-i18n="select_all">Select All</span> <span class="shortcut">Ctrl+A</span></div>
+  <div class="dd-item" onclick="editorSelectWordAtCursor()" data-i18n="select_word">Select Word</div>
 </div>
 <div class="tb-dropdown" id="dd-view">
   <div class="dd-item" onclick="openCmdPalette()"><span data-i18n="cmd_palette">Command Palette</span> <span class="shortcut">Ctrl+Shift+P</span></div>
@@ -1969,7 +1970,7 @@ const _LANG={
 en:{
   file:'File',edit:'Edit',selection:'Selection',view:'View',go:'Go',run:'Run',terminal:'Terminal',help:'Help',
   new_file:'New File',open_file:'Open File...',save:'Save',export_chat:'Export Chat...',preferences:'Preferences',
-  undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',
+  undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',select_word:'Select Word',
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
@@ -2110,7 +2111,7 @@ en:{
 zh:{
   file:'文件',edit:'编辑',selection:'选择',view:'视图',go:'转到',run:'运行',terminal:'终端',help:'帮助',
   new_file:'新建文件',open_file:'打开文件...',save:'保存',export_chat:'导出对话...',preferences:'偏好设置',
-  undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',
+  undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',select_word:'选择单词',
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
@@ -2570,26 +2571,86 @@ function languageWordRegex(globalFlag){
   const flags=languageRegexFlags(spec.flags).replace(/g/g,'')+(globalFlag?'g':'');
   try{return new RegExp(spec.pattern,flags)}catch{return new RegExp(DEFAULT_WORD_PATTERN,globalFlag?'g':'')}
 }
+function editorWordRangesForLine(line,baseOffset){
+  const ranges=[],re=languageWordRegex(true);
+  let match;
+  while((match=re.exec(String(line||'')))){
+    const text=match[0]||'';
+    if(!text){re.lastIndex++;continue}
+    ranges.push({start:baseOffset+match.index,end:baseOffset+match.index+text.length,text});
+  }
+  return ranges;
+}
+function editorLineSpanAt(value,pos){
+  value=String(value||'');pos=Math.max(0,Math.min(value.length,pos));
+  const lineStart=pos>0?value.lastIndexOf('\n',pos-1)+1:0;
+  let lineEnd=value.indexOf('\n',pos);if(lineEnd===-1)lineEnd=value.length;
+  return {lineStart,lineEnd,line:value.slice(lineStart,lineEnd)};
+}
 function editorWordRangeAt(value,start,end){
   value=String(value||'');
   const pos=Math.max(0,Math.min(value.length,start));
-  const lineStart=pos>0?value.lastIndexOf('\n',pos-1)+1:0;
-  let lineEnd=value.indexOf('\n',pos);if(lineEnd===-1)lineEnd=value.length;
-  const line=value.slice(lineStart,lineEnd),localPos=pos-lineStart;
-  const localEnd=Math.max(localPos,(end||start)-lineStart);
-  const re=languageWordRegex(true);
-  let match;
-  while((match=re.exec(line))){
-    const text=match[0]||'';
-    if(!text){re.lastIndex++;continue}
-    const s=match.index,e=s+text.length;
-    if(s<=localPos&&localEnd<=e)return {start:lineStart+s,end:lineStart+e,text};
+  const span=editorLineSpanAt(value,pos),localPos=pos-span.lineStart;
+  const localEnd=Math.max(localPos,(end||start)-span.lineStart);
+  for(const range of editorWordRangesForLine(span.line,span.lineStart)){
+    if(range.start-span.lineStart<=localPos&&localEnd<=range.end-span.lineStart)return range;
   }
   return null;
 }
 function editorWordAtCursor(){
   const range=editorWordRangeAt(ed.value,ed.selectionStart,ed.selectionEnd);
   return range?range.text:'';
+}
+function editorWordBoundary(value,pos,direction){
+  value=String(value||'');pos=Math.max(0,Math.min(value.length,pos));
+  if(direction>0){
+    while(pos<value.length){
+      const span=editorLineSpanAt(value,pos);
+      for(const range of editorWordRangesForLine(span.line,span.lineStart)){
+        if(range.start<=pos&&pos<range.end)return range.end;
+        if(range.start>pos)return range.end;
+      }
+      if(span.lineEnd>=value.length)return value.length;
+      pos=span.lineEnd+1;
+    }
+    return value.length;
+  }
+  while(pos>0){
+    const span=editorLineSpanAt(value,pos);
+    const ranges=editorWordRangesForLine(span.line,span.lineStart);
+    for(let i=ranges.length-1;i>=0;i--){
+      const range=ranges[i];
+      if(range.start<pos&&pos<=range.end)return range.start;
+      if(range.end<pos)return range.start;
+    }
+    if(span.lineStart<=0)return 0;
+    pos=span.lineStart-1;
+  }
+  return 0;
+}
+function editorSelectionFocus(){
+  return ed.selectionDirection==='backward'?ed.selectionStart:ed.selectionEnd;
+}
+function editorSelectionAnchor(){
+  return ed.selectionDirection==='backward'?ed.selectionEnd:ed.selectionStart;
+}
+function editorSetSelection(anchor,focus){
+  if(focus<anchor)ed.setSelectionRange(focus,anchor,'backward');
+  else ed.setSelectionRange(anchor,focus,'forward');
+  ed.focus();updateCursorPos();
+}
+function editorMoveWord(direction,selecting){
+  const pos=selecting?editorSelectionFocus():(direction<0?ed.selectionStart:ed.selectionEnd);
+  const target=editorWordBoundary(ed.value,pos,direction);
+  if(selecting)editorSetSelection(editorSelectionAnchor(),target);
+  else{ed.selectionStart=ed.selectionEnd=target;ed.focus();updateCursorPos()}
+}
+function editorSelectWordAtCursor(){
+  const range=editorWordRangeAt(ed.value,ed.selectionStart,ed.selectionEnd);
+  if(!range)return false;
+  ed.setSelectionRange(range.start,range.end,'forward');
+  ed.focus();updateCursorPos();
+  return true;
 }
 function editorFindSeedText(){
   const selected=ed.value.substring(ed.selectionStart,ed.selectionEnd);
@@ -3017,6 +3078,7 @@ const ed=$('editor-text');
 _undoPush(true);
 ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',updateCursorPos);
+ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',updateCursorPos);
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos()});
 ed.addEventListener('keydown',function(e){
@@ -3042,6 +3104,9 @@ ed.addEventListener('keydown',function(e){
   if(e.key==='h'&&e.ctrlKey){e.preventDefault();openFindBar(true);return}
   // Ctrl+G → Go to line
   if(e.key==='g'&&e.ctrlKey){e.preventDefault();goToLinePrompt();return}
+  // Ctrl+Arrow / Ctrl+Shift+Arrow → language word navigation
+  if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&e.ctrlKey&&!e.altKey){
+    e.preventDefault();editorMoveWord(e.key==='ArrowRight'?1:-1,e.shiftKey);return}
   // Ctrl+/ → Toggle comment
   if(e.key==='/'&&e.ctrlKey){e.preventDefault();_undoPush(true);toggleComment();return}
   // Ctrl+D → Duplicate line
@@ -3094,6 +3159,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Paste',shortcut:'Ctrl+V',action:()=>{document.execCommand('paste')}},
     {sep:true},
     {label:'Select All',shortcut:'Ctrl+A',action:()=>{ed.select()}},
+    {label:'Select Word',shortcut:'',action:()=>editorSelectWordAtCursor()},
     {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
     {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
     {sep:true},
@@ -7176,6 +7242,7 @@ const COMMANDS=[
   {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
   {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
   {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+  {label:'Select Word',shortcut:'',action:()=>editorSelectWordAtCursor()},
   {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},

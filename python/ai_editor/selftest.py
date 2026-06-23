@@ -1215,8 +1215,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "ArrowDown" in html
             and "function languageWordPattern(lang)" in html
             and "function languageWordRegex(globalFlag)" in html
+            and "function editorWordRangesForLine(line,baseOffset)" in html
+            and "function editorLineSpanAt(value,pos)" in html
             and "function editorWordAtCursor()" in html
             and "function editorWordRangeAt(value,start,end)" in html
+            and "function editorWordBoundary(value,pos,direction)" in html
+            and "function editorMoveWord(direction,selecting)" in html
+            and "function editorSelectWordAtCursor()" in html
+            and "editorMoveWord(e.key==='ArrowRight'?1:-1,e.shiftKey)" in html
+            and "Select Word" in html
+            and "select_word" in html
             and "function editorFindSeedText()" in html
             and "function _isLanguageWholeWordMatch(value,start,end)" in html
             and "function _findMatches(regex,value)" in html
