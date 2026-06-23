@@ -226,11 +226,11 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
 }
 .editor-textarea::selection { background:var(--selection); }
-.editor-suggest,.editor-hover,.editor-signature-help,.editor-code-actions { position:absolute; z-index:8; border:1px solid var(--border);
+.editor-suggest,.editor-hover,.editor-signature-help,.editor-code-actions,.editor-references { position:absolute; z-index:8; border:1px solid var(--border);
   background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px rgba(0,0,0,.32);
   border-radius:6px; opacity:0; transform:translateY(-4px); pointer-events:none;
   transition:opacity .12s ease,transform .12s ease; }
-.editor-suggest.open,.editor-hover.open,.editor-signature-help.open,.editor-code-actions.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+.editor-suggest.open,.editor-hover.open,.editor-signature-help.open,.editor-code-actions.open,.editor-references.open { opacity:1; transform:translateY(0); pointer-events:auto; }
 .editor-suggest { min-width:240px; max-width:420px; max-height:260px; overflow:auto; padding:4px; }
 .editor-suggest-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:5px 7px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
@@ -243,6 +243,12 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-code-action-item.active { background:var(--selection); }
 .editor-code-action-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-code-action-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-references { min-width:300px; max-width:520px; max-height:280px; overflow:auto; padding:4px; }
+.editor-reference-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
+  padding:6px 8px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
+.editor-reference-item.active { background:var(--selection); }
+.editor-reference-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-reference-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-hover { max-width:460px; max-height:220px; overflow:auto; padding:8px 10px;
   font:12px/1.45 var(--ui); white-space:pre-wrap; pointer-events:none; }
 .editor-signature-help { max-width:560px; min-width:280px; overflow:hidden; padding:8px 10px;
@@ -1175,6 +1181,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
         <div class="editor-signature-help" id="editor-signature-help" role="tooltip"></div>
         <div class="editor-code-actions" id="editor-code-actions" role="listbox"></div>
+        <div class="editor-references" id="editor-references" role="listbox"></div>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
         <div class="minimap-container hidden" id="minimap-container">
@@ -2405,6 +2412,7 @@ function openInEditor(code,lang){
   if(typeof closeEditorHover==='function')closeEditorHover();
   if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
   if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
+  if(typeof closeEditorReferences==='function')closeEditorReferences();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -3221,6 +3229,7 @@ function _editorInputWithUndo(e){
   _undoTimer=setTimeout(()=>_undoPush(false),_UNDO_DEBOUNCE);
   closeEditorHover();
   closeEditorCodeActions();
+  closeEditorReferences();
   const ch=e&&typeof e.data==='string'?e.data:'';
   if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
   else closeEditorSuggest();
@@ -3235,6 +3244,7 @@ let _editorHoverTimer=null,_editorHoverRequest=0;
 let _editorSignatureRequest=0;
 let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
+let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3398,7 +3408,7 @@ function showEditorHover(text,position){
   requestAnimationFrame(()=>box.classList.add('open'));
 }
 async function requestEditorHover(){
-  if(isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||!ed||ed.offsetParent===null)return;
+  if(isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||isEditorReferencesOpen()||!ed||ed.offsetParent===null)return;
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await call('editor_language_provider',editorProviderPayload('hover'));
   if(requestId!==_editorHoverRequest)return;
@@ -3625,6 +3635,74 @@ async function requestEditorDefinition(quiet){
   if(target&&await navigateEditorDefinition(target))return;
   if(!quiet)setStatus('No definition found');
 }
+function isEditorReferencesOpen(){
+  const box=$('editor-references');return !!(box&&box.classList.contains('open'));
+}
+function closeEditorReferences(){
+  const box=$('editor-references');if(!box)return;
+  box.classList.remove('open');box.style.display='none';_editorReferences=[];
+}
+function referenceLocationLabel(ref){
+  const target=editorDefinitionTarget(ref)||{},range=target.range||{},start=range.start||{};
+  const path=editorDocumentUriToPath(target.uri);
+  const name=path?path.split(/[\\/]/).pop():String(target.uri||'Current file');
+  return name+':'+((Number(start.line)||0)+1)+':'+((Number(start.character)||0)+1);
+}
+function referenceDetailText(ref){
+  const target=editorDefinitionTarget(ref)||{},range=target.range||{},start=range.start||{};
+  if(!target.uri||editorCurrentUriMatches(target.uri)){
+    const lines=String(ed.value||'').split('\n'),line=lines[Number(start.line)||0];
+    if(line)return line.trim();
+  }
+  return editorDocumentUriToPath(target.uri)||String(target.uri||'');
+}
+function setEditorReferenceIndex(index){
+  if(!_editorReferences.length)return;
+  _editorReferenceIndex=(index+_editorReferences.length)%_editorReferences.length;
+  document.querySelectorAll('#editor-references .editor-reference-item').forEach((el,i)=>{
+    el.classList.toggle('active',i===_editorReferenceIndex);
+    if(i===_editorReferenceIndex)el.scrollIntoView({block:'nearest'});
+  });
+}
+function showEditorReferences(references,position){
+  const box=$('editor-references');if(!box)return;
+  _editorReferences=references.slice(0,120);_editorReferenceIndex=0;box.innerHTML='';
+  _editorReferences.forEach((ref,index)=>{
+    const row=document.createElement('div');row.className='editor-reference-item'+(index===0?' active':'');row.setAttribute('role','option');
+    const title=document.createElement('div');title.className='editor-reference-title';title.textContent=referenceLocationLabel(ref);
+    const detail=document.createElement('div');detail.className='editor-reference-detail';detail.textContent=referenceDetailText(ref);
+    row.appendChild(title);row.appendChild(detail);
+    row.onmousedown=e=>{e.preventDefault();applyEditorReference(ref)};
+    box.appendChild(row);
+  });
+  placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+}
+async function applyEditorReference(ref){
+  const target=editorDefinitionTarget(ref);
+  closeEditorReferences();
+  if(target)await navigateEditorDefinition(target);
+  ed.focus();
+}
+async function requestEditorReferences(quiet){
+  const requestId=++_editorReferencesRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('references',{includeDeclaration:true}));
+  if(requestId!==_editorReferencesRequest)return;
+  if(res&&res.error){closeEditorReferences();if(!quiet)setStatus('References failed: '+res.error);return}
+  const refs=(res&&res.ok&&Array.isArray(res.references)?res.references:[]).filter(ref=>editorDefinitionTarget(ref));
+  if(refs.length){
+    closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();
+    showEditorReferences(refs,position);setStatus(refs.length+' reference'+(refs.length===1?'':'s'));return;
+  }
+  closeEditorReferences();if(!quiet)setStatus('No references found');
+}
+function handleEditorReferencesKey(e){
+  if(!isEditorReferencesOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setEditorReferenceIndex(_editorReferenceIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setEditorReferenceIndex(_editorReferenceIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorReference(_editorReferences[_editorReferenceIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeEditorReferences();return true}
+  return false;
+}
 function editorTextEditFromActionEntry(entry){
   if(!entry||typeof entry!=='object')return null;
   if(entry.kind==='createFile'||entry.kind==='deleteFile'||entry.kind==='renameFile')return null;
@@ -3719,11 +3797,13 @@ ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',()=>{updateCursorPos();scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences()});
 ed.addEventListener('keydown',function(e){
+  if(handleEditorReferencesKey(e))return;
   if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
   if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
   if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();requestEditorSignatureHelp('',1,false);return}
@@ -3818,6 +3898,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
     {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
     {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
+    {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -3833,7 +3914,7 @@ ed.addEventListener('contextmenu',function(e){
 });
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
-  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions()}
+  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences()}
 });
 
 // ── Find/Replace ──
@@ -7549,6 +7630,7 @@ function switchTab(id){
     if(typeof closeEditorHover==='function')closeEditorHover();
     if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
     if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
+    if(typeof closeEditorReferences==='function')closeEditorReferences();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
   }
@@ -7914,6 +7996,7 @@ const COMMANDS=[
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
   {label:'Go to Definition',shortcut:'F12',action:()=>requestEditorDefinition(false)},
+  {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},

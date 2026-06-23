@@ -1099,6 +1099,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDefinitionProvider(selector, provider) {
                     return _registerLangProvider('definition', selector, provider);
                 },
+                registerReferenceProvider(selector, provider) {
+                    return _registerLangProvider('references', selector, provider);
+                },
                 registerDocumentSymbolProvider(selector, provider) {
                     return _registerLangProvider('documentSymbol', selector, provider);
                 },
@@ -1626,6 +1629,7 @@ function _languageProviderMethod(kind) {
         hover: 'provideHover',
         signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
+        references: 'provideReferences',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
@@ -1768,6 +1772,10 @@ async function handleLanguageProviderRequest(msg) {
                         only: msg.only,
                         triggerKind: msg.triggerKind,
                     }, token);
+                } else if (kind === 'references') {
+                    value = await fn.call(provider, document, position, Object.assign({
+                        includeDeclaration: true,
+                    }, msg.context || {}), token);
                 } else if (kind === 'formatting') {
                     value = await fn.call(provider, document, msg.options || {}, token);
                 } else if (kind === 'documentSymbol') {

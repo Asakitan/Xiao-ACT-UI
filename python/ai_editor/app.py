@@ -2600,6 +2600,8 @@ class AIEditorAPI:
             "signatures": "signatureHelp",
             "definition": "definition",
             "definitions": "definition",
+            "reference": "references",
+            "references": "references",
             "documentSymbol": "documentSymbol",
             "documentSymbols": "documentSymbol",
             "symbols": "documentSymbol",
@@ -2690,6 +2692,26 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "definitions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "references":
+                context = {
+                    "includeDeclaration": bool(
+                        payload.get("includeDeclaration", True)),
+                }
+                result = self._ext_host.commands.execute(
+                    "vscode.executeReferenceProvider",
+                    document.uri,
+                    position,
+                    context,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "references": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "documentSymbol":

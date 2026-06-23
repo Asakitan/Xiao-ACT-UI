@@ -1073,6 +1073,7 @@ class VscodeNamespace:
             "vscode.executeHoverProvider": self._execute_hover_provider,
             "vscode.executeSignatureHelpProvider": self._execute_signature_help_provider,
             "vscode.executeDefinitionProvider": self._execute_definition_provider,
+            "vscode.executeReferenceProvider": self._execute_reference_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
@@ -1344,6 +1345,25 @@ class VscodeNamespace:
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "definition", document, position=self._position_payload(pos))))
+        return results
+
+    def _execute_reference_provider(
+            self, uri: Any, position: Any = None, context: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        ref_context = context if isinstance(context, dict) else {}
+        if "includeDeclaration" not in ref_context:
+            ref_context = dict(ref_context)
+            ref_context["includeDeclaration"] = True
+        results = self._collect_language_provider_results(
+            "references", document, "provideReferences",
+            (document, pos, ref_context, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "references",
+                document,
+                position=self._position_payload(pos),
+                context=ref_context)))
         return results
 
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
@@ -2359,6 +2379,7 @@ class VscodeNamespace:
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
             "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
             "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
+            "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
             "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),

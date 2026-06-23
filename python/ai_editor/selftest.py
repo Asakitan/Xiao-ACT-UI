@@ -365,6 +365,7 @@ def test_app_settings_parity() -> None:
         def __init__(self):
             self.seen_texts = []
             self.seen_dirty = []
+            self.seen_reference_context = None
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -404,6 +405,15 @@ def test_app_settings_parity() -> None:
                 Range(Position(0, 0), Position(0, 6)),
             )
 
+        def provideReferences(self, document, position, context, token):
+            self.seen_reference_context = dict(context)
+            return [
+                Location(
+                    document.uri,
+                    Range(Position(0, 1), Position(0, 6)),
+                )
+            ]
+
     editor_provider = _EditorProvider()
     lang_api = provider_api._vscode_ns.build()["languages"]
     lang_api["registerCompletionItemProvider"]("python", editor_provider)
@@ -412,6 +422,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
     lang_api["registerDefinitionProvider"]("python", editor_provider)
+    lang_api["registerReferenceProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
         provider_path = os.path.join(tmp_provider_dir, "buffer.py")
@@ -437,6 +448,8 @@ def test_app_settings_parity() -> None:
             }))
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
+        references_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="references", includeDeclaration=False))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
         with open(provider_path, "r", encoding="utf-8") as fh:
@@ -472,6 +485,14 @@ def test_app_settings_parity() -> None:
                and definition.get("range", {}).get("start", {}).get("line") == 0
                and definition.get("range", {}).get("end", {})
                .get("character") == 6)
+        reference = references_result.get("references", [{}])[0]
+        _check("editor_language_provider serializes references",
+               references_result.get("ok") is True
+               and editor_provider.seen_reference_context
+               .get("includeDeclaration") is False
+               and reference.get("uri", "").startswith("file://")
+               and reference.get("range", {}).get("start", {})
+               .get("character") == 1)
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
@@ -1446,6 +1467,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-hover\"" in html
            and "id=\"editor-signature-help\"" in html
            and "id=\"editor-code-actions\"" in html
+           and "id=\"editor-references\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1463,12 +1485,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function requestEditorDefinition(quiet)" in html
            and "function navigateEditorDefinition(target)" in html
            and "function editorRevealRange(range)" in html
+           and "function requestEditorReferences(quiet)" in html
+           and "function showEditorReferences(references,position)" in html
+           and "function handleEditorReferencesKey(e)" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
            and "Ctrl+Shift+Space" in html
            and "Ctrl+." in html
            and "F12" in html
+           and "Shift+F12" in html
            and "Go to Definition" in html
+           and "Find All References" in html
            and "Quick Fix..." in html
            and "Formatted via extension" in html)
     try:
@@ -3041,6 +3068,15 @@ def test_vscode_api() -> None:
             def provideDefinition(self, document, position, token):
                 return Location(document.uri, Range(Position(0, 0), Position(0, 4)))
 
+        class _ReferenceProvider:
+            def __init__(self):
+                self.contexts = []
+
+            def provideReferences(self, document, position, context, token):
+                self.contexts.append(context)
+                return [Location(
+                    document.uri, Range(Position(0, 1), Position(0, 4)))]
+
         class _DocumentSymbolProvider:
             def provideDocumentSymbols(self, document, token):
                 return [{"name": "selftest_symbol",
@@ -3064,6 +3100,9 @@ def test_vscode_api() -> None:
             "python", signature_provider, "(", ",")
         api["languages"]["registerDefinitionProvider"](
             "python", _DefinitionProvider())
+        reference_provider = _ReferenceProvider()
+        api["languages"]["registerReferenceProvider"](
+            "python", reference_provider)
         api["languages"]["registerDocumentSymbolProvider"](
             "python", _DocumentSymbolProvider())
         api["languages"]["registerCodeActionsProvider"](
@@ -3078,6 +3117,9 @@ def test_vscode_api() -> None:
             "vscode.executeSignatureHelpProvider", doc.uri, Position(0, 4), "(")
         definitions = api["commands"]["executeCommand"](
             "vscode.executeDefinitionProvider", doc.uri, Position(0, 0))
+        references = api["commands"]["executeCommand"](
+            "vscode.executeReferenceProvider", doc.uri, Position(0, 0),
+            {"includeDeclaration": False})
         symbols = api["commands"]["executeCommand"](
             "vscode.executeDocumentSymbolProvider", doc.uri)
         actions = api["commands"]["executeCommand"](
@@ -3096,6 +3138,9 @@ def test_vscode_api() -> None:
                and signature_provider.contexts[-1]["triggerCharacter"] == "(")
         _check("executeDefinitionProvider invokes matching providers",
                definitions and definitions[0].uri == doc.uri)
+        _check("executeReferenceProvider invokes matching providers",
+               references and references[0].uri == doc.uri
+               and reference_provider.contexts[-1]["includeDeclaration"] is False)
         _check("executeDocumentSymbolProvider invokes matching providers",
                symbols and symbols[0]["name"] == "selftest_symbol")
         _check("executeCodeActionProvider passes diagnostics context",
@@ -3105,6 +3150,8 @@ def test_vscode_api() -> None:
         hover_runtime.dispose()
         _check("language execute commands are registered",
                "vscode.executeCompletionItemProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeReferenceProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSignatureHelpProvider"
                in api["commands"]["getCommands"]())
@@ -4331,6 +4378,11 @@ function activate(context) {
       return new vscode.Location(document.uri, new vscode.Range(0, 0, 0, 4));
     },
   });
+  vscode.languages.registerReferenceProvider('python', {
+    provideReferences(document, position, context, token) {
+      return [new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4))];
+    },
+  });
   vscode.languages.registerDocumentSymbolProvider('python', {
     provideDocumentSymbols(document, token) {
       return [{ name: 'nodeSymbol', kind: vscode.SymbolKind.Function, range: new vscode.Range(0, 0, 0, 4) }];
@@ -4442,6 +4494,8 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 5), "(")
                 node_definition = api._ext_host.commands.execute(
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
+                node_references = api._ext_host.commands.execute(
+                    "vscode.executeReferenceProvider", node_uri, Position(0, 1))
                 node_symbols = api._ext_host.commands.execute(
                     "vscode.executeDocumentSymbolProvider", node_uri)
                 node_actions = api._ext_host.commands.execute(
@@ -4480,6 +4534,11 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS definition",
                        node_definition
                        and node_definition[0].get("uri", "").endswith("node_provider.py"))
+                _check("node host language provider invokes JS references",
+                       node_references
+                       and node_references[0].get("uri", "").endswith("node_provider.py")
+                       and node_references[0].get("range", {}).get("start", {})
+                       .get("character") == 1)
                 _check("node host language provider invokes JS document symbols",
                        node_symbols
                        and node_symbols[0].get("name") == "nodeSymbol")
