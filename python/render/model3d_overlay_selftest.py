@@ -1007,6 +1007,10 @@ class Model3DBackendTests(unittest.TestCase):
                     },
                 },
                 "clips": ["Wave"],
+                "native_unity_animations": {
+                    "files": ["Unity/HandSign/K_Peace.anim"],
+                    "hand_signs": {"peace": "Unity/HandSign/K_Peace.anim"},
+                },
             }), encoding="utf-8")
             node = normalize_ui_spec({
                 "type": "model3d",
@@ -1025,6 +1029,21 @@ class Model3DBackendTests(unittest.TestCase):
                         },
                     },
                 },
+                "procedural_action": {
+                    "schema": "sao.humanoid.procedural.v1",
+                    "enabled": True,
+                    "actions": {
+                        "wave": {
+                            "native_unity": ["Unity/HandSign/K_Peace.anim"],
+                            "effectors": {
+                                "right_hand": {
+                                    "offset": [0.0, 0.2, 0.0],
+                                    "weight": 1.0,
+                                },
+                            },
+                        },
+                    },
+                },
             })["nodes"][0]
 
             context = build_native_model3d_context(node, palette={"accent": "#fff"})
@@ -1038,6 +1057,14 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(context["action"]["name"], "wave")
         self.assertEqual(context["retarget"]["bone_map"]["right_hand"], "mixamorig:RightHand")
         self.assertTrue(context["pose"]["ok"], context["pose"])
+        self.assertIn(
+            "Unity/HandSign/K_Peace.anim",
+            context["model"]["native_unity_animations"]["files"],
+        )
+        self.assertIn(
+            "Unity/HandSign/K_Peace.anim",
+            context["pose"]["procedural_action"]["native_unity"],
+        )
         self.assertIn("model", context["signatures"])
         self.assertIn("action", context["signatures"])
         self.assertIn("backend", context)
@@ -2659,6 +2686,33 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertTrue(crop.getchannel("A").getbbox())
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_strict_assets_does_not_draw_avatar_fallback_for_existing_model(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="model3d_strict_assets_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 320,
+                "height": 480,
+                "model": {"path": str(model_path)},
+                "asset_policy": "strict",
+                "strict_assets": True,
+                "fallback": "diagnostic_only",
+                "action": {"name": "wave"},
+            })["nodes"][0]
+
+            with mock.patch("render.model3d_overlay._draw_stylized_avatar") as stylized:
+                with mock.patch("render.model3d_overlay._draw_retarget_pose_avatar") as retarget:
+                    image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        self.assertIsNotNone(image)
+        self.assertEqual(stylized.call_count, 0)
+        self.assertEqual(retarget.call_count, 0)
+        crop = image.crop((0, 0, 110, 42))
+        self.assertTrue(crop.getchannel("A").getbbox())
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_software_mesh_preview_renders_before_avatar_fallback(self) -> None:
         with tempfile.TemporaryDirectory(prefix="model3d_software_") as root:
             model_path = Path(root) / "avatar.obj"
@@ -2763,6 +2817,60 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         pixels = [rgba for rgba in data if rgba[3] > 100]
         self.assertTrue(any(r > 150 and g > 145 and b > 125 for r, g, b, _a in pixels))
         self.assertTrue(any(g > 120 and b > 85 and r < 105 for r, g, b, _a in pixels))
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_software_mesh_preview_uses_sidecar_material_texture_colors(self) -> None:
+        clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
+        with tempfile.TemporaryDirectory(prefix="model3d_material_texture_") as root:
+            root_path = Path(root)
+            model_path = root_path / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            texture_dir = root_path / "Texture"
+            texture_dir.mkdir()
+            overlay_mod.Image.new("RGBA", (4, 4), (230, 20, 30, 255)).save(texture_dir / "Body.png")
+            overlay_mod.Image.new("RGBA", (4, 4), (20, 45, 230, 255)).save(texture_dir / "Hair.png")
+            (root_path / "avatar.model3d.json").write_text(json.dumps({
+                "mesh": {
+                    "preview": {
+                        "vertices": [
+                            [-0.9, 0.2, 0.0],
+                            [-0.1, 0.2, 0.0],
+                            [-0.1, 1.6, 0.0],
+                            [-0.9, 1.6, 0.0],
+                            [0.1, 0.2, 0.0],
+                            [0.9, 0.2, 0.0],
+                            [0.9, 1.6, 0.0],
+                            [0.1, 1.6, 0.0],
+                        ],
+                        "faces": [[0, 1, 2, 3], [4, 5, 6, 7]],
+                        "face_materials": ["Body", "Hair"],
+                    },
+                },
+                "materials": {
+                    "textures": {
+                        "base": {
+                            "Body": "Texture/Body.png",
+                            "Hair": "Texture/Hair.png",
+                        },
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "width": 128,
+                "height": 128,
+                "model": {"path": str(model_path), "format": "fbx"},
+                "asset_policy": "strict",
+                "strict_assets": True,
+            })["nodes"][0]
+
+            image = render_model3d_node(node, {"accent": "#7dd3fc"})
+
+        data = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+        pixels = [rgba for rgba in data if rgba[3] > 100]
+        self.assertTrue(any(r > 145 and g < 90 and b < 100 for r, g, b, _a in pixels))
+        self.assertTrue(any(b > 145 and r < 100 and g < 110 for r, g, b, _a in pixels))
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_glb_software_preview_renders_without_native_window(self) -> None:

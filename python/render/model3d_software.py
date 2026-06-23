@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 try:
@@ -27,6 +28,7 @@ _PREVIEW_GEOMETRY_CACHE: dict[
 ] = {}
 _SKIN_INFLUENCE_CACHE: dict[tuple[Any, ...], list[list[tuple[str, float]]]] = {}
 _CHAIN_WEIGHT_CACHE: dict[tuple[Any, ...], list[list[tuple[int, float]]]] = {}
+_TEXTURE_COLOR_CACHE: dict[tuple[str, int, int], tuple[int, int, int, int] | None] = {}
 
 
 def _color(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -74,6 +76,7 @@ def clear_software_model3d_caches() -> None:
     _PREVIEW_GEOMETRY_CACHE.clear()
     _SKIN_INFLUENCE_CACHE.clear()
     _CHAIN_WEIGHT_CACHE.clear()
+    _TEXTURE_COLOR_CACHE.clear()
 
 
 def _preview_geometry_cache_key(meta: Mapping[str, Any], preview: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -624,11 +627,152 @@ def _joint_color(joint: str, accent: tuple[int, int, int, int]) -> tuple[int, in
     return accent
 
 
+def _norm_material_token(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _face_material_name(preview: Mapping[str, Any], face_index: int) -> str:
+    raw = preview.get("face_materials")
+    if not isinstance(raw, (list, tuple)) or face_index < 0 or face_index >= len(raw):
+        return ""
+    return str(raw[face_index] or "").strip()
+
+
+def _material_texture_entries(config: Mapping[str, Any]) -> list[tuple[str, str]]:
+    textures = config.get("textures") if isinstance(config.get("textures"), Mapping) else {}
+    entries: list[tuple[str, str]] = []
+    base = textures.get("base") if isinstance(textures, Mapping) else None
+    if isinstance(base, Mapping):
+        for key, value in base.items():
+            if isinstance(value, str) and value.strip():
+                entries.append((str(key), value.strip()))
+    elif isinstance(textures, Mapping):
+        for key, value in textures.items():
+            if isinstance(value, str) and value.strip():
+                entries.append((str(key), value.strip()))
+    return entries
+
+
+def _texture_path_candidates(meta: Mapping[str, Any], texture: str) -> list[Path]:
+    text = str(texture or "").strip()
+    if not text:
+        return []
+    raw = Path(text)
+    if raw.is_absolute():
+        return [raw]
+    model_path = Path(str(meta.get("resolved_path") or meta.get("path") or ""))
+    bases: list[Path] = []
+    if str(model_path):
+        bases.append(model_path.parent)
+        bases.append(model_path.parent.parent)
+    bases.append(Path.cwd())
+    out: list[Path] = []
+    seen: set[str] = set()
+    for base in bases:
+        try:
+            candidate = (base / raw).resolve()
+        except Exception:
+            candidate = base / raw
+        token = str(candidate)
+        if token not in seen:
+            seen.add(token)
+            out.append(candidate)
+    return out
+
+
+def _average_texture_color(path: Path) -> tuple[int, int, int, int] | None:
+    if Image is None:
+        return None
+    try:
+        stat = path.stat()
+    except Exception:
+        return None
+    key = (str(path), int(stat.st_size), int(stat.st_mtime_ns))
+    if key in _TEXTURE_COLOR_CACHE:
+        return _TEXTURE_COLOR_CACHE[key]
+    try:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            rgba.thumbnail((64, 64))
+            raw_pixels = (
+                rgba.get_flattened_data()
+                if hasattr(rgba, "get_flattened_data")
+                else rgba.getdata()
+            )
+            pixels = list(raw_pixels)
+    except Exception:
+        _TEXTURE_COLOR_CACHE[key] = None
+        return None
+    total_r = total_g = total_b = total_a = count = 0
+    for r, g, b, a in pixels:
+        if int(a) <= 8:
+            continue
+        total_r += int(r) * int(a)
+        total_g += int(g) * int(a)
+        total_b += int(b) * int(a)
+        total_a += int(a)
+        count += 1
+    if count <= 0 or total_a <= 0:
+        color = None
+    else:
+        color = (
+            max(0, min(255, int(total_r / total_a))),
+            max(0, min(255, int(total_g / total_a))),
+            max(0, min(255, int(total_b / total_a))),
+            255,
+        )
+    _TEXTURE_COLOR_CACHE[key] = color
+    return color
+
+
+def _material_texture_color(
+    meta: Mapping[str, Any] | None,
+    material_name: str,
+) -> tuple[int, int, int, int] | None:
+    if not isinstance(meta, Mapping) or not material_name:
+        return None
+    config = meta.get("materials_config")
+    if not isinstance(config, Mapping):
+        return None
+    token = _norm_material_token(material_name)
+    if not token:
+        return None
+    entries = _material_texture_entries(config)
+    best: str = ""
+    for name, texture in entries:
+        name_token = _norm_material_token(name)
+        if name_token and (name_token == token or name_token in token or token in name_token):
+            best = texture
+            break
+    if not best:
+        all_files = config.get("all_files")
+        if isinstance(all_files, (list, tuple)):
+            for item in all_files:
+                text = str(item or "")
+                text_token = _norm_material_token(Path(text).stem)
+                if token and token in text_token and "normal" not in text.lower() and "mask" not in text.lower():
+                    best = text
+                    break
+    if not best:
+        return None
+    for candidate in _texture_path_candidates(meta, best):
+        color = _average_texture_color(candidate)
+        if color is not None:
+            return color
+    return None
+
+
 def _face_base_color(
     face: list[int],
     preview: Mapping[str, Any],
     accent: tuple[int, int, int, int],
+    face_index: int = -1,
+    meta: Mapping[str, Any] | None = None,
 ) -> tuple[int, int, int, int]:
+    material_name = _face_material_name(preview, face_index)
+    material_color = _material_texture_color(meta, material_name)
+    if material_color is not None:
+        return material_color
     skin = preview.get("skin")
     if not isinstance(skin, (list, tuple)) or not skin:
         return accent
@@ -695,15 +839,15 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     ys = [p[1] for p in projected]
     draw.ellipse((width * 0.25, max(ys) + 8, width * 0.75, max(ys) + 34), fill=shadow)
 
-    ordered = sorted(faces, key=lambda face: sum(projected[idx][2] for idx in face) / len(face))
+    ordered = sorted(enumerate(faces), key=lambda item: sum(projected[idx][2] for idx in item[1]) / len(item[1]))
     stroke = max(1, min(5, int(scale * 0.02)))
     depths = [p[2] for p in projected]
     min_depth, max_depth = min(depths), max(depths)
-    for face in ordered:
+    for face_index, face in ordered:
         pts = [(projected[idx][0], projected[idx][1]) for idx in face]
         depth = sum(projected[idx][2] for idx in face) / len(face)
         normal = _face_normal(face, transformed)
-        base = _face_base_color(face, preview, accent)
+        base = _face_base_color(face, preview, accent, face_index, meta)
         fill = _lit_color(base, normal, depth, min_depth, max_depth, alpha=168)
         draw.polygon(pts, fill=fill)
         draw.line(pts + [pts[0]], fill=_outline_color(base), width=stroke)

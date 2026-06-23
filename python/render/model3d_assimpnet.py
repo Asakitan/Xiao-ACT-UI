@@ -231,10 +231,14 @@ def _skin_influence_name(raw_name: str) -> str:
     return canonical or raw_name
 
 
-def _extract_meshes(scene: Any) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]]:
+def _extract_meshes(
+    scene: Any,
+    material_names: tuple[str, ...] = (),
+) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]]:
     points_for_bbox: list[tuple[float, float, float]] = []
     preview_vertices: list[list[float]] = []
     preview_faces: list[list[int]] = []
+    preview_face_materials: list[str] = []
     preview_skin: list[list[dict[str, Any]]] = []
     skins: list[dict[str, Any]] = []
     bone_names: list[str] = []
@@ -246,6 +250,15 @@ def _extract_meshes(scene: Any) -> tuple[dict[str, Any], list[dict[str, Any]], t
     except Exception:
         meshes = []
     for mesh_index, mesh in enumerate(meshes):
+        try:
+            material_index = int(getattr(mesh, "MaterialIndex", -1) or -1)
+        except Exception:
+            material_index = -1
+        material_name = (
+            material_names[material_index]
+            if 0 <= material_index < len(material_names)
+            else (f"material_{material_index}" if material_index >= 0 else "")
+        )
         try:
             vertices = list(getattr(mesh, "Vertices", []) or [])
         except Exception:
@@ -273,6 +286,7 @@ def _extract_meshes(scene: Any) -> tuple[dict[str, Any], list[dict[str, Any]], t
             mapped = [local_to_preview[index] for index in indices if index in local_to_preview]
             if len(mapped) == len(indices) and len(mapped) >= 3 and len(preview_faces) < _MESH_PREVIEW_FACE_LIMIT:
                 preview_faces.append(mapped)
+                preview_face_materials.append(material_name)
         mesh_bones: list[str] = []
         try:
             bones = list(getattr(mesh, "Bones", []) or [])
@@ -317,6 +331,8 @@ def _extract_meshes(scene: Any) -> tuple[dict[str, Any], list[dict[str, Any]], t
         "vertices": preview_vertices,
         "faces": preview_faces,
     }
+    if preview_face_materials:
+        preview["face_materials"] = preview_face_materials
     if any(preview_skin):
         preview["skin"] = preview_skin
         preview["skin_source"] = "assimpnet"
@@ -461,7 +477,7 @@ def import_model_metadata(path: str | Path, *, root: Path | None = None) -> dict
             materials = _unique(getattr(material, "Name", "") for material in list(scene.Materials or []))
         except Exception:
             materials = ()
-        mesh, skins, bone_names = _extract_meshes(scene)
+        mesh, skins, bone_names = _extract_meshes(scene, materials)
         clip_names, clip_keyframes = _extract_animations(scene)
         return {
             "mesh": mesh,

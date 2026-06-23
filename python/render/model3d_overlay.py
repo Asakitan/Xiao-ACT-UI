@@ -504,6 +504,14 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         now = float(action.get("time", node.get("phase", 0.0)) or 0.0)
     except Exception:
         now = 0.0
+    asset_policy = str(node.get("asset_policy") or "").strip().lower()
+    fallback_policy = str(node.get("fallback") or "").strip().lower()
+    strict_assets = bool(node.get("strict_assets") or node.get("require_assets"))
+    strict_assets = strict_assets or asset_policy in {"strict", "diagnostic_only"} or fallback_policy in {
+        "none",
+        "disabled",
+        "diagnostic_only",
+    }
     pose = None
     if callable(evaluate_retarget_pose):
         try:
@@ -511,13 +519,17 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         except Exception:
             pose = None
     used_pose = False
-    if isinstance(pose, Mapping) and pose.get("ok"):
+    if not strict_assets and isinstance(pose, Mapping) and pose.get("ok"):
         used_pose = _draw_retarget_pose_avatar(draw, width, height, pose, accent)
     if not used_pose:
-        _draw_stylized_avatar(draw, width, height, now * speed, action_name, action_cfg, accent)
+        if not strict_assets:
+            _draw_stylized_avatar(draw, width, height, now * speed, action_name, action_cfg, accent)
 
     status = "ready"
     diagnostic = False
+    if strict_assets and not used_pose:
+        status = "model asset render required"
+        diagnostic = True
     if not path:
         status = "no model_path"
         diagnostic = True
@@ -526,6 +538,8 @@ def render_model3d_node(node: Mapping[str, Any], pal: Mapping[str, Any] | None =
         diagnostic = True
     else:
         status = _backend_status()
+        if strict_assets and diagnostic:
+            status = "model asset render required"
     if action_cfg.get("_load_error"):
         diagnostic = True
     try:

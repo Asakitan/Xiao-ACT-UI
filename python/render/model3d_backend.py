@@ -554,6 +554,16 @@ def _extract_preview_mesh(value: Any) -> dict[str, Any]:
         "vertices": vertices,
         "faces": faces,
     }
+    raw_face_materials = value.get("face_materials") or value.get("materials")
+    if isinstance(raw_face_materials, (list, tuple)):
+        face_materials = [
+            str(item or "").strip()
+            for item in list(raw_face_materials)[:len(faces)]
+        ]
+        if face_materials:
+            while len(face_materials) < len(faces):
+                face_materials.append("")
+            out["face_materials"] = face_materials
     skin = _extract_preview_skin(value.get("skin"))
     if skin:
         out["skin"] = skin
@@ -617,6 +627,9 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     materials = src.get("materials")
     if isinstance(materials, (Mapping, list, tuple)):
         out["materials_config"] = copy.deepcopy(materials)
+    native_unity = src.get("native_unity_animations") or src.get("unity_animations")
+    if isinstance(native_unity, Mapping):
+        out["native_unity_animations"] = copy.deepcopy(dict(native_unity))
     physics = src.get("physics")
     if isinstance(physics, Mapping):
         out["physics"] = copy.deepcopy(dict(physics))
@@ -1982,6 +1995,7 @@ def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) ->
         "nodes": tuple(file_meta.get("nodes") or ()),
         "materials": tuple(file_meta.get("materials") or ()),
         "materials_config": copy.deepcopy(sidecar_meta.get("materials_config") or {}),
+        "native_unity_animations": copy.deepcopy(sidecar_meta.get("native_unity_animations") or {}),
         "physics": copy.deepcopy(sidecar_meta.get("physics") or {}),
         "secondary_motion": copy.deepcopy(sidecar_meta.get("secondary_motion") or {}),
         "bone_names": bone_names,
@@ -3307,6 +3321,12 @@ def _relative_action_offsets(
         "schema": str(root.get("schema") or "sao.humanoid.procedural.v1"),
         "mode": str(root.get("mode") or "relative_ik"),
         "name": str(selected.get("name") or action_name or ""),
+        "clip": str(selected.get("clip") or ""),
+        "native_unity": tuple(
+            str(item)
+            for item in list(selected.get("native_unity") or [])[:8]
+            if str(item or "").strip()
+        ) if isinstance(selected.get("native_unity"), (list, tuple)) else (),
         "offset_count": len(offsets),
         "has_gait": isinstance(selected.get("gait"), Mapping),
         "has_effectors": isinstance(selected.get("effectors"), Mapping) or isinstance(selected.get("targets"), Mapping),

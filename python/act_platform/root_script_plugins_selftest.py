@@ -17,8 +17,9 @@ from .plugins import PluginManager
 from .runtime import act_plugin_action, act_plugin_disable, act_plugin_enable, render_overlays
 
 try:
-    from render.model3d_backend import get_model_metadata
+    from render.model3d_backend import evaluate_retarget_pose, get_model_metadata
 except Exception:  # pragma: no cover - render package can be absent in narrow imports
+    evaluate_retarget_pose = None  # type: ignore[assignment]
     get_model_metadata = None  # type: ignore[assignment]
 
 
@@ -660,6 +661,23 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_default_prefer_model_clips",
                         "retarget": default_retarget,
                     }
+                default_action = default_model_node.get("action") if isinstance(default_model_node.get("action"), dict) else {}
+                default_model = default_model_node.get("model") if isinstance(default_model_node.get("model"), dict) else {}
+                if "tomurai_1_00" not in str(default_model.get("path") or "").lower() or str(default_action.get("clip") or "") != "Idle":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_tomurai_model_action",
+                        "model": default_model,
+                        "action": default_action,
+                    }
+                if default_model_node.get("strict_assets") is not True or default_model_node.get("asset_policy") != "strict":
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_default_strict_assets",
+                        "node": default_model_node,
+                    }
                 default_procedural = (
                     default_model_node.get("procedural_action")
                     if isinstance(default_model_node.get("procedural_action"), dict)
@@ -671,13 +689,17 @@ def run_selftest() -> dict[str, Any]:
                     else {}
                 )
                 required_default_actions = {
-                    "idle", "walk", "jog", "run", "sprint", "sneak", "salute", "beckon",
-                    "dance", "cheer", "victory", "think", "yawn", "sleepy", "scared",
-                    "guard", "dodge_left", "dodge_right", "kick", "punch", "stumble",
-                    "crouch", "tap_react", "drag_react", "drop_react", "happy",
+                    "tomurai_idle", "moe_idle", "shy_wave", "double_peace", "heart_pose",
+                    "cat_paw", "head_tilt", "hand_on_cheek", "wink_pose", "sparkle_pose",
+                    "pout", "happy_hop", "twirl", "curtsy", "sleepy_rub", "surprised",
+                    "please_pose", "giggle", "blush_hide", "walk", "jog", "run",
+                    "sprint", "sneak", "dance", "cheer", "victory", "think", "yawn",
+                    "sleepy", "scared", "guard", "dodge_left", "dodge_right", "kick",
+                    "punch", "stumble", "crouch", "tap_react", "drag_react",
+                    "drop_react", "happy",
                 }
                 missing_default_actions = sorted(required_default_actions - set(default_actions))
-                if default_procedural.get("default_action") != "idle" or len(default_actions) < 48 or missing_default_actions:
+                if default_procedural.get("default_action") != "tomurai_idle" or len(default_actions) < 65 or missing_default_actions:
                     return {
                         "ok": False,
                         "plugin_id": plugin_id,
@@ -686,6 +708,24 @@ def run_selftest() -> dict[str, Any]:
                         "missing": missing_default_actions,
                         "procedural_action": default_procedural,
                     }
+                for action_name, required_refs in {
+                    "tomurai_idle": ("Unity/HandSign/K_Idle.anim",),
+                    "double_peace": ("Unity/HandSign/K_Peace.anim", "Unity/Animation/Facial/ウィンク.anim"),
+                    "cat_paw": ("Unity/HandSign/K_Open.anim",),
+                    "sparkle_pose": ("Unity/Animation/Facial/キラキラ.anim",),
+                    "sleepy_rub": ("Unity/Animation/Facial/Zzz.anim",),
+                }.items():
+                    action_cfg = default_actions.get(action_name) if isinstance(default_actions.get(action_name), dict) else {}
+                    refs = set(action_cfg.get("native_unity") if isinstance(action_cfg.get("native_unity"), list) else [])
+                    if not set(required_refs).issubset(refs):
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_default_native_unity_refs",
+                            "action": action_name,
+                            "required": sorted(required_refs),
+                            "refs": sorted(refs),
+                        }
                 common = default_procedural.get("common") if isinstance(default_procedural.get("common"), dict) else {}
                 adaptation = (
                     default_procedural.get("adaptation")
@@ -700,7 +740,14 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_default_adaptation",
                         "procedural_action": default_procedural,
                     }
-                for default_action_name in ("sprint", "guard", "cheer", "crouch"):
+                for default_action_name, expected_clip in (
+                    ("double_peace", "K_Peace"),
+                    ("cat_paw", "K_Open"),
+                    ("sparkle_pose", "K_Peace"),
+                    ("sprint", "sprint"),
+                    ("guard", "K_Fist"),
+                    ("crouch", "crouch"),
+                ):
                     representative_action = act_plugin_action(
                         owner,
                         "script.avatar.action",
@@ -717,6 +764,33 @@ def run_selftest() -> dict[str, Any]:
                             "state": representative_state,
                             "result": representative_action,
                         }
+                    representative_node = _find_model3d_node(
+                        render_overlays(owner, "unioverlay").get("overlays") or [])
+                    representative_spec = (
+                        representative_node.get("action")
+                        if isinstance(representative_node.get("action"), dict)
+                        else {}
+                    )
+                    if representative_spec.get("name") != default_action_name or representative_spec.get("clip") != expected_clip:
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_representative_action_spec",
+                            "action": default_action_name,
+                            "expected_clip": expected_clip,
+                            "spec": representative_spec,
+                        }
+                    if default_action_name == "double_peace" and callable(evaluate_retarget_pose):
+                        pose = evaluate_retarget_pose(representative_node)
+                        procedural_info = pose.get("procedural_action") if isinstance(pose.get("procedural_action"), dict) else {}
+                        native_refs = procedural_info.get("native_unity") if isinstance(procedural_info.get("native_unity"), (list, tuple)) else ()
+                        if "Unity/HandSign/K_Peace.anim" not in native_refs:
+                            return {
+                                "ok": False,
+                                "plugin_id": plugin_id,
+                                "stage": "stickwoman_representative_native_unity_pose",
+                                "pose": pose,
+                            }
                 procedural_json = json.dumps({
                     "schema": "sao.humanoid.procedural.v1",
                     "enabled": True,
@@ -977,9 +1051,38 @@ def run_selftest() -> dict[str, Any]:
                     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
                     preview = mesh.get("preview") if isinstance(mesh.get("preview"), dict) else {}
                     skin = preview.get("skin") if isinstance(preview.get("skin"), list) else []
+                    face_materials = preview.get("face_materials") if isinstance(preview.get("face_materials"), list) else []
                     vertex_count = int(mesh.get("vertex_count") or 0)
                     face_count = int(mesh.get("face_count") or 0)
-                    if vertex_count < 300 or face_count < 300 or len(skin) < 300:
+                    bone_names = meta.get("bone_names") if isinstance(meta.get("bone_names"), (list, tuple)) else ()
+                    materials_config = meta.get("materials_config") if isinstance(meta.get("materials_config"), dict) else {}
+                    textures = materials_config.get("textures") if isinstance(materials_config.get("textures"), dict) else {}
+                    base_textures = textures.get("base") if isinstance(textures.get("base"), dict) else {}
+                    native_unity = (
+                        meta.get("native_unity_animations")
+                        if isinstance(meta.get("native_unity_animations"), dict)
+                        else {}
+                    )
+                    native_files = native_unity.get("files") if isinstance(native_unity.get("files"), list) else []
+                    resolved_model = Path(str(meta.get("resolved_path") or ""))
+                    asset_root = resolved_model.parent.parent if str(resolved_model) else Path()
+                    missing_textures = []
+                    for texture in base_textures.values():
+                        texture_path = asset_root / str(texture)
+                        if not texture_path.is_file():
+                            missing_textures.append(str(texture))
+                    material_names = {str(item) for item in meta.get("materials") or ()}
+                    if (
+                        vertex_count < 30000
+                        or face_count < 50000
+                        or len(skin) < 3000
+                        or len(face_materials) < 3000
+                        or len(bone_names) < 100
+                        or {"Hair", "Clothes", "Outer", "Body", "Face", "Other"} - material_names
+                        or len(base_textures) < 6
+                        or missing_textures
+                        or len(native_files) < 28
+                    ):
                         return {
                             "ok": False,
                             "plugin_id": plugin_id,
@@ -990,11 +1093,20 @@ def run_selftest() -> dict[str, Any]:
                                 "face_count": face_count,
                                 "preview_skin_count": len(skin),
                                 "preview_skin_source": preview.get("skin_source"),
+                                "preview_face_material_count": len(face_materials),
+                                "bone_count": len(bone_names),
+                                "materials": sorted(material_names),
+                                "base_textures": base_textures,
+                                "missing_textures": missing_textures,
+                                "native_unity_file_count": len(native_files),
                             },
                         }
                     state["default_vertex_count"] = vertex_count
                     state["default_face_count"] = face_count
                     state["default_preview_skin_count"] = len(skin)
+                    state["default_preview_face_material_count"] = len(face_materials)
+                    state["default_bone_count"] = len(bone_names)
+                    state["default_native_unity_file_count"] = len(native_files)
             if not action.get("ok"):
                 return {"ok": False, "plugin_id": plugin_id, "stage": "game_action", "result": action}
             summaries[plugin_id] = {

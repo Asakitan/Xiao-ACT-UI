@@ -599,22 +599,29 @@ class SAOPlayerGUIMenuMixin:
         wrapped = dict(item)
         command = wrapped.get('command')
         keep_menu_open = bool(wrapped.get('keep_menu_open'))
+        close_menu_before = bool(wrapped.get('close_menu_before'))
         if not callable(command):
             return wrapped
 
-        def _wrapped_command(command=command, keep_menu_open=keep_menu_open):
+        def _close_open_menu() -> None:
+            menu = getattr(self, '_sao_menu', None)
+            if menu is not None and getattr(menu, 'visible', False):
+                try:
+                    self._toggle_sao_menu(allow_close=True)
+                except Exception:
+                    pass
+
+        def _wrapped_command(command=command, keep_menu_open=keep_menu_open,
+                             close_menu_before=close_menu_before):
             should_close = False
             if not keep_menu_open:
                 menu = getattr(self, '_sao_menu', None)
                 should_close = bool(menu is not None and getattr(menu, 'visible', False))
+            if should_close and close_menu_before:
+                _close_open_menu()
             result = command()
-            if should_close:
-                menu = getattr(self, '_sao_menu', None)
-                if menu is not None and getattr(menu, 'visible', False):
-                    try:
-                        self._toggle_sao_menu(allow_close=True)
-                    except Exception:
-                        pass
+            if should_close and not close_menu_before:
+                _close_open_menu()
             return result
 
         wrapped['command'] = _wrapped_command

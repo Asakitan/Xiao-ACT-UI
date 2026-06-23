@@ -186,12 +186,13 @@ def _deform_vertices(
     vertices: list[tuple[float, float, float]],
     preview: Mapping[str, Any],
     node: Mapping[str, Any],
+    meta: Mapping[str, Any] | None = None,
 ) -> list[tuple[float, float, float]]:
     fn = getattr(_software, "_deform_vertices", None) if _software is not None else None
     if not callable(fn):
         return vertices
     try:
-        return fn(vertices, preview, node)
+        return fn(vertices, preview, node, meta)
     except Exception:
         return vertices
 
@@ -228,11 +229,13 @@ def _face_base_color(
     face: list[int],
     preview: Mapping[str, Any],
     accent: tuple[int, int, int, int],
+    face_index: int = -1,
+    meta: Mapping[str, Any] | None = None,
 ) -> tuple[int, int, int, int]:
     fn = getattr(_software, "_face_base_color", None) if _software is not None else None
     if callable(fn):
         try:
-            return fn(face, preview, accent)
+            return fn(face, preview, accent, face_index, meta)
         except Exception:
             pass
     return accent
@@ -257,13 +260,19 @@ def _topology_cache_key(
     faces: list[list[int]],
     preview: Mapping[str, Any],
     accent: tuple[int, int, int, int],
+    meta: Mapping[str, Any] | None = None,
 ) -> tuple[Any, ...]:
     skin = preview.get("skin")
+    materials = preview.get("face_materials")
+    material_config = meta.get("materials_config") if isinstance(meta, Mapping) else None
     return (
         id(preview.get("faces")),
         len(faces),
         id(skin),
         len(skin) if isinstance(skin, (list, tuple)) else 0,
+        id(materials),
+        len(materials) if isinstance(materials, (list, tuple)) else 0,
+        id(material_config),
         accent,
     )
 
@@ -272,19 +281,20 @@ def _topology_index_batches(
     faces: list[list[int]],
     preview: Mapping[str, Any],
     accent: tuple[int, int, int, int],
+    meta: Mapping[str, Any] | None = None,
 ) -> tuple[list[tuple[Any, Any]], list[tuple[Any, Any]]]:
     if np is None:
         return [], []
-    key = _topology_cache_key(faces, preview, accent)
+    key = _topology_cache_key(faces, preview, accent, meta)
     cached = _TOPOLOGY_CACHE.get(key)
     if cached is not None:
         return cached
     tri_groups: dict[tuple[int, int, int, int], list[int]] = {}
     line_groups: dict[tuple[int, int, int, int], list[int]] = {}
-    for face in faces:
+    for face_index, face in enumerate(faces):
         if len(face) < 3:
             continue
-        base = _face_base_color(face, preview, accent)
+        base = _face_base_color(face, preview, accent, face_index, meta)
         outline = _outline_color(base)
         tri_group = tri_groups.setdefault(base, [])
         line_group = line_groups.setdefault(outline, [])
@@ -346,12 +356,13 @@ def _mesh_arrays_by_color(
     height: int,
     preview: Mapping[str, Any],
     accent: tuple[int, int, int, int],
+    meta: Mapping[str, Any] | None = None,
 ) -> tuple[list[tuple[Any, tuple[float, float, float, float]]], list[tuple[Any, tuple[float, float, float, float]]]]:
     if np is None:
         return [], []
     ndc = _projected_ndc_array(projected, width, height)
     if ndc is not None:
-        tri_index_batches, line_index_batches = _topology_index_batches(faces, preview, accent)
+        tri_index_batches, line_index_batches = _topology_index_batches(faces, preview, accent, meta)
         triangles = [
             (np.ascontiguousarray(ndc[indices].reshape((-1, 2)), dtype="f4"), color)
             for indices, color in tri_index_batches
@@ -365,10 +376,10 @@ def _mesh_arrays_by_color(
         return triangles, lines
     tri_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
     line_groups: dict[tuple[int, int, int, int], list[tuple[float, float]]] = {}
-    ordered = sorted(faces, key=lambda face: sum(projected[idx][2] for idx in face) / len(face))
-    for face in ordered:
+    ordered = sorted(enumerate(faces), key=lambda item: sum(projected[idx][2] for idx in item[1]) / len(item[1]))
+    for face_index, face in ordered:
         pts = [_ndc(projected[index], width, height) for index in face]
-        base = _face_base_color(face, preview, accent)
+        base = _face_base_color(face, preview, accent, face_index, meta)
         outline = _outline_color(base)
         tri_group = tri_groups.setdefault(base, [])
         line_group = line_groups.setdefault(outline, [])
@@ -444,12 +455,13 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
     vertices, faces, preview = _preview_from_context(context)
     if len(vertices) < 3 or not faces:
         return None
-    vertices = _deform_vertices(vertices, preview, node)
+    model = context.get("model") if isinstance(context.get("model"), Mapping) else {}
+    vertices = _deform_vertices(vertices, preview, node, model)
     projected = _project_vertices(vertices, width, height, node)
     if len(projected) != len(vertices):
         return None
     accent = _accent_color(context)
-    triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent)
+    triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent, model)
     if not triangle_batches:
         return None
 
