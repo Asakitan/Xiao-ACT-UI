@@ -1183,6 +1183,70 @@ async function _workspaceOpenTextDocument(uriOrPath) {
     return doc;
 }
 
+function _workspaceEditEntries(edit) {
+    if (!edit) return [];
+    if (Array.isArray(edit)) return edit;
+    if (Array.isArray(edit._edits)) return edit._edits;
+    if (Array.isArray(edit.edits)) return edit.edits;
+    return [];
+}
+
+function _workspaceEditText(entry) {
+    if (!entry || typeof entry !== 'object') return '';
+    if (entry.newText !== undefined) return String(entry.newText);
+    if (entry.text !== undefined) return String(entry.text);
+    return '';
+}
+
+async function _workspaceApplyEdit(edit) {
+    const entries = _workspaceEditEntries(edit);
+    if (!entries.length) return true;
+    const grouped = new Map();
+    for (const entry of entries) {
+        const uri = _workspaceUriFromInput(entry && (entry.uri || entry.resource || entry.path));
+        if (!uri || uri.scheme !== 'file' || !entry.range) return false;
+        const key = uri.toString();
+        if (!grouped.has(key)) grouped.set(key, { uri, edits: [] });
+        grouped.get(key).edits.push({
+            range: _rangeFromPayload(entry.range),
+            text: _workspaceEditText(entry),
+        });
+    }
+    try {
+        for (const group of grouped.values()) {
+            let text = '';
+            try { text = await fsp.readFile(group.uri.fsPath, 'utf8'); }
+            catch (err) {
+                if (!err || err.code !== 'ENOENT') throw err;
+            }
+            const edits = group.edits.slice().sort((a, b) => {
+                const ao = _offsetAt(text, a.range.start);
+                const bo = _offsetAt(text, b.range.start);
+                if (ao !== bo) return bo - ao;
+                return _offsetAt(text, b.range.end) - _offsetAt(text, a.range.end);
+            });
+            for (const item of edits) {
+                const start = _offsetAt(text, item.range.start);
+                const end = _offsetAt(text, item.range.end);
+                text = text.slice(0, start) + item.text + text.slice(end);
+            }
+            await fsp.mkdir(path.dirname(group.uri.fsPath), { recursive: true });
+            await fsp.writeFile(group.uri.fsPath, text, 'utf8');
+            const doc = _createLanguageDocument({
+                uri: group.uri,
+                text,
+                languageId: _languageIdForUri(group.uri),
+                version: Date.now(),
+            });
+            _workspaceTextDocuments.set(group.uri.toString(), doc);
+        }
+        return true;
+    } catch (err) {
+        log(`workspace.applyEdit failed: ${err && err.message || err}`);
+        return false;
+    }
+}
+
 function _offsetAt(text, position) {
     const targetLine = Math.max(0, Number(position?.line || 0));
     const targetCharacter = Math.max(0, Number(position?.character || 0));
@@ -1621,8 +1685,7 @@ function buildVscodeModule(extDesc, extensionPath) {
                 return _workspaceFindFiles(include, exclude, maxResults);
             },
             applyEdit(edit) {
-                log('stub: applyEdit');
-                return Promise.resolve(true);
+                return _workspaceApplyEdit(edit);
             },
             openTextDocument(uriOrPath) {
                 return _workspaceOpenTextDocument(uriOrPath);

@@ -6176,6 +6176,13 @@ function activate(context) {
       content: 'alpha\nbeta',
       language: 'plaintext',
     });
+    const editUri = vscode.Uri.joinPath(context.extensionUri, 'workspace-edit.txt');
+    await vscode.workspace.fs.writeFile(editUri, new TextEncoder().encode('hello world'));
+    const workspaceEdit = new vscode.WorkspaceEdit();
+    workspaceEdit.replace(editUri, new vscode.Range(0, 6, 0, 11), 'SAO');
+    workspaceEdit.insert(editUri, new vscode.Position(0, 0), 'say ');
+    const editApplied = await vscode.workspace.applyEdit(workspaceEdit);
+    const editedDoc = await vscode.workspace.openTextDocument(editUri);
     return {
       folderName: folders[0] && folders[0].name,
       rootPath: vscode.workspace.rootPath,
@@ -6186,6 +6193,8 @@ function activate(context) {
       pyCount: pyMatches.length,
       textDocuments: vscode.workspace.textDocuments.length,
       untitledText: untitled.getText(),
+      editApplied,
+      editText: editedDoc.getText(),
     };
   });
   void vscode.commands.executeCommand('selftest.node.workspaceProbe')
@@ -6628,8 +6637,10 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("docPrefix") == "\"\"\"AI "
                        and node_workspace_probe.get("docLineCount", 0) > 100
                        and node_workspace_probe.get("pyCount", 0) > 0
-                       and node_workspace_probe.get("textDocuments", 0) >= 2
-                       and node_workspace_probe.get("untitledText") == "alpha\nbeta",
+                       and node_workspace_probe.get("textDocuments", 0) >= 3
+                       and node_workspace_probe.get("untitledText") == "alpha\nbeta"
+                       and node_workspace_probe.get("editApplied") is True
+                       and node_workspace_probe.get("editText") == "say hello SAO",
                        json.dumps(node_workspace_probe, ensure_ascii=False))
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
