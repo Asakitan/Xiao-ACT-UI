@@ -2865,6 +2865,86 @@ function editorSelectWordAtCursor(){
   ed.focus();updateCursorPos();
   return true;
 }
+function editorSelectionRangeKey(){
+  return [ed.selectionStart,ed.selectionEnd,ed.value.length].join(':');
+}
+function editorSelectionRangeChain(node){
+  const chain=[];let guard=0;
+  while(node&&node.range&&guard++<64){
+    chain.push(node.range);
+    node=node.parent;
+  }
+  return chain;
+}
+function editorSelectionOffsetsForRange(range){
+  if(!range||!range.start||!range.end)return null;
+  const start=editorOffsetFromPosition(ed.value,range.start),end=editorOffsetFromPosition(ed.value,range.end);
+  return {start:Math.min(start,end),end:Math.max(start,end)};
+}
+function editorSelectionRangeContainsCurrent(range){
+  const offsets=editorSelectionOffsetsForRange(range);if(!offsets)return false;
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  return offsets.start<=start&&end<=offsets.end&&(offsets.start<start||end<offsets.end);
+}
+function editorSelectionRangeInsideCurrent(range){
+  const offsets=editorSelectionOffsetsForRange(range);if(!offsets)return false;
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  return start<=offsets.start&&offsets.end<=end&&(start<offsets.start||offsets.end<end);
+}
+function editorApplySelectionRange(range){
+  const offsets=editorSelectionOffsetsForRange(range);if(!offsets)return false;
+  editorSetSelection(offsets.start,offsets.end);
+  _editorSelectionRangeKey=editorSelectionRangeKey();
+  return true;
+}
+function fallbackExpandSelection(){
+  if(ed.selectionStart===ed.selectionEnd&&editorSelectWordAtCursor())return true;
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  const span=editorLineSpanAt(ed.value,start);
+  const lineEnd=end>span.lineEnd?editorLineSpanAt(ed.value,end).lineEnd:span.lineEnd;
+  editorSetSelection(span.lineStart,lineEnd);
+  return true;
+}
+function fallbackShrinkSelection(){
+  if(ed.selectionStart===ed.selectionEnd)return false;
+  return editorSelectWordAtCursor();
+}
+function applyEditorSelectionRange(direction){
+  const key=editorSelectionRangeKey();
+  if(key!==_editorSelectionRangeKey){_editorSelectionRangeIndex=-1;_editorSelectionRangeKey=key}
+  if(!Array.isArray(_editorSelectionRanges)||!_editorSelectionRanges.length)return false;
+  if(direction>0){
+    const next=_editorSelectionRanges.findIndex((range,index)=>index>_editorSelectionRangeIndex&&editorSelectionRangeContainsCurrent(range));
+    if(next>=0){_editorSelectionRangeIndex=next;return editorApplySelectionRange(_editorSelectionRanges[next])}
+  }else{
+    for(let i=Math.min(_editorSelectionRangeIndex-1,_editorSelectionRanges.length-1);i>=0;i--){
+      if(editorSelectionRangeInsideCurrent(_editorSelectionRanges[i])){
+        _editorSelectionRangeIndex=i;return editorApplySelectionRange(_editorSelectionRanges[i]);
+      }
+    }
+  }
+  return false;
+}
+async function requestEditorSelectionRanges(direction,quiet){
+  const position=editorPositionFromOffset(ed.value,editorSelectionFocus());
+  const res=await call('editor_language_provider',editorProviderPayload('selectionRange',{positions:[position]}));
+  if(res&&res.error){if(!quiet)setStatus('Selection ranges failed: '+res.error);return false}
+  const first=res&&res.ok&&Array.isArray(res.ranges)?res.ranges[0]:null;
+  _editorSelectionRanges=editorSelectionRangeChain(first);
+  _editorSelectionRangeIndex=-1;
+  _editorSelectionRangeKey=editorSelectionRangeKey();
+  return applyEditorSelectionRange(direction);
+}
+async function expandEditorSelection(quiet){
+  if(applyEditorSelectionRange(1)){setStatus('Expanded selection');return true}
+  if(await requestEditorSelectionRanges(1,true)){setStatus('Expanded selection');return true}
+  const ok=fallbackExpandSelection();if(!quiet)setStatus(ok?'Expanded selection':'No selection range');return ok;
+}
+async function shrinkEditorSelection(quiet){
+  if(applyEditorSelectionRange(-1)){setStatus('Shrank selection');return true}
+  if(await requestEditorSelectionRanges(-1,true)){setStatus('Shrank selection');return true}
+  const ok=fallbackShrinkSelection();if(!quiet)setStatus(ok?'Shrank selection':'No smaller selection range');return ok;
+}
 function editorFindSeedText(){
   const selected=ed.value.substring(ed.selectionStart,ed.selectionEnd);
   return selected||editorWordAtCursor();
@@ -3408,6 +3488,7 @@ let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineComp
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1;
 let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
+let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -4584,6 +4665,8 @@ ed.addEventListener('keydown',function(e){
   if(e.key==='F2'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorRename(false);return}
   if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
   if(e.key==='F12'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorDefinition(false);return}
+  if(e.key==='ArrowRight'&&e.shiftKey&&!e.ctrlKey&&e.altKey){e.preventDefault();expandEditorSelection(false);return}
+  if(e.key==='ArrowLeft'&&e.shiftKey&&!e.ctrlKey&&e.altKey){e.preventDefault();shrinkEditorSelection(false);return}
   if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();requestEditorSignatureHelp('',1,false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
@@ -4665,6 +4748,8 @@ ed.addEventListener('contextmenu',function(e){
     {sep:true},
     {label:'Select All',shortcut:'Ctrl+A',action:()=>{ed.select()}},
     {label:'Select Word',shortcut:'',action:()=>editorSelectWordAtCursor()},
+    {label:'Expand Selection',shortcut:'Shift+Alt+Right',action:()=>expandEditorSelection(false)},
+    {label:'Shrink Selection',shortcut:'Shift+Alt+Left',action:()=>shrinkEditorSelection(false)},
     {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
     {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
     {sep:true},
@@ -8781,6 +8866,8 @@ const COMMANDS=[
   {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
   {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
   {label:'Select Word',shortcut:'',action:()=>editorSelectWordAtCursor()},
+  {label:'Expand Selection',shortcut:'Shift+Alt+Right',action:()=>expandEditorSelection(false)},
+  {label:'Shrink Selection',shortcut:'Shift+Alt+Left',action:()=>shrinkEditorSelection(false)},
   {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
   {label:'Refresh Folding Ranges',shortcut:'',action:()=>requestEditorFoldingRanges(false)},
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},

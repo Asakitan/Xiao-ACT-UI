@@ -151,6 +151,13 @@ class FoldingRange {
     }
 }
 
+class SelectionRange {
+    constructor(range, parent) {
+        this.range = range;
+        this.parent = parent;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Semantic tokens
 // -------------------------------------------------------------------------
@@ -1302,6 +1309,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerFoldingRangeProvider(selector, provider) {
                     return _registerLangProvider('foldingRange', selector, provider);
                 },
+                registerSelectionRangeProvider(selector, provider) {
+                    return _registerLangProvider('selectionRange', selector, provider);
+                },
                 registerDocumentSemanticTokensProvider(selector, provider, legend) {
                     return _registerLangProvider('semanticTokens', selector, provider, {
                         metadata: legend || new SemanticTokensLegend([], []),
@@ -1482,6 +1492,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } get isResolved() { return !!this.command; } },
         FoldingRange,
         FoldingRangeKind: { Comment: 1, Imports: 2, Region: 3 },
+        SelectionRange,
         SemanticTokensLegend,
         SemanticTokensBuilder,
         SemanticTokens,
@@ -1801,6 +1812,7 @@ function _languageProviderMethod(kind) {
         inlineCompletion: 'provideInlineCompletionItems',
         codeLens: 'provideCodeLenses',
         foldingRange: 'provideFoldingRanges',
+        selectionRange: 'provideSelectionRanges',
         semanticTokens: 'provideDocumentSemanticTokens',
         semanticTokensLegend: 'provideDocumentSemanticTokens',
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
@@ -1845,6 +1857,9 @@ async function handleLanguageProviderRequest(msg) {
         if (!methodName) throw new Error(`Unsupported language provider kind: ${kind}`);
         const document = _createLanguageDocument(msg.document || msg);
         const position = _positionFromPayload(msg.position);
+        const positions = Array.isArray(msg.positions)
+            ? msg.positions.map(_positionFromPayload)
+            : [position];
         const range = _rangeFromPayload(msg.range);
         const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
         const trigger = msg.triggerCharacter === undefined || msg.triggerCharacter === null
@@ -2116,6 +2131,8 @@ async function handleLanguageProviderRequest(msg) {
                     }, msg.context || {}), token);
                 } else if (kind === 'foldingRange') {
                     value = await fn.call(provider, document, msg.context || {}, token);
+                } else if (kind === 'selectionRange') {
+                    value = await fn.call(provider, document, positions, token);
                 } else if (kind === 'documentSymbol') {
                     value = await fn.call(provider, document, token);
                 } else {

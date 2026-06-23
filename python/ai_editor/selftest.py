@@ -357,8 +357,8 @@ def test_app_settings_parity() -> None:
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
-        CodeLens, FoldingRange, SemanticTokensLegend, SemanticTokensBuilder,
-        WorkspaceEdit, Location,
+        CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
+        SemanticTokensBuilder, WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -460,6 +460,12 @@ def test_app_settings_parity() -> None:
         def provideFoldingRanges(self, document, context, token):
             return [FoldingRange(0, 2, 3)]
 
+        def provideSelectionRanges(self, document, positions, token):
+            parent = SelectionRange(
+                Range(Position(0, 0), Position(0, 6)))
+            return [SelectionRange(
+                Range(Position(0, 0), Position(0, 3)), parent)]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -489,6 +495,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerInlineCompletionItemProvider"]("python", editor_provider)
     lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
+    lang_api["registerSelectionRangeProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
     lang_api["registerRenameProvider"]("python", editor_provider)
@@ -532,6 +539,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="codeLens", itemResolveCount=10))
         folding_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="foldingRange"))
+        selection_range_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="selectionRange"))
         semantic_tokens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="semanticTokens"))
         prepare_rename_result = provider_api.editor_language_provider(
@@ -615,6 +624,13 @@ def test_app_settings_parity() -> None:
                and folding_range_result.get("ranges", [{}])[0].get("start") == 0
                and folding_range_result.get("ranges", [{}])[0].get("end") == 2
                and folding_range_result.get("ranges", [{}])[0].get("kind") == 3)
+        selection_range = selection_range_result.get("ranges", [{}])[0]
+        _check("editor_language_provider serializes selection ranges",
+               selection_range_result.get("ok") is True
+               and selection_range.get("range", {}).get("end", {})
+               .get("character") == 3
+               and selection_range.get("parent", {})
+               .get("range", {}).get("end", {}).get("character") == 6)
         _check("editor_language_provider serializes semantic tokens",
                semantic_tokens_result.get("ok") is True
                and semantic_tokens_result.get("legend", {})
@@ -1603,6 +1619,14 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorWordBoundary(value,pos,direction)" in html
             and "function editorMoveWord(direction,selecting)" in html
             and "function editorSelectWordAtCursor()" in html
+            and "async function requestEditorSelectionRanges(direction,quiet)" in html
+            and "async function expandEditorSelection(quiet)" in html
+            and "async function shrinkEditorSelection(quiet)" in html
+            and "editorProviderPayload('selectionRange'" in html
+            and "Expand Selection" in html
+            and "Shrink Selection" in html
+            and "Shift+Alt+Right" in html
+            and "Shift+Alt+Left" in html
             and "editorMoveWord(e.key==='ArrowRight'?1:-1,e.shiftKey)" in html
             and "Select Word" in html
             and "select_word" in html
@@ -2921,8 +2945,9 @@ def test_vscode_api() -> None:
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
-        CodeLens, FoldingRange, SemanticTokensLegend, SemanticTokensBuilder,
-        TextEdit, Location, SignatureHelp, SignatureInformation,
+        CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
+        SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
+        SignatureInformation,
         ParameterInformation,
     )
 
@@ -2956,6 +2981,7 @@ def test_vscode_api() -> None:
     _check("api.SignatureHelp", api["SignatureHelp"] is SignatureHelp)
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
     _check("api.FoldingRange", api["FoldingRange"] is FoldingRange)
+    _check("api.SelectionRange", api["SelectionRange"] is SelectionRange)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3355,6 +3381,13 @@ def test_vscode_api() -> None:
             def provideFoldingRanges(self, document, context, token):
                 return [FoldingRange(0, 2, api["FoldingRangeKind"]["Region"])]
 
+        class _SelectionRangeProvider:
+            def provideSelectionRanges(self, document, positions, token):
+                parent = SelectionRange(
+                    Range(Position(0, 0), Position(0, 11)))
+                return [SelectionRange(
+                    Range(Position(0, 0), Position(0, 4)), parent)]
+
         class _SemanticTokensProvider:
             def provideDocumentSemanticTokens(self, document, token):
                 builder = SemanticTokensBuilder(semantic_legend)
@@ -3420,6 +3453,8 @@ def test_vscode_api() -> None:
             "python", code_lens_provider)
         api["languages"]["registerFoldingRangeProvider"](
             "python", _FoldingRangeProvider())
+        api["languages"]["registerSelectionRangeProvider"](
+            "python", _SelectionRangeProvider())
         semantic_legend = SemanticTokensLegend(
             ["function", "variable"], ["readonly"])
         api["languages"]["registerDocumentSemanticTokensProvider"](
@@ -3463,6 +3498,10 @@ def test_vscode_api() -> None:
             "vscode.executeCodeLensProvider", doc.uri, 1)
         folding_ranges = api["commands"]["executeCommand"](
             "vscode.executeFoldingRangeProvider", doc.uri)
+        selection_ranges = api["commands"]["executeCommand"](
+            "vscode.executeSelectionRangeProvider",
+            doc.uri,
+            [Position(0, 1)])
         semantic_legend_result = api["commands"]["executeCommand"](
             "vscode.provideDocumentSemanticTokensLegend", doc.uri)
         semantic_tokens = api["commands"]["executeCommand"](
@@ -3523,6 +3562,10 @@ def test_vscode_api() -> None:
                and folding_ranges[0].start == 0
                and folding_ranges[0].end == 2
                and folding_ranges[0].kind == api["FoldingRangeKind"]["Region"])
+        _check("executeSelectionRangeProvider invokes matching providers",
+               selection_ranges
+               and selection_ranges[0].range.end.character == 4
+               and selection_ranges[0].parent.range.end.character == 11)
         _check("provideDocumentSemanticTokens invokes matching providers",
                semantic_legend_result
                and semantic_legend_result.tokenTypes == ["function", "variable"]
@@ -3555,6 +3598,8 @@ def test_vscode_api() -> None:
                and "vscode.executeCodeLensProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeFoldingRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeSelectionRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.provideDocumentSemanticTokens"
                in api["commands"]["getCommands"]()
@@ -4846,6 +4891,12 @@ function activate(context) {
       return [new vscode.FoldingRange(0, 2, vscode.FoldingRangeKind.Region)];
     },
   });
+  vscode.languages.registerSelectionRangeProvider('python', {
+    provideSelectionRanges(document, positions, token) {
+      const parent = new vscode.SelectionRange(new vscode.Range(0, 0, 0, 12));
+      return [new vscode.SelectionRange(new vscode.Range(0, 0, 0, 4), parent)];
+    },
+  });
   const semanticLegend = new vscode.SemanticTokensLegend(
     ['function', 'variable'],
     ['readonly'],
@@ -4996,6 +5047,10 @@ module.exports = { activate, deactivate };
                     "vscode.executeCodeLensProvider", node_uri, 1)
                 node_folding_ranges = api._ext_host.commands.execute(
                     "vscode.executeFoldingRangeProvider", node_uri)
+                node_selection_ranges = api._ext_host.commands.execute(
+                    "vscode.executeSelectionRangeProvider",
+                    node_uri,
+                    [Position(0, 1)])
                 node_semantic_legend = api._ext_host.commands.execute(
                     "vscode.provideDocumentSemanticTokensLegend", node_uri)
                 node_semantic_tokens = api._ext_host.commands.execute(
@@ -5075,6 +5130,12 @@ module.exports = { activate, deactivate };
                        and node_folding_ranges[0].get("start") == 0
                        and node_folding_ranges[0].get("end") == 2
                        and node_folding_ranges[0].get("kind") == 3)
+                _check("node host language provider invokes JS selection ranges",
+                       node_selection_ranges
+                       and node_selection_ranges[0].get("range", {})
+                       .get("end", {}).get("character") == 4
+                       and node_selection_ranges[0].get("parent", {})
+                       .get("range", {}).get("end", {}).get("character") == 12)
                 _check("node host language provider invokes JS semantic tokens",
                        node_semantic_legend
                        and node_semantic_legend.get("tokenTypes", [None])[0]

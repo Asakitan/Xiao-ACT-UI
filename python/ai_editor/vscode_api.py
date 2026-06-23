@@ -845,6 +845,12 @@ class FoldingRange:
         self.kind = kind
 
 
+class SelectionRange:
+    def __init__(self, range: Any, parent: Any = None) -> None:
+        self.range = range
+        self.parent = parent
+
+
 class SemanticTokensLegend:
     def __init__(
             self,
@@ -1314,6 +1320,8 @@ class VscodeNamespace:
             "vscode.executeCodeLensProvider": self._execute_code_lens_provider,
             "_executeFoldingRangeProvider": self._execute_folding_range_provider,
             "vscode.executeFoldingRangeProvider": self._execute_folding_range_provider,
+            "_executeSelectionRangeProvider": self._execute_selection_range_provider,
+            "vscode.executeSelectionRangeProvider": self._execute_selection_range_provider,
             "_provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
@@ -1812,6 +1820,28 @@ class VscodeNamespace:
                 "foldingRange", document, context={})))
         return results
 
+    def _execute_selection_range_provider(
+            self, uri: Any, positions: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        if isinstance(positions, (list, tuple)):
+            selection_positions = [_coerce_position(item) for item in positions]
+        else:
+            selection_positions = [_coerce_position(positions)]
+        for entry in self._matching_language_providers(
+                "selectionRange", document):
+            value = self._call_language_provider(
+                entry.get("provider"), "provideSelectionRanges",
+                (document, selection_positions, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "selectionRange",
+            document,
+            positions=[self._position_payload(pos)
+                       for pos in selection_positions])
+        return self._provider_values(external)
+
     def _execute_document_semantic_tokens_legend(self, uri: Any) -> Any:
         document = self._resolve_language_document(uri)
         for entry in self._matching_language_providers(
@@ -2055,6 +2085,7 @@ class VscodeNamespace:
             "InlineCompletionList": InlineCompletionList,
             "CodeLens": CodeLens,
             "FoldingRange": FoldingRange,
+            "SelectionRange": SelectionRange,
             "SemanticTokensLegend": SemanticTokensLegend,
             "SemanticTokensBuilder": SemanticTokensBuilder,
             "SemanticTokens": SemanticTokens,
@@ -2912,6 +2943,7 @@ class VscodeNamespace:
             "registerInlayHintsProvider": lambda selector, provider: self._register_language_provider("inlayHint", selector, provider),
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
             "registerFoldingRangeProvider": lambda selector, provider: self._register_language_provider("foldingRange", selector, provider),
+            "registerSelectionRangeProvider": lambda selector, provider: self._register_language_provider("selectionRange", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),

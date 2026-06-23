@@ -491,7 +491,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
     "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
-    "tokenModifiers",
+    "tokenModifiers", "parent",
 )
 
 
@@ -2751,6 +2751,9 @@ class AIEditorAPI:
             "foldingRange": "foldingRange",
             "foldingRanges": "foldingRange",
             "folds": "foldingRange",
+            "selectionRange": "selectionRange",
+            "selectionRanges": "selectionRange",
+            "expandSelection": "selectionRange",
             "semanticToken": "semanticTokens",
             "semanticTokens": "semanticTokens",
             "documentSemanticTokens": "semanticTokens",
@@ -2992,6 +2995,29 @@ class AIEditorAPI:
                 result = self._ext_host.commands.execute(
                     "vscode.executeFoldingRangeProvider",
                     document.uri,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "ranges": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "selectionRange":
+                positions = payload.get("positions")
+                if isinstance(positions, list):
+                    selection_positions = [
+                        _editor_provider_position(item, content)
+                        for item in positions
+                    ]
+                else:
+                    selection_positions = [position]
+                result = self._ext_host.commands.execute(
+                    "vscode.executeSelectionRangeProvider",
+                    document.uri,
+                    selection_positions,
                 )
                 value = _json_ready_language_value(result)
                 return {
