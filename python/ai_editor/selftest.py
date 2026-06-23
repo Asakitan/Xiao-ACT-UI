@@ -5823,6 +5823,7 @@ const output = vscode.window.createOutputChannel('node-tree-selftest');
 const workspaceEvents = { open: 0, change: 0, close: 0, save: 0 };
 
 function activate(context) {
+  console.log('node console probe', { source: 'selftest' });
   vscode.workspace.onDidOpenTextDocument(function(document) {
     workspaceEvents.open += 1;
     workspaceEvents.openThis = this && this.name;
@@ -6815,6 +6816,14 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 _check("node host tree view events and item actions receive JS element",
                        action_result.get("ok") is True and output_seen)
+                console_seen = _wait_until(
+                    lambda: "node console probe" in "".join(
+                        node_host._output_channels.get("Extension Console", [])),
+                    timeout=3.0)
+                _check("node host bridges extension console output",
+                       console_seen,
+                       "".join(node_host._output_channels.get(
+                           "Extension Console", [])))
                 node_diagnostics = node_host.diagnostics_snapshot()
                 node_diag_categories = node_diagnostics.get("categories", {})
                 _check("node host diagnostics are default-off and record enabled probes",

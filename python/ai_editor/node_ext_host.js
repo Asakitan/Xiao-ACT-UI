@@ -18,6 +18,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const readline = require('node:readline');
 const fsp = require('node:fs/promises');
+const util = require('node:util');
 
 // -------------------------------------------------------------------------
 // Logging — stderr only
@@ -30,6 +31,27 @@ const log = (...args) => process.stderr.write(`[ext-host] ${args.join(' ')}\n`);
 function send(msg) {
     process.stdout.write(JSON.stringify(msg) + '\n');
 }
+
+function _formatConsoleArgs(args) {
+    return args.map((arg) => {
+        if (typeof arg === 'string') return arg;
+        return util.inspect(arg, { depth: 5, breakLength: 120 });
+    }).join(' ');
+}
+
+function _bridgeConsole(level, args) {
+    const text = _formatConsoleArgs(args);
+    if (!text) return;
+    send({
+        type: 'output',
+        channel: 'Extension Console',
+        text: `[${level}] ${text}\n`,
+    });
+}
+
+['log', 'info', 'warn', 'error', 'debug'].forEach((level) => {
+    console[level] = (...args) => _bridgeConsole(level, args);
+});
 
 // -------------------------------------------------------------------------
 // EventEmitter (lightweight, mirrors vscode.EventEmitter)
