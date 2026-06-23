@@ -2534,6 +2534,36 @@ function editorLineStringScopes(prefix,lineComment){
   }
   return quote?['string']:[];
 }
+function editorRegexScopes(prefix,lineComment){
+  const text=String(prefix||''),lineToken=String(lineComment||'');
+  let quote='',escaped=false,inRegex=false,inClass=false;
+  for(let i=0;i<text.length;i++){
+    if(!quote&&!inRegex&&lineToken&&text.startsWith(lineToken,i))break;
+    const ch=text[i];
+    if(escaped){escaped=false;continue}
+    if(quote){
+      if(ch==='\\'){escaped=true;continue}
+      if(ch===quote)quote='';
+      continue;
+    }
+    if(inRegex){
+      if(ch==='\\'){escaped=true;continue}
+      if(ch==='['){inClass=true;continue}
+      if(ch===']'){inClass=false;continue}
+      if(ch==='/'&&!inClass){inRegex=false;continue}
+      continue;
+    }
+    if(ch==='"'||ch==="'"||ch==='`'){quote=ch;continue}
+    if(ch==='/'){
+      const next=text[i+1]||'';
+      if(next==='/'||next==='*')continue;
+      const before=text.slice(0,i).trimEnd(),prev=before.slice(-1);
+      const keyword=/\b(return|case|throw|typeof|delete|void|yield|await|in|of)$/.test(before);
+      if(!before||keyword||/[({\[\]=:;,!?&|+\-*~%^<>]/.test(prev))inRegex=true;
+    }
+  }
+  return inRegex?['regex']:[];
+}
 function editorBlockCommentOpenAt(value,pos,blockComment,lineComment){
   if(!blockComment||!blockComment[0]||!blockComment[1])return false;
   const open=String(blockComment[0]),close=String(blockComment[1]),text=String(value||'').slice(0,pos);
@@ -2562,27 +2592,53 @@ function editorBlockCommentOpenAt(value,pos,blockComment,lineComment){
   }
   return depth>0;
 }
-function editorContextScopesAt(lang,value,pos){
+function languageGrammarTokenTypes(lang){
+  const meta=LANGUAGE_META[lang]||{},groups=Object.create(null);
+  (Array.isArray(meta.grammars)?meta.grammars:[]).forEach(grammar=>{
+    const tokenTypes=grammar&&typeof grammar.tokenTypes==='object'&&!Array.isArray(grammar.tokenTypes)?grammar.tokenTypes:{};
+    Object.entries(tokenTypes).forEach(([scope,type])=>{
+      const key=String(type||'').toLowerCase(),name=String(scope||'').trim();
+      if(!key||!name)return;
+      (groups[key]||(groups[key]=[])).push(name);
+    });
+  });
+  return groups;
+}
+function editorRegexLikeLanguage(lang){
+  const family=languageHighlightFamily(lang);
+  return family==='javascript'||family==='textmate';
+}
+function editorTokenContextAt(lang,value,pos){
   value=String(value||'');pos=Math.max(0,Math.min(value.length,pos));
   const tokens=languageCommentTokens(lang),scopes=new Set();
   if(editorBlockCommentOpenAt(value,pos,tokens.blockComment,tokens.lineComment))scopes.add('comment');
   const span=editorLineSpanAt(value,pos);
   editorLineStringScopes(value.slice(span.lineStart,pos),tokens.lineComment).forEach(scope=>scopes.add(scope));
-  return scopes;
+  if(editorRegexLikeLanguage(lang)){
+    editorRegexScopes(value.slice(span.lineStart,pos),tokens.lineComment).forEach(scope=>scopes.add(scope));
+  }
+  const meta=LANGUAGE_META[lang]||{},grammarScopes=Array.isArray(meta.grammarScopes)?meta.grammarScopes:[];
+  const hasTextMateHints=meta.tokenizer==='textmate'||grammarScopes.length;
+  return {scopes,source:hasTextMateHints?'textmate-hints+lightweight':'lightweight',
+    grammarScopes,grammarTokenTypes:languageGrammarTokenTypes(lang)};
 }
-function autoClosingPairBlockedByContext(pair,scopes){
+function editorContextScopesAt(lang,value,pos){
+  return editorTokenContextAt(lang,value,pos).scopes;
+}
+function autoClosingPairBlockedByContext(pair,context){
+  const scopes=context&&context.scopes?context.scopes:context;
   const blocked=Array.isArray(pair&&pair.notIn)?pair.notIn.map(v=>String(v).toLowerCase()):[];
-  return blocked.some(scope=>scopes.has(scope));
+  return blocked.some(scope=>scopes&&scopes.has(scope));
 }
 function autoClosingPairForKey(lang,key,value,pos,hasSelection){
   if(String(key||'').length!==1)return null;
   const before=String(value||'').slice(0,pos);
-  const scopes=editorContextScopesAt(lang,value,pos);
+  const context=editorTokenContextAt(lang,value,pos);
   const pairs=(hasSelection?languageSurroundingPairs(lang):languageAutoClosingPairs(lang))
     .filter(pair=>pair&&pair.open&&typeof pair.close==='string'&&pair.open.endsWith(key))
     .sort((a,b)=>b.open.length-a.open.length);
   for(const pair of pairs){
-    if(autoClosingPairBlockedByContext(pair,scopes))continue;
+    if(autoClosingPairBlockedByContext(pair,context))continue;
     if(hasSelection&&pair.open!==key)continue;
     if(pair.open===key)return pair;
     const prefix=pair.open.slice(0,-key.length);
