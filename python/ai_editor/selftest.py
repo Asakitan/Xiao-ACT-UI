@@ -372,6 +372,8 @@ def test_app_settings_parity() -> None:
             self.seen_dirty = []
             self.seen_reference_context = None
             self.seen_rename_name = None
+            self.seen_range_format_range = None
+            self.seen_on_type_trigger = None
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -391,6 +393,16 @@ def test_app_settings_parity() -> None:
         def provideDocumentFormattingEdits(self, document, options, token):
             end = Position(0, len(document.getText()))
             return [TextEdit.replace(Range(Position(0, 0), end), "formatted")]
+
+        def provideDocumentRangeFormattingEdits(
+                self, document, range, options, token):
+            self.seen_range_format_range = range
+            return [TextEdit.replace(range, "range-formatted")]
+
+        def provideOnTypeFormattingEdits(
+                self, document, position, ch, options, token):
+            self.seen_on_type_trigger = ch
+            return [TextEdit.insert(position, "typed")]
 
         def provideCodeActions(self, document, range, context, token):
             action = CodeAction("Replace buffer", "quickfix")
@@ -544,6 +556,10 @@ def test_app_settings_parity() -> None:
     lang_api["registerHoverProvider"]("python", editor_provider)
     lang_api["registerSignatureHelpProvider"]("python", editor_provider, "(")
     lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
+    lang_api["registerDocumentRangeFormattingEditProvider"](
+        "python", editor_provider)
+    lang_api["registerOnTypeFormattingEditProvider"](
+        "python", editor_provider, "}")
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
     lang_api["registerDefinitionProvider"]("python", editor_provider)
     lang_api["registerTypeDefinitionProvider"]("python", editor_provider)
@@ -637,6 +653,17 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="rename", newName="renamed"))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
+        format_range_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="rangeFormatting", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }))
+        format_on_type_miss = provider_api.editor_language_provider(
+            dict(provider_payload, kind="onTypeFormatting",
+                 triggerCharacter=";"))
+        format_on_type_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="onTypeFormatting",
+                 triggerCharacter="}"))
         with open(provider_path, "r", encoding="utf-8") as fh:
             disk_text = fh.read()
         _check("editor_language_provider serializes completion items",
@@ -792,6 +819,17 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
+        _check("editor_language_provider exposes range formatting edits",
+               format_range_result.get("ok") is True
+               and format_range_result.get("edits", [{}])[0]
+               .get("newText") == "range-formatted"
+               and editor_provider.seen_range_format_range.end.character == 6)
+        _check("editor_language_provider exposes on-type formatting edits",
+               format_on_type_miss.get("edits") == []
+               and format_on_type_result.get("ok") is True
+               and format_on_type_result.get("edits", [{}])[0]
+               .get("newText") == "typed"
+               and editor_provider.seen_on_type_trigger == "}")
     finally:
         shutil.rmtree(tmp_provider_dir, ignore_errors=True)
 
@@ -1863,6 +1901,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function acceptEditorInlineCompletion()" in html
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
+           and "function editorFormatOptions()" in html
+           and "async function formatSelection()" in html
+           and "editorProviderPayload('rangeFormatting'" in html
+           and "Format Selection" in html
            and "function requestEditorCodeLenses(quiet)" in html
            and "function renderEditorCodeLenses(lenses)" in html
            and "function runEditorCodeLens(lens)" in html
@@ -3678,6 +3720,24 @@ def test_vscode_api() -> None:
                 return [TextEdit.replace(
                     Range(Position(0, 0), Position(0, 4)), "fmt")]
 
+        class _RangeFormatProvider:
+            def __init__(self):
+                self.ranges = []
+
+            def provideDocumentRangeFormattingEdits(
+                    self, document, range, options, token):
+                self.ranges.append(range)
+                return [TextEdit.replace(range, "rng")]
+
+        class _OnTypeFormatProvider:
+            def __init__(self):
+                self.triggers = []
+
+            def provideOnTypeFormattingEdits(
+                    self, document, position, ch, options, token):
+                self.triggers.append(ch)
+                return [TextEdit.insert(position, "typ")]
+
         hover_runtime = api["languages"]["registerHoverProvider"](
             {"language": "python", "scheme": "file"}, _HoverProvider())
         signature_provider = _SignatureProvider()
@@ -3730,6 +3790,12 @@ def test_vscode_api() -> None:
             "python", _CodeActionProvider())
         api["languages"]["registerDocumentFormattingEditProvider"](
             "python", _FormatProvider())
+        range_format_provider = _RangeFormatProvider()
+        api["languages"]["registerDocumentRangeFormattingEditProvider"](
+            "python", range_format_provider)
+        on_type_format_provider = _OnTypeFormatProvider()
+        api["languages"]["registerOnTypeFormattingEditProvider"](
+            "python", on_type_format_provider, "}")
         hovers = api["commands"]["executeCommand"](
             "vscode.executeHoverProvider", doc.uri, Position(0, 0))
         signature_none = api["commands"]["executeCommand"](
@@ -3819,6 +3885,17 @@ def test_vscode_api() -> None:
             Range(Position(0, 0), Position(0, 1)), api["CodeActionKind"]["QuickFix"])
         format_edits = api["commands"]["executeCommand"](
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
+        range_format_edits = api["commands"]["executeCommand"](
+            "vscode.executeFormatRangeProvider",
+            doc.uri,
+            Range(Position(0, 0), Position(0, 4)),
+            {"tabSize": 4})
+        on_type_miss = api["commands"]["executeCommand"](
+            "vscode.executeFormatOnTypeProvider",
+            doc.uri, Position(0, 4), ";", {"tabSize": 4})
+        on_type_edits = api["commands"]["executeCommand"](
+            "vscode.executeFormatOnTypeProvider",
+            doc.uri, Position(0, 4), "}", {"tabSize": 4})
         _check("executeHoverProvider invokes matching providers",
                hovers and hovers[0].contents == ["selftest hover"])
         _check("executeSignatureHelpProvider invokes matching providers",
@@ -3924,7 +4001,18 @@ def test_vscode_api() -> None:
         _check("executeCodeActionProvider passes diagnostics context",
                actions and actions[0].diagnostics[0].message == "boom")
         _check("executeFormatDocumentProvider invokes formatting providers",
-               format_edits and format_edits[0]["newText"] == "fmt")
+               format_edits and format_edits[0]["newText"] == "fmt"
+               and any(edit.get("newText") == "rng"
+                       for edit in format_edits))
+        _check("executeFormatRangeProvider invokes range formatting providers",
+               range_format_edits
+               and range_format_edits[0]["newText"] == "rng"
+               and range_format_provider.ranges[-1].end.character == 4)
+        _check("executeFormatOnTypeProvider respects trigger characters",
+               on_type_miss == []
+               and on_type_edits
+               and on_type_edits[0]["newText"] == "typ"
+               and on_type_format_provider.triggers == ["}"])
         hover_runtime.dispose()
         _check("language execute commands are registered",
                "vscode.executeCompletionItemProvider"
@@ -3936,6 +4024,10 @@ def test_vscode_api() -> None:
                and "vscode.executeDeclarationProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeImplementationProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeFormatRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeFormatOnTypeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeLinkProvider"
                in api["commands"]["getCommands"]()
@@ -5358,6 +5450,16 @@ function activate(context) {
       return [vscode.TextEdit.replace(new vscode.Range(0, 0, 0, 4), 'NODE')];
     },
   });
+  vscode.languages.registerDocumentRangeFormattingEditProvider('python', {
+    provideDocumentRangeFormattingEdits(document, range, options, token) {
+      return [vscode.TextEdit.replace(range, 'NODE_RANGE')];
+    },
+  });
+  vscode.languages.registerOnTypeFormattingEditProvider('python', {
+    provideOnTypeFormattingEdits(document, position, ch, options, token) {
+      return [vscode.TextEdit.insert(position, 'NODE_TYPE_' + ch)];
+    },
+  }, '}');
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
@@ -5517,6 +5619,17 @@ module.exports = { activate, deactivate };
                 node_format_edits = api._ext_host.commands.execute(
                     "vscode.executeFormatDocumentProvider",
                     node_uri, {"tabSize": 2})
+                node_range_format_edits = api._ext_host.commands.execute(
+                    "vscode.executeFormatRangeProvider",
+                    node_uri,
+                    Range(Position(0, 0), Position(0, 4)),
+                    {"tabSize": 2})
+                node_on_type_miss = api._ext_host.commands.execute(
+                    "vscode.executeFormatOnTypeProvider",
+                    node_uri, Position(0, 4), ";", {"tabSize": 2})
+                node_on_type_edits = api._ext_host.commands.execute(
+                    "vscode.executeFormatOnTypeProvider",
+                    node_uri, Position(0, 4), "}", {"tabSize": 2})
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -5646,7 +5759,19 @@ module.exports = { activate, deactivate };
                        and node_actions[0].get("title") == "node quick fix")
                 _check("node host language provider invokes JS formatting",
                        node_format_edits
-                       and node_format_edits[0].get("newText") == "NODE")
+                       and node_format_edits[0].get("newText") == "NODE"
+                       and any(
+                           edit.get("newText") == "NODE_RANGE"
+                           for edit in node_format_edits))
+                _check("node host language provider invokes JS range formatting",
+                       node_range_format_edits
+                       and node_range_format_edits[0].get("newText")
+                       == "NODE_RANGE")
+                _check("node host language provider invokes JS on-type formatting",
+                       node_on_type_miss == []
+                       and node_on_type_edits
+                       and node_on_type_edits[0].get("newText")
+                       == "NODE_TYPE_}")
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {

@@ -1385,6 +1385,18 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDocumentFormattingEditProvider(selector, provider) {
                     return _registerLangProvider('formatting', selector, provider);
                 },
+                registerDocumentRangeFormattingEditProvider(selector, provider) {
+                    return _registerLangProvider('rangeFormatting', selector, provider);
+                },
+                registerOnTypeFormattingEditProvider(selector, provider, firstTriggerCharacter, ...moreTriggerCharacters) {
+                    const triggers = [firstTriggerCharacter, ...moreTriggerCharacters]
+                        .filter(ch => ch !== undefined && ch !== null)
+                        .map(ch => String(ch));
+                    return _registerLangProvider('onTypeFormatting', selector, provider, {
+                        triggers,
+                        metadata: { triggerCharacters: triggers },
+                    });
+                },
                 registerDocumentLinkProvider(selector, provider) {
                     return _registerLangProvider('documentLink', selector, provider);
                 },
@@ -1924,6 +1936,8 @@ function _languageProviderMethod(kind) {
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
         formatting: 'provideDocumentFormattingEdits',
+        rangeFormatting: 'provideDocumentRangeFormattingEdits',
+        onTypeFormatting: 'provideOnTypeFormattingEdits',
     })[kind] || '';
 }
 
@@ -2304,6 +2318,12 @@ async function handleLanguageProviderRequest(msg) {
                     }, msg.context || {}), token);
                 } else if (kind === 'formatting') {
                     value = await fn.call(provider, document, msg.options || {}, token);
+                } else if (kind === 'rangeFormatting') {
+                    value = await fn.call(provider, document, range, msg.options || {}, token);
+                } else if (kind === 'onTypeFormatting') {
+                    const triggers = (entry.triggers || []).map(item => String(item));
+                    if (trigger && triggers.length && !triggers.includes(trigger)) continue;
+                    value = await fn.call(provider, document, position, trigger, msg.options || {}, token);
                 } else if (kind === 'inlayHint') {
                     value = await fn.call(provider, document, range, token);
                 } else if (kind === 'inlineCompletion') {

@@ -1416,6 +1416,10 @@ class VscodeNamespace:
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
             "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
+            "_executeFormatRangeProvider": self._execute_format_range_provider,
+            "vscode.executeFormatRangeProvider": self._execute_format_range_provider,
+            "_executeFormatOnTypeProvider": self._execute_format_on_type_provider,
+            "vscode.executeFormatOnTypeProvider": self._execute_format_on_type_provider,
         }
         for command_id, handler in commands.items():
             try:
@@ -1462,6 +1466,15 @@ class VscodeNamespace:
             "start": cls._position_payload(rng.start),
             "end": cls._position_payload(rng.end),
         }
+
+    @staticmethod
+    def _document_full_range(document: Any) -> Range:
+        text = document.getText() if hasattr(document, "getText") else ""
+        lines = str(text or "").split("\n")
+        return Range(
+            Position(0, 0),
+            Position(max(0, len(lines) - 1), len(lines[-1] if lines else "")),
+        )
 
     @staticmethod
     def _color_payload(color: Any) -> Dict[str, float]:
@@ -2167,6 +2180,66 @@ class VscodeNamespace:
         results.extend(self._provider_values(
             self._request_external_language_provider(
                 "formatting", document, options=format_options)))
+        full_range = self._document_full_range(document)
+        results.extend(self._collect_language_provider_results(
+            "rangeFormatting",
+            document,
+            "provideDocumentRangeFormattingEdits",
+            (document, full_range, format_options, CancellationToken.NONE)))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "rangeFormatting",
+                document,
+                range=self._range_payload(full_range),
+                options=format_options)))
+        return results
+
+    def _execute_format_range_provider(
+            self, uri: Any, range: Any = None,
+            options: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        format_range = _coerce_range(range)
+        format_options = options or {}
+        results = self._collect_language_provider_results(
+            "rangeFormatting",
+            document,
+            "provideDocumentRangeFormattingEdits",
+            (document, format_range, format_options, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "rangeFormatting",
+                document,
+                range=self._range_payload(format_range),
+                options=format_options)))
+        return results
+
+    def _execute_format_on_type_provider(
+            self, uri: Any, position: Any = None, ch: Any = None,
+            options: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        trigger = "" if ch is None else str(ch)
+        format_options = options or {}
+        results: List[Any] = []
+        for entry in self._matching_language_providers(
+                "onTypeFormatting", document):
+            triggers = tuple(str(item) for item in (entry.get("metadata") or ()))
+            if trigger and triggers and trigger not in triggers:
+                continue
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideOnTypeFormattingEdits",
+                (document, pos, trigger, format_options,
+                 CancellationToken.NONE),
+                default=None)
+            results.extend(self._provider_values(value))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "onTypeFormatting",
+                document,
+                position=self._position_payload(pos),
+                triggerCharacter=trigger or None,
+                options=format_options)))
         return results
 
     def set_ui_bridge(self, bridge: UIBridge) -> None:
@@ -3175,6 +3248,8 @@ class VscodeNamespace:
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
+            "registerDocumentRangeFormattingEditProvider": lambda selector, provider: self._register_language_provider("rangeFormatting", selector, provider),
+            "registerOnTypeFormattingEditProvider": lambda selector, provider, first, *more: self._register_language_provider("onTypeFormatting", selector, provider, self._on_type_formatting_triggers(first, more)),
             "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),
             "registerCodeLensProvider": lambda selector, provider: self._register_language_provider("codeLens", selector, provider),
             "registerDocumentLinkProvider": lambda selector, provider: self._register_language_provider("documentLink", selector, provider),
@@ -3239,6 +3314,15 @@ class VscodeNamespace:
                 "retriggerCharacters": list(values[0].get("retriggerCharacters") or []),
             }
         return tuple(str(item) for item in values)
+
+    @staticmethod
+    def _on_type_formatting_triggers(first: Any,
+                                     more: Sequence[Any]) -> Sequence[str]:
+        return tuple(
+            str(item)
+            for item in (first, *more)
+            if item is not None
+        )
 
     def _register_language_provider(self, kind: str, selector: Any,
                                     provider: Any, metadata: Any = None) -> Disposable:

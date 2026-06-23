@@ -2815,6 +2815,11 @@ class AIEditorAPI:
             "format": "formatting",
             "formatting": "formatting",
             "formatDocument": "formatting",
+            "formatRange": "rangeFormatting",
+            "rangeFormatting": "rangeFormatting",
+            "formatSelection": "rangeFormatting",
+            "formatOnType": "onTypeFormatting",
+            "onTypeFormatting": "onTypeFormatting",
         }
         kind = kind_aliases.get(str(payload.get("kind") or "").strip())
         if not kind:
@@ -3269,6 +3274,48 @@ class AIEditorAPI:
             options = payload.get("options")
             if not isinstance(options, dict):
                 options = {"tabSize": 4, "insertSpaces": True}
+            if kind == "rangeFormatting":
+                format_range = _editor_provider_range(
+                    payload.get("range"), content)
+                result = self._ext_host.commands.execute(
+                    "vscode.executeFormatRangeProvider",
+                    document.uri,
+                    format_range,
+                    options,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "edits": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "onTypeFormatting":
+                trigger = (
+                    payload.get("triggerCharacter")
+                    if payload.get("triggerCharacter") is not None
+                    else payload.get("ch")
+                )
+                if trigger is None:
+                    trigger = payload.get("character")
+                result = self._ext_host.commands.execute(
+                    "vscode.executeFormatOnTypeProvider",
+                    document.uri,
+                    position,
+                    "" if trigger is None else str(trigger),
+                    options,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "edits": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
             result = self._ext_host.commands.execute(
                 "vscode.executeFormatDocumentProvider",
                 document.uri,

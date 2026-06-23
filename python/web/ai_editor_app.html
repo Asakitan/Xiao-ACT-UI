@@ -5206,6 +5206,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
     {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+    {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   ];
@@ -5391,8 +5392,9 @@ function deleteLine(){
 }
 
 // ── Format document ──
+function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
 async function formatDocument(){
-  const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:{tabSize:4,insertSpaces:true}}));
+  const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:editorFormatOptions()}));
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){setStatus('Formatted via extension');return}
@@ -5401,6 +5403,16 @@ async function formatDocument(){
     try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);updateLineNums();setStatus('Formatted JSON')}
     catch{setStatus('Invalid JSON')}
   } else setStatus('Format not available for '+editorLang);
+}
+async function formatSelection(){
+  const range=editorSelectedRangePayload(),start=range.start,end=range.end;
+  if(start.line===end.line&&start.character===end.character){setStatus('No selection to format');return}
+  const res=await call('editor_language_provider',editorProviderPayload('rangeFormatting',{range,options:editorFormatOptions()}));
+  if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
+    _undoPush(true);
+    if(editorApplyTextEdits(res.edits)){setStatus('Formatted selection via extension');return}
+  }
+  setStatus('Format selection not available for '+editorLang);
 }
 
 // ── Language picker ──
@@ -9378,6 +9390,7 @@ const COMMANDS=[
   {label:'Find All References',shortcut:'Shift+F12',action:()=>requestEditorReferences(false)},
   {label:'Go to Symbol in Workspace...',shortcut:'Ctrl+T',action:()=>openWorkspaceSymbolPicker()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
+  {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
   {label:'Open Settings',shortcut:'',action:()=>openSettings()},
