@@ -199,6 +199,7 @@ def on_load(ctx):
 class FakeSettings:
     def __init__(self, data=None) -> None:
         self.data = dict(data or {})
+        self.save_count = 0
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -207,7 +208,7 @@ class FakeSettings:
         self.data[key] = value
 
     def save(self) -> None:
-        pass
+        self.save_count += 1
 
 
 def _write_hot_remove_plugin(root: str) -> str:
@@ -422,6 +423,20 @@ dictionary@ state()
         assert script_item.get("menu", {}).get("actions", [{}])[0].get("label") == "Read state", script_item
         assert script_item.get("menu", {}).get("priority") == 25.0, script_item
         assert script_item.get("surface") == "unioverlay", script_item
+        manager.set_plugin_setting("script_menu_demo", "overlay_enabled", False)
+        settings.data["act_plugin_enabled"] = {"script_menu_demo": True}
+        restarted_manager = PluginManager(plugin_dirs=[root], event_bus=bus, settings=settings)
+        restarted_manager.discover()
+        restarted_entries = restarted_manager.list_script_menu_entries("en-US")
+        restarted_item = next(
+            item for item in restarted_entries
+            if item.get("id") == "script_menu_demo"
+        )
+        assert restarted_item.get("enabled") is True, restarted_item
+        assert restarted_item.get("overlay_enabled") is False, restarted_item
+        assert restarted_item.get("loaded") is False, restarted_item
+        assert restarted_manager._records["script_menu_demo"].loaded is False, restarted_manager.status()
+        assert settings.save_count >= 1, settings.save_count
         settings.data["act_plugin_locale"] = "zh-CN"
         manager._records["script_menu_demo"].enabled = False
         menu_summary = act_plugin_menu(owner)
