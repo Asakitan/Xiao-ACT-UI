@@ -72,6 +72,10 @@ if TYPE_CHECKING:
 
 _clr = None
 _System = None
+_SOURCE_ASSEMBLY_CACHE_LIMIT = 16
+_SOURCE_ASSEMBLY_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_SOURCE_ASSEMBLY_CACHE_ORDER: list[tuple[Any, ...]] = []
+_REFERENCE_ASSEMBLY_CACHE: dict[tuple[str, bool, int, int], Any] = {}
 
 
 def _ensure_pythonnet():
@@ -88,6 +92,72 @@ def _ensure_pythonnet():
             "C# runtime requires the 'pythonnet' package and .NET runtime. "
             "Install with: pip install pythonnet"
         )
+
+
+def _file_signature(path: str) -> tuple[str, bool, int, int]:
+    abs_path = os.path.abspath(path)
+    try:
+        stat = os.stat(abs_path)
+        mtime_ns = int(getattr(
+            stat,
+            "st_mtime_ns",
+            int(stat.st_mtime * 1_000_000_000),
+        ))
+        return (abs_path, True, int(stat.st_size), mtime_ns)
+    except OSError:
+        return (abs_path, False, 0, 0)
+
+
+def _source_cache_key(source_path: str, references: list[str]) -> tuple[Any, ...]:
+    ref_sigs = tuple(_file_signature(path) for path in sorted(str(p) for p in references))
+    return (_file_signature(source_path), ref_sigs)
+
+
+def _remember_source_assembly(key: tuple[Any, ...], assembly: Any,
+                              build_dir: str, dll_path: str) -> None:
+    cached_build_dir = build_dir
+    if build_dir and os.path.isdir(build_dir):
+        try:
+            shutil.rmtree(build_dir, ignore_errors=True)
+            if not os.path.isdir(build_dir):
+                cached_build_dir = ""
+        except Exception:
+            cached_build_dir = build_dir
+    if key in _SOURCE_ASSEMBLY_CACHE:
+        try:
+            _SOURCE_ASSEMBLY_CACHE_ORDER.remove(key)
+        except ValueError:
+            pass
+    _SOURCE_ASSEMBLY_CACHE[key] = {
+        "assembly": assembly,
+        "build_dir": cached_build_dir,
+        "dll_path": dll_path,
+    }
+    _SOURCE_ASSEMBLY_CACHE_ORDER.append(key)
+    while len(_SOURCE_ASSEMBLY_CACHE_ORDER) > _SOURCE_ASSEMBLY_CACHE_LIMIT:
+        stale = _SOURCE_ASSEMBLY_CACHE_ORDER.pop(0)
+        entry = _SOURCE_ASSEMBLY_CACHE.pop(stale, None)
+        stale_dir = str((entry or {}).get("build_dir") or "")
+        if stale_dir and os.path.isdir(stale_dir):
+            try:
+                shutil.rmtree(stale_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def _load_compiled_source_assembly(dll_path: str) -> Any:
+    with open(dll_path, "rb") as fp:
+        data = fp.read()
+    byte_array = _System.Array[_System.Byte](data)
+    return _System.Reflection.Assembly.Load(byte_array)
+
+
+def _ensure_reference_assemblies(references: list[str]) -> None:
+    for path in references:
+        sig = _file_signature(path)
+        if not sig[1] or sig in _REFERENCE_ASSEMBLY_CACHE:
+            continue
+        _REFERENCE_ASSEMBLY_CACHE[sig] = _System.Reflection.Assembly.LoadFile(os.path.abspath(path))
 
 
 def _find_csc() -> str | None:
@@ -543,10 +613,9 @@ class CSharpRuntime(ScriptRuntime):
     def load_script(self, entry_path: str, record: "PluginRecord",
                     ctx: "PluginContext") -> ModuleType:
         ext = os.path.splitext(entry_path)[1].lower()
+        assembly = None
 
         if ext == ".cs":
-            build_dir = tempfile.mkdtemp(prefix=f"sao_cs_{record.plugin_id}_")
-            self._build_dirs[record.plugin_id] = build_dir
             refs_dir = os.path.join(record.path, "refs")
             references = []
             if os.path.isdir(refs_dir):
@@ -555,13 +624,27 @@ class CSharpRuntime(ScriptRuntime):
             runtime_ref = _python_runtime_reference()
             if runtime_ref and runtime_ref not in references:
                 references.append(runtime_ref)
-            dll_path = _compile_cs(entry_path, build_dir, references or None)
+            source_key = _source_cache_key(entry_path, references)
+            cached = _SOURCE_ASSEMBLY_CACHE.get(source_key)
+            if cached is not None:
+                assembly = cached.get("assembly")
+            if assembly is None:
+                build_dir = tempfile.mkdtemp(prefix=f"sao_cs_{record.plugin_id}_")
+                try:
+                    dll_path = _compile_cs(entry_path, build_dir, references or None)
+                    _ensure_reference_assemblies(references)
+                    assembly = _load_compiled_source_assembly(dll_path)
+                    _remember_source_assembly(source_key, assembly, build_dir, dll_path)
+                except Exception:
+                    shutil.rmtree(build_dir, ignore_errors=True)
+                    raise
         elif ext == ".dll":
             dll_path = entry_path
         else:
             raise ValueError(f"C# runtime: unsupported entry extension {ext!r}")
 
-        assembly = _System.Reflection.Assembly.LoadFile(os.path.abspath(dll_path))
+        if assembly is None:
+            assembly = _System.Reflection.Assembly.LoadFile(os.path.abspath(dll_path))
         self._assemblies[record.plugin_id] = assembly
 
         exported_types = list(assembly.GetExportedTypes())

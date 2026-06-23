@@ -1059,6 +1059,8 @@ class PluginUnifiedOverlayHost:
         self._after_id = None
         if self._destroyed:
             return
+        if self._hidden:
+            return
         if self._dirty:
             self._dirty = False
             self._refresh_now()

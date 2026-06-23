@@ -2719,6 +2719,31 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(len(root.after_calls), 1)
         self.assertEqual(root.after_calls[0][0], 0)
 
+    def test_hidden_host_skips_pending_tick_until_restore(self) -> None:
+        class FakeRoot:
+            def __init__(self):
+                self.after_calls = []
+
+            def after(self, delay, callback):
+                self.after_calls.append((delay, callback))
+                return f"after_{len(self.after_calls)}"
+
+        root = FakeRoot()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=root), surface="unioverlay")
+        host.mark_dirty()
+        self.assertEqual(len(root.after_calls), 1)
+        host.hide_temporarily()
+
+        with mock.patch.object(host, "_refresh_now") as refresh:
+            root.after_calls[0][1]()
+
+        refresh.assert_not_called()
+        self.assertTrue(host._dirty)
+        host.restore()
+        self.assertEqual(len(root.after_calls), 2)
+        self.assertEqual(root.after_calls[1][0], 0)
+
     def test_tick_reschedules_if_refresh_marks_dirty_again(self) -> None:
         class FakeRoot:
             def __init__(self):

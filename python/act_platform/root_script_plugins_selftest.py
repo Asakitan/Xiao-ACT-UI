@@ -447,6 +447,23 @@ def run_selftest() -> dict[str, Any]:
             elif plugin_id == "script_stickwoman_csharp":
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_timer_active", "state": state}
+                if state.get("settings_snapshot_loaded") is not True:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_settings_snapshot_loaded",
+                        "state": state,
+                    }
+                settings_reads = int(state.get("settings_read_count") or 0)
+                settings_refreshes = int(state.get("settings_refresh_count") or 0)
+                if settings_reads <= 0 or settings_reads > 30 or settings_refreshes <= 0 or settings_refreshes > 2:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_settings_read_budget",
+                        "state": state,
+                    }
+                initial_reload_nonce = int(state.get("model_reload_nonce") or 0)
                 default_fps = float(state.get("animation_fps") or 0.0)
                 default_interval = float(state.get("tick_interval") or 0.0)
                 if abs(default_fps - 15.0) > 0.01 or abs(default_interval - (1.0 / 15.0)) > 0.0001:
@@ -499,13 +516,26 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_retarget_motion_scale_max",
                         "state": motion_scale_state,
                     }
+                model_path = str(motion_scale_state.get("model_path") or "")
+                reload_action = act_plugin_action(
+                    owner, "script.model.set_path", {"path": model_path}, plugin_id=plugin_id)
+                reload_state = _state(reload_action)
+                if int(reload_state.get("model_reload_nonce") or 0) <= initial_reload_nonce:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_model_reload_nonce",
+                        "before": state,
+                        "after": reload_state,
+                    }
                 state = dict(state)
                 state["animation_fps"] = fps_state.get("animation_fps")
-                state["tick_interval"] = motion_scale_state.get("tick_interval")
+                state["tick_interval"] = reload_state.get("tick_interval")
                 state["retarget_twist_limit"] = twist_state.get("retarget_twist_limit")
                 state["retarget_stretch_limit"] = stretch_state.get("retarget_stretch_limit")
                 state["retarget_motion_scale_min"] = motion_scale_state.get("retarget_motion_scale_min")
                 state["retarget_motion_scale_max"] = motion_scale_state.get("retarget_motion_scale_max")
+                state["model_reload_nonce"] = reload_state.get("model_reload_nonce")
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
@@ -521,6 +551,22 @@ def run_selftest() -> dict[str, Any]:
                         "ok": False,
                         "plugin_id": plugin_id,
                         "stage": "stickwoman_spec_cache_reuse",
+                        "before": action_state,
+                        "after": redraw_state,
+                    }
+                if int(redraw_state.get("settings_read_count") or 0) != int(action_state.get("settings_read_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_redraw_settings_read_stable",
+                        "before": action_state,
+                        "after": redraw_state,
+                    }
+                if int(redraw_state.get("settings_refresh_count") or 0) != int(action_state.get("settings_refresh_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_redraw_settings_refresh_stable",
                         "before": action_state,
                         "after": redraw_state,
                     }
@@ -541,6 +587,9 @@ def run_selftest() -> dict[str, Any]:
                 state["render_count"] = action_state.get("render_count")
                 state["spec_build_count"] = action_state.get("spec_build_count")
                 state["animation_fps"] = action_state.get("animation_fps")
+                state["settings_read_count"] = action_state.get("settings_read_count")
+                state["settings_refresh_count"] = action_state.get("settings_refresh_count")
+                state["settings_snapshot_loaded"] = action_state.get("settings_snapshot_loaded")
                 overlays = render_overlays(owner, "unioverlay").get("overlays") or []
                 overlay_text = json.dumps(overlays, ensure_ascii=False, sort_keys=True, default=str)
                 if "keyframes" not in overlay_text or '"time"' not in overlay_text:
@@ -587,6 +636,16 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_overlay_motion_scale_max",
                         "retarget": retarget,
                     }
+                model = model_node.get("model") if isinstance(model_node.get("model"), dict) else {}
+                reload_key = str(model.get("reload_key") or "")
+                if f":{int(state.get('model_reload_nonce') or 0)}:" not in reload_key:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_reload_key",
+                        "model": model,
+                        "state": state,
+                    }
                 if callable(get_model_metadata):
                     meta = get_model_metadata(model_node)
                     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
@@ -629,6 +688,10 @@ def run_selftest() -> dict[str, Any]:
                 "static_ops_count": state.get("static_ops_count"),
                 "dynamic_ops_count": state.get("dynamic_ops_count"),
                 "spec_build_count": state.get("spec_build_count"),
+                "model_reload_nonce": state.get("model_reload_nonce"),
+                "settings_read_count": state.get("settings_read_count"),
+                "settings_refresh_count": state.get("settings_refresh_count"),
+                "settings_snapshot_loaded": state.get("settings_snapshot_loaded"),
                 "animation_fps": state.get("animation_fps"),
                 "retarget_twist_limit": state.get("retarget_twist_limit"),
                 "retarget_stretch_limit": state.get("retarget_stretch_limit"),
