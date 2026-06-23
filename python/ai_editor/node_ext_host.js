@@ -701,6 +701,9 @@ function _serializeLanguageValue(value) {
     if (value instanceof Uri) return _serializeLanguageUri(value);
     if (value instanceof Position) return _serializeLanguagePosition(value);
     if (value instanceof Range) return _serializeLanguageRange(value);
+    if (value instanceof RegExp) {
+        return { source: value.source, flags: value.flags, pattern: String(value) };
+    }
     if (value instanceof Location) {
         return {
             uri: _serializeLanguageUri(value.uri),
@@ -1325,6 +1328,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDocumentHighlightProvider(selector, provider) {
                     return _registerLangProvider('documentHighlight', selector, provider);
                 },
+                registerLinkedEditingRangeProvider(selector, provider) {
+                    return _registerLangProvider('linkedEditing', selector, provider);
+                },
                 registerRenameProvider(selector, provider) {
                     return _registerLangProvider('rename', selector, provider);
                 },
@@ -1925,6 +1931,7 @@ function _languageProviderMethod(kind) {
         codeLens: 'provideCodeLenses',
         foldingRange: 'provideFoldingRanges',
         selectionRange: 'provideSelectionRanges',
+        linkedEditing: 'provideLinkedEditingRanges',
         documentColor: 'provideDocumentColors',
         colorPresentation: 'provideColorPresentations',
         workspaceSymbol: 'provideWorkspaceSymbols',
@@ -2138,6 +2145,37 @@ async function handleLanguageProviderRequest(msg) {
                 if (typeof fn !== 'function') continue;
                 try {
                     const value = await fn.call(provider, document, position, token, context);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeLanguageValue(value),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'linkedEditing') {
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, position, token);
                     if (value !== undefined && value !== null) {
                         send({
                             type: 'language_provider_response',

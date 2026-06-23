@@ -2793,6 +2793,9 @@ class AIEditorAPI:
             "selectionRange": "selectionRange",
             "selectionRanges": "selectionRange",
             "expandSelection": "selectionRange",
+            "linkedEditing": "linkedEditing",
+            "linkedEditingRange": "linkedEditing",
+            "linkedEditingRanges": "linkedEditing",
             "documentColor": "documentColor",
             "documentColors": "documentColor",
             "colors": "documentColor",
@@ -3133,6 +3136,25 @@ class AIEditorAPI:
                     "version": document.version,
                     "ranges": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "linkedEditing":
+                result = self._ext_host.commands.execute(
+                    "_executeLinkedEditingProvider",
+                    document.uri,
+                    position,
+                )
+                value = _json_ready_language_value(result)
+                ranges = []
+                if isinstance(value, dict):
+                    raw_ranges = value.get("ranges")
+                    ranges = raw_ranges if isinstance(raw_ranges, list) else []
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "linkedEditing": value,
+                    "ranges": ranges,
                 }
             if kind == "documentColor":
                 result = self._ext_host.commands.execute(

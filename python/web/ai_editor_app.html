@@ -1524,6 +1524,7 @@ pre.code-block { overflow:visible; }
     <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
+      <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
     </div>
 
     <div class="settings-section">
@@ -1701,7 +1702,7 @@ const SETTINGS_SECTION_DEFAULTS={
   mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands']},
-  editor:{formatOnType:false},
+  editor:{formatOnType:false,linkedEditing:false},
   customization:{instructions_locations:['.sao/instructions.md','.sao/instructions'],agent_locations:['.sao/agents'],workflow_locations:['.sao/workflows'],skill_locations:['.agents/skills/.local','.claude/skills/.local'],use_agent_md:true,use_claude_md:false}
 };
 const SETTINGS_DEFAULTS={
@@ -3554,6 +3555,7 @@ function _editorInputWithUndo(e){
   scheduleEditorFoldingRanges();
   clearEditorDocumentColors();
   scheduleEditorDocumentColors();
+  applyEditorLinkedEditingFromInput();
   requestEditorOnTypeFormatting(ch,true);
 }
 
@@ -3575,6 +3577,7 @@ let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTime
 let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorTimer=null,_editorDocumentColorContentLength=-1;
 let _editorColorPresentationMenu=null;
 let _editorFormatOnTypeRequest=0;
+let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
@@ -5091,10 +5094,11 @@ function handleEditorCodeActionKey(e){
 const ed=$('editor-text');
 // Seed initial undo state
 _undoPush(true);
+ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore);
 ed.addEventListener('input',_editorInputWithUndo);
-ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
+ed.addEventListener('click',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
-ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorHover()});
+ed.addEventListener('keyup',()=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover()});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorReferences();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('keydown',function(e){
   if(handleEditorLinksKey(e))return;
@@ -5401,6 +5405,92 @@ function deleteLine(){
 
 // ── Format document ──
 function editorFormatOptions(){return {tabSize:4,insertSpaces:true}}
+function editorLinkedEditingEnabled(){
+  const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
+  return editor.linkedEditing===true;
+}
+function normalizeEditorLinkedRanges(value){
+  const ranges=Array.isArray(value&&value.ranges)?value.ranges:(Array.isArray(value)?value:[]);
+  return ranges.filter(range=>range&&range.start&&range.end);
+}
+function clearEditorLinkedEditingRanges(){
+  _editorLinkedEditingRanges=[];_editorLinkedEditingContentLength=-1;
+  clearTimeout(_editorLinkedEditingTimer);_editorLinkedEditingTimer=null;
+}
+async function requestEditorLinkedEditingRanges(quiet){
+  if(!editorLinkedEditingEnabled()){clearEditorLinkedEditingRanges();return}
+  const requestId=++_editorLinkedEditingRequest;
+  const res=await call('editor_language_provider',editorProviderPayload('linkedEditing'));
+  if(requestId!==_editorLinkedEditingRequest)return;
+  if(res&&res.error){clearEditorLinkedEditingRanges();if(!quiet)setStatus('Linked editing failed: '+res.error);return}
+  const payload=res&&res.ok?(res.linkedEditing||{ranges:res.ranges||[]}):null;
+  _editorLinkedEditingRanges=normalizeEditorLinkedRanges(payload);
+  _editorLinkedEditingContentLength=ed.value.length;
+}
+function scheduleEditorLinkedEditingRanges(delay){
+  if(!editorLinkedEditingEnabled())return;
+  clearTimeout(_editorLinkedEditingTimer);
+  _editorLinkedEditingTimer=setTimeout(()=>requestEditorLinkedEditingRanges(true),delay==null?120:delay);
+}
+function editorRangeOffsetsForValue(value,range){
+  const start=editorOffsetFromPosition(value,range.start),end=editorOffsetFromPosition(value,range.end);
+  return {start:Math.min(start,end),end:Math.max(start,end)};
+}
+function captureEditorLinkedEditingBefore(){
+  if(!editorLinkedEditingEnabled()||_editorLinkedEditingApplying)return;
+  if(_editorLinkedEditingContentLength!==ed.value.length||!_editorLinkedEditingRanges.length){
+    _editorLinkedEditingBefore=null;return;
+  }
+  _editorLinkedEditingBefore={
+    value:ed.value,
+    start:ed.selectionStart,
+    end:ed.selectionEnd,
+    ranges:_editorLinkedEditingRanges.map(range=>({
+      range,
+      offsets:editorRangeOffsetsForValue(ed.value,range),
+    })),
+  };
+}
+function applyEditorLinkedEditingFromInput(){
+  const snap=_editorLinkedEditingBefore;_editorLinkedEditingBefore=null;
+  if(!editorLinkedEditingEnabled()||_editorLinkedEditingApplying||!snap||snap.ranges.length<2)return false;
+  const activeIndex=snap.ranges.findIndex(item=>
+    snap.start>=item.offsets.start&&snap.start<=item.offsets.end&&
+    snap.end>=item.offsets.start&&snap.end<=item.offsets.end);
+  if(activeIndex<0)return false;
+  const active=snap.ranges[activeIndex].offsets,delta=ed.value.length-snap.value.length;
+  const activeEnd=Math.max(active.start,active.end+delta);
+  const replacement=ed.value.slice(active.start,activeEnd);
+  const edits=[];
+  let restoreShift=0;
+  snap.ranges.forEach((item,index)=>{
+    if(index===activeIndex)return;
+    const shift=item.offsets.start>active.start?delta:0;
+    const startOffset=item.offsets.start+shift,endOffset=item.offsets.end+shift;
+    const editDelta=replacement.length-(endOffset-startOffset);
+    if(endOffset<=ed.selectionStart)restoreShift+=editDelta;
+    edits.push({
+      range:{
+        start:editorPositionFromOffset(ed.value,startOffset),
+        end:editorPositionFromOffset(ed.value,endOffset),
+      },
+      newText:replacement,
+    });
+  });
+  if(!edits.length)return false;
+  const restoreStart=ed.selectionStart+restoreShift,restoreEnd=ed.selectionEnd+restoreShift;
+  _editorLinkedEditingApplying=true;
+  const changed=editorApplyTextEdits(edits);
+  _editorLinkedEditingApplying=false;
+  if(changed){
+    ed.selectionStart=Math.min(ed.value.length,restoreStart);
+    ed.selectionEnd=Math.min(ed.value.length,restoreEnd);
+    updateCursorPos();
+  }
+  clearEditorLinkedEditingRanges();
+  scheduleEditorLinkedEditingRanges(160);
+  return changed;
+}
 function editorFormatOnTypeEnabled(){
   const editor=config&&config.editor&&typeof config.editor==='object'?config.editor:{};
   return editor.formatOnType===true;
@@ -7511,6 +7601,7 @@ function openSettings(){
   setFileIconThemeInfo(selectedIconThemeOption?('Active: '+selectedIconThemeOption.textContent):'',false);
   const editor=settingSection('editor');
   setCheckedValue('s-editor-format-on-type',editor.formatOnType===true);
+  setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true);
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -7744,7 +7835,7 @@ async function saveSettings(){
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
-  config.editor={...settingSection('editor'),formatOnType:readCheckedValue('s-editor-format-on-type')};
+  config.editor={...settingSection('editor'),formatOnType:readCheckedValue('s-editor-format-on-type'),linkedEditing:readCheckedValue('s-editor-linked-editing')};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
   await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   await applyEditorIconTheme(readInputValue('s-file-icon-theme')||config.file_icon_theme||defaultFileIconThemeValue());

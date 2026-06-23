@@ -1398,6 +1398,7 @@ class VscodeNamespace:
             "vscode.executeFoldingRangeProvider": self._execute_folding_range_provider,
             "_executeSelectionRangeProvider": self._execute_selection_range_provider,
             "vscode.executeSelectionRangeProvider": self._execute_selection_range_provider,
+            "_executeLinkedEditingProvider": self._execute_linked_editing_provider,
             "_executeDocumentColorProvider": self._execute_document_color_provider,
             "vscode.executeDocumentColorProvider": self._execute_document_color_provider,
             "_executeColorPresentationProvider": self._execute_color_presentation_provider,
@@ -1993,6 +1994,24 @@ class VscodeNamespace:
             positions=[self._position_payload(pos)
                        for pos in selection_positions])
         return self._provider_values(external)
+
+    def _execute_linked_editing_provider(
+            self, uri: Any, position: Any = None) -> Any:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        for entry in self._matching_language_providers(
+                "linkedEditing", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideLinkedEditingRanges",
+                (document, pos, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return value
+        return self._request_external_language_provider(
+            "linkedEditing",
+            document,
+            position=self._position_payload(pos))
 
     def _execute_document_color_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
@@ -3257,6 +3276,7 @@ class VscodeNamespace:
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
             "registerFoldingRangeProvider": lambda selector, provider: self._register_language_provider("foldingRange", selector, provider),
             "registerSelectionRangeProvider": lambda selector, provider: self._register_language_provider("selectionRange", selector, provider),
+            "registerLinkedEditingRangeProvider": lambda selector, provider: self._register_language_provider("linkedEditing", selector, provider),
             "registerColorProvider": lambda selector, provider: self._register_language_provider("documentColor", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),

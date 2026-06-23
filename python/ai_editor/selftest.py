@@ -498,6 +498,15 @@ def test_app_settings_parity() -> None:
             return [SelectionRange(
                 Range(Position(0, 0), Position(0, 3)), parent)]
 
+        def provideLinkedEditingRanges(self, document, position, token):
+            return {
+                "ranges": [
+                    Range(Position(0, 0), Position(0, 3)),
+                    Range(Position(0, 7), Position(0, 10)),
+                ],
+                "wordPattern": "[A-Za-z]+",
+            }
+
         def provideDocumentHighlights(self, document, position, token):
             self.seen_highlight_position = position
             return [DocumentHighlight(
@@ -572,6 +581,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerSelectionRangeProvider"]("python", editor_provider)
+    lang_api["registerLinkedEditingRangeProvider"]("python", editor_provider)
     lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
@@ -627,6 +637,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="foldingRange"))
         selection_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="selectionRange"))
+        linked_editing_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="linkedEditing"))
         document_highlight_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentHighlight",
                  position={"line": 0, "character": 1}))
@@ -763,6 +775,12 @@ def test_app_settings_parity() -> None:
                .get("character") == 3
                and selection_range.get("parent", {})
                .get("range", {}).get("end", {}).get("character") == 6)
+        linked_range = linked_editing_result.get("ranges", [{}])[1]
+        _check("editor_language_provider serializes linked editing ranges",
+               linked_editing_result.get("ok") is True
+               and linked_range.get("start", {}).get("character") == 7
+               and linked_editing_result.get("linkedEditing", {})
+               .get("wordPattern") == "[A-Za-z]+")
         highlight = document_highlight_result.get("highlights", [{}])[0]
         _check("editor_language_provider serializes document highlights",
                document_highlight_result.get("ok") is True
@@ -1902,14 +1920,25 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function handleEditorInlineCompletionKey(e)" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
-           and "editor:{formatOnType:false}" in html
+           and "editor:{formatOnType:false,linkedEditing:false}" in html
+           and "linkedEditing:false" in html
            and "id=\"s-editor-format-on-type\"" in html
+           and "id=\"s-editor-linked-editing\"" in html
            and "function editorFormatOnTypeEnabled()" in html
+           and "function editorLinkedEditingEnabled()" in html
+           and "async function requestEditorLinkedEditingRanges(quiet)" in html
+           and "function captureEditorLinkedEditingBefore()" in html
+           and "function applyEditorLinkedEditingFromInput()" in html
            and "async function requestEditorOnTypeFormatting(ch,quiet)" in html
+           and "editorProviderPayload('linkedEditing'" in html
            and "editorProviderPayload('onTypeFormatting'" in html
+           and "ed.addEventListener('beforeinput',captureEditorLinkedEditingBefore)" in html
+           and "applyEditorLinkedEditingFromInput()" in html
            and "requestEditorOnTypeFormatting(ch,true)" in html
            and "setCheckedValue('s-editor-format-on-type',editor.formatOnType===true)" in html
+           and "setCheckedValue('s-editor-linked-editing',editor.linkedEditing===true)" in html
            and "formatOnType:readCheckedValue('s-editor-format-on-type')" in html
+           and "linkedEditing:readCheckedValue('s-editor-linked-editing')" in html
            and "async function formatSelection()" in html
            and "editorProviderPayload('rangeFormatting'" in html
            and "Format Selection" in html
@@ -3639,6 +3668,16 @@ def test_vscode_api() -> None:
                 return [SelectionRange(
                     Range(Position(0, 0), Position(0, 4)), parent)]
 
+        class _LinkedEditingProvider:
+            def provideLinkedEditingRanges(self, document, position, token):
+                return {
+                    "ranges": [
+                        Range(Position(0, 0), Position(0, 4)),
+                        Range(Position(0, 7), Position(0, 11)),
+                    ],
+                    "wordPattern": "[A-Za-z]+",
+                }
+
         class _DocumentHighlightProvider:
             def __init__(self):
                 self.positions = []
@@ -3777,6 +3816,8 @@ def test_vscode_api() -> None:
             "python", _FoldingRangeProvider())
         api["languages"]["registerSelectionRangeProvider"](
             "python", _SelectionRangeProvider())
+        api["languages"]["registerLinkedEditingRangeProvider"](
+            "python", _LinkedEditingProvider())
         document_highlight_provider = _DocumentHighlightProvider()
         api["languages"]["registerDocumentHighlightProvider"](
             "python", document_highlight_provider)
@@ -3844,6 +3885,10 @@ def test_vscode_api() -> None:
             "vscode.executeSelectionRangeProvider",
             doc.uri,
             [Position(0, 1)])
+        linked_editing = api["commands"]["executeCommand"](
+            "_executeLinkedEditingProvider",
+            doc.uri,
+            Position(0, 1))
         document_highlights = api["commands"]["executeCommand"](
             "vscode.executeDocumentHighlightProvider",
             doc.uri,
@@ -3961,6 +4006,11 @@ def test_vscode_api() -> None:
                selection_ranges
                and selection_ranges[0].range.end.character == 4
                and selection_ranges[0].parent.range.end.character == 11)
+        _check("executeLinkedEditingProvider invokes matching providers",
+               linked_editing
+               and linked_editing.get("ranges", [None, {}])[1]
+               .end.character == 11
+               and linked_editing.get("wordPattern") == "[A-Za-z]+")
         _check("executeDocumentHighlightProvider invokes matching providers",
                document_highlights
                and document_highlight_provider.positions[-1].character == 2
@@ -4048,6 +4098,8 @@ def test_vscode_api() -> None:
                and "vscode.executeFoldingRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSelectionRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "_executeLinkedEditingProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeDocumentHighlightProvider"
                in api["commands"]["getCommands"]()
@@ -5391,6 +5443,17 @@ function activate(context) {
       return [new vscode.SelectionRange(new vscode.Range(0, 0, 0, 4), parent)];
     },
   });
+  vscode.languages.registerLinkedEditingRangeProvider('python', {
+    provideLinkedEditingRanges(document, position, token) {
+      return {
+        ranges: [
+          new vscode.Range(0, 0, 0, 4),
+          new vscode.Range(0, 7, 0, 11),
+        ],
+        wordPattern: /[A-Za-z]+/g,
+      };
+    },
+  });
   vscode.languages.registerColorProvider('python', {
     provideDocumentColors(document, token) {
       return [new vscode.ColorInformation(
@@ -5595,6 +5658,10 @@ module.exports = { activate, deactivate };
                     "vscode.executeSelectionRangeProvider",
                     node_uri,
                     [Position(0, 1)])
+                node_linked_editing = api._ext_host.commands.execute(
+                    "_executeLinkedEditingProvider",
+                    node_uri,
+                    Position(0, 1))
                 node_document_colors = api._ext_host.commands.execute(
                     "vscode.executeDocumentColorProvider", node_uri)
                 node_color_presentations = api._ext_host.commands.execute(
@@ -5722,6 +5789,12 @@ module.exports = { activate, deactivate };
                        .get("end", {}).get("character") == 4
                        and node_selection_ranges[0].get("parent", {})
                        .get("range", {}).get("end", {}).get("character") == 12)
+                _check("node host language provider invokes JS linked editing",
+                       node_linked_editing
+                       and node_linked_editing.get("ranges", [{}, {}])[1]
+                       .get("end", {}).get("character") == 11
+                       and node_linked_editing.get("wordPattern", {})
+                       .get("source") == "[A-Za-z]+")
                 _check("node host language provider invokes JS document colors",
                        node_document_colors
                        and node_document_colors[0].get("color", {})
