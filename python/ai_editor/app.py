@@ -2054,6 +2054,9 @@ class AIEditorAPI:
         word_pattern = cls._safe_editor_regex(payload.get("wordPattern"))
         if word_pattern:
             result["wordPattern"] = word_pattern
+        folding = cls._safe_editor_folding(payload.get("folding"))
+        if folding:
+            result["folding"] = folding
         return result
 
     @classmethod
@@ -2136,6 +2139,21 @@ class AIEditorAPI:
             pattern = cls._safe_editor_regex(value.get(key))
             if pattern:
                 result[key] = pattern
+        return result
+
+    @classmethod
+    def _safe_editor_folding(cls, value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result: Dict[str, Any] = {}
+        markers = value.get("markers")
+        if isinstance(markers, dict):
+            start = cls._safe_editor_regex(markers.get("start"))
+            end = cls._safe_editor_regex(markers.get("end"))
+            if start and end:
+                result["markers"] = {"start": start, "end": end}
+        if isinstance(value.get("offSide"), bool):
+            result["offSide"] = bool(value.get("offSide"))
         return result
 
     @classmethod

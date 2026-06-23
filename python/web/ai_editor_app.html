@@ -2544,6 +2544,13 @@ function languageOnEnterRules(lang){
   const rules=languageConfiguration(lang).onEnterRules;
   return Array.isArray(rules)?rules:[];
 }
+function languageFoldingMarkers(lang){
+  const folding=languageConfiguration(lang).folding;
+  const markers=folding&&typeof folding==='object'?folding.markers:null;
+  if(!markers||typeof markers!=='object')return null;
+  if(!markers.start||!markers.end)return null;
+  return {start:markers.start,end:markers.end};
+}
 function languageWordPattern(lang){
   return languageConfiguration(lang).wordPattern||{pattern:DEFAULT_WORD_PATTERN,flags:''};
 }
@@ -2632,6 +2639,52 @@ function editorEnterInsertion(value,start){
   const text='\n'+indent;
   return {text,cursorOffset:text.length};
 }
+function editorFoldingRegions(){
+  const markers=languageFoldingMarkers(editorLang);if(!markers)return [];
+  const startSpec=languageRegexSpec(markers.start),endSpec=languageRegexSpec(markers.end);
+  if(!startSpec||!endSpec)return [];
+  let startRe,endRe;
+  try{
+    startRe=new RegExp(startSpec.pattern,languageRegexFlags(startSpec.flags).replace(/g/g,''));
+    endRe=new RegExp(endSpec.pattern,languageRegexFlags(endSpec.flags).replace(/g/g,''));
+  }catch{return []}
+  const lines=ed.value.split('\n'),stack=[],regions=[];
+  lines.forEach((line,i)=>{
+    startRe.lastIndex=0;endRe.lastIndex=0;
+    if(startRe.test(line)){stack.push({line:i,text:line.trim()});return}
+    if(endRe.test(line)&&stack.length){
+      const start=stack.pop();
+      if(i>start.line)regions.push({startLine:start.line,endLine:i,label:start.text||('Region '+(regions.length+1))});
+    }
+  });
+  return regions.sort((a,b)=>a.startLine-b.startLine||a.endLine-b.endLine);
+}
+function editorCursorLine(){
+  return ed.value.slice(0,ed.selectionStart).split('\n').length-1;
+}
+function editorSetCursorLine(line){
+  const lines=ed.value.split('\n');
+  const target=Math.max(0,Math.min(lines.length-1,line));
+  let pos=0;for(let i=0;i<target;i++)pos+=lines[i].length+1;
+  ed.selectionStart=ed.selectionEnd=pos;ed.focus();updateCursorPos();
+  ed.scrollTop=Math.max(0,(target-5)*18);
+}
+function goToFoldRegion(direction){
+  const regions=editorFoldingRegions();
+  if(!regions.length){setStatus('No folding regions for '+languageDisplayName(editorLang));return}
+  const current=editorCursorLine();
+  let region=null;
+  if(direction<0){
+    for(let i=regions.length-1;i>=0;i--){if(regions[i].startLine<current){region=regions[i];break}}
+    if(!region)region=regions[regions.length-1];
+  }else{
+    region=regions.find(r=>r.startLine>current)||regions[0];
+  }
+  editorSetCursorLine(region.startLine);
+  setStatus('Fold region '+(region.startLine+1)+'-'+(region.endLine+1));
+}
+function goToNextFoldRegion(){goToFoldRegion(1)}
+function goToPreviousFoldRegion(){goToFoldRegion(-1)}
 function languageForFileName(name){
   const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
   if(!base)return '';
@@ -2827,6 +2880,7 @@ function setEditorLanguage(lang){
   if(cfg.indentationRules)configBits.push('indentationRules');
   if(Array.isArray(cfg.onEnterRules)&&cfg.onEnterRules.length)configBits.push('onEnterRules');
   if(cfg.wordPattern)configBits.push('wordPattern');
+  if(cfg.folding&&cfg.folding.markers)configBits.push('folding.markers');
   if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
   scheduleEditorSyntaxHighlight();
@@ -2976,6 +3030,8 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
     {sep:true},
     {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+    {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
+    {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
@@ -7050,6 +7106,8 @@ const COMMANDS=[
   {label:'Find',shortcut:'Ctrl+F',action:()=>openFindBar()},
   {label:'Replace',shortcut:'Ctrl+H',action:()=>openFindBar(true)},
   {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
+  {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
+  {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},

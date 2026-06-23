@@ -1200,6 +1200,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
             and "function languageIndentationRules(lang)" in html
             and "function languageOnEnterRules(lang)" in html
+            and "function languageFoldingMarkers(lang)" in html
+            and "function editorFoldingRegions()" in html
+            and "function goToNextFoldRegion()" in html
+            and "function goToPreviousFoldRegion()" in html
             and "function languageWordPattern(lang)" in html
             and "function languageWordRegex(globalFlag)" in html
             and "function editorWordAtCursor()" in html
@@ -1215,6 +1219,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "Line comment: " in html
             and "indentationRules" in html
             and "onEnterRules" in html
+            and "folding.markers" in html
             and "id=\"editor-syntax-highlight\"" in html
             and "class=\"editor-syntax-layer\"" in html
             and "function updateEditorSyntaxHighlight()" in html
@@ -3083,6 +3088,12 @@ def test_app_extension_runtime_support() -> None:
   ],
   "surroundingPairs": [["(", ")"]],
   "wordPattern": "[A-Za-z_][A-Za-z0-9_]*",
+  "folding": {
+    "markers": {
+      "start": "^\\\\s*;;\\\\s*#region\\\\b",
+      "end": "^\\\\s*;;\\\\s*#endregion\\\\b",
+    },
+  },
   "indentationRules": {
     "increaseIndentPattern": "^.*:\\\\s*$",
     "decreaseIndentPattern": {"pattern": "^\\\\s*end\\\\b"},
@@ -3172,6 +3183,12 @@ def test_app_extension_runtime_support() -> None:
                and ["(", ")"] in selflang_config.get("surroundingPairs", [])
                and selflang_config.get("wordPattern", {}).get("pattern")
                    == "[A-Za-z_][A-Za-z0-9_]*"
+               and selflang_config.get("folding", {})
+                   .get("markers", {}).get("start", {}).get("pattern")
+                   == r"^\s*;;\s*#region\b"
+               and selflang_config.get("folding", {})
+                   .get("markers", {}).get("end", {}).get("pattern")
+                   == r"^\s*;;\s*#endregion\b"
                and selflang_config.get("indentationRules", {})
                    .get("increaseIndentPattern", {}).get("pattern")
                    == r"^.*:\s*$"
