@@ -451,7 +451,7 @@ def run_selftest() -> dict[str, Any]:
                     skin = preview.get("skin") if isinstance(preview.get("skin"), list) else []
                     vertex_count = int(mesh.get("vertex_count") or 0)
                     face_count = int(mesh.get("face_count") or 0)
-                    if vertex_count < 40 or face_count < 20 or not any(skin):
+                    if vertex_count < 300 or face_count < 300 or len(skin) < 300:
                         return {
                             "ok": False,
                             "plugin_id": plugin_id,
