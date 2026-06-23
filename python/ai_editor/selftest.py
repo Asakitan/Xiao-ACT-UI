@@ -1171,13 +1171,17 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
-            and "function renderExtensionTreeNode(viewId,node,depth)" in html
+            and "function renderExtensionTreeNode(viewId,node,depth,viewVersion)" in html
             and "tree.setAttribute('role','tree')" in html
             and "event==='extension_tree_changed'" in html
             and "function scheduleExtensionActivityRefresh()" in html
             and "function appendExtensionTitleActions(title,view,state)" in html
             and "function showExtensionActionMenu(x,y,actions,runner)" in html
-            and "function loadExtensionTreeChildren(viewId,node,childBox,depth)" in html
+            and "let _extTreeChildRequestSeq=0" in html
+            and "function loadExtensionTreeChildren(viewId,node,childBox,depth,viewVersion)" in html
+            and "function setExtensionTreeStatus(childBox,depth,text,kind)" in html
+            and "node._childRequestId!==requestId||!childBox.isConnected" in html
+            and "expectedVersion!==responseVersion" in html
             and "function focusRevealedExtensionTree(tree)" in html
             and ".ext-tree-node[data-revealed=\"1\"]>.sb-item" in html
             and "target.scrollIntoView({block:'nearest',inline:'nearest'})" in html
