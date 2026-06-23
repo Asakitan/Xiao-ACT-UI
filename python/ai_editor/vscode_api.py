@@ -3414,6 +3414,8 @@ class _TreeView:
         self._expanded_handles = set()
         self._revealed_element = None
         self._reveal_ancestors: List[Any] = []
+        self._focused_element = None
+        self._reveal_expand_levels = 0
         self._change_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
         self._provider_change_disposable = None
         self._dispose = EventEmitter()
@@ -3460,6 +3462,8 @@ class _TreeView:
         self._expanded_handles.clear()
         self._revealed_element = None
         self._reveal_ancestors = []
+        self._focused_element = None
+        self._reveal_expand_levels = 0
         self.refresh_version += 1
         self._subscribe_provider_refresh()
 
@@ -3528,6 +3532,43 @@ class _TreeView:
                 return True
         return False
 
+    def is_focused(self, element: Any) -> bool:
+        focused = self._focused_element
+        if focused is None:
+            return False
+        return self._same_element(focused, element)
+
+    def reveal_expand_level(self, element: Any) -> int:
+        levels = int(self._reveal_expand_levels or 0)
+        revealed = self._revealed_element
+        if levels <= 0 or revealed is None:
+            return 0
+        if self._same_element(element, revealed):
+            return levels
+        get_parent = self._get_parent_callable()
+        if not callable(get_parent):
+            return 0
+        current = element
+        seen = {id(element)}
+        remaining = levels
+        while remaining > 0:
+            try:
+                parent = _resolve_provider_result(
+                    get_parent(current), default=None)
+            except Exception:
+                return 0
+            if parent is None:
+                return 0
+            if self._same_element(parent, revealed):
+                return remaining - 1
+            marker = id(parent)
+            if marker in seen:
+                return 0
+            seen.add(marker)
+            current = parent
+            remaining -= 1
+        return 0
+
     def is_selected(self, element: Any) -> bool:
         for selected in self.selection:
             if selected is element:
@@ -3567,6 +3608,8 @@ class _TreeView:
         if not reveal:
             self._revealed_element = None
             self._reveal_ancestors = []
+            self._focused_element = None
+            self._reveal_expand_levels = 0
         self.selection = normalized
         self.activeItem = normalized[0] if normalized else None
         if changed:
@@ -3576,22 +3619,81 @@ class _TreeView:
                 "refreshVersion": self.refresh_version,
             })
 
-    def reveal(self, element: Any, **kw: Any) -> None:
-        self.set_selection([element], reveal=True)
+    def reveal(self, element: Any = None, options: Any = None,
+               **kw: Any) -> None:
+        normalized_options = self._normalize_reveal_options(options, kw)
+        if element is None:
+            self._revealed_element = None
+            self._reveal_ancestors = []
+            self._focused_element = None
+            self._reveal_expand_levels = 0
+            self.reveal_version += 1
+            self._notify_changed("reveal", {
+                "refreshVersion": self.refresh_version,
+                "revealVersion": self.reveal_version,
+            })
+            return
+        select = bool(normalized_options.get("select", True))
+        focus = bool(normalized_options.get("focus", False))
+        if select:
+            self.set_selection([element], reveal=True)
+        elif focus:
+            self.activeItem = element
+            self._active_change.fire({"activeItem": self.activeItem})
         self._revealed_element = element
         self._reveal_ancestors = self._resolve_reveal_ancestors(element)
+        self._focused_element = element if focus else None
+        self._reveal_expand_levels = self._normalize_reveal_expand(
+            normalized_options.get("expand", False))
         self.reveal_version += 1
         self._notify_changed("reveal", {
             "refreshVersion": self.refresh_version,
             "revealVersion": self.reveal_version,
+            "select": select,
+            "focus": focus,
+            "expand": self._reveal_expand_levels,
         })
 
-    def _resolve_reveal_ancestors(self, element: Any) -> List[Any]:
+    @staticmethod
+    def _normalize_reveal_options(options: Any,
+                                  kw: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        if isinstance(options, dict):
+            result.update(options)
+        elif options is not None:
+            for key in ("select", "focus", "expand"):
+                if hasattr(options, key):
+                    result[key] = getattr(options, key)
+        result.update(kw or {})
+        if "select" not in result:
+            result["select"] = True
+        if "focus" not in result:
+            result["focus"] = False
+        if "expand" not in result:
+            result["expand"] = False
+        return result
+
+    @staticmethod
+    def _normalize_reveal_expand(value: Any) -> int:
+        if value is True:
+            return 1
+        if value in (False, None):
+            return 0
+        try:
+            levels = int(value)
+        except Exception:
+            return 0
+        return max(0, min(levels, 3))
+
+    def _get_parent_callable(self) -> Optional[Callable[[Any], Any]]:
         provider = self.provider
-        get_parent = (
+        return (
             getattr(provider, "getParent", None)
             or getattr(provider, "get_parent", None)
         )
+
+    def _resolve_reveal_ancestors(self, element: Any) -> List[Any]:
+        get_parent = self._get_parent_callable()
         if not callable(get_parent):
             return []
         ancestors: List[Any] = []

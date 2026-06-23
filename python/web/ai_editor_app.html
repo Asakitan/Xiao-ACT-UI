@@ -5785,8 +5785,11 @@ function focusRevealedExtensionTree(tree){
   if(!target)return;
   requestAnimationFrame(()=>{
     try{target.scrollIntoView({block:'nearest',inline:'nearest'})}catch(e){target.scrollIntoView()}
-    try{target.focus({preventScroll:true})}catch(e){try{target.focus()}catch(_e){}}
-    target.classList.add('active');
+    const shouldFocus=target.parentElement&&target.parentElement.dataset.focused==='1';
+    if(shouldFocus){
+      try{target.focus({preventScroll:true})}catch(e){try{target.focus()}catch(_e){}}
+      target.classList.add('active');
+    }
   });
 }
 function appendExtensionTitleActions(title,view,state){
@@ -5848,11 +5851,12 @@ function renderExtensionTreeNode(viewId,node,depth,viewVersion){
   if(node.contextValue)wrap.dataset.contextValue=String(node.contextValue);
   if(node.resourceUri)wrap.dataset.resourceUri=String(node.resourceUri);
   if(node.revealed)wrap.dataset.revealed='1';
+  if(node.focused)wrap.dataset.focused='1';
   node.refreshVersion=Number(viewVersion||node.refreshVersion||0)||0;
   const row=document.createElement('div');row.className='sb-item';row.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 0 3px '+(depth*12)+'px;min-height:22px';
   row.tabIndex=0;row.setAttribute('role','button');
   if(node.handle)row.dataset.handle=String(node.handle);
-  if(node.selected||node.revealed){row.classList.add('active');wrap.setAttribute('aria-selected','true')}else wrap.setAttribute('aria-selected','false');
+  if(node.selected||node.focused){row.classList.add('active');wrap.setAttribute('aria-selected',node.selected?'true':'false')}else wrap.setAttribute('aria-selected','false');
   if(!Array.isArray(node.children))node.children=[];
   const children=node.children;
   const rawCollapsible=Number(node.collapsibleState)||0;

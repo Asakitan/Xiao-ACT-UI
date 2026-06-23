@@ -1219,6 +1219,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "expectedVersion!==responseVersion" in html
             and "function focusRevealedExtensionTree(tree)" in html
             and ".ext-tree-node[data-revealed=\"1\"]>.sb-item" in html
+            and "dataset.focused='1'" in html
+            and "node.selected||node.focused" in html
+            and "const shouldFocus=target.parentElement&&target.parentElement.dataset.focused==='1'" in html
             and "target.scrollIntoView({block:'nearest',inline:'nearest'})" in html
             and "call('load_extension_tree_children',viewId,node.handle)" in html
             and "call('set_extension_tree_item_expanded',viewId,node.handle,!!expanded)" in html
@@ -2687,7 +2690,10 @@ def test_vscode_api() -> None:
             return self._emitter.event
 
         def getChildren(self, element=None):
-            return ["node"]
+            return ["node", "node-b"] if element is None else []
+
+        def getParent(self, element):
+            return None
 
         def refresh(self, element=None):
             self._emitter.fire(element)
@@ -2705,9 +2711,17 @@ def test_vscode_api() -> None:
     _check("tree view selection emits VSCode event",
            tree_selection_events
            and tree_selection_events[-1].get("selection") == ["node"])
-    _check("tree view reveal marks focused element",
+    _check("tree view reveal marks revealed element",
            tree_view.is_revealed("node")
+           and not tree_view.is_focused("node")
            and tree_view.reveal_version == 1)
+    tree_view.reveal("node-b", {"select": False, "focus": True, "expand": 4})
+    _check("tree view reveal options preserve selection and clamp expand",
+           tree_view.selection == ["node"]
+           and tree_view.is_revealed("node-b")
+           and tree_view.is_focused("node-b")
+           and tree_view.reveal_expand_level("node-b") == 3
+           and tree_view.reveal_version == 2)
     tree_expand_events = []
     tree_collapse_events = []
     tree_view.onDidExpandElement(
@@ -3509,6 +3523,27 @@ def test_app_extension_runtime_support() -> None:
                and revealed_activity_child.get("revealed") is True
                and revealed_activity_child.get("selected") is True
                and revealed_activity_child.get("revealVersion", 0) >= 1)
+        if activity_tree_view is not None:
+            activity_tree_view.reveal(
+                "node-b", {"select": False, "focus": True, "expand": 4})
+        reveal_option_views = {
+            view.get("id"): view
+            for item in api.list_extension_activity_bar_items().get("items", [])
+            if item.get("id") == "selftest.activity"
+            for view in item.get("views", [])
+        }
+        reveal_option_nodes = reveal_option_views.get(
+            "selftest.activity.tree", {}).get("runtimeState", {}).get("nodes", [])
+        reveal_option_node_b = (
+            reveal_option_nodes[1] if len(reveal_option_nodes) > 1 else {})
+        _check("activity tree reveal options surface focus without reselection",
+               activity_tree_view is not None
+               and activity_tree_view.selection == ["leaf-a"]
+               and reveal_option_node_b.get("label") == "Node-B"
+               and reveal_option_node_b.get("revealed") is True
+               and reveal_option_node_b.get("focused") is True
+               and reveal_option_node_b.get("selected") is False
+               and reveal_option_node_b.get("revealExpand") == 3)
         before_activity_version = activity_views.get(
             "selftest.activity.tree", {}).get("runtimeState", {}).get("refreshVersion", 0)
         activity_tree_provider.refresh("node-a")
@@ -3582,6 +3617,7 @@ function activate(context) {
   view.onDidChangeSelection(evt => output.appendLine('selection:' + evt.selection.map(item => item.id).join(',')));
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
+  void view.reveal(root, { select: false, focus: true, expand: 2 });
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
@@ -3648,22 +3684,30 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.openItem"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
-                node_items = {
-                    item.get("id"): item
-                    for item in api.list_extension_activity_bar_items().get("items", [])
-                }
-                node_views = {
-                    view.get("id"): view
-                    for view in node_items.get("selftest.node", {}).get("views", [])
-                }
-                node_nodes = node_views.get(
-                    "selftest.node.tree", {}).get(
-                        "runtimeState", {}).get("nodes", [])
+                node_snapshot = {"nodes": []}
+                def _node_root_focused():
+                    node_items = {
+                        item.get("id"): item
+                        for item in api.list_extension_activity_bar_items().get("items", [])
+                    }
+                    node_views = {
+                        view.get("id"): view
+                        for view in node_items.get("selftest.node", {}).get("views", [])
+                    }
+                    nodes = node_views.get(
+                        "selftest.node.tree", {}).get(
+                            "runtimeState", {}).get("nodes", [])
+                    node_snapshot["nodes"] = nodes
+                    return bool(nodes and nodes[0].get("focused"))
+                node_reveal_seen = _wait_until(
+                    _node_root_focused, timeout=3.0)
+                node_nodes = node_snapshot.get("nodes", [])
                 _check("node host tree provider registers dynamic activity view",
                        node_started is True
                        and sent is True
                        and node_registered
                        and node_command_registered
+                       and node_reveal_seen
                        and node_nodes
                        and node_nodes[0].get("label") == "Node Root"
                        and node_nodes[0].get("description") == "from-js"
@@ -3671,6 +3715,9 @@ module.exports = { activate, deactivate };
                        and node_nodes[0].get("contextValue") == "nodeRoot"
                        and node_nodes[0].get("themeIcon", {}).get("id") == "folder"
                        and node_nodes[0].get("resourceUri") == "file:///workspace/root.txt"
+                       and node_nodes[0].get("focused") is True
+                       and node_nodes[0].get("selected") is False
+                       and node_nodes[0].get("revealExpand") == 2
                        and node_nodes[0].get("actions", [{}])[0].get("command") == "selftest.node.openItem")
                 node_handle = node_nodes[0].get("handle", "") if node_nodes else ""
                 loaded_node_children = api.load_extension_tree_children(

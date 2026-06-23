@@ -3389,7 +3389,10 @@ class AIEditorAPI:
                         normalized_view_id, treeDataProvider=provider)
                 reveal = getattr(view, "reveal", None)
                 if callable(reveal):
-                    reveal(NodeTreeElement(element))
+                    reveal(
+                        NodeTreeElement(element),
+                        payload.get("options") if isinstance(
+                            payload.get("options"), dict) else None)
         except Exception as exc:
             print(f"[NodeExtHost] Failed to bridge tree event "
                   f"{event}:{normalized_view_id}: {exc}")
@@ -4820,15 +4823,28 @@ class AIEditorAPI:
                     force_reveal_children = False
             if force_reveal_children:
                 node["revealAncestor"] = True
+            reveal_expand_remaining = 0
+            reveal_expand_level = getattr(tree_view, "reveal_expand_level", None)
+            if callable(reveal_expand_level):
+                try:
+                    reveal_expand_remaining = int(
+                        reveal_expand_level(child) or 0)
+                except Exception:
+                    reveal_expand_remaining = 0
+            if reveal_expand_remaining > 0:
+                node["revealExpand"] = reveal_expand_remaining
             child_nodes: List[Dict[str, Any]] = []
             attempted_children = False
-            if force_reveal_children or (
+            if force_reveal_children or reveal_expand_remaining > 0 or (
                     depth < max_depth
                     and (node.get("collapsibleState", 0) or depth < 1)):
                 attempted_children = True
                 child_max_depth = (
                     max(max_depth, depth + 1)
                     if force_reveal_children else max_depth)
+                if reveal_expand_remaining > 0:
+                    child_max_depth = max(
+                        child_max_depth, depth + reveal_expand_remaining)
                 child_nodes = self._tree_view_nodes_preview(
                     provider, child, depth + 1, child_seen,
                     tree_view=tree_view, max_depth=child_max_depth,
@@ -4928,6 +4944,13 @@ class AIEditorAPI:
                         node["revealed"] = True
                         node["revealVersion"] = int(
                             getattr(tree_view, "reveal_version", 0) or 0)
+                except Exception:
+                    pass
+            focused = getattr(tree_view, "is_focused", None)
+            if callable(focused):
+                try:
+                    if bool(focused(element)):
+                        node["focused"] = True
                 except Exception:
                     pass
         return node
