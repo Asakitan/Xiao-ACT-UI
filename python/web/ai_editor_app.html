@@ -1092,6 +1092,7 @@ pre.code-block { overflow:visible; }
   <div class="dd-item" onclick="openFileDialog()"><span data-i18n="open_file">Open File...</span> <span class="shortcut">Ctrl+O</span></div>
   <div class="dd-sep"></div>
   <div class="dd-item" onclick="saveFile()"><span data-i18n="save">Save</span> <span class="shortcut">Ctrl+S</span></div>
+  <div class="dd-item" onclick="saveFileAs()"><span>Save As...</span> <span class="shortcut">Ctrl+Shift+S</span></div>
   <div class="dd-item" onclick="exportChat()" data-i18n="export_chat">Export Chat...</div>
   <div class="dd-sep"></div>
   <div class="dd-item" onclick="openSettings()" data-i18n="preferences">Preferences</div>
@@ -10576,6 +10577,7 @@ const _GLOBAL_SHORTCUT_MAP={
   'Ctrl+N':()=>addTab(),
   'Ctrl+O':()=>openFileDialog(),
   'Ctrl+S':()=>saveFile(),
+  'Ctrl+Shift+S':()=>saveFileAs(),
   'Ctrl+B':()=>toggleSidebarVis(),
   'Ctrl+L':()=>clearChat(),
 };
@@ -11073,6 +11075,47 @@ async function saveCustomEditorTab(tab){
   applyCustomEditorState((r&&r.state)||r);
   showToast('Saved: '+(tab.name||uri||viewType||'custom editor'),'success',1500);
   return r;
+}
+function defaultCustomEditorSaveAsTarget(tab){
+  const uri=customEditorUriFromTab(tab);
+  if(/^file:\/\//i.test(uri)){
+    try{return decodeURIComponent(uri.replace(/^file:\/+\/?/i,''))}
+    catch(e){return uri.replace(/^file:\/+\/?/i,'')}
+  }
+  return uri||tab&&tab.name||'';
+}
+async function saveCustomEditorTabAs(tab){
+  const ce=tab&&tab.customEditor||{};
+  if(!(ce.supportsSaveAs||ce.supports_save_as||ce.textEditor||ce.text_editor)){
+    showToast('Save As failed: custom editor provider unavailable','error');
+    return {error:'custom editor provider unavailable'};
+  }
+  const viewId=customEditorWebviewIdFromTab(tab);
+  const viewType=customEditorViewTypeFromTab(tab);
+  const uri=customEditorUriFromTab(tab);
+  const target=window.prompt('Save As target path',defaultCustomEditorSaveAsTarget(tab));
+  if(!target)return {ok:false,cancelled:true};
+  const r=await call('save_extension_custom_editor_as',viewId,viewType,uri,target);
+  if(!callSucceeded(r)){
+    showToast('Save As failed: '+callFailedMessage(r,'custom editor provider unavailable'),'error');
+    return r||{error:'custom editor provider unavailable'};
+  }
+  const state=(r&&r.state)||r;
+  applyCustomEditorState(state);
+  const stateUri=String(state&&state.uri||target);
+  tab.name=(target.split(/[\\/]/).pop()||tab.name||'custom editor');
+  tab.filePath=stateUri;
+  renderTabs();
+  showToast('Saved As: '+tab.name,'success',1500);
+  return r;
+}
+async function saveFileAs(){
+  const tab=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(tab)){
+    await saveCustomEditorTabAs(tab);
+    return;
+  }
+  showToast('Save As is available for extension custom editors','info',2000);
 }
 async function saveFile(){
   const tab=tabs.find(t=>t.id===activeTab);

@@ -2527,6 +2527,9 @@ console.log("frontend auto-close behavior ok");
            and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html
            and "function saveCustomEditorTab(tab)" in html
            and "call('save_extension_custom_editor',viewId,viewType,uri)" in html
+           and "function saveCustomEditorTabAs(tab)" in html
+           and "call('save_extension_custom_editor_as',viewId,viewType,uri,target)" in html
+           and "'Ctrl+Shift+S':()=>saveFileAs()" in html
            and "runCustomEditorEditLifecycle(active,'undo')" in html
            and "undo_extension_custom_editor" in html
            and "redo_extension_custom_editor" in html
