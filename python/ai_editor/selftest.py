@@ -354,6 +354,7 @@ def test_app_settings_parity() -> None:
 
     from ai_editor.vscode_api import (
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
+        SignatureHelp, SignatureInformation, ParameterInformation,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -374,6 +375,11 @@ def test_app_settings_parity() -> None:
         def provideHover(self, document, position, token):
             return Hover(["hover " + document.getText()], Range(position, position))
 
+        def provideSignatureHelp(self, document, position, token, context):
+            sig = SignatureInformation("editorCall(value)", "signature docs")
+            sig.parameters = [ParameterInformation("value", "value docs")]
+            return SignatureHelp([sig], 0, 0)
+
         def provideDocumentFormattingEdits(self, document, options, token):
             end = Position(0, len(document.getText()))
             return [TextEdit.replace(Range(Position(0, 0), end), "formatted")]
@@ -382,6 +388,7 @@ def test_app_settings_parity() -> None:
     lang_api = provider_api._vscode_ns.build()["languages"]
     lang_api["registerCompletionItemProvider"]("python", editor_provider)
     lang_api["registerHoverProvider"]("python", editor_provider)
+    lang_api["registerSignatureHelpProvider"]("python", editor_provider, "(")
     lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -399,6 +406,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="completion"))
         hover_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="hover"))
+        signature_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="signatureHelp", triggerCharacter="("))
         format_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="formatting"))
         with open(provider_path, "r", encoding="utf-8") as fh:
@@ -414,6 +423,12 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider serializes hover contents",
                hover_result.get("hovers", [{}])[0].get("contents") == [
                    "hover buffer"])
+        _check("editor_language_provider serializes signature help",
+               signature_result.get("signatureHelp", {})
+               .get("signatures", [{}])[0].get("label") == "editorCall(value)"
+               and signature_result.get("signatureHelp", {})
+               .get("signatures", [{}])[0].get("parameters", [{}])[0]
+               .get("documentation") == "value docs")
         _check("editor_language_provider exposes formatting edits without saving",
                format_result.get("edits", [{}])[0].get("newText") == "formatted"
                and disk_text == "disk")
@@ -1386,6 +1401,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend invokes dynamic editor language providers",
            "id=\"editor-suggest\"" in html
            and "id=\"editor-hover\"" in html
+           and "id=\"editor-signature-help\"" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
@@ -1393,8 +1409,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
            and "function requestEditorHover()" in html
+           and "function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet)" in html
+           and "function showEditorSignatureHelp(help,position)" in html
+           and "function appendSignatureLabel(target,signature,activeParameter)" in html
            and "function editorApplyTextEdits(edits)" in html
            and "Ctrl+Space" in html
+           and "Ctrl+Shift+Space" in html
            and "Formatted via extension" in html)
     try:
         from ai_editor.node_runtime import get_node_path
@@ -2604,7 +2624,8 @@ def test_vscode_api() -> None:
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
-        TextEdit, Location,
+        TextEdit, Location, SignatureHelp, SignatureInformation,
+        ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -2634,8 +2655,11 @@ def test_vscode_api() -> None:
     _check("api.Disposable", api["Disposable"] is not None)
     _check("api.CompletionItem", api["CompletionItem"] is CompletionItem)
     _check("api.Hover", api["Hover"] is Hover)
+    _check("api.SignatureHelp", api["SignatureHelp"] is SignatureHelp)
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
+    _check("api.SignatureHelpTriggerKind",
+           api["SignatureHelpTriggerKind"]["TriggerCharacter"] == 2)
 
     # Commands via namespace
     box = []
@@ -2948,6 +2972,16 @@ def test_vscode_api() -> None:
             def provideHover(self, document, position, token):
                 return Hover(["selftest hover"], Range(position, position))
 
+        class _SignatureProvider:
+            def __init__(self):
+                self.contexts = []
+
+            def provideSignatureHelp(self, document, position, token, context):
+                self.contexts.append(context)
+                sig = SignatureInformation("call(arg)")
+                sig.parameters = [ParameterInformation("arg", "argument docs")]
+                return SignatureHelp([sig], 0, 0)
+
         class _DefinitionProvider:
             def provideDefinition(self, document, position, token):
                 return Location(document.uri, Range(Position(0, 0), Position(0, 4)))
@@ -2970,6 +3004,9 @@ def test_vscode_api() -> None:
 
         hover_runtime = api["languages"]["registerHoverProvider"](
             {"language": "python", "scheme": "file"}, _HoverProvider())
+        signature_provider = _SignatureProvider()
+        api["languages"]["registerSignatureHelpProvider"](
+            "python", signature_provider, "(", ",")
         api["languages"]["registerDefinitionProvider"](
             "python", _DefinitionProvider())
         api["languages"]["registerDocumentSymbolProvider"](
@@ -2980,6 +3017,10 @@ def test_vscode_api() -> None:
             "python", _FormatProvider())
         hovers = api["commands"]["executeCommand"](
             "vscode.executeHoverProvider", doc.uri, Position(0, 0))
+        signature_none = api["commands"]["executeCommand"](
+            "vscode.executeSignatureHelpProvider", doc.uri, Position(0, 4), "?")
+        signature_help = api["commands"]["executeCommand"](
+            "vscode.executeSignatureHelpProvider", doc.uri, Position(0, 4), "(")
         definitions = api["commands"]["executeCommand"](
             "vscode.executeDefinitionProvider", doc.uri, Position(0, 0))
         symbols = api["commands"]["executeCommand"](
@@ -2991,6 +3032,13 @@ def test_vscode_api() -> None:
             "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
         _check("executeHoverProvider invokes matching providers",
                hovers and hovers[0].contents == ["selftest hover"])
+        _check("executeSignatureHelpProvider invokes matching providers",
+               signature_none is None
+               and isinstance(signature_help, SignatureHelp)
+               and signature_help.signatures[0].label == "call(arg)"
+               and signature_help.signatures[0].parameters[0].documentation
+               == "argument docs"
+               and signature_provider.contexts[-1]["triggerCharacter"] == "(")
         _check("executeDefinitionProvider invokes matching providers",
                definitions and definitions[0].uri == doc.uri)
         _check("executeDocumentSymbolProvider invokes matching providers",
@@ -3002,6 +3050,8 @@ def test_vscode_api() -> None:
         hover_runtime.dispose()
         _check("language execute commands are registered",
                "vscode.executeCompletionItemProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeSignatureHelpProvider"
                in api["commands"]["getCommands"]())
         class _TaskProvider:
             def provideTasks(self):
@@ -4210,6 +4260,17 @@ function activate(context) {
       return new vscode.Hover(['node hover ' + document.getText().slice(0, 4)], new vscode.Range(position, position));
     },
   });
+  vscode.languages.registerSignatureHelpProvider('python', {
+    provideSignatureHelp(document, position, token, context) {
+      const sig = new vscode.SignatureInformation('nodeCall(value)', 'node signature docs');
+      sig.parameters = [new vscode.ParameterInformation('value', 'node value docs')];
+      const help = new vscode.SignatureHelp();
+      help.signatures = [sig];
+      help.activeSignature = 0;
+      help.activeParameter = context.triggerCharacter === ',' ? 1 : 0;
+      return help;
+    },
+  }, '(', ',');
   vscode.languages.registerDefinitionProvider('python', {
     provideDefinition(document, position, token) {
       return new vscode.Location(document.uri, new vscode.Range(0, 0, 0, 4));
@@ -4321,6 +4382,9 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 1), ".")
                 node_hover = api._ext_host.commands.execute(
                     "vscode.executeHoverProvider", node_uri, Position(0, 1))
+                node_signature = api._ext_host.commands.execute(
+                    "vscode.executeSignatureHelpProvider",
+                    node_uri, Position(0, 5), "(")
                 node_definition = api._ext_host.commands.execute(
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
                 node_symbols = api._ext_host.commands.execute(
@@ -4345,6 +4409,13 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])
+                _check("node host language provider invokes JS signature help",
+                       node_signature
+                       and node_signature.get("signatures", [{}])[0].get("label")
+                       == "nodeCall(value)"
+                       and node_signature.get("signatures", [{}])[0]
+                       .get("parameters", [{}])[0].get("documentation")
+                       == "node value docs")
                 _check("node host language provider reuses document text cache",
                        any("text" in payload for payload in node_language_payloads)
                        and any(

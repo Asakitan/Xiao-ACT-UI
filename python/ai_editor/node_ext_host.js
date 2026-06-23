@@ -1084,6 +1084,18 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerHoverProvider(selector, provider) {
                     return _registerLangProvider('hover', selector, provider);
                 },
+                registerSignatureHelpProvider(selector, provider, ...metadata) {
+                    if (metadata.length === 1 && metadata[0] && typeof metadata[0] === 'object' && !Array.isArray(metadata[0])) {
+                        return _registerLangProvider('signatureHelp', selector, provider, {
+                            metadata: metadata[0],
+                            triggers: metadata[0].triggerCharacters || [],
+                        });
+                    }
+                    return _registerLangProvider('signatureHelp', selector, provider, {
+                        metadata: { triggerCharacters: metadata, retriggerCharacters: [] },
+                        triggers: metadata,
+                    });
+                },
                 registerDefinitionProvider(selector, provider) {
                     return _registerLangProvider('definition', selector, provider);
                 },
@@ -1300,6 +1312,10 @@ function buildVscodeModule(extDesc, extensionPath) {
         },
         CompletionItem: class { constructor(label, kind) { this.label = label; this.kind = kind; } },
         CompletionList: class { constructor(items, isIncomplete) { this.items = items || []; this.isIncomplete = !!isIncomplete; } },
+        ParameterInformation: class { constructor(label, documentation) { this.label = label; this.documentation = documentation; } },
+        SignatureInformation: class { constructor(label, documentation) { this.label = label || ''; this.documentation = documentation; this.parameters = []; } },
+        SignatureHelp: class { constructor() { this.signatures = []; this.activeSignature = 0; this.activeParameter = 0; } },
+        SignatureHelpTriggerKind: { Invoke: 1, TriggerCharacter: 2, ContentChange: 3 },
         CodeAction: class { constructor(title, kind) { this.title = title; this.kind = kind; } },
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
@@ -1608,6 +1624,7 @@ function _languageProviderMethod(kind) {
     return ({
         completion: 'provideCompletionItems',
         hover: 'provideHover',
+        signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
         documentSymbol: 'provideDocumentSymbols',
         codeActions: 'provideCodeActions',
@@ -1660,7 +1677,7 @@ async function handleLanguageProviderRequest(msg) {
         if (trigger) {
             context.triggerKind = 2;
             context.triggerCharacter = trigger;
-        } else if (kind === 'completion') {
+        } else if (kind === 'completion' || kind === 'signatureHelp') {
             context.triggerKind = context.triggerKind || 1;
         }
         const providers = _languageProviders
@@ -1697,6 +1714,43 @@ async function handleLanguageProviderRequest(msg) {
                     items: _serializeLanguageValue(items),
                     isIncomplete,
                 },
+            });
+            return;
+        }
+
+        if (kind === 'signatureHelp') {
+            for (const entry of providers) {
+                const metadata = entry.metadata || {};
+                const triggers = [
+                    ...(metadata.triggerCharacters || []),
+                    ...(metadata.retriggerCharacters || []),
+                ].map(item => String(item));
+                if (trigger && triggers.length && !triggers.includes(trigger)) continue;
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, position, token, context);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeLanguageValue(value),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
             });
             return;
         }

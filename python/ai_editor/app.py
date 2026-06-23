@@ -486,6 +486,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "targetRange", "originSelectionRange", "name", "containerName",
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
+    "signatures", "activeSignature", "activeParameter", "parameters",
 )
 
 
@@ -2589,6 +2590,9 @@ class AIEditorAPI:
             "completion": "completion",
             "completions": "completion",
             "hover": "hover",
+            "signatureHelp": "signatureHelp",
+            "signature": "signatureHelp",
+            "signatures": "signatureHelp",
             "definition": "definition",
             "definitions": "definition",
             "documentSymbol": "documentSymbol",
@@ -2653,6 +2657,23 @@ class AIEditorAPI:
                     "version": document.version,
                     "hovers": value if isinstance(value, list) else (
                         [] if value is None else [value]),
+                }
+            if kind == "signatureHelp":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeSignatureHelpProvider",
+                    document.uri,
+                    position,
+                    payload.get("triggerCharacter"),
+                    payload.get("triggerKind"),
+                    payload.get("isRetrigger"),
+                    payload.get("activeSignatureHelp"),
+                )
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "signatureHelp": _json_ready_language_value(result),
                 }
             if kind == "definition":
                 result = self._ext_host.commands.execute(

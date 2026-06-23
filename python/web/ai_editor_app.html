@@ -226,11 +226,11 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
 }
 .editor-textarea::selection { background:var(--selection); }
-.editor-suggest,.editor-hover { position:absolute; z-index:8; border:1px solid var(--border);
+.editor-suggest,.editor-hover,.editor-signature-help { position:absolute; z-index:8; border:1px solid var(--border);
   background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px rgba(0,0,0,.32);
   border-radius:6px; opacity:0; transform:translateY(-4px); pointer-events:none;
   transition:opacity .12s ease,transform .12s ease; }
-.editor-suggest.open,.editor-hover.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+.editor-suggest.open,.editor-hover.open,.editor-signature-help.open { opacity:1; transform:translateY(0); pointer-events:auto; }
 .editor-suggest { min-width:240px; max-width:420px; max-height:260px; overflow:auto; padding:4px; }
 .editor-suggest-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:5px 7px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
@@ -239,6 +239,13 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-suggest-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-hover { max-width:460px; max-height:220px; overflow:auto; padding:8px 10px;
   font:12px/1.45 var(--ui); white-space:pre-wrap; pointer-events:none; }
+.editor-signature-help { max-width:560px; min-width:280px; overflow:hidden; padding:8px 10px;
+  font:12px/1.45 var(--ui); }
+.editor-signature-top { display:flex; align-items:center; gap:8px; }
+.editor-signature-label { flex:1; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-signature-param { color:var(--fg-accent); font-weight:600; }
+.editor-signature-count { color:var(--fg-dim); font-size:11px; }
+.editor-signature-doc { margin-top:5px; color:var(--fg-dim); white-space:pre-wrap; max-height:86px; overflow:auto; }
 .editor-welcome { display:flex; align-items:center; justify-content:center; flex:1;
   color:var(--fg-dim); font-size:14px; flex-direction:column; gap:12px; }
 .editor-welcome kbd { background:var(--bg3); padding:2px 6px; border-radius:3px;
@@ -1160,6 +1167,7 @@ pre.code-block { overflow:visible; }
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
+        <div class="editor-signature-help" id="editor-signature-help" role="tooltip"></div>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
         <div class="minimap-container hidden" id="minimap-container">
@@ -2388,6 +2396,7 @@ function openInEditor(code,lang){
   _undoStack.length=0;_redoStack.length=0;_undoPush(true);
   if(typeof closeEditorSuggest==='function')closeEditorSuggest();
   if(typeof closeEditorHover==='function')closeEditorHover();
+  if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -3206,11 +3215,15 @@ function _editorInputWithUndo(e){
   const ch=e&&typeof e.data==='string'?e.data:'';
   if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
   else closeEditorSuggest();
+  if(editorSignatureTriggerCharacter(ch))requestEditorSignatureHelp(ch,2,true);
+  else if(editorSignatureCloseCharacter(ch))closeEditorSignatureHelp();
+  else if(isEditorSignatureOpen())requestEditorSignatureHelp('',3,true);
   scheduleEditorHover();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
 let _editorHoverTimer=null,_editorHoverRequest=0;
+let _editorSignatureRequest=0;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3374,7 +3387,7 @@ function showEditorHover(text,position){
   requestAnimationFrame(()=>box.classList.add('open'));
 }
 async function requestEditorHover(){
-  if(isEditorSuggestOpen()||!ed||ed.offsetParent===null)return;
+  if(isEditorSuggestOpen()||isEditorSignatureOpen()||!ed||ed.offsetParent===null)return;
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await call('editor_language_provider',editorProviderPayload('hover'));
   if(requestId!==_editorHoverRequest)return;
@@ -3385,6 +3398,79 @@ function scheduleEditorHover(){
   clearTimeout(_editorHoverTimer);
   _editorHoverTimer=setTimeout(()=>requestEditorHover(),520);
 }
+function isEditorSignatureOpen(){
+  const box=$('editor-signature-help');return !!(box&&box.classList.contains('open'));
+}
+function closeEditorSignatureHelp(){
+  const box=$('editor-signature-help');if(!box)return;
+  box.classList.remove('open');box.style.display='none';
+}
+function editorSignatureTriggerCharacter(ch){
+  return typeof ch==='string'&&ch.length===1&&'(<,'.includes(ch);
+}
+function editorSignatureCloseCharacter(ch){
+  return ch===')'||ch===']'||ch==='}'||ch===';'||ch==='\n';
+}
+function appendSignatureLabel(target,signature,activeParameter){
+  const label=String(signature&&signature.label||''),params=Array.isArray(signature&&signature.parameters)?signature.parameters:[];
+  const active=params[Math.max(0,Math.min(params.length-1,Number(activeParameter)||0))]||null;
+  let start=-1,end=-1,paramLabel=active?active.label:null;
+  if(Array.isArray(paramLabel)&&paramLabel.length>=2){
+    start=Math.max(0,Number(paramLabel[0])||0);end=Math.max(start,Number(paramLabel[1])||start);
+  }else if(paramLabel!=null){
+    const needle=String(paramLabel);
+    start=label.indexOf(needle);
+    if(start>=0)end=start+needle.length;
+  }
+  if(start>=0&&end>start&&end<=label.length){
+    target.appendChild(document.createTextNode(label.slice(0,start)));
+    const mark=document.createElement('span');mark.className='editor-signature-param';mark.textContent=label.slice(start,end);
+    target.appendChild(mark);
+    target.appendChild(document.createTextNode(label.slice(end)));
+  }else{
+    target.textContent=label;
+  }
+}
+function showEditorSignatureHelp(help,position){
+  const box=$('editor-signature-help');if(!box||!help)return;
+  const signatures=Array.isArray(help.signatures)?help.signatures:[];
+  if(!signatures.length){closeEditorSignatureHelp();return}
+  const activeSignature=Math.max(0,Math.min(signatures.length-1,Number(help.activeSignature)||0));
+  const activeParameter=Math.max(0,Number(help.activeParameter)||0);
+  const signature=signatures[activeSignature]||{};
+  box.innerHTML='';
+  const top=document.createElement('div');top.className='editor-signature-top';
+  const label=document.createElement('div');label.className='editor-signature-label';
+  appendSignatureLabel(label,signature,activeParameter);
+  const count=document.createElement('div');count.className='editor-signature-count';count.textContent=(activeSignature+1)+'/'+signatures.length;
+  top.appendChild(label);top.appendChild(count);box.appendChild(top);
+  const param=Array.isArray(signature.parameters)?signature.parameters[activeParameter]:null;
+  const docText=editorProviderText((param&&param.documentation)||signature.documentation||'');
+  if(docText){
+    const doc=document.createElement('div');doc.className='editor-signature-doc';doc.textContent=docText;box.appendChild(doc);
+  }
+  placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+}
+async function requestEditorSignatureHelp(triggerCharacter,triggerKind,quiet){
+  const requestId=++_editorSignatureRequest;
+  const position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('signatureHelp',{
+    triggerCharacter:triggerCharacter||null,
+    triggerKind:triggerKind||1,
+    isRetrigger:isEditorSignatureOpen()
+  }));
+  if(requestId!==_editorSignatureRequest)return;
+  const help=res&&res.ok?res.signatureHelp:null;
+  if(help&&Array.isArray(help.signatures)&&help.signatures.length){
+    closeEditorHover();showEditorSignatureHelp(help,position);return;
+  }
+  closeEditorSignatureHelp();if(!quiet)setStatus('No signature help');
+}
+function handleEditorSignatureKey(e){
+  if(!isEditorSignatureOpen())return false;
+  if(e.key==='Escape'){e.preventDefault();closeEditorSignatureHelp();return true}
+  return false;
+}
 
 const ed=$('editor-text');
 // Seed initial undo state
@@ -3393,10 +3479,12 @@ ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',()=>{updateCursorPos();scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover();closeEditorSignatureHelp()});
 ed.addEventListener('keydown',function(e){
+  if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
-  if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
+  if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();requestEditorSignatureHelp('',1,false);return}
+  if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
   // Ctrl+Z → Undo
   if(e.key==='z'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();editorUndo();return}
   // Ctrl+Y or Ctrl+Shift+Z → Redo
@@ -3484,6 +3572,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
     {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
+    {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -3499,7 +3588,7 @@ ed.addEventListener('contextmenu',function(e){
 });
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
-  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover()}
+  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp()}
 });
 
 // ── Find/Replace ──
@@ -7212,6 +7301,7 @@ function switchTab(id){
     _undoStack.length=0;_redoStack.length=0;_undoPush(true);
     if(typeof closeEditorSuggest==='function')closeEditorSuggest();
     if(typeof closeEditorHover==='function')closeEditorHover();
+    if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
   }
@@ -7574,6 +7664,7 @@ const COMMANDS=[
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
   {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
+  {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},

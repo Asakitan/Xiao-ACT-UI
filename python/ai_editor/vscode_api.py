@@ -819,6 +819,28 @@ class Hover:
         self.range = range
 
 
+class ParameterInformation:
+    def __init__(self, label: Any = "", documentation: Any = None) -> None:
+        self.label = label
+        self.documentation = documentation
+
+
+class SignatureInformation:
+    def __init__(self, label: str = "", documentation: Any = None) -> None:
+        self.label = str(label or "")
+        self.documentation = documentation
+        self.parameters: List[Any] = []
+
+
+class SignatureHelp:
+    def __init__(
+            self, signatures: Any = None, active_signature: int = 0,
+            active_parameter: int = 0) -> None:
+        self.signatures = list(signatures or [])
+        self.activeSignature = int(active_signature or 0)
+        self.activeParameter = int(active_parameter or 0)
+
+
 class CodeAction:
     def __init__(self, title: str = "", kind: Any = None) -> None:
         self.title = title
@@ -1049,6 +1071,7 @@ class VscodeNamespace:
         commands = {
             "vscode.executeCompletionItemProvider": self._execute_completion_item_provider,
             "vscode.executeHoverProvider": self._execute_hover_provider,
+            "vscode.executeSignatureHelpProvider": self._execute_signature_help_provider,
             "vscode.executeDefinitionProvider": self._execute_definition_provider,
             "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
             "vscode.executeCodeActionProvider": self._execute_code_action_provider,
@@ -1254,6 +1277,63 @@ class VscodeNamespace:
                 "hover", document, position=self._position_payload(pos))))
         return results
 
+    @staticmethod
+    def _signature_help_trigger_metadata(entry: Dict[str, Any]) -> Dict[str, List[str]]:
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict):
+            triggers = metadata.get("triggerCharacters")
+            retriggers = metadata.get("retriggerCharacters")
+            return {
+                "triggerCharacters": [str(item) for item in (triggers or [])],
+                "retriggerCharacters": [str(item) for item in (retriggers or [])],
+            }
+        return {
+            "triggerCharacters": [str(item) for item in (metadata or [])],
+            "retriggerCharacters": [],
+        }
+
+    def _execute_signature_help_provider(
+            self,
+            uri: Any,
+            position: Any = None,
+            trigger_character: Any = None,
+            trigger_kind: Any = None,
+            is_retrigger: Any = False,
+            active_signature_help: Any = None) -> Any:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        trigger = "" if trigger_character is None else str(trigger_character)
+        try:
+            kind_value = int(trigger_kind) if trigger_kind is not None else (
+                2 if trigger else 1)
+        except Exception:
+            kind_value = 2 if trigger else 1
+        context = {
+            "triggerKind": kind_value,
+            "triggerCharacter": trigger or None,
+            "isRetrigger": bool(is_retrigger),
+            "activeSignatureHelp": active_signature_help,
+        }
+        for entry in self._matching_language_providers("signatureHelp", document):
+            metadata = self._signature_help_trigger_metadata(entry)
+            triggers = set(metadata.get("triggerCharacters") or [])
+            retriggers = set(metadata.get("retriggerCharacters") or [])
+            if trigger and trigger not in triggers and trigger not in retriggers:
+                continue
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideSignatureHelp",
+                (document, pos, CancellationToken.NONE, context),
+                default=None)
+            if value is not None:
+                return value
+        return self._request_external_language_provider(
+            "signatureHelp",
+            document,
+            position=self._position_payload(pos),
+            triggerCharacter=trigger or None,
+            context=context)
+
     def _execute_definition_provider(
             self, uri: Any, position: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
@@ -1436,6 +1516,9 @@ class VscodeNamespace:
             "CompletionItem": CompletionItem,
             "CompletionList": CompletionList,
             "Hover": Hover,
+            "ParameterInformation": ParameterInformation,
+            "SignatureInformation": SignatureInformation,
+            "SignatureHelp": SignatureHelp,
             "CodeAction": CodeAction,
             "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
@@ -1459,6 +1542,11 @@ class VscodeNamespace:
                 "EnumMember": 19, "Constant": 20, "Struct": 21,
                 "Event": 22, "Operator": 23, "TypeParameter": 24,
                 "User": 25, "Issue": 26,
+            },
+            "SignatureHelpTriggerKind": {
+                "Invoke": 1,
+                "TriggerCharacter": 2,
+                "ContentChange": 3,
             },
             "SymbolKind": {
                 "File": 0, "Module": 1, "Namespace": 2, "Package": 3,
@@ -2269,6 +2357,7 @@ class VscodeNamespace:
             "onDidChangeDiagnostics": self._diagnostics_change_emitter.event,
             "registerHoverProvider": lambda selector, provider: self._register_language_provider("hover", selector, provider),
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
+            "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
             "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
@@ -2321,6 +2410,15 @@ class VscodeNamespace:
             wanted = selector.get("language")
             return 10 if wanted in (None, language_id) else 0
         return 0
+
+    @staticmethod
+    def _signature_help_registration_metadata(values: Sequence[Any]) -> Any:
+        if len(values) == 1 and isinstance(values[0], dict):
+            return {
+                "triggerCharacters": list(values[0].get("triggerCharacters") or []),
+                "retriggerCharacters": list(values[0].get("retriggerCharacters") or []),
+            }
+        return tuple(str(item) for item in values)
 
     def _register_language_provider(self, kind: str, selector: Any,
                                     provider: Any, metadata: Any = None) -> Disposable:
