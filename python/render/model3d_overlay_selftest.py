@@ -155,6 +155,93 @@ def _write_animated_hand_glb(path: Path) -> None:
     )
 
 
+def _write_skinned_strip_glb(path: Path) -> None:
+    vertices = [
+        (-0.24, 0.00, -0.06), (0.24, 0.00, -0.06),
+        (0.24, 0.40, -0.06), (-0.24, 0.40, -0.06),
+        (-0.24, 0.62, 0.06), (0.24, 0.62, 0.06),
+        (0.24, 1.02, 0.06), (-0.24, 1.02, 0.06),
+    ]
+    indices = [
+        0, 1, 2, 0, 2, 3,
+        4, 6, 5, 4, 7, 6,
+        0, 4, 5, 0, 5, 1,
+        2, 6, 7, 2, 7, 3,
+        1, 5, 6, 1, 6, 2,
+        0, 3, 7, 0, 7, 4,
+    ]
+    joints = [
+        (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0),
+        (1, 0, 0, 0), (1, 0, 0, 0), (1, 0, 0, 0), (1, 0, 0, 0),
+    ]
+    weights = [(1.0, 0.0, 0.0, 0.0) for _ in vertices]
+    chunks: list[bytes] = []
+
+    def append(blob: bytes) -> tuple[int, int]:
+        offset = sum(len(item) for item in chunks)
+        padding = (-offset) % 4
+        if padding:
+            chunks.append(b"\0" * padding)
+            offset += padding
+        chunks.append(blob)
+        return offset, len(blob)
+
+    pos_offset, pos_len = append(b"".join(struct.pack("<fff", *point) for point in vertices))
+    idx_offset, idx_len = append(b"".join(struct.pack("<H", item) for item in indices))
+    joints_offset, joints_len = append(b"".join(struct.pack("<BBBB", *row) for row in joints))
+    weights_offset, weights_len = append(b"".join(struct.pack("<ffff", *row) for row in weights))
+    time_offset, time_len = append(b"".join(struct.pack("<f", item) for item in (0.0, 1.0)))
+    trans_offset, trans_len = append(
+        b"".join(struct.pack("<fff", *point) for point in ((0.0, 0.0, 0.0), (0.0, 0.55, 0.0)))
+    )
+    bin_blob = _pad4(b"".join(chunks), b"\0")
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": pos_offset, "byteLength": pos_len, "target": 34962},
+            {"buffer": 0, "byteOffset": idx_offset, "byteLength": idx_len, "target": 34963},
+            {"buffer": 0, "byteOffset": joints_offset, "byteLength": joints_len, "target": 34962},
+            {"buffer": 0, "byteOffset": weights_offset, "byteLength": weights_len, "target": 34962},
+            {"buffer": 0, "byteOffset": time_offset, "byteLength": time_len},
+            {"buffer": 0, "byteOffset": trans_offset, "byteLength": trans_len},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(vertices),
+             "type": "VEC3", "min": [-0.24, 0.0, -0.06], "max": [0.24, 1.02, 0.06]},
+            {"bufferView": 1, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+            {"bufferView": 2, "componentType": 5121, "count": len(vertices), "type": "VEC4"},
+            {"bufferView": 3, "componentType": 5126, "count": len(vertices), "type": "VEC4"},
+            {"bufferView": 4, "componentType": 5126, "count": 2, "type": "SCALAR"},
+            {"bufferView": 5, "componentType": 5126, "count": 2, "type": "VEC3"},
+        ],
+        "meshes": [{"name": "SkinnedBody", "primitives": [
+            {"attributes": {"POSITION": 0, "JOINTS_0": 2, "WEIGHTS_0": 3},
+             "indices": 1, "mode": 4}
+        ]}],
+        "skins": [{"name": "BodySkin", "skeleton": 0, "joints": [0, 1]}],
+        "nodes": [
+            {"name": "mixamorig:Hips", "children": [1, 2], "translation": [0.0, 0.0, 0.0]},
+            {"name": "mixamorig:RightHand", "translation": [0.0, 1.0, 0.0]},
+            {"name": "BodyNode", "mesh": 0, "skin": 0},
+        ],
+        "animations": [{"name": "Wave", "samplers": [
+            {"input": 4, "output": 5, "interpolation": "LINEAR"}
+        ], "channels": [
+            {"sampler": 0, "target": {"node": 1, "path": "translation"}}
+        ]}],
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+    }
+    json_blob = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), b" ")
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    path.write_bytes(
+        b"glTF" + struct.pack("<II", 2, total)
+        + struct.pack("<II", len(json_blob), 0x4E4F534A) + json_blob
+        + struct.pack("<II", len(bin_blob), 0x004E4942) + bin_blob
+    )
+
+
 def _write_rotating_arm_glb(path: Path) -> None:
     vertices = [(-0.2, 0.0, 0.0), (0.2, 0.0, 0.0), (0.0, 0.4, 0.0)]
     indices = [0, 1, 2]
@@ -808,6 +895,31 @@ Objects:  {
         self.assertEqual(len(meta["mesh"]["preview"]["faces"]), 12)
         self.assertIn("CubeNode", meta["nodes"])
         self.assertIn("PreviewMat", meta["materials"])
+
+    def test_model_metadata_extracts_glb_skin_weights_for_preview(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_skin_") as root:
+            model_path = Path(root) / "avatar.glb"
+            _write_skinned_strip_glb(model_path)
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path), "format": "glb"},
+                "retarget": {"mode": "humanoid_auto"},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            plan = get_retarget_plan(node)
+
+        self.assertEqual(meta["mesh"]["source"], "glb")
+        self.assertEqual(meta["skins"][0]["joint_count"], 2)
+        self.assertEqual(meta["skins"][0]["canonical_joints"], ["hips", "right_hand"])
+        skin = meta["mesh"]["preview"]["skin"]
+        self.assertEqual(len(skin), 8)
+        self.assertEqual(skin[0][0]["joint"], "hips")
+        self.assertEqual(skin[-1][0]["joint"], "right_hand")
+        self.assertAlmostEqual(skin[-1][0]["weight"], 1.0)
+        self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
+        self.assertEqual(plan["bone_map"]["right_hand"], "mixamorig:RightHand")
 
     def test_model_metadata_applies_glb_node_rest_transforms(self) -> None:
         clear_model3d_metadata_caches()
@@ -1481,6 +1593,42 @@ class Model3DOverlayRenderTests(unittest.TestCase):
         self.assertEqual(image.size, (96, 128))
         self.assertIsNotNone(image.getchannel("A").getbbox())
         self.assertEqual(pose.call_count, 0)
+
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_skinned_glb_software_preview_deforms_with_action_pose(self) -> None:
+        clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
+        with tempfile.TemporaryDirectory(prefix="model3d_glb_skin_render_") as root:
+            from PIL import ImageChops
+
+            model_path = Path(root) / "avatar.glb"
+            _write_skinned_strip_glb(model_path)
+            base = {
+                "type": "model3d",
+                "width": 220,
+                "height": 220,
+                "model": {"path": str(model_path), "format": "glb"},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.5},
+            }
+            first = normalize_ui_spec({
+                **base,
+                "action": {"name": "Wave", "time": 0.0},
+            })["nodes"][0]
+            moved = normalize_ui_spec({
+                **base,
+                "action": {"name": "Wave", "time": 0.5},
+            })["nodes"][0]
+
+            image_a = render_model3d_node(first, {"accent": "#7dd3fc"})
+            image_b = render_model3d_node(moved, {"accent": "#7dd3fc"})
+            pose = evaluate_retarget_pose(moved)
+            meta = get_model_metadata(moved)
+            diff = ImageChops.difference(image_a, image_b)
+
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertIn("skin", meta["mesh"]["preview"])
+        self.assertIsNotNone(diff.getbbox())
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_retarget_pose_preview_animates_existing_model_without_extra_window(self) -> None:

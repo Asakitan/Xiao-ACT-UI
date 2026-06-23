@@ -345,12 +345,15 @@ def _copy_metadata(value: dict[str, Any]) -> dict[str, Any]:
         "sidecar",
         "retarget",
         "mesh",
+        "skins",
         "rest_positions",
         "clip_keyframes",
     ):
         item = out.get(key)
         if isinstance(item, Mapping):
             out[key] = copy.deepcopy(dict(item))
+        elif isinstance(item, list):
+            out[key] = copy.deepcopy(item)
     for key in ("bone_names", "clips", "warnings", "unresolved", "nodes", "materials", "metadata_errors"):
         item = out.get(key)
         if isinstance(item, tuple):
@@ -1128,6 +1131,141 @@ def _glb_node_rest_positions(data: Mapping[str, Any]) -> dict[str, tuple[float, 
     return out
 
 
+def _glb_skin_metadata(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    nodes = data.get("nodes")
+    skins = data.get("skins")
+    accessors = data.get("accessors")
+    if not isinstance(nodes, list) or not isinstance(skins, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for skin_index, skin in enumerate(skins):
+        if not isinstance(skin, Mapping):
+            continue
+        raw_joints = skin.get("joints")
+        if not isinstance(raw_joints, list):
+            continue
+        joints: list[dict[str, Any]] = []
+        for raw_joint in raw_joints:
+            joint_index = _int_at(raw_joint, -1)
+            if not (0 <= joint_index < len(nodes)):
+                continue
+            name = _node_name(nodes, joint_index)
+            joints.append({
+                "index": joint_index,
+                "name": name,
+                "canonical": _canonical_from_token(name),
+            })
+        inverse_accessor = _json_index(accessors, skin.get("inverseBindMatrices"))
+        out.append({
+            "index": skin_index,
+            "name": str(skin.get("name") or f"skin_{skin_index}"),
+            "skeleton": _node_name(nodes, skin.get("skeleton")),
+            "joint_count": len(joints),
+            "joints": joints,
+            "canonical_joints": [item["canonical"] for item in joints if item.get("canonical")],
+            "inverse_bind_accessor": _int_at(skin.get("inverseBindMatrices"), -1),
+            "inverse_bind_count": _int_at(inverse_accessor.get("count")) if inverse_accessor else 0,
+        })
+    return out
+
+
+def _glb_mesh_skin_joints(
+    data: Mapping[str, Any],
+    skin_meta: list[dict[str, Any]],
+) -> dict[int, tuple[dict[str, Any], ...]]:
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list) or not skin_meta:
+        return {}
+    skins_by_index = {
+        int(skin.get("index")): tuple(copy.deepcopy(skin.get("joints") or ()))
+        for skin in skin_meta
+        if isinstance(skin, Mapping)
+    }
+    out: dict[int, tuple[dict[str, Any], ...]] = {}
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        mesh_index = _int_at(node.get("mesh"), -1)
+        skin_index = _int_at(node.get("skin"), -1)
+        if mesh_index < 0 or skin_index < 0 or mesh_index in out:
+            continue
+        joints = skins_by_index.get(skin_index)
+        if joints:
+            out[mesh_index] = joints
+    return out
+
+
+def _gltf_weight_value(value: Any, accessor: Mapping[str, Any]) -> float:
+    try:
+        weight = float(value)
+    except Exception:
+        return 0.0
+    if bool(accessor.get("normalized")):
+        component = _int_at(accessor.get("componentType"), -1)
+        if component == 5121:
+            weight = weight / 255.0
+        elif component == 5123:
+            weight = weight / 65535.0
+        elif component == 5120:
+            weight = max(0.0, weight / 127.0)
+        elif component == 5122:
+            weight = max(0.0, weight / 32767.0)
+    return max(0.0, weight)
+
+
+def _glb_vertex_skin(
+    attrs: Mapping[str, Any],
+    accessors: Any,
+    buffer_views: Any,
+    binary: bytes,
+    *,
+    limit: int,
+    skin_joints: tuple[dict[str, Any], ...],
+    errors: list[str],
+) -> list[list[dict[str, Any]]]:
+    if not skin_joints:
+        return []
+    joint_accessor = _json_index(accessors, attrs.get("JOINTS_0"))
+    weight_accessor = _json_index(accessors, attrs.get("WEIGHTS_0"))
+    if joint_accessor is None or weight_accessor is None:
+        return []
+    joint_rows, _total_joints, joint_err = _read_accessor_values(
+        joint_accessor, buffer_views, binary, limit=limit)
+    weight_rows, _total_weights, weight_err = _read_accessor_values(
+        weight_accessor, buffer_views, binary, limit=limit)
+    if joint_err:
+        errors.append(f"skin joints: {joint_err}")
+    if weight_err:
+        errors.append(f"skin weights: {weight_err}")
+    count = min(len(joint_rows), len(weight_rows), max(0, int(limit or 0)))
+    out: list[list[dict[str, Any]]] = []
+    for row_index in range(count):
+        entries: list[dict[str, Any]] = []
+        joints = joint_rows[row_index]
+        weights = weight_rows[row_index]
+        for slot in range(min(4, len(joints), len(weights))):
+            joint_slot = int(joints[slot])
+            if not (0 <= joint_slot < len(skin_joints)):
+                continue
+            weight = _gltf_weight_value(weights[slot], weight_accessor)
+            if weight <= 0.000001:
+                continue
+            joint = skin_joints[joint_slot]
+            canonical = str(joint.get("canonical") or "").strip()
+            source = str(joint.get("name") or "").strip()
+            entries.append({
+                "joint": canonical or source,
+                "source": source,
+                "weight": weight,
+            })
+        total = sum(float(item.get("weight") or 0.0) for item in entries)
+        if total > 0.000001:
+            for item in entries:
+                item["weight"] = float(item.get("weight") or 0.0) / total
+        out.append(entries)
+    return out
+
+
 def _glb_animation_keyframes(
     data: Mapping[str, Any],
     buffer_views: Any,
@@ -1237,13 +1375,16 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
 
     clip_keyframes = _glb_animation_keyframes(data, buffer_views, binary, errors)
     rest_positions = _glb_node_rest_positions(data)
+    skin_meta = _glb_skin_metadata(data)
+    mesh_skin_joints = _glb_mesh_skin_joints(data, skin_meta)
     bone_names = [name for name in nodes if _canonical_from_token(name)]
     vertices: list[list[float]] = []
     faces: list[list[int]] = []
+    vertex_skin: list[list[dict[str, Any]]] = []
     bbox_points: list[tuple[float, float, float]] = []
     vertex_count = 0
     face_count = 0
-    for mesh in meshes:
+    for mesh_index, mesh in enumerate(meshes):
         if not isinstance(mesh, Mapping):
             continue
         primitives = mesh.get("primitives")
@@ -1273,6 +1414,16 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
                     bbox_points.append(point)
             base_index = len(vertices)
             vertices.extend([list(point) for point in points])
+            skin = _glb_vertex_skin(
+                attrs, accessors, buffer_views, binary,
+                limit=len(points),
+                skin_joints=mesh_skin_joints.get(mesh_index, ()),
+                errors=errors,
+            )
+            if skin:
+                vertex_skin.extend(skin + ([[]] * max(0, len(points) - len(skin))))
+            else:
+                vertex_skin.extend([[] for _ in points])
 
             mode = _int_at(primitive.get("mode"), 4)
             if mode != 4:
@@ -1302,6 +1453,8 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
         "source": "glb",
         "truncated": vertex_count > _MESH_PREVIEW_VERTEX_LIMIT or face_count > _MESH_PREVIEW_FACE_LIMIT,
     }
+    if any(vertex_skin):
+        preview["skin"] = vertex_skin[:len(vertices)]
     if not vertices or not faces:
         preview = _bbox_preview(box)
         if preview:
@@ -1317,7 +1470,12 @@ def _parse_glb_metadata(path: Path) -> dict[str, Any]:
         },
         "nodes": _unique_strings(nodes),
         "materials": _unique_strings(materials),
-        "bone_names": _merge_unique(bone_names, rest_positions.keys()),
+        "skins": copy.deepcopy(skin_meta),
+        "bone_names": _merge_unique(
+            bone_names,
+            rest_positions.keys(),
+            *(skin.get("canonical_joints") for skin in skin_meta),
+        ),
         "clips": _merge_unique(_extract_names(data.get("animations")), clip_keyframes.keys()),
         "clip_keyframes": copy.deepcopy(clip_keyframes),
         "rest_positions": dict(rest_positions),
@@ -1501,6 +1659,7 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "extension": resolved.suffix.lower(),
         "sidecar": dict(sidecar_meta),
         "mesh": dict(file_meta.get("mesh") or {}),
+        "skins": copy.deepcopy(file_meta.get("skins") or []),
         "nodes": tuple(file_meta.get("nodes") or ()),
         "materials": tuple(file_meta.get("materials") or ()),
         "bone_names": bone_names,

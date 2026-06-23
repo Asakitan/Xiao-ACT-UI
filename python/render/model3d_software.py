@@ -14,8 +14,9 @@ except Exception:  # pragma: no cover - optional at import time
     ImageDraw = None  # type: ignore[assignment]
 
 try:
-    from render.model3d_backend import get_model_metadata
+    from render.model3d_backend import evaluate_retarget_pose, get_model_metadata
 except Exception:  # pragma: no cover
+    evaluate_retarget_pose = None  # type: ignore[assignment]
     get_model_metadata = None  # type: ignore[assignment]
 
 
@@ -56,6 +57,85 @@ def _faces(value: Any, vertex_count: int) -> list[list[int]]:
         if len(face) >= 3:
             out.append(face)
     return out
+
+
+def _skin_for_vertex(value: Any) -> list[tuple[str, float]]:
+    out: list[tuple[str, float]] = []
+    if not isinstance(value, (list, tuple)):
+        return out
+    for item in value[:8]:
+        if not isinstance(item, Mapping):
+            continue
+        joint = str(item.get("joint") or "").strip()
+        if not joint:
+            continue
+        try:
+            weight = float(item.get("weight") or 0.0)
+        except Exception:
+            continue
+        if weight > 0.000001:
+            out.append((joint, weight))
+    return out
+
+
+def _pose_points(pose: Mapping[str, Any], key: str) -> dict[str, tuple[float, float, float]]:
+    raw = pose.get(key)
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict[str, tuple[float, float, float]] = {}
+    for name, value in raw.items():
+        point = _point3(value)
+        if point is not None:
+            out[str(name)] = point
+    return out
+
+
+def _deform_vertices(
+    vertices: list[tuple[float, float, float]],
+    preview: Mapping[str, Any],
+    node: Mapping[str, Any],
+) -> list[tuple[float, float, float]]:
+    skin = preview.get("skin")
+    if not isinstance(skin, (list, tuple)) or not any(skin):
+        return vertices
+    if not callable(evaluate_retarget_pose):
+        return vertices
+    try:
+        pose = evaluate_retarget_pose(node)
+    except Exception:
+        return vertices
+    if not isinstance(pose, Mapping) or not bool(pose.get("ok")):
+        return vertices
+    rest = _pose_points(pose, "rest_positions")
+    posed = _pose_points(pose, "positions")
+    if not rest or not posed:
+        return vertices
+
+    deformed: list[tuple[float, float, float]] = []
+    changed = False
+    for index, point in enumerate(vertices):
+        influences = _skin_for_vertex(skin[index] if index < len(skin) else ())
+        if not influences:
+            deformed.append(point)
+            continue
+        dx = dy = dz = total = 0.0
+        for joint, weight in influences:
+            before = rest.get(joint)
+            after = posed.get(joint)
+            if before is None or after is None:
+                continue
+            dx += (after[0] - before[0]) * weight
+            dy += (after[1] - before[1]) * weight
+            dz += (after[2] - before[2]) * weight
+            total += weight
+        if total <= 0.000001:
+            deformed.append(point)
+            continue
+        moved = (point[0] + dx, point[1] + dy, point[2] + dz)
+        if any(abs(moved[axis] - point[axis]) > 0.000001 for axis in range(3)):
+            changed = True
+        deformed.append(moved)
+    return deformed if changed else vertices
 
 
 def _rotation(node: Mapping[str, Any]) -> tuple[float, float, float]:
@@ -138,6 +218,7 @@ def render_software_model3d_preview(node: Mapping[str, Any], pal: Mapping[str, A
     if len(vertices) < 6 or len(faces) < 4:
         return None
 
+    vertices = _deform_vertices(vertices, preview, node)
     projected, scale = _project(vertices, width, height, node)
     pal = dict(pal or {})
     accent = _color(pal.get("accent") or "#7dd3fc", (125, 211, 252, 255))
