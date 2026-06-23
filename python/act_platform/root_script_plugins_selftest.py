@@ -550,6 +550,24 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps", "state": fps_state}
                 if abs(float(fps_state.get("tick_interval") or 0.0) - (1.0 / 12.0)) > 0.0001:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps_interval", "state": fps_state}
+                same_fps_state = _state(act_plugin_action(
+                    owner, "script.model3d.set_fps", {"fps": 12}, plugin_id=plugin_id))
+                if int(same_fps_state.get("render_count") or 0) != int(fps_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_same_fps_no_extra_render",
+                        "before": fps_state,
+                        "after": same_fps_state,
+                    }
+                if int(same_fps_state.get("spec_build_count") or 0) != int(fps_state.get("spec_build_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_same_fps_no_spec_rebuild",
+                        "before": fps_state,
+                        "after": same_fps_state,
+                    }
                 twist_action = act_plugin_action(
                     owner, "script.retarget.set_twist_limit", {"twist_limit": 0.2}, plugin_id=plugin_id)
                 twist_state = _state(twist_action)
@@ -559,6 +577,16 @@ def run_selftest() -> dict[str, Any]:
                         "plugin_id": plugin_id,
                         "stage": "stickwoman_retarget_twist_limit",
                         "state": twist_state,
+                    }
+                same_twist_state = _state(act_plugin_action(
+                    owner, "script.retarget.set_twist_limit", {"twist_limit": 0.2}, plugin_id=plugin_id))
+                if int(same_twist_state.get("render_count") or 0) != int(twist_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_same_twist_no_extra_render",
+                        "before": twist_state,
+                        "after": same_twist_state,
                     }
                 stretch_action = act_plugin_action(
                     owner, "script.retarget.set_stretch_limit", {"stretch_limit": 0.06}, plugin_id=plugin_id)
@@ -618,6 +646,16 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_action", "state": action_state}
                 if int(action_state.get("render_count") or 0) < 1:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_render_count", "state": action_state}
+                same_action_state = _state(act_plugin_action(
+                    owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id))
+                if int(same_action_state.get("render_count") or 0) != int(action_state.get("render_count") or 0):
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_same_action_no_extra_render",
+                        "before": action_state,
+                        "after": same_action_state,
+                    }
                 spec_build_count = int(action_state.get("spec_build_count") or 0)
                 redraw = act_plugin_action(owner, "script.model3d.redraw", {}, plugin_id=plugin_id)
                 redraw_state = _state(redraw)
