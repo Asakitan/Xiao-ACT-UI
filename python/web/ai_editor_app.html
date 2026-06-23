@@ -2408,6 +2408,7 @@ const DEFAULT_AUTO_CLOSING_PAIRS=[
   {open:"'",close:"'"},{open:'"',close:'"'},{open:'`',close:'`'}
 ];
 const INDENT_UNIT='    ';
+const DEFAULT_WORD_PATTERN='[A-Za-z_][A-Za-z0-9_]*';
 
 let _prevLineCount=1;
 function updateLineNums(){
@@ -2542,6 +2543,31 @@ function languageIndentationRules(lang){
 function languageOnEnterRules(lang){
   const rules=languageConfiguration(lang).onEnterRules;
   return Array.isArray(rules)?rules:[];
+}
+function languageWordPattern(lang){
+  return languageConfiguration(lang).wordPattern||{pattern:DEFAULT_WORD_PATTERN,flags:''};
+}
+function editorWordAtCursor(){
+  const value=ed.value,pos=ed.selectionStart;
+  const lineStart=pos>0?value.lastIndexOf('\n',pos-1)+1:0;
+  let lineEnd=value.indexOf('\n',pos);if(lineEnd===-1)lineEnd=value.length;
+  const line=value.slice(lineStart,lineEnd),localPos=pos-lineStart;
+  const spec=languageRegexSpec(languageWordPattern(editorLang))||{pattern:DEFAULT_WORD_PATTERN,flags:''};
+  const flags=languageRegexFlags(spec.flags).replace(/g/g,'')+'g';
+  let re;
+  try{re=new RegExp(spec.pattern,flags)}catch{return ''}
+  let match;
+  while((match=re.exec(line))){
+    const text=match[0]||'';
+    if(!text){re.lastIndex++;continue}
+    const start=match.index,end=start+text.length;
+    if(start<=localPos&&localPos<=end)return text;
+  }
+  return '';
+}
+function editorFindSeedText(){
+  const selected=ed.value.substring(ed.selectionStart,ed.selectionEnd);
+  return selected||editorWordAtCursor();
 }
 function editorLineContext(value,pos){
   const text=String(value||''),lineStart=pos>0?text.lastIndexOf('\n',pos-1)+1:0;
@@ -2962,8 +2988,8 @@ document.addEventListener('click',()=>{$('ctx-menu').style.display='none'});
 function openFindBar(showReplace){
   const bar=$('find-bar');bar.style.display='flex';
   $('replace-input').style.display=showReplace?'':'none';
-  const sel=ed.value.substring(ed.selectionStart,ed.selectionEnd);
-  if(sel)$('find-input').value=sel;
+  const seed=editorFindSeedText();
+  if(seed)$('find-input').value=seed;
   $('find-input').focus();$('find-input').select();
 }
 function closeFindBar(){$('find-bar').style.display='none';ed.focus()}

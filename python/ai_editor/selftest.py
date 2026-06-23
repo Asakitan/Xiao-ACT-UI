@@ -1200,6 +1200,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
             and "function languageIndentationRules(lang)" in html
             and "function languageOnEnterRules(lang)" in html
+            and "function languageWordPattern(lang)" in html
+            and "function editorWordAtCursor()" in html
+            and "function editorFindSeedText()" in html
             and "function editorEnterInsertion(value,start)" in html
             and "function onEnterRuleMatches(rule,ctx)" in html
             and "function toggleLineComment(token)" in html
