@@ -17,6 +17,7 @@
 const path = require('node:path');
 const Module = require('node:module');
 const readline = require('node:readline');
+const fsp = require('node:fs/promises');
 
 // -------------------------------------------------------------------------
 // Logging — stderr only
@@ -610,6 +611,10 @@ const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
+const _workspaceTextDocuments = new Map(); // uri -> TextDocument-like object
+const _workspaceRoot = path.resolve(process.cwd());
+const _workspaceName = path.basename(_workspaceRoot) || _workspaceRoot;
+const _workspaceDefaultSkipDirs = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
 const _hierarchyItemCache = new Map(); // handle -> { provider, item, kind }
@@ -1007,6 +1012,175 @@ function _languageIdForUri(uri) {
         '.yaml': 'yaml',
         '.yml': 'yaml',
     })[ext] || 'plaintext';
+}
+
+function _workspaceFolder() {
+    return { uri: Uri.file(_workspaceRoot), name: _workspaceName, index: 0 };
+}
+
+function _pathFromUriLike(value) {
+    if (!value) return '';
+    if (value instanceof Uri) return value.fsPath;
+    if (typeof value === 'string') return value;
+    if (value.uri) return _pathFromUriLike(value.uri);
+    if (value.fsPath) return String(value.fsPath);
+    if (value.path) return String(value.path);
+    return '';
+}
+
+function _workspaceUriFromInput(value) {
+    if (value instanceof Uri) return value;
+    if (typeof value === 'string') {
+        if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return Uri.parse(value);
+        return Uri.file(path.isAbsolute(value) ? value : path.join(_workspaceRoot, value));
+    }
+    if (value && typeof value === 'object') {
+        if (value.scheme) return _uriFromPayload(value);
+        if (value.uri || value.path || value.fsPath) {
+            return _workspaceUriFromInput(value.uri || value.fsPath || value.path);
+        }
+    }
+    return new Uri('untitled', '', '/Untitled-1', '', '');
+}
+
+function _workspaceRelativePath(value, includeWorkspaceFolder) {
+    const rawPath = _pathFromUriLike(value);
+    const absPath = path.resolve(rawPath || _workspaceRoot);
+    let rel = path.relative(_workspaceRoot, absPath).replace(/\\/g, '/');
+    if (!rel || rel.startsWith('..')) rel = absPath.replace(/\\/g, '/');
+    return includeWorkspaceFolder ? `${_workspaceName}/${rel}` : rel;
+}
+
+function _workspacePatternText(pattern, fallback = '**/*') {
+    if (pattern === undefined || pattern === null) return fallback;
+    if (typeof pattern === 'string') return pattern.replace(/\\/g, '/');
+    if (pattern && typeof pattern === 'object' && pattern.pattern !== undefined) {
+        return String(pattern.pattern || fallback).replace(/\\/g, '/');
+    }
+    return String(pattern || fallback).replace(/\\/g, '/');
+}
+
+function _workspacePatternBase(pattern) {
+    if (!pattern || typeof pattern !== 'object') return _workspaceRoot;
+    const base = pattern.baseUri || pattern.base || pattern.uri;
+    const basePath = _pathFromUriLike(base);
+    if (!basePath) return _workspaceRoot;
+    const resolved = path.resolve(basePath);
+    const rel = path.relative(_workspaceRoot, resolved);
+    return rel && (rel.startsWith('..') || path.isAbsolute(rel)) ? _workspaceRoot : resolved;
+}
+
+function _escapeRegexText(value) {
+    return String(value).replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
+}
+
+function _globToRegExp(pattern) {
+    let glob = _workspacePatternText(pattern).replace(/^\.\//, '');
+    if (!glob) glob = '**/*';
+    let source = '^';
+    for (let i = 0; i < glob.length; i += 1) {
+        const ch = glob[i];
+        if (ch === '*') {
+            if (glob[i + 1] === '*') {
+                i += 1;
+                if (glob[i + 1] === '/') {
+                    source += '(?:.*/)?';
+                    i += 1;
+                } else {
+                    source += '.*';
+                }
+            } else {
+                source += '[^/]*';
+            }
+        } else if (ch === '?') {
+            source += '[^/]';
+        } else if (ch === '{') {
+            const end = glob.indexOf('}', i + 1);
+            if (end > i) {
+                const alternatives = glob.slice(i + 1, end).split(',')
+                    .map(part => _escapeRegexText(part.trim()));
+                source += '(?:' + alternatives.join('|') + ')';
+                i = end;
+            } else {
+                source += '\\{';
+            }
+        } else if (ch === '/') {
+            source += '/';
+        } else {
+            source += _escapeRegexText(ch);
+        }
+    }
+    return new RegExp(source + '$');
+}
+
+function _workspaceDefaultSkipDir(name) {
+    return _workspaceDefaultSkipDirs.has(name);
+}
+
+function _workspaceExcluded(rel, excludeRegexes) {
+    if (!excludeRegexes.length) return false;
+    return excludeRegexes.some(rx => rx.test(rel) || rx.test(rel + '/'));
+}
+
+async function _workspaceFindFiles(include, exclude, maxResults) {
+    const base = _workspacePatternBase(include);
+    const baseRelPrefix = path.relative(_workspaceRoot, base).replace(/\\/g, '/');
+    const includeRegex = _globToRegExp(_workspacePatternText(include));
+    const excludeRegexes = exclude === undefined || exclude === null
+        ? []
+        : [_globToRegExp(_workspacePatternText(exclude, ''))];
+    const rawMax = Number(maxResults);
+    const limit = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : 5000;
+    const results = [];
+    async function walk(dir) {
+        if (results.length >= limit) return;
+        let entries = [];
+        try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
+        catch { return; }
+        for (const entry of entries) {
+            if (results.length >= limit) break;
+            const abs = path.join(dir, entry.name);
+            const rel = path.relative(_workspaceRoot, abs).replace(/\\/g, '/');
+            const matchRel = baseRelPrefix && !baseRelPrefix.startsWith('..')
+                ? path.relative(base, abs).replace(/\\/g, '/')
+                : rel;
+            if (entry.isDirectory()) {
+                if (_workspaceDefaultSkipDir(entry.name) || _workspaceExcluded(rel, excludeRegexes)) continue;
+                await walk(abs);
+            } else if (entry.isFile()) {
+                if (_workspaceExcluded(rel, excludeRegexes)) continue;
+                if (includeRegex.test(matchRel) || includeRegex.test(rel)) results.push(Uri.file(abs));
+            }
+        }
+    }
+    await walk(base);
+    return results;
+}
+
+async function _workspaceOpenTextDocument(uriOrPath) {
+    if (uriOrPath && typeof uriOrPath === 'object'
+        && !(uriOrPath instanceof Uri)
+        && (uriOrPath.content !== undefined || uriOrPath.language !== undefined)) {
+        const uri = new Uri('untitled', '', '/Untitled-1', '', '');
+        const doc = _createLanguageDocument({
+            uri,
+            text: String(uriOrPath.content || ''),
+            languageId: uriOrPath.language || 'plaintext',
+            version: Date.now(),
+        });
+        _workspaceTextDocuments.set(uri.toString(), doc);
+        return doc;
+    }
+    const uri = _workspaceUriFromInput(uriOrPath);
+    const text = uri.scheme === 'file' ? await fsp.readFile(uri.fsPath, 'utf8') : '';
+    const doc = _createLanguageDocument({
+        uri,
+        text,
+        languageId: _languageIdForUri(uri),
+        version: Date.now(),
+    });
+    _workspaceTextDocuments.set(uri.toString(), doc);
+    return doc;
 }
 
 function _offsetAt(text, position) {
@@ -1427,32 +1601,34 @@ function buildVscodeModule(extDesc, extensionPath) {
             getConfiguration(section) {
                 return _createConfigProxy(section);
             },
-            workspaceFolders: [],
-            name: undefined,
-            rootPath: undefined,
+            get workspaceFolders() { return [_workspaceFolder()]; },
+            get name() { return _workspaceName; },
+            get rootPath() { return _workspaceRoot; },
+            get textDocuments() { return Array.from(_workspaceTextDocuments.values()); },
             fs: {
-                readFile: (uri) => require('node:fs/promises').readFile(uri.fsPath),
-                writeFile: (uri, content) => require('node:fs/promises').writeFile(uri.fsPath, content),
-                stat: (uri) => require('node:fs/promises').stat(uri.fsPath).then(s => ({ type: s.isDirectory() ? 2 : 1, size: s.size, ctime: s.ctimeMs, mtime: s.mtimeMs })),
-                readDirectory: (uri) => require('node:fs/promises').readdir(uri.fsPath, { withFileTypes: true }).then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1])),
-                createDirectory: (uri) => require('node:fs/promises').mkdir(uri.fsPath, { recursive: true }),
-                delete: (uri) => require('node:fs/promises').rm(uri.fsPath, { force: true }),
-                rename: (src, dst) => require('node:fs/promises').rename(src.fsPath, dst.fsPath),
-                copy: (src, dst) => require('node:fs/promises').copyFile(src.fsPath, dst.fsPath),
+                readFile: (uri) => fsp.readFile(uri.fsPath),
+                writeFile: (uri, content) => fsp.writeFile(uri.fsPath, content),
+                stat: (uri) => fsp.stat(uri.fsPath).then(s => ({ type: s.isDirectory() ? 2 : 1, size: s.size, ctime: s.ctimeMs, mtime: s.mtimeMs })),
+                readDirectory: (uri) => fsp.readdir(uri.fsPath, { withFileTypes: true }).then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1])),
+                createDirectory: (uri) => fsp.mkdir(uri.fsPath, { recursive: true }),
+                delete: (uri) => fsp.rm(uri.fsPath, { force: true }),
+                rename: (src, dst) => fsp.rename(src.fsPath, dst.fsPath),
+                copy: (src, dst) => fsp.copyFile(src.fsPath, dst.fsPath),
             },
             onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
             onDidChangeWorkspaceFolders: new EventEmitter().event,
             findFiles(include, exclude, maxResults) {
-                log('stub: findFiles');
-                return Promise.resolve([]);
+                return _workspaceFindFiles(include, exclude, maxResults);
             },
             applyEdit(edit) {
                 log('stub: applyEdit');
                 return Promise.resolve(true);
             },
             openTextDocument(uriOrPath) {
-                log('stub: openTextDocument');
-                return Promise.resolve({ uri: typeof uriOrPath === 'string' ? Uri.file(uriOrPath) : uriOrPath, getText: () => '', lineCount: 0 });
+                return _workspaceOpenTextDocument(uriOrPath);
+            },
+            asRelativePath(pathOrUri, includeWorkspaceFolder) {
+                return _workspaceRelativePath(pathOrUri, includeWorkspaceFolder);
             },
             registerTextDocumentContentProvider(scheme, provider) {
                 log(`stub: registerTextDocumentContentProvider ${scheme}`);

@@ -6163,6 +6163,34 @@ function activate(context) {
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
+  vscode.commands.registerCommand('selftest.node.workspaceProbe', async () => {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const found = await vscode.workspace.findFiles('python/ai_editor/selftest.py', undefined, 2);
+    const doc = found[0] ? await vscode.workspace.openTextDocument(found[0]) : null;
+    const pyMatches = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(folders[0], 'python/ai_editor/*.py'),
+      '**/__pycache__/**',
+      20,
+    );
+    const untitled = await vscode.workspace.openTextDocument({
+      content: 'alpha\nbeta',
+      language: 'plaintext',
+    });
+    return {
+      folderName: folders[0] && folders[0].name,
+      rootPath: vscode.workspace.rootPath,
+      found: found.map(uri => uri.toString()),
+      relative: found[0] ? vscode.workspace.asRelativePath(found[0]) : '',
+      docPrefix: doc ? doc.getText(new vscode.Range(0, 0, 0, 6)) : '',
+      docLineCount: doc ? doc.lineCount : 0,
+      pyCount: pyMatches.length,
+      textDocuments: vscode.workspace.textDocuments.length,
+      untitledText: untitled.getText(),
+    };
+  });
+  void vscode.commands.executeCommand('selftest.node.workspaceProbe')
+    .then(result => output.appendLine('workspaceProbe:' + JSON.stringify(result)))
+    .catch(err => output.appendLine('workspaceProbeError:' + (err && err.message || String(err))));
   context.subscriptions.push(view);
 }
 
@@ -6224,6 +6252,10 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_command_registered = _wait_until(
                     lambda: "selftest.node.openItem"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_workspace_command_registered = _wait_until(
+                    lambda: "selftest.node.workspaceProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_language_registered = _wait_until(
@@ -6380,6 +6412,22 @@ module.exports = { activate, deactivate };
                     node_uri,
                     Position(0, 4),
                     {"image/png": [1, 2, 3]})
+                node_workspace_probe = {}
+                def _node_workspace_probe_seen():
+                    output_text = "".join(
+                        node_host._output_channels.get(
+                            "node-tree-selftest", []))
+                    for line in output_text.splitlines():
+                        if line.startswith("workspaceProbe:"):
+                            try:
+                                node_workspace_probe.update(
+                                    json.loads(line.split(":", 1)[1]))
+                                return True
+                            except Exception:
+                                return False
+                    return False
+                node_workspace_probe_seen = _wait_until(
+                    _node_workspace_probe_seen, timeout=3.0)
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -6568,6 +6616,21 @@ module.exports = { activate, deactivate };
                        and node_drop_edits[0].get("kind", {}).get("value")
                        == "text"
                        and node_drop_miss == [])
+                _check("node host workspace APIs read local files",
+                       node_workspace_command_registered
+                       and node_workspace_probe_seen
+                       and isinstance(node_workspace_probe, dict)
+                       and node_workspace_probe.get("folderName")
+                       and node_workspace_probe.get("rootPath")
+                       and any("python/ai_editor/selftest.py" in item.replace("\\", "/")
+                               for item in node_workspace_probe.get("found", []))
+                       and node_workspace_probe.get("relative") == "python/ai_editor/selftest.py"
+                       and node_workspace_probe.get("docPrefix") == "\"\"\"AI "
+                       and node_workspace_probe.get("docLineCount", 0) > 100
+                       and node_workspace_probe.get("pyCount", 0) > 0
+                       and node_workspace_probe.get("textDocuments", 0) >= 2
+                       and node_workspace_probe.get("untitledText") == "alpha\nbeta",
+                       json.dumps(node_workspace_probe, ensure_ascii=False))
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {
