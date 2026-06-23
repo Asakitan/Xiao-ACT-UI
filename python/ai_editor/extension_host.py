@@ -487,6 +487,11 @@ class _MemStore:
         self._store[key] = value
         self._save()
 
+    def delete(self, key: str) -> None:
+        if key in self._store:
+            del self._store[key]
+            self._save()
+
     def keys(self) -> List[str]:
         return list(self._store.keys())
 

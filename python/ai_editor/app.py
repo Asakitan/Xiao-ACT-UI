@@ -4052,20 +4052,35 @@ class AIEditorAPI:
             ws_state = ctx.workspace_state if ctx else None
             props = entry.get("properties", {})
             values: Dict[str, Any] = {}
+            defaults: Dict[str, Any] = {}
+            configured_values: Dict[str, Any] = {}
+            modified: Dict[str, bool] = {}
+            configured_keys = set(ws_state.keys()) if ws_state else set()
             for key, schema in props.items():
                 if not isinstance(schema, dict):
                     continue
-                stored = ws_state.get(key) if ws_state else None
-                if stored is not None:
+                has_default = "default" in schema
+                if has_default:
+                    defaults[key] = schema["default"]
+                if key in configured_keys:
+                    stored = ws_state.get(key) if ws_state else None
                     values[key] = stored
-                elif "default" in schema:
+                    configured_values[key] = stored
+                    modified[key] = True
+                elif has_default:
                     values[key] = schema["default"]
+                    modified[key] = False
+                else:
+                    modified[key] = False
             result.append({
                 "extension_id": eid,
                 "display_name": display_name,
                 "title": entry.get("title", ""),
                 "properties": props,
                 "values": values,
+                "defaults": defaults,
+                "configuredValues": configured_values,
+                "modified": modified,
             })
         return {"configurations": result}
 
@@ -4079,8 +4094,9 @@ class AIEditorAPI:
                 eid = entry.get("extension_id", "")
                 ctx = self._ext_host.activator.get_context(eid)
                 if ctx:
-                    stored = ctx.workspace_state.get(key)
-                    if stored is not None:
+                    keys = set(ctx.workspace_state.keys())
+                    if key in keys:
+                        stored = ctx.workspace_state.get(key)
                         return {"ok": True, "key": key, "value": stored}
                 schema_default = props[key].get("default") if isinstance(props[key], dict) else None
                 return {"ok": True, "key": key,
@@ -4099,17 +4115,43 @@ class AIEditorAPI:
                 if not ctx:
                     return {"error": f"Extension context not found: {eid}"}
                 ctx.workspace_state.update(key, value)
-                # Notify Node extension host of the change
-                section = key.rsplit(".", 1)[0] if "." in key else ""
-                short_key = key.rsplit(".", 1)[-1] if "." in key else key
-                host = getattr(self, "_node_ext_host", None)
-                if host is not None and host.is_running:
-                    try:
-                        host.send_settings_changed(section, short_key, value)
-                    except Exception:
-                        pass
+                self._notify_extension_setting_changed(key, value)
                 return {"ok": True, "key": key, "extension_id": eid}
         return {"error": f"Setting key not found in any extension: {key}"}
+
+    def reset_extension_setting(self, key: str) -> Dict:
+        """Remove a workspace override for an extension setting."""
+        self._ensure_engine()
+        contributions = self._ext_host.ext_points.configuration_contributions
+        for entry in contributions:
+            props = entry.get("properties", {})
+            if key in props:
+                eid = entry.get("extension_id", "")
+                ctx = self._ext_host.activator.get_context(eid)
+                if not ctx:
+                    return {"error": f"Extension context not found: {eid}"}
+                ctx.workspace_state.delete(key)
+                schema = props[key] if isinstance(props[key], dict) else {}
+                default_value = schema.get("default")
+                self._notify_extension_setting_changed(key, default_value)
+                return {
+                    "ok": True,
+                    "key": key,
+                    "extension_id": eid,
+                    "value": default_value,
+                    "modified": False,
+                }
+        return {"error": f"Setting key not found in any extension: {key}"}
+
+    def _notify_extension_setting_changed(self, key: str, value: Any) -> None:
+        section = key.rsplit(".", 1)[0] if "." in key else ""
+        short_key = key.rsplit(".", 1)[-1] if "." in key else key
+        host = getattr(self, "_node_ext_host", None)
+        if host is not None and host.is_running:
+            try:
+                host.send_settings_changed(section, short_key, value)
+            except Exception:
+                pass
 
     def _decorate_extension_contributions(
             self,

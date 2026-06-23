@@ -282,6 +282,8 @@ def test_app_settings_parity() -> None:
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
         "get_extension_contributions",
+        "list_extension_settings", "get_extension_setting",
+        "set_extension_setting", "reset_extension_setting",
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes",
         "list_extension_activity_bar_items",
@@ -1174,6 +1176,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "badges.push('TextMate')" in html
             and "LANGUAGE_BY_EXT" in html
             and "languageForFileName(name)" in html)
+    _check("frontend renders extension settings modified reset controls",
+            "function renderExtensionSettings()" in html
+            and "reset_extension_setting" in html
+            and "markExtensionSettingRow" in html
+            and "ext-setting-badge" in html
+            and "Invalid JSON" in html)
     _check("frontend renders extension activity bar views dynamically",
             "function renderExtensionContainerContent(item)" in html
             and "function renderExtensionTreeView(view)" in html
@@ -2876,6 +2884,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.vscode_api import LanguageModelToolResult
 
     previous_host = extension_host_module._host
+    settings_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
         api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
@@ -2973,6 +2982,67 @@ def test_app_extension_runtime_support() -> None:
         _check("extension language extensions and filenames drive file detection",
                api._editor_language_for_path("demo.self") == "selflang"
                and api._editor_language_for_path("SELFFILE") == "selflang")
+
+        settings_tmp = tempfile.mkdtemp(prefix="sao_ext_settings_")
+        settings_desc = ExtensionDescription.from_package_json({
+            "name": "settings-pack",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "activationEvents": ["*"],
+            "contributes": {
+                "configuration": {
+                    "title": "Selftest Settings",
+                    "properties": {
+                        "selftest.flag": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Feature flag",
+                        },
+                        "selftest.mode": {
+                            "type": "string",
+                            "default": "auto",
+                            "enum": ["auto", "manual"],
+                            "order": 2,
+                        },
+                        "selftest.options": {
+                            "type": "object",
+                            "default": {"level": 1},
+                        },
+                    },
+                },
+            },
+        }, settings_tmp)
+        api._ext_host.registry.register(settings_desc)
+        api._ext_host.activator.activate(settings_desc.id)
+        ext_settings = api.list_extension_settings().get("configurations", [])
+        settings_cfg = next(
+            (item for item in ext_settings
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        _check("extension settings expose defaults and modified map",
+               settings_cfg.get("values", {}).get("selftest.flag") is False
+               and settings_cfg.get("defaults", {}).get("selftest.mode") == "auto"
+               and settings_cfg.get("modified", {}).get("selftest.flag") is False)
+        set_setting = api.set_extension_setting("selftest.flag", True)
+        after_set = next(
+            (item for item in api.list_extension_settings().get("configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        _check("extension setting write marks modified override",
+               set_setting.get("ok") is True
+               and after_set.get("values", {}).get("selftest.flag") is True
+               and after_set.get("configuredValues", {}).get("selftest.flag") is True
+               and after_set.get("modified", {}).get("selftest.flag") is True)
+        reset_setting = api.reset_extension_setting("selftest.flag")
+        after_reset = next(
+            (item for item in api.list_extension_settings().get("configurations", [])
+             if item.get("extension_id") == "selftest.settings-pack"),
+            {})
+        _check("extension setting reset restores default",
+               reset_setting.get("ok") is True
+               and after_reset.get("values", {}).get("selftest.flag") is False
+               and "selftest.flag" not in after_reset.get("configuredValues", {})
+               and after_reset.get("modified", {}).get("selftest.flag") is False)
 
         manifest_tool_name = api._extension_tool_wrapper_name(
             "selftest.manifest-only", "manifest_tool")
@@ -3396,6 +3466,8 @@ def test_app_extension_runtime_support() -> None:
                "no registered handler" in missing_data.get("error", ""))
     finally:
         extension_host_module._host = previous_host
+        if settings_tmp:
+            shutil.rmtree(settings_tmp, ignore_errors=True)
 
 
 def test_auth() -> None:

@@ -729,6 +729,20 @@ pre.code-block { overflow:visible; }
 .settings-field .s-reset:hover { color:var(--fg); background:var(--bg-hover); }
 .settings-field.modified { border-left:2px solid var(--fg-accent); padding-left:2px; }
 .settings-field.modified .s-reset { display:inline-block; }
+.ext-setting-row { position:relative; margin-bottom:10px; padding:6px 28px 6px 8px;
+  border-left:2px solid transparent; border-radius:3px; }
+.ext-setting-row.modified { border-left-color:var(--fg-accent); background:var(--bg-hover); }
+.ext-setting-row.settings-field.modified { padding-left:8px; }
+.ext-setting-row .s-reset { top:8px; right:6px; transform:none; }
+.ext-setting-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
+.ext-setting-title { font-size:12px; color:var(--fg); font-weight:600; }
+.ext-setting-badge { display:none; font-size:9px; color:var(--fg-accent); border:1px solid var(--fg-accent);
+  border-radius:3px; padding:0 4px; line-height:15px; }
+.ext-setting-row.modified .ext-setting-badge { display:inline-flex; }
+.ext-setting-key { font-size:11px; font-family:var(--mono); color:var(--fg-dim); user-select:all; margin-bottom:4px; }
+.ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
+.ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
+.ext-setting-row.invalid .ext-setting-error { display:block; }
 
 /* ── SETTINGS-05: Keyboard shortcuts editor ── */
 .kb-modal-bg { position:fixed; inset:0; background:#00000080; z-index:700; display:none; align-items:center; justify-content:center; }
@@ -5262,6 +5276,57 @@ window.delModel=delModel;
 window.addCustomModel=addCustomModel;
 
 // ── EXT-10: Extension-contributed settings ──
+function extensionSettingType(schema){
+  const t=schema&&schema.type;
+  if(Array.isArray(t))return t.find(v=>v&&v!=='null')||'string';
+  return t||'string';
+}
+function extensionSettingDefault(schema,defaults,key){
+  if(defaults&&Object.prototype.hasOwnProperty.call(defaults,key))return defaults[key];
+  if(schema&&Object.prototype.hasOwnProperty.call(schema,'default'))return schema.default;
+  const type=extensionSettingType(schema||{});
+  return type==='array'?[]:(type==='object'?{}:'');
+}
+function extensionSettingJson(value,type){
+  const fallback=type==='array'?[]:(type==='object'?{}:'');
+  const v=value===undefined?fallback:value;
+  try{return JSON.stringify(v,null,2)}catch(e){return String(v??'')}
+}
+function setExtensionSettingInputValue(input,schema,type,value){
+  if(input.type==='checkbox'){input.checked=!!value;return}
+  if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
+    const wanted=JSON.stringify(value);
+    const idx=schema.enum.findIndex(opt=>JSON.stringify(opt)===wanted);
+    input.selectedIndex=idx>=0?idx:0;return;
+  }
+  if(type==='array'||type==='object')input.value=extensionSettingJson(value,type);
+  else input.value=value!=null?String(value):'';
+}
+function readExtensionSettingInputValue(input,schema,type){
+  if(input.type==='checkbox')return !!input.checked;
+  if(input.tagName==='SELECT'&&Array.isArray(schema.enum)){
+    const opt=input.selectedOptions&&input.selectedOptions[0];
+    const idx=opt?Number(opt.dataset.enumIndex):-1;
+    return idx>=0&&idx<schema.enum.length?schema.enum[idx]:input.value;
+  }
+  if(type==='integer')return Math.trunc(Number(input.value)||0);
+  if(type==='number')return Number(input.value)||0;
+  if(type==='array'||type==='object'){
+    const text=input.value.trim();
+    if(!text)return type==='array'?[]:{};
+    return JSON.parse(text);
+  }
+  return input.value;
+}
+function markExtensionSettingRow(row,modified){
+  row.classList.toggle('modified',!!modified);
+  row.dataset.modified=modified?'1':'0';
+}
+function setExtensionSettingError(row,message){
+  row.classList.toggle('invalid',!!message);
+  const el=row.querySelector('.ext-setting-error');
+  if(el)el.textContent=message||'';
+}
 async function renderExtensionSettings(){
   const container=$('ext-settings-container');if(!container)return;
   container.innerHTML='';
@@ -5278,10 +5343,14 @@ async function renderExtensionSettings(){
     const title=cfg.title||'';
     const properties=cfg.properties;
     const values=cfg.values||{};
+    const defaults=cfg.defaults||{};
+    const modified=cfg.modified||{};
     if(!properties||typeof properties!=='object')return;
-    const propKeys=Object.keys(properties);
+    const propKeys=Object.keys(properties).sort((a,b)=>{
+      const ao=Number((properties[a]||{}).order||0),bo=Number((properties[b]||{}).order||0);
+      return ao===bo?a.localeCompare(b):ao-bo;
+    });
     if(!propKeys.length)return;
-    // Collapsible section per extension
     const section=document.createElement('details');section.className='settings-section';section.open=true;
     section.dataset.extSettingsSection='1';
     const summary=document.createElement('summary');
@@ -5293,47 +5362,71 @@ async function renderExtensionSettings(){
     propKeys.forEach(key=>{
       const schema=properties[key];
       if(!schema||typeof schema!=='object')return;
-      const currentVal=values[key]!==undefined?values[key]:schema.default;
-      const type=schema.type||'string';
-      const description=schema.description||'';
+      const type=extensionSettingType(schema);
+      const defaultVal=extensionSettingDefault(schema,defaults,key);
+      const hasDefaultValue=Object.prototype.hasOwnProperty.call(defaults,key)||Object.prototype.hasOwnProperty.call(schema,'default');
+      const currentVal=Object.prototype.hasOwnProperty.call(values,key)?values[key]:defaultVal;
+      const description=schema.markdownDescription||schema.description||'';
       const shortKey=key.split('.').pop()||key;
-      const row=document.createElement('div');row.dataset.extSettingKey=key;
-      row.style.cssText='margin-bottom:10px';
-      // Setting key in mono
+      const row=document.createElement('div');row.className='ext-setting-row settings-field';row.dataset.extSettingKey=key;
+      const head=document.createElement('div');head.className='ext-setting-head';
+      const name=document.createElement('span');name.className='ext-setting-title';name.textContent=schema.title||shortKey;
+      const badge=document.createElement('span');badge.className='ext-setting-badge';badge.textContent='Modified';
+      head.appendChild(name);head.appendChild(badge);row.appendChild(head);
       const keyLabel=document.createElement('div');
-      keyLabel.style.cssText='font-size:11px;font-family:var(--mono);color:var(--fg-dim);margin-bottom:2px;user-select:all';
-      keyLabel.textContent=key;row.appendChild(keyLabel);
+      keyLabel.className='ext-setting-key';
+      keyLabel.textContent=key+(schema.scope?' · '+schema.scope:'')+' · '+type;
+      row.appendChild(keyLabel);
+      if(description){const desc=document.createElement('div');desc.className='ext-setting-desc';desc.textContent=description;row.appendChild(desc)}
+      let input;
       if(type==='boolean'){
         const lbl=document.createElement('label');lbl.className='settings-check';
-        const cb=document.createElement('input');cb.type='checkbox';cb.checked=!!currentVal;
-        cb.addEventListener('change',()=>{call('set_extension_setting',key,cb.checked)});
-        const span=document.createElement('span');
-        span.innerHTML='<b>'+esc(shortKey)+'</b>'+(description?'<small>'+esc(description)+'</small>':'');
-        lbl.appendChild(cb);lbl.appendChild(span);row.appendChild(lbl);
-      } else if(type==='string'&&schema.enum){
-        const lbl=document.createElement('label');lbl.textContent=shortKey;row.appendChild(lbl);
-        if(description){const desc=document.createElement('div');desc.style.cssText='font-size:11px;color:var(--fg-dim);margin-bottom:3px';desc.textContent=description;row.appendChild(desc)}
-        const sel=document.createElement('select');
-        schema.enum.forEach(opt=>{const o=document.createElement('option');o.value=opt;o.textContent=opt;sel.appendChild(o)});
-        sel.value=currentVal!=null?String(currentVal):'';
-        sel.addEventListener('change',()=>{call('set_extension_setting',key,sel.value)});
-        row.appendChild(sel);
+        input=document.createElement('input');input.type='checkbox';
+        const span=document.createElement('span');span.textContent=schema.title||shortKey;
+        lbl.appendChild(input);lbl.appendChild(span);row.appendChild(lbl);
+      } else if(Array.isArray(schema.enum)){
+        input=document.createElement('select');
+        schema.enum.forEach((opt,idx)=>{
+          const o=document.createElement('option');o.value=String(opt);o.dataset.enumIndex=String(idx);
+          const enumLabels=schema.enumItemLabels||schema.enumDescriptions||[];
+          o.textContent=enumLabels[idx]||String(opt);input.appendChild(o);
+        });
+        row.appendChild(input);
       } else if(type==='number'||type==='integer'){
-        const lbl=document.createElement('label');lbl.textContent=shortKey;row.appendChild(lbl);
-        if(description){const desc=document.createElement('div');desc.style.cssText='font-size:11px;color:var(--fg-dim);margin-bottom:3px';desc.textContent=description;row.appendChild(desc)}
-        const inp=document.createElement('input');inp.type='number';
-        inp.value=currentVal!=null?currentVal:'';
-        inp.addEventListener('change',()=>{call('set_extension_setting',key,Number(inp.value)||0)});
-        row.appendChild(inp);
+        input=document.createElement('input');input.type='number';
+        if(type==='integer')input.step='1';
+        row.appendChild(input);
+      } else if(type==='array'||type==='object'){
+        input=document.createElement('textarea');input.rows=3;input.spellcheck=false;
+        row.appendChild(input);
       } else {
-        const lbl=document.createElement('label');lbl.textContent=shortKey;row.appendChild(lbl);
-        if(description){const desc=document.createElement('div');desc.style.cssText='font-size:11px;color:var(--fg-dim);margin-bottom:3px';desc.textContent=description;row.appendChild(desc)}
-        const inp=document.createElement('input');inp.type='text';
-        inp.value=currentVal!=null?String(currentVal):'';
-        inp.placeholder=schema.default!=null?String(schema.default):'';
-        inp.addEventListener('change',()=>{call('set_extension_setting',key,inp.value)});
-        row.appendChild(inp);
+        input=document.createElement('input');input.type='text';
+        row.appendChild(input);
       }
+      input.dataset.extSettingInput='1';
+      input.title=key;
+      setExtensionSettingInputValue(input,schema,type,currentVal);
+      if(type!=='array'&&type!=='object')input.placeholder=defaultVal!=null?String(defaultVal):'';
+      const err=document.createElement('div');err.className='ext-setting-error';row.appendChild(err);
+      const reset=document.createElement('span');reset.className='s-reset';reset.textContent='↻';reset.title='Reset to default';
+      reset.onclick=async ev=>{
+        ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
+        const r=await call('reset_extension_setting',key);
+        if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);markExtensionSettingRow(row,false)}
+        else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
+      };
+      row.appendChild(reset);
+      input.addEventListener('change',async()=>{
+        setExtensionSettingError(row,'');
+        let nextValue;
+        try{nextValue=readExtensionSettingInputValue(input,schema,type)}
+        catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
+        const r=await call('set_extension_setting',key,nextValue);
+        if(r&&r.ok)markExtensionSettingRow(row,true);
+        else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
+      });
+      if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
+      markExtensionSettingRow(row,modified[key]===true);
       inner.appendChild(row);
     });
     section.appendChild(inner);
