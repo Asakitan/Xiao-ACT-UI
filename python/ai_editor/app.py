@@ -6262,6 +6262,20 @@ class AIEditorAPI:
         return self._extension_custom_editor_lifecycle(
             "backup", view_id=view_id, view_type=view_type, uri=uri)
 
+    def undo_extension_custom_editor(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Run the latest custom editor edit undo callback."""
+        return self._extension_custom_editor_lifecycle(
+            "undo", view_id=view_id, view_type=view_type, uri=uri)
+
+    def redo_extension_custom_editor(
+            self, view_id: str = "", view_type: str = "",
+            uri: str = "") -> Dict:
+        """Run the next custom editor edit redo callback."""
+        return self._extension_custom_editor_lifecycle(
+            "redo", view_id=view_id, view_type=view_type, uri=uri)
+
     def save_extension_custom_editor_as(
             self, view_id: str = "", view_type: str = "",
             uri: str = "", target: str = "") -> Dict:

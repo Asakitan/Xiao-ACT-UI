@@ -1832,6 +1832,14 @@ class NodeExtensionHost:
         for key in ("supportsSave", "supportsSaveAs", "supportsRevert", "supportsBackup"):
             if key in payload:
                 state[key] = bool(payload.get(key))
+        for key in ("canUndo", "canRedo"):
+            if key in payload:
+                state[key] = bool(payload.get(key))
+        if "currentEditIndex" in payload:
+            try:
+                state["currentEditIndex"] = int(payload.get("currentEditIndex"))
+            except (TypeError, ValueError):
+                state["currentEditIndex"] = -1
         return state
 
     def _store_custom_editor_state(

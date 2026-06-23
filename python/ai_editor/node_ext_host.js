@@ -740,6 +740,9 @@ function _customEditorStatePayload(entry, kind, extra = {}) {
         label: entry.lastLabel || '',
         editId: entry.lastEditId || 0,
         edits: entry.edits.length,
+        currentEditIndex: entry.currentEditIndex,
+        canUndo: entry.currentEditIndex >= 0,
+        canRedo: entry.currentEditIndex < entry.edits.length - 1,
         backupId: entry.backupId || '',
         ...extra,
     };
@@ -773,14 +776,20 @@ function _customEditorEntryForDocument(viewType, document) {
     return null;
 }
 
+function _refreshCustomEditorDirty(entry) {
+    entry.dirty = !!entry.contentDirty || entry.currentEditIndex >= 0;
+    return entry.dirty;
+}
+
 function _handleCustomDocumentChange(viewType, event) {
     const entry = _customEditorEntryForDocument(viewType, event?.document);
     if (!entry) return;
     const editEvent = _isCustomEditorEditEvent(event);
-    entry.dirty = true;
     entry.lastKind = editEvent ? 'edit' : 'content';
     entry.lastLabel = String(event?.label || '');
     if (editEvent) {
+        const spliceStart = entry.currentEditIndex + 1;
+        if (spliceStart < entry.edits.length) entry.edits.splice(spliceStart);
         const editId = _nextCustomEditorEditHandle++;
         entry.lastEditId = editId;
         entry.edits.push({
@@ -789,7 +798,11 @@ function _handleCustomDocumentChange(viewType, event) {
             undo: event.undo,
             redo: event.redo,
         });
+        entry.currentEditIndex = entry.edits.length - 1;
+    } else {
+        entry.contentDirty = true;
     }
+    _refreshCustomEditorDirty(entry);
     _sendCustomEditorState(entry, entry.lastKind);
 }
 
@@ -815,6 +828,14 @@ async function _customEditorBackupDestination(entry) {
         Math.floor(Math.random() * 1000000),
     ].join('-') + '.bak';
     return Uri.file(path.join(backupDir, name));
+}
+
+function _markCustomEditorClean(entry) {
+    entry.contentDirty = false;
+    entry.dirty = false;
+    entry.edits.length = 0;
+    entry.currentEditIndex = -1;
+    entry.lastEditId = 0;
 }
 
 // -------------------------------------------------------------------------
@@ -3008,11 +3029,13 @@ async function resolveCustomEditor(msg) {
                 provider: reg.provider,
                 document,
                 dirty: false,
+                contentDirty: false,
                 editable: typeof reg.provider.onDidChangeCustomDocument === 'function',
                 lastKind: 'resolved',
                 lastLabel: '',
                 lastEditId: 0,
                 edits: [],
+                currentEditIndex: -1,
                 backup: null,
                 backupId: msg.backupId ? String(msg.backupId) : '',
             };
@@ -3067,8 +3090,7 @@ async function handleCustomEditorLifecycle(msg) {
             }
             await provider.saveCustomDocument(entry.document, token);
             await _disposeCustomEditorBackup(entry);
-            entry.dirty = false;
-            entry.edits.length = 0;
+            _markCustomEditorClean(entry);
             entry.lastKind = 'save';
             _sendCustomEditorState(entry, 'save', { dirty: false });
             value = _customEditorStatePayload(entry, 'save');
@@ -3081,8 +3103,7 @@ async function handleCustomEditorLifecycle(msg) {
             const target = _workspaceUriFromInput(targetInput);
             await provider.saveCustomDocumentAs(entry.document, target, token);
             await _disposeCustomEditorBackup(entry);
-            entry.dirty = false;
-            entry.edits.length = 0;
+            _markCustomEditorClean(entry);
             entry.lastKind = 'saveAs';
             _sendCustomEditorState(entry, 'saveAs', { dirty: false, target: target.toString() });
             value = _customEditorStatePayload(entry, 'saveAs', { target: target.toString() });
@@ -3092,8 +3113,7 @@ async function handleCustomEditorLifecycle(msg) {
             }
             await provider.revertCustomDocument(entry.document, token);
             await _disposeCustomEditorBackup(entry);
-            entry.dirty = false;
-            entry.edits.length = 0;
+            _markCustomEditorClean(entry);
             entry.lastKind = 'revert';
             _sendCustomEditorState(entry, 'revert', { dirty: false });
             value = _customEditorStatePayload(entry, 'revert');
@@ -3109,6 +3129,47 @@ async function handleCustomEditorLifecycle(msg) {
             entry.lastKind = 'backup';
             _sendCustomEditorState(entry, 'backup', { backupId: entry.backupId });
             value = _customEditorStatePayload(entry, 'backup');
+        } else if (action === 'undo') {
+            let edit = null;
+            if (msg.editId !== undefined && msg.editId !== null && msg.editId !== '') {
+                const wantedId = Number(msg.editId);
+                const wantedIndex = entry.edits.findIndex(item => item.id === wantedId);
+                if (wantedIndex >= 0 && wantedIndex <= entry.currentEditIndex) {
+                    entry.currentEditIndex = wantedIndex;
+                }
+            }
+            if (entry.currentEditIndex >= 0) {
+                edit = entry.edits[entry.currentEditIndex];
+                await Promise.resolve(edit.undo());
+                entry.currentEditIndex -= 1;
+                entry.lastEditId = edit.id;
+                entry.lastLabel = edit.label || '';
+                entry.lastKind = 'undo';
+                _refreshCustomEditorDirty(entry);
+                if (!entry.dirty) await _disposeCustomEditorBackup(entry);
+            } else {
+                entry.lastKind = 'undo';
+                _refreshCustomEditorDirty(entry);
+            }
+            _sendCustomEditorState(entry, 'undo', { editId: edit ? edit.id : 0 });
+            value = _customEditorStatePayload(entry, 'undo', { editId: edit ? edit.id : 0 });
+        } else if (action === 'redo') {
+            let edit = null;
+            const nextIndex = entry.currentEditIndex + 1;
+            if (nextIndex < entry.edits.length) {
+                edit = entry.edits[nextIndex];
+                await Promise.resolve(edit.redo());
+                entry.currentEditIndex = nextIndex;
+                entry.lastEditId = edit.id;
+                entry.lastLabel = edit.label || '';
+                entry.lastKind = 'redo';
+                _refreshCustomEditorDirty(entry);
+            } else {
+                entry.lastKind = 'redo';
+                _refreshCustomEditorDirty(entry);
+            }
+            _sendCustomEditorState(entry, 'redo', { editId: edit ? edit.id : 0 });
+            value = _customEditorStatePayload(entry, 'redo', { editId: edit ? edit.id : 0 });
         } else if (action === 'state') {
             value = _customEditorStatePayload(entry, 'state');
         } else {

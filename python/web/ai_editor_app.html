@@ -3558,7 +3558,25 @@ function _undoPush(force){
   if(_undoStack.length>_UNDO_MAX)_undoStack.shift();
   _undoLastPush=now;
 }
-function editorUndo(){
+async function runCustomEditorEditLifecycle(tab,action){
+  const viewId=customEditorWebviewIdFromTab(tab);
+  const viewType=customEditorViewTypeFromTab(tab);
+  const uri=customEditorUriFromTab(tab);
+  const method=action==='redo'?'redo_extension_custom_editor':'undo_extension_custom_editor';
+  const r=await call(method,viewId,viewType,uri);
+  if(!callSucceeded(r)){
+    showToast((action==='redo'?'Redo':'Undo')+' failed: '+callFailedMessage(r,'custom editor provider unavailable'),'error');
+    return r||{error:'custom editor provider unavailable'};
+  }
+  applyCustomEditorState((r&&r.state)||r);
+  return r;
+}
+async function editorUndo(){
+  const active=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(active)){
+    await runCustomEditorEditLifecycle(active,'undo');
+    return;
+  }
   const ta=$('editor-text');if(!ta||!_undoStack.length)return;
   _redoStack.push({content:ta.value,cursor:ta.selectionStart});
   const snap=_undoStack.pop();
@@ -3579,7 +3597,12 @@ function editorUndo(){
   if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(500);
 }
-function editorRedo(){
+async function editorRedo(){
+  const active=tabs.find(t=>t.id===activeTab);
+  if(isExtensionCustomEditorTab(active)){
+    await runCustomEditorEditLifecycle(active,'redo');
+    return;
+  }
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
   _undoStack.push({content:ta.value,cursor:ta.selectionStart});
   const snap=_redoStack.pop();
@@ -7657,6 +7680,13 @@ function applyCustomEditorState(data){
       ce[key.replace(/[A-Z]/g,m=>'_'+m.toLowerCase())]=!!data[key];
     }
   });
+  ['canUndo','canRedo'].forEach(key=>{
+    if(Object.prototype.hasOwnProperty.call(data,key)){
+      ce[key]=!!data[key];
+      ce[key.replace(/[A-Z]/g,m=>'_'+m.toLowerCase())]=!!data[key];
+    }
+  });
+  if(Object.prototype.hasOwnProperty.call(data,'currentEditIndex'))ce.currentEditIndex=Number(data.currentEditIndex)||0;
   tab.customEditor=ce;
   const viewId=customEditorWebviewIdFromTab(tab);
   if(viewId&&data.uri)tab.webview={...(tab.webview||{}),uri:data.uri};
@@ -10551,6 +10581,10 @@ document.addEventListener('keydown',e=>{
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
   if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
   if((e.key==='o'||e.key==='O')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();openDocumentSymbolPicker();return}
+  if(isExtensionCustomEditorTab(tabs.find(t=>t.id===activeTab))){
+    if(e.key==='z'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();editorUndo();return}
+    if((e.key==='y'&&e.ctrlKey)||(e.key==='z'&&e.ctrlKey&&e.shiftKey)){e.preventDefault();editorRedo();return}
+  }
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
   if(e.key==='Escape'&&_editorColorPresentationMenu){e.preventDefault();closeEditorColorPresentationMenu();return}
   if(e.key==='Escape'&&isWorkspaceSymbolPickerOpen()){e.preventDefault();closeWorkspaceSymbolPicker();return}

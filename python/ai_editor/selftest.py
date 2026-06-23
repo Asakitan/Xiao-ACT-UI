@@ -360,11 +360,15 @@ class _FakeNodeCustomEditorHost:
             "viewType": view_type or "selftest.customNbt",
             "uri": uri or "file:///fake.nbt",
             "dirty": False,
+            "canUndo": False,
+            "canRedo": action == "undo",
             "state": {
                 "viewId": view_id or "custom-selftest-1",
                 "viewType": view_type or "selftest.customNbt",
                 "uri": uri or "file:///fake.nbt",
                 "dirty": False,
+                "canUndo": False,
+                "canRedo": action == "undo",
             },
         }
 
@@ -397,6 +401,7 @@ def test_app_settings_parity() -> None:
         "custom_editor_state", "list_custom_editor_states",
         "save_extension_custom_editor", "revert_extension_custom_editor",
         "backup_extension_custom_editor", "save_extension_custom_editor_as",
+        "undo_extension_custom_editor", "redo_extension_custom_editor",
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
@@ -2522,6 +2527,9 @@ console.log("frontend auto-close behavior ok");
            and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html
            and "function saveCustomEditorTab(tab)" in html
            and "call('save_extension_custom_editor',viewId,viewType,uri)" in html
+           and "runCustomEditorEditLifecycle(active,'undo')" in html
+           and "undo_extension_custom_editor" in html
+           and "redo_extension_custom_editor" in html
            and "event==='custom_editor_changed'" in html
            and "applyCustomEditorState(data)" in html)
     with tempfile.TemporaryDirectory() as webview_tmp, \
@@ -6882,6 +6890,12 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_lifecycle_content_state = node_host.custom_editor_state(
                     view_id=node_lifecycle_view_id)
+                node_lifecycle_content_save = api.save_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_content_saved_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
                 try:
                     node_lifecycle_edit_command = api._ext_host.commands.execute(
                         "selftest.node.lifecycleEdit",
@@ -6895,6 +6909,18 @@ module.exports = { activate, deactivate };
                         == "edit"),
                     timeout=3.0)
                 node_lifecycle_edit_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                node_lifecycle_undo = api.undo_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_undo_state = node_host.custom_editor_state(
+                    view_id=node_lifecycle_view_id)
+                node_lifecycle_redo = api.redo_extension_custom_editor(
+                    node_lifecycle_view_id,
+                    "selftest.node.lifecycleEditor",
+                    node_lifecycle_uri)
+                node_lifecycle_redo_state = node_host.custom_editor_state(
                     view_id=node_lifecycle_view_id)
                 node_lifecycle_save = api.save_extension_custom_editor(
                     node_lifecycle_view_id,
@@ -7205,7 +7231,7 @@ module.exports = { activate, deactivate };
                        }, ensure_ascii=False))
                 node_lifecycle_output = "".join(
                     node_host._output_channels.get("node-tree-selftest", []))
-                _check("node host bridges custom editor save lifecycle",
+                _check("node host bridges custom editor edit lifecycle",
                        node_lifecycle_editor.get("ok") is True
                        and node_lifecycle_view_id
                        and 'data-view="lifecycle-editor"' in node_lifecycle_html
@@ -7214,11 +7240,21 @@ module.exports = { activate, deactivate };
                        and node_lifecycle_content_command is True
                        and node_lifecycle_content_dirty
                        and node_lifecycle_content_state.get("kind") == "content"
+                       and node_lifecycle_content_save.get("ok") is True
+                       and node_lifecycle_content_saved_state.get("dirty") is False
                        and node_lifecycle_edit_command is True
                        and node_lifecycle_edit_dirty
                        and node_lifecycle_edit_state.get("kind") == "edit"
                        and node_lifecycle_edit_state.get("label") == "Life Edit"
                        and int(node_lifecycle_edit_state.get("edits") or 0) >= 1
+                       and node_lifecycle_edit_state.get("canUndo") is True
+                       and node_lifecycle_undo.get("ok") is True
+                       and node_lifecycle_undo_state.get("dirty") is False
+                       and node_lifecycle_undo_state.get("canUndo") is False
+                       and node_lifecycle_undo_state.get("canRedo") is True
+                       and node_lifecycle_redo.get("ok") is True
+                       and node_lifecycle_redo_state.get("dirty") is True
+                       and node_lifecycle_redo_state.get("canUndo") is True
                        and node_lifecycle_save.get("ok") is True
                        and node_lifecycle_saved_state.get("dirty") is False
                        and node_lifecycle_backup.get("ok") is True
@@ -7227,6 +7263,8 @@ module.exports = { activate, deactivate };
                        and node_lifecycle_revert.get("ok") is True
                        and node_lifecycle_reverted_state.get("dirty") is False
                        and "life:save:" in node_lifecycle_output
+                       and "life:undo" in node_lifecycle_output
+                       and "life:redo" in node_lifecycle_output
                        and "life:backup:" in node_lifecycle_output
                        and "life:revert:" in node_lifecycle_output
                        and "life:backup-delete" in node_lifecycle_output,
@@ -7234,7 +7272,13 @@ module.exports = { activate, deactivate };
                            "result": node_lifecycle_editor,
                            "initial": node_lifecycle_initial_state,
                            "content": node_lifecycle_content_state,
+                           "content_save": node_lifecycle_content_save,
+                           "content_saved": node_lifecycle_content_saved_state,
                            "edit": node_lifecycle_edit_state,
+                           "undo": node_lifecycle_undo,
+                           "undo_state": node_lifecycle_undo_state,
+                           "redo": node_lifecycle_redo,
+                           "redo_state": node_lifecycle_redo_state,
                            "save": node_lifecycle_save,
                            "saved": node_lifecycle_saved_state,
                            "backup": node_lifecycle_backup,
