@@ -215,6 +215,23 @@ dictionary@ state()
         assert script_record.get("sao_menu", {}).get("name") == "脚本演示", script_record
         assert manager.load_plugin("capture_demo"), manager.status()
         assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
+        invalidate_events = []
+        invalidate_token = bus.subscribe(
+            "plugin_ui_invalidate", invalidate_events.append, owner_id="selftest_overlay_dedupe")
+        current_overlay = manager.render_registry.overlays("unioverlay")[0]["spec"]
+        before_overlay_status = manager.render_registry.status()
+        manager._set_overlay("capture_demo", "unioverlay", current_overlay)
+        after_same_status = manager.render_registry.status()
+        assert after_same_status.get("overlay_unchanged_count") == (
+            before_overlay_status.get("overlay_unchanged_count", 0) + 1
+        ), after_same_status
+        assert not invalidate_events, invalidate_events
+        changed_overlay = dict(current_overlay)
+        changed_overlay["title"] = "Demo Overlay Changed"
+        manager._set_overlay("capture_demo", "unioverlay", changed_overlay)
+        assert len(invalidate_events) == 1, invalidate_events
+        assert invalidate_events[0].get("payload", {}).get("reason") == "overlay_set", invalidate_events
+        bus.unsubscribe(invalidate_token)
         assert manager.list_ui_panels(), manager.list_ui_panels()
         assert manager.list_hotkeys(), manager.list_hotkeys()
         assert manager._timers.get("capture_demo"), manager._timers

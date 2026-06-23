@@ -66,6 +66,9 @@ class RenderHookRegistry:
         self._overlays: Dict[str, Dict[str, dict]] = {}  # surface -> plugin_id -> spec
         self._seq = 0
         self._slow_hook_ms = max(0.0, float(slow_hook_ms or 0.0))
+        self._overlay_set_count = 0
+        self._overlay_changed_count = 0
+        self._overlay_unchanged_count = 0
 
     # ── registration ─────────────────────────────────────────────────────
     def register_hook(self, plugin_id: str, surface: str, callback: HookCallback,
@@ -95,10 +98,23 @@ class RenderHookRegistry:
         return False
 
     def set_overlay(self, plugin_id: str, surface: str, spec: Any) -> dict:
-        normalized = normalize_ui_spec(spec)
-        with self._lock:
-            self._overlays.setdefault(_surface_id(surface), {})[str(plugin_id or "")] = normalized
+        normalized, _changed = self.set_overlay_with_status(plugin_id, surface, spec)
         return normalized
+
+    def set_overlay_with_status(self, plugin_id: str, surface: str, spec: Any) -> tuple[dict, bool]:
+        normalized = normalize_ui_spec(spec)
+        surface_id = _surface_id(surface)
+        plugin_key = str(plugin_id or "")
+        with self._lock:
+            bucket = self._overlays.setdefault(surface_id, {})
+            changed = bucket.get(plugin_key) != normalized
+            bucket[plugin_key] = normalized
+            self._overlay_set_count += 1
+            if changed:
+                self._overlay_changed_count += 1
+            else:
+                self._overlay_unchanged_count += 1
+        return normalized, changed
 
     def clear_overlay(self, plugin_id: str, surface: Optional[str] = None) -> None:
         plugin_id = str(plugin_id or "")
@@ -214,12 +230,18 @@ class RenderHookRegistry:
         with self._lock:
             hooks_by_surface = {surface: list(hooks) for surface, hooks in self._hooks.items()}
             overlays_by_surface = {surface: dict(bucket) for surface, bucket in self._overlays.items()}
+            overlay_set_count = self._overlay_set_count
+            overlay_changed_count = self._overlay_changed_count
+            overlay_unchanged_count = self._overlay_unchanged_count
         total_hooks = sum(len(v) for v in hooks_by_surface.values())
         total_overlays = sum(len(v) for v in overlays_by_surface.values())
         failures = sum(h.failures for hooks in hooks_by_surface.values() for h in hooks)
         return {
             "hook_count": total_hooks,
             "overlay_count": total_overlays,
+            "overlay_set_count": overlay_set_count,
+            "overlay_changed_count": overlay_changed_count,
+            "overlay_unchanged_count": overlay_unchanged_count,
             "hook_failures": failures,
             "surfaces": self.surfaces(),
         }

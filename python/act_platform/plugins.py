@@ -1921,8 +1921,9 @@ class PluginManager:
         return token
 
     def _set_overlay(self, plugin_id: str, surface: str, spec: Any) -> dict[str, Any]:
-        normalized = self.render_registry.set_overlay(plugin_id, surface, spec)
-        self._publish_plugin_ui_invalidate(plugin_id, surface, "overlay_set")
+        normalized, changed = self.render_registry.set_overlay_with_status(plugin_id, surface, spec)
+        if changed:
+            self._publish_plugin_ui_invalidate(plugin_id, surface, "overlay_set")
         return normalized
 
     def _clear_overlay(self, plugin_id: str, surface: Optional[str] = None) -> None:
