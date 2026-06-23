@@ -88,6 +88,21 @@ def _create_context(moderngl: Any) -> Any:
     return moderngl.create_standalone_context(require=330, backend="egl")
 
 
+def _release_resource(resource: Any) -> bool:
+    released = False
+    for name in ("release", "close"):
+        fn = getattr(resource, name, None)
+        if not callable(fn):
+            continue
+        try:
+            fn()
+            released = True
+            break
+        except Exception:
+            pass
+    return released
+
+
 def _ensure_state() -> Any:
     global _GLOBAL_FAILED
     if _DISABLED or np is None or Image is None:
@@ -494,16 +509,49 @@ def register_builtin_renderers(register: Any) -> tuple[str, ...]:
     return (_RENDERER_NAME,)
 
 
-def _reset_for_tests() -> None:
+def reset_builtin_renderer_resources(
+    *,
+    clear_import_cache: bool = False,
+    reset_failures: bool = False,
+) -> dict[str, Any]:
+    """Release persistent ModernGL resources owned by the current thread.
+
+    Per-frame textures, framebuffers, vertex buffers, and VAOs are already
+    released in the render path. This hook handles longer-lived context/program
+    state once no model3d layers are visible, so plugin enable/disable cycles do
+    not pin GPU resources indefinitely.
+    """
+
     global _GLOBAL_FAILED, _MODERNGL, _IMPORT_ERROR
-    _GLOBAL_FAILED = False
-    _MODERNGL = None
-    _IMPORT_ERROR = ""
-    _TOPOLOGY_CACHE.clear()
-    _TLS.__dict__.clear()
+    released: list[str] = []
+    with _RENDER_LOCK, _get_wgl_serialize_lock():
+        state = getattr(_TLS, "state", None)
+        if isinstance(state, Mapping):
+            for key in ("program", "ctx"):
+                resource = state.get(key)
+                if resource is not None and _release_resource(resource):
+                    released.append(key)
+        _TLS.__dict__.clear()
+        _TOPOLOGY_CACHE.clear()
+        if reset_failures:
+            _GLOBAL_FAILED = False
+            _IMPORT_ERROR = ""
+        if clear_import_cache:
+            _MODERNGL = None
+    return {
+        "ok": True,
+        "renderer": _RENDERER_NAME,
+        "released": tuple(released),
+        "topology_cache_size": len(_TOPOLOGY_CACHE),
+    }
+
+
+def _reset_for_tests() -> None:
+    reset_builtin_renderer_resources(clear_import_cache=True, reset_failures=True)
 
 
 __all__ = [
     "register_builtin_renderers",
     "render_moderngl_model3d",
+    "reset_builtin_renderer_resources",
 ]

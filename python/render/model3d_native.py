@@ -9,6 +9,7 @@ own presentation, z-order, and input.
 from __future__ import annotations
 
 import importlib
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, is_dataclass
 from threading import RLock
@@ -112,6 +113,35 @@ def clear_native_model3d_renderers() -> None:
 def native_model3d_renderer_status() -> dict[str, Any]:
     with _LOCK:
         return dict(_LAST_STATUS)
+
+
+def reset_native_model3d_resources() -> dict[str, Any]:
+    """Release persistent resources held by already-imported native providers.
+
+    This does not unregister renderers. It is intended for overlay lifecycle
+    cleanup after the final model3d layer has been destroyed; the next render
+    can recreate provider state lazily.
+    """
+
+    results: dict[str, Any] = {}
+    errors: list[str] = []
+    for module_name in _BUILTIN_PROVIDER_MODULES:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        reset = getattr(module, "reset_builtin_renderer_resources", None)
+        if not callable(reset):
+            continue
+        try:
+            results[module_name] = reset()
+        except Exception as exc:
+            errors.append(f"{module_name}: {exc}")
+    return {
+        "ok": not errors,
+        "provider_count": len(results),
+        "providers": results,
+        "errors": errors,
+    }
 
 
 def bootstrap_builtin_native_model3d_renderers(*, force: bool = False) -> dict[str, Any]:
@@ -323,6 +353,7 @@ __all__ = [
     "clear_native_model3d_renderers",
     "native_model3d_renderer_status",
     "register_native_model3d_renderer",
+    "reset_native_model3d_resources",
     "try_render_native_model3d_node",
     "unregister_native_model3d_renderer",
 ]

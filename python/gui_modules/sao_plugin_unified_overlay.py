@@ -48,6 +48,11 @@ try:
 except Exception:
     render_model3d_node = None  # type: ignore[assignment]
 
+try:
+    from render.model3d_native import reset_native_model3d_resources
+except Exception:
+    reset_native_model3d_resources = None  # type: ignore[assignment]
+
 _FONT_CACHE: dict[tuple[int, bool], Any] = {}
 _FONT_FILES = {
     False: ("msyh.ttc", "segoeui.ttf", "arial.ttf"),
@@ -657,9 +662,11 @@ class PluginUnifiedOverlayHost:
                 pass
 
     def _destroy_layer(self, key: str) -> None:
-        state = self._layers.pop(str(key), None)
-        self._position_overrides.pop(str(key), None)
-        self._drag_state.pop(str(key), None)
+        key_text = str(key)
+        state = self._layers.pop(key_text, None)
+        was_model3d = key_text.startswith("model3d:")
+        self._position_overrides.pop(key_text, None)
+        self._drag_state.pop(key_text, None)
         if not state:
             return
         layer = state.get("layer")
@@ -675,6 +682,8 @@ class PluginUnifiedOverlayHost:
                 overlay.destroy_layer(layer_name)
             except Exception:
                 pass
+        if was_model3d and not self._has_model3d_layers():
+            self._release_model3d_resources()
 
     def _destroy_all_layers(self) -> None:
         for key in list(self._layers):
@@ -698,6 +707,17 @@ class PluginUnifiedOverlayHost:
         for key in list(self._layers):
             if self._plugin_id_from_layer_key(key) == pid:
                 self._destroy_layer(key)
+
+    def _has_model3d_layers(self) -> bool:
+        return any(str(key).startswith("model3d:") for key in self._layers)
+
+    def _release_model3d_resources(self) -> None:
+        if not callable(reset_native_model3d_resources):
+            return
+        try:
+            reset_native_model3d_resources()
+        except Exception:
+            pass
 
     def _lifecycle_targets_surface(self, payload: Mapping[str, Any]) -> bool:
         surface = str(payload.get("surface") or "")

@@ -2,6 +2,7 @@
 """Focused selftests for plugin unioverlay canvas/model3d support."""
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import struct
@@ -38,6 +39,7 @@ from render.model3d_native import (
     clear_native_model3d_renderers,
     native_model3d_renderer_status,
     register_native_model3d_renderer,
+    reset_native_model3d_resources,
 )
 from render.model3d_overlay import render_model3d_node
 
@@ -645,6 +647,26 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(native_model3d_renderer_status()["renderer"], "builtin-fake-offscreen")
 
+    def test_reset_native_model3d_resources_calls_loaded_provider(self) -> None:
+        fake_module = ModuleType("render.model3d_native_moderngl")
+        reset_calls = []
+
+        def reset_builtin_renderer_resources():
+            reset_calls.append("reset")
+            return {"ok": True, "released": ("ctx",)}
+
+        fake_module.reset_builtin_renderer_resources = reset_builtin_renderer_resources
+        with mock.patch.dict(sys.modules, {"render.model3d_native_moderngl": fake_module}):
+            result = reset_native_model3d_resources()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["provider_count"], 1)
+        self.assertEqual(reset_calls, ["reset"])
+        self.assertEqual(
+            result["providers"]["render.model3d_native_moderngl"]["released"],
+            ("ctx",),
+        )
+
     def test_explicit_native_renderer_is_not_preempted_by_builtin_bootstrap(self) -> None:
         from PIL import Image
 
@@ -811,6 +833,37 @@ class Model3DBackendTests(unittest.TestCase):
 
         self.assertEqual(image.size, (48, 64))
         self.assertEqual(image.getpixel((0, 0)), (18, 48, 88, 220))
+
+    def test_moderngl_reset_releases_tls_resources_and_clears_cache(self) -> None:
+        from render import model3d_native_moderngl as provider
+
+        class FakeResource:
+            def __init__(self):
+                self.release_calls = 0
+
+            def release(self):
+                self.release_calls += 1
+
+        program = FakeResource()
+        ctx = FakeResource()
+        provider._TLS.state = {"program": program, "ctx": ctx}
+        provider._TOPOLOGY_CACHE[("fixture", "preview")] = ([], [])
+
+        with mock.patch.object(
+            provider,
+            "_get_wgl_serialize_lock",
+            return_value=contextlib.nullcontext(),
+        ):
+            result = provider.reset_builtin_renderer_resources()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["released"], ("program", "ctx"))
+        self.assertEqual(result["topology_cache_size"], 0)
+        self.assertEqual(program.release_calls, 1)
+        self.assertEqual(ctx.release_calls, 1)
+        self.assertFalse(hasattr(provider._TLS, "state"))
+        self.assertFalse(provider._TOPOLOGY_CACHE)
+        provider._reset_for_tests()
 
     def test_moderngl_provider_reuses_preview_topology_batches(self) -> None:
         from render import model3d_native_moderngl as provider
@@ -3037,6 +3090,55 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(set(host._layers), {"model3d:other/avatar"})
         self.assertEqual(fake_overlay.destroyed, ["plugin canvas plug meter"])
         self.assertTrue(host._dirty)
+
+    def test_host_destroying_last_model3d_layer_resets_native_resources(self) -> None:
+        class FakeLayer:
+            def __init__(self):
+                self.proxy_destroyed = False
+
+            def destroy_input_proxy(self):
+                self.proxy_destroyed = True
+
+        class FakeOverlay:
+            def __init__(self):
+                self.destroyed = []
+
+            def destroy_layer(self, name):
+                self.destroyed.append(name)
+
+            def force_host_input_passthrough(self):
+                return None
+
+        fake_overlay = FakeOverlay()
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+        host._overlay = fake_overlay
+        host._layers = {
+            "canvas:plug/meter": {"layer": FakeLayer(), "layer_name": "plugin canvas plug meter"},
+            "model3d:plug/avatar": {"layer": FakeLayer(), "layer_name": "plugin model plug avatar"},
+            "model3d:other/avatar": {"layer": FakeLayer(), "layer_name": "plugin model other avatar"},
+        }
+
+        with mock.patch.object(
+            overlay_mod,
+            "reset_native_model3d_resources",
+            return_value={"ok": True},
+        ) as reset:
+            host._destroy_layer("canvas:plug/meter")
+            self.assertEqual(reset.call_count, 0)
+
+            host._destroy_layer("model3d:plug/avatar")
+            self.assertEqual(reset.call_count, 0)
+
+            host._destroy_layer("model3d:other/avatar")
+            self.assertEqual(reset.call_count, 1)
+
+        self.assertFalse(host._layers)
+        self.assertEqual(fake_overlay.destroyed, [
+            "plugin canvas plug meter",
+            "plugin model plug avatar",
+            "plugin model other avatar",
+        ])
 
     @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
     def test_canvas_only_noop_refresh_skips_model_probe_and_layer_churn(self) -> None:
