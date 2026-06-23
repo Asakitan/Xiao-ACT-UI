@@ -198,6 +198,26 @@ def run_selftest() -> dict[str, Any]:
                 resume_state = _state(resume_action)
                 if resume_state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "snake_resume_timer_active", "state": resume_state}
+                queued_first = _state(act_plugin_action(
+                    owner, "script.game.direction", {"direction": "up"}, plugin_id=plugin_id))
+                queued_second = _state(act_plugin_action(
+                    owner, "script.game.direction", {"direction": "left"}, plugin_id=plugin_id))
+                if queued_second.get("pending_turns") != ["up", "left"]:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "snake_buffered_turns_queue",
+                        "first": queued_first,
+                        "second": queued_second,
+                    }
+                tick_one = _state(act_plugin_action(
+                    owner, "script.game.tick", {}, plugin_id=plugin_id))
+                if tick_one.get("direction") != "up" or tick_one.get("next_direction") != "left":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_buffered_turns_first_tick", "state": tick_one}
+                tick_two = _state(act_plugin_action(
+                    owner, "script.game.tick", {}, plugin_id=plugin_id))
+                if tick_two.get("direction") != "left":
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "snake_buffered_turns_second_tick", "state": tick_two}
                 action = act_plugin_action(
                     owner, "script.game.direction", {"direction": "down"}, plugin_id=plugin_id)
             elif plugin_id == "script_stickwoman_csharp":
@@ -266,6 +286,7 @@ def run_selftest() -> dict[str, Any]:
                 "render_count": state.get("render_count"),
                 "spec_build_count": state.get("spec_build_count"),
                 "cache_hit_count": state.get("cache_hit_count"),
+                "pending_turns": state.get("pending_turns"),
             }
         finally:
             act_plugin_action(
