@@ -758,6 +758,7 @@ def _parse_obj_metadata(path: Path) -> dict[str, Any]:
 
 
 _NUMBER_RE = re.compile(r"[-+]?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][-+]?\d+)?")
+_FBX_TICKS_PER_SECOND = 46186158000.0
 
 
 def _numbers(text: str, *, limit: int = 200000) -> list[float]:
@@ -769,6 +770,59 @@ def _numbers(text: str, *, limit: int = 200000) -> list[float]:
             continue
         if len(out) >= limit:
             break
+    return out
+
+
+def _fbx_clean_name(value: Any) -> str:
+    return str(value or "").split("::", 1)[-1].strip()
+
+
+def _fbx_find_matching_brace(text: str, open_index: int) -> int:
+    depth = 0
+    for index in range(max(0, int(open_index or 0)), len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth <= 0:
+                return index
+    return len(text)
+
+
+def _iter_fbx_objects(text: str, kind: str) -> list[tuple[int, str, str, str]]:
+    pattern = re.compile(
+        rf"\b{re.escape(kind)}:\s*(-?\d+)\s*,\s*\"([^\"]*)\"\s*,\s*\"([^\"]*)\"\s*{{",
+        re.S,
+    )
+    out: list[tuple[int, str, str, str]] = []
+    for match in pattern.finditer(text):
+        try:
+            object_id = int(match.group(1))
+        except Exception:
+            continue
+        body_start = match.end() - 1
+        body_end = _fbx_find_matching_brace(text, body_start)
+        out.append((object_id, _fbx_clean_name(match.group(2)), str(match.group(3) or ""), text[body_start + 1:body_end]))
+    return out
+
+
+def _fbx_property_numbers(body: str, property_name: str, *, limit: int = 200000) -> list[float]:
+    match = re.search(rf"\b{re.escape(property_name)}:\s*\*\d+\s*{{\s*a:\s*([^}}]*)}}", body, re.S)
+    if match:
+        return _numbers(match.group(1), limit=limit)
+    match = re.search(rf"\b{re.escape(property_name)}:\s*([^\n}}]+)", body)
+    return _numbers(match.group(1), limit=limit) if match else []
+
+
+def _fbx_connections(text: str) -> list[tuple[str, int, int, str]]:
+    out: list[tuple[str, int, int, str]] = []
+    pattern = re.compile(r'C:\s*"([^"]+)"\s*,\s*(-?\d+)\s*,\s*(-?\d+)(?:\s*,\s*"([^"]+)")?')
+    for match in pattern.finditer(text):
+        try:
+            out.append((str(match.group(1) or ""), int(match.group(2)), int(match.group(3)), str(match.group(4) or "")))
+        except Exception:
+            continue
     return out
 
 
@@ -824,6 +878,7 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
 
     nodes: list[str] = []
     bones: list[str] = []
+    model_names_by_id: dict[int, str] = {}
     for match in re.finditer(r'Model:\s*[^"\n]*"([^"]+)"\s*,\s*"([^"]+)"', text):
         raw_name = str(match.group(1) or "")
         kind = str(match.group(2) or "")
@@ -833,6 +888,13 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
         nodes.append(name)
         if "limb" in kind.lower() or "bone" in kind.lower():
             bones.append(name)
+    for object_id, name, kind, _body in _iter_fbx_objects(text, "Model"):
+        if name:
+            model_names_by_id[object_id] = name
+            if name not in nodes:
+                nodes.append(name)
+            if "limb" in kind.lower() or "bone" in kind.lower():
+                bones.append(name)
 
     clips: list[str] = []
     for match in re.finditer(r'AnimationStack:\s*[^"\n]*"([^"]+)"', text):
@@ -844,6 +906,8 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
         name = str(match.group(1) or "").strip()
         if name:
             clips.append(name)
+    clip_keyframes = _fbx_animation_keyframes(text, model_names_by_id)
+    clips = _merge_unique(clips, clip_keyframes.keys())
 
     box = _bbox(points)
     return {
@@ -862,6 +926,7 @@ def _parse_ascii_fbx_metadata(path: Path) -> dict[str, Any]:
         "nodes": _unique_strings(nodes),
         "bone_names": _unique_strings(bones),
         "clips": _unique_strings(clips),
+        "clip_keyframes": dict(clip_keyframes),
         "errors": tuple(errors),
     }
 
@@ -2126,6 +2191,190 @@ def _canonical_from_token(token: Any) -> str:
             if norm == _normalize_bone_token(alias):
                 return canonical
     return raw if raw in HUMANOID_BONES else ""
+
+
+def _fbx_axis_from_property(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "|" in text:
+        text = text.rsplit("|", 1)[-1]
+    if text.endswith("x"):
+        return "x"
+    if text.endswith("y"):
+        return "y"
+    if text.endswith("z"):
+        return "z"
+    return ""
+
+
+def _fbx_curve_node_kind(name: str, property_name: str) -> str:
+    text = f"{name} {property_name}".lower()
+    if "translation" in text or text.rstrip().endswith(" t") or "::t" in text or "|t" in text:
+        return "translation"
+    if "rotation" in text or text.rstrip().endswith(" r") or "::r" in text or "|r" in text:
+        return "rotation"
+    return ""
+
+
+def _fbx_euler_degrees_to_quat(x_deg: float, y_deg: float, z_deg: float) -> tuple[float, float, float, float]:
+    # FBX exports commonly store local Euler channels in degrees.  XYZ order is
+    # a conservative offline preview default; native providers can later apply
+    # the exact model rotation order.
+    hx = math.radians(float(x_deg or 0.0)) * 0.5
+    hy = math.radians(float(y_deg or 0.0)) * 0.5
+    hz = math.radians(float(z_deg or 0.0)) * 0.5
+    sx, cx = math.sin(hx), math.cos(hx)
+    sy, cy = math.sin(hy), math.cos(hy)
+    sz, cz = math.sin(hz), math.cos(hz)
+    return _quat_normalize((
+        sx * cy * cz + cx * sy * sz,
+        cx * sy * cz - sx * cy * sz,
+        cx * cy * sz + sx * sy * cz,
+        cx * cy * cz - sx * sy * sz,
+    ))
+
+
+def _fbx_curve_samples(body: str) -> list[tuple[float, float]]:
+    times = _fbx_property_numbers(body, "KeyTime", limit=_MESH_PREVIEW_FACE_LIMIT)
+    values = _fbx_property_numbers(body, "KeyValueFloat", limit=_MESH_PREVIEW_FACE_LIMIT)
+    total = min(len(times), len(values))
+    if total <= 0:
+        return []
+    out: list[tuple[float, float]] = []
+    for index in range(total):
+        raw_time = float(times[index])
+        time_value = raw_time / _FBX_TICKS_PER_SECOND if abs(raw_time) > 1000000.0 else raw_time
+        if not math.isfinite(time_value):
+            time_value = float(index)
+        value = float(values[index])
+        if math.isfinite(value):
+            out.append((time_value, value))
+    return out
+
+
+def _fbx_value_at(samples: list[tuple[float, float]], time_value: float) -> float:
+    if not samples:
+        return 0.0
+    best = samples[0][1]
+    for sample_time, value in samples:
+        if sample_time > time_value + 0.000001:
+            break
+        best = value
+    return best
+
+
+def _fbx_stack_for_node(
+    node_id: int,
+    object_parents: Mapping[int, tuple[int, ...]],
+    stack_names: Mapping[int, str],
+) -> str:
+    seen: set[int] = set()
+    pending = [node_id]
+    while pending:
+        current = pending.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        if current in stack_names:
+            return str(stack_names[current])
+        pending.extend(object_parents.get(current, ()))
+    return next(iter(stack_names.values()), "Take 001")
+
+
+def _fbx_animation_keyframes(text: str, model_names_by_id: Mapping[int, str]) -> dict[str, dict[str, Any]]:
+    curves = {
+        object_id: _fbx_curve_samples(body)
+        for object_id, _name, _kind, body in _iter_fbx_objects(text, "AnimationCurve")
+    }
+    curve_nodes = {
+        object_id: name
+        for object_id, name, _kind, _body in _iter_fbx_objects(text, "AnimationCurveNode")
+    }
+    if not curves or not curve_nodes:
+        return {}
+
+    stack_names = {
+        object_id: (name or f"animation_{index}")
+        for index, (object_id, name, _kind, _body) in enumerate(_iter_fbx_objects(text, "AnimationStack"))
+    }
+    if not stack_names:
+        stack_names = {0: "Take 001"}
+
+    object_parents: dict[int, list[int]] = {}
+    curves_by_node: dict[int, dict[str, int]] = {}
+    model_by_node: dict[int, tuple[int, str]] = {}
+    for conn_type, src, dst, prop in _fbx_connections(text):
+        if conn_type == "OO":
+            object_parents.setdefault(src, []).append(dst)
+            if src in curves and dst in curve_nodes:
+                axis = _fbx_axis_from_property(prop)
+                if axis:
+                    curves_by_node.setdefault(dst, {})[axis] = src
+            elif src in curve_nodes and dst in model_names_by_id:
+                model_by_node[src] = (dst, prop)
+        elif conn_type == "OP":
+            if src in curves and dst in curve_nodes:
+                axis = _fbx_axis_from_property(prop)
+                if axis:
+                    curves_by_node.setdefault(dst, {})[axis] = src
+            elif src in curve_nodes and dst in model_names_by_id:
+                model_by_node[src] = (dst, prop)
+
+    clips_by_name: dict[str, dict[float, dict[str, dict[str, tuple[float, ...]]]]] = {}
+    sample_counts: dict[str, int] = {}
+    for node_id, axes in curves_by_node.items():
+        model_entry = model_by_node.get(node_id)
+        if model_entry is None:
+            continue
+        model_id, model_prop = model_entry
+        canonical = _canonical_from_token(model_names_by_id.get(model_id, ""))
+        if not canonical:
+            continue
+        kind = _fbx_curve_node_kind(curve_nodes.get(node_id, ""), model_prop)
+        if kind not in {"translation", "rotation"}:
+            continue
+        clip_name = _fbx_stack_for_node(node_id, object_parents, stack_names)
+        frames_by_time = clips_by_name.setdefault(clip_name, {})
+        axis_samples = {axis: curves.get(curve_id, []) for axis, curve_id in axes.items()}
+        times = sorted({time_value for samples in axis_samples.values() for time_value, _value in samples})
+        if not times:
+            continue
+        base = {
+            axis: (_fbx_value_at(samples, times[0]) if samples else 0.0)
+            for axis, samples in axis_samples.items()
+        }
+        for time_value in times:
+            x = _fbx_value_at(axis_samples.get("x", []), time_value) - float(base.get("x", 0.0))
+            y = _fbx_value_at(axis_samples.get("y", []), time_value) - float(base.get("y", 0.0))
+            z = _fbx_value_at(axis_samples.get("z", []), time_value) - float(base.get("z", 0.0))
+            frame = frames_by_time.setdefault(time_value, {"offsets": {}, "rotations": {}})
+            if kind == "translation":
+                frame["offsets"][canonical] = (x, y, z)
+            else:
+                frame["rotations"][canonical] = _fbx_euler_degrees_to_quat(x, y, z)
+        sample_counts[clip_name] = sample_counts.get(clip_name, 0) + sum(len(samples) for samples in axis_samples.values())
+
+    out: dict[str, dict[str, Any]] = {}
+    for clip_name, frames_by_time in clips_by_name.items():
+        frames: list[dict[str, Any]] = []
+        for time_value, groups in sorted(frames_by_time.items()):
+            frame: dict[str, Any] = {"time": float(time_value)}
+            offsets = groups.get("offsets") if isinstance(groups.get("offsets"), Mapping) else {}
+            rotations = groups.get("rotations") if isinstance(groups.get("rotations"), Mapping) else {}
+            if offsets:
+                frame["bone_offsets"] = {bone: [float(x) for x in value] for bone, value in sorted(offsets.items())}
+            if rotations:
+                frame["bone_rotations"] = {bone: [float(x) for x in value] for bone, value in sorted(rotations.items())}
+            if len(frame) > 1:
+                frames.append(frame)
+        if frames:
+            out[str(clip_name)] = {
+                "source": "fbx_ascii",
+                "duration": max(float(frame["time"]) for frame in frames),
+                "loop": True,
+                "keyframes": frames,
+                "sample_count": int(sample_counts.get(clip_name, 0)),
+            }
+    return out
 
 
 def _pose_offsets_from_mapping(value: Any) -> dict[str, tuple[float, float, float]]:

@@ -905,6 +905,68 @@ Objects:  {
         self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
         self.assertEqual(plan["bone_map"]["head"], "mixamorig:Head")
 
+    def test_model_metadata_extracts_ascii_fbx_animation_curves_for_retarget(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_fbx_anim_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text(
+                """
+; FBX 7.4.0 project file
+Objects:  {
+    Model: 1, "Model::mixamorig:RightHand", "LimbNode" {}
+    Model: 2, "Model::mixamorig:RightArm", "LimbNode" {}
+    AnimationStack: 10, "AnimStack::Wave", "" {}
+    AnimationLayer: 11, "AnimLayer::BaseLayer", "" {}
+    AnimationCurveNode: 20, "AnimCurveNode::T", "" {}
+    AnimationCurve: 21, "AnimCurve::", "" {
+        KeyTime: *2 { a: 0,46186158000 }
+        KeyValueFloat: *2 { a: 0,0.4 }
+    }
+    AnimationCurveNode: 30, "AnimCurveNode::R", "" {}
+    AnimationCurve: 31, "AnimCurve::", "" {
+        KeyTime: *2 { a: 0,46186158000 }
+        KeyValueFloat: *2 { a: 0,90 }
+    }
+}
+Connections:  {
+    C: "OP",21,20,"d|Y"
+    C: "OP",20,1,"Lcl Translation"
+    C: "OO",20,11
+    C: "OO",11,10
+    C: "OP",31,30,"d|Z"
+    C: "OP",30,2,"Lcl Rotation"
+    C: "OO",30,11
+}
+""",
+                encoding="utf-8",
+            )
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "action": {"name": "Wave", "time": 0.5},
+                "retarget": {"mode": "humanoid_auto", "preserve_proportions": False},
+            })["nodes"][0]
+
+            meta = get_model_metadata(node)
+            action = get_action_metadata(node)
+            pose = evaluate_retarget_pose(node)
+
+        self.assertIn("Wave", meta["clip_keyframes"])
+        clip = meta["clip_keyframes"]["Wave"]
+        self.assertEqual(clip["source"], "fbx_ascii")
+        self.assertEqual(len(clip["keyframes"]), 2)
+        self.assertEqual(clip["keyframes"][0]["bone_offsets"]["right_hand"], [0.0, 0.0, 0.0])
+        self.assertEqual(clip["keyframes"][1]["bone_offsets"]["right_hand"], [0.0, 0.4, 0.0])
+        quat = clip["keyframes"][1]["bone_rotations"]["right_arm"]
+        self.assertAlmostEqual(quat[2], 0.70710678, places=5)
+        self.assertAlmostEqual(quat[3], 0.70710678, places=5)
+        self.assertEqual(action["model_clip"], "Wave")
+        self.assertEqual(action["selected"]["source"], "fbx_ascii")
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_source"], "keyframes")
+        self.assertEqual(pose["motion_sample"]["rotation_count"], 1)
+        self.assertGreater(pose["positions"]["right_hand"][1], pose["rest_positions"]["right_hand"][1])
+
     def test_sidecar_preview_skin_animates_ascii_fbx_preview(self) -> None:
         clear_model3d_metadata_caches()
         clear_native_model3d_renderers()
