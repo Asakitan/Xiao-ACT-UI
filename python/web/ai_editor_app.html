@@ -2547,23 +2547,31 @@ function languageOnEnterRules(lang){
 function languageWordPattern(lang){
   return languageConfiguration(lang).wordPattern||{pattern:DEFAULT_WORD_PATTERN,flags:''};
 }
-function editorWordAtCursor(){
-  const value=ed.value,pos=ed.selectionStart;
+function languageWordRegex(globalFlag){
+  const spec=languageRegexSpec(languageWordPattern(editorLang))||{pattern:DEFAULT_WORD_PATTERN,flags:''};
+  const flags=languageRegexFlags(spec.flags).replace(/g/g,'')+(globalFlag?'g':'');
+  try{return new RegExp(spec.pattern,flags)}catch{return new RegExp(DEFAULT_WORD_PATTERN,globalFlag?'g':'')}
+}
+function editorWordRangeAt(value,start,end){
+  value=String(value||'');
+  const pos=Math.max(0,Math.min(value.length,start));
   const lineStart=pos>0?value.lastIndexOf('\n',pos-1)+1:0;
   let lineEnd=value.indexOf('\n',pos);if(lineEnd===-1)lineEnd=value.length;
   const line=value.slice(lineStart,lineEnd),localPos=pos-lineStart;
-  const spec=languageRegexSpec(languageWordPattern(editorLang))||{pattern:DEFAULT_WORD_PATTERN,flags:''};
-  const flags=languageRegexFlags(spec.flags).replace(/g/g,'')+'g';
-  let re;
-  try{re=new RegExp(spec.pattern,flags)}catch{return ''}
+  const localEnd=Math.max(localPos,(end||start)-lineStart);
+  const re=languageWordRegex(true);
   let match;
   while((match=re.exec(line))){
     const text=match[0]||'';
     if(!text){re.lastIndex++;continue}
-    const start=match.index,end=start+text.length;
-    if(start<=localPos&&localPos<=end)return text;
+    const s=match.index,e=s+text.length;
+    if(s<=localPos&&localEnd<=e)return {start:lineStart+s,end:lineStart+e,text};
   }
-  return '';
+  return null;
+}
+function editorWordAtCursor(){
+  const range=editorWordRangeAt(ed.value,ed.selectionStart,ed.selectionEnd);
+  return range?range.text:'';
 }
 function editorFindSeedText(){
   const selected=ed.value.substring(ed.selectionStart,ed.selectionEnd);
@@ -3020,12 +3028,14 @@ function doReplace(){
   const sel=ed.value.substring(ed.selectionStart,ed.selectionEnd);
   const testRe=new RegExp('^'+regex.source+'$',regex.flags.replace('g',''));
   if(!testRe.test(sel))return;
+  if(_findWholeWordEnabled&&_findWholeWordEnabled()
+      && !_isLanguageWholeWordMatch(ed.value,ed.selectionStart,ed.selectionEnd))return;
   const s=ed.selectionStart;
   ed.value=ed.value.substring(0,s)+sel.replace(testRe,r)+ed.value.substring(ed.selectionEnd);
   ed.selectionStart=s;ed.selectionEnd=s+r.length;updateLineNums();
   // FIND-001: Update N-of-M count after replacement
   const gRegex=_buildFindRegex(true);
-  if(gRegex){const remaining=[...ed.value.matchAll(gRegex)];$('find-count').textContent=remaining.length?remaining.length+' results':'No results'}
+  if(gRegex){const remaining=_findMatches?_findMatches(gRegex,ed.value):[...ed.value.matchAll(gRegex)];$('find-count').textContent=remaining.length?remaining.length+' results':'No results'}
   doFind();
 }
 function doReplaceAll(){
@@ -3034,8 +3044,20 @@ function doReplaceAll(){
   const regex=_buildFindRegex?_buildFindRegex(true):null;
   if(!regex){const q=$('find-input').value;if(!q)return;ed.value=ed.value.split(q).join(r);updateLineNums();$('find-count').textContent='All replaced';return}
   const before=ed.value;
-  ed.value=ed.value.replace(regex,r);updateLineNums();
-  const count=(before.match(regex)||[]).length;
+  const matches=_findMatches?_findMatches(regex,before):[...before.matchAll(regex)];
+  if(matches.length){
+    const singleRe=new RegExp(regex.source,regex.flags.replace('g',''));
+    let cursor=0,next='';
+    matches.forEach(match=>{
+      next+=before.slice(cursor,match.index);
+      next+=match[0].replace(singleRe,r);
+      cursor=match.index+match[0].length;
+    });
+    next+=before.slice(cursor);
+    ed.value=next;
+  }
+  updateLineNums();
+  const count=matches.length;
   $('find-count').textContent=count+' replaced';
 }
 $('find-input').addEventListener('keydown',e=>{if(e.key==='Enter')doFind();if(e.key==='Escape')closeFindBar()});
@@ -7200,17 +7222,27 @@ function _buildFindRegex(globalFlag){
   const q=$('find-input').value;if(!q)return null;
   const useRegex=$('find-regex').classList.contains('active');
   const caseSensitive=$('find-case').classList.contains('active');
-  const wholeWord=$('find-word').classList.contains('active');
   let pattern=q;
   if(!useRegex)pattern=pattern.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  if(wholeWord)pattern='\\b'+pattern+'\\b';
   const flags=(globalFlag?'g':'')+(caseSensitive?'':'i');
   try{return new RegExp(pattern,flags)}catch(e){return null}
+}
+function _findWholeWordEnabled(){
+  const el=$('find-word');return !!(el&&el.classList.contains('active'));
+}
+function _isLanguageWholeWordMatch(value,start,end){
+  const range=editorWordRangeAt(value,start,end);
+  return !!(range&&range.start===start&&range.end===end);
+}
+function _findMatches(regex,value){
+  const matches=[...String(value||'').matchAll(regex)];
+  if(!_findWholeWordEnabled())return matches;
+  return matches.filter(m=>_isLanguageWholeWordMatch(value,m.index,m.index+m[0].length));
 }
 doFind=function(){
   const regex=_buildFindRegex(true);if(!regex){$('find-count').textContent='';return}
   try{
-    const val=ed.value,matches=[...val.matchAll(regex)];
+    const val=ed.value,matches=_findMatches(regex,val);
     const start=ed.selectionEnd;
     const matchIdx=matches.findIndex(m=>m.index>=start);
     const idx=matchIdx>=0?matchIdx:(matches.length?0:-1);
@@ -7226,7 +7258,7 @@ doFind=function(){
 doFindPrev=function(){
   const regex=_buildFindRegex(true);if(!regex){$('find-count').textContent='';return}
   try{
-    const val=ed.value,matches=[...val.matchAll(regex)];
+    const val=ed.value,matches=_findMatches(regex,val);
     if(!matches.length){$('find-count').textContent='No results';return}
     const end=ed.selectionStart;
     let idx=-1;for(let i=matches.length-1;i>=0;i--){if(matches[i].index<end){idx=i;break}}
