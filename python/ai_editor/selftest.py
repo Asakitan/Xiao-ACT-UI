@@ -282,6 +282,7 @@ def test_app_settings_parity() -> None:
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
         "get_extension_contributions",
+        "list_editor_languages",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "get_model_info", "test_connection", "set_mode", "save_config",
@@ -1161,6 +1162,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "provider_tabs_changed'||event==='extension_views_changed" in html
             and "ensureExtensionProviderPanel(data,viewId)" in html
             and "rememberDynamicProvidersFromEventData(data)" in html)
+    _check("frontend loads dynamic editor language contributions",
+            "call('list_editor_languages')" in html
+            and "function applyEditorLanguages(rows)" in html
+            and "LANGUAGE_BY_EXT" in html
+            and "languageForFileName(name)" in html)
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
@@ -2810,6 +2816,31 @@ def test_app_extension_runtime_support() -> None:
         _check("app exposes extension contribution details",
                ext_contribs.get("summary", {}).get("languageModelTools", 0) >= 1
                and "languageModelTools" in ext_contribs.get("contributions", {}))
+
+        language_desc = ExtensionDescription.from_package_json({
+            "name": "language-pack",
+            "publisher": "selftest",
+            "version": "0.0.1",
+            "contributes": {
+                "languages": [{
+                    "id": "selflang",
+                    "aliases": ["Self Lang"],
+                    "extensions": [".self"],
+                    "filenames": ["SELFFILE"],
+                }],
+            },
+        }, "/tmp/selftest-language")
+        api._ext_host.ext_points.process(language_desc)
+        editor_languages = {
+            item.get("id"): item
+            for item in api.list_editor_languages().get("languages", [])
+        }
+        _check("extension languages feed editor language table",
+               editor_languages.get("selflang", {}).get("name") == "Self Lang"
+               and ".self" in editor_languages.get("selflang", {}).get("extensions", []))
+        _check("extension language extensions and filenames drive file detection",
+               api._editor_language_for_path("demo.self") == "selflang"
+               and api._editor_language_for_path("SELFFILE") == "selflang")
 
         manifest_tool_name = api._extension_tool_wrapper_name(
             "selftest.manifest-only", "manifest_tool")

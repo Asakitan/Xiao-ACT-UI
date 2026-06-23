@@ -78,6 +78,28 @@ _EDITOR_LANGUAGE_BY_EXT = {
     ".cxx": "cpp", ".h": "cpp", ".hpp": "cpp", ".cs": "csharp",
     ".java": "java", ".go": "go", ".rs": "rust", ".toml": "toml",
 }
+_EDITOR_LANGUAGE_DISPLAY_NAMES = {
+    "plaintext": "Plain Text",
+    "python": "Python",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "json": "JSON",
+    "html": "HTML",
+    "css": "CSS",
+    "markdown": "Markdown",
+    "yaml": "YAML",
+    "xml": "XML",
+    "sql": "SQL",
+    "shell": "Shell Script",
+    "lua": "Lua",
+    "c": "C",
+    "cpp": "C++",
+    "csharp": "C#",
+    "java": "Java",
+    "go": "Go",
+    "rust": "Rust",
+    "toml": "TOML",
+}
 _AI_EDITOR_LAYOUT_DEFAULTS: Dict[str, Any] = {
     "sidebarVisible": True,
     "editorVisible": False,
@@ -847,6 +869,22 @@ class AIEditorAPI:
             result["layout"] = ai_cfg["layout"]
         return result
 
+    def list_editor_languages(self) -> Dict:
+        """Return built-in and extension-contributed editor languages.
+
+        VS Code language extensions declare ``contributes.languages`` in their
+        manifest. The lightweight editor keeps using its existing textarea
+        surface, but it should still honor those dynamic declarations for
+        language mode selection and file-extension detection.
+        """
+        self._ensure_engine()
+        languages = self._editor_language_entries()
+        return {
+            "languages": languages,
+            "extensionCount": sum(
+                1 for item in languages if item.get("source") == "extension"),
+        }
+
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
         merged = _merge_ai_editor_config({}, data)
@@ -1536,9 +1574,109 @@ class AIEditorAPI:
             raise ValueError("Path escapes workspace")
         return full
 
+    def _editor_language_entries(self) -> List[Dict[str, Any]]:
+        rows: Dict[str, Dict[str, Any]] = {}
+
+        def _entry(language_id: str, source: str = "builtin") -> Dict[str, Any]:
+            item = rows.setdefault(language_id, {
+                "id": language_id,
+                "name": _EDITOR_LANGUAGE_DISPLAY_NAMES.get(
+                    language_id, language_id.replace("-", " ").title()),
+                "aliases": [],
+                "extensions": [],
+                "filenames": [],
+                "source": source,
+                "extension_id": "",
+            })
+            if item.get("source") != "builtin" and source == "builtin":
+                item["source"] = "builtin"
+            return item
+
+        for language_id in ["plaintext", *_EDITOR_LANGUAGE_DISPLAY_NAMES.keys()]:
+            _entry(language_id)
+        for extension, language_id in _EDITOR_LANGUAGE_BY_EXT.items():
+            item = _entry(language_id)
+            if extension not in item["extensions"]:
+                item["extensions"].append(extension)
+
+        try:
+            contributed = self._ext_host.ext_points.all_contributions.get(
+                "languages", [])
+        except Exception:
+            contributed = []
+        for lang in contributed:
+            if not isinstance(lang, dict):
+                continue
+            language_id = str(lang.get("id") or "").strip()
+            if not language_id:
+                continue
+            item = _entry(language_id, "extension")
+            if item.get("source") != "builtin":
+                item["source"] = "extension"
+            item["extension_id"] = str(lang.get("_extensionId") or item.get("extension_id") or "")
+            aliases = [
+                str(value).strip()
+                for value in (lang.get("aliases") or [])
+                if str(value).strip()
+            ]
+            if aliases:
+                item["name"] = aliases[0]
+            for alias in aliases:
+                if alias not in item["aliases"]:
+                    item["aliases"].append(alias)
+            for extension in (lang.get("extensions") or []):
+                normalized = self._normalize_editor_language_extension(extension)
+                if normalized and normalized not in item["extensions"]:
+                    item["extensions"].append(normalized)
+            for filename in (lang.get("filenames") or []):
+                normalized_name = str(filename or "").strip()
+                if normalized_name and normalized_name not in item["filenames"]:
+                    item["filenames"].append(normalized_name)
+
+        return sorted(rows.values(), key=lambda item: (
+            0 if item.get("id") == "plaintext" else 1,
+            str(item.get("name") or item.get("id") or "").casefold(),
+        ))
+
+    def _editor_language_by_ext(self) -> Dict[str, str]:
+        language_by_ext = dict(_EDITOR_LANGUAGE_BY_EXT)
+        for item in self._editor_language_entries():
+            language_id = str(item.get("id") or "")
+            if not language_id:
+                continue
+            for extension in item.get("extensions") or []:
+                normalized = self._normalize_editor_language_extension(extension)
+                if normalized:
+                    language_by_ext[normalized] = language_id
+        return language_by_ext
+
+    def _editor_language_by_filename(self) -> Dict[str, str]:
+        language_by_filename: Dict[str, str] = {}
+        for item in self._editor_language_entries():
+            language_id = str(item.get("id") or "")
+            if not language_id:
+                continue
+            for filename in item.get("filenames") or []:
+                normalized = str(filename or "").strip().casefold()
+                if normalized:
+                    language_by_filename[normalized] = language_id
+        return language_by_filename
+
     @staticmethod
-    def _editor_language_for_path(path: str) -> str:
-        return _EDITOR_LANGUAGE_BY_EXT.get(os.path.splitext(path)[1].lower(), "plaintext")
+    def _normalize_editor_language_extension(value: Any) -> str:
+        extension = str(value or "").strip().lower()
+        if not extension:
+            return ""
+        return extension if extension.startswith(".") else f".{extension}"
+
+    def _editor_language_for_path(self, path: str) -> str:
+        filename = os.path.basename(path).casefold()
+        if filename:
+            by_filename = self._editor_language_by_filename()
+            if filename in by_filename:
+                return by_filename[filename]
+        return self._editor_language_by_ext().get(
+            os.path.splitext(path)[1].lower(), "plaintext")
 
     def list_workspace_tree(self, rel_path: str = "") -> Dict:
         root = self._workspace_root()

@@ -1877,6 +1877,7 @@ function _applyLayoutState(){
 // ── Init ──
 async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
+  await loadEditorLanguages();
   if(normalizeUiLanguage(config.language))_curLang=config.language;
   syncUI();
   _applyLayoutState();
@@ -2327,8 +2328,19 @@ function hideEditorArea(){
 
 // ── Editor state ──
 let editorLang='plaintext', editorDirty=false, editorFileName='untitled';
-const LANGUAGES=['plaintext','python','javascript','typescript','json','html','css','markdown',
+const BUILTIN_LANGUAGE_IDS=['plaintext','python','javascript','typescript','json','html','css','markdown',
   'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
+let LANGUAGES=[...BUILTIN_LANGUAGE_IDS];
+let LANGUAGE_META=Object.create(null),LANGUAGE_BY_EXT=Object.create(null),LANGUAGE_BY_FILENAME=Object.create(null);
+const LANGUAGE_ICONS={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
+  markdown:'M↓',yaml:'YAML',shell:'$_',lua:'Lua',sql:'SQL',plaintext:'{}'};
+const BUILTIN_LANGUAGE_EXTS={
+  py:'python',pyi:'python',pyw:'python',js:'javascript',mjs:'javascript',cjs:'javascript',
+  ts:'typescript',tsx:'typescript',json:'json',html:'html',htm:'html',css:'css',scss:'css',sass:'css',
+  md:'markdown',markdown:'markdown',yml:'yaml',yaml:'yaml',xml:'xml',sql:'sql',sh:'shell',
+  bash:'shell',ps1:'shell',bat:'shell',cmd:'shell',lua:'lua',c:'c',cc:'cpp',cpp:'cpp',
+  cxx:'cpp',h:'cpp',hpp:'cpp',cs:'csharp',java:'java',go:'go',rs:'rust',toml:'toml'
+};
 
 let _prevLineCount=1;
 function updateLineNums(){
@@ -2360,24 +2372,74 @@ function _updateLineHighlight(ta,lineNum){
   hl.style.height=lineHeight+'px';
   hl.style.left=$('line-nums').offsetWidth+'px';
 }
-function detectLanguage(code,name){
-  if(name){
-    const ext=name.split('.').pop().toLowerCase();
-    const map={py:'python',js:'javascript',ts:'typescript',json:'json',html:'html',css:'css',
-      md:'markdown',yml:'yaml',yaml:'yaml',xml:'xml',sql:'sql',sh:'shell',bash:'shell',
-      lua:'lua',c:'c',cpp:'cpp',cs:'csharp',java:'java',go:'go',rs:'rust',toml:'toml'};
-    if(map[ext]){setEditorLanguage(map[ext]);return}
+function normalizeLanguageExt(ext){
+  ext=String(ext||'').trim().toLowerCase();
+  if(!ext)return '';
+  return ext[0]==='.'?ext.slice(1):ext;
+}
+function languageDisplayName(lang){
+  const meta=LANGUAGE_META[lang]||{};
+  return meta.name||String(lang||'plaintext').replace(/[-_]/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+function languageSearchText(lang){
+  const meta=LANGUAGE_META[lang]||{};
+  const exts=(meta.extensions||[]).flatMap(ext=>[ext,'.'+String(ext).replace(/^\./,'')]);
+  return [lang,meta.name||'',...(meta.aliases||[]),...exts,...(meta.filenames||[])]
+    .join(' ').toLowerCase();
+}
+function languageForFileName(name){
+  const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
+  if(!base)return '';
+  if(LANGUAGE_BY_FILENAME[base])return LANGUAGE_BY_FILENAME[base];
+  const parts=base.split('.');
+  if(parts.length<2)return '';
+  for(let i=1;i<parts.length;i++){
+    const suffix=parts.slice(i).join('.');
+    if(LANGUAGE_BY_EXT[suffix])return LANGUAGE_BY_EXT[suffix];
   }
+  return '';
+}
+function applyEditorLanguages(rows){
+  const byId=Object.create(null),byExt=Object.create(null),byFilename=Object.create(null);
+  BUILTIN_LANGUAGE_IDS.forEach(id=>{byId[id]={id,name:languageDisplayName(id),aliases:[],extensions:[],filenames:[],source:'builtin'}});
+  Object.entries(BUILTIN_LANGUAGE_EXTS).forEach(([ext,id])=>{byExt[normalizeLanguageExt(ext)]=id});
+  (Array.isArray(rows)?rows:[]).forEach(row=>{
+    if(!row||!row.id)return;
+    const id=String(row.id);
+    const current=byId[id]||{id,aliases:[],extensions:[],filenames:[],source:'extension'};
+    const aliases=Array.isArray(row.aliases)?row.aliases.map(String).filter(Boolean):[];
+    const extensions=Array.isArray(row.extensions)?row.extensions.map(normalizeLanguageExt).filter(Boolean):[];
+    const filenames=Array.isArray(row.filenames)?row.filenames.map(v=>String(v).toLowerCase()).filter(Boolean):[];
+    byId[id]={...current,...row,id,
+      name:row.name||aliases[0]||current.name||id,
+      aliases:[...(current.aliases||[]),...aliases].filter((v,i,a)=>a.indexOf(v)===i),
+      extensions:[...(current.extensions||[]),...extensions].filter((v,i,a)=>a.indexOf(v)===i),
+      filenames:[...(current.filenames||[]),...filenames].filter((v,i,a)=>a.indexOf(v)===i)};
+    extensions.forEach(ext=>{byExt[ext]=id});
+    filenames.forEach(filename=>{byFilename[filename]=id});
+  });
+  LANGUAGE_META=byId;LANGUAGE_BY_EXT=byExt;LANGUAGE_BY_FILENAME=byFilename;
+  LANGUAGES=Object.keys(byId).sort((a,b)=>a==='plaintext'?-1:b==='plaintext'?1:languageDisplayName(a).localeCompare(languageDisplayName(b)));
+  setEditorLanguage(editorLang);
+}
+async function loadEditorLanguages(){
+  applyEditorLanguages([]);
+  try{
+    const r=await call('list_editor_languages');
+    if(r&&Array.isArray(r.languages))applyEditorLanguages(r.languages);
+  }catch(e){}
+}
+function detectLanguage(code,name){
+  const byName=languageForFileName(name);
+  if(byName){setEditorLanguage(byName);return}
   if(code.startsWith('#!/usr/bin/env python')||code.includes('def ')||code.includes('import '))setEditorLanguage('python');
   else if(code.includes('function ')||code.includes('const ')||code.includes('=>'))setEditorLanguage('javascript');
   else if(code.startsWith('{')&&code.endsWith('}'))setEditorLanguage('json');
   else setEditorLanguage('plaintext');
 }
 function setEditorLanguage(lang){
-  editorLang=lang;
-  const icons={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
-    markdown:'M↓',yaml:'📄',shell:'$_',lua:'🌙',sql:'🗃',plaintext:'{}'};
-  $('status-language').textContent=(icons[lang]||'{}')+' '+lang.charAt(0).toUpperCase()+lang.slice(1);
+  editorLang=LANGUAGE_META[lang]?lang:'plaintext';
+  $('status-language').textContent=(LANGUAGE_ICONS[editorLang]||'{}')+' '+languageDisplayName(editorLang);
 }
 
 // ── Undo / Redo stack for textarea editor ──
@@ -2636,9 +2698,11 @@ function showLanguagePicker(){
 }
 function filterLanguages(){
   const q=$('lang-search').value.toLowerCase(),list=$('lang-list');list.innerHTML='';
-  LANGUAGES.filter(l=>l.includes(q)).forEach(l=>{
+  LANGUAGES.filter(l=>!q||languageSearchText(l).includes(q)).forEach(l=>{
     const d=document.createElement('div');d.className='sb-item';d.style.padding='6px 16px';
-    d.textContent=l.charAt(0).toUpperCase()+l.slice(1);
+    const meta=LANGUAGE_META[l]||{};
+    d.textContent=languageDisplayName(l)+(meta.source==='extension'?' · Extension':'');
+    d.title=[l,...(meta.extensions||[])].filter(Boolean).join(' ');
     d.onclick=()=>{setEditorLanguage(l);$('lang-picker').classList.remove('open')};
     list.appendChild(d);
   });

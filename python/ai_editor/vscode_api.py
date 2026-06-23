@@ -1704,7 +1704,11 @@ class VscodeNamespace:
                     contributed.append(str(language_id))
         except Exception:
             pass
-        builtins = ["plaintext", "python", "javascript", "typescript", "json", "markdown"]
+        builtins = [
+            "plaintext", "python", "javascript", "typescript", "json", "html",
+            "css", "markdown", "yaml", "xml", "sql", "shell", "lua", "c",
+            "cpp", "csharp", "java", "go", "rust", "toml",
+        ]
         return sorted(set(builtins + contributed))
 
     def _language_match(self, selector: Any, document: Any) -> int:
