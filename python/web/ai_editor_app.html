@@ -226,17 +226,23 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
 }
 .editor-textarea::selection { background:var(--selection); }
-.editor-suggest,.editor-hover,.editor-signature-help { position:absolute; z-index:8; border:1px solid var(--border);
+.editor-suggest,.editor-hover,.editor-signature-help,.editor-code-actions { position:absolute; z-index:8; border:1px solid var(--border);
   background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px rgba(0,0,0,.32);
   border-radius:6px; opacity:0; transform:translateY(-4px); pointer-events:none;
   transition:opacity .12s ease,transform .12s ease; }
-.editor-suggest.open,.editor-hover.open,.editor-signature-help.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+.editor-suggest.open,.editor-hover.open,.editor-signature-help.open,.editor-code-actions.open { opacity:1; transform:translateY(0); pointer-events:auto; }
 .editor-suggest { min-width:240px; max-width:420px; max-height:260px; overflow:auto; padding:4px; }
 .editor-suggest-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
   padding:5px 7px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
 .editor-suggest-item.active { background:var(--selection); }
 .editor-suggest-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-suggest-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-code-actions { min-width:260px; max-width:460px; max-height:260px; overflow:auto; padding:4px; }
+.editor-code-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
+  padding:6px 8px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
+.editor-code-action-item.active { background:var(--selection); }
+.editor-code-action-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-code-action-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-hover { max-width:460px; max-height:220px; overflow:auto; padding:8px 10px;
   font:12px/1.45 var(--ui); white-space:pre-wrap; pointer-events:none; }
 .editor-signature-help { max-width:560px; min-width:280px; overflow:hidden; padding:8px 10px;
@@ -1168,6 +1174,7 @@ pre.code-block { overflow:visible; }
         <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
         <div class="editor-hover" id="editor-hover" role="tooltip"></div>
         <div class="editor-signature-help" id="editor-signature-help" role="tooltip"></div>
+        <div class="editor-code-actions" id="editor-code-actions" role="listbox"></div>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
         <div class="minimap-container hidden" id="minimap-container">
@@ -2397,6 +2404,7 @@ function openInEditor(code,lang){
   if(typeof closeEditorSuggest==='function')closeEditorSuggest();
   if(typeof closeEditorHover==='function')closeEditorHover();
   if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
+  if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -3212,6 +3220,7 @@ function _editorInputWithUndo(e){
   clearTimeout(_undoTimer);
   _undoTimer=setTimeout(()=>_undoPush(false),_UNDO_DEBOUNCE);
   closeEditorHover();
+  closeEditorCodeActions();
   const ch=e&&typeof e.data==='string'?e.data:'';
   if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
   else closeEditorSuggest();
@@ -3224,6 +3233,7 @@ function _editorInputWithUndo(e){
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
 let _editorHoverTimer=null,_editorHoverRequest=0;
 let _editorSignatureRequest=0;
+let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -3387,7 +3397,7 @@ function showEditorHover(text,position){
   requestAnimationFrame(()=>box.classList.add('open'));
 }
 async function requestEditorHover(){
-  if(isEditorSuggestOpen()||isEditorSignatureOpen()||!ed||ed.offsetParent===null)return;
+  if(isEditorSuggestOpen()||isEditorSignatureOpen()||isEditorCodeActionsOpen()||!ed||ed.offsetParent===null)return;
   const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const res=await call('editor_language_provider',editorProviderPayload('hover'));
   if(requestId!==_editorHoverRequest)return;
@@ -3471,6 +3481,165 @@ function handleEditorSignatureKey(e){
   if(e.key==='Escape'){e.preventDefault();closeEditorSignatureHelp();return true}
   return false;
 }
+function editorSelectedRangePayload(){
+  const start=Math.min(ed.selectionStart,ed.selectionEnd),end=Math.max(ed.selectionStart,ed.selectionEnd);
+  return {start:editorPositionFromOffset(ed.value,start),end:editorPositionFromOffset(ed.value,end)};
+}
+function isEditorCodeActionsOpen(){
+  const box=$('editor-code-actions');return !!(box&&box.classList.contains('open'));
+}
+function closeEditorCodeActions(){
+  const box=$('editor-code-actions');if(!box)return;
+  box.classList.remove('open');box.style.display='none';_editorCodeActions=[];
+}
+function codeActionTitle(action){
+  return String((action&&action.title)||(action&&action.command&&action.command.title)||'Code Action');
+}
+function codeActionDisabledText(disabled){
+  if(!disabled)return '';
+  if(typeof disabled==='string')return disabled;
+  return String(disabled.reason||disabled.message||'Disabled');
+}
+function codeActionDetail(action){
+  const disabled=codeActionDisabledText(action&&action.disabled);
+  if(disabled)return disabled;
+  if(action&&action.kind)return String(action.kind);
+  if(action&&action.command){
+    if(typeof action.command==='string')return action.command;
+    return String(action.command.command||action.command.title||'command');
+  }
+  return action&&action.edit?'edit':'';
+}
+function setEditorCodeActionIndex(index){
+  if(!_editorCodeActions.length)return;
+  _editorCodeActionIndex=(index+_editorCodeActions.length)%_editorCodeActions.length;
+  document.querySelectorAll('#editor-code-actions .editor-code-action-item').forEach((el,i)=>{
+    el.classList.toggle('active',i===_editorCodeActionIndex);
+    if(i===_editorCodeActionIndex)el.scrollIntoView({block:'nearest'});
+  });
+}
+function showEditorCodeActions(actions,position){
+  const box=$('editor-code-actions');if(!box)return;
+  _editorCodeActions=actions.slice(0,80);_editorCodeActionIndex=0;box.innerHTML='';
+  _editorCodeActions.forEach((action,index)=>{
+    const row=document.createElement('div');row.className='editor-code-action-item'+(index===0?' active':'');row.setAttribute('role','option');
+    const title=document.createElement('div');title.className='editor-code-action-title';title.textContent=codeActionTitle(action);
+    const detail=document.createElement('div');detail.className='editor-code-action-detail';detail.textContent=codeActionDetail(action);
+    row.appendChild(title);row.appendChild(detail);
+    row.onmousedown=e=>{e.preventDefault();applyEditorCodeAction(action)};
+    box.appendChild(row);
+  });
+  placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+}
+function editorNormalizeDocumentUri(value){
+  if(!value)return '';
+  if(typeof value==='object'){
+    if(value.uri)value=value.uri;
+    else if(value.scheme&&value.path)value=value.scheme+':'+value.path;
+    else value=String(value);
+  }
+  let text=String(value).replace(/\\/g,'/');
+  try{text=decodeURIComponent(text)}catch{}
+  if(text.startsWith('file://')){
+    text=text.replace(/^file:\/\/\/?/,'');
+    if(/^\/[A-Za-z]:\//.test(text))text=text.slice(1);
+  }
+  return text.toLowerCase();
+}
+function editorCurrentUriMatches(uri){
+  if(!uri)return true;
+  const incoming=editorNormalizeDocumentUri(uri);
+  if(!incoming)return true;
+  const tab=activeEditorTab(),filePath=tab.filePath||'',untitled=editorUntitledUri(tab);
+  const candidates=[filePath,filePath?'file:///'+filePath.replace(/\\/g,'/'): '',untitled].map(editorNormalizeDocumentUri);
+  return candidates.some(candidate=>candidate&&candidate===incoming);
+}
+function editorTextEditFromActionEntry(entry){
+  if(!entry||typeof entry!=='object')return null;
+  if(entry.kind==='createFile'||entry.kind==='deleteFile'||entry.kind==='renameFile')return null;
+  let range=entry.range;
+  if(!range&&entry.position)range={start:entry.position,end:entry.position};
+  if(!range)return null;
+  const text=entry.kind==='delete'?'':String(entry.newText??entry.text??'');
+  return {range,newText:text};
+}
+function editorCodeActionEdits(action){
+  const edits=[];let skipped=0;
+  function take(edit,uri){
+    if(!editorCurrentUriMatches(uri)){skipped++;return}
+    const textEdit=editorTextEditFromActionEntry(edit);
+    if(textEdit)edits.push(textEdit);
+    else if(edit&&edit.kind)skipped++;
+  }
+  const edit=action&&action.edit;
+  if(!edit)return {edits,skipped};
+  if(Array.isArray(edit)){edit.forEach(item=>take(item,item&&item.uri));return {edits,skipped}}
+  if(edit.range||edit.position)take(edit,edit.uri);
+  const entries=Array.isArray(edit._edits)?edit._edits:(Array.isArray(edit.edits)?edit.edits:[]);
+  entries.forEach(item=>take(item,item&&item.uri));
+  if(edit.changes&&typeof edit.changes==='object'){
+    Object.keys(edit.changes).forEach(uri=>{
+      const items=Array.isArray(edit.changes[uri])?edit.changes[uri]:[];
+      items.forEach(item=>take(item,uri));
+    });
+  }
+  if(Array.isArray(edit.documentChanges)){
+    edit.documentChanges.forEach(change=>{
+      if(!change||typeof change!=='object')return;
+      if(change.kind){skipped++;return}
+      const uri=change.uri||(change.textDocument&&change.textDocument.uri);
+      if(Array.isArray(change.edits))change.edits.forEach(item=>take(item,uri));
+      else take(change,uri);
+    });
+  }
+  return {edits,skipped};
+}
+function editorApplyWorkspaceEdit(edit){
+  const result=editorCodeActionEdits({edit});
+  return {changed:editorApplyTextEdits(result.edits),skipped:result.skipped};
+}
+async function runEditorCodeActionCommand(command){
+  if(!command)return null;
+  let id='',args=[];
+  if(typeof command==='string')id=command;
+  else {id=String(command.command||command.id||'');args=Array.isArray(command.arguments)?command.arguments:[]}
+  if(!id)return null;
+  const result=await call('execute_command',id,...args);
+  if(result&&result.error)setStatus('Code action failed: '+result.error);
+  return result;
+}
+async function applyEditorCodeAction(action){
+  if(!action||action.disabled)return;
+  _undoPush(true);
+  const editResult=action.edit?editorApplyWorkspaceEdit(action.edit):{changed:false,skipped:0};
+  const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
+  closeEditorCodeActions();ed.focus();
+  const title=codeActionTitle(action);
+  if(editResult.changed){setStatus('Applied code action: '+title);return}
+  if(callSucceeded(commandResult)){setStatus('Ran code action: '+title);return}
+  if(editResult.skipped){setStatus('Code action edits outside the active editor were skipped');return}
+  setStatus('Code action has no local edit');
+}
+async function requestEditorCodeActions(quiet){
+  const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('codeActions',{range:editorSelectedRangePayload()}));
+  if(requestId!==_editorCodeActionRequest)return;
+  if(res&&res.error){closeEditorCodeActions();if(!quiet)setStatus('Code actions failed: '+res.error);return}
+  const actions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>action&&!action.disabled);
+  if(actions.length){
+    closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();
+    showEditorCodeActions(actions,position);setStatus(actions.length+' code action'+(actions.length===1?'':'s'));return;
+  }
+  closeEditorCodeActions();if(!quiet)setStatus('No code actions');
+}
+function handleEditorCodeActionKey(e){
+  if(!isEditorCodeActionsOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setEditorCodeActionIndex(_editorCodeActionIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setEditorCodeActionIndex(_editorCodeActionIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorCodeAction(_editorCodeActions[_editorCodeActionIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeEditorCodeActions();return true}
+  return false;
+}
 
 const ed=$('editor-text');
 // Seed initial undo state
@@ -3479,10 +3648,12 @@ ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',()=>{updateCursorPos();scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',()=>{updateCursorPos();scheduleEditorHover()});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover();closeEditorSignatureHelp()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions()});
 ed.addEventListener('keydown',function(e){
+  if(handleEditorCodeActionKey(e))return;
   if(handleEditorSignatureKey(e))return;
   if(handleEditorSuggestKey(e))return;
+  if(e.key==='.'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCodeActions(false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();requestEditorSignatureHelp('',1,false);return}
   if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
   // Ctrl+Z → Undo
@@ -3573,6 +3744,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
     {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
     {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
+    {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -3588,7 +3760,7 @@ ed.addEventListener('contextmenu',function(e){
 });
 document.addEventListener('click',e=>{
   $('ctx-menu').style.display='none';
-  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp()}
+  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions()}
 });
 
 // ── Find/Replace ──
@@ -7302,6 +7474,7 @@ function switchTab(id){
     if(typeof closeEditorSuggest==='function')closeEditorSuggest();
     if(typeof closeEditorHover==='function')closeEditorHover();
     if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
+    if(typeof closeEditorCodeActions==='function')closeEditorCodeActions();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
   }
@@ -7665,6 +7838,7 @@ const COMMANDS=[
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
   {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
   {label:'Signature Help',shortcut:'Ctrl+Shift+Space',action:()=>requestEditorSignatureHelp('',1,false)},
+  {label:'Quick Fix...',shortcut:'Ctrl+.',action:()=>requestEditorCodeActions(false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},

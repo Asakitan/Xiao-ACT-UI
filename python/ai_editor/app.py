@@ -38,6 +38,7 @@ from ai_editor.chat_providers import (
 )
 from ai_editor.extension_host import Position, Range, Uri
 from ai_editor.vscode_api import (
+    WorkspaceEdit,
     _resolve_provider_result as _resolve_vscode_provider_result,
 )
 
@@ -482,7 +483,7 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
 _LANGUAGE_RESULT_ATTRS = (
     "items", "isIncomplete", "label", "kind", "detail", "documentation",
     "sortText", "filterText", "insertText", "range", "textEdit",
-    "additionalTextEdits", "command", "contents", "uri", "targetUri",
+    "additionalTextEdits", "command", "arguments", "contents", "uri", "targetUri",
     "targetRange", "originSelectionRange", "name", "containerName",
     "children", "selectionRange", "diagnostics", "edit", "title",
     "isPreferred", "disabled", "newText", "position", "value",
@@ -574,6 +575,10 @@ def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
         return {
             "start": _json_ready_language_value(value.start, depth + 1),
             "end": _json_ready_language_value(value.end, depth + 1),
+        }
+    if isinstance(value, WorkspaceEdit):
+        return {
+            "_edits": _json_ready_language_value(value.entries(), depth + 1),
         }
     if isinstance(value, dict):
         return {
