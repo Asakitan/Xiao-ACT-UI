@@ -6197,9 +6197,6 @@ function activate(context) {
       editText: editedDoc.getText(),
     };
   });
-  void vscode.commands.executeCommand('selftest.node.workspaceProbe')
-    .then(result => output.appendLine('workspaceProbe:' + JSON.stringify(result)))
-    .catch(err => output.appendLine('workspaceProbeError:' + (err && err.message || String(err))));
   context.subscriptions.push(view);
 }
 
@@ -6421,22 +6418,11 @@ module.exports = { activate, deactivate };
                     node_uri,
                     Position(0, 4),
                     {"image/png": [1, 2, 3]})
-                node_workspace_probe = {}
-                def _node_workspace_probe_seen():
-                    output_text = "".join(
-                        node_host._output_channels.get(
-                            "node-tree-selftest", []))
-                    for line in output_text.splitlines():
-                        if line.startswith("workspaceProbe:"):
-                            try:
-                                node_workspace_probe.update(
-                                    json.loads(line.split(":", 1)[1]))
-                                return True
-                            except Exception:
-                                return False
-                    return False
-                node_workspace_probe_seen = _wait_until(
-                    _node_workspace_probe_seen, timeout=3.0)
+                try:
+                    node_workspace_probe = api._ext_host.commands.execute(
+                        "selftest.node.workspaceProbe")
+                except Exception as exc:
+                    node_workspace_probe = {"_error": str(exc)}
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -6625,9 +6611,13 @@ module.exports = { activate, deactivate };
                        and node_drop_edits[0].get("kind", {}).get("value")
                        == "text"
                        and node_drop_miss == [])
+                _check("node host registered command returns JS result",
+                       node_workspace_command_registered
+                       and isinstance(node_workspace_probe, dict)
+                       and node_workspace_probe.get("editText") == "say hello SAO",
+                       json.dumps(node_workspace_probe, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
-                       and node_workspace_probe_seen
                        and isinstance(node_workspace_probe, dict)
                        and node_workspace_probe.get("folderName")
                        and node_workspace_probe.get("rootPath")

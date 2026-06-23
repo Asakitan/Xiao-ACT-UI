@@ -2396,19 +2396,46 @@ function handleWebviewMessage(viewId, message) {
 // -------------------------------------------------------------------------
 // Execute a registered command
 // -------------------------------------------------------------------------
-async function executeCommand(commandId, args) {
+async function executeCommand(commandId, args, requestId) {
     const handler = _commands.get(commandId);
     if (!handler) {
         log(`command not found: ${commandId}`);
         send({ type: 'error', extensionId: '', error: `command not found: ${commandId}` });
+        if (requestId) {
+            send({
+                type: 'command_response',
+                requestId,
+                ok: false,
+                error: `command not found: ${commandId}`,
+            });
+        }
         return;
     }
     try {
         const result = handler(...(args || []).map(_deserializeArgFromPython));
-        if (result && typeof result.then === 'function') await result;
+        const value = result && typeof result.then === 'function'
+            ? await result
+            : result;
+        if (requestId) {
+            send({
+                type: 'command_response',
+                requestId,
+                ok: true,
+                value: value === undefined ? null : _serializeLanguageValue(value),
+            });
+        }
     } catch (err) {
-        log(`command error ${commandId}: ${err.message}`);
-        send({ type: 'error', extensionId: '', error: `command ${commandId}: ${err.message}` });
+        const message = err && err.message ? err.message : String(err);
+        log(`command error ${commandId}: ${message}`);
+        send({ type: 'error', extensionId: '', error: `command ${commandId}: ${message}` });
+        if (requestId) {
+            send({
+                type: 'command_response',
+                requestId,
+                ok: false,
+                error: `command ${commandId}: ${message}`,
+            });
+        }
     }
 }
 
@@ -3277,7 +3304,7 @@ async function handleMessage(msg) {
             break;
         case 'command':
         case 'executeCommand':
-            await executeCommand(msg.commandId, msg.args);
+            await executeCommand(msg.commandId, msg.args, msg.requestId);
             break;
         case 'tree_request':
             await handleTreeRequest(msg);

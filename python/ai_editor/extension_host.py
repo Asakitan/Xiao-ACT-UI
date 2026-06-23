@@ -1548,6 +1548,7 @@ class NodeExtensionHost:
         {"type": "webview_html",        "viewId": "...", "html": "..."}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
+        {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
         {"type": "output",              "channel": "...", "text": "..."}
         {"type": "show_message",        "level": "info|warn|error", "message": "..."}
@@ -1569,6 +1570,8 @@ class NodeExtensionHost:
         self._activated_ids: Set[str] = set()
         self._output_channels: Dict[str, List[str]] = {}
         self._command_service: Optional[CommandService] = None
+        self._command_request_lock = threading.Lock()
+        self._command_requests: Dict[str, Dict[str, Any]] = {}
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
@@ -1842,16 +1845,25 @@ class NodeExtensionHost:
             if command_id and self._command_service:
                 # Register a proxy command that forwards execution to Node
                 def _node_command_proxy(*args, _cid=command_id):
-                    self._send({
-                        "type": "executeCommand",
-                        "commandId": _cid,
-                        "args": list(args),
-                    })
-                    return {"ok": True, "proxied": True,
-                            "commandId": _cid}
+                    result = self.request_command_result(_cid, list(args))
+                    if result.get("ok"):
+                        return result.get("value")
+                    raise RuntimeError(
+                        result.get("error")
+                        or f"Node command failed: {_cid}")
                 self._command_service.register(command_id, _node_command_proxy)
                 _log.info("[NodeExtHost] Command registered: %s (from %s)",
                           command_id, ext_id)
+
+        elif msg_type == "command_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._command_request_lock:
+                pending = self._command_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
 
         elif msg_type == "output":
             channel = str(
@@ -1999,6 +2011,59 @@ class NodeExtensionHost:
             callback: Callable[[str, str, Dict[str, Any]], None]) -> None:
         """Register a callback for Node TreeDataProvider lifecycle events."""
         self._on_tree_callbacks.append(callback)
+
+    def request_command_result(
+            self, command_id: str, args: Optional[List[Any]] = None,
+            default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
+        """Synchronously execute a Node-registered command and return its result."""
+        if not self.is_running:
+            return {
+                "ok": False,
+                "value": default,
+                "error": "Node extension host is not running",
+            }
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._command_request_lock:
+            self._command_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "executeCommand",
+                "requestId": request_id,
+                "commandId": str(command_id or ""),
+                "args": list(args or []),
+            })
+            if not sent:
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node command request could not be sent",
+                }
+            if not event.wait(timeout):
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node command request timed out",
+                    "timeout": True,
+                }
+            with self._command_request_lock:
+                pending = self._command_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": (
+                    response.get("error")
+                    if isinstance(response, dict) else "Node command failed"),
+            }
+        finally:
+            with self._command_request_lock:
+                self._command_requests.pop(request_id, None)
 
     def request_tree_data(
             self, view_id: str, op: str, element_handle: str = "",
