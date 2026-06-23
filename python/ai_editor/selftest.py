@@ -2556,12 +2556,16 @@ console.log("frontend auto-close behavior ok");
            and "applyCustomEditorState(data)" in html)
     with tempfile.TemporaryDirectory() as webview_tmp, \
             tempfile.TemporaryDirectory() as outside_tmp:
+        import urllib.request
         script_path = os.path.join(webview_tmp, "panel.js")
+        large_script_path = os.path.join(webview_tmp, "panel-large.js")
         style_path = os.path.join(webview_tmp, "panel.css")
         font_path = os.path.join(webview_tmp, "panel.woff")
         outside_script_path = os.path.join(outside_tmp, "blocked.js")
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__panelLoaded = true;\n")
+        with open(large_script_path, "wb") as fh:
+            fh.write(b"/" + b"x" * (2 * 1024 * 1024 + 32))
         with open(outside_script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__blockedLoaded = true;\n")
         with open(font_path, "wb") as fh:
@@ -2586,16 +2590,34 @@ console.log("frontend auto-close behavior ok");
             f'<script nonce="a" src="{_wv_url(script_path)}"></script>')
         encoded_webview_html = (
             f'<script src="{_wv_resource_url(script_path)}?v=1#main"></script>')
+        large_webview_html = (
+            '<meta http-equiv="Content-Security-Policy" '
+            'content="default-src \'none\'; script-src https://webview.local">'
+            f'<script src="{_wv_resource_url(large_script_path)}"></script>')
+        runtime_only_html = (
+            '<meta http-equiv="Content-Security-Policy" '
+            'content="default-src \'none\'; script-src https://webview.local">'
+            '<main data-dynamic="true"></main>')
         blocked_webview_html = f'<script src="{_wv_url(outside_script_path)}"></script>'
-        prepared_webview_html = AIEditorAPI(
-            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
-                raw_webview_html, [{"uri": "file:///" + webview_tmp.replace("\\", "/")}])
-        encoded_prepared_html = AIEditorAPI(
-            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
-                encoded_webview_html, [{"fsPath": webview_tmp}])
-        blocked_prepared_html = AIEditorAPI(
-            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
-                blocked_webview_html, [{"fsPath": webview_tmp}])
+        webview_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        prepared_webview_html = webview_api._prepare_extension_webview_html(
+            raw_webview_html,
+            [{"uri": "file:///" + webview_tmp.replace("\\", "/")}],
+            view_id="selftest.inline")
+        encoded_prepared_html = webview_api._prepare_extension_webview_html(
+            encoded_webview_html, [{"fsPath": webview_tmp}],
+            view_id="selftest.encoded")
+        large_prepared_html = webview_api._prepare_extension_webview_html(
+            large_webview_html, [{"fsPath": webview_tmp}],
+            view_id="selftest.large")
+        runtime_only_prepared_html = webview_api._prepare_extension_webview_html(
+            runtime_only_html, [{"fsPath": webview_tmp}],
+            view_id="selftest.runtime")
+        blocked_prepared_html = webview_api._prepare_extension_webview_html(
+            blocked_webview_html, [{"fsPath": webview_tmp}])
+        large_endpoint_url = large_prepared_html.split('src="', 1)[1].split('"', 1)[0]
+        large_endpoint_data = urllib.request.urlopen(
+            large_endpoint_url, timeout=2).read()
         css_payload = prepared_webview_html.split(
             "data:text/css;base64,", 1)[1].split('"', 1)[0]
         decoded_css = base64.b64decode(css_payload).decode(
@@ -2616,12 +2638,27 @@ console.log("frontend auto-close behavior ok");
                not in encoded_prepared_html
                and "data:text/javascript;base64," in encoded_prepared_html
                and "sao-webview-resource-map" in encoded_prepared_html)
+        _check("webview oversized local resources fall back to local endpoint",
+               large_endpoint_url.startswith("http://127.0.0.1:")
+               and "/__sao_webview_resource__/" in large_endpoint_url
+               and large_endpoint_data.startswith(b"/x")
+               and _wv_resource_url(large_script_path) not in large_prepared_html
+               and "sao-webview-resource-endpoint" in large_prepared_html
+               and "default-src 'none' http://127.0.0.1:"
+               in large_prepared_html)
+        _check("webview runtime-only local resources get endpoint metadata",
+               "sao-webview-resource-endpoint" in runtime_only_prepared_html
+               and "default-src 'none' http://127.0.0.1:"
+               in runtime_only_prepared_html)
         _check("webview local resource roots block outside files",
                "https://webview.local/" in blocked_prepared_html
                and "data:text/javascript;base64," not in blocked_prepared_html)
         _check("webview bridge rewrites dynamic local resources",
                "function _resourceMap()" in html
                and "sao-webview-resource-map" in html
+               and "function _resourceEndpointBase()" in html
+               and "window.fetch=function(input,init)" in html
+               and "XMLHttpRequest.prototype.open=function(method,url)" in html
                and "Element.prototype.setAttribute=function(name,value)" in html
                and "_patchUrlProperty(window.HTMLScriptElement&&HTMLScriptElement.prototype,\"src\",_rewriteResourceUrl)" in html
                and "new MutationObserver(function(ms)" in html)

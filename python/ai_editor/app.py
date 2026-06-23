@@ -18,12 +18,14 @@ import math
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
 # Ensure package root on path
 _HERE = os.path.dirname(__file__)
@@ -82,6 +84,7 @@ _WEBVIEW_LOCAL_URL_RE = re.compile(
 )
 _WEBVIEW_RESOURCE_MAX_BYTES = 2 * 1024 * 1024
 _WEBVIEW_RESOURCE_TOTAL_MAX_BYTES = 8 * 1024 * 1024
+_WEBVIEW_RESOURCE_ROUTE = "/__sao_webview_resource__"
 _EDITOR_LANGUAGE_BY_EXT = {
     ".py": "python", ".pyi": "python", ".pyw": "python",
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -655,6 +658,155 @@ def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Local webview resource server
+# ---------------------------------------------------------------------------
+
+class _WebviewResourceRequestHandler(BaseHTTPRequestHandler):
+    server: "_WebviewResourceHttpServer"
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
+    def do_HEAD(self) -> None:
+        self._serve_file(send_body=False)
+
+    def do_GET(self) -> None:
+        self._serve_file(send_body=True)
+
+    def _serve_file(self, send_body: bool) -> None:
+        resolved = self.server.owner.resolve_request(self.path)
+        if not resolved:
+            self.send_error(404)
+            return
+        fs_path, mime = resolved
+        try:
+            with open(fs_path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+        self.end_headers()
+        if send_body:
+            self.wfile.write(data)
+
+
+class _WebviewResourceHttpServer(ThreadingHTTPServer):
+    def __init__(self, owner: "_WebviewResourceServer") -> None:
+        super().__init__(("127.0.0.1", 0), _WebviewResourceRequestHandler)
+        self.owner = owner
+        self.daemon_threads = True
+
+
+class _WebviewResourceServer:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._nonce = secrets.token_urlsafe(24)
+        self._views: Dict[str, Optional[List[str]]] = {}
+        self._server = _WebviewResourceHttpServer(self)
+        host, port = self._server.server_address[:2]
+        self.origin = f"http://{host}:{int(port)}"
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def register_view(
+            self, view_id: str, roots: Optional[List[str]]) -> str:
+        key = str(view_id or "").strip()
+        if not key:
+            return ""
+        normalized = None if roots is None else list(roots)
+        with self._lock:
+            self._views[key] = normalized
+        return self.view_base_url(key)
+
+    def unregister_view(self, view_id: str) -> None:
+        key = str(view_id or "").strip()
+        if not key:
+            return
+        with self._lock:
+            self._views.pop(key, None)
+
+    def view_base_url(self, view_id: str) -> str:
+        key = str(view_id or "").strip()
+        if not key:
+            return ""
+        return (
+            f"{self.origin}{_WEBVIEW_RESOURCE_ROUTE}/"
+            f"{quote(self._nonce, safe='')}/{quote(key, safe='')}"
+        )
+
+    def resource_url(self, view_id: str, original_url: str) -> str:
+        parsed = urlsplit(str(original_url or ""))
+        base = self.view_base_url(view_id)
+        if not base or not parsed.netloc:
+            return str(original_url or "")
+        path = parsed.path or "/"
+        url = (
+            f"{base}/{quote(parsed.netloc, safe='')}{path}"
+        )
+        if parsed.query:
+            url += f"?{parsed.query}"
+        if parsed.fragment:
+            url += f"#{parsed.fragment}"
+        return url
+
+    def resolve_request(self, raw_path: str) -> Optional[tuple[str, str]]:
+        parsed = urlsplit(str(raw_path or ""))
+        parts = parsed.path.split("/")
+        if len(parts) < 6 or parts[1] != _WEBVIEW_RESOURCE_ROUTE.strip("/"):
+            return None
+        nonce = unquote(parts[2] or "")
+        view_id = unquote(parts[3] or "")
+        host = unquote(parts[4] or "")
+        if not nonce or nonce != self._nonce or not view_id or not host:
+            return None
+        marker = object()
+        with self._lock:
+            roots = self._views.get(view_id, marker)
+        if roots is marker:
+            return None
+        original_path = "/" + "/".join(parts[5:])
+        original_url = urlunsplit((
+            "https",
+            host,
+            original_path,
+            parsed.query,
+            "",
+        ))
+        fs_path = AIEditorAPI._webview_local_path_from_url(original_url)
+        if not fs_path:
+            return None
+        if not AIEditorAPI._webview_path_allowed(fs_path, roots):
+            return None
+        if not os.path.isfile(fs_path):
+            return None
+        return fs_path, AIEditorAPI._webview_mime_for_path(fs_path)
+
+    def stop(self) -> None:
+        try:
+            self._server.shutdown()
+        except Exception:
+            pass
+        try:
+            self._server.server_close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # UIBridge implementation — delegates vscode API UI calls to the webview
 # ---------------------------------------------------------------------------
 
@@ -751,7 +903,7 @@ class _AIEditorUIBridge:
             local_resource_roots: Any = None) -> None:
         """Push HTML content for a webview panel to the frontend."""
         prepared = self._api._prepare_extension_webview_html(
-            html, local_resource_roots)
+            html, local_resource_roots, view_id=view_id)
         self._api._emit("render_webview_panel", {
             "view_id": view_id,
             "html": prepared,
@@ -759,6 +911,7 @@ class _AIEditorUIBridge:
 
     def dispose_webview_panel(self, view_id: str) -> None:
         """Dispose a webview panel by emitting a dispose event to the frontend."""
+        self._api._unregister_webview_resource_view(view_id)
         self._api._emit("dispose_webview_panel", {"view_id": view_id})
 
     def post_webview_message(self, view_id: str, message: Any) -> None:
@@ -860,6 +1013,9 @@ class _AIEditorUIBridge:
 class AIEditorAPI:
     """Python backend exposed to JavaScript via ``window.pywebview.api``."""
 
+    _webview_resource_server: Optional[_WebviewResourceServer] = None
+    _webview_resource_server_lock = threading.Lock()
+
     def __init__(self, gui_ref: Any = None) -> None:
         self._gui_ref = gui_ref
         self._engine: Optional[LLMEngine] = None
@@ -877,6 +1033,23 @@ class AIEditorAPI:
         self._maximized = False
         self._window_geometry: Optional[Dict[str, int]] = None
         self._window_resize_supports_fix_point: Optional[bool] = None
+
+    @classmethod
+    def _ensure_webview_resource_server(cls) -> _WebviewResourceServer:
+        with cls._webview_resource_server_lock:
+            server = cls._webview_resource_server
+            if server is None:
+                server = _WebviewResourceServer()
+                cls._webview_resource_server = server
+            return server
+
+    @classmethod
+    def _stop_webview_resource_server(cls) -> None:
+        with cls._webview_resource_server_lock:
+            server = cls._webview_resource_server
+            cls._webview_resource_server = None
+        if server is not None:
+            server.stop()
 
     @staticmethod
     def _webview_local_path_from_url(url: str) -> str:
@@ -956,21 +1129,46 @@ class AIEditorAPI:
             return False
         return False
 
+    def _register_webview_resource_view(
+            self, view_id: str,
+            local_resource_roots: Any = None) -> tuple[str, str]:
+        key = str(view_id or "").strip()
+        if not key:
+            return "", ""
+        roots = self._webview_resource_roots(local_resource_roots)
+        server = self._ensure_webview_resource_server()
+        return server.register_view(key, roots), server.origin
+
+    def _unregister_webview_resource_view(self, view_id: str) -> None:
+        key = str(view_id or "").strip()
+        if not key:
+            return
+        server = self.__class__._webview_resource_server
+        if server is not None:
+            server.unregister_view(key)
+
     def _prepare_extension_webview_html(
-            self, html: str, local_resource_roots: Any = None) -> str:
+            self, html: str, local_resource_roots: Any = None,
+            view_id: str = "") -> str:
         """Inline local ``asWebviewUri`` resources for srcdoc webviews.
 
         Node-side extensions naturally emit local HTTPS resource URLs from
         ``webview.asWebviewUri``.  The AI Editor embeds webviews as sandboxed
         ``srcdoc`` iframes instead of running a local webview resource server,
-        so readable local assets are converted to data URIs.
+        so readable local assets are converted to data URIs and larger or
+        runtime-only assets are rewritten through a scoped local endpoint.
         """
         text = str(html or "")
-        if "webview.local/" not in text:
-            return text
-
         budget = {"bytes": 0}
         allowed_roots = self._webview_resource_roots(local_resource_roots)
+        endpoint_base = ""
+        endpoint_origin = ""
+        view_key = str(view_id or "").strip()
+        if view_key:
+            endpoint_base, endpoint_origin = self._register_webview_resource_view(
+                view_key, local_resource_roots)
+        if "webview.local/" not in text and not endpoint_base:
+            return text
         resource_map: Dict[str, str] = {}
 
         def file_to_data_uri(path: str) -> str:
@@ -1021,24 +1219,45 @@ class AIEditorAPI:
         def local_url_repl(match: re.Match) -> str:
             url = match.group(0)
             path = self._webview_local_path_from_url(url)
-            data_uri = file_to_data_uri(path) if path else ""
+            if not path or not self._webview_path_allowed(path, allowed_roots):
+                return url
+            data_uri = file_to_data_uri(path)
             if data_uri:
                 resource_map[url] = data_uri
-            return data_uri or url
+                return data_uri
+            if endpoint_base:
+                server = self.__class__._webview_resource_server
+                if server is not None:
+                    return server.resource_url(view_key, url)
+            return url
 
         prepared = _WEBVIEW_LOCAL_URL_RE.sub(local_url_repl, text)
+        prefix_parts: List[str] = []
         if resource_map:
             map_json = json.dumps(resource_map, ensure_ascii=False).replace(
                 "<", "\\u003c")
-            prepared = (
+            prefix_parts.append(
                 '<script id="sao-webview-resource-map" '
                 'type="application/json">'
-                f"{map_json}</script>{prepared}"
+                f"{map_json}</script>"
             )
-        return self._relax_webview_csp_for_data_uris(prepared)
+        if endpoint_base:
+            endpoint_json = json.dumps(
+                {"base": endpoint_base}, ensure_ascii=False).replace(
+                    "<", "\\u003c")
+            prefix_parts.append(
+                '<script id="sao-webview-resource-endpoint" '
+                'type="application/json">'
+                f"{endpoint_json}</script>"
+            )
+        if prefix_parts:
+            prepared = "".join(prefix_parts) + prepared
+        return self._relax_webview_csp_for_data_uris(
+            prepared, endpoint_origin=endpoint_origin)
 
     @staticmethod
-    def _relax_webview_csp_for_data_uris(html: str) -> str:
+    def _relax_webview_csp_for_data_uris(
+            html: str, endpoint_origin: str = "") -> str:
         def csp_repl(match: re.Match) -> str:
             content = match.group(3)
             additions = {
@@ -1047,6 +1266,14 @@ class AIEditorAPI:
                 "script-src": ["data:"],
                 "style-src": ["data:", "'unsafe-inline'"],
             }
+            if endpoint_origin:
+                for directive in (
+                        "child-src", "connect-src", "default-src",
+                        "font-src", "img-src", "media-src",
+                        "script-src", "style-src", "worker-src"):
+                    additions.setdefault(directive, [])
+                    if endpoint_origin not in additions[directive]:
+                        additions[directive].append(endpoint_origin)
             rebuilt = []
             seen = set()
             for directive in content.split(";"):
@@ -8787,6 +9014,7 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
         def _on_closing():
             api.cancel()
             api._shutdown_node_extension_host()
+            api._stop_webview_resource_server()
 
         window.events.closing += _on_closing
         window.events.closed += _on_closed
