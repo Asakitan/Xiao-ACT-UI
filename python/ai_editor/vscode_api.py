@@ -1031,6 +1031,7 @@ class VscodeNamespace:
         self._debug_api: Optional[Dict[str, Any]] = None
         self._extensions_api: Optional[Dict[str, Any]] = None
         self._language_command_disposables: List[Callable] = []
+        self._language_provider_request_callback: Optional[Callable[[Dict[str, Any]], Any]] = None
         try:
             host.on_did_change(self._on_host_extensions_changed)
         except Exception:
@@ -1081,6 +1082,65 @@ class VscodeNamespace:
                 matches.append((score, entry))
         matches.sort(key=lambda item: item[0], reverse=True)
         return [entry for _score, entry in matches]
+
+    @staticmethod
+    def _position_payload(position: Any) -> Dict[str, int]:
+        pos = _coerce_position(position)
+        return {
+            "line": int(getattr(pos, "line", 0)),
+            "character": int(getattr(pos, "character", 0)),
+        }
+
+    @classmethod
+    def _range_payload(cls, range_value: Any) -> Dict[str, Dict[str, int]]:
+        rng = _coerce_range(range_value)
+        return {
+            "start": cls._position_payload(rng.start),
+            "end": cls._position_payload(rng.end),
+        }
+
+    @classmethod
+    def _diagnostic_payload(cls, diagnostic: Any) -> Any:
+        if isinstance(diagnostic, dict):
+            return dict(diagnostic)
+        return {
+            "range": cls._range_payload(getattr(diagnostic, "range", None)),
+            "message": str(getattr(diagnostic, "message", "")),
+            "severity": getattr(diagnostic, "severity", None),
+            "source": getattr(diagnostic, "source", ""),
+            "code": getattr(diagnostic, "code", None),
+        }
+
+    @staticmethod
+    def _provider_values(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _request_external_language_provider(
+            self, kind: str, document: Any, **payload: Any) -> Any:
+        callback = self._language_provider_request_callback
+        if callback is None:
+            return None
+        request = {
+            "kind": kind,
+            "uri": str(getattr(document, "uri", "")),
+            "languageId": str(getattr(document, "languageId", "plaintext")),
+            "text": document.getText() if hasattr(document, "getText") else "",
+            "version": getattr(document, "version", 1),
+        }
+        request.update(payload)
+        try:
+            result = _resolve_provider_result(callback(request), default=None)
+        except Exception:
+            return None
+        if isinstance(result, dict) and "ok" in result:
+            if not result.get("ok"):
+                return None
+            return result.get("value")
+        return result
 
     def _call_language_provider(
             self,
@@ -1149,6 +1209,16 @@ class VscodeNamespace:
                 continue
             items.extend(normalized.items)
             incomplete = incomplete or bool(normalized.isIncomplete)
+        external = self._request_external_language_provider(
+            "completion",
+            document,
+            position=self._position_payload(pos),
+            triggerCharacter=trigger or None,
+            context=context)
+        normalized_external = _completion_list_from_provider_result(external)
+        if normalized_external is not None:
+            items.extend(normalized_external.items)
+            incomplete = incomplete or bool(normalized_external.isIncomplete)
         return CompletionList(items, incomplete)
 
     def _execute_completion_item_provider(
@@ -1164,23 +1234,34 @@ class VscodeNamespace:
             self, uri: Any, position: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         pos = _coerce_position(position)
-        return self._collect_language_provider_results(
+        results = self._collect_language_provider_results(
             "hover", document, "provideHover",
             (document, pos, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "hover", document, position=self._position_payload(pos))))
+        return results
 
     def _execute_definition_provider(
             self, uri: Any, position: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         pos = _coerce_position(position)
-        return self._collect_language_provider_results(
+        results = self._collect_language_provider_results(
             "definition", document, "provideDefinition",
             (document, pos, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "definition", document, position=self._position_payload(pos))))
+        return results
 
     def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
         document = self._resolve_language_document(uri)
-        return self._collect_language_provider_results(
+        results = self._collect_language_provider_results(
             "documentSymbol", document, "provideDocumentSymbols",
             (document, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider("documentSymbol", document)))
+        return results
 
     def _execute_code_action_provider(
             self, uri: Any, range: Any = None, kind: Any = None) -> List[Any]:
@@ -1189,16 +1270,32 @@ class VscodeNamespace:
         context = {"diagnostics": self._get_diagnostics(document.uri)}
         if kind is not None:
             context["only"] = kind
-        return self._collect_language_provider_results(
+        results = self._collect_language_provider_results(
             "codeActions", document, "provideCodeActions",
             (document, action_range, context, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "codeActions",
+                document,
+                range=self._range_payload(action_range),
+                diagnostics=[
+                    self._diagnostic_payload(item)
+                    for item in context.get("diagnostics", [])
+                ],
+                only=kind)))
+        return results
 
     def _execute_format_document_provider(
             self, uri: Any, options: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
-        return self._collect_language_provider_results(
+        format_options = options or {}
+        results = self._collect_language_provider_results(
             "formatting", document, "provideDocumentFormattingEdits",
-            (document, options or {}, CancellationToken.NONE))
+            (document, format_options, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "formatting", document, options=format_options)))
+        return results
 
     def set_ui_bridge(self, bridge: UIBridge) -> None:
         """Connect this namespace to a live HTML UI bridge (e.g. AIEditorAPI).
@@ -1220,6 +1317,12 @@ class VscodeNamespace:
             callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         """Notify the host when runtime TreeView providers or data change."""
         self._tree_view_change_callback = callback
+
+    def set_language_provider_request_callback(
+            self,
+            callback: Optional[Callable[[Dict[str, Any]], Any]]) -> None:
+        """Ask an external extension host for language-provider results."""
+        self._language_provider_request_callback = callback
 
     def _notify_tree_view_changed(
             self,

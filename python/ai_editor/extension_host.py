@@ -1579,6 +1579,8 @@ class NodeExtensionHost:
         ] = []
         self._tree_request_lock = threading.Lock()
         self._tree_requests: Dict[str, Dict[str, Any]] = {}
+        self._language_request_lock = threading.Lock()
+        self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
         self._shutting_down = False
 
@@ -1879,11 +1881,32 @@ class NodeExtensionHost:
             kind = str(msg.get("kind", ""))
             selector = msg.get("selector")
             self._language_providers.append({
+                "handle": msg.get("handle"),
+                "extensionId": str(msg.get("extensionId", "")),
                 "kind": kind,
                 "selector": selector,
+                "triggers": list(msg.get("triggers") or []),
+                "metadata": msg.get("metadata"),
             })
             _log.info("[NodeExtHost] Language provider registered: %s "
                       "selector=%s", kind, selector)
+
+        elif msg_type == "language_provider_disposed":
+            handle = msg.get("handle")
+            self._language_providers = [
+                item for item in self._language_providers
+                if item.get("handle") != handle
+            ]
+
+        elif msg_type == "language_provider_response":
+            request_id = str(msg.get("requestId", ""))
+            with self._language_request_lock:
+                pending = self._language_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
 
         elif msg_type == "tree_response":
             request_id = str(msg.get("requestId", ""))
@@ -2038,6 +2061,68 @@ class NodeExtensionHost:
         finally:
             with self._tree_request_lock:
                 self._tree_requests.pop(request_id, None)
+
+    def request_language_provider(
+            self, payload: Dict[str, Any], default: Any = None,
+            timeout: float = 0.85) -> Any:
+        """Synchronously request language-provider data from the Node host."""
+        result = self.request_language_provider_result(
+            payload, default=default, timeout=timeout)
+        return result.get("value", default) if result.get("ok") else default
+
+    def request_language_provider_result(
+            self, payload: Dict[str, Any], default: Any = None,
+            timeout: float = 0.85) -> Dict[str, Any]:
+        """Return a structured Node language-provider request result."""
+        if not self.is_running:
+            return {
+                "ok": False,
+                "value": default,
+                "error": "Node extension host is not running",
+            }
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._language_request_lock:
+            self._language_requests[request_id] = {"event": event}
+        try:
+            msg = {
+                "type": "language_provider_request",
+                "requestId": request_id,
+            }
+            msg.update(dict(payload or {}))
+            sent = self._send(msg)
+            if not sent:
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node language provider request could not be sent",
+                }
+            if not event.wait(timeout):
+                return {
+                    "ok": False,
+                    "value": default,
+                    "error": "Node language provider request timed out",
+                    "timeout": True,
+                }
+            with self._language_request_lock:
+                pending = self._language_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                return {
+                    "ok": True,
+                    "value": response.get("value", default),
+                }
+            return {
+                "ok": False,
+                "value": default,
+                "error": (
+                    response.get("error")
+                    if isinstance(response, dict)
+                    else "Node language provider failed"),
+            }
+        finally:
+            with self._language_request_lock:
+                self._language_requests.pop(request_id, None)
 
     def send_tree_view_event(
             self, view_id: str, event: str, element: Any = None,

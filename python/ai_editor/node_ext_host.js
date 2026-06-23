@@ -254,6 +254,7 @@ const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
+let _nextLanguageProviderHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
 const _debugAdapterFactories = new Map();   // type -> factory
@@ -475,6 +476,190 @@ function _deserializeArgFromPython(value) {
         return result;
     }
     return value;
+}
+
+function _serializeLanguagePosition(value) {
+    return {
+        line: Number(value?.line || 0),
+        character: Number(value?.character || 0),
+    };
+}
+
+function _serializeLanguageRange(value) {
+    return {
+        start: _serializeLanguagePosition(value?.start),
+        end: _serializeLanguagePosition(value?.end),
+    };
+}
+
+function _serializeLanguageUri(value) {
+    if (value instanceof Uri) return value.toString();
+    if (value && typeof value.toString === 'function' && value.scheme) return value.toString();
+    return value === undefined || value === null ? value : String(value);
+}
+
+function _serializeLanguageValue(value) {
+    if (value === undefined || value === null) return value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+    if (value instanceof Uri) return _serializeLanguageUri(value);
+    if (value instanceof Position) return _serializeLanguagePosition(value);
+    if (value instanceof Range) return _serializeLanguageRange(value);
+    if (value instanceof Location) {
+        return {
+            uri: _serializeLanguageUri(value.uri),
+            range: _serializeLanguageRange(value.range),
+        };
+    }
+    if (Array.isArray(value)) return value.map(_serializeLanguageValue);
+    if (typeof value === 'object') {
+        const result = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (typeof item !== 'function') result[key] = _serializeLanguageValue(item);
+        }
+        return result;
+    }
+    return String(value);
+}
+
+function _positionFromPayload(value) {
+    if (value instanceof Position) return value;
+    return new Position(Number(value?.line || 0), Number(value?.character || 0));
+}
+
+function _rangeFromPayload(value) {
+    if (value instanceof Range) return value;
+    return new Range(_positionFromPayload(value?.start), _positionFromPayload(value?.end));
+}
+
+function _uriFromPayload(value) {
+    if (value instanceof Uri) return value;
+    if (typeof value === 'string' && value) return Uri.parse(value);
+    if (value && typeof value === 'object') {
+        if (value.scheme) {
+            return new Uri(value.scheme, value.authority || '', value.path || '', value.query || '', value.fragment || '');
+        }
+        if (value.uri || value.path) return _uriFromPayload(value.uri || value.path);
+    }
+    return Uri.file('');
+}
+
+function _languageIdForUri(uri) {
+    const ext = path.extname(uri?.path || '').toLowerCase();
+    return ({
+        '.py': 'python',
+        '.js': 'javascript',
+        '.jsx': 'javascriptreact',
+        '.ts': 'typescript',
+        '.tsx': 'typescriptreact',
+        '.json': 'json',
+        '.md': 'markdown',
+        '.html': 'html',
+        '.css': 'css',
+        '.cs': 'csharp',
+        '.xml': 'xml',
+        '.yaml': 'yaml',
+        '.yml': 'yaml',
+    })[ext] || 'plaintext';
+}
+
+function _offsetAt(text, position) {
+    const targetLine = Math.max(0, Number(position?.line || 0));
+    const targetCharacter = Math.max(0, Number(position?.character || 0));
+    let line = 0;
+    let character = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        if (line === targetLine && character >= targetCharacter) return i;
+        const ch = text[i];
+        if (ch === '\r' || ch === '\n') {
+            if (ch === '\r' && text[i + 1] === '\n') i += 1;
+            line += 1;
+            character = 0;
+            if (line > targetLine) return i + 1;
+        } else {
+            character += 1;
+        }
+    }
+    return text.length;
+}
+
+function _positionAt(text, offset) {
+    const target = Math.max(0, Math.min(Number(offset || 0), text.length));
+    let line = 0;
+    let character = 0;
+    for (let i = 0; i < target; i += 1) {
+        const ch = text[i];
+        if (ch === '\r' || ch === '\n') {
+            if (ch === '\r' && text[i + 1] === '\n' && i + 1 < target) i += 1;
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+    return new Position(line, character);
+}
+
+function _createLanguageDocument(msg) {
+    const uri = _uriFromPayload(msg.uri);
+    const text = String(msg.text ?? '');
+    const languageId = String(msg.languageId || _languageIdForUri(uri));
+    return {
+        uri,
+        fileName: uri.scheme === 'file' ? uri.fsPath : uri.toString(),
+        languageId,
+        version: Number(msg.version || 1),
+        isDirty: false,
+        isUntitled: uri.scheme === 'untitled',
+        get lineCount() { return text.split(/\r\n|\r|\n/).length; },
+        getText(range) {
+            if (!range) return text;
+            const normalized = _rangeFromPayload(range);
+            return text.slice(
+                _offsetAt(text, normalized.start),
+                _offsetAt(text, normalized.end),
+            );
+        },
+        lineAt(lineOrPosition) {
+            const line = typeof lineOrPosition === 'number'
+                ? lineOrPosition
+                : Number(lineOrPosition?.line || 0);
+            const lines = text.split(/\r\n|\r|\n/);
+            const value = lines[Math.max(0, Math.min(line, lines.length - 1))] || '';
+            return {
+                lineNumber: line,
+                text: value,
+                range: new Range(line, 0, line, value.length),
+                rangeIncludingLineBreak: new Range(line, 0, line, value.length),
+                firstNonWhitespaceCharacterIndex: Math.max(0, value.search(/\S/)),
+                isEmptyOrWhitespace: !/\S/.test(value),
+            };
+        },
+        offsetAt(position) { return _offsetAt(text, _positionFromPayload(position)); },
+        positionAt(offset) { return _positionAt(text, offset); },
+        getWordRangeAtPosition() { return undefined; },
+        save() { return Promise.resolve(true); },
+    };
+}
+
+function _matchDocumentSelector(selector, document) {
+    if (!selector || !document) return 0;
+    const docLang = document.languageId || '';
+    const docScheme = (document.uri && document.uri.scheme) || 'file';
+    const selectors = Array.isArray(selector) ? selector : [selector];
+    let best = 0;
+    for (const sel of selectors) {
+        let score = 0;
+        if (typeof sel === 'string') {
+            score = (sel === docLang) ? 10 : 0;
+        } else if (typeof sel === 'object' && sel !== null) {
+            const langMatch = !sel.language || sel.language === docLang || sel.language === '*';
+            const schemeMatch = !sel.scheme || sel.scheme === docScheme || sel.scheme === '*';
+            if (langMatch && schemeMatch) score = 10;
+            if (sel.pattern) score = Math.max(score, 5);
+        }
+        best = Math.max(best, score);
+    }
+    return best;
 }
 
 function _subscribeTreeDataChanges(viewId, provider) {
@@ -851,13 +1036,33 @@ function buildVscodeModule(extDesc, extensionPath) {
         // --- Namespace: languages ---
         languages: (() => {
             const _registerLangProvider = (kind, selector, provider, extra) => {
-                const entry = Object.assign({ kind, selector, provider }, extra || {});
+                const entry = Object.assign({
+                    handle: _nextLanguageProviderHandle++,
+                    extensionId: extDesc.extensionId || '',
+                    kind,
+                    selector,
+                    provider,
+                }, extra || {});
                 _languageProviders.push(entry);
-                send({ type: 'language_provider_registered', kind, selector });
+                send({
+                    type: 'language_provider_registered',
+                    handle: entry.handle,
+                    extensionId: entry.extensionId,
+                    kind,
+                    selector,
+                    triggers: entry.triggers || [],
+                    metadata: entry.metadata || null,
+                });
                 log(`register ${kind} provider: ${JSON.stringify(selector)}`);
                 const d = new Disposable(() => {
                     const idx = _languageProviders.indexOf(entry);
                     if (idx >= 0) _languageProviders.splice(idx, 1);
+                    send({
+                        type: 'language_provider_disposed',
+                        handle: entry.handle,
+                        kind,
+                        selector,
+                    });
                 });
                 subscriptions.push(d);
                 return d;
@@ -921,28 +1126,17 @@ function buildVscodeModule(extDesc, extensionPath) {
                 },
                 onDidChangeDiagnostics: _onDidChangeDiagnosticsEmitter.event,
                 match(selector, document) {
-                    if (!selector || !document) return 0;
-                    const docLang = document.languageId || '';
-                    const docScheme = (document.uri && document.uri.scheme) || 'file';
-                    const selectors = Array.isArray(selector) ? selector : [selector];
-                    let best = 0;
-                    for (const sel of selectors) {
-                        let score = 0;
-                        if (typeof sel === 'string') {
-                            score = (sel === docLang) ? 10 : 0;
-                        } else if (typeof sel === 'object' && sel !== null) {
-                            const langMatch = !sel.language || sel.language === docLang || sel.language === '*';
-                            const schemeMatch = !sel.scheme || sel.scheme === docScheme || sel.scheme === '*';
-                            if (langMatch && schemeMatch) score = 10;
-                            if (sel.pattern) score = Math.max(score, 5);
-                        }
-                        best = Math.max(best, score);
-                    }
-                    return best;
+                    return _matchDocumentSelector(selector, document);
                 },
-                registerDocumentFormattingEditProvider() { return new Disposable(() => {}); },
-                registerDocumentLinkProvider() { return new Disposable(() => {}); },
-                registerInlineCompletionItemProvider() { return new Disposable(() => {}); },
+                registerDocumentFormattingEditProvider(selector, provider) {
+                    return _registerLangProvider('formatting', selector, provider);
+                },
+                registerDocumentLinkProvider(selector, provider) {
+                    return _registerLangProvider('documentLink', selector, provider);
+                },
+                registerInlineCompletionItemProvider(selector, provider) {
+                    return _registerLangProvider('inlineCompletion', selector, provider);
+                },
                 getLanguages() { return Promise.resolve([]); },
             };
         })(),
@@ -1400,6 +1594,146 @@ async function executeCommand(commandId, args) {
     }
 }
 
+function _languageProviderMethod(kind) {
+    return ({
+        completion: 'provideCompletionItems',
+        hover: 'provideHover',
+        definition: 'provideDefinition',
+        documentSymbol: 'provideDocumentSymbols',
+        codeActions: 'provideCodeActions',
+        formatting: 'provideDocumentFormattingEdits',
+    })[kind] || '';
+}
+
+function _normalizeProviderItems(value) {
+    if (value === undefined || value === null) return [];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value[Symbol.iterator] === 'function' && typeof value !== 'string') {
+        try { return Array.from(value); } catch {}
+    }
+    return [value];
+}
+
+function _completionListFromProviderValue(value) {
+    if (value === undefined || value === null) {
+        return { items: [], isIncomplete: false };
+    }
+    if (Array.isArray(value)) {
+        return { items: value, isIncomplete: false };
+    }
+    if (value.items !== undefined) {
+        return {
+            items: _normalizeProviderItems(value.items),
+            isIncomplete: !!value.isIncomplete,
+        };
+    }
+    return { items: [value], isIncomplete: false };
+}
+
+async function handleLanguageProviderRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const kind = String(msg.kind || '');
+    const methodName = _languageProviderMethod(kind);
+    try {
+        if (!requestId) throw new Error('Missing language provider requestId');
+        if (!methodName) throw new Error(`Unsupported language provider kind: ${kind}`);
+        const document = _createLanguageDocument(msg.document || msg);
+        const position = _positionFromPayload(msg.position);
+        const range = _rangeFromPayload(msg.range);
+        const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+        const trigger = msg.triggerCharacter === undefined || msg.triggerCharacter === null
+            ? ''
+            : String(msg.triggerCharacter);
+        const context = msg.context && typeof msg.context === 'object'
+            ? Object.assign({}, msg.context)
+            : {};
+        if (trigger) {
+            context.triggerKind = 2;
+            context.triggerCharacter = trigger;
+        } else if (kind === 'completion') {
+            context.triggerKind = context.triggerKind || 1;
+        }
+        const providers = _languageProviders
+            .filter(entry => entry.kind === kind)
+            .map(entry => ({ entry, score: _matchDocumentSelector(entry.selector, document) }))
+            .filter(item => item.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .map(item => item.entry);
+
+        if (kind === 'completion') {
+            const items = [];
+            let isIncomplete = false;
+            for (const entry of providers) {
+                const triggers = (entry.triggers || []).map(item => String(item));
+                if (trigger && !triggers.includes(trigger)) continue;
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, position, token, context);
+                    const normalized = _completionListFromProviderValue(value);
+                    items.push(...normalized.items);
+                    isIncomplete = isIncomplete || normalized.isIncomplete;
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: {
+                    items: _serializeLanguageValue(items),
+                    isIncomplete,
+                },
+            });
+            return;
+        }
+
+        const values = [];
+        for (const entry of providers) {
+            const provider = entry.provider;
+            const fn = provider && provider[methodName];
+            if (typeof fn !== 'function') continue;
+            try {
+                let value;
+                if (kind === 'codeActions') {
+                    value = await fn.call(provider, document, range, {
+                        diagnostics: msg.diagnostics || [],
+                        only: msg.only,
+                        triggerKind: msg.triggerKind,
+                    }, token);
+                } else if (kind === 'formatting') {
+                    value = await fn.call(provider, document, msg.options || {}, token);
+                } else if (kind === 'documentSymbol') {
+                    value = await fn.call(provider, document, token);
+                } else {
+                    value = await fn.call(provider, document, position, token);
+                }
+                values.push(..._normalizeProviderItems(value));
+            } catch (err) {
+                log(`language provider ${kind} error: ${err.message}`);
+            }
+        }
+        send({
+            type: 'language_provider_response',
+            requestId,
+            ok: true,
+            kind,
+            value: _serializeLanguageValue(values),
+        });
+    } catch (err) {
+        send({
+            type: 'language_provider_response',
+            requestId,
+            ok: false,
+            kind,
+            error: err?.message || String(err),
+        });
+    }
+}
+
 async function handleTreeRequest(msg) {
     const requestId = String(msg.requestId || '');
     const viewId = String(msg.viewId || '');
@@ -1499,6 +1833,9 @@ async function handleMessage(msg) {
             break;
         case 'tree_request':
             await handleTreeRequest(msg);
+            break;
+        case 'language_provider_request':
+            await handleLanguageProviderRequest(msg);
             break;
         case 'tree_view_event':
             handleTreeViewEvent(msg);

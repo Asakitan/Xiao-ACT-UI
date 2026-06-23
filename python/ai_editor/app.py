@@ -3759,6 +3759,8 @@ class AIEditorAPI:
             return
 
         self._node_ext_host = host
+        self._vscode_ns.set_language_provider_request_callback(
+            self._request_node_language_provider)
         activated = host.activate_all(node_exts)
         print(f"[NodeExtHost] {activated}/{len(node_exts)} JS extension(s) "
               "sent for activation.")
@@ -3768,6 +3770,17 @@ class AIEditorAPI:
 
         # Handle config_set messages from Node (extension called config.update)
         host.on_config_set(self._handle_node_config_set)
+
+    def _request_node_language_provider(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Bridge VS Code language-provider execution into the Node host."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not host.is_running:
+            return {
+                "ok": False,
+                "value": None,
+                "error": "Node extension host is not running",
+            }
+        return host.request_language_provider_result(payload, default=None)
 
     def _sync_settings_to_node_host(self) -> None:
         """Push the full settings dict to the Node extension host.
@@ -3910,6 +3923,7 @@ class AIEditorAPI:
         if host is not None:
             host.stop()
             self._node_ext_host = None
+        self._vscode_ns.set_language_provider_request_callback(None)
 
     def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
         """Forward a webview message to the Node extension host."""

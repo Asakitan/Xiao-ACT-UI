@@ -3256,7 +3256,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.chat_providers import ChatProviderDef
     from ai_editor.extension_host import (
         EventEmitter, ExtensionDescription, ExtensionHost, NodeExtensionHost,
-        NodeTreeDataProvider)
+        NodeTreeDataProvider, Position, Range, Uri)
     from ai_editor.node_runtime import get_node_path
     from ai_editor.vscode_api import LanguageModelToolResult
 
@@ -4116,6 +4116,40 @@ function activate(context) {
   view.onDidExpandElement(evt => output.appendLine('expand:' + evt.element.id));
   view.onDidCollapseElement(evt => output.appendLine('collapse:' + evt.element.id));
   void view.reveal(root, { select: false, focus: true, expand: 2 });
+  vscode.languages.registerCompletionItemProvider('python', {
+    provideCompletionItems(document, position, token, context) {
+      const item = new vscode.CompletionItem('nodeCompletion', vscode.CompletionItemKind.Function);
+      item.detail = document.languageId + ':' + (context.triggerCharacter || '');
+      return new vscode.CompletionList([item], true);
+    },
+  }, '.');
+  vscode.languages.registerHoverProvider('python', {
+    provideHover(document, position, token) {
+      return new vscode.Hover(['node hover ' + document.getText().slice(0, 4)], new vscode.Range(position, position));
+    },
+  });
+  vscode.languages.registerDefinitionProvider('python', {
+    provideDefinition(document, position, token) {
+      return new vscode.Location(document.uri, new vscode.Range(0, 0, 0, 4));
+    },
+  });
+  vscode.languages.registerDocumentSymbolProvider('python', {
+    provideDocumentSymbols(document, token) {
+      return [{ name: 'nodeSymbol', kind: vscode.SymbolKind.Function, range: new vscode.Range(0, 0, 0, 4) }];
+    },
+  });
+  vscode.languages.registerCodeActionsProvider('python', {
+    provideCodeActions(document, range, context, token) {
+      const action = new vscode.CodeAction('node quick fix', vscode.CodeActionKind.QuickFix);
+      action.diagnostics = context.diagnostics || [];
+      return [action];
+    },
+  });
+  vscode.languages.registerDocumentFormattingEditProvider('python', {
+    provideDocumentFormattingEdits(document, options, token) {
+      return [vscode.TextEdit.replace(new vscode.Range(0, 0, 0, 4), 'NODE')];
+    },
+  });
   vscode.commands.registerCommand('selftest.node.openItem', element => {
     output.appendLine('open:' + (element && element.id));
   });
@@ -4182,6 +4216,61 @@ module.exports = { activate, deactivate };
                     lambda: "selftest.node.openItem"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_language_registered = _wait_until(
+                    lambda: any(
+                        item.get("kind") == "completion"
+                        and item.get("triggers") == ["."]
+                        for item in node_host.list_language_providers()
+                    ),
+                    timeout=3.0)
+                api._vscode_ns.set_language_provider_request_callback(
+                    lambda payload: node_host.request_language_provider_result(
+                        payload, default=None))
+                node_provider_sample = os.path.join(node_tree_tmp, "node_provider.py")
+                with open(node_provider_sample, "w", encoding="utf-8") as fh:
+                    fh.write("print('node provider')\n")
+                node_uri = Uri.file(node_provider_sample)
+                node_completion = api._ext_host.commands.execute(
+                    "vscode.executeCompletionItemProvider",
+                    node_uri, Position(0, 1), ".")
+                node_hover = api._ext_host.commands.execute(
+                    "vscode.executeHoverProvider", node_uri, Position(0, 1))
+                node_definition = api._ext_host.commands.execute(
+                    "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
+                node_symbols = api._ext_host.commands.execute(
+                    "vscode.executeDocumentSymbolProvider", node_uri)
+                node_actions = api._ext_host.commands.execute(
+                    "vscode.executeCodeActionProvider",
+                    node_uri, Range(Position(0, 0), Position(0, 1)),
+                    "quickfix")
+                node_format_edits = api._ext_host.commands.execute(
+                    "vscode.executeFormatDocumentProvider",
+                    node_uri, {"tabSize": 2})
+                node_completion_items = getattr(node_completion, "items", [])
+                node_completion_labels = [
+                    item.get("label") if isinstance(item, dict)
+                    else getattr(item, "label", "")
+                    for item in node_completion_items
+                ]
+                _check("node host language provider invokes JS completion",
+                       node_language_registered
+                       and getattr(node_completion, "isIncomplete", False) is True
+                       and "nodeCompletion" in node_completion_labels)
+                _check("node host language provider invokes JS hover",
+                       node_hover
+                       and node_hover[0].get("contents") == ["node hover prin"])
+                _check("node host language provider invokes JS definition",
+                       node_definition
+                       and node_definition[0].get("uri", "").endswith("node_provider.py"))
+                _check("node host language provider invokes JS document symbols",
+                       node_symbols
+                       and node_symbols[0].get("name") == "nodeSymbol")
+                _check("node host language provider invokes JS code actions",
+                       node_actions
+                       and node_actions[0].get("title") == "node quick fix")
+                _check("node host language provider invokes JS formatting",
+                       node_format_edits
+                       and node_format_edits[0].get("newText") == "NODE")
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {
@@ -4245,6 +4334,7 @@ module.exports = { activate, deactivate };
                 _check("node host tree view events and item actions receive JS element",
                        action_result.get("ok") is True and output_seen)
             finally:
+                api._vscode_ns.set_language_provider_request_callback(None)
                 node_host.stop(timeout=1.0)
                 api._node_ext_host = previous_node_host
 
