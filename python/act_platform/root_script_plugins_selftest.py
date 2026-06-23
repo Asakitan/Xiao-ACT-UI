@@ -17,15 +17,21 @@ from .plugins import PluginManager
 from .runtime import act_plugin_action, act_plugin_disable, act_plugin_enable, render_overlays
 
 try:
-    from render.model3d_backend import evaluate_retarget_pose, get_model_metadata
+    from render.model3d_backend import evaluate_retarget_pose, get_action_metadata, get_model_metadata
 except Exception:  # pragma: no cover - render package can be absent in narrow imports
     evaluate_retarget_pose = None  # type: ignore[assignment]
+    get_action_metadata = None  # type: ignore[assignment]
     get_model_metadata = None  # type: ignore[assignment]
 
 try:
     from render.model3d_overlay import render_model3d_node
 except Exception:  # pragma: no cover - render package can be absent in narrow imports
     render_model3d_node = None  # type: ignore[assignment]
+
+try:
+    from render import model3d_native_moderngl as model3d_moderngl_provider
+except Exception:  # pragma: no cover - optional native provider
+    model3d_moderngl_provider = None  # type: ignore[assignment]
 
 
 def _workspace_root() -> Path:
@@ -796,6 +802,53 @@ def run_selftest() -> dict[str, Any]:
                                 "stage": "stickwoman_representative_native_unity_pose",
                                 "pose": pose,
                             }
+                        action_meta = (
+                            get_action_metadata(representative_node)
+                            if callable(get_action_metadata)
+                            else {}
+                        )
+                        selected = action_meta.get("selected") if isinstance(action_meta.get("selected"), dict) else {}
+                        unity_clips = selected.get("unity_clips") if isinstance(selected.get("unity_clips"), list) else []
+                        unity_curve_count = sum(
+                            int(clip.get("curve_count") or 0)
+                            for clip in unity_clips
+                            if isinstance(clip, dict)
+                        )
+                        unity_float_curves = (
+                            selected.get("unity_float_curves")
+                            if isinstance(selected.get("unity_float_curves"), dict)
+                            else {}
+                        )
+                        unity_blendshapes = (
+                            selected.get("unity_blendshapes")
+                            if isinstance(selected.get("unity_blendshapes"), dict)
+                            else {}
+                        )
+                        if len(unity_clips) < 2 or unity_curve_count < 100 or not unity_float_curves or not unity_blendshapes:
+                            return {
+                                "ok": False,
+                                "plugin_id": plugin_id,
+                                "stage": "stickwoman_representative_native_unity_curves",
+                                "clip_count": len(unity_clips),
+                                "curve_count": unity_curve_count,
+                                "float_curve_count": len(unity_float_curves),
+                                "blendshape_count": len(unity_blendshapes),
+                                "action": action_meta,
+                            }
+                        motion_sample = pose.get("motion_sample") if isinstance(pose.get("motion_sample"), dict) else {}
+                        if (
+                            motion_sample.get("motion_source") != "unity_anim"
+                            or int(motion_sample.get("unity_curve_count") or 0) < 100
+                        ):
+                            return {
+                                "ok": False,
+                                "plugin_id": plugin_id,
+                                "stage": "stickwoman_representative_native_unity_motion_sample",
+                                "pose": pose,
+                            }
+                        state["representative_unity_clip_count"] = len(unity_clips)
+                        state["representative_unity_curve_count"] = unity_curve_count
+                        state["representative_unity_blendshape_count"] = len(unity_blendshapes)
                 procedural_json = json.dumps({
                     "schema": "sao.humanoid.procedural.v1",
                     "enabled": True,
@@ -1061,6 +1114,7 @@ def run_selftest() -> dict[str, Any]:
                     preview_faces = preview.get("faces") if isinstance(preview.get("faces"), list) else []
                     skin = preview.get("skin") if isinstance(preview.get("skin"), list) else []
                     face_materials = preview.get("face_materials") if isinstance(preview.get("face_materials"), list) else []
+                    preview_uvs = preview.get("uvs") if isinstance(preview.get("uvs"), list) else []
                     vertex_count = int(mesh.get("vertex_count") or 0)
                     face_count = int(mesh.get("face_count") or 0)
                     preview_vertex_count = len(preview_vertices)
@@ -1085,6 +1139,26 @@ def run_selftest() -> dict[str, Any]:
                     material_names = {str(item) for item in meta.get("materials") or ()}
                     preview_material_names = {str(item) for item in face_materials if str(item or "").strip()}
                     expected_tomurai_materials = {"Hair", "Clothes", "Outer", "Body", "Face", "Other"}
+                    texture_batch_count = 0
+                    if model3d_moderngl_provider is not None:
+                        project_vertices = getattr(model3d_moderngl_provider, "_project_vertices", None)
+                        textured_arrays = getattr(model3d_moderngl_provider, "_mesh_textured_arrays", None)
+                        if callable(project_vertices) and callable(textured_arrays):
+                            preview_points = [
+                                (float(point[0]), float(point[1]), float(point[2]))
+                                for point in preview_vertices
+                                if isinstance(point, list) and len(point) >= 3
+                            ]
+                            projected = project_vertices(
+                                preview_points,
+                                int(model_node.get("width") or 420),
+                                int(model_node.get("height") or 560),
+                                model_node,
+                            )
+                            texture_batch_count = len(
+                                textured_arrays(projected, preview_faces, int(model_node.get("width") or 420),
+                                                int(model_node.get("height") or 560), preview, meta)
+                            )
                     if (
                         vertex_count < 30000
                         or face_count < 50000
@@ -1093,12 +1167,14 @@ def run_selftest() -> dict[str, Any]:
                         or bool(preview.get("truncated"))
                         or len(skin) != preview_vertex_count
                         or len(face_materials) != preview_face_count
+                        or len(preview_uvs) != preview_vertex_count
                         or len(bone_names) < 100
                         or expected_tomurai_materials - material_names
                         or expected_tomurai_materials - preview_material_names
                         or len(base_textures) < 6
                         or missing_textures
                         or len(native_files) < 28
+                        or texture_batch_count < 6
                     ):
                         return {
                             "ok": False,
@@ -1114,12 +1190,14 @@ def run_selftest() -> dict[str, Any]:
                                 "preview_skin_count": len(skin),
                                 "preview_skin_source": preview.get("skin_source"),
                                 "preview_face_material_count": len(face_materials),
+                                "preview_uv_count": len(preview_uvs),
                                 "bone_count": len(bone_names),
                                 "materials": sorted(material_names),
                                 "preview_materials": sorted(preview_material_names),
                                 "base_textures": base_textures,
                                 "missing_textures": missing_textures,
                                 "native_unity_file_count": len(native_files),
+                                "texture_batch_count": texture_batch_count,
                             },
                         }
                     if callable(render_model3d_node):
@@ -1166,6 +1244,8 @@ def run_selftest() -> dict[str, Any]:
                     state["default_preview_face_count"] = preview_face_count
                     state["default_preview_skin_count"] = len(skin)
                     state["default_preview_face_material_count"] = len(face_materials)
+                    state["default_preview_uv_count"] = len(preview_uvs)
+                    state["default_texture_batch_count"] = texture_batch_count
                     state["default_bone_count"] = len(bone_names)
                     state["default_native_unity_file_count"] = len(native_files)
             if not action.get("ok"):
@@ -1205,6 +1285,11 @@ def run_selftest() -> dict[str, Any]:
                 "default_preview_face_count": state.get("default_preview_face_count"),
                 "default_preview_skin_count": state.get("default_preview_skin_count"),
                 "default_preview_face_material_count": state.get("default_preview_face_material_count"),
+                "default_preview_uv_count": state.get("default_preview_uv_count"),
+                "default_texture_batch_count": state.get("default_texture_batch_count"),
+                "representative_unity_clip_count": state.get("representative_unity_clip_count"),
+                "representative_unity_curve_count": state.get("representative_unity_curve_count"),
+                "representative_unity_blendshape_count": state.get("representative_unity_blendshape_count"),
                 "cache_hit_count": state.get("cache_hit_count"),
                 "pending_turns": state.get("pending_turns"),
                 "queued_flaps": state.get("queued_flaps"),

@@ -729,6 +729,14 @@ def _material_texture_color(
     meta: Mapping[str, Any] | None,
     material_name: str,
 ) -> tuple[int, int, int, int] | None:
+    path = _material_texture_path(meta, material_name)
+    return _average_texture_color(path) if path is not None else None
+
+
+def _material_texture_path(
+    meta: Mapping[str, Any] | None,
+    material_name: str,
+) -> Path | None:
     if not isinstance(meta, Mapping) or not material_name:
         return None
     config = meta.get("materials_config")
@@ -756,9 +764,8 @@ def _material_texture_color(
     if not best:
         return None
     for candidate in _texture_path_candidates(meta, best):
-        color = _average_texture_color(candidate)
-        if color is not None:
-            return color
+        if candidate.is_file():
+            return candidate
     return None
 
 

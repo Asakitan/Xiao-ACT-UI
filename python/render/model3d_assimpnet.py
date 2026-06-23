@@ -101,6 +101,13 @@ def _vec3(value: Any) -> tuple[float, float, float]:
     )
 
 
+def _uv2(value: Any) -> tuple[float, float]:
+    return (
+        _finite_float(getattr(value, "X", 0.0)),
+        _finite_float(getattr(value, "Y", 0.0)),
+    )
+
+
 def _quat4(value: Any) -> tuple[float, float, float, float]:
     x = _finite_float(getattr(value, "X", 0.0))
     y = _finite_float(getattr(value, "Y", 0.0))
@@ -295,8 +302,10 @@ def _balanced_preview_face_indices(full_faces: list[tuple[list[int], str]]) -> l
 def _append_preview_vertex(
     global_index: int,
     full_vertices: list[tuple[float, float, float]],
+    full_uvs: list[tuple[float, float] | None],
     full_skin: list[list[dict[str, Any]]],
     preview_vertices: list[list[float]],
+    preview_uvs: list[list[float] | None],
     preview_skin: list[list[dict[str, Any]]],
     global_to_preview: dict[int, int],
 ) -> int:
@@ -307,16 +316,20 @@ def _append_preview_vertex(
     preview_index = len(preview_vertices)
     global_to_preview[global_index] = preview_index
     preview_vertices.append([point[0], point[1], point[2]])
+    uv = full_uvs[global_index] if global_index < len(full_uvs) else None
+    preview_uvs.append([uv[0], uv[1]] if uv is not None else None)
     preview_skin.append([dict(item) for item in full_skin[global_index]])
     return preview_index
 
 
 def _build_mesh_preview(
     full_vertices: list[tuple[float, float, float]],
+    full_uvs: list[tuple[float, float] | None],
     full_skin: list[list[dict[str, Any]]],
     full_faces: list[tuple[list[int], str]],
-) -> tuple[list[list[float]], list[list[int]], list[str], list[list[dict[str, Any]]]]:
+) -> tuple[list[list[float]], list[list[float] | None], list[list[int]], list[str], list[list[dict[str, Any]]]]:
     preview_vertices: list[list[float]] = []
+    preview_uvs: list[list[float] | None] = []
     preview_faces: list[list[int]] = []
     preview_face_materials: list[str] = []
     preview_skin: list[list[dict[str, Any]]] = []
@@ -324,7 +337,7 @@ def _build_mesh_preview(
     vertex_limit = len(full_vertices) if _MESH_PREVIEW_VERTEX_LIMIT <= 0 else _MESH_PREVIEW_VERTEX_LIMIT
     face_limit = len(full_faces) if _MESH_PREVIEW_FACE_LIMIT <= 0 else _MESH_PREVIEW_FACE_LIMIT
     if not full_vertices or vertex_limit <= 0:
-        return preview_vertices, preview_faces, preview_face_materials, preview_skin
+        return preview_vertices, preview_uvs, preview_faces, preview_face_materials, preview_skin
 
     for face_index in _balanced_preview_face_indices(full_faces):
         face, material_name = full_faces[face_index]
@@ -335,8 +348,10 @@ def _build_mesh_preview(
             _append_preview_vertex(
                 index,
                 full_vertices,
+                full_uvs,
                 full_skin,
                 preview_vertices,
+                preview_uvs,
                 preview_skin,
                 global_to_preview,
             )
@@ -352,8 +367,10 @@ def _build_mesh_preview(
         for global_index, point in enumerate(full_vertices[:vertex_limit]):
             global_to_preview[global_index] = len(preview_vertices)
             preview_vertices.append([point[0], point[1], point[2]])
+            uv = full_uvs[global_index] if global_index < len(full_uvs) else None
+            preview_uvs.append([uv[0], uv[1]] if uv is not None else None)
             preview_skin.append([dict(item) for item in full_skin[global_index]])
-    return preview_vertices, preview_faces, preview_face_materials, preview_skin
+    return preview_vertices, preview_uvs, preview_faces, preview_face_materials, preview_skin
 
 
 def _extract_meshes(
@@ -362,6 +379,7 @@ def _extract_meshes(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]]:
     points_for_bbox: list[tuple[float, float, float]] = []
     full_vertices: list[tuple[float, float, float]] = []
+    full_uvs: list[tuple[float, float] | None] = []
     full_skin: list[list[dict[str, Any]]] = []
     full_faces: list[tuple[list[int], str]] = []
     skins: list[dict[str, Any]] = []
@@ -387,11 +405,23 @@ def _extract_meshes(
             vertices = list(getattr(mesh, "Vertices", []) or [])
         except Exception:
             vertices = []
+        mesh_uvs: list[Any] = []
+        try:
+            has_uvs = bool(mesh.HasTextureCoords(0)) if callable(getattr(mesh, "HasTextureCoords", None)) else False
+        except Exception:
+            has_uvs = False
+        if has_uvs:
+            try:
+                channels = getattr(mesh, "TextureCoordinateChannels", []) or []
+                mesh_uvs = list(channels[0] or [])
+            except Exception:
+                mesh_uvs = []
         base_index = len(full_vertices)
         for local_index, vertex in enumerate(vertices):
             point = _vec3(vertex)
             points_for_bbox.append(point)
             full_vertices.append(point)
+            full_uvs.append(_uv2(mesh_uvs[local_index]) if local_index < len(mesh_uvs) else None)
             full_skin.append([])
             vertex_total += 1
         try:
@@ -448,8 +478,9 @@ def _extract_meshes(
                 "joints": _unique(mesh_bones),
                 "canonical_joints": _unique(_canonical_from_token(name) for name in mesh_bones),
             })
-    preview_vertices, preview_faces, preview_face_materials, preview_skin = _build_mesh_preview(
+    preview_vertices, preview_uvs, preview_faces, preview_face_materials, preview_skin = _build_mesh_preview(
         full_vertices,
+        full_uvs,
         full_skin,
         full_faces,
     )
@@ -466,6 +497,8 @@ def _extract_meshes(
     }
     if preview_face_materials:
         preview["face_materials"] = preview_face_materials
+    if any(item is not None for item in preview_uvs):
+        preview["uvs"] = [item if item is not None else [0.0, 0.0] for item in preview_uvs]
     if any(preview_skin):
         preview["skin"] = preview_skin
         preview["skin_source"] = "assimpnet"

@@ -36,6 +36,7 @@ _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
 _MODEL_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _ACTION_METADATA_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _RETARGET_PLAN_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_UNITY_ANIM_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 HUMANOID_BONES = (
     "root",
@@ -1881,6 +1882,205 @@ def _action_json_oversize_message(source: str, size: int) -> str:
     )
 
 
+def _unity_anim_signature(path: Path) -> tuple[str, bool, int, int]:
+    exists, size, mtime_ns = _file_signature(path)
+    return str(path), exists, size, mtime_ns
+
+
+def _unity_yaml_documents(text: str) -> list[Any]:
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("%YAML") or stripped.startswith("%TAG"):
+            continue
+        if stripped.startswith("--- !u!"):
+            lines.append("---")
+            continue
+        lines.append(line)
+    try:
+        import yaml  # type: ignore[import-not-found]
+
+        return [doc for doc in yaml.safe_load_all("\n".join(lines)) if isinstance(doc, Mapping)]
+    except Exception:
+        return []
+
+
+def _curve_keys(raw_curve: Any) -> list[dict[str, float]]:
+    if not isinstance(raw_curve, Mapping):
+        return []
+    curve = raw_curve.get("curve") if isinstance(raw_curve.get("curve"), Mapping) else raw_curve
+    raw_keys = curve.get("m_Curve") if isinstance(curve, Mapping) else None
+    if not isinstance(raw_keys, (list, tuple)):
+        return []
+    keys: list[dict[str, float]] = []
+    for raw_key in raw_keys:
+        if not isinstance(raw_key, Mapping):
+            continue
+        try:
+            time_value = float(raw_key.get("time") or 0.0)
+            value = float(raw_key.get("value") or 0.0)
+        except Exception:
+            continue
+        if math.isfinite(time_value) and math.isfinite(value):
+            keys.append({"time": time_value, "value": value})
+    keys.sort(key=lambda item: item["time"])
+    return keys
+
+
+def _sample_float_keys(keys: list[dict[str, float]], phase: float) -> tuple[float, float]:
+    if not keys:
+        return 0.0, 0.0
+    duration = max(0.0, float(keys[-1].get("time") or 0.0))
+    sample_time = float(phase or 0.0)
+    if duration > 0.000001:
+        sample_time = sample_time % duration
+    previous = keys[0]
+    for current in keys[1:]:
+        current_time = float(current.get("time") or 0.0)
+        if sample_time <= current_time + 0.000001:
+            prev_time = float(previous.get("time") or 0.0)
+            span = max(0.000001, current_time - prev_time)
+            amount = max(0.0, min(1.0, (sample_time - prev_time) / span))
+            value = float(previous.get("value") or 0.0) * (1.0 - amount) + float(current.get("value") or 0.0) * amount
+            return sample_time, value
+        previous = current
+    return sample_time, float(keys[-1].get("value") or 0.0)
+
+
+def _read_unity_anim(path: Path) -> dict[str, Any]:
+    signature = _unity_anim_signature(path)
+    cached = _UNITY_ANIM_CACHE.get(signature)
+    if cached is not None:
+        return copy.deepcopy(cached)
+    if not signature[1]:
+        return {"source": "unity_anim_yaml", "resolved_path": str(path), "exists": False, "curves": (), "errors": ("missing",)}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return {"source": "unity_anim_yaml", "resolved_path": str(path), "exists": False, "curves": (), "errors": (str(exc),)}
+    clip_doc: Mapping[str, Any] = {}
+    for doc in _unity_yaml_documents(text):
+        if isinstance(doc.get("AnimationClip"), Mapping):
+            clip_doc = doc["AnimationClip"]
+            break
+    if not clip_doc:
+        return {"source": "unity_anim_yaml", "resolved_path": str(path), "exists": True, "curves": (), "errors": ("AnimationClip missing",)}
+    curves: list[dict[str, Any]] = []
+    raw_curves = clip_doc.get("m_FloatCurves")
+    if isinstance(raw_curves, (list, tuple)):
+        for raw_curve in raw_curves:
+            if not isinstance(raw_curve, Mapping):
+                continue
+            attribute = str(raw_curve.get("attribute") or "").strip()
+            curve_path = str(raw_curve.get("path") or "").strip()
+            if not attribute:
+                continue
+            keys = _curve_keys(raw_curve)
+            if not keys:
+                continue
+            curves.append({
+                "attribute": attribute,
+                "path": curve_path,
+                "class_id": int(raw_curve.get("classID") or 0),
+                "keys": keys,
+            })
+    duration = max((float(item["keys"][-1]["time"]) for item in curves if item.get("keys")), default=0.0)
+    parsed = {
+        "source": "unity_anim_yaml",
+        "resolved_path": str(path),
+        "exists": True,
+        "name": str(clip_doc.get("m_Name") or path.stem),
+        "duration": duration,
+        "curve_count": len(curves),
+        "curves": tuple(curves),
+        "errors": (),
+    }
+    if len(_UNITY_ANIM_CACHE) >= _CACHE_LIMIT:
+        _UNITY_ANIM_CACHE.clear()
+    _UNITY_ANIM_CACHE[signature] = copy.deepcopy(parsed)
+    return parsed
+
+
+def _model_asset_root(model_meta: Mapping[str, Any]) -> Path:
+    sidecar = model_meta.get("sidecar") if isinstance(model_meta.get("sidecar"), Mapping) else {}
+    sidecar_path = Path(str(sidecar.get("path") or ""))
+    if str(sidecar_path):
+        parent = sidecar_path.parent
+        return parent.parent if parent.name.lower() == "fbx" else parent
+    resolved = Path(str(model_meta.get("resolved_path") or ""))
+    return resolved.parent.parent if str(resolved) and resolved.parent.name.lower() == "fbx" else resolved.parent
+
+
+def _resolve_model_asset(model_meta: Mapping[str, Any], reference: str) -> Path:
+    raw = Path(str(reference or "").strip())
+    if raw.is_absolute():
+        return raw
+    return _model_asset_root(model_meta) / raw
+
+
+def _unity_curve_name(curve: Mapping[str, Any]) -> str:
+    attribute = str(curve.get("attribute") or "").strip()
+    path = str(curve.get("path") or "").strip()
+    return f"{path}/{attribute}" if path else attribute
+
+
+def _load_native_unity_action(
+    model_meta: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    phase: float,
+) -> dict[str, Any]:
+    raw_refs = selected.get("native_unity")
+    if not isinstance(raw_refs, (list, tuple)):
+        return {}
+    refs = [str(item).strip() for item in raw_refs if str(item or "").strip()]
+    clips: list[dict[str, Any]] = []
+    sampled: dict[str, float] = {}
+    blendshapes: dict[str, float] = {}
+    errors: list[str] = []
+    for ref in refs[:8]:
+        path = _resolve_model_asset(model_meta, ref)
+        parsed = _read_unity_anim(path)
+        if parsed.get("errors"):
+            errors.extend(f"{ref}: {item}" for item in parsed.get("errors") or ())
+        curves = parsed.get("curves") if isinstance(parsed.get("curves"), (list, tuple)) else ()
+        curve_summaries: list[dict[str, Any]] = []
+        sample_time = 0.0
+        for curve in curves:
+            if not isinstance(curve, Mapping):
+                continue
+            keys = curve.get("keys") if isinstance(curve.get("keys"), list) else list(curve.get("keys") or ())
+            sample_time, value = _sample_float_keys(keys, phase)
+            name = _unity_curve_name(curve)
+            sampled[name] = value
+            if "blendshape." in name.lower():
+                blendshapes[name] = value
+            curve_summaries.append({
+                "attribute": str(curve.get("attribute") or ""),
+                "path": str(curve.get("path") or ""),
+                "class_id": int(curve.get("class_id") or 0),
+                "value": value,
+            })
+        clips.append({
+            "source": "unity_anim_yaml",
+            "path": ref,
+            "resolved_path": str(path),
+            "name": str(parsed.get("name") or Path(ref).stem),
+            "duration": float(parsed.get("duration") or 0.0),
+            "sample_time": sample_time,
+            "curve_count": int(parsed.get("curve_count") or len(curve_summaries)),
+            "curves": curve_summaries,
+        })
+    out: dict[str, Any] = {
+        "native_unity": tuple(refs),
+        "unity_clips": clips,
+        "unity_float_curves": sampled,
+        "unity_blendshapes": blendshapes,
+    }
+    if errors:
+        out["unity_errors"] = tuple(errors)
+    return out
+
+
 def _has_keyframes(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -1888,6 +2088,28 @@ def _has_keyframes(value: Any) -> bool:
     if not isinstance(frames, (list, tuple)):
         frames = value.get("frames")
     return isinstance(frames, (list, tuple)) and bool(frames)
+
+
+def _unity_motion_sample_info(selected: Mapping[str, Any]) -> dict[str, Any]:
+    clips = selected.get("unity_clips")
+    curves = selected.get("unity_float_curves")
+    blendshapes = selected.get("unity_blendshapes")
+    clip_count = len(clips) if isinstance(clips, (list, tuple)) else 0
+    curve_count = len(curves) if isinstance(curves, Mapping) else 0
+    blendshape_count = len(blendshapes) if isinstance(blendshapes, Mapping) else 0
+    if clip_count <= 0 and curve_count <= 0 and blendshape_count <= 0:
+        return {}
+    return {
+        "motion_source": "unity_anim",
+        "unity_clip_count": clip_count,
+        "unity_curve_count": curve_count,
+        "unity_blendshape_count": blendshape_count,
+        "unity_clips": tuple(
+            str(item.get("name") or item.get("path") or "")
+            for item in list(clips or [])[:8]
+            if isinstance(item, Mapping)
+        ) if isinstance(clips, (list, tuple)) else (),
+    }
 
 
 def _clip_match_tokens(value: Any) -> set[str]:
@@ -1949,6 +2171,7 @@ def clear_model3d_metadata_caches() -> None:
     _MODEL_METADATA_CACHE.clear()
     _ACTION_METADATA_CACHE.clear()
     _RETARGET_PLAN_CACHE.clear()
+    _UNITY_ANIM_CACHE.clear()
 
 
 def _get_model_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -> dict[str, Any]:
@@ -2045,6 +2268,10 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
     file_exists, file_size, file_mtime_ns = _file_signature(action_path) if action_file else (False, 0, 0)
     model_meta = get_model_metadata_view(node)
     model_cache_key = tuple(model_meta.get("cache_key") or ())
+    try:
+        action_time = float(action.get("time", node.get("phase", 0.0)) or 0.0)
+    except Exception:
+        action_time = 0.0
     cache_key = (
         name,
         _hash_mapping(inline) if inline else "",
@@ -2055,6 +2282,7 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
         file_mtime_ns,
         json_error,
         model_cache_key,
+        round(action_time, 4),
     )
     cached = _ACTION_METADATA_CACHE.get(cache_key)
     if cached is not None:
@@ -2095,6 +2323,9 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
             errors.append(f"action file is missing: {action_file}")
 
     selected = dict(data.get(name) or {}) if isinstance(data.get(name), Mapping) else {}
+    _procedural_root, procedural_selected = _selected_relative_action(node, name)
+    if procedural_selected:
+        selected = _merge_action_config(procedural_selected, selected)
     model_clip_name = ""
     if not _has_keyframes(selected):
         model_clip_name, model_selected = _select_clip_keyframes(model_meta, name, action.get("clip"))
@@ -2103,6 +2334,10 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
             merged.update(model_selected)
             selected = merged
             data.setdefault(name, dict(selected))
+    unity_action = _load_native_unity_action(model_meta, selected, action_time)
+    if unity_action:
+        selected.update(unity_action)
+        data.setdefault(name, dict(selected))
     file_kind = "json" if action_file and _is_json_action_file(action_path, action_file) else "motion" if action_file else ""
     metadata = {
         "name": name,
@@ -3464,6 +3699,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         _pose_offsets_from_mapping(selected.get("offsets")),
     )
     keyframe_offsets, keyframe_info = _sample_keyframe_offsets(selected, phase)
+    unity_motion_info = _unity_motion_sample_info(selected)
     keyframe_rotations = (
         keyframe_info.get("rotations") if isinstance(keyframe_info.get("rotations"), Mapping) else {}
     )
@@ -3537,10 +3773,14 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "stretch_limit": stretch_limit,
         "preserve_proportions": preserve,
         "rest_source": rest_source,
-        "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
+        "motion_source": (
+            keyframe_info.get("motion_source")
+            or unity_motion_info.get("motion_source")
+            or ("procedural" if use_procedural else "offsets")
+        ),
         "procedural_action": dict(relative_info),
         "foot_planting": dict(foot_planting),
-        "motion_sample": dict(keyframe_info),
+        "motion_sample": dict(keyframe_info, **unity_motion_info),
         "rotations": dict(keyframe_rotations),
         "rotation_limit": dict(rotation_limit),
         "motion_scale": dict(motion_scale),

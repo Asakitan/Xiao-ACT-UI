@@ -956,6 +956,42 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(len(first[0]), len(second[0]))
         self.assertEqual(len(first[1]), len(second[1]))
 
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_moderngl_provider_builds_textured_batches_from_uvs(self) -> None:
+        from render import model3d_native_moderngl as provider
+
+        if provider.np is None:
+            self.skipTest("numpy is unavailable")
+        with tempfile.TemporaryDirectory(prefix="model3d_textured_batches_") as root:
+            root_path = Path(root)
+            model_path = root_path / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            texture_dir = root_path / "Texture"
+            texture_dir.mkdir()
+            overlay_mod.Image.new("RGBA", (2, 2), (210, 40, 30, 255)).save(texture_dir / "Body.png")
+            meta = {
+                "resolved_path": str(model_path),
+                "materials_config": {"textures": {"base": {"Body": "Texture/Body.png"}}},
+            }
+            preview = {
+                "vertices": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]],
+                "faces": [[0, 1, 2, 3]],
+                "face_materials": ["Body"],
+                "uvs": [[0, 0], [1, 0], [1, 1], [0, 1]],
+            }
+            projected = [(0.0, 0.0, 0.0), (64.0, 0.0, 0.0), (64.0, 64.0, 0.0), (0.0, 64.0, 0.0)]
+
+            batches = provider._mesh_textured_arrays(projected, preview["faces"], 64, 64, preview, meta)
+
+        self.assertEqual(len(batches), 1)
+        texture_path, array, tint = batches[0]
+        self.assertTrue(str(texture_path).endswith("Texture\\Body.png") or str(texture_path).endswith("Texture/Body.png"))
+        self.assertEqual(array.shape, (6, 5))
+        self.assertAlmostEqual(float(array[0, 2]), 0.0)
+        self.assertAlmostEqual(float(array[0, 3]), 0.0)
+        self.assertAlmostEqual(float(array[2, 4]), 1.0)
+        self.assertEqual(tint, (1.0, 1.0, 1.0, 1.0))
+
     def test_missing_builtin_native_renderer_bootstrap_is_quiet(self) -> None:
         clear_native_model3d_renderers()
         modules = {
@@ -1070,6 +1106,87 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertIn("backend", context)
         self.assertTrue(context["backend"]["import_available"], context["backend"])
         self.assertFalse(context["backend"]["render_available"], context["backend"])
+
+    def test_action_metadata_reads_native_unity_anim_curves(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_unity_anim_") as root:
+            root_path = Path(root)
+            model_path = root_path / "FBX" / "avatar.fbx"
+            model_path.parent.mkdir()
+            model_path.write_text("fixture", encoding="utf-8")
+            anim_path = root_path / "Unity" / "HandSign" / "K_Peace.anim"
+            anim_path.parent.mkdir(parents=True)
+            anim_path.write_text(
+                """
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!74 &7400000
+AnimationClip:
+  m_Name: K_Peace
+  m_FloatCurves:
+  - curve:
+      m_Curve:
+      - time: 0
+        value: 1
+      - time: 0.5
+        value: 0.5
+    attribute: LeftHand.Index.1 Stretched
+    path:
+    classID: 95
+  - curve:
+      m_Curve:
+      - time: 0
+        value: 100
+    attribute: blendShape.Eye_Wink_L
+    path: Body
+    classID: 137
+""".strip(),
+                encoding="utf-8",
+            )
+            model_path.with_suffix(".model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["Hips", "Spine", "Head", "Hand_L"],
+                    "bone_map": {"hips": "Hips", "spine": "Spine", "head": "Head", "left_hand": "Hand_L"},
+                    "rest_positions": {
+                        "Hips": [0.0, 0.0, 0.0],
+                        "Spine": [0.0, 0.5, 0.0],
+                        "Head": [0.0, 1.2, 0.0],
+                        "Hand_L": [-0.6, 0.7, 0.0],
+                    },
+                },
+                "native_unity_animations": {
+                    "files": ["Unity/HandSign/K_Peace.anim"],
+                    "hand_signs": {"peace": "Unity/HandSign/K_Peace.anim"},
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto"},
+                "action": {"name": "double_peace", "time": 0.25},
+                "procedural_action": {
+                    "schema": "sao.humanoid.procedural.v1",
+                    "enabled": True,
+                    "actions": {
+                        "double_peace": {
+                            "native_unity": ["Unity/HandSign/K_Peace.anim"],
+                            "effectors": {"left_hand": {"offset": [-0.1, 0.2, 0.0], "weight": 1.0}},
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            action = get_action_metadata(node)
+            pose = evaluate_retarget_pose(node)
+
+        selected = action["selected"]
+        self.assertIn("Unity/HandSign/K_Peace.anim", selected["native_unity"])
+        self.assertEqual(selected["unity_clips"][0]["name"], "K_Peace")
+        self.assertEqual(selected["unity_clips"][0]["curve_count"], 2)
+        self.assertAlmostEqual(selected["unity_float_curves"]["LeftHand.Index.1 Stretched"], 0.75)
+        self.assertAlmostEqual(selected["unity_blendshapes"]["Body/blendShape.Eye_Wink_L"], 100.0)
+        self.assertEqual(pose["motion_sample"]["unity_curve_count"], 2)
+        self.assertEqual(pose["motion_sample"]["unity_clip_count"], 1)
 
     def test_native_offscreen_renderer_failure_falls_back(self) -> None:
         def failing_renderer(node, context):
@@ -1474,6 +1591,44 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(len(preview["vertices"]), 24)
         self.assertEqual(len(preview["faces"]), 16)
         self.assertFalse(preview["truncated"])
+
+    def test_assimpnet_preview_preserves_uvs(self) -> None:
+        from render import model3d_assimpnet
+
+        vertices = [
+            SimpleNamespace(X=0.0, Y=0.0, Z=0.0),
+            SimpleNamespace(X=1.0, Y=0.0, Z=0.0),
+            SimpleNamespace(X=1.0, Y=1.0, Z=0.0),
+            SimpleNamespace(X=0.0, Y=1.0, Z=0.0),
+        ]
+        uvs = [
+            SimpleNamespace(X=0.0, Y=0.0, Z=0.0),
+            SimpleNamespace(X=1.0, Y=0.0, Z=0.0),
+            SimpleNamespace(X=1.0, Y=1.0, Z=0.0),
+            SimpleNamespace(X=0.0, Y=1.0, Z=0.0),
+        ]
+
+        class Mesh(SimpleNamespace):
+            def HasTextureCoords(self, channel: int) -> bool:
+                return channel == 0
+
+        scene = SimpleNamespace(
+            MeshCount=1,
+            Meshes=[
+                Mesh(
+                    Name="textured_quad",
+                    MaterialIndex=0,
+                    Vertices=vertices,
+                    TextureCoordinateChannels=[uvs],
+                    Faces=[SimpleNamespace(Indices=[0, 1, 2, 3])],
+                    Bones=[],
+                )
+            ],
+        )
+
+        mesh_meta, _skins, _bones = model3d_assimpnet._extract_meshes(scene, ("Body",))
+
+        self.assertEqual(mesh_meta["preview"]["uvs"], [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
 
     def test_preview_face_parsers_do_not_truncate_full_meshes(self) -> None:
         from render import model3d_native_moderngl

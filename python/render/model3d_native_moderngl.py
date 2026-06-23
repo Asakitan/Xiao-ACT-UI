@@ -60,6 +60,32 @@ void main() {
 }
 """
 
+_VS_TEXTURE = """
+#version 330
+in vec3 in_pos;
+in vec2 in_uv;
+out vec2 v_uv;
+void main() {
+    v_uv = in_uv;
+    gl_Position = vec4(in_pos, 1.0);
+}
+"""
+
+_FS_TEXTURE = """
+#version 330
+uniform sampler2D u_texture;
+uniform vec4 u_tint;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    vec4 texel = texture(u_texture, v_uv);
+    if (texel.a * u_tint.a < 0.03) {
+        discard;
+    }
+    f_color = vec4(texel.rgb * u_tint.rgb, texel.a * u_tint.a);
+}
+"""
+
 
 def _get_wgl_serialize_lock() -> Any:
     try:
@@ -123,6 +149,7 @@ def _ensure_state() -> Any:
         try:
             ctx = _create_context(moderngl)
             program = ctx.program(vertex_shader=_VS_MESH, fragment_shader=_FS_MESH)
+            texture_program = ctx.program(vertex_shader=_VS_TEXTURE, fragment_shader=_FS_TEXTURE)
         except Exception:
             _GLOBAL_FAILED = True
             _TLS.failed = True
@@ -130,6 +157,8 @@ def _ensure_state() -> Any:
     state = {
         "ctx": ctx,
         "program": program,
+        "texture_program": texture_program,
+        "textures": {},
         "moderngl": moderngl,
     }
     _TLS.state = state
@@ -162,6 +191,28 @@ def _faces(value: Any, vertex_count: int) -> list[list[int]]:
                 face.append(index)
         if len(face) >= 3:
             out.append(face)
+    return out
+
+
+def _uv2(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return None
+    try:
+        return float(value[0]), float(value[1])
+    except Exception:
+        return None
+
+
+def _preview_uvs(preview: Mapping[str, Any], vertex_count: int) -> list[tuple[float, float]]:
+    raw = preview.get("uvs")
+    if not isinstance(raw, (list, tuple)) or len(raw) < vertex_count:
+        return []
+    out: list[tuple[float, float]] = []
+    for item in raw[:vertex_count]:
+        uv = _uv2(item)
+        if uv is None:
+            return []
+        out.append(uv)
     return out
 
 
@@ -342,11 +393,91 @@ def _gl_color(color: tuple[int, int, int, int], alpha: float | None = None) -> t
     )
 
 
+def _material_texture_path(meta: Mapping[str, Any] | None, material_name: str) -> Path | None:
+    fn = getattr(_software, "_material_texture_path", None) if _software is not None else None
+    if not callable(fn):
+        return None
+    try:
+        return fn(meta, material_name)
+    except Exception:
+        return None
+
+
 def _ndc(point: tuple[float, float, float], width: int, height: int) -> tuple[float, float]:
     return (
         (float(point[0]) / max(1.0, float(width))) * 2.0 - 1.0,
         1.0 - (float(point[1]) / max(1.0, float(height))) * 2.0,
     )
+
+
+def _projected_depth_array(projected: list[tuple[float, float, float]]) -> Any:
+    if np is None or not projected:
+        return None
+    depth = np.asarray([float(point[2]) for point in projected], dtype=np.float32)
+    if getattr(depth, "size", 0) <= 0:
+        return None
+    depth_min = float(np.min(depth))
+    depth_max = float(np.max(depth))
+    span = depth_max - depth_min
+    if span <= 0.000001:
+        return np.zeros((int(depth.size),), dtype=np.float32)
+    return np.asarray(0.9 - ((depth - depth_min) / span) * 1.8, dtype=np.float32)
+
+
+def _mesh_textured_arrays(
+    projected: list[tuple[float, float, float]],
+    faces: list[list[int]],
+    width: int,
+    height: int,
+    preview: Mapping[str, Any],
+    meta: Mapping[str, Any] | None = None,
+) -> list[tuple[Path, Any, tuple[float, float, float, float]]]:
+    if np is None:
+        return []
+    uvs = _preview_uvs(preview, len(projected))
+    if not uvs:
+        return []
+    ndc = _projected_ndc_array(projected, width, height)
+    if ndc is None:
+        return []
+    depth = _projected_depth_array(projected)
+    if depth is None or len(depth) != len(projected):
+        return []
+    uv_array = np.asarray(uvs, dtype=np.float32)
+    if uv_array.ndim != 2 or uv_array.shape[0] != len(projected) or uv_array.shape[1] < 2:
+        return []
+    materials = preview.get("face_materials")
+    if not isinstance(materials, (list, tuple)):
+        return []
+    groups: dict[Path, list[int]] = {}
+    texture_cache: dict[str, Path | None] = {}
+    for face_index, face in enumerate(faces):
+        material_name = str(materials[face_index] or "").strip() if face_index < len(materials) else ""
+        if not material_name:
+            continue
+        texture_path = texture_cache.get(material_name)
+        if material_name not in texture_cache:
+            texture_path = _material_texture_path(meta, material_name)
+            texture_cache[material_name] = texture_path
+        if texture_path is None:
+            continue
+        indices = groups.setdefault(texture_path, [])
+        first = face[0]
+        for index in range(1, len(face) - 1):
+            indices.extend((first, face[index], face[index + 1]))
+    batches: list[tuple[Path, Any, tuple[float, float, float, float]]] = []
+    for texture_path, raw_indices in groups.items():
+        if not raw_indices:
+            continue
+        indices = np.asarray(raw_indices, dtype=np.int32)
+        if getattr(indices, "size", 0) <= 0:
+            continue
+        array = np.empty((int(indices.size), 5), dtype=np.float32)
+        array[:, 0:2] = ndc[indices]
+        array[:, 2] = depth[indices]
+        array[:, 3:5] = uv_array[indices, 0:2]
+        batches.append((texture_path, np.ascontiguousarray(array, dtype="f4"), (1.0, 1.0, 1.0, 1.0)))
+    return batches
 
 
 def _mesh_arrays_by_color(
@@ -430,6 +561,94 @@ def _draw_array(ctx: Any, program: Any, mode: Any, array: Any, color: tuple[floa
                     pass
 
 
+def _texture_cache_key(path: Path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+        return str(path), int(stat.st_size), int(stat.st_mtime_ns)
+    except Exception:
+        return str(path), 0, 0
+
+
+def _texture_resource(state: Mapping[str, Any], ctx: Any, moderngl: Any, path: Path) -> Any:
+    textures = state.get("textures")
+    if not isinstance(textures, dict):
+        return None
+    key = _texture_cache_key(path)
+    cached = textures.get(key)
+    if cached is not None:
+        return cached
+    if Image is None:
+        return None
+    try:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            transpose = getattr(Image, "Transpose", None)
+            flip = getattr(transpose, "FLIP_TOP_BOTTOM", None) if transpose is not None else None
+            if flip is None:
+                flip = getattr(Image, "FLIP_TOP_BOTTOM", None)
+            if flip is not None:
+                rgba = rgba.transpose(flip)
+            data = rgba.tobytes()
+            texture = ctx.texture(rgba.size, 4, data)
+    except Exception:
+        return None
+    try:
+        texture.filter = (
+            getattr(moderngl, "LINEAR", 9729),
+            getattr(moderngl, "LINEAR", 9729),
+        )
+    except Exception:
+        pass
+    for attr in ("repeat_x", "repeat_y"):
+        try:
+            setattr(texture, attr, True)
+        except Exception:
+            pass
+    textures[key] = texture
+    return texture
+
+
+def _draw_textured_array(
+    ctx: Any,
+    program: Any,
+    moderngl: Any,
+    array: Any,
+    texture: Any,
+    tint: tuple[float, float, float, float],
+) -> None:
+    if array is None or getattr(array, "size", 0) <= 0 or texture is None:
+        return
+    vbo = None
+    vao = None
+    try:
+        use = getattr(texture, "use", None)
+        if callable(use):
+            use(location=0)
+        try:
+            program["u_texture"].value = 0
+        except Exception:
+            try:
+                program["u_texture"] = 0
+            except Exception:
+                pass
+        _set_uniform(program, "u_tint", tint)
+        vbo = ctx.buffer(array.tobytes())
+        vertex_array = getattr(ctx, "vertex_array", None)
+        if callable(vertex_array):
+            vao = vertex_array(program, [(vbo, "3f 2f", "in_pos", "in_uv")])
+        else:
+            vao = ctx.simple_vertex_array(program, vbo, "in_pos", "in_uv")
+        vao.render(getattr(moderngl, "TRIANGLES", 4))
+    finally:
+        for resource in (vao, vbo):
+            release = getattr(resource, "release", None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:
+                    pass
+
+
 def _read_image(fbo: Any, width: int, height: int) -> Any:
     if Image is None:
         return None
@@ -461,8 +680,12 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
     if len(projected) != len(vertices):
         return None
     accent = _accent_color(context)
-    triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent, model)
-    if not triangle_batches:
+    textured_batches = _mesh_textured_arrays(projected, faces, width, height, preview, model)
+    triangle_batches: list[tuple[Any, tuple[float, float, float, float]]] = []
+    line_batches: list[tuple[Any, tuple[float, float, float, float]]] = []
+    if not textured_batches:
+        triangle_batches, line_batches = _mesh_arrays_by_color(projected, faces, width, height, preview, accent, model)
+    if not textured_batches and not triangle_batches:
         return None
 
     with _RENDER_LOCK, _get_wgl_serialize_lock():
@@ -471,11 +694,17 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
             return None
         ctx = state["ctx"]
         program = state["program"]
+        texture_program = state.get("texture_program")
         moderngl = state["moderngl"]
-        tex = fbo = None
+        tex = depth = fbo = None
         try:
             tex = ctx.texture((width, height), 4, dtype="f1")
-            fbo = ctx.framebuffer(color_attachments=[tex])
+            try:
+                depth = ctx.depth_renderbuffer((width, height))
+                fbo = ctx.framebuffer(color_attachments=[tex], depth_attachment=depth)
+            except Exception:
+                depth = None
+                fbo = ctx.framebuffer(color_attachments=[tex])
             fbo.use()
             fbo.clear(0.0, 0.0, 0.0, 0.0)
             enable = getattr(ctx, "enable", None)
@@ -484,6 +713,11 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
                     enable(getattr(moderngl, "BLEND", 0))
                 except Exception:
                     pass
+                if textured_batches and depth is not None:
+                    try:
+                        enable(getattr(moderngl, "DEPTH_TEST", 0))
+                    except Exception:
+                        pass
             try:
                 ctx.blend_func = (
                     getattr(moderngl, "SRC_ALPHA", 770),
@@ -491,19 +725,24 @@ def render_moderngl_model3d(node: Mapping[str, Any], context: Mapping[str, Any])
                 )
             except Exception:
                 pass
+            if textured_batches and texture_program is not None:
+                for texture_path, array, tint in textured_batches:
+                    texture = _texture_resource(state, ctx, moderngl, texture_path)
+                    _draw_textured_array(ctx, texture_program, moderngl, array, texture, tint)
             for triangles, color in triangle_batches:
                 _draw_array(ctx, program, getattr(moderngl, "TRIANGLES", 4), triangles, color)
-            try:
-                ctx.line_width = 1.6
-            except Exception:
-                pass
-            for lines, color in line_batches:
-                _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, color)
+            if not textured_batches:
+                try:
+                    ctx.line_width = 1.6
+                except Exception:
+                    pass
+                for lines, color in line_batches:
+                    _draw_array(ctx, program, getattr(moderngl, "LINES", 1), lines, color)
             return _read_image(fbo, width, height)
         except Exception:
             return None
         finally:
-            for resource in (fbo, tex):
+            for resource in (fbo, depth, tex):
                 release = getattr(resource, "release", None)
                 if callable(release):
                     try:
@@ -539,7 +778,12 @@ def reset_builtin_renderer_resources(
     with _RENDER_LOCK, _get_wgl_serialize_lock():
         state = getattr(_TLS, "state", None)
         if isinstance(state, Mapping):
-            for key in ("program", "ctx"):
+            textures = state.get("textures")
+            if isinstance(textures, Mapping):
+                for texture in list(textures.values()):
+                    if texture is not None and _release_resource(texture):
+                        released.append("texture")
+            for key in ("texture_program", "program", "ctx"):
                 resource = state.get(key)
                 if resource is not None and _release_resource(resource):
                     released.append(key)
