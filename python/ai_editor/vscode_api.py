@@ -919,6 +919,55 @@ class SelectionRange:
         self.parent = parent
 
 
+class CallHierarchyItem:
+    def __init__(
+            self, kind: Any, name: Any, detail: Any, uri: Any,
+            range: Any, selection_range: Any) -> None:
+        try:
+            self.kind = int(kind)
+        except Exception:
+            self.kind = kind
+        self.name = "" if name is None else str(name)
+        self.detail = "" if detail is None else str(detail)
+        self.uri = _coerce_uri(uri) or Uri.file("")
+        self.range = range
+        self.selectionRange = selection_range
+        self.tags = None
+
+
+class CallHierarchyIncomingCall:
+    def __init__(self, item: Any, from_ranges: Any) -> None:
+        self.from_ = item
+        setattr(self, "from", item)
+        self.fromRanges = list(from_ranges or [])
+
+    @property
+    def from_item(self) -> Any:
+        return self.from_
+
+
+class CallHierarchyOutgoingCall:
+    def __init__(self, item: Any, from_ranges: Any) -> None:
+        self.to = item
+        self.fromRanges = list(from_ranges or [])
+
+
+class TypeHierarchyItem:
+    def __init__(
+            self, kind: Any, name: Any, detail: Any, uri: Any,
+            range: Any, selection_range: Any) -> None:
+        try:
+            self.kind = int(kind)
+        except Exception:
+            self.kind = kind
+        self.name = "" if name is None else str(name)
+        self.detail = "" if detail is None else str(detail)
+        self.uri = _coerce_uri(uri) or Uri.file("")
+        self.range = range
+        self.selectionRange = selection_range
+        self.tags = None
+
+
 class SemanticTokensLegend:
     def __init__(
             self,
@@ -1403,6 +1452,18 @@ class VscodeNamespace:
             "vscode.executeDocumentColorProvider": self._execute_document_color_provider,
             "_executeColorPresentationProvider": self._execute_color_presentation_provider,
             "vscode.executeColorPresentationProvider": self._execute_color_presentation_provider,
+            "_executePrepareCallHierarchy": self._execute_prepare_call_hierarchy_provider,
+            "vscode.prepareCallHierarchy": self._execute_prepare_call_hierarchy_provider,
+            "_executeProvideIncomingCalls": self._execute_call_hierarchy_incoming_provider,
+            "vscode.provideIncomingCalls": self._execute_call_hierarchy_incoming_provider,
+            "_executeProvideOutgoingCalls": self._execute_call_hierarchy_outgoing_provider,
+            "vscode.provideOutgoingCalls": self._execute_call_hierarchy_outgoing_provider,
+            "_executePrepareTypeHierarchy": self._execute_prepare_type_hierarchy_provider,
+            "vscode.prepareTypeHierarchy": self._execute_prepare_type_hierarchy_provider,
+            "_executeProvideSupertypes": self._execute_type_hierarchy_supertypes_provider,
+            "vscode.provideSupertypes": self._execute_type_hierarchy_supertypes_provider,
+            "_executeProvideSubtypes": self._execute_type_hierarchy_subtypes_provider,
+            "vscode.provideSubtypes": self._execute_type_hierarchy_subtypes_provider,
             "_executeWorkspaceSymbolProvider": self._execute_workspace_symbol_provider,
             "vscode.executeWorkspaceSymbolProvider": self._execute_workspace_symbol_provider,
             "_resolveWorkspaceSymbolProvider": self._execute_resolve_workspace_symbol_provider,
@@ -1467,6 +1528,90 @@ class VscodeNamespace:
             "start": cls._position_payload(rng.start),
             "end": cls._position_payload(rng.end),
         }
+
+    @classmethod
+    def _language_value_payload(cls, value: Any, depth: int = 0) -> Any:
+        if depth > 8:
+            return str(value)
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Uri):
+            return str(value)
+        if isinstance(value, Position):
+            return cls._position_payload(value)
+        if isinstance(value, Range):
+            return cls._range_payload(value)
+        if isinstance(value, dict):
+            return {
+                str(key): cls._language_value_payload(item, depth + 1)
+                for key, item in value.items()
+                if not callable(item)
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [cls._language_value_payload(item, depth + 1)
+                    for item in value]
+        attrs = (
+            "name", "kind", "detail", "uri", "range", "selectionRange",
+            "tags", "from", "fromRanges", "to",
+        )
+        data: Dict[str, Any] = {}
+        for attr in attrs:
+            if hasattr(value, attr):
+                try:
+                    item = getattr(value, attr)
+                except Exception:
+                    continue
+                if item is not None and not callable(item):
+                    data[attr] = cls._language_value_payload(item, depth + 1)
+        if data:
+            return data
+        if hasattr(value, "__dict__"):
+            return {
+                str(key): cls._language_value_payload(item, depth + 1)
+                for key, item in vars(value).items()
+                if not key.startswith("_") and not callable(item)
+            }
+        return str(value)
+
+    @staticmethod
+    def _hierarchy_item_uri(item: Any) -> Uri:
+        if isinstance(item, dict):
+            uri = _coerce_uri(item.get("uri"))
+        else:
+            uri = _coerce_uri(getattr(item, "uri", None))
+        return uri or Uri.file("")
+
+    @staticmethod
+    def _call_hierarchy_item_from_payload(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        value = CallHierarchyItem(
+            item.get("kind"),
+            item.get("name"),
+            item.get("detail"),
+            item.get("uri"),
+            _coerce_range(item.get("range")),
+            _coerce_range(item.get("selectionRange")),
+        )
+        if item.get("tags") is not None:
+            value.tags = item.get("tags")
+        return value
+
+    @staticmethod
+    def _type_hierarchy_item_from_payload(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        value = TypeHierarchyItem(
+            item.get("kind"),
+            item.get("name"),
+            item.get("detail"),
+            item.get("uri"),
+            _coerce_range(item.get("range")),
+            _coerce_range(item.get("selectionRange")),
+        )
+        if item.get("tags") is not None:
+            value.tags = item.get("tags")
+        return value
 
     @staticmethod
     def _document_full_range(document: Any) -> Range:
@@ -2058,6 +2203,154 @@ class VscodeNamespace:
                 range=self._range_payload(color_range))))
         return results
 
+    def _execute_prepare_call_hierarchy_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        for entry in self._matching_language_providers("callHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "prepareCallHierarchy",
+                (document, pos, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "prepareCallHierarchy",
+            document,
+            position=self._position_payload(pos))
+        return self._provider_values(external)
+
+    def _execute_call_hierarchy_incoming_provider(
+            self, item: Any = None) -> List[Any]:
+        if item is None:
+            return []
+        if isinstance(item, dict) and item.get("_nodeHierarchyHandle"):
+            document = self._resolve_language_document(
+                self._hierarchy_item_uri(item))
+            external = self._request_external_language_provider(
+                "callHierarchyIncoming",
+                document,
+                item=self._language_value_payload(item))
+            return self._provider_values(external)
+        local_item = self._call_hierarchy_item_from_payload(item)
+        document = self._resolve_language_document(self._hierarchy_item_uri(item))
+        for entry in self._matching_language_providers("callHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideCallHierarchyIncomingCalls",
+                (local_item, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "callHierarchyIncoming",
+            document,
+            item=self._language_value_payload(item))
+        return self._provider_values(external)
+
+    def _execute_call_hierarchy_outgoing_provider(
+            self, item: Any = None) -> List[Any]:
+        if item is None:
+            return []
+        if isinstance(item, dict) and item.get("_nodeHierarchyHandle"):
+            document = self._resolve_language_document(
+                self._hierarchy_item_uri(item))
+            external = self._request_external_language_provider(
+                "callHierarchyOutgoing",
+                document,
+                item=self._language_value_payload(item))
+            return self._provider_values(external)
+        local_item = self._call_hierarchy_item_from_payload(item)
+        document = self._resolve_language_document(self._hierarchy_item_uri(item))
+        for entry in self._matching_language_providers("callHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideCallHierarchyOutgoingCalls",
+                (local_item, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "callHierarchyOutgoing",
+            document,
+            item=self._language_value_payload(item))
+        return self._provider_values(external)
+
+    def _execute_prepare_type_hierarchy_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        for entry in self._matching_language_providers("typeHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "prepareTypeHierarchy",
+                (document, pos, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "prepareTypeHierarchy",
+            document,
+            position=self._position_payload(pos))
+        return self._provider_values(external)
+
+    def _execute_type_hierarchy_supertypes_provider(
+            self, item: Any = None) -> List[Any]:
+        if item is None:
+            return []
+        if isinstance(item, dict) and item.get("_nodeTypeHierarchyHandle"):
+            document = self._resolve_language_document(
+                self._hierarchy_item_uri(item))
+            external = self._request_external_language_provider(
+                "typeHierarchySupertypes",
+                document,
+                item=self._language_value_payload(item))
+            return self._provider_values(external)
+        local_item = self._type_hierarchy_item_from_payload(item)
+        document = self._resolve_language_document(self._hierarchy_item_uri(item))
+        for entry in self._matching_language_providers("typeHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideTypeHierarchySupertypes",
+                (local_item, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "typeHierarchySupertypes",
+            document,
+            item=self._language_value_payload(item))
+        return self._provider_values(external)
+
+    def _execute_type_hierarchy_subtypes_provider(
+            self, item: Any = None) -> List[Any]:
+        if item is None:
+            return []
+        if isinstance(item, dict) and item.get("_nodeTypeHierarchyHandle"):
+            document = self._resolve_language_document(
+                self._hierarchy_item_uri(item))
+            external = self._request_external_language_provider(
+                "typeHierarchySubtypes",
+                document,
+                item=self._language_value_payload(item))
+            return self._provider_values(external)
+        local_item = self._type_hierarchy_item_from_payload(item)
+        document = self._resolve_language_document(self._hierarchy_item_uri(item))
+        for entry in self._matching_language_providers("typeHierarchy", document):
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideTypeHierarchySubtypes",
+                (local_item, CancellationToken.NONE),
+                default=None)
+            if value is not None:
+                return self._provider_values(value)
+        external = self._request_external_language_provider(
+            "typeHierarchySubtypes",
+            document,
+            item=self._language_value_payload(item))
+        return self._provider_values(external)
+
     def _execute_document_semantic_tokens_legend(self, uri: Any) -> Any:
         document = self._resolve_language_document(uri)
         for entry in self._matching_language_providers(
@@ -2405,6 +2698,10 @@ class VscodeNamespace:
             "CodeLens": CodeLens,
             "FoldingRange": FoldingRange,
             "SelectionRange": SelectionRange,
+            "CallHierarchyItem": CallHierarchyItem,
+            "CallHierarchyIncomingCall": CallHierarchyIncomingCall,
+            "CallHierarchyOutgoingCall": CallHierarchyOutgoingCall,
+            "TypeHierarchyItem": TypeHierarchyItem,
             "SemanticTokensLegend": SemanticTokensLegend,
             "SemanticTokensBuilder": SemanticTokensBuilder,
             "SemanticTokens": SemanticTokens,
@@ -3277,6 +3574,8 @@ class VscodeNamespace:
             "registerFoldingRangeProvider": lambda selector, provider: self._register_language_provider("foldingRange", selector, provider),
             "registerSelectionRangeProvider": lambda selector, provider: self._register_language_provider("selectionRange", selector, provider),
             "registerLinkedEditingRangeProvider": lambda selector, provider: self._register_language_provider("linkedEditing", selector, provider),
+            "registerCallHierarchyProvider": lambda selector, provider: self._register_language_provider("callHierarchy", selector, provider),
+            "registerTypeHierarchyProvider": lambda selector, provider: self._register_language_provider("typeHierarchy", selector, provider),
             "registerColorProvider": lambda selector, provider: self._register_language_provider("documentColor", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),

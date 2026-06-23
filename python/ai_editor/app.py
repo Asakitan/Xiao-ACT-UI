@@ -492,7 +492,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
     "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
     "tokenModifiers", "parent", "color", "red", "green", "blue", "alpha",
-    "tags",
+    "tags", "from", "fromRanges", "to",
 )
 
 
@@ -2796,6 +2796,20 @@ class AIEditorAPI:
             "linkedEditing": "linkedEditing",
             "linkedEditingRange": "linkedEditing",
             "linkedEditingRanges": "linkedEditing",
+            "prepareCallHierarchy": "prepareCallHierarchy",
+            "callHierarchy": "prepareCallHierarchy",
+            "callHierarchyPrepare": "prepareCallHierarchy",
+            "incomingCalls": "callHierarchyIncoming",
+            "callHierarchyIncoming": "callHierarchyIncoming",
+            "outgoingCalls": "callHierarchyOutgoing",
+            "callHierarchyOutgoing": "callHierarchyOutgoing",
+            "prepareTypeHierarchy": "prepareTypeHierarchy",
+            "typeHierarchy": "prepareTypeHierarchy",
+            "typeHierarchyPrepare": "prepareTypeHierarchy",
+            "supertypes": "typeHierarchySupertypes",
+            "typeHierarchySupertypes": "typeHierarchySupertypes",
+            "subtypes": "typeHierarchySubtypes",
+            "typeHierarchySubtypes": "typeHierarchySubtypes",
             "documentColor": "documentColor",
             "documentColors": "documentColor",
             "colors": "documentColor",
@@ -3155,6 +3169,86 @@ class AIEditorAPI:
                     "version": document.version,
                     "linkedEditing": value,
                     "ranges": ranges,
+                }
+            if kind == "prepareCallHierarchy":
+                result = self._ext_host.commands.execute(
+                    "vscode.prepareCallHierarchy", document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "callHierarchyIncoming":
+                result = self._ext_host.commands.execute(
+                    "vscode.provideIncomingCalls",
+                    payload.get("item") or payload.get("callHierarchyItem"),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "calls": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "callHierarchyOutgoing":
+                result = self._ext_host.commands.execute(
+                    "vscode.provideOutgoingCalls",
+                    payload.get("item") or payload.get("callHierarchyItem"),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "calls": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "prepareTypeHierarchy":
+                result = self._ext_host.commands.execute(
+                    "vscode.prepareTypeHierarchy", document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "typeHierarchySupertypes":
+                result = self._ext_host.commands.execute(
+                    "vscode.provideSupertypes",
+                    payload.get("item") or payload.get("typeHierarchyItem"),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "typeHierarchySubtypes":
+                result = self._ext_host.commands.execute(
+                    "vscode.provideSubtypes",
+                    payload.get("item") or payload.get("typeHierarchyItem"),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
                 }
             if kind == "documentColor":
                 result = self._ext_host.commands.execute(

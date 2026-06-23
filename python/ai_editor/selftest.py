@@ -360,7 +360,8 @@ def test_app_settings_parity() -> None:
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, WorkspaceEdit, Location, Color,
         ColorInformation, ColorPresentation, SymbolInformation,
-        DocumentHighlight, Uri,
+        DocumentHighlight, CallHierarchyItem, CallHierarchyIncomingCall,
+        CallHierarchyOutgoingCall, TypeHierarchyItem, Uri,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -507,6 +508,74 @@ def test_app_settings_parity() -> None:
                 "wordPattern": "[A-Za-z]+",
             }
 
+        def prepareCallHierarchy(self, document, position, token):
+            return [CallHierarchyItem(
+                11,
+                "editorCall",
+                "call detail",
+                document.uri,
+                Range(Position(0, 0), Position(0, 6)),
+                Range(Position(0, 0), Position(0, 6)),
+            )]
+
+        def provideCallHierarchyIncomingCalls(self, item, token):
+            caller = CallHierarchyItem(
+                11,
+                "editorCaller",
+                "caller detail",
+                item.uri,
+                Range(Position(1, 0), Position(1, 12)),
+                Range(Position(1, 0), Position(1, 12)),
+            )
+            return [CallHierarchyIncomingCall(
+                caller,
+                [Range(Position(1, 2), Position(1, 12))],
+            )]
+
+        def provideCallHierarchyOutgoingCalls(self, item, token):
+            callee = CallHierarchyItem(
+                11,
+                "editorCallee",
+                "callee detail",
+                item.uri,
+                Range(Position(2, 0), Position(2, 12)),
+                Range(Position(2, 0), Position(2, 12)),
+            )
+            return [CallHierarchyOutgoingCall(
+                callee,
+                [Range(Position(0, 1), Position(0, 6))],
+            )]
+
+        def prepareTypeHierarchy(self, document, position, token):
+            return [TypeHierarchyItem(
+                4,
+                "EditorType",
+                "type detail",
+                document.uri,
+                Range(Position(0, 0), Position(0, 6)),
+                Range(Position(0, 0), Position(0, 6)),
+            )]
+
+        def provideTypeHierarchySupertypes(self, item, token):
+            return [TypeHierarchyItem(
+                4,
+                "EditorSuper",
+                "super detail",
+                item.uri,
+                Range(Position(3, 0), Position(3, 11)),
+                Range(Position(3, 0), Position(3, 11)),
+            )]
+
+        def provideTypeHierarchySubtypes(self, item, token):
+            return [TypeHierarchyItem(
+                4,
+                "EditorSub",
+                "sub detail",
+                item.uri,
+                Range(Position(4, 0), Position(4, 9)),
+                Range(Position(4, 0), Position(4, 9)),
+            )]
+
         def provideDocumentHighlights(self, document, position, token):
             self.seen_highlight_position = position
             return [DocumentHighlight(
@@ -582,6 +651,8 @@ def test_app_settings_parity() -> None:
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerSelectionRangeProvider"]("python", editor_provider)
     lang_api["registerLinkedEditingRangeProvider"]("python", editor_provider)
+    lang_api["registerCallHierarchyProvider"]("python", editor_provider)
+    lang_api["registerTypeHierarchyProvider"]("python", editor_provider)
     lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
@@ -639,6 +710,20 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="selectionRange"))
         linked_editing_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="linkedEditing"))
+        call_hierarchy_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="prepareCallHierarchy"))
+        call_item = call_hierarchy_result.get("items", [{}])[0]
+        incoming_calls_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="callHierarchyIncoming", item=call_item))
+        outgoing_calls_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="callHierarchyOutgoing", item=call_item))
+        type_hierarchy_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="prepareTypeHierarchy"))
+        type_item = type_hierarchy_result.get("items", [{}])[0]
+        supertypes_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="typeHierarchySupertypes", item=type_item))
+        subtypes_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="typeHierarchySubtypes", item=type_item))
         document_highlight_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="documentHighlight",
                  position={"line": 0, "character": 1}))
@@ -781,6 +866,23 @@ def test_app_settings_parity() -> None:
                and linked_range.get("start", {}).get("character") == 7
                and linked_editing_result.get("linkedEditing", {})
                .get("wordPattern") == "[A-Za-z]+")
+        incoming_call = incoming_calls_result.get("calls", [{}])[0]
+        outgoing_call = outgoing_calls_result.get("calls", [{}])[0]
+        _check("editor_language_provider serializes call hierarchy",
+               call_hierarchy_result.get("ok") is True
+               and call_item.get("name") == "editorCall"
+               and incoming_call.get("from", {}).get("name") == "editorCaller"
+               and outgoing_call.get("to", {}).get("name") == "editorCallee"
+               and outgoing_call.get("fromRanges", [{}])[0]
+               .get("end", {}).get("character") == 6)
+        super_item = supertypes_result.get("items", [{}])[0]
+        sub_item = subtypes_result.get("items", [{}])[0]
+        _check("editor_language_provider serializes type hierarchy",
+               type_hierarchy_result.get("ok") is True
+               and type_item.get("name") == "EditorType"
+               and super_item.get("name") == "EditorSuper"
+               and sub_item.get("selectionRange", {})
+               .get("end", {}).get("character") == 9)
         highlight = document_highlight_result.get("highlights", [{}])[0]
         _check("editor_language_provider serializes document highlights",
                document_highlight_result.get("ok") is True
@@ -3212,6 +3314,8 @@ def test_vscode_api() -> None:
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
         SymbolInformation, DocumentHighlight, ParameterInformation,
+        CallHierarchyItem, CallHierarchyIncomingCall,
+        CallHierarchyOutgoingCall, TypeHierarchyItem,
     )
 
     host = ExtensionHost()
@@ -3245,6 +3349,10 @@ def test_vscode_api() -> None:
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
     _check("api.FoldingRange", api["FoldingRange"] is FoldingRange)
     _check("api.SelectionRange", api["SelectionRange"] is SelectionRange)
+    _check("api.CallHierarchyItem",
+           api["CallHierarchyItem"] is CallHierarchyItem)
+    _check("api.TypeHierarchyItem",
+           api["TypeHierarchyItem"] is TypeHierarchyItem)
     _check("api.Color", api["Color"] is Color)
     _check("api.SymbolInformation",
            api["SymbolInformation"] is SymbolInformation)
@@ -3678,6 +3786,88 @@ def test_vscode_api() -> None:
                     "wordPattern": "[A-Za-z]+",
                 }
 
+        class _CallHierarchyProvider:
+            def __init__(self):
+                self.incoming_items = []
+                self.outgoing_items = []
+
+            def prepareCallHierarchy(self, document, position, token):
+                return [CallHierarchyItem(
+                    api["SymbolKind"]["Function"],
+                    "selftestCall",
+                    "call detail",
+                    document.uri,
+                    Range(Position(0, 0), Position(0, 4)),
+                    Range(Position(0, 0), Position(0, 4)),
+                )]
+
+            def provideCallHierarchyIncomingCalls(self, item, token):
+                self.incoming_items.append(item)
+                caller = CallHierarchyItem(
+                    api["SymbolKind"]["Function"],
+                    "selftestCaller",
+                    "caller detail",
+                    item.uri,
+                    Range(Position(1, 0), Position(1, 6)),
+                    Range(Position(1, 0), Position(1, 6)),
+                )
+                return [CallHierarchyIncomingCall(
+                    caller,
+                    [Range(Position(1, 1), Position(1, 6))],
+                )]
+
+            def provideCallHierarchyOutgoingCalls(self, item, token):
+                self.outgoing_items.append(item)
+                callee = CallHierarchyItem(
+                    api["SymbolKind"]["Function"],
+                    "selftestCallee",
+                    "callee detail",
+                    item.uri,
+                    Range(Position(2, 0), Position(2, 6)),
+                    Range(Position(2, 0), Position(2, 6)),
+                )
+                return [CallHierarchyOutgoingCall(
+                    callee,
+                    [Range(Position(0, 1), Position(0, 4))],
+                )]
+
+        class _TypeHierarchyProvider:
+            def __init__(self):
+                self.super_items = []
+                self.sub_items = []
+
+            def prepareTypeHierarchy(self, document, position, token):
+                return [TypeHierarchyItem(
+                    api["SymbolKind"]["Class"],
+                    "SelftestType",
+                    "type detail",
+                    document.uri,
+                    Range(Position(0, 0), Position(0, 4)),
+                    Range(Position(0, 0), Position(0, 4)),
+                )]
+
+            def provideTypeHierarchySupertypes(self, item, token):
+                self.super_items.append(item)
+                return [TypeHierarchyItem(
+                    api["SymbolKind"]["Class"],
+                    "SelftestSuper",
+                    "super detail",
+                    item.uri,
+                    Range(Position(3, 0), Position(3, 6)),
+                    Range(Position(3, 0), Position(3, 6)),
+                )]
+
+            def provideTypeHierarchySubtypes(self, item, token):
+                self.sub_items.append(item)
+                return [TypeHierarchyItem(
+                    api["SymbolKind"]["Class"],
+                    "SelftestSub",
+                    "sub detail",
+                    item.uri,
+                    Range(Position(4, 0), Position(4, 5)),
+                    Range(Position(4, 0), Position(4, 5)),
+                )]
+
         class _DocumentHighlightProvider:
             def __init__(self):
                 self.positions = []
@@ -3818,6 +4008,12 @@ def test_vscode_api() -> None:
             "python", _SelectionRangeProvider())
         api["languages"]["registerLinkedEditingRangeProvider"](
             "python", _LinkedEditingProvider())
+        call_hierarchy_provider = _CallHierarchyProvider()
+        api["languages"]["registerCallHierarchyProvider"](
+            "python", call_hierarchy_provider)
+        type_hierarchy_provider = _TypeHierarchyProvider()
+        api["languages"]["registerTypeHierarchyProvider"](
+            "python", type_hierarchy_provider)
         document_highlight_provider = _DocumentHighlightProvider()
         api["languages"]["registerDocumentHighlightProvider"](
             "python", document_highlight_provider)
@@ -3889,6 +4085,26 @@ def test_vscode_api() -> None:
             "_executeLinkedEditingProvider",
             doc.uri,
             Position(0, 1))
+        call_hierarchy = api["commands"]["executeCommand"](
+            "vscode.prepareCallHierarchy",
+            doc.uri,
+            Position(0, 1))
+        incoming_calls = api["commands"]["executeCommand"](
+            "vscode.provideIncomingCalls",
+            call_hierarchy[0] if call_hierarchy else None)
+        outgoing_calls = api["commands"]["executeCommand"](
+            "vscode.provideOutgoingCalls",
+            call_hierarchy[0] if call_hierarchy else None)
+        type_hierarchy = api["commands"]["executeCommand"](
+            "vscode.prepareTypeHierarchy",
+            doc.uri,
+            Position(0, 1))
+        supertypes = api["commands"]["executeCommand"](
+            "vscode.provideSupertypes",
+            type_hierarchy[0] if type_hierarchy else None)
+        subtypes = api["commands"]["executeCommand"](
+            "vscode.provideSubtypes",
+            type_hierarchy[0] if type_hierarchy else None)
         document_highlights = api["commands"]["executeCommand"](
             "vscode.executeDocumentHighlightProvider",
             doc.uri,
@@ -4011,6 +4227,25 @@ def test_vscode_api() -> None:
                and linked_editing.get("ranges", [None, {}])[1]
                .end.character == 11
                and linked_editing.get("wordPattern") == "[A-Za-z]+")
+        _check("call hierarchy commands invoke matching providers",
+               call_hierarchy
+               and call_hierarchy[0].name == "selftestCall"
+               and incoming_calls
+               and getattr(incoming_calls[0], "from").name == "selftestCaller"
+               and incoming_calls[0].fromRanges[0].end.character == 6
+               and outgoing_calls
+               and outgoing_calls[0].to.name == "selftestCallee"
+               and call_hierarchy_provider.incoming_items[-1].name
+               == "selftestCall")
+        _check("type hierarchy commands invoke matching providers",
+               type_hierarchy
+               and type_hierarchy[0].name == "SelftestType"
+               and supertypes
+               and supertypes[0].name == "SelftestSuper"
+               and subtypes
+               and subtypes[0].selectionRange.end.character == 5
+               and type_hierarchy_provider.super_items[-1].name
+               == "SelftestType")
         _check("executeDocumentHighlightProvider invokes matching providers",
                document_highlights
                and document_highlight_provider.positions[-1].character == 2
@@ -4100,6 +4335,18 @@ def test_vscode_api() -> None:
                and "vscode.executeSelectionRangeProvider"
                in api["commands"]["getCommands"]()
                and "_executeLinkedEditingProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.prepareCallHierarchy"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideIncomingCalls"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideOutgoingCalls"
+               in api["commands"]["getCommands"]()
+               and "vscode.prepareTypeHierarchy"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideSupertypes"
+               in api["commands"]["getCommands"]()
+               and "vscode.provideSubtypes"
                in api["commands"]["getCommands"]()
                and "vscode.executeDocumentHighlightProvider"
                in api["commands"]["getCommands"]()
@@ -5454,6 +5701,76 @@ function activate(context) {
       };
     },
   });
+  vscode.languages.registerCallHierarchyProvider('python', {
+    prepareCallHierarchy(document, position, token) {
+      return [new vscode.CallHierarchyItem(
+        vscode.SymbolKind.Function,
+        'nodeCall',
+        'node call detail',
+        document.uri,
+        new vscode.Range(0, 0, 0, 4),
+        new vscode.Range(0, 0, 0, 4),
+      )];
+    },
+    provideCallHierarchyIncomingCalls(item, token) {
+      return [new vscode.CallHierarchyIncomingCall(
+        new vscode.CallHierarchyItem(
+          vscode.SymbolKind.Function,
+          'nodeCaller',
+          'node caller detail',
+          item.uri,
+          new vscode.Range(1, 0, 1, 10),
+          new vscode.Range(1, 0, 1, 10),
+        ),
+        [new vscode.Range(1, 2, 1, 10)],
+      )];
+    },
+    provideCallHierarchyOutgoingCalls(item, token) {
+      return [new vscode.CallHierarchyOutgoingCall(
+        new vscode.CallHierarchyItem(
+          vscode.SymbolKind.Function,
+          'nodeCallee',
+          'node callee detail',
+          item.uri,
+          new vscode.Range(2, 0, 2, 10),
+          new vscode.Range(2, 0, 2, 10),
+        ),
+        [new vscode.Range(0, 1, 0, 4)],
+      )];
+    },
+  });
+  vscode.languages.registerTypeHierarchyProvider('python', {
+    prepareTypeHierarchy(document, position, token) {
+      return [new vscode.TypeHierarchyItem(
+        vscode.SymbolKind.Class,
+        'NodeType',
+        'node type detail',
+        document.uri,
+        new vscode.Range(0, 0, 0, 4),
+        new vscode.Range(0, 0, 0, 4),
+      )];
+    },
+    provideTypeHierarchySupertypes(item, token) {
+      return [new vscode.TypeHierarchyItem(
+        vscode.SymbolKind.Class,
+        'NodeSuper',
+        'node super detail',
+        item.uri,
+        new vscode.Range(3, 0, 3, 9),
+        new vscode.Range(3, 0, 3, 9),
+      )];
+    },
+    provideTypeHierarchySubtypes(item, token) {
+      return [new vscode.TypeHierarchyItem(
+        vscode.SymbolKind.Class,
+        'NodeSub',
+        'node sub detail',
+        item.uri,
+        new vscode.Range(4, 0, 4, 7),
+        new vscode.Range(4, 0, 4, 7),
+      )];
+    },
+  });
   vscode.languages.registerColorProvider('python', {
     provideDocumentColors(document, token) {
       return [new vscode.ColorInformation(
@@ -5662,6 +5979,26 @@ module.exports = { activate, deactivate };
                     "_executeLinkedEditingProvider",
                     node_uri,
                     Position(0, 1))
+                node_call_hierarchy = api._ext_host.commands.execute(
+                    "vscode.prepareCallHierarchy",
+                    node_uri,
+                    Position(0, 1))
+                node_incoming_calls = api._ext_host.commands.execute(
+                    "vscode.provideIncomingCalls",
+                    node_call_hierarchy[0] if node_call_hierarchy else None)
+                node_outgoing_calls = api._ext_host.commands.execute(
+                    "vscode.provideOutgoingCalls",
+                    node_call_hierarchy[0] if node_call_hierarchy else None)
+                node_type_hierarchy = api._ext_host.commands.execute(
+                    "vscode.prepareTypeHierarchy",
+                    node_uri,
+                    Position(0, 1))
+                node_supertypes = api._ext_host.commands.execute(
+                    "vscode.provideSupertypes",
+                    node_type_hierarchy[0] if node_type_hierarchy else None)
+                node_subtypes = api._ext_host.commands.execute(
+                    "vscode.provideSubtypes",
+                    node_type_hierarchy[0] if node_type_hierarchy else None)
                 node_document_colors = api._ext_host.commands.execute(
                     "vscode.executeDocumentColorProvider", node_uri)
                 node_color_presentations = api._ext_host.commands.execute(
@@ -5795,6 +6132,28 @@ module.exports = { activate, deactivate };
                        .get("end", {}).get("character") == 11
                        and node_linked_editing.get("wordPattern", {})
                        .get("source") == "[A-Za-z]+")
+                _check("node host language provider invokes JS call hierarchy",
+                       node_call_hierarchy
+                       and node_call_hierarchy[0].get("name") == "nodeCall"
+                       and node_call_hierarchy[0].get("_nodeHierarchyHandle")
+                       and node_incoming_calls
+                       and node_incoming_calls[0].get("from", {})
+                       .get("name") == "nodeCaller"
+                       and node_incoming_calls[0].get("from", {})
+                       .get("_nodeHierarchyHandle")
+                       and node_outgoing_calls
+                       and node_outgoing_calls[0].get("to", {})
+                       .get("name") == "nodeCallee")
+                _check("node host language provider invokes JS type hierarchy",
+                       node_type_hierarchy
+                       and node_type_hierarchy[0].get("name") == "NodeType"
+                       and node_type_hierarchy[0].get("_nodeTypeHierarchyHandle")
+                       and node_supertypes
+                       and node_supertypes[0].get("name") == "NodeSuper"
+                       and node_supertypes[0].get("_nodeTypeHierarchyHandle")
+                       and node_subtypes
+                       and node_subtypes[0].get("selectionRange", {})
+                       .get("end", {}).get("character") == 7)
                 _check("node host language provider invokes JS document colors",
                        node_document_colors
                        and node_document_colors[0].get("color", {})

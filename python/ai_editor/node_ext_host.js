@@ -215,6 +215,44 @@ class SelectionRange {
     }
 }
 
+class CallHierarchyItem {
+    constructor(kind, name, detail, uri, range, selectionRange) {
+        this.kind = Number(kind || 0);
+        this.name = name === undefined || name === null ? '' : String(name);
+        this.detail = detail === undefined || detail === null ? '' : String(detail);
+        this.uri = uri instanceof Uri ? uri : _uriFromPayload(uri || '');
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        this.selectionRange = selectionRange instanceof Range ? selectionRange : _rangeFromPayload(selectionRange);
+        this.tags = undefined;
+    }
+}
+
+class CallHierarchyIncomingCall {
+    constructor(item, fromRanges) {
+        this.from = item;
+        this.fromRanges = Array.isArray(fromRanges) ? fromRanges : [];
+    }
+}
+
+class CallHierarchyOutgoingCall {
+    constructor(item, fromRanges) {
+        this.to = item;
+        this.fromRanges = Array.isArray(fromRanges) ? fromRanges : [];
+    }
+}
+
+class TypeHierarchyItem {
+    constructor(kind, name, detail, uri, range, selectionRange) {
+        this.kind = Number(kind || 0);
+        this.name = name === undefined || name === null ? '' : String(name);
+        this.detail = detail === undefined || detail === null ? '' : String(detail);
+        this.uri = uri instanceof Uri ? uri : _uriFromPayload(uri || '');
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        this.selectionRange = selectionRange instanceof Range ? selectionRange : _rangeFromPayload(selectionRange);
+        this.tags = undefined;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Semantic tokens
 // -------------------------------------------------------------------------
@@ -452,6 +490,8 @@ let _nextLanguageProviderHandle = 1;
 const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _workspaceSymbolCache = new Map(); // handle -> { provider, symbol }
 let _nextWorkspaceSymbolHandle = 1;
+const _hierarchyItemCache = new Map(); // handle -> { provider, item, kind }
+let _nextHierarchyItemHandle = 1;
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
 const _debugAdapterFactories = new Map();   // type -> factory
@@ -730,6 +770,34 @@ function _positionFromPayload(value) {
 function _rangeFromPayload(value) {
     if (value instanceof Range) return value;
     return new Range(_positionFromPayload(value?.start), _positionFromPayload(value?.end));
+}
+
+function _callHierarchyItemFromPayload(value) {
+    if (value instanceof CallHierarchyItem) return value;
+    const item = new CallHierarchyItem(
+        value?.kind,
+        value?.name,
+        value?.detail,
+        value?.uri,
+        value?.range,
+        value?.selectionRange,
+    );
+    if (value && value.tags !== undefined) item.tags = value.tags;
+    return item;
+}
+
+function _typeHierarchyItemFromPayload(value) {
+    if (value instanceof TypeHierarchyItem) return value;
+    const item = new TypeHierarchyItem(
+        value?.kind,
+        value?.name,
+        value?.detail,
+        value?.uri,
+        value?.range,
+        value?.selectionRange,
+    );
+    if (value && value.tags !== undefined) item.tags = value.tags;
+    return item;
 }
 
 function _clampColorComponent(value, fallback) {
@@ -1027,6 +1095,10 @@ function buildVscodeModule(extDesc, extensionPath) {
         Location,
         DocumentHighlight,
         SymbolInformation,
+        CallHierarchyItem,
+        CallHierarchyIncomingCall,
+        CallHierarchyOutgoingCall,
+        TypeHierarchyItem,
         Disposable,
         EventEmitter,
         CancellationTokenSource,
@@ -1330,6 +1402,12 @@ function buildVscodeModule(extDesc, extensionPath) {
                 },
                 registerLinkedEditingRangeProvider(selector, provider) {
                     return _registerLangProvider('linkedEditing', selector, provider);
+                },
+                registerCallHierarchyProvider(selector, provider) {
+                    return _registerLangProvider('callHierarchy', selector, provider);
+                },
+                registerTypeHierarchyProvider(selector, provider) {
+                    return _registerLangProvider('typeHierarchy', selector, provider);
                 },
                 registerRenameProvider(selector, provider) {
                     return _registerLangProvider('rename', selector, provider);
@@ -1932,6 +2010,12 @@ function _languageProviderMethod(kind) {
         foldingRange: 'provideFoldingRanges',
         selectionRange: 'provideSelectionRanges',
         linkedEditing: 'provideLinkedEditingRanges',
+        prepareCallHierarchy: 'prepareCallHierarchy',
+        callHierarchyIncoming: 'provideCallHierarchyIncomingCalls',
+        callHierarchyOutgoing: 'provideCallHierarchyOutgoingCalls',
+        prepareTypeHierarchy: 'prepareTypeHierarchy',
+        typeHierarchySupertypes: 'provideTypeHierarchySupertypes',
+        typeHierarchySubtypes: 'provideTypeHierarchySubtypes',
         documentColor: 'provideDocumentColors',
         colorPresentation: 'provideColorPresentations',
         workspaceSymbol: 'provideWorkspaceSymbols',
@@ -1988,6 +2072,48 @@ function _cacheWorkspaceSymbol(provider, symbol) {
     return value;
 }
 
+function _hierarchyHandleKey(kind) {
+    return kind === 'typeHierarchy' ? '_nodeTypeHierarchyHandle' : '_nodeHierarchyHandle';
+}
+
+function _cacheHierarchyItem(provider, item, kind) {
+    const handle = String(_nextHierarchyItemHandle++);
+    _hierarchyItemCache.set(handle, { provider, item, kind });
+    while (_hierarchyItemCache.size > 2000) {
+        const first = _hierarchyItemCache.keys().next().value;
+        if (first === undefined) break;
+        _hierarchyItemCache.delete(first);
+    }
+    const value = _serializeLanguageValue(item);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        value[_hierarchyHandleKey(kind)] = handle;
+    }
+    return value;
+}
+
+function _serializeHierarchyItems(provider, value, kind) {
+    return _normalizeProviderItems(value).map(item => _cacheHierarchyItem(provider, item, kind));
+}
+
+function _serializeCallHierarchyCalls(provider, value, direction) {
+    const itemKey = direction === 'incoming' ? 'from' : 'to';
+    return _normalizeProviderItems(value).map(call => {
+        const serialized = _serializeLanguageValue(call);
+        const item = call && call[itemKey];
+        if (serialized && serialized[itemKey] && item) {
+            serialized[itemKey] = _cacheHierarchyItem(provider, item, 'callHierarchy');
+        }
+        return serialized;
+    });
+}
+
+function _cachedHierarchyProvider(value, kind) {
+    const handle = String(value?.[_hierarchyHandleKey(kind)] || '');
+    if (!handle) return null;
+    const cached = _hierarchyItemCache.get(handle);
+    return cached && cached.kind === kind ? cached : null;
+}
+
 async function handleLanguageProviderRequest(msg) {
     const requestId = String(msg.requestId || '');
     const kind = String(msg.kind || '');
@@ -2024,6 +2150,10 @@ async function handleLanguageProviderRequest(msg) {
                     ? 'documentColor'
                     : kind === 'workspaceSymbolResolve'
                         ? 'workspaceSymbol'
+                    : kind === 'prepareCallHierarchy' || kind === 'callHierarchyIncoming' || kind === 'callHierarchyOutgoing'
+                        ? 'callHierarchy'
+                    : kind === 'prepareTypeHierarchy' || kind === 'typeHierarchySupertypes' || kind === 'typeHierarchySubtypes'
+                        ? 'typeHierarchy'
                     : (kind === 'prepareRename' || kind === 'rename') ? 'rename' : kind;
         const providers = workspaceSymbolKind
             ? _languageProviders.filter(entry => entry.kind === 'workspaceSymbol')
@@ -2183,6 +2313,117 @@ async function handleLanguageProviderRequest(msg) {
                             ok: true,
                             kind,
                             value: _serializeLanguageValue(value),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'prepareCallHierarchy' || kind === 'prepareTypeHierarchy') {
+            const hierarchyKind = kind === 'prepareTypeHierarchy' ? 'typeHierarchy' : 'callHierarchy';
+            for (const entry of providers) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, document, position, token);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeHierarchyItems(provider, value, hierarchyKind),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'callHierarchyIncoming' || kind === 'callHierarchyOutgoing') {
+            const cached = _cachedHierarchyProvider(msg.item || {}, 'callHierarchy');
+            const entries = cached
+                ? [{ provider: cached.provider, item: cached.item }]
+                : providers.map(entry => ({
+                    provider: entry.provider,
+                    item: _callHierarchyItemFromPayload(msg.item || {}),
+                }));
+            for (const entry of entries) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, entry.item, token);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeCallHierarchyCalls(
+                                provider,
+                                value,
+                                kind === 'callHierarchyIncoming' ? 'incoming' : 'outgoing'),
+                        });
+                        return;
+                    }
+                } catch (err) {
+                    log(`language provider ${kind} error: ${err.message}`);
+                }
+            }
+            send({
+                type: 'language_provider_response',
+                requestId,
+                ok: true,
+                kind,
+                value: null,
+            });
+            return;
+        }
+
+        if (kind === 'typeHierarchySupertypes' || kind === 'typeHierarchySubtypes') {
+            const cached = _cachedHierarchyProvider(msg.item || {}, 'typeHierarchy');
+            const entries = cached
+                ? [{ provider: cached.provider, item: cached.item }]
+                : providers.map(entry => ({
+                    provider: entry.provider,
+                    item: _typeHierarchyItemFromPayload(msg.item || {}),
+                }));
+            for (const entry of entries) {
+                const provider = entry.provider;
+                const fn = provider && provider[methodName];
+                if (typeof fn !== 'function') continue;
+                try {
+                    const value = await fn.call(provider, entry.item, token);
+                    if (value !== undefined && value !== null) {
+                        send({
+                            type: 'language_provider_response',
+                            requestId,
+                            ok: true,
+                            kind,
+                            value: _serializeHierarchyItems(provider, value, 'typeHierarchy'),
                         });
                         return;
                     }
