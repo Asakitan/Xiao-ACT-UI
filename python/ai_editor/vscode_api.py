@@ -1774,6 +1774,43 @@ class VscodeNamespace:
         self._workspace_open_text_document_emitter.fire(document)
         return document
 
+    def update_text_document_snapshot(
+            self, uri: Any, content: str,
+            language_id: str = "") -> "_TextDocument":
+        """Update an in-memory editor buffer without saving it to disk."""
+        uri_obj = _coerce_uri(uri) or Uri.parse("untitled:Untitled-1")
+        doc_key = str(uri_obj)
+        text = "" if content is None else str(content)
+        language = str(language_id or "").strip()
+        if not language:
+            language = _language_id_for_path(
+                uri_obj.fs_path if uri_obj.scheme == "file" else uri_obj.path)
+
+        document = None
+        for existing in self._text_documents:
+            if self._document_key(existing) == doc_key:
+                document = existing
+                break
+        if document is None:
+            document = self._remember_text_document(
+                _TextDocument(uri_obj, text, language))
+            document.isDirty = False
+            return document
+
+        changed = document.getText() != text
+        language_changed = document.languageId != language
+        if language_changed:
+            document.languageId = language
+        if changed:
+            document._content = text
+            document.version += 1
+            document.isDirty = True
+        if changed or language_changed:
+            self._workspace_change_text_document_emitter.fire(
+                {"document": document})
+            self._sync_workspace_state()
+        return document
+
     def _get_configuration(self, section: str = "") -> WorkspaceConfiguration:
         data = {}
         if self._settings_getter:

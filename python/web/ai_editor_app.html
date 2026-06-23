@@ -226,6 +226,19 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
 }
 .editor-textarea::selection { background:var(--selection); }
+.editor-suggest,.editor-hover { position:absolute; z-index:8; border:1px solid var(--border);
+  background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px rgba(0,0,0,.32);
+  border-radius:6px; opacity:0; transform:translateY(-4px); pointer-events:none;
+  transition:opacity .12s ease,transform .12s ease; }
+.editor-suggest.open,.editor-hover.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+.editor-suggest { min-width:240px; max-width:420px; max-height:260px; overflow:auto; padding:4px; }
+.editor-suggest-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
+  padding:5px 7px; border-radius:4px; cursor:pointer; font:12px/1.35 var(--ui); }
+.editor-suggest-item.active { background:var(--selection); }
+.editor-suggest-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-suggest-detail { color:var(--fg-dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-hover { max-width:460px; max-height:220px; overflow:auto; padding:8px 10px;
+  font:12px/1.45 var(--ui); white-space:pre-wrap; pointer-events:none; }
 .editor-welcome { display:flex; align-items:center; justify-content:center; flex:1;
   color:var(--fg-dim); font-size:14px; flex-direction:column; gap:12px; }
 .editor-welcome kbd { background:var(--bg3); padding:2px 6px; border-radius:3px;
@@ -1145,6 +1158,8 @@ pre.code-block { overflow:visible; }
         <div class="line-numbers" id="line-nums">1</div>
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
+        <div class="editor-suggest" id="editor-suggest" role="listbox"></div>
+        <div class="editor-hover" id="editor-hover" role="tooltip"></div>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
         <div class="minimap-container hidden" id="minimap-container">
@@ -2371,6 +2386,8 @@ function openInEditor(code,lang){
   $('editor-container').style.display='flex';
   $('editor-text').value=code;
   _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+  if(typeof closeEditorSuggest==='function')closeEditorSuggest();
+  if(typeof closeEditorHover==='function')closeEditorHover();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -3181,21 +3198,205 @@ function editorRedo(){
   ta.value=snap.content;ta.selectionStart=ta.selectionEnd=snap.cursor;
   updateLineNums();updateCursorPos();
 }
-function _editorInputWithUndo(){
+function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
   clearTimeout(_undoTimer);
   _undoTimer=setTimeout(()=>_undoPush(false),_UNDO_DEBOUNCE);
+  closeEditorHover();
+  const ch=e&&typeof e.data==='string'?e.data:'';
+  if(editorCompletionTriggerCharacter(ch))requestEditorCompletion(ch,true);
+  else closeEditorSuggest();
+  scheduleEditorHover();
+}
+
+let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
+let _editorHoverTimer=null,_editorHoverRequest=0;
+function activeEditorTab(){
+  return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
+}
+function editorPositionFromOffset(value,offset){
+  value=String(value||'');offset=Math.max(0,Math.min(value.length,Number(offset)||0));
+  const before=value.slice(0,offset),parts=before.split('\n');
+  return {line:parts.length-1,character:parts[parts.length-1].length};
+}
+function editorOffsetFromPosition(value,pos){
+  value=String(value||'');pos=pos||{};
+  let line=Math.max(0,Number(pos.line)||0),character=Math.max(0,Number(pos.character)||0),offset=0;
+  while(line>0){
+    const next=value.indexOf('\n',offset);
+    if(next<0)return value.length;
+    offset=next+1;line--;
+  }
+  const lineEnd=value.indexOf('\n',offset);
+  const max=lineEnd<0?value.length:lineEnd;
+  return Math.max(offset,Math.min(max,offset+character));
+}
+function editorUntitledUri(tab){
+  const name=String((tab&&tab.name)||editorFileName||'Untitled-1').replace(/[\r\n?#]+/g,'-')||'Untitled-1';
+  return 'untitled:'+name;
+}
+function editorProviderPayload(kind,extra){
+  const tab=activeEditorTab(),value=ed.value,offset=ed.selectionStart;
+  const filePath=tab.filePath||'',uri=filePath||editorUntitledUri(tab);
+  return Object.assign({
+    kind,uri,filePath,workspacePath:tab.workspacePath||'',name:tab.name||editorFileName||'untitled',
+    language:editorLang,content:value,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
+  },extra||{});
+}
+function editorOverlayPoint(position){
+  const ta=ed,wrap=$('editor-container'),nums=$('line-nums');
+  const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
+  const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
+  const gutter=nums?nums.offsetWidth:50;
+  const left=gutter+paddingLeft+(Number(position.character)||0)*charWidth-ta.scrollLeft;
+  const top=paddingTop+(Number(position.line)||0)*lineHeight-ta.scrollTop+lineHeight;
+  const maxLeft=Math.max(gutter+4,(wrap?wrap.clientWidth:800)-260);
+  const maxTop=Math.max(8,(wrap?wrap.clientHeight:500)-80);
+  return {
+    left:Math.max(gutter+4,Math.min(maxLeft,left)),
+    top:Math.max(8,Math.min(maxTop,top))
+  };
+}
+function placeEditorOverlay(el,position){
+  const p=editorOverlayPoint(position||editorPositionFromOffset(ed.value,ed.selectionStart));
+  el.style.left=p.left+'px';el.style.top=p.top+'px';
+}
+function completionLabelText(label){
+  if(label&&typeof label==='object')return String(label.label||label.name||label.detail||'');
+  return String(label||'');
+}
+function editorProviderText(value){
+  if(value==null)return '';
+  if(Array.isArray(value))return value.map(editorProviderText).filter(Boolean).join('\n');
+  if(typeof value==='string')return value;
+  if(typeof value.value==='string')return value.value;
+  if(value.contents!==undefined)return editorProviderText(value.contents);
+  if(value.label!==undefined)return completionLabelText(value.label);
+  if(value.name!==undefined)return String(value.name);
+  return String(value);
+}
+function editorInsertText(item){
+  let text=item&&item.textEdit&&item.textEdit.newText!==undefined?item.textEdit.newText:item&&item.insertText;
+  if(text&&typeof text==='object')text=text.value||text.snippet||text.text||'';
+  if(text===undefined||text===null||text==='')text=completionLabelText(item&&item.label);
+  return String(text||'').replace(/\$\{\d+:([^}]+)\}/g,'$1').replace(/\$\d+/g,'');
+}
+function editorApplyTextEdits(edits){
+  if(!Array.isArray(edits)||!edits.length)return false;
+  const value=ed.value,ops=[];
+  edits.forEach(edit=>{
+    if(!edit||typeof edit!=='object')return;
+    let range=edit.range;
+    if(!range&&edit.position)range={start:edit.position,end:edit.position};
+    if(!range)return;
+    const start=editorOffsetFromPosition(value,range.start),end=editorOffsetFromPosition(value,range.end);
+    ops.push({start:Math.min(start,end),end:Math.max(start,end),text:String(edit.newText??edit.text??'')});
+  });
+  if(!ops.length)return false;
+  const primary=ops[0];let next=value;
+  ops.sort((a,b)=>b.start-a.start||b.end-a.end).forEach(op=>{next=next.slice(0,op.start)+op.text+next.slice(op.end)});
+  ed.value=next;
+  const cursor=Math.min(next.length,primary.start+primary.text.length);
+  ed.selectionStart=ed.selectionEnd=cursor;editorDirty=true;
+  updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+  return true;
+}
+function isEditorSuggestOpen(){
+  const box=$('editor-suggest');return !!(box&&box.classList.contains('open'));
+}
+function closeEditorSuggest(){
+  const box=$('editor-suggest');if(!box)return;
+  box.classList.remove('open');box.style.display='none';_editorSuggestItems=[];
+}
+function setEditorSuggestIndex(index){
+  if(!_editorSuggestItems.length)return;
+  _editorSuggestIndex=(index+_editorSuggestItems.length)%_editorSuggestItems.length;
+  document.querySelectorAll('#editor-suggest .editor-suggest-item').forEach((el,i)=>{
+    el.classList.toggle('active',i===_editorSuggestIndex);
+    if(i===_editorSuggestIndex)el.scrollIntoView({block:'nearest'});
+  });
+}
+function showEditorSuggest(items,position){
+  const box=$('editor-suggest');if(!box)return;
+  _editorSuggestItems=items.slice(0,80);_editorSuggestIndex=0;box.innerHTML='';
+  _editorSuggestItems.forEach((item,index)=>{
+    const row=document.createElement('div');row.className='editor-suggest-item'+(index===0?' active':'');row.setAttribute('role','option');
+    const label=document.createElement('div');label.className='editor-suggest-label';label.textContent=completionLabelText(item.label)||editorInsertText(item);
+    const docValue=item.documentation&&typeof item.documentation==='object'?item.documentation.value:'';
+    const detail=document.createElement('div');detail.className='editor-suggest-detail';detail.textContent=String(item.detail||docValue||item.kind||'');
+    row.appendChild(label);row.appendChild(detail);
+    row.onmousedown=e=>{e.preventDefault();applyEditorCompletion(item)};
+    box.appendChild(row);
+  });
+  placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+}
+function applyEditorCompletion(item){
+  if(!item)return;
+  _undoPush(true);
+  const edits=[];
+  if(item.textEdit)edits.push(item.textEdit);
+  if(Array.isArray(item.additionalTextEdits))edits.push(...item.additionalTextEdits);
+  if(edits.length&&editorApplyTextEdits(edits)){closeEditorSuggest();ed.focus();return}
+  const value=ed.value,s=ed.selectionStart,end=ed.selectionEnd,word=editorWordRangeAt(value,s,end);
+  const start=word?word.start:s,finish=word?word.end:end,text=editorInsertText(item);
+  ed.value=value.slice(0,start)+text+value.slice(finish);
+  ed.selectionStart=ed.selectionEnd=start+text.length;editorDirty=true;
+  updateLineNums();updateCursorPos();closeEditorSuggest();ed.focus();
+}
+function handleEditorSuggestKey(e){
+  if(!isEditorSuggestOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setEditorSuggestIndex(_editorSuggestIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setEditorSuggestIndex(_editorSuggestIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyEditorCompletion(_editorSuggestItems[_editorSuggestIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeEditorSuggest();return true}
+  return false;
+}
+function editorCompletionTriggerCharacter(ch){
+  return typeof ch==='string'&&ch.length===1&&'.:#/@'.includes(ch);
+}
+async function requestEditorCompletion(triggerCharacter,quiet){
+  const requestId=++_editorSuggestRequest;
+  const position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('completion',{triggerCharacter:triggerCharacter||null}));
+  if(requestId!==_editorSuggestRequest)return;
+  const items=res&&res.ok&&Array.isArray(res.items)?res.items:[];
+  if(items.length){closeEditorHover();showEditorSuggest(items,position);setStatus(items.length+' suggestion'+(items.length===1?'':'s'));return}
+  closeEditorSuggest();if(!quiet)setStatus('No suggestions');
+}
+function closeEditorHover(){
+  const box=$('editor-hover');if(!box)return;
+  box.classList.remove('open');box.style.display='none';
+}
+function showEditorHover(text,position){
+  const box=$('editor-hover');if(!box||!text)return;
+  box.textContent=text;placeEditorOverlay(box,position);box.style.display='block';
+  requestAnimationFrame(()=>box.classList.add('open'));
+}
+async function requestEditorHover(){
+  if(isEditorSuggestOpen()||!ed||ed.offsetParent===null)return;
+  const requestId=++_editorHoverRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
+  const res=await call('editor_language_provider',editorProviderPayload('hover'));
+  if(requestId!==_editorHoverRequest)return;
+  const text=(res&&res.ok&&Array.isArray(res.hovers)?res.hovers:[]).map(editorProviderText).filter(Boolean).join('\n\n');
+  if(text)showEditorHover(text,position);else closeEditorHover();
+}
+function scheduleEditorHover(){
+  clearTimeout(_editorHoverTimer);
+  _editorHoverTimer=setTimeout(()=>requestEditorHover(),520);
 }
 
 const ed=$('editor-text');
 // Seed initial undo state
 _undoPush(true);
 ed.addEventListener('input',_editorInputWithUndo);
-ed.addEventListener('click',updateCursorPos);
+ed.addEventListener('click',()=>{updateCursorPos();scheduleEditorHover()});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
-ed.addEventListener('keyup',updateCursorPos);
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos()});
+ed.addEventListener('keyup',()=>{updateCursorPos();scheduleEditorHover()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos();closeEditorHover()});
 ed.addEventListener('keydown',function(e){
+  if(handleEditorSuggestKey(e))return;
+  if((e.code==='Space'||e.key===' ')&&e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorCompletion('',false);return}
   // Ctrl+Z → Undo
   if(e.key==='z'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();editorUndo();return}
   // Ctrl+Y or Ctrl+Shift+Z → Redo
@@ -3282,6 +3483,7 @@ ed.addEventListener('contextmenu',function(e){
     {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
     {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
+    {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
     {label:'Format Document',shortcut:'',action:()=>formatDocument()},
     {sep:true},
     {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
@@ -3295,7 +3497,10 @@ ed.addEventListener('contextmenu',function(e){
   });
   menu.style.display='block';menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
 });
-document.addEventListener('click',()=>{$('ctx-menu').style.display='none'});
+document.addEventListener('click',e=>{
+  $('ctx-menu').style.display='none';
+  if(!e.target.closest||!e.target.closest('#editor-container')){closeEditorSuggest();closeEditorHover()}
+});
 
 // ── Find/Replace ──
 function openFindBar(showReplace){
@@ -3463,7 +3668,12 @@ function deleteLine(){
 }
 
 // ── Format document ──
-function formatDocument(){
+async function formatDocument(){
+  const res=await call('editor_language_provider',editorProviderPayload('formatting',{options:{tabSize:4,insertSpaces:true}}));
+  if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
+    _undoPush(true);
+    if(editorApplyTextEdits(res.edits)){setStatus('Formatted via extension');return}
+  }
   if(editorLang==='json'){
     try{ed.value=JSON.stringify(JSON.parse(ed.value),null,2);updateLineNums();setStatus('Formatted JSON')}
     catch{setStatus('Invalid JSON')}
@@ -7000,6 +7210,8 @@ function switchTab(id){
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
     _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+    if(typeof closeEditorSuggest==='function')closeEditorSuggest();
+    if(typeof closeEditorHover==='function')closeEditorHover();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
   }
@@ -7361,6 +7573,7 @@ const COMMANDS=[
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
+  {label:'Trigger Suggest',shortcut:'Ctrl+Space',action:()=>requestEditorCompletion('',false)},
   {label:'Format Document',shortcut:'',action:()=>formatDocument()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},

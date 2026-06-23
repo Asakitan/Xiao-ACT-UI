@@ -36,6 +36,7 @@ from ai_editor.chat_providers import (
     describe_provider_status,
     provider_runtime_cli_path,
 )
+from ai_editor.extension_host import Position, Range, Uri
 from ai_editor.vscode_api import (
     _resolve_provider_result as _resolve_vscode_provider_result,
 )
@@ -476,6 +477,137 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
         extra_headers=raw["extra_headers"],
         extra_body=raw["extra_body"],
     )
+
+
+_LANGUAGE_RESULT_ATTRS = (
+    "items", "isIncomplete", "label", "kind", "detail", "documentation",
+    "sortText", "filterText", "insertText", "range", "textEdit",
+    "additionalTextEdits", "command", "contents", "uri", "targetUri",
+    "targetRange", "originSelectionRange", "name", "containerName",
+    "children", "selectionRange", "diagnostics", "edit", "title",
+    "isPreferred", "disabled", "newText", "position", "value",
+)
+
+
+def _text_position_for_offset(text: str, offset: Any) -> Position:
+    value = str(text or "")
+    try:
+        raw = int(offset)
+    except Exception:
+        raw = 0
+    index = max(0, min(len(value), raw))
+    line = value.count("\n", 0, index)
+    line_start = value.rfind("\n", 0, index) + 1
+    return Position(line, index - line_start)
+
+
+def _editor_provider_position(value: Any, content: str = "") -> Position:
+    if isinstance(value, Position):
+        return value
+    if isinstance(value, dict):
+        try:
+            return Position(
+                int(value.get("line", 0)),
+                int(value.get("character", 0)),
+            )
+        except Exception:
+            return Position()
+    if value is not None:
+        return _text_position_for_offset(content, value)
+    return Position()
+
+
+def _editor_provider_range(value: Any, content: str = "") -> Range:
+    if isinstance(value, Range):
+        return value
+    if isinstance(value, dict):
+        return Range(
+            _editor_provider_position(value.get("start"), content),
+            _editor_provider_position(value.get("end"), content),
+        )
+    return Range()
+
+
+def _editor_provider_uri(payload: Dict[str, Any]) -> Uri:
+    raw = (
+        payload.get("uri")
+        or payload.get("filePath")
+        or payload.get("file_path")
+        or payload.get("absolute_path")
+        or payload.get("path")
+    )
+    if isinstance(raw, Uri):
+        return raw
+    if isinstance(raw, dict) and raw.get("scheme"):
+        return Uri(
+            str(raw.get("scheme") or "file"),
+            str(raw.get("path") or ""),
+            str(raw.get("authority") or ""),
+            str(raw.get("query") or ""),
+            str(raw.get("fragment") or ""),
+        )
+    raw_text = str(raw or "").strip()
+    if raw_text:
+        if os.path.isabs(raw_text) or (
+                len(raw_text) >= 2 and raw_text[1] == ":"
+                and raw_text[0].isalpha()):
+            return Uri.file(raw_text)
+        if ":" in raw_text:
+            return Uri.parse(raw_text)
+        return Uri.file(raw_text)
+    name = re.sub(r"[\r\n?#]+", "-", str(payload.get("name") or "Untitled-1"))
+    name = name.strip().replace("\\", "/") or "Untitled-1"
+    return Uri.parse(f"untitled:{name}")
+
+
+def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
+    if depth > 8:
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Uri):
+        return str(value)
+    if isinstance(value, Position):
+        return {"line": int(value.line), "character": int(value.character)}
+    if isinstance(value, Range):
+        return {
+            "start": _json_ready_language_value(value.start, depth + 1),
+            "end": _json_ready_language_value(value.end, depth + 1),
+        }
+    if isinstance(value, dict):
+        return {
+            str(key): _json_ready_language_value(item, depth + 1)
+            for key, item in value.items()
+            if not callable(item)
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_json_ready_language_value(item, depth + 1) for item in value]
+
+    items = getattr(value, "items", None)
+    if items is not None and hasattr(value, "isIncomplete"):
+        return {
+            "items": _json_ready_language_value(list(items or []), depth + 1),
+            "isIncomplete": bool(getattr(value, "isIncomplete", False)),
+        }
+
+    data: Dict[str, Any] = {}
+    for attr in _LANGUAGE_RESULT_ATTRS:
+        if hasattr(value, attr):
+            try:
+                item = getattr(value, attr)
+            except Exception:
+                continue
+            if item is not None and not callable(item):
+                data[attr] = _json_ready_language_value(item, depth + 1)
+    if data:
+        return data
+    if hasattr(value, "__dict__"):
+        return {
+            str(key): _json_ready_language_value(item, depth + 1)
+            for key, item in vars(value).items()
+            if not key.startswith("_") and not callable(item)
+        }
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -2448,6 +2580,143 @@ class AIEditorAPI:
             "language": self._editor_language_for_path(full),
             "truncated": truncated,
         }
+
+    def editor_language_provider(self, payload: Dict[str, Any]) -> Dict:
+        """Run VS Code language providers against the live editor buffer."""
+        if not isinstance(payload, dict):
+            return {"error": "Language provider payload must be an object"}
+        kind_aliases = {
+            "completion": "completion",
+            "completions": "completion",
+            "hover": "hover",
+            "definition": "definition",
+            "definitions": "definition",
+            "documentSymbol": "documentSymbol",
+            "documentSymbols": "documentSymbol",
+            "symbols": "documentSymbol",
+            "codeAction": "codeActions",
+            "codeActions": "codeActions",
+            "format": "formatting",
+            "formatting": "formatting",
+            "formatDocument": "formatting",
+        }
+        kind = kind_aliases.get(str(payload.get("kind") or "").strip())
+        if not kind:
+            return {"error": "Unsupported language provider kind"}
+
+        self._ensure_engine()
+        content = "" if payload.get("content") is None else str(payload.get("content"))
+        language = str(
+            payload.get("language")
+            or payload.get("languageId")
+            or "plaintext")
+        document = self._vscode_ns.update_text_document_snapshot(
+            _editor_provider_uri(payload), content, language)
+        if "dirty" in payload:
+            document.isDirty = bool(payload.get("dirty"))
+        pos_value = payload.get("position")
+        if pos_value is None:
+            pos_value = payload.get("offset")
+        position = _editor_provider_position(pos_value, content)
+
+        try:
+            if kind == "completion":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeCompletionItemProvider",
+                    document.uri,
+                    position,
+                    payload.get("triggerCharacter"),
+                )
+                value = _json_ready_language_value(result)
+                if isinstance(value, dict):
+                    items = value.get("items") or []
+                    incomplete = bool(value.get("isIncomplete"))
+                else:
+                    items = value if isinstance(value, list) else []
+                    incomplete = False
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "items": items,
+                    "isIncomplete": incomplete,
+                }
+            if kind == "hover":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeHoverProvider", document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "hovers": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "definition":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeDefinitionProvider", document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "definitions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "documentSymbol":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeDocumentSymbolProvider", document.uri)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "symbols": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "codeActions":
+                action_range = _editor_provider_range(
+                    payload.get("range"), content)
+                result = self._ext_host.commands.execute(
+                    "vscode.executeCodeActionProvider",
+                    document.uri,
+                    action_range,
+                    payload.get("only"),
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "actions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            options = payload.get("options")
+            if not isinstance(options, dict):
+                options = {"tabSize": 4, "insertSpaces": True}
+            result = self._ext_host.commands.execute(
+                "vscode.executeFormatDocumentProvider",
+                document.uri,
+                options,
+            )
+            value = _json_ready_language_value(result)
+            return {
+                "ok": True,
+                "kind": kind,
+                "uri": str(document.uri),
+                "version": document.version,
+                "edits": value if isinstance(value, list) else (
+                    [] if value is None else [value]),
+            }
+        except KeyError as exc:
+            return {"error": f"Language provider command not found: {exc}"}
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def new_chat(self) -> Dict:
         if self._controller:

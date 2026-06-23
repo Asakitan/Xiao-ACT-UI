@@ -330,6 +330,7 @@ def test_app_settings_parity() -> None:
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "open_workspace_file",
+        "editor_language_provider",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
@@ -350,6 +351,74 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+
+    from ai_editor.vscode_api import (
+        CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
+    )
+    provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    provider_api._extension_scan_dirs = lambda: []
+    provider_api._ensure_engine()
+
+    class _EditorProvider:
+        def __init__(self):
+            self.seen_texts = []
+            self.seen_dirty = []
+
+        def provideCompletionItems(self, document, position, token, context):
+            self.seen_texts.append(document.getText())
+            self.seen_dirty.append(document.isDirty)
+            item = CompletionItem("editorCompletion")
+            item.detail = document.languageId
+            return CompletionList([item], False)
+
+        def provideHover(self, document, position, token):
+            return Hover(["hover " + document.getText()], Range(position, position))
+
+        def provideDocumentFormattingEdits(self, document, options, token):
+            end = Position(0, len(document.getText()))
+            return [TextEdit.replace(Range(Position(0, 0), end), "formatted")]
+
+    editor_provider = _EditorProvider()
+    lang_api = provider_api._vscode_ns.build()["languages"]
+    lang_api["registerCompletionItemProvider"]("python", editor_provider)
+    lang_api["registerHoverProvider"]("python", editor_provider)
+    lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
+    tmp_provider_dir = tempfile.mkdtemp()
+    try:
+        provider_path = os.path.join(tmp_provider_dir, "buffer.py")
+        with open(provider_path, "w", encoding="utf-8") as fh:
+            fh.write("disk")
+        provider_payload = {
+            "filePath": provider_path,
+            "language": "python",
+            "content": "buffer",
+            "dirty": True,
+            "position": {"line": 0, "character": 3},
+        }
+        completion_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="completion"))
+        hover_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="hover"))
+        format_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="formatting"))
+        with open(provider_path, "r", encoding="utf-8") as fh:
+            disk_text = fh.read()
+        _check("editor_language_provider serializes completion items",
+               completion_result.get("ok") is True
+               and completion_result.get("items", [{}])[0].get("label")
+               == "editorCompletion"
+               and completion_result.get("items", [{}])[0].get("detail")
+               == "python"
+               and editor_provider.seen_texts[-1] == "buffer"
+               and editor_provider.seen_dirty[-1] is True)
+        _check("editor_language_provider serializes hover contents",
+               hover_result.get("hovers", [{}])[0].get("contents") == [
+                   "hover buffer"])
+        _check("editor_language_provider exposes formatting edits without saving",
+               format_result.get("edits", [{}])[0].get("newText") == "formatted"
+               and disk_text == "disk")
+    finally:
+        shutil.rmtree(tmp_provider_dir, ignore_errors=True)
 
     x, y, w, h = _normalize_window_geometry({"x": 999999, "y": 999999, "w": 999999, "h": 999999})
     _check("saved AI Editor window geometry is clamped to visible screen",
@@ -1314,6 +1383,19 @@ def test_phase1_ai_editor_regressions() -> None:
             and "icon.uri||icon.iconUri" in html
             and "function iconThemeFileGlyph(name,language)" in html
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
+    _check("frontend invokes dynamic editor language providers",
+           "id=\"editor-suggest\"" in html
+           and "id=\"editor-hover\"" in html
+           and "call('editor_language_provider'" in html
+           and "function editorProviderPayload(kind,extra)" in html
+           and "function requestEditorCompletion(triggerCharacter,quiet)" in html
+           and "function showEditorSuggest(items,position)" in html
+           and "function applyEditorCompletion(item)" in html
+           and "function handleEditorSuggestKey(e)" in html
+           and "function requestEditorHover()" in html
+           and "function editorApplyTextEdits(edits)" in html
+           and "Ctrl+Space" in html
+           and "Formatted via extension" in html)
     try:
         from ai_editor.node_runtime import get_node_path
         node_path = get_node_path()
