@@ -2587,7 +2587,9 @@ console.log("frontend auto-close behavior ok");
         decoded_css = base64.b64decode(css_payload).decode(
             "utf-8", errors="replace")
         _check("webview local resources are inlined for srcdoc iframes",
-               "https://webview.local/" not in prepared_webview_html
+               "sao-webview-resource-map" in prepared_webview_html
+               and f'src="{_wv_url(script_path)}"' not in prepared_webview_html
+               and f'href="{_wv_url(style_path)}"' not in prepared_webview_html
                and "data:text/javascript;base64," in prepared_webview_html
                and "data:text/css;base64," in prepared_webview_html
                and base64.b64encode(b"font-bytes").decode("ascii")
@@ -2598,6 +2600,12 @@ console.log("frontend auto-close behavior ok");
         _check("webview local resource roots block outside files",
                "https://webview.local/" in blocked_prepared_html
                and "data:text/javascript;base64," not in blocked_prepared_html)
+        _check("webview bridge rewrites dynamic local resources",
+               "function _resourceMap()" in html
+               and "sao-webview-resource-map" in html
+               and "Element.prototype.setAttribute=function(name,value)" in html
+               and "_patchUrlProperty(window.HTMLScriptElement&&HTMLScriptElement.prototype,\"src\",_rewriteResourceUrl)" in html
+               and "new MutationObserver(function(ms)" in html)
     _check("inline HTML handlers are exported to window",
            all(token in html for token in (
                "window.refreshExplorer=refreshExplorer",

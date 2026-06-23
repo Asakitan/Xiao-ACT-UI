@@ -960,6 +960,7 @@ class AIEditorAPI:
 
         budget = {"bytes": 0}
         allowed_roots = self._webview_resource_roots(local_resource_roots)
+        resource_map: Dict[str, str] = {}
 
         def file_to_data_uri(path: str) -> str:
             full = os.path.abspath(path)
@@ -1010,9 +1011,19 @@ class AIEditorAPI:
             url = match.group(0)
             path = self._webview_local_path_from_url(url)
             data_uri = file_to_data_uri(path) if path else ""
+            if data_uri:
+                resource_map[url] = data_uri
             return data_uri or url
 
         prepared = _WEBVIEW_LOCAL_URL_RE.sub(local_url_repl, text)
+        if resource_map:
+            map_json = json.dumps(resource_map, ensure_ascii=False).replace(
+                "<", "\\u003c")
+            prepared = (
+                '<script id="sao-webview-resource-map" '
+                'type="application/json">'
+                f"{map_json}</script>{prepared}"
+            )
         return self._relax_webview_csp_for_data_uris(prepared)
 
     @staticmethod
