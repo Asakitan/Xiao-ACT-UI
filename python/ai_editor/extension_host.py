@@ -1589,6 +1589,8 @@ class NodeExtensionHost:
         self._language_request_lock = threading.Lock()
         self._language_requests: Dict[str, Dict[str, Any]] = {}
         self._language_providers: List[Dict[str, Any]] = []
+        self._custom_editor_request_lock = threading.Lock()
+        self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._shutting_down = False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -1992,6 +1994,16 @@ class NodeExtensionHost:
                 if isinstance(event, threading.Event):
                     event.set()
 
+        elif msg_type == "custom_editor_resolved":
+            request_id = str(msg.get("requestId", ""))
+            with self._custom_editor_request_lock:
+                pending = self._custom_editor_requests.get(request_id)
+            if pending:
+                pending["response"] = msg
+                event = pending.get("event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
         elif msg_type in {
                 "tree_data_provider_registered",
                 "tree_data_provider_disposed",
@@ -2331,6 +2343,62 @@ class NodeExtensionHost:
             "selectionHandles": selection_handles,
         })
 
+    def request_custom_editor_result(
+            self, view_type: str, uri: str, title: str = "",
+            view_id: str = "", timeout: float = 2.0) -> Dict[str, Any]:
+        """Ask Node to resolve a registered CustomEditorProvider."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = str(view_type or "")
+        if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "custom_editor", 0, ok=False, detail=detail, error=error)
+            return {"ok": False, "error": error}
+        request_id = str(uuid.uuid4())
+        event = threading.Event()
+        with self._custom_editor_request_lock:
+            self._custom_editor_requests[request_id] = {"event": event}
+        try:
+            sent = self._send({
+                "type": "resolve_custom_editor",
+                "requestId": request_id,
+                "viewType": str(view_type or ""),
+                "uri": str(uri or ""),
+                "title": str(title or ""),
+                "viewId": str(view_id or ""),
+            })
+            if not sent:
+                error = "Node custom editor request could not be sent"
+                return {"ok": False, "error": error}
+            if not event.wait(timeout):
+                timed_out = True
+                error = "Node custom editor request timed out"
+                return {"ok": False, "error": error, "timeout": True}
+            with self._custom_editor_request_lock:
+                pending = self._custom_editor_requests.get(request_id, {})
+            response = pending.get("response", {})
+            if isinstance(response, dict) and response.get("ok"):
+                ok = True
+                return dict(response)
+            error = (
+                response.get("error")
+                if isinstance(response, dict) else "Node custom editor failed")
+            return {"ok": False, "error": error}
+        finally:
+            with self._custom_editor_request_lock:
+                self._custom_editor_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "custom_editor",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
+
     # -- Webview message relay -----------------------------------------------
 
     def relay_webview_message(self, view_id: str, message: Any) -> bool:
@@ -2397,6 +2465,7 @@ class NodeExtensionHost:
                 "commands": len(self._command_requests),
                 "tree": len(self._tree_requests),
                 "language": len(self._language_requests),
+                "customEditors": len(self._custom_editor_requests),
             },
             "categories": categories,
         }

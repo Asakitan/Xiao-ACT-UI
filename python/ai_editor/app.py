@@ -5821,7 +5821,12 @@ class AIEditorAPI:
                 "enabled": self._extension_diagnostics_enabled(),
                 "running": False,
                 "activated": 0,
-                "pending": {"commands": 0, "tree": 0, "language": 0},
+                "pending": {
+                    "commands": 0,
+                    "tree": 0,
+                    "language": 0,
+                    "customEditors": 0,
+                },
                 "categories": {},
             }
         if reset:
@@ -5845,6 +5850,17 @@ class AIEditorAPI:
             "extensions": merged.get("extensions", {}),
             "diagnostics": self.get_extension_host_diagnostics(),
         }
+
+    def resolve_extension_custom_editor(
+            self, view_type: str, uri: str, title: str = "") -> Dict:
+        """Resolve a Node-registered custom editor into a dynamic webview."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {
+                "ok": False,
+                "error": "Node extension host is not running",
+            }
+        return host.request_custom_editor_result(view_type, uri, title=title)
 
     def get_extension_settings(self, ext_id: str = "") -> Dict:
         """EXT-10: Return extension-contributed configuration schema and values.

@@ -605,6 +605,40 @@ class WebviewView {
     dispose() { this._onDidDispose.fire(); }
 }
 
+function _createWebviewPanelObject(viewType, title, viewId) {
+    const view = new WebviewView(viewId, viewType);
+    view.title = title || '';
+    _webviewViews.set(viewId, view);
+    const viewStateEmitter = new EventEmitter();
+    const panel = {
+        viewType,
+        title: title || '',
+        webview: view.webview,
+        visible: true,
+        active: true,
+        viewColumn: 1,
+        onDidDispose: view.onDidDispose,
+        onDidChangeViewState: viewStateEmitter.event,
+        reveal(viewColumn, preserveFocus) {
+            panel.visible = true;
+            panel.active = !preserveFocus;
+            if (viewColumn !== undefined) panel.viewColumn = viewColumn;
+            viewStateEmitter.fire({ webviewPanel: panel });
+        },
+        dispose() {
+            view.dispose();
+            _webviewViews.delete(viewId);
+        },
+    };
+    return panel;
+}
+
+function _safeViewIdPart(value) {
+    return String(value || 'custom')
+        .replace(/[^a-zA-Z0-9_.-]+/g, '-')
+        .slice(0, 80) || 'custom';
+}
+
 // -------------------------------------------------------------------------
 // OutputChannel
 // -------------------------------------------------------------------------
@@ -633,6 +667,7 @@ const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
+const _customEditorProviders = new Map(); // viewType -> { provider, options, extensionId }
 const _treeDataProviders = new Map();    // viewId -> { provider, disposable? }
 const _treeViews = new Map();            // viewId -> TreeView-like object
 const _treeElementStores = new Map();    // viewId -> element handle store
@@ -1136,6 +1171,7 @@ function _pathFromUriLike(value) {
 function _workspaceUriFromInput(value) {
     if (value instanceof Uri) return value;
     if (typeof value === 'string') {
+        if (/^[a-zA-Z]:[\\/]/.test(value)) return Uri.file(value);
         if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return Uri.parse(value);
         return Uri.file(path.isAbsolute(value) ? value : path.join(_workspaceRoot, value));
     }
@@ -1852,24 +1888,33 @@ function buildVscodeModule(extDesc, extensionPath) {
                 log(`registered WebviewViewProvider: ${viewType}`);
                 return new Disposable(() => _webviewViewProviders.delete(viewType));
             },
+            registerCustomEditorProvider(viewType, provider, options) {
+                const normalized = String(viewType || '');
+                _customEditorProviders.set(normalized, {
+                    provider,
+                    options: options || {},
+                    extensionId: extDesc.extensionId || '',
+                });
+                send({
+                    type: 'custom_editor_provider_registered',
+                    viewType: normalized,
+                    extensionId: extDesc.extensionId || '',
+                    options: options || {},
+                });
+                log(`registered CustomEditorProvider: ${normalized}`);
+                return new Disposable(() => {
+                    _customEditorProviders.delete(normalized);
+                    send({
+                        type: 'custom_editor_provider_disposed',
+                        viewType: normalized,
+                        extensionId: extDesc.extensionId || '',
+                    });
+                });
+            },
             createWebviewPanel(viewType, title, showOptions, options) {
                 const viewId = `panel-${_nextViewHandle++}`;
-                const view = new WebviewView(viewId, viewType);
-                view.title = title;
-                _webviewViews.set(viewId, view);
                 log(`stub: createWebviewPanel ${viewType} -> ${viewId}`);
-                return {
-                    viewType,
-                    title,
-                    webview: view.webview,
-                    visible: true,
-                    active: true,
-                    viewColumn: 1,
-                    onDidDispose: view.onDidDispose,
-                    onDidChangeViewState: new EventEmitter().event,
-                    reveal() {},
-                    dispose() { view.dispose(); },
-                };
+                return _createWebviewPanelObject(viewType, title, viewId);
             },
             createOutputChannel(name, options) {
                 const ch = new OutputChannel(typeof options === 'string' ? `${name} (${options})` : name);
@@ -2710,6 +2755,58 @@ function resolveWebviewView(viewType, state) {
     } catch (err) {
         log(`resolveWebviewView error for ${viewType}: ${err.message}`);
         send({ type: 'error', extensionId: viewType, error: err.message });
+    }
+}
+
+async function resolveCustomEditor(msg) {
+    const viewType = String(msg.viewType || msg.customEditorId || '');
+    const reg = _customEditorProviders.get(viewType);
+    if (!reg) {
+        const error = `no custom editor provider for viewType=${viewType}`;
+        log(error);
+        send({ type: 'custom_editor_resolved', requestId: msg.requestId, viewType, ok: false, error });
+        return;
+    }
+    const uri = _workspaceUriFromInput(msg.uri || msg.resource || msg.path);
+    const viewId = String(
+        msg.viewId || `custom-${_safeViewIdPart(viewType)}-${_nextViewHandle++}`);
+    const title = String(msg.title || path.basename(uri.fsPath || uri.path || viewType));
+    const panel = _createWebviewPanelObject(viewType, title, viewId);
+    const token = {
+        isCancellationRequested: false,
+        onCancellationRequested: new EventEmitter().event,
+    };
+    try {
+        let document = null;
+        if (typeof reg.provider.resolveCustomTextEditor === 'function') {
+            document = await _workspaceOpenTextDocument(uri);
+            await reg.provider.resolveCustomTextEditor(document, panel, token);
+        } else {
+            if (typeof reg.provider.openCustomDocument === 'function') {
+                document = await reg.provider.openCustomDocument(
+                    uri, { backupId: msg.backupId || undefined }, token);
+            } else {
+                document = { uri, dispose() {} };
+            }
+            if (typeof reg.provider.resolveCustomEditor !== 'function') {
+                throw new Error(`custom editor provider ${viewType} has no resolver`);
+            }
+            await reg.provider.resolveCustomEditor(document, panel, token);
+        }
+        send({
+            type: 'custom_editor_resolved',
+            requestId: msg.requestId,
+            viewType,
+            viewId,
+            uri: uri.toString(),
+            ok: true,
+        });
+    } catch (err) {
+        const error = err && err.message ? err.message : String(err);
+        _webviewViews.delete(viewId);
+        log(`resolveCustomEditor error for ${viewType}: ${error}`);
+        send({ type: 'custom_editor_resolved', requestId: msg.requestId, viewType, viewId, uri: uri.toString(), ok: false, error });
+        send({ type: 'error', extensionId: viewType, error });
     }
 }
 
@@ -3660,11 +3757,15 @@ async function handleMessage(msg) {
         case 'deactivate':
             await deactivateExtension(msg.extensionId);
             break;
+        case 'webviewMessage':
         case 'webview_message':
             handleWebviewMessage(msg.viewId, msg.message);
             break;
         case 'resolve_webview_view':
             resolveWebviewView(msg.viewType, msg.state);
+            break;
+        case 'resolve_custom_editor':
+            await resolveCustomEditor(msg);
             break;
         case 'command':
         case 'executeCommand':

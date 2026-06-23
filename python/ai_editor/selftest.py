@@ -339,6 +339,7 @@ def test_app_settings_parity() -> None:
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
         "get_extension_host_diagnostics", "set_extension_host_diagnostics",
+        "resolve_extension_custom_editor",
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
@@ -6263,6 +6264,19 @@ function activate(context) {
       hasLocalProbe: (await vscode.commands.getCommands()).includes('selftest.node.workspaceProbe'),
     };
   });
+  context.subscriptions.push(vscode.window.registerCustomEditorProvider(
+    'selftest.node.customEditor',
+    {
+      async resolveCustomTextEditor(document, panel, token) {
+        panel.webview.options = { enableScripts: true };
+        panel.webview.html = '<main data-view="custom-editor">' + document.getText() + '</main>';
+        panel.webview.onDidReceiveMessage(message => {
+          output.appendLine('custom:' + message.type);
+        });
+      },
+    },
+    { supportsMultipleEditorsPerDocument: true },
+  ));
   context.subscriptions.push(view);
 }
 
@@ -6298,12 +6312,23 @@ module.exports = { activate, deactivate };
                 },
             }, node_tree_tmp)
             api._ext_host.ext_points.process(node_tree_desc)
+            class _NodeUiBridge:
+                def __init__(self) -> None:
+                    self.webviews = {}
+
+                def render_webview_panel(self, view_id: str, html: str) -> None:
+                    self.webviews[view_id] = html
+
+                def post_webview_message(self, view_id: str, message) -> None:
+                    self.webviews.setdefault(view_id, "")
+
+            node_ui_bridge = _NodeUiBridge()
             node_host = NodeExtensionHost(
                 node_path=node_path,
                 script_path=os.path.join(
                     os.path.dirname(extension_host_module.__file__),
                     "node_ext_host.js"),
-                ui_bridge=None,
+                ui_bridge=node_ui_bridge,
             )
             previous_node_host = api._node_ext_host
             api._node_ext_host = node_host
@@ -6517,6 +6542,19 @@ module.exports = { activate, deactivate };
                         "selftest.node.pythonCommandProbe")
                 except Exception as exc:
                     node_python_command_probe = {"_error": str(exc)}
+                custom_editor_file = os.path.join(
+                    node_tree_tmp, "custom-editor.txt")
+                with open(custom_editor_file, "w", encoding="utf-8") as fh:
+                    fh.write("custom-editor-doc")
+                node_custom_editor = api.resolve_extension_custom_editor(
+                    "selftest.node.customEditor",
+                    custom_editor_file,
+                    "Node Custom Editor")
+                node_custom_editor_html = node_ui_bridge.webviews.get(
+                    node_custom_editor.get("viewId", ""), "")
+                if node_custom_editor.get("viewId"):
+                    node_host.relay_webview_message(
+                        node_custom_editor.get("viewId"), {"type": "ping"})
                 node_completion_items = getattr(node_completion, "items", [])
                 node_completion_labels = [
                     item.get("label") if isinstance(item, dict)
@@ -6754,6 +6792,22 @@ module.exports = { activate, deactivate };
                        and node_workspace_probe.get("renamedExists") is True
                        and node_workspace_probe.get("deleteMissing") is True,
                        json.dumps(node_workspace_probe, ensure_ascii=False))
+                custom_editor_message_seen = _wait_until(
+                    lambda: "custom:ping" in "".join(
+                        node_host._output_channels.get("node-tree-selftest", [])),
+                    timeout=3.0)
+                _check("node host resolves JS custom editors dynamically",
+                       node_custom_editor.get("ok") is True
+                       and node_custom_editor.get("viewId")
+                       and 'data-view="custom-editor"' in node_custom_editor_html
+                       and "custom-editor-doc" in node_custom_editor_html
+                       and custom_editor_message_seen,
+                       json.dumps({
+                           "result": node_custom_editor,
+                           "html": node_custom_editor_html,
+                           "output": node_host._output_channels.get(
+                               "node-tree-selftest", []),
+                       }, ensure_ascii=False))
                 node_snapshot = {"nodes": []}
                 def _node_root_focused():
                     node_items = {
