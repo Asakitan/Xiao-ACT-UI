@@ -1570,6 +1570,7 @@ class NodeExtensionHost:
         self._reader: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._activated_ids: Set[str] = set()
+        self._activation_sent_ids: Set[str] = set()
         self._output_channels: Dict[str, List[str]] = {}
         self._command_service: Optional[CommandService] = None
         self._command_request_lock = threading.Lock()
@@ -1680,6 +1681,7 @@ class NodeExtensionHost:
                 pass
         self._proc = None
         self._activated_ids.clear()
+        self._activation_sent_ids.clear()
         _log.info("[NodeExtHost] Stopped.")
 
     @property
@@ -1699,19 +1701,27 @@ class NodeExtensionHost:
             _log.warning("[NodeExtHost] Cannot activate %s: host not running.",
                          extension_id)
             return False
+        if extension_id in self._activated_ids:
+            return True
+        if extension_id in self._activation_sent_ids:
+            return True
         msg = {
             "type": "activate",
             "extensionPath": extension_path,
             "extensionId": extension_id,
             "manifest": manifest,
         }
-        return self._send(msg)
+        sent = self._send(msg)
+        if sent:
+            self._activation_sent_ids.add(extension_id)
+        return sent
 
     def deactivate(self, extension_id: str) -> bool:
         """Send a deactivate message for a single extension."""
         if not self.is_running:
             return False
         self._activated_ids.discard(extension_id)
+        self._activation_sent_ids.discard(extension_id)
         return self._send({
             "type": "deactivate",
             "extensionId": extension_id,
@@ -1880,6 +1890,7 @@ class NodeExtensionHost:
         if msg_type == "activated":
             ext_id = str(msg.get("extensionId", ""))
             self._activated_ids.add(ext_id)
+            self._activation_sent_ids.add(ext_id)
             _log.info("[NodeExtHost] Extension activated: %s", ext_id)
             for cb in self._on_activated_callbacks:
                 try:
@@ -1890,6 +1901,8 @@ class NodeExtensionHost:
         elif msg_type == "error":
             ext_id = str(msg.get("extensionId", ""))
             message = str(msg.get("message", "Unknown error"))
+            if ext_id and ext_id not in self._activated_ids:
+                self._activation_sent_ids.discard(ext_id)
             _log.error("[NodeExtHost] Extension error (%s): %s",
                        ext_id, message)
             for cb in self._on_error_callbacks:
@@ -2615,6 +2628,12 @@ class NodeExtensionHost:
 
     def is_extension_activated(self, extension_id: str) -> bool:
         return extension_id in self._activated_ids
+
+    def is_extension_activation_pending(self, extension_id: str) -> bool:
+        return (
+            extension_id in self._activation_sent_ids
+            and extension_id not in self._activated_ids
+        )
 
     def list_activated(self) -> List[str]:
         return sorted(self._activated_ids)

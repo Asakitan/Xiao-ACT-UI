@@ -166,7 +166,13 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "confirm_install": True,
         "allowed_publishers": [],
         "blocked_publishers": [],
-        "enabled_contributions": ["chatParticipants", "languageModelTools", "commands", "views"],
+        "enabled_contributions": [
+            "chatParticipants",
+            "languageModelTools",
+            "commands",
+            "views",
+            "customEditors",
+        ],
         "diagnostics_enabled": False,
     },
     "customization": {
@@ -3264,6 +3270,16 @@ class AIEditorAPI:
                 ext_host.activate_event(f"onCustomEditor:{view_type}")
             except Exception:
                 pass
+        ext_id = str(contribution.get("_extensionId") or "").strip()
+        node_host = getattr(self, "_node_ext_host", None)
+        is_activated = getattr(node_host, "is_extension_activated", None)
+        if (ext_id and node_host is not None
+                and getattr(node_host, "is_running", False)
+                and callable(is_activated)):
+            deadline = time.time() + 2.0
+            while (time.time() < deadline
+                   and not is_activated(ext_id)):
+                time.sleep(0.05)
         result = self.resolve_extension_custom_editor(
             view_type, full, title=os.path.basename(full), timeout=10.0)
         if not result.get("ok"):
@@ -5456,6 +5472,23 @@ class AIEditorAPI:
         all_exts = self._ext_host.registry.list_all()
         node_exts = [ext for ext in all_exts if ext.main and ext.enabled]
         if not node_exts:
+            return
+        existing_host = getattr(self, "_node_ext_host", None)
+        if existing_host is not None and existing_host.is_running:
+            existing_host.set_diagnostics_enabled(
+                self._extension_diagnostics_enabled())
+            existing_host.set_command_service(self._ext_host.commands)
+            pending = [
+                ext for ext in node_exts
+                if not existing_host.is_extension_activated(ext.id)
+                and not existing_host.is_extension_activation_pending(ext.id)
+            ]
+            if pending:
+                activated = existing_host.activate_all(pending)
+                print(
+                    f"[NodeExtHost] {activated}/{len(pending)} new JS "
+                    "extension(s) sent for activation.")
+                self._sync_settings_to_node_host()
             return
 
         node_path = get_node_path()
@@ -7728,6 +7761,7 @@ class AIEditorAPI:
         if desc:
             if not self._extension_allowed(desc):
                 return {"error": f"Extension blocked by trust policy: {desc.id}"}
+            self._try_start_node_extension_host()
             self._register_ext_tools()
             return {"ok": True, "id": desc.id, "name": desc.display_name}
         return {"error": "Failed to install from directory"}

@@ -2827,6 +2827,8 @@ console.log("frontend auto-close behavior ok");
     ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
     _check("extension views contribution remains enabled for old settings",
            "views" in ext_defaults._enabled_extension_contributions())
+    _check("extension custom editor contribution remains enabled for old settings",
+           "customEditors" in ext_defaults._enabled_extension_contributions())
     diag_settings_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     diag_result = diag_settings_api.set_extension_host_diagnostics(True)
     diag_loaded = diag_settings_api.load_config()
