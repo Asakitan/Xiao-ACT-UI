@@ -143,6 +143,13 @@ class Location {
     }
 }
 
+class DocumentHighlight {
+    constructor(range, kind) {
+        this.range = range instanceof Range ? range : _rangeFromPayload(range);
+        this.kind = kind === undefined || kind === null ? 0 : Number(kind);
+    }
+}
+
 class SymbolInformation {
     constructor(name, kind, containerOrRange, locationOrUri, containerName) {
         this.name = name === undefined || name === null ? '' : String(name);
@@ -1015,6 +1022,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         Range,
         Selection,
         Location,
+        DocumentHighlight,
         SymbolInformation,
         Disposable,
         EventEmitter,
@@ -1027,6 +1035,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         ExtensionKind: { UI: 1, Workspace: 2 },
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+        DocumentHighlightKind: { Text: 0, Read: 1, Write: 2 },
         CompletionItemKind: Object.fromEntries([
             'Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable',
             'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value',
@@ -1304,6 +1313,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerReferenceProvider(selector, provider) {
                     return _registerLangProvider('references', selector, provider);
                 },
+                registerDocumentHighlightProvider(selector, provider) {
+                    return _registerLangProvider('documentHighlight', selector, provider);
+                },
                 registerRenameProvider(selector, provider) {
                     return _registerLangProvider('rename', selector, provider);
                 },
@@ -1553,6 +1565,7 @@ function buildVscodeModule(extDesc, extensionPath) {
         CodeActionKind: { QuickFix: 'quickfix', Refactor: 'refactor', Source: 'source', Empty: '' },
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        DocumentHighlight,
         SymbolInformation,
         Color,
         ColorInformation,
@@ -1879,6 +1892,7 @@ function _languageProviderMethod(kind) {
         signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
         references: 'provideReferences',
+        documentHighlight: 'provideDocumentHighlights',
         prepareRename: 'prepareRename',
         rename: 'provideRenameEdits',
         documentLink: 'provideDocumentLinks',

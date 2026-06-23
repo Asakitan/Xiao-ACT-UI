@@ -781,6 +781,12 @@ class Location:
     range: Range = field(default_factory=Range)
 
 
+@dataclass
+class DocumentHighlight:
+    range: Range = field(default_factory=Range)
+    kind: int = 0
+
+
 class SymbolInformation:
     def __init__(
             self,
@@ -1369,6 +1375,8 @@ class VscodeNamespace:
             "vscode.executeSignatureHelpProvider": self._execute_signature_help_provider,
             "vscode.executeDefinitionProvider": self._execute_definition_provider,
             "vscode.executeReferenceProvider": self._execute_reference_provider,
+            "_executeDocumentHighlightProvider": self._execute_document_highlight_provider,
+            "vscode.executeDocumentHighlightProvider": self._execute_document_highlight_provider,
             "_executeDocumentRenameProvider": self._execute_rename_provider,
             "vscode.executeDocumentRenameProvider": self._execute_rename_provider,
             "_executePrepareRename": self._execute_prepare_rename_provider,
@@ -1721,6 +1729,20 @@ class VscodeNamespace:
                 document,
                 position=self._position_payload(pos),
                 context=ref_context)))
+        return results
+
+    def _execute_document_highlight_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        results = self._collect_language_provider_results(
+            "documentHighlight", document, "provideDocumentHighlights",
+            (document, pos, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "documentHighlight",
+                document,
+                position=self._position_payload(pos))))
         return results
 
     def _execute_prepare_rename_provider(
@@ -2243,6 +2265,7 @@ class VscodeNamespace:
             "LanguageModelThinkingPart": LanguageModelThinkingPart,
             "LanguageModelError": LanguageModelError,
             "Location": Location,
+            "DocumentHighlight": DocumentHighlight,
             "SymbolInformation": SymbolInformation,
             "Diagnostic": Diagnostic,
             "CompletionItem": CompletionItem,
@@ -2310,6 +2333,11 @@ class VscodeNamespace:
                 "Operator": 24, "TypeParameter": 25,
             },
             "SymbolTag": {"Deprecated": 1},
+            "DocumentHighlightKind": {
+                "Text": 0,
+                "Read": 1,
+                "Write": 2,
+            },
             "CodeActionKind": {
                 "QuickFix": "quickfix",
                 "Refactor": "refactor",
@@ -3112,6 +3140,7 @@ class VscodeNamespace:
             "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
             "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
             "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
+            "registerDocumentHighlightProvider": lambda selector, provider: self._register_language_provider("documentHighlight", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
             "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerWorkspaceSymbolProvider": lambda provider: self._register_language_provider("workspaceSymbol", None, provider),

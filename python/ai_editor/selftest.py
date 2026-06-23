@@ -359,7 +359,8 @@ def test_app_settings_parity() -> None:
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, WorkspaceEdit, Location, Color,
-        ColorInformation, ColorPresentation, SymbolInformation, Uri,
+        ColorInformation, ColorPresentation, SymbolInformation,
+        DocumentHighlight, Uri,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     provider_api._extension_scan_dirs = lambda: []
@@ -467,6 +468,11 @@ def test_app_settings_parity() -> None:
             return [SelectionRange(
                 Range(Position(0, 0), Position(0, 3)), parent)]
 
+        def provideDocumentHighlights(self, document, position, token):
+            self.seen_highlight_position = position
+            return [DocumentHighlight(
+                Range(Position(0, 0), Position(0, 6)), 2)]
+
         def provideWorkspaceSymbols(self, query, token):
             self.seen_workspace_query = query
             return [SymbolInformation(
@@ -529,6 +535,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerCodeLensProvider"]("python", editor_provider)
     lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerSelectionRangeProvider"]("python", editor_provider)
+    lang_api["registerDocumentHighlightProvider"]("python", editor_provider)
     lang_api["registerWorkspaceSymbolProvider"](editor_provider)
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
@@ -577,6 +584,9 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="foldingRange"))
         selection_range_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="selectionRange"))
+        document_highlight_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="documentHighlight",
+                 position={"line": 0, "character": 1}))
         workspace_symbol_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="workspaceSymbol", query="buf"))
         workspace_symbol = workspace_symbol_result.get("symbols", [{}])[0]
@@ -682,6 +692,13 @@ def test_app_settings_parity() -> None:
                .get("character") == 3
                and selection_range.get("parent", {})
                .get("range", {}).get("end", {}).get("character") == 6)
+        highlight = document_highlight_result.get("highlights", [{}])[0]
+        _check("editor_language_provider serializes document highlights",
+               document_highlight_result.get("ok") is True
+               and editor_provider.seen_highlight_position.character == 1
+               and highlight.get("kind") == 2
+               and highlight.get("range", {}).get("end", {})
+               .get("character") == 6)
         _check("editor_language_provider serializes workspace symbols",
                workspace_symbol_result.get("ok") is True
                and editor_provider.seen_workspace_query == "buf"
@@ -1749,6 +1766,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "id=\"editor-inlay-layer\"" in html
            and "id=\"editor-ghost-layer\"" in html
            and "id=\"editor-codelens-layer\"" in html
+           and "id=\"editor-highlight-layer\"" in html
            and "id=\"editor-color-layer\"" in html
            and "id=\"workspace-symbol-palette\"" in html
            and "id=\"workspace-symbol-input\"" in html
@@ -1799,6 +1817,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function runEditorCodeLens(lens)" in html
            and "function scheduleEditorCodeLenses(delay)" in html
            and "editorProviderPayload('codeLens'" in html
+           and "function requestEditorDocumentHighlights(quiet)" in html
+           and "function renderEditorDocumentHighlights(highlights)" in html
+           and "function scheduleEditorDocumentHighlights(delay)" in html
+           and "editorProviderPayload('documentHighlight'" in html
+           and "editor-document-highlight" in html
            and "function requestEditorDocumentColors(quiet)" in html
            and "function renderEditorDocumentColors(colors)" in html
            and "async function requestEditorColorPresentations(info,quiet,event)" in html
@@ -3054,7 +3077,7 @@ def test_vscode_api() -> None:
         CodeLens, FoldingRange, SelectionRange, SemanticTokensLegend,
         SemanticTokensBuilder, TextEdit, Location, SignatureHelp,
         SignatureInformation, Color, ColorInformation, ColorPresentation,
-        SymbolInformation, ParameterInformation,
+        SymbolInformation, DocumentHighlight, ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -3091,6 +3114,8 @@ def test_vscode_api() -> None:
     _check("api.Color", api["Color"] is Color)
     _check("api.SymbolInformation",
            api["SymbolInformation"] is SymbolInformation)
+    _check("api.DocumentHighlight",
+           api["DocumentHighlight"] is DocumentHighlight)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3497,6 +3522,17 @@ def test_vscode_api() -> None:
                 return [SelectionRange(
                     Range(Position(0, 0), Position(0, 4)), parent)]
 
+        class _DocumentHighlightProvider:
+            def __init__(self):
+                self.positions = []
+
+            def provideDocumentHighlights(self, document, position, token):
+                self.positions.append(position)
+                return [DocumentHighlight(
+                    Range(Position(0, 0), Position(0, 4)),
+                    api["DocumentHighlightKind"]["Write"],
+                )]
+
         class _WorkspaceSymbolProvider:
             def __init__(self):
                 self.queries = []
@@ -3600,6 +3636,9 @@ def test_vscode_api() -> None:
             "python", _FoldingRangeProvider())
         api["languages"]["registerSelectionRangeProvider"](
             "python", _SelectionRangeProvider())
+        document_highlight_provider = _DocumentHighlightProvider()
+        api["languages"]["registerDocumentHighlightProvider"](
+            "python", document_highlight_provider)
         workspace_symbol_provider = _WorkspaceSymbolProvider()
         api["languages"]["registerWorkspaceSymbolProvider"](
             workspace_symbol_provider)
@@ -3652,6 +3691,10 @@ def test_vscode_api() -> None:
             "vscode.executeSelectionRangeProvider",
             doc.uri,
             [Position(0, 1)])
+        document_highlights = api["commands"]["executeCommand"](
+            "vscode.executeDocumentHighlightProvider",
+            doc.uri,
+            Position(0, 2))
         workspace_symbols = api["commands"]["executeCommand"](
             "vscode.executeWorkspaceSymbolProvider", "self")
         workspace_symbol_resolved = api["commands"]["executeCommand"](
@@ -3745,6 +3788,12 @@ def test_vscode_api() -> None:
                selection_ranges
                and selection_ranges[0].range.end.character == 4
                and selection_ranges[0].parent.range.end.character == 11)
+        _check("executeDocumentHighlightProvider invokes matching providers",
+               document_highlights
+               and document_highlight_provider.positions[-1].character == 2
+               and document_highlights[0].kind
+               == api["DocumentHighlightKind"]["Write"]
+               and document_highlights[0].range.end.character == 4)
         _check("executeWorkspaceSymbolProvider invokes matching providers",
                workspace_symbols
                and workspace_symbols[0].name == "selftestWorkspaceSymbol"
@@ -3805,6 +3854,8 @@ def test_vscode_api() -> None:
                and "vscode.executeFoldingRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeSelectionRangeProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeDocumentHighlightProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeWorkspaceSymbolProvider"
                in api["commands"]["getCommands"]()
@@ -5065,6 +5116,14 @@ function activate(context) {
       return [new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4))];
     },
   });
+  vscode.languages.registerDocumentHighlightProvider('python', {
+    provideDocumentHighlights(document, position, token) {
+      return [new vscode.DocumentHighlight(
+        new vscode.Range(0, 1, 0, 4),
+        vscode.DocumentHighlightKind.Read,
+      )];
+    },
+  });
   vscode.languages.registerDocumentLinkProvider('python', {
     provideDocumentLinks(document, token) {
       const link = new vscode.DocumentLink(new vscode.Range(0, 0, 0, 4));
@@ -5286,6 +5345,9 @@ module.exports = { activate, deactivate };
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
                 node_references = api._ext_host.commands.execute(
                     "vscode.executeReferenceProvider", node_uri, Position(0, 1))
+                node_document_highlights = api._ext_host.commands.execute(
+                    "vscode.executeDocumentHighlightProvider",
+                    node_uri, Position(0, 1))
                 node_document_links = api._ext_host.commands.execute(
                     "vscode.executeLinkProvider", node_uri, 1)
                 node_inlay_hints = api._ext_host.commands.execute(
@@ -5371,6 +5433,11 @@ module.exports = { activate, deactivate };
                        and node_references[0].get("uri", "").endswith("node_provider.py")
                        and node_references[0].get("range", {}).get("start", {})
                        .get("character") == 1)
+                _check("node host language provider invokes JS document highlights",
+                       node_document_highlights
+                       and node_document_highlights[0].get("kind") == 1
+                       and node_document_highlights[0].get("range", {})
+                       .get("start", {}).get("character") == 1)
                 _check("node host language provider invokes JS document links",
                        node_document_links
                        and node_document_links[0].get("target", "").endswith("node-link.py")

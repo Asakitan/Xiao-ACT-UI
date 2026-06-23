@@ -2761,6 +2761,9 @@ class AIEditorAPI:
             "definitions": "definition",
             "reference": "references",
             "references": "references",
+            "documentHighlight": "documentHighlight",
+            "documentHighlights": "documentHighlight",
+            "highlights": "documentHighlight",
             "prepareRename": "prepareRename",
             "prepare_rename": "prepareRename",
             "rename": "rename",
@@ -2907,6 +2910,21 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "references": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "documentHighlight":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeDocumentHighlightProvider",
+                    document.uri,
+                    position,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "highlights": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "prepareRename":
