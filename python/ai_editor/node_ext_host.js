@@ -558,10 +558,13 @@ class Memento {
 let _nextViewHandle = 1;
 
 class Webview {
-    constructor(viewId) {
+    constructor(viewId, options, defaultLocalResourceRoots) {
         this._viewId = viewId;
         this._html = '';
-        this._options = {};
+        this._options = options && typeof options === 'object' ? options : {};
+        this._defaultLocalResourceRoots = Array.isArray(defaultLocalResourceRoots)
+            ? defaultLocalResourceRoots
+            : [];
         this._onDidReceiveMessage = new EventEmitter();
         this.onDidReceiveMessage = this._onDidReceiveMessage.event;
         this.cspSource = 'https://cdn.example.com';
@@ -587,8 +590,12 @@ class Webview {
         return Uri.parse(`https://webview.local/${localUri.path}`);
     }
     _localResourceRootsPayload() {
-        const roots = this._options && this._options.localResourceRoots;
-        if (!Array.isArray(roots)) return undefined;
+        const roots = (
+            this._options
+            && Array.isArray(this._options.localResourceRoots)
+        )
+            ? this._options.localResourceRoots
+            : this._defaultLocalResourceRoots;
         return roots.map((root) => {
             const uri = root instanceof Uri ? root : _workspaceUriFromInput(root);
             return {
@@ -613,9 +620,10 @@ class Webview {
 }
 
 class WebviewView {
-    constructor(viewId, viewType) {
+    constructor(viewId, viewType, webviewOptions, defaultLocalResourceRoots) {
         this.viewType = viewType;
-        this.webview = new Webview(viewId);
+        this.webview = new Webview(
+            viewId, webviewOptions || {}, defaultLocalResourceRoots || []);
         this._title = '';
         this._description = '';
         this._badge = undefined;
@@ -635,8 +643,27 @@ class WebviewView {
     dispose() { this._onDidDispose.fire(); }
 }
 
-function _createWebviewPanelObject(viewType, title, viewId) {
-    const view = new WebviewView(viewId, viewType);
+function _defaultLocalResourceRoots(extensionPath) {
+    const roots = [Uri.file(_workspaceRoot)];
+    if (extensionPath) roots.push(Uri.file(extensionPath));
+    return roots;
+}
+
+function _webviewPanelOptionsPayload(options) {
+    const raw = options && typeof options === 'object' ? options : {};
+    const payload = {};
+    if ('enableFindWidget' in raw) payload.enableFindWidget = !!raw.enableFindWidget;
+    if ('retainContextWhenHidden' in raw) {
+        payload.retainContextWhenHidden = !!raw.retainContextWhenHidden;
+    }
+    return payload;
+}
+
+function _createWebviewPanelObject(
+    viewType, title, viewId, webviewOptions, extensionPath) {
+    const view = new WebviewView(
+        viewId, viewType, webviewOptions || {},
+        _defaultLocalResourceRoots(extensionPath));
     view.title = title || '';
     _webviewViews.set(viewId, view);
     const viewStateEmitter = new EventEmitter();
@@ -647,6 +674,7 @@ function _createWebviewPanelObject(viewType, title, viewId) {
         visible: true,
         active: true,
         viewColumn: 1,
+        options: _webviewPanelOptionsPayload(webviewOptions),
         onDidDispose: view.onDidDispose,
         onDidChangeViewState: viewStateEmitter.event,
         reveal(viewColumn, preserveFocus) {
@@ -1914,7 +1942,11 @@ function buildVscodeModule(extDesc, extensionPath) {
         // --- Namespace: window ---
         window: {
             registerWebviewViewProvider(viewType, provider, options) {
-                _webviewViewProviders.set(viewType, { provider, options: options || {} });
+                _webviewViewProviders.set(viewType, {
+                    provider,
+                    options: options || {},
+                    extensionPath,
+                });
                 log(`registered WebviewViewProvider: ${viewType}`);
                 return new Disposable(() => _webviewViewProviders.delete(viewType));
             },
@@ -1924,6 +1956,7 @@ function buildVscodeModule(extDesc, extensionPath) {
                     provider,
                     options: options || {},
                     extensionId: extDesc.extensionId || '',
+                    extensionPath,
                 });
                 send({
                     type: 'custom_editor_provider_registered',
@@ -1944,7 +1977,8 @@ function buildVscodeModule(extDesc, extensionPath) {
             createWebviewPanel(viewType, title, showOptions, options) {
                 const viewId = `panel-${_nextViewHandle++}`;
                 log(`stub: createWebviewPanel ${viewType} -> ${viewId}`);
-                return _createWebviewPanelObject(viewType, title, viewId);
+                return _createWebviewPanelObject(
+                    viewType, title, viewId, options || {}, extensionPath);
             },
             createOutputChannel(name, options) {
                 const ch = new OutputChannel(typeof options === 'string' ? `${name} (${options})` : name);
@@ -2770,7 +2804,9 @@ function resolveWebviewView(viewType, state) {
         return;
     }
     const viewId = `view-${_nextViewHandle++}`;
-    const view = new WebviewView(viewId, viewType);
+    const view = new WebviewView(
+        viewId, viewType, {},
+        _defaultLocalResourceRoots(reg.extensionPath));
     _webviewViews.set(viewId, view);
 
     const token = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
@@ -2801,7 +2837,10 @@ async function resolveCustomEditor(msg) {
     const viewId = String(
         msg.viewId || `custom-${_safeViewIdPart(viewType)}-${_nextViewHandle++}`);
     const title = String(msg.title || path.basename(uri.fsPath || uri.path || viewType));
-    const panel = _createWebviewPanelObject(viewType, title, viewId);
+    const panel = _createWebviewPanelObject(
+        viewType, title, viewId,
+        (reg.options && reg.options.webviewOptions) || {},
+        reg.extensionPath);
     const token = {
         isCancellationRequested: false,
         onCancellationRequested: new EventEmitter().event,

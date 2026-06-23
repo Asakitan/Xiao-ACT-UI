@@ -6368,6 +6368,26 @@ function activate(context) {
       hasLocalProbe: (await vscode.commands.getCommands()).includes('selftest.node.workspaceProbe'),
     };
   });
+  vscode.commands.registerCommand('selftest.node.webviewDefaultRoots', () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.defaultRoots',
+      'Default Roots',
+      vscode.ViewColumn.One,
+      { enableScripts: true },
+    );
+    panel.webview.html = '<main data-view="default-roots"></main>';
+    return true;
+  });
+  vscode.commands.registerCommand('selftest.node.webviewEmptyRoots', () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.emptyRoots',
+      'Empty Roots',
+      vscode.ViewColumn.One,
+      { localResourceRoots: [] },
+    );
+    panel.webview.html = '<main data-view="empty-roots"></main>';
+    return true;
+  });
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(
     'selftest.node.customEditor',
     {
@@ -6493,6 +6513,14 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 node_python_command_registered = _wait_until(
                     lambda: "selftest.node.pythonCommandProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_default_roots_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewDefaultRoots"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                node_empty_roots_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewEmptyRoots"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
                 node_language_registered = _wait_until(
@@ -6659,6 +6687,46 @@ module.exports = { activate, deactivate };
                         "selftest.node.pythonCommandProbe")
                 except Exception as exc:
                     node_python_command_probe = {"_error": str(exc)}
+                try:
+                    node_default_roots_probe = api._ext_host.commands.execute(
+                        "selftest.node.webviewDefaultRoots")
+                except Exception as exc:
+                    node_default_roots_probe = {"_error": str(exc)}
+                try:
+                    node_empty_roots_probe = api._ext_host.commands.execute(
+                        "selftest.node.webviewEmptyRoots")
+                except Exception as exc:
+                    node_empty_roots_probe = {"_error": str(exc)}
+                _wait_until(
+                    lambda: any(
+                        'data-view="default-roots"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                _wait_until(
+                    lambda: any(
+                        'data-view="empty-roots"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                node_default_roots_view_id = next((
+                    view_id for view_id, html
+                    in node_ui_bridge.webviews.items()
+                    if 'data-view="default-roots"' in html
+                ), "")
+                node_empty_roots_view_id = next((
+                    view_id for view_id, html
+                    in node_ui_bridge.webviews.items()
+                    if 'data-view="empty-roots"' in html
+                ), "")
+                node_default_roots = (
+                    node_ui_bridge.local_resource_roots.get(
+                        node_default_roots_view_id, []) or [])
+                node_empty_roots = node_ui_bridge.local_resource_roots.get(
+                    node_empty_roots_view_id, None)
+                node_default_root_paths = [
+                    os.path.normcase(os.path.realpath(str(root.get("fsPath", ""))))
+                    for root in node_default_roots
+                    if isinstance(root, dict) and root.get("fsPath")
+                ]
                 custom_editor_file = os.path.join(
                     node_tree_tmp, "custom-editor.txt")
                 with open(custom_editor_file, "w", encoding="utf-8") as fh:
@@ -6887,6 +6955,29 @@ module.exports = { activate, deactivate };
                        and node_python_command_probe.get("nested", {}).get("echo") == "from-node"
                        and node_python_command_probe.get("nested", {}).get("answer") == 42,
                        json.dumps(node_python_command_probe, ensure_ascii=False))
+                _check("node host webview default roots match VS Code",
+                       node_default_roots_command_registered
+                       and node_default_roots_probe is True
+                       and node_default_roots_view_id
+                       and os.path.normcase(os.path.realpath(os.getcwd()))
+                       in node_default_root_paths
+                       and os.path.normcase(os.path.realpath(node_tree_tmp))
+                       in node_default_root_paths,
+                       json.dumps({
+                           "probe": node_default_roots_probe,
+                           "view_id": node_default_roots_view_id,
+                           "roots": node_default_roots,
+                       }, ensure_ascii=False))
+                _check("node host webview explicit empty roots stay empty",
+                       node_empty_roots_command_registered
+                       and node_empty_roots_probe is True
+                       and node_empty_roots_view_id
+                       and node_empty_roots == [],
+                       json.dumps({
+                           "probe": node_empty_roots_probe,
+                           "view_id": node_empty_roots_view_id,
+                           "roots": node_empty_roots,
+                       }, ensure_ascii=False))
                 _check("node host workspace APIs read local files",
                        node_workspace_command_registered
                        and isinstance(node_workspace_probe, dict)
