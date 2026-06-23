@@ -1206,6 +1206,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function extensionIconThemes()" in html
             and "function iconThemeDefinitionIcon(iconId,fallback)" in html
             and "function applyIconVisual(el,value)" in html
+            and "function installIconThemeFonts(theme)" in html
+            and "@font-face{font-family:" in html
+            and "icon.fontFamily" in html
             and "icon.uri||icon.iconUri" in html
             and "function iconThemeFileGlyph(name,language)" in html
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
@@ -2992,6 +2995,9 @@ def test_app_extension_runtime_support() -> None:
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" "
                 "viewBox=\"0 0 16 16\"><path fill=\"#68e4ff\" "
                 "d=\"M2 2h12v12H2z\"/></svg>")
+        with open(os.path.join(language_tmp, "themes", "icons", "self.woff2"),
+                  "wb") as f:
+            f.write(b"wOF2")
         with open(os.path.join(language_tmp, "themes", "self-dark.json"),
                   "w", encoding="utf-8") as f:
             f.write("""
@@ -3012,12 +3018,19 @@ def test_app_extension_runtime_support() -> None:
 {
   "name": "Self Icons",
   "showLanguageModeIcons": true,
+  "fonts": [{
+    "id": "self-icons-font",
+    "src": [{"path": "./icons/self.woff2", "format": "woff2"}],
+    "size": "125%",
+  }],
   "iconDefinitions": {
     "_file": {"fontCharacter": "F"},
     "_self": {
       "fontCharacter": "S",
       "fontColor": "#68e4ff",
       "iconPath": "./icons/self.svg",
+      "fontId": "self-icons-font",
+      "fontSize": "110%",
     },
     "_folder": {"fontCharacter": "D"},
     "_folder_open": {"fontCharacter": "O"},
@@ -3113,8 +3126,17 @@ def test_app_extension_runtime_support() -> None:
                and editor_icon_theme_data.get("iconDefinitions", {})
                    .get("_self", {}).get("fontColor") == "#68e4ff"
                and editor_icon_theme_data.get("iconDefinitions", {})
+                   .get("_self", {}).get("fontId") == "self-icons-font"
+               and editor_icon_theme_data.get("iconDefinitions", {})
+                   .get("_self", {}).get("fontSize") == "110%"
+               and editor_icon_theme_data.get("iconDefinitions", {})
                    .get("_self", {}).get("iconUri", "")
                    .replace("\\", "/").endswith("/themes/icons/self.svg")
+               and editor_icon_theme_data.get("fonts", [{}])[0]
+                   .get("id") == "self-icons-font"
+               and editor_icon_theme_data.get("fonts", [{}])[0]
+                   .get("src", [{}])[0].get("uri", "")
+                   .replace("\\", "/").endswith("/themes/icons/self.woff2")
                and editor_icon_theme_data.get("fileExtensions", {})
                    .get("self") == "_self"
                and editor_icon_theme_data.get("fileNames", {})

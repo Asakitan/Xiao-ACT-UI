@@ -2512,16 +2512,50 @@ function defaultFileIconThemeValue(){
 }
 async function loadEditorIconTheme(value){
   EXTENSION_ICON_THEME=null;
+  installIconThemeFonts(null);
   const selected=String(value||'').trim();
   const theme=selected==='builtin'?null:(extensionIconThemeByValue(selected)||(!selected?extensionIconThemes()[0]:null));
   currentFileIconTheme=theme?extensionIconThemeValue(theme):'builtin';
   if(!theme)return currentFileIconTheme;
   try{
     const r=await call('get_editor_icon_theme',String(theme.id||theme.label||''));
-    if(r&&r.ok){EXTENSION_ICON_THEME=r;return currentFileIconTheme}
+    if(r&&r.ok){EXTENSION_ICON_THEME=r;installIconThemeFonts(r);return currentFileIconTheme}
   }catch(e){}
   currentFileIconTheme='builtin';
   return currentFileIconTheme;
+}
+function safeCssKeyword(value,fallback){
+  const text=String(value||'').trim();
+  return /^[A-Za-z0-9 _.-]{1,40}$/.test(text)?text:(fallback||'normal');
+}
+function safeCssFontSize(value){
+  const text=String(value||'').trim();
+  return /^(?:[0-9]+(?:\.[0-9]+)?(?:%|px|em|rem))$/.test(text)?text:'';
+}
+function installIconThemeFonts(theme){
+  const id='extension-icon-theme-fonts';
+  let style=document.getElementById(id);
+  if(!theme||!Array.isArray(theme.fonts)||!theme.fonts.length){
+    if(style)style.remove();
+    return;
+  }
+  if(!style){style=document.createElement('style');style.id=id;document.head.appendChild(style)}
+  const rules=[];
+  theme.fonts.forEach(font=>{
+    const family=String(font&&font.id||'').trim();
+    const src=Array.isArray(font&&font.src)?font.src:[];
+    const srcCss=src.map(item=>{
+      const uri=String(item&&item.uri||'').trim();
+      const fmt=String(item&&item.format||'').trim();
+      if(!uri||!fmt)return '';
+      return 'url('+JSON.stringify(uri)+') format('+JSON.stringify(fmt)+')';
+    }).filter(Boolean).join(',');
+    if(!family||!srcCss)return;
+    const weight=safeCssKeyword(font.weight,'normal');
+    const fontStyle=safeCssKeyword(font.style,'normal');
+    rules.push('@font-face{font-family:'+JSON.stringify(family)+';src:'+srcCss+';font-weight:'+weight+';font-style:'+fontStyle+';font-display:block;}');
+  });
+  style.textContent=rules.join('\n');
 }
 function extensionThemeValue(theme){return 'ext:'+String(theme&&theme.id||'')}
 function extensionThemeByValue(value){
@@ -3545,6 +3579,8 @@ function applyIconVisual(el,value){
   el.classList.remove('icon-image');
   el.style.backgroundImage='';
   el.style.color='';
+  el.style.fontFamily='';
+  el.style.fontSize='';
   el.title='';
   const icon=value&&typeof value==='object'?value:{text:String(value||'')};
   const uri=String(icon.uri||icon.iconUri||'');
@@ -3557,6 +3593,8 @@ function applyIconVisual(el,value){
   }
   el.textContent=String(icon.text||icon.glyph||'');
   if(icon.color)el.style.color=String(icon.color);
+  if(icon.fontFamily)el.style.fontFamily=String(icon.fontFamily);
+  if(icon.fontSize)el.style.fontSize=String(icon.fontSize);
   if(icon.title)el.title=String(icon.title);
 }
 function localIconPathUri(raw){
@@ -3579,7 +3617,9 @@ function iconThemeDefinitionIcon(iconId,fallback){
   const uri=String(def.iconUri||'');
   if(uri)return {uri,title:String(iconId||'')};
   const ch=String(def.fontCharacter||'');
-  if(ch)return {text:ch,color:def.fontColor||'',title:String(iconId||'')};
+  const fontId=String(def.fontId||((theme.fonts&&theme.fonts[0]&&theme.fonts[0].id)||''));
+  const fontSize=safeCssFontSize(def.fontSize||((theme.fonts&&theme.fonts[0]&&theme.fonts[0].size)||''));
+  if(ch)return {text:ch,color:def.fontColor||'',fontFamily:fontId,fontSize,title:String(iconId||'')};
   const raw=String(iconId||'').replace(/^[_-]+/,'').replace(/^(file|folder)[_-]?/,'');
   return {text:raw?raw.slice(0,3).toUpperCase():(fallback||''),title:String(iconId||'')};
 }

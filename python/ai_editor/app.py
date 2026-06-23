@@ -1088,6 +1088,8 @@ class AIEditorAPI:
             "hidesExplorerArrows": bool(payload.get("hidesExplorerArrows")),
             "showLanguageModeIcons": bool(payload.get("showLanguageModeIcons")),
             "iconDefinitions": icon_definitions,
+            "fonts": self._safe_icon_theme_fonts(
+                payload.get("fonts"), theme, path),
             "file": self._safe_icon_theme_id(payload.get("file")),
             "folder": self._safe_icon_theme_id(payload.get("folder")),
             "folderExpanded": self._safe_icon_theme_id(
@@ -1138,21 +1140,26 @@ class AIEditorAPI:
             if isinstance(raw_icon_path, str) and raw_icon_path.strip():
                 item["iconPath"] = raw_icon_path.strip()
                 icon_uri = self._safe_icon_theme_asset_uri(
-                    theme, theme_path, raw_icon_path)
+                    theme, theme_path, raw_icon_path, {".svg", ".png"})
                 if icon_uri:
                     item["iconUri"] = icon_uri
+            for key in ("fontId", "fontSize"):
+                raw_value = raw.get(key)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    item[key] = raw_value.strip()
             if item:
                 result[normalized_id] = item
         return result
 
     def _safe_icon_theme_asset_uri(
-            self, theme: Dict, theme_path: str, raw_path: str) -> str:
+            self, theme: Dict, theme_path: str, raw_path: str,
+            allowed_extensions: set) -> str:
         raw = str(raw_path or "").strip()
         if not raw or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", raw):
             return ""
         asset_ref = raw.split("?", 1)[0].split("#", 1)[0]
         ext = os.path.splitext(asset_ref)[1].lower()
-        if ext not in {".svg", ".png"}:
+        if ext not in allowed_extensions:
             return ""
         theme_dir = os.path.dirname(os.path.abspath(theme_path))
         full = os.path.abspath(os.path.join(theme_dir, asset_ref))
@@ -1174,6 +1181,47 @@ class AIEditorAPI:
             return Path(full).resolve().as_uri()
         except Exception:
             return ""
+
+    def _safe_icon_theme_fonts(
+            self, value: Any, theme: Dict,
+            theme_path: str) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        formats = {
+            "woff", "woff2", "truetype", "opentype",
+            "embedded-opentype", "svg",
+        }
+        result: List[Dict[str, Any]] = []
+        for raw_font in value:
+            if not isinstance(raw_font, dict):
+                continue
+            font_id = str(raw_font.get("id") or "").strip()
+            if not font_id or len(font_id) > 80:
+                continue
+            raw_src = raw_font.get("src")
+            if not isinstance(raw_src, list):
+                continue
+            src_items: List[Dict[str, str]] = []
+            for raw_item in raw_src:
+                if not isinstance(raw_item, dict):
+                    continue
+                font_format = str(raw_item.get("format") or "").strip().lower()
+                if font_format not in formats:
+                    continue
+                uri = self._safe_icon_theme_asset_uri(
+                    theme, theme_path, str(raw_item.get("path") or ""),
+                    {".woff", ".woff2", ".ttf", ".otf", ".eot", ".svg"})
+                if uri:
+                    src_items.append({"uri": uri, "format": font_format})
+            if not src_items:
+                continue
+            item: Dict[str, Any] = {"id": font_id, "src": src_items}
+            for key in ("weight", "style", "size"):
+                raw_value = raw_font.get(key)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    item[key] = raw_value.strip()
+            result.append(item)
+        return result
 
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
