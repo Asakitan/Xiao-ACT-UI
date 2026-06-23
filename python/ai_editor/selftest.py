@@ -4223,9 +4223,13 @@ module.exports = { activate, deactivate };
                         for item in node_host.list_language_providers()
                     ),
                     timeout=3.0)
+                node_language_payloads = []
+                def _node_language_request(payload):
+                    node_language_payloads.append(dict(payload))
+                    return node_host.request_language_provider_result(
+                        payload, default=None)
                 api._vscode_ns.set_language_provider_request_callback(
-                    lambda payload: node_host.request_language_provider_result(
-                        payload, default=None))
+                    _node_language_request)
                 node_provider_sample = os.path.join(node_tree_tmp, "node_provider.py")
                 with open(node_provider_sample, "w", encoding="utf-8") as fh:
                     fh.write("print('node provider')\n")
@@ -4259,6 +4263,12 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS hover",
                        node_hover
                        and node_hover[0].get("contents") == ["node hover prin"])
+                _check("node host language provider reuses document text cache",
+                       any("text" in payload for payload in node_language_payloads)
+                       and any(
+                           payload.get("kind") == "hover"
+                           and "text" not in payload
+                           for payload in node_language_payloads))
                 _check("node host language provider invokes JS definition",
                        node_definition
                        and node_definition[0].get("uri", "").endswith("node_provider.py"))

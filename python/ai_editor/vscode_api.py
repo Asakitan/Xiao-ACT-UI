@@ -1032,6 +1032,7 @@ class VscodeNamespace:
         self._extensions_api: Optional[Dict[str, Any]] = None
         self._language_command_disposables: List[Callable] = []
         self._language_provider_request_callback: Optional[Callable[[Dict[str, Any]], Any]] = None
+        self._external_language_document_versions: Dict[str, Any] = {}
         try:
             host.on_did_change(self._on_host_extensions_changed)
         except Exception:
@@ -1128,9 +1129,16 @@ class VscodeNamespace:
             "kind": kind,
             "uri": str(getattr(document, "uri", "")),
             "languageId": str(getattr(document, "languageId", "plaintext")),
-            "text": document.getText() if hasattr(document, "getText") else "",
             "version": getattr(document, "version", 1),
         }
+        uri_key = request["uri"]
+        version = request["version"]
+        send_text = (
+            self._external_language_document_versions.get(uri_key) != version
+        )
+        if send_text:
+            request["text"] = (
+                document.getText() if hasattr(document, "getText") else "")
         request.update(payload)
         try:
             result = _resolve_provider_result(callback(request), default=None)
@@ -1139,7 +1147,11 @@ class VscodeNamespace:
         if isinstance(result, dict) and "ok" in result:
             if not result.get("ok"):
                 return None
+            if send_text:
+                self._external_language_document_versions[uri_key] = version
             return result.get("value")
+        if send_text:
+            self._external_language_document_versions[uri_key] = version
         return result
 
     def _call_language_provider(
@@ -1323,6 +1335,7 @@ class VscodeNamespace:
             callback: Optional[Callable[[Dict[str, Any]], Any]]) -> None:
         """Ask an external extension host for language-provider results."""
         self._language_provider_request_callback = callback
+        self._external_language_document_versions.clear()
 
     def _notify_tree_view_changed(
             self,

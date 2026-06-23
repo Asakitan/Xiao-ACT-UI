@@ -255,6 +255,7 @@ const _treeElementStores = new Map();    // viewId -> element handle store
 const _outputChannels = new Map();       // name -> OutputChannel
 const _languageProviders = [];           // { kind, selector, provider, triggers?, disposable }
 let _nextLanguageProviderHandle = 1;
+const _languageDocumentTextCache = new Map(); // uri -> { version, text }
 const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
 const _debugAdapterFactories = new Map();   // type -> factory
@@ -601,13 +602,22 @@ function _positionAt(text, offset) {
 
 function _createLanguageDocument(msg) {
     const uri = _uriFromPayload(msg.uri);
-    const text = String(msg.text ?? '');
+    const uriKey = uri.toString();
+    const version = Number(msg.version || 1);
+    let text = '';
+    if (Object.prototype.hasOwnProperty.call(msg, 'text')) {
+        text = String(msg.text ?? '');
+        _languageDocumentTextCache.set(uriKey, { version, text });
+    } else {
+        const cached = _languageDocumentTextCache.get(uriKey);
+        text = cached && cached.version === version ? cached.text : '';
+    }
     const languageId = String(msg.languageId || _languageIdForUri(uri));
     return {
         uri,
         fileName: uri.scheme === 'file' ? uri.fsPath : uri.toString(),
         languageId,
-        version: Number(msg.version || 1),
+        version,
         isDirty: false,
         isUntitled: uri.scheme === 'untitled',
         get lineCount() { return text.split(/\r\n|\r|\n/).length; },
