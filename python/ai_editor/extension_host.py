@@ -1546,7 +1546,8 @@ class NodeExtensionHost:
         {"type": "activated",           "extensionId": "..."}
         {"type": "error",               "extensionId": "...", "message": "..."}
         {"type": "execute_command",     "requestId": "...", "commandId": "...", "args": [...]}
-        {"type": "webview_html",        "viewId": "...", "html": "..."}
+        {"type": "webview_html",        "viewId": "...", "html": "...",
+         "localResourceRoots": [...]}
         {"type": "webview_post_message","viewId": "...", "message": {...}}
         {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
         {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
@@ -1828,9 +1829,18 @@ class NodeExtensionHost:
         elif msg_type == "webview_html":
             view_id = str(msg.get("viewId", ""))
             html = str(msg.get("html", ""))
+            local_roots = msg.get("localResourceRoots", None)
             if self._ui_bridge and view_id:
                 try:
-                    self._ui_bridge.render_webview_panel(view_id, html)
+                    self._ui_bridge.render_webview_panel(
+                        view_id, html, local_roots)
+                except TypeError:
+                    try:
+                        self._ui_bridge.render_webview_panel(view_id, html)
+                    except Exception:
+                        _log.exception(
+                            "[NodeExtHost] render_webview_panel failed "
+                            "for %s", view_id)
                 except Exception:
                     _log.exception("[NodeExtHost] render_webview_panel failed "
                                    "for %s", view_id)

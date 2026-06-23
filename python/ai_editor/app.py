@@ -743,9 +743,12 @@ class _AIEditorUIBridge:
         self._api._emit("dispose_status_bar_item", {"id": item_id})
 
     # -- Webview panels --
-    def render_webview_panel(self, view_id: str, html: str) -> None:
+    def render_webview_panel(
+            self, view_id: str, html: str,
+            local_resource_roots: Any = None) -> None:
         """Push HTML content for a webview panel to the frontend."""
-        prepared = self._api._prepare_extension_webview_html(html)
+        prepared = self._api._prepare_extension_webview_html(
+            html, local_resource_roots)
         self._api._emit("render_webview_panel", {
             "view_id": view_id,
             "html": prepared,
@@ -887,7 +890,59 @@ class AIEditorAPI:
             return "text/css"
         return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
-    def _prepare_extension_webview_html(self, html: str) -> str:
+    @staticmethod
+    def _webview_resource_root_path(value: Any) -> str:
+        raw: Any = value
+        if isinstance(value, dict):
+            raw = (
+                value.get("fsPath")
+                or value.get("fs_path")
+                or value.get("uri")
+                or value.get("path")
+            )
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        parsed = urlparse(text)
+        if parsed.scheme == "file":
+            path = unquote(parsed.path or "")
+            if re.match(r"^/[A-Za-z]:/", path):
+                path = path[1:]
+            return os.path.realpath(os.path.abspath(path)) if path else ""
+        if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith(("/", "\\")):
+            return os.path.realpath(os.path.abspath(text))
+        return ""
+
+    @staticmethod
+    def _webview_resource_roots(value: Any) -> Optional[List[str]]:
+        if value is None:
+            return None
+        raw_items = value if isinstance(value, list) else [value]
+        roots = []
+        for item in raw_items:
+            path = AIEditorAPI._webview_resource_root_path(item)
+            if path:
+                roots.append(path)
+        return roots
+
+    @staticmethod
+    def _webview_path_allowed(path: str, roots: Optional[List[str]]) -> bool:
+        if roots is None:
+            return True
+        if not roots:
+            return False
+        try:
+            target = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+            for root in roots:
+                root_norm = os.path.normcase(os.path.realpath(os.path.abspath(root)))
+                if os.path.commonpath([root_norm, target]) == root_norm:
+                    return True
+        except (OSError, ValueError):
+            return False
+        return False
+
+    def _prepare_extension_webview_html(
+            self, html: str, local_resource_roots: Any = None) -> str:
         """Inline local ``asWebviewUri`` resources for srcdoc webviews.
 
         Node-side extensions naturally emit ``https://webview.local/...`` URLs
@@ -900,10 +955,13 @@ class AIEditorAPI:
             return text
 
         budget = {"bytes": 0}
+        allowed_roots = self._webview_resource_roots(local_resource_roots)
 
         def file_to_data_uri(path: str) -> str:
             full = os.path.abspath(path)
             try:
+                if not self._webview_path_allowed(full, allowed_roots):
+                    return ""
                 if not os.path.isfile(full):
                     return ""
                 size = os.path.getsize(full)

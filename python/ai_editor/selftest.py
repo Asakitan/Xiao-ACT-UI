@@ -2488,12 +2488,16 @@ console.log("frontend auto-close behavior ok");
            and "function isExtensionCustomEditorTab(tab)" in html
            and "customEditorWebviewIdFromOpenResult(res)" in html
            and "injectCustomEditorWebview(viewId,data)||isLikelyCustomEditorViewId(viewId)" in html)
-    with tempfile.TemporaryDirectory() as webview_tmp:
+    with tempfile.TemporaryDirectory() as webview_tmp, \
+            tempfile.TemporaryDirectory() as outside_tmp:
         script_path = os.path.join(webview_tmp, "panel.js")
         style_path = os.path.join(webview_tmp, "panel.css")
         font_path = os.path.join(webview_tmp, "panel.woff")
+        outside_script_path = os.path.join(outside_tmp, "blocked.js")
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__panelLoaded = true;\n")
+        with open(outside_script_path, "w", encoding="utf-8") as fh:
+            fh.write("window.__blockedLoaded = true;\n")
         with open(font_path, "wb") as fh:
             fh.write(b"font-bytes")
         with open(style_path, "w", encoding="utf-8") as fh:
@@ -2506,9 +2510,13 @@ console.log("frontend auto-close behavior ok");
             'style-src https://webview.local">'
             f'<link href="{_wv_url(style_path)}" rel="stylesheet">'
             f'<script nonce="a" src="{_wv_url(script_path)}"></script>')
+        blocked_webview_html = f'<script src="{_wv_url(outside_script_path)}"></script>'
         prepared_webview_html = AIEditorAPI(
             _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
-                raw_webview_html)
+                raw_webview_html, [{"uri": "file:///" + webview_tmp.replace("\\", "/")}])
+        blocked_prepared_html = AIEditorAPI(
+            _SettingsGui({"ai_editor": {}}))._prepare_extension_webview_html(
+                blocked_webview_html, [{"fsPath": webview_tmp}])
         css_payload = prepared_webview_html.split(
             "data:text/css;base64,", 1)[1].split('"', 1)[0]
         decoded_css = base64.b64decode(css_payload).decode(
@@ -2522,6 +2530,9 @@ console.log("frontend auto-close behavior ok");
                and "script-src 'nonce-a' data:" in prepared_webview_html
                and "style-src https://webview.local data: 'unsafe-inline'"
                in prepared_webview_html)
+        _check("webview local resource roots block outside files",
+               "https://webview.local/" in blocked_prepared_html
+               and "data:text/javascript;base64," not in blocked_prepared_html)
     _check("inline HTML handlers are exported to window",
            all(token in html for token in (
                "window.refreshExplorer=refreshExplorer",
@@ -6361,7 +6372,10 @@ function activate(context) {
     'selftest.node.customEditor',
     {
       async resolveCustomTextEditor(document, panel, token) {
-        panel.webview.options = { enableScripts: true };
+        panel.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [context.extensionUri],
+        };
         panel.webview.html = '<main data-view="custom-editor">' + document.getText() + '</main>';
         panel.webview.onDidReceiveMessage(message => {
           output.appendLine('custom:' + message.type);
@@ -6414,9 +6428,13 @@ module.exports = { activate, deactivate };
             class _NodeUiBridge:
                 def __init__(self) -> None:
                     self.webviews = {}
+                    self.local_resource_roots = {}
 
-                def render_webview_panel(self, view_id: str, html: str) -> None:
+                def render_webview_panel(
+                        self, view_id: str, html: str,
+                        local_resource_roots=None) -> None:
                     self.webviews[view_id] = html
+                    self.local_resource_roots[view_id] = local_resource_roots
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
@@ -6651,6 +6669,14 @@ module.exports = { activate, deactivate };
                     "Node Custom Editor")
                 node_custom_editor_html = node_ui_bridge.webviews.get(
                     node_custom_editor.get("viewId", ""), "")
+                node_custom_editor_roots = (
+                    node_ui_bridge.local_resource_roots.get(
+                        node_custom_editor.get("viewId", ""), []) or [])
+                node_custom_editor_root_paths = [
+                    os.path.normcase(os.path.realpath(str(root.get("fsPath", ""))))
+                    for root in node_custom_editor_roots
+                    if isinstance(root, dict) and root.get("fsPath")
+                ]
                 previous_workspace_root = api._workspace_root
                 api._workspace_root = lambda: node_tree_tmp
                 try:
@@ -6907,10 +6933,13 @@ module.exports = { activate, deactivate };
                        and node_custom_editor.get("viewId")
                        and 'data-view="custom-editor"' in node_custom_editor_html
                        and "custom-editor-doc" in node_custom_editor_html
+                       and os.path.normcase(os.path.realpath(node_tree_tmp))
+                       in node_custom_editor_root_paths
                        and custom_editor_message_seen,
                        json.dumps({
                            "result": node_custom_editor,
                            "html": node_custom_editor_html,
+                           "roots": node_custom_editor_roots,
                            "output": node_host._output_channels.get(
                                "node-tree-selftest", []),
                        }, ensure_ascii=False))

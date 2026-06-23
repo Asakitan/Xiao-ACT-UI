@@ -569,16 +569,46 @@ class Webview {
     get html() { return this._html; }
     set html(value) {
         this._html = value;
-        send({ type: 'webview_html', viewId: this._viewId, html: value });
+        send({
+            type: 'webview_html',
+            viewId: this._viewId,
+            html: value,
+            options: this._webviewOptionsPayload(),
+            localResourceRoots: this._localResourceRootsPayload(),
+        });
     }
     get options() { return this._options; }
-    set options(value) { this._options = value; }
+    set options(value) { this._options = value && typeof value === 'object' ? value : {}; }
     postMessage(message) {
         send({ type: 'webview_post_message', viewId: this._viewId, message });
         return Promise.resolve(true);
     }
     asWebviewUri(localUri) {
         return Uri.parse(`https://webview.local/${localUri.path}`);
+    }
+    _localResourceRootsPayload() {
+        const roots = this._options && this._options.localResourceRoots;
+        if (!Array.isArray(roots)) return undefined;
+        return roots.map((root) => {
+            const uri = root instanceof Uri ? root : _workspaceUriFromInput(root);
+            return {
+                scheme: uri.scheme,
+                path: uri.path,
+                fsPath: uri.fsPath,
+                uri: uri.toString(),
+            };
+        });
+    }
+    _webviewOptionsPayload() {
+        const options = this._options || {};
+        const payload = {};
+        if ('enableScripts' in options) payload.enableScripts = !!options.enableScripts;
+        if ('retainContextWhenHidden' in options) {
+            payload.retainContextWhenHidden = !!options.retainContextWhenHidden;
+        }
+        const roots = this._localResourceRootsPayload();
+        if (roots !== undefined) payload.localResourceRoots = roots;
+        return payload;
     }
 }
 
