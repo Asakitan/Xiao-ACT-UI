@@ -57,19 +57,54 @@ def _write_script_menu_plugin(root: str) -> str:
     with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
         json.dump({
             "id": "script_menu_demo",
-            "name": "Script Menu Demo",
+            "name": "脚本菜单演示",
+            "description": "中文脚本菜单演示",
             "version": "0.1.0",
             "entry": "plugin.lua",
             "language": "lua",
             "enabled": False,
             "settings_schema": {
-                "overlay_enabled": {"type": "boolean", "default": True},
+                "overlay_enabled": {"type": "boolean", "default": True, "description": "显示叠加层"},
             },
             "sao_menu": {
                 "name": "脚本演示",
                 "icon_text": "▣",
                 "script_label": "脚本演示",
                 "priority": 25,
+                "actions": [
+                    {"id": "script.state", "label": "读取状态"},
+                ],
+            },
+            "locales": {
+                "en": {
+                    "sao_menu": {
+                        "name": "Generic Script Demo",
+                    },
+                },
+                "en-US": {
+                    "name": "Script Menu Demo",
+                    "description": "Localized script menu demo",
+                    "settings_schema": {
+                        "overlay_enabled": {
+                            "description": "Show overlay",
+                            "default": False,
+                        },
+                    },
+                    "sao_menu": {
+                        "name": "Script Demo",
+                        "script_label": "Script Demo",
+                        "actions": {
+                            "script.state": {"label": "Read state"},
+                        },
+                        "priority": 99,
+                        "surface": "other_surface",
+                    },
+                },
+                "en-GB": {
+                    "sao_menu": {
+                        "name": "Script Demo UK",
+                    },
+                },
             },
         }, fp, ensure_ascii=False, indent=2)
     with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
@@ -161,6 +196,20 @@ def on_load(ctx):
 '''
 
 
+class FakeSettings:
+    def __init__(self, data=None) -> None:
+        self.data = dict(data or {})
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value) -> None:
+        self.data[key] = value
+
+    def save(self) -> None:
+        pass
+
+
 def _write_hot_remove_plugin(root: str) -> str:
     plugin_dir = os.path.join(root, "hot_remove_demo")
     os.makedirs(plugin_dir, exist_ok=True)
@@ -220,7 +269,8 @@ dictionary@ state()
         _write_script_menu_plugin(root)
         _write_failing_script_plugin(root)
         _write_action_script_plugin(root)
-        manager = PluginManager(plugin_dirs=[root], event_bus=bus)
+        settings = FakeSettings({"act_plugin_locale": "zh-CN"})
+        manager = PluginManager(plugin_dirs=[root], event_bus=bus, settings=settings)
         lifecycle_events = []
         bus.subscribe("plugin_lifecycle", lifecycle_events.append, owner_id="selftest_lifecycle")
         manager.discover()
@@ -229,7 +279,39 @@ dictionary@ state()
             item for item in manifest_status.get("plugins", [])
             if item.get("id") == "script_menu_demo"
         )
+        assert manifest_status.get("locale") == "zh-CN", manifest_status
+        assert script_record.get("name") == "脚本菜单演示", script_record
+        assert script_record.get("description") == "中文脚本菜单演示", script_record
         assert script_record.get("sao_menu", {}).get("name") == "脚本演示", script_record
+        assert script_record.get("settings_schema", {}).get("overlay_enabled", {}).get("description") == "显示叠加层", script_record
+        assert script_record.get("sao_menu", {}).get("actions", [{}])[0].get("label") == "读取状态", script_record
+        settings.data["act_plugin_locale"] = "en-US"
+        localized_status = manager.status()
+        localized_record = next(
+            item for item in localized_status.get("plugins", [])
+            if item.get("id") == "script_menu_demo"
+        )
+        assert localized_status.get("locale") == "en-US", localized_status
+        assert localized_record.get("name") == "Script Menu Demo", localized_record
+        assert localized_record.get("default_name") == "脚本菜单演示", localized_record
+        assert localized_record.get("description") == "Localized script menu demo", localized_record
+        assert localized_record.get("sao_menu", {}).get("name") == "Script Demo", localized_record
+        assert localized_record.get("sao_menu", {}).get("priority") == 25.0, localized_record
+        assert localized_record.get("sao_menu", {}).get("surface") != "other_surface", localized_record
+        assert localized_record.get("settings_schema", {}).get("overlay_enabled", {}).get("description") == "Show overlay", localized_record
+        assert localized_record.get("settings_schema", {}).get("overlay_enabled", {}).get("default") is True, localized_record
+        assert localized_record.get("sao_menu", {}).get("actions", [{}])[0].get("label") == "Read state", localized_record
+        settings.data["act_plugin_locale"] = "en-GB"
+        gb_record = next(
+            item for item in manager.status().get("plugins", [])
+            if item.get("id") == "script_menu_demo"
+        )
+        assert gb_record.get("name") == "Script Menu Demo", gb_record
+        assert gb_record.get("sao_menu", {}).get("name") == "Script Demo UK", gb_record
+        settings.data["act_plugin_locale"] = "C.UTF-8"
+        c_locale_status = manager.status()
+        assert c_locale_status.get("locale") == "zh-CN", c_locale_status
+        settings.data["act_plugin_locale"] = "zh-CN"
         assert manager.load_plugin("capture_demo"), manager.status()
         assert manager.render_registry.status().get("overlay_count") == 1, manager.render_registry.status()
         invalidate_events = []
@@ -290,6 +372,7 @@ dictionary@ state()
         owner = type("Owner", (), {})()
         owner._act_event_bus = bus
         owner._act_plugin_manager = manager
+        owner.settings = settings
         from .runtime import (
             act_plugin_action,
             act_plugin_menu,
@@ -326,6 +409,7 @@ dictionary@ state()
             for item in script_menus.get("items", [])
         ), script_menus
         manager._records["script_menu_demo"].enabled = True
+        settings.data["act_plugin_locale"] = "en-US"
         enabled_script_menus = act_plugin_script_menus(owner)
         script_item = next(
             item for item in enabled_script_menus.get("items", [])
@@ -333,6 +417,12 @@ dictionary@ state()
         )
         assert script_item.get("enabled") is True, script_item
         assert script_item.get("overlay_enabled") is True, script_item
+        assert script_item.get("name") == "Script Menu Demo", script_item
+        assert script_item.get("menu", {}).get("name") == "Script Demo", script_item
+        assert script_item.get("menu", {}).get("actions", [{}])[0].get("label") == "Read state", script_item
+        assert script_item.get("menu", {}).get("priority") == 25.0, script_item
+        assert script_item.get("surface") == "unioverlay", script_item
+        settings.data["act_plugin_locale"] = "zh-CN"
         manager._records["script_menu_demo"].enabled = False
         menu_summary = act_plugin_menu(owner)
         assert not manager._records["failing_script_demo"].loaded, manager.status()

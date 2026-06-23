@@ -156,6 +156,239 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _normalize_locale(value: Any) -> str:
+    if value is _MISSING:
+        return ""
+    text = str(value or "").strip().replace("_", "-")
+    if not text:
+        return ""
+    if text.lower() in {"c", "c.utf-8", "posix"}:
+        return ""
+    parts = [part for part in text.split("-") if part]
+    if not parts:
+        return ""
+    out = [parts[0].lower()]
+    for part in parts[1:]:
+        if len(part) == 2 and part.isalpha():
+            out.append(part.upper())
+        elif len(part) == 4 and part.isalpha():
+            out.append(part.title())
+        else:
+            out.append(part)
+    return "-".join(out)
+
+
+def _normalize_manifest_locales(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for raw_locale, table in value.items():
+        locale = _normalize_locale(raw_locale)
+        if not locale or not isinstance(table, Mapping):
+            continue
+        safe = _json_safe(table)
+        if isinstance(safe, Mapping):
+            out[locale] = dict(safe)
+    return out
+
+
+def _locale_overlay(locales: Mapping[str, Any], locale: Any) -> dict[str, Any]:
+    requested = _normalize_locale(locale)
+    if not requested or not isinstance(locales, Mapping):
+        return {}
+    language = requested.split("-", 1)[0]
+    candidates: list[str] = []
+    if language and language != requested:
+        candidates.append(language)
+    if language == "en" and requested != "en-US" and "en-US" not in candidates:
+        candidates.append("en-US")
+    if language == "zh" and requested != "zh-CN" and "zh-CN" not in candidates:
+        candidates.append("zh-CN")
+    candidates.append(requested)
+    overlay: dict[str, Any] = {}
+    for candidate in candidates:
+        section = locales.get(candidate)
+        if isinstance(section, Mapping):
+            overlay = _merge_localized(overlay, section)
+    return overlay
+
+
+def _merge_localized(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if isinstance(base, Mapping) and isinstance(override, Mapping):
+        out = {str(k): copy.deepcopy(v) for k, v in base.items()}
+        for key, value in override.items():
+            text_key = str(key)
+            out[text_key] = _merge_localized(out.get(text_key), value)
+        return out
+    if isinstance(base, list) and isinstance(override, Mapping):
+        return _merge_list_by_id(base, override)
+    if isinstance(base, tuple) and isinstance(override, Mapping):
+        return tuple(_merge_list_by_id(list(base), override))
+    if isinstance(base, (list, tuple)) and isinstance(override, (list, tuple)):
+        return _merge_list_by_id(list(base), override)
+    return copy.deepcopy(override)
+
+
+def _merge_list_by_id(base: list[Any], override: Any) -> list[Any]:
+    out = [copy.deepcopy(item) for item in base]
+    if isinstance(override, Mapping):
+        override_items = [
+            dict(value, id=key) if isinstance(value, Mapping) and "id" not in value else value
+            for key, value in override.items()
+        ]
+    elif isinstance(override, (list, tuple)):
+        override_items = list(override)
+    else:
+        return copy.deepcopy(override)
+
+    index_by_id = {
+        str(item.get("id") or ""): idx
+        for idx, item in enumerate(out)
+        if isinstance(item, Mapping) and item.get("id")
+    }
+    for item in override_items:
+        if not isinstance(item, Mapping):
+            out.append(copy.deepcopy(item))
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id and item_id in index_by_id:
+            idx = index_by_id[item_id]
+            out[idx] = _merge_localized(out[idx], item)
+        else:
+            out.append(copy.deepcopy(item))
+            if item_id:
+                index_by_id[item_id] = len(out) - 1
+    return out
+
+
+def _localized_value(locales: Mapping[str, Any], locale: Any,
+                     key: str, fallback: Any = "") -> Any:
+    overlay = _locale_overlay(locales, locale)
+    if key in overlay:
+        return copy.deepcopy(overlay.get(key))
+    return copy.deepcopy(fallback)
+
+
+_LOCALIZED_MENU_TEXT_KEYS = {
+    "name",
+    "category",
+    "title",
+    "label",
+    "script_label",
+    "toggle_label",
+    "enable_label",
+    "disable_label",
+}
+_LOCALIZED_ACTION_TEXT_KEYS = {"label", "title", "description", "tooltip"}
+_LOCALIZED_CAPABILITY_TEXT_KEYS = {"label", "title", "description", "display_name", "render_hint"}
+_LOCALIZED_SETTING_TEXT_KEYS = {
+    "label",
+    "title",
+    "description",
+    "help",
+    "tooltip",
+    "placeholder",
+    "unit",
+    "prefix",
+    "suffix",
+}
+
+
+def _localized_sao_menu(base: Mapping[str, Any], override: Any) -> dict[str, Any]:
+    out = copy.deepcopy(dict(base or {}))
+    if not isinstance(override, Mapping):
+        return out
+    for key in _LOCALIZED_MENU_TEXT_KEYS:
+        if key in override:
+            out[key] = copy.deepcopy(override.get(key))
+    if isinstance(out.get("actions"), list) and isinstance(override.get("actions"), (Mapping, list, tuple)):
+        out["actions"] = _localized_actions(out.get("actions") or [], override.get("actions"))
+    return out
+
+
+def _localized_actions(base: list[Any], override: Any) -> list[Any]:
+    out = [copy.deepcopy(item) for item in base]
+    if isinstance(override, Mapping):
+        override_items = [
+            dict(value, id=key) if isinstance(value, Mapping) and "id" not in value else value
+            for key, value in override.items()
+        ]
+    elif isinstance(override, (list, tuple)):
+        override_items = list(override)
+    else:
+        return out
+    index_by_id = {
+        str(item.get("id") or ""): idx
+        for idx, item in enumerate(out)
+        if isinstance(item, Mapping) and item.get("id")
+    }
+    for item in override_items:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id not in index_by_id:
+            continue
+        target = out[index_by_id[item_id]]
+        if not isinstance(target, Mapping):
+            continue
+        merged = dict(target)
+        for key in _LOCALIZED_ACTION_TEXT_KEYS:
+            if key in item:
+                merged[key] = copy.deepcopy(item.get(key))
+        out[index_by_id[item_id]] = merged
+    return out
+
+
+def _localized_capabilities(base: tuple[dict[str, Any], ...], override: Any) -> tuple[dict[str, Any], ...]:
+    out = [copy.deepcopy(dict(item)) for item in base if isinstance(item, Mapping)]
+    if isinstance(override, Mapping):
+        override_items = [
+            dict(value, id=key) if isinstance(value, Mapping) and "id" not in value else value
+            for key, value in override.items()
+        ]
+    elif isinstance(override, (list, tuple)):
+        override_items = list(override)
+    else:
+        return tuple(out)
+    index_by_id = {
+        str(item.get("id") or ""): idx
+        for idx, item in enumerate(out)
+        if item.get("id")
+    }
+    for item in override_items:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id not in index_by_id:
+            continue
+        merged = dict(out[index_by_id[item_id]])
+        for key in _LOCALIZED_CAPABILITY_TEXT_KEYS:
+            if key in item:
+                merged[key] = copy.deepcopy(item.get(key))
+        out[index_by_id[item_id]] = merged
+    return tuple(out)
+
+
+def _localized_settings_schema(base: Mapping[str, Any], override: Any) -> dict[str, Any]:
+    out = copy.deepcopy(dict(base or {}))
+    if not isinstance(override, Mapping):
+        return out
+    for setting_key, setting_override in override.items():
+        if not isinstance(setting_override, Mapping):
+            continue
+        target = out.get(str(setting_key))
+        if not isinstance(target, Mapping):
+            continue
+        merged = dict(target)
+        for key in _LOCALIZED_SETTING_TEXT_KEYS:
+            if key in setting_override:
+                merged[key] = copy.deepcopy(setting_override.get(key))
+        out[str(setting_key)] = merged
+    return out
+
+
 def _normalize_sao_menu(value: Any) -> dict[str, Any]:
     """Normalize optional manifest-declared SAO menu metadata."""
     if not isinstance(value, Mapping):
@@ -321,6 +554,7 @@ class PluginRecord:
     version: str
     path: str
     entry: str
+    description: str = ""
     enabled: bool = False
     #: Scripting language: "python" (default), "lua", "csharp", "angelscript", "emma".
     language: str = "python"
@@ -330,6 +564,7 @@ class PluginRecord:
     capabilities: tuple[dict[str, Any], ...] = ()
     settings_schema: Mapping[str, Any] = field(default_factory=dict)
     sao_menu: Mapping[str, Any] = field(default_factory=dict)
+    locales: Mapping[str, Any] = field(default_factory=dict)
     module: Optional[ModuleType] = None
     context: Optional["PluginContext"] = None
     loaded: bool = False
@@ -350,27 +585,69 @@ class PluginRecord:
     #: {dist: 'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'} after deps bootstrap.
     deps_summary: dict[str, str] = field(default_factory=dict)
 
-    def to_status(self) -> dict[str, Any]:
+    def localized_name(self, locale: Any = "") -> str:
+        value = _localized_value(self.locales, locale, "name", self.name)
+        return str(value or self.name)
+
+    def localized_description(self, locale: Any = "") -> str:
+        value = _localized_value(self.locales, locale, "description", self.description)
+        return str(value or self.description or "")
+
+    def localized_settings_schema(self, locale: Any = "") -> Mapping[str, Any]:
+        overlay = _locale_overlay(self.locales, locale)
+        return _localized_settings_schema(
+            self.settings_schema,
+            overlay.get("settings_schema") if isinstance(overlay.get("settings_schema"), Mapping) else None,
+        )
+
+    def localized_sao_menu(self, locale: Any = "") -> Mapping[str, Any]:
+        overlay = _locale_overlay(self.locales, locale)
+        menu = _localized_sao_menu(
+            self.sao_menu,
+            overlay.get("sao_menu") if isinstance(overlay.get("sao_menu"), Mapping) else None,
+        )
+        return _normalize_sao_menu(menu)
+
+    def localized_capabilities(self, locale: Any = "") -> tuple[dict[str, Any], ...]:
+        overlay = _locale_overlay(self.locales, locale)
+        return _localized_capabilities(
+            self.capabilities,
+            overlay.get("capabilities") if overlay.get("capabilities") is not None else None,
+        )
+
+    def to_status(self, locale: Any = "") -> dict[str, Any]:
+        locale_id = _normalize_locale(locale)
+        name = self.localized_name(locale_id)
+        description = self.localized_description(locale_id)
+        capabilities = self.localized_capabilities(locale_id)
+        sao_menu = self.localized_sao_menu(locale_id)
+        settings_schema = self.localized_settings_schema(locale_id)
         return {
             "id": self.plugin_id,
-            "name": self.name,
+            "name": name,
+            "default_name": self.name,
+            "description": description,
+            "default_description": self.description,
             "version": self.version,
             "path": self.path,
             "entry": self.entry,
             "language": self.language,
+            "locale": locale_id,
+            "locales": sorted(str(key) for key in self.locales),
             "enabled": self.enabled,
             "loaded": self.loaded,
             "active": self.active,
             "game_ids": list(self.game_ids),
             "requires": list(self.requires),
             "permissions": list(self.permissions),
-            "capabilities": [dict(cap) for cap in self.capabilities],
-            "capability_ids": [str(cap.get("id")) for cap in self.capabilities if cap.get("id")],
-            "sao_menu": _json_safe(self.sao_menu) if isinstance(self.sao_menu, Mapping) else {},
+            "capabilities": [dict(cap) for cap in capabilities],
+            "capability_ids": [str(cap.get("id")) for cap in capabilities if cap.get("id")],
+            "settings_schema": _json_safe(settings_schema) if isinstance(settings_schema, Mapping) else {},
+            "sao_menu": _json_safe(sao_menu) if isinstance(sao_menu, Mapping) else {},
             # A plugin only "has a panel" if it DECLARES one — the manifest must
             # list a ``ui_panels`` capability. Lets the menu/manager know even
             # while the plugin is disabled (and so not yet runtime-registered).
-            "declares_panel": any(str(cap.get("id")) == "ui_panels" for cap in self.capabilities),
+            "declares_panel": any(str(cap.get("id")) == "ui_panels" for cap in capabilities),
             "failures": self.failures,
             "event_failures": self.event_failures,
             "last_error": self.last_error,
@@ -1312,10 +1589,13 @@ class PluginManager:
                 new_record is None
                 or old_record.path != new_record.path
                 or old_record.entry != new_record.entry
+                or old_record.name != new_record.name
+                or old_record.description != getattr(new_record, "description", "")
                 or old_record.version != new_record.version
                 or old_record.language != new_record.language
                 or old_record.sao_menu != getattr(new_record, "sao_menu", {})
                 or old_record.settings_schema != getattr(new_record, "settings_schema", {})
+                or old_record.locales != getattr(new_record, "locales", {})
                 or old_record.capabilities != getattr(new_record, "capabilities", ())
                 or old_record.requires != getattr(new_record, "requires", ())
                 or old_record.permissions != getattr(new_record, "permissions", ())
@@ -1563,7 +1843,35 @@ class PluginManager:
         self.discover()
         return self.load_all()
 
-    def list_plugins(self) -> list[dict[str, Any]]:
+    def _owner(self) -> Any:
+        if callable(self.owner_provider):
+            try:
+                return self.owner_provider()
+            except Exception:
+                return None
+        return None
+
+    def current_locale(self) -> str:
+        for key in ("act_plugin_locale", "plugin_locale", "ui_locale", "locale", "ui_language", "language"):
+            value = _MISSING
+            if self.settings is not None and hasattr(self.settings, "get"):
+                try:
+                    value = self.settings.get(key, _MISSING)
+                except Exception:
+                    value = _MISSING
+            locale = _normalize_locale(value)
+            if locale:
+                return locale
+        owner = self._owner()
+        for attr in ("act_plugin_locale", "plugin_locale", "ui_locale", "locale", "ui_language"):
+            locale = _normalize_locale(getattr(owner, attr, ""))
+            if locale:
+                return locale
+        locale = _normalize_locale(os.environ.get("SAO_UI_LOCALE") or os.environ.get("LANG"))
+        return locale or "zh-CN"
+
+    def list_plugins(self, locale: Any = "") -> list[dict[str, Any]]:
+        locale_id = _normalize_locale(locale) or self.current_locale()
         pinned = set(self.pinned_plugins())
         hotkeys_by_plugin: dict[str, int] = {}
         with self._hotkeys_lock:
@@ -1573,19 +1881,20 @@ class PluginManager:
             hotkeys_by_plugin[pid] = hotkeys_by_plugin.get(pid, 0) + 1
         out: list[dict[str, Any]] = []
         for key in sorted(self._records):
-            status = self._records[key].to_status()
+            status = self._records[key].to_status(locale_id)
             status["pinned"] = key in pinned
             status["hotkey_count"] = hotkeys_by_plugin.get(key, 0)
             status["user_installed"] = self._is_user_path(self._records[key].path)
             out.append(status)
         return out
 
-    def list_script_menu_entries(self) -> list[dict[str, Any]]:
+    def list_script_menu_entries(self, locale: Any = "") -> list[dict[str, Any]]:
         """Return manifest-declared SAO popup buttons for script-like plugins.
 
         Only enabled plugins are exposed here. Disabled scripts stay
         discoverable/manageable without being launchable from the popup.
         """
+        locale_id = _normalize_locale(locale) or self.current_locale()
         entries: list[dict[str, Any]] = []
         script_languages = {"lua", "csharp", "angelscript", "emma"}
 
@@ -1608,10 +1917,12 @@ class PluginManager:
                 continue
             if not bool(record.enabled):
                 continue
-            meta = dict(record.sao_menu or {})
+            meta = dict(record.localized_sao_menu(locale_id) or {})
             if not meta:
                 continue
-            schema = record.settings_schema if isinstance(record.settings_schema, Mapping) else {}
+            schema = record.localized_settings_schema(locale_id)
+            if not isinstance(schema, Mapping):
+                schema = {}
             setting_key = str(meta.get("setting") or meta.get("overlay_setting") or "overlay_enabled")
             overlay_schema = schema.get(setting_key)
             default_enabled = _boolish(meta.get("default_enabled"), False)
@@ -1624,9 +1935,10 @@ class PluginManager:
             entries.append({
                 "id": record.plugin_id,
                 "plugin_id": record.plugin_id,
-                "name": record.name,
-                "plugin_label": record.name,
+                "name": record.localized_name(locale_id),
+                "plugin_label": record.localized_name(locale_id),
                 "language": record.language,
+                "locale": locale_id,
                 "enabled": bool(record.enabled),
                 "loaded": bool(record.loaded),
                 "active": bool(record.active and record.enabled),
@@ -2288,9 +2600,10 @@ class PluginManager:
         return self.render_registry.status()
 
     def status(self) -> dict[str, Any]:
+        locale_id = self.current_locale()
         capabilities: dict[str, list[str]] = {}
         for record in self._records.values():
-            for cap in record.capabilities:
+            for cap in record.localized_capabilities(locale_id):
                 cap_id = str(cap.get("id") or "")
                 if cap_id:
                     capabilities.setdefault(cap_id, []).append(record.plugin_id)
@@ -2303,9 +2616,10 @@ class PluginManager:
             script_runtimes = {}
         return {
             "ok": True,
+            "locale": locale_id,
             "plugin_count": len(self._records),
             "active_count": sum(1 for record in self._records.values() if record.active),
-            "plugins": self.list_plugins(),
+            "plugins": self.list_plugins(locale_id),
             "capabilities": dict(sorted(capabilities.items())),
             "extensions": self.list_extensions(),
             "extension_counts": {
@@ -2448,9 +2762,15 @@ class PluginManager:
             raise FileNotFoundError(entry)
         from .scripting import detect_language
         language = detect_language(entry, str(manifest.get("language") or ""))
+        locales = _normalize_manifest_locales(
+            manifest.get("locales")
+            or manifest.get("i18n")
+            or manifest.get("translations")
+        )
         return PluginRecord(
             plugin_id=plugin_id,
             name=str(manifest.get("name") or plugin_id),
+            description=str(manifest.get("description") or ""),
             version=str(manifest.get("version") or "0.1.0"),
             path=plug_dir,
             entry=entry,
@@ -2462,6 +2782,7 @@ class PluginManager:
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
             sao_menu=_normalize_sao_menu(manifest.get("sao_menu")),
+            locales=locales,
         )
 
     def _prepare_plugin_sys_path(self, record: PluginRecord) -> None:

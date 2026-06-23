@@ -56,6 +56,55 @@ my_lua_plugin/
 | `angelscript` | `as`、`angel` |
 | `emma` | — |
 
+### 多语言 manifest
+
+脚本插件和 Python 插件使用同一套 manifest 本地化字段。基础 `name`、`description`、`sao_menu`、`settings_schema` 建议保留默认中文；额外语言写在 `locales`（也兼容 `i18n`、`translations`）里：
+
+```json
+{
+  "id": "my_lua_plugin",
+  "name": "我的 Lua 插件",
+  "description": "Lua 示例插件",
+  "entry": "plugin.lua",
+  "language": "lua",
+  "sao_menu": {
+    "name": "Lua 工具",
+    "icon_text": "▣",
+    "script_label": "Lua 工具",
+    "actions": [
+      {"id": "script.state", "label": "读取状态"}
+    ]
+  },
+  "settings_schema": {
+    "overlay_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否显示叠加层"
+    }
+  },
+  "locales": {
+    "en-US": {
+      "name": "My Lua Plugin",
+      "description": "Lua sample plugin",
+      "sao_menu": {
+        "name": "Lua Tool",
+        "script_label": "Lua Tool",
+        "actions": {
+          "script.state": {"label": "Read state"}
+        }
+      },
+      "settings_schema": {
+        "overlay_enabled": {
+          "description": "Show the overlay"
+        }
+      }
+    }
+  }
+}
+```
+
+本地化覆盖只改显示文本，不会改变 `enabled`、设置 `default/type`、菜单 `priority/surface`、权限、capability id 或 action id。这样插件管理器、SAO popup、settings 面板可以即时换语言，同时不会因为翻译包改变脚本加载和运行行为。
+
 ### 第三步：写入口脚本
 
 每种语言的入口脚本都要定义相同的四个生命周期函数（只有 `on_load` 是必须的）：

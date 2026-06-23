@@ -131,6 +131,30 @@ my_plugin/
       "default": "",
       "description": "API 密钥"
     }
+  },
+  "locales": {
+    "en-US": {
+      "name": "My Plugin",
+      "description": "Brief plugin description",
+      "capabilities": {
+        "ui_panels": {
+          "title": "Main Panel",
+          "description": "Panel feature description"
+        }
+      },
+      "sao_menu": {
+        "name": "My Tool",
+        "script_label": "My Tool",
+        "actions": {
+          "script.state": {"label": "Read state"}
+        }
+      },
+      "settings_schema": {
+        "sound_enabled": {
+          "description": "Enable sound effects"
+        }
+      }
+    }
   }
 }
 ```
@@ -148,6 +172,21 @@ my_plugin/
 | `permissions` | 否 | — | 声明需要的权限标记 |
 | `capabilities` | 否 | — | 声明插件提供的能力（面板、自动化等） |
 | `settings_schema` | 否 | — | 插件设置字段定义，支持 `boolean`/`integer`/`string` 类型 |
+| `locales`/`i18n`/`translations` | 否 | — | 按 locale 覆盖显示文本，支持 `en-US`、`zh-CN`、`zh` 等 locale key |
+
+### manifest 本地化
+
+平台启动和热刷新时会读取 `locales`（也兼容 `i18n`、`translations`）里的本地化覆盖。当前语言来自设置项 `act_plugin_locale`/`plugin_locale`/`ui_locale`/`locale` 等，未设置时默认 `zh-CN`。locale key 会正规化，例如 `en_US` 会作为 `en-US` 处理；`en-GB` 会按 `en` → `en-US` → `en-GB` 顺序合并，精确 locale 优先。
+
+本地化覆盖只应用展示文本，不能改变插件行为。可覆盖字段包括：
+
+- 顶层：`name`、`description`
+- `sao_menu`：`name`、`category`、`title`、`label`、`script_label`、`toggle_label`、`enable_label`、`disable_label`
+- `sao_menu.actions`：按 `id` 覆盖 `label`、`title`、`description`、`tooltip`
+- `capabilities`：按 `id` 覆盖 `label`、`title`、`description`、`display_name`、`render_hint`
+- `settings_schema`：按设置 key 覆盖 `label`、`title`、`description`、`help`、`tooltip`、`placeholder`、`unit`、`prefix`、`suffix`
+
+不会从 locale 覆盖新增/删除 action、capability 或 setting，也不会覆盖 `enabled`、`default`、`type`、`priority`、`surface`、`action_id`、坐标、权限等行为字段。这样菜单和设置可以即时切换语言，同时避免翻译文件改变插件加载、开关或权限语义。
 
 ### capabilities 详解
 

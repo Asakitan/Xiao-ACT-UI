@@ -164,6 +164,14 @@ my_plugin/
   "settings_schema": {
     "tts_enabled": {"type": "boolean", "default": true},
     "refresh_interval": {"type": "number", "default": 1.0}
+  },
+  "locales": {
+    "en-US": {
+      "name": "My Game Plugin",
+      "settings_schema": {
+        "tts_enabled": {"description": "Enable text-to-speech"}
+      }
+    }
   }
 }
 ```
@@ -180,6 +188,9 @@ my_plugin/
 | `permissions` | 否 | 声明的权限（`engine_access`、`input_control`） |
 | `settings_schema` | 否 | 插件设置字段定义，自动生成设置界面 |
 | `mcpServers` | 否 | 向 AI 编辑器暴露的 MCP 工具 |
+| `locales`/`i18n`/`translations` | 否 | 按 locale 覆盖插件管理、SAO 菜单、能力和设置的显示文本 |
+
+`locales` 只用于本地化展示文本，不改变插件行为。平台会按当前设置语言读取 `name`、`description`、`sao_menu` 文案、`capabilities` 文案和 `settings_schema` 说明；`enabled`、设置 `default/type`、权限、能力/action id、菜单 `priority/surface` 等字段始终以基础 manifest 为准。
 
 ### 插件生命周期
 

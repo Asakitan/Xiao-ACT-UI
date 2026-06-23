@@ -41,6 +41,7 @@ MAX_TITLE_LEN = 200
 MAX_CANVAS_OPS = 4000
 MAX_CANVAS_DIM = 4096
 MAX_MODEL_PATH_LEN = 2000
+MAX_MODEL3D_ACTION_JSON_TEXT_LEN = 4 * 1024 * 1024
 MAX_LAYER_POS = 32768
 MAX_LAYER_Z = 10000
 
@@ -148,6 +149,18 @@ def _json_safe_map(value: Any, *, max_items: int = 64, depth: int = 0) -> dict:
     for key, val in list(value.items())[:max_items]:
         out[str(key)] = _json_safe_value(val, max_items=max_items, depth=depth)
     return out
+
+
+def _model3d_action_json_text(value: Any) -> tuple[str, str]:
+    if not isinstance(value, str):
+        return "", ""
+    text = str(value)
+    if len(text) > MAX_MODEL3D_ACTION_JSON_TEXT_LEN:
+        return "", (
+            "action json_text exceeds action json parse limit "
+            f"({len(text)} > {MAX_MODEL3D_ACTION_JSON_TEXT_LEN})"
+        )
+    return text, ""
 
 
 def _ci(value: Any, default: int = 0) -> int:
@@ -269,16 +282,21 @@ def _normalize_model3d(node: Mapping[str, Any]) -> dict:
         else (action_json_raw if isinstance(action_json_raw, str) else "")
     )
     action_json = _json_safe_map(action_json_raw)
+    action_json_text, action_json_error = _model3d_action_json_text(action_json_text_raw)
+    if not action_json_error and isinstance(action.get("json_error"), str):
+        action_json_error = _s(action.get("json_error"), 300)
     normalized_action = {
         "name": _s(action.get("name", node.get("animation_name", "")), 120),
         "clip": _s(action.get("clip", ""), 120),
         "file": _s(action.get("file", node.get("animation_file", "")), MAX_MODEL_PATH_LEN),
         "json": action_json,
-        "json_text": _s(action_json_text_raw, MAX_MODEL_PATH_LEN * 4),
+        "json_text": action_json_text,
         "speed": _cf(action.get("speed", 1.0), 1.0, lo=0.0, hi=8.0),
         "loop": bool(action.get("loop", True)),
         "time": _cf(action.get("time", node.get("phase", 0.0)), 0.0, lo=-1.0e9, hi=1.0e9),
     }
+    if action_json_error:
+        normalized_action["json_error"] = action_json_error
 
     raw_camera = node.get("camera")
     camera = dict(raw_camera or {}) if isinstance(raw_camera, Mapping) else {}
@@ -662,6 +680,15 @@ class UI:
                 debug: bool = False,
                 diagnostic: bool = False,
                 draggable: bool = True) -> dict:
+        action_json_text, action_json_error = _model3d_action_json_text(animation_json)
+        action = {
+            "name": _s(animation_name, 120),
+            "file": _s(animation_file, MAX_MODEL_PATH_LEN),
+            "json": _json_safe_map(animation_json or {}),
+            "json_text": action_json_text,
+        }
+        if action_json_error:
+            action["json_error"] = action_json_error
         return {
             "type": "model3d",
             "id": _s(id, 120),
@@ -671,12 +698,7 @@ class UI:
             "draggable": bool(draggable),
             "phase": _cf(phase, 0.0, lo=-1.0e9, hi=1.0e9),
             "model": {"path": _s(model_path, MAX_MODEL_PATH_LEN), "format": "auto"},
-            "action": {
-                "name": _s(animation_name, 120),
-                "file": _s(animation_file, MAX_MODEL_PATH_LEN),
-                "json": _json_safe_map(animation_json or {}),
-                "json_text": _s(animation_json, MAX_MODEL_PATH_LEN * 4) if isinstance(animation_json, str) else "",
-            },
+            "action": action,
             "camera": dict(camera or {}) if isinstance(camera, Mapping) else {},
             "transform": dict(transform or {}) if isinstance(transform, Mapping) else {},
             "retarget": dict(retarget or {}) if isinstance(retarget, Mapping) else {},

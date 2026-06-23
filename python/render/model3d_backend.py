@@ -28,6 +28,8 @@ _NATIVE_NAMES = (
 )
 _CACHE_LIMIT = 128
 _MODEL_PARSE_LIMIT = 4 * 1024 * 1024
+_ACTION_JSON_PARSE_LIMIT = 4 * 1024 * 1024
+_ACTION_JSON_CACHE_PREFIX_LIMIT = 4096
 _MESH_PREVIEW_VERTEX_LIMIT = 4096
 _MESH_PREVIEW_FACE_LIMIT = 8192
 _BACKEND_STATUS_CACHE: Model3DBackendStatus | None = None
@@ -1849,6 +1851,20 @@ def _is_json_action_file(path: Path, action_file: str) -> bool:
     return bool(action_file and not suffix)
 
 
+def _action_json_text_cache_token(text: str) -> str:
+    if len(text) <= _ACTION_JSON_PARSE_LIMIT:
+        return _hash_text(text)
+    prefix = text[:_ACTION_JSON_CACHE_PREFIX_LIMIT]
+    return f"oversize:{len(text)}:{_hash_text(prefix)}"
+
+
+def _action_json_oversize_message(source: str, size: int) -> str:
+    return (
+        f"{source} exceeds action json parse limit "
+        f"({size} > {_ACTION_JSON_PARSE_LIMIT})"
+    )
+
+
 def _has_keyframes(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -2006,6 +2022,7 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
         json_text = str(action.get("json_text") or "")
     elif isinstance(action.get("json"), str):
         json_text = str(action.get("json") or "")
+    json_error = str(action.get("json_error") or "").strip()
     action_file = str(action.get("file") or "").strip()
     action_path = resolve_action_path(action_file, node) if action_file else Path("")
     file_exists, file_size, file_mtime_ns = _file_signature(action_path) if action_file else (False, 0, 0)
@@ -2014,11 +2031,12 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
     cache_key = (
         name,
         _hash_mapping(inline) if inline else "",
-        _hash_text(json_text) if json_text else "",
+        _action_json_text_cache_token(json_text) if json_text else "",
         str(action_path) if action_file else "",
         file_exists,
         file_size,
         file_mtime_ns,
+        json_error,
         model_cache_key,
     )
     cached = _ACTION_METADATA_CACHE.get(cache_key)
@@ -2027,27 +2045,35 @@ def _get_action_metadata_cached(node: Mapping[str, Any], *, copy_result: bool) -
 
     data: dict[str, Any] = dict(inline)
     errors: list[str] = []
+    if json_error:
+        errors.append(json_error)
     if json_text:
-        try:
-            loaded = json.loads(json_text)
-            if isinstance(loaded, Mapping):
-                data.update(dict(loaded))
-            else:
-                errors.append("action json_text must decode to an object")
-        except Exception as exc:
-            errors.append(str(exc))
+        if len(json_text) > _ACTION_JSON_PARSE_LIMIT:
+            errors.append(_action_json_oversize_message("action json_text", len(json_text)))
+        else:
+            try:
+                loaded = json.loads(json_text)
+                if isinstance(loaded, Mapping):
+                    data.update(dict(loaded))
+                else:
+                    errors.append("action json_text must decode to an object")
+            except Exception as exc:
+                errors.append(str(exc))
     if action_file:
         if file_exists:
             if _is_json_action_file(action_path, action_file):
-                try:
-                    with open(action_path, "r", encoding="utf-8") as fp:
-                        loaded = json.load(fp)
-                    if isinstance(loaded, Mapping):
-                        data.update(dict(loaded))
-                    else:
-                        errors.append("action file must decode to an object")
-                except Exception as exc:
-                    errors.append(str(exc))
+                if file_size > _ACTION_JSON_PARSE_LIMIT:
+                    errors.append(_action_json_oversize_message("action file", int(file_size)))
+                else:
+                    try:
+                        with open(action_path, "r", encoding="utf-8") as fp:
+                            loaded = json.load(fp)
+                        if isinstance(loaded, Mapping):
+                            data.update(dict(loaded))
+                        else:
+                            errors.append("action file must decode to an object")
+                    except Exception as exc:
+                        errors.append(str(exc))
         else:
             errors.append(f"action file is missing: {action_file}")
 

@@ -717,7 +717,16 @@ def _record_setting_default(manager: PluginManager, plugin_id: str,
                             key: str, default: bool = False) -> bool:
     records = getattr(manager, "_records", {})
     record = records.get(str(plugin_id or "")) if isinstance(records, Mapping) else None
-    schema = getattr(record, "settings_schema", {}) if record is not None else {}
+    schema = {}
+    if record is not None:
+        localized_schema = getattr(record, "localized_settings_schema", None)
+        if callable(localized_schema):
+            try:
+                schema = localized_schema(manager.current_locale())
+            except Exception:
+                schema = getattr(record, "settings_schema", {})
+        else:
+            schema = getattr(record, "settings_schema", {})
     if isinstance(schema, Mapping):
         item = schema.get(str(key or ""))
         if isinstance(item, Mapping) and "default" in item:

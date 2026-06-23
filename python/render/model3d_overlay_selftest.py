@@ -491,6 +491,31 @@ class Model3DSpecTests(unittest.TestCase):
         ))["nodes"][0]
         self.assertEqual(helper["action"]["json_text"], raw)
 
+    def test_model3d_rejects_oversized_action_json_text_during_normalize(self) -> None:
+        raw = "{" + ("x" * model3d_backend._ACTION_JSON_PARSE_LIMIT)
+        with mock.patch.object(json, "loads", wraps=json.loads) as loads:
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "action": {"name": "wave", "json": raw},
+            })["nodes"][0]
+
+        self.assertEqual(loads.call_count, 0)
+        self.assertEqual(node["action"]["json"], {})
+        self.assertEqual(node["action"]["json_text"], "")
+        self.assertIn("exceeds action json parse limit", node["action"]["json_error"])
+
+        helper = normalize_ui_spec(UI.model3d(
+            "helper", "avatar.fbx", animation_name="wave",
+            animation_json=raw,
+        ))["nodes"][0]
+        self.assertEqual(helper["action"]["json_text"], "")
+        self.assertIn("exceeds action json parse limit", helper["action"]["json_error"])
+
+        meta = get_action_metadata(node)
+        self.assertIn("exceeds action json parse limit", "; ".join(meta["errors"]))
+        self.assertIn("_load_error", meta["selected"])
+
         keyframed = normalize_ui_spec({
             "type": "model3d",
             "id": "keyframed",
@@ -955,6 +980,33 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(second["selected"]["bounce"], 0.1)
         self.assertEqual(loads.call_count, 1)
 
+    def test_action_metadata_rejects_oversized_inline_json_before_parse(self) -> None:
+        clear_model3d_metadata_caches()
+        raw = "{" + ("x" * model3d_backend._ACTION_JSON_PARSE_LIMIT)
+        node = {
+            "type": "model3d",
+            "id": "avatar",
+            "action": {
+                "name": "wave",
+                "json": raw,
+            },
+        }
+
+        with mock.patch.object(json, "loads", wraps=json.loads) as loads:
+            with mock.patch.object(model3d_backend, "_hash_text", wraps=model3d_backend._hash_text) as hash_text:
+                meta = get_action_metadata(node)
+
+        self.assertEqual(loads.call_count, 0)
+        self.assertIn("exceeds action json parse limit", "; ".join(meta["errors"]))
+        self.assertIn("_load_error", meta["selected"])
+        hashed_lengths = [
+            len(call.args[0])
+            for call in hash_text.call_args_list
+            if call.args and isinstance(call.args[0], str)
+        ]
+        self.assertTrue(hashed_lengths)
+        self.assertLessEqual(max(hashed_lengths), model3d_backend._ACTION_JSON_CACHE_PREFIX_LIMIT)
+
     def test_action_metadata_cache_loads_resolved_relative_action_file(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_action_") as root:
@@ -975,6 +1027,29 @@ class Model3DBackendTests(unittest.TestCase):
         self.assertEqual(meta["selected"]["speed"], 1.8)
         self.assertTrue(str(meta["resolved_file"]).endswith("wave.json"))
         self.assertEqual(meta["file_kind"], "json")
+
+    def test_action_metadata_rejects_oversized_json_file_before_load(self) -> None:
+        clear_model3d_metadata_caches()
+        with tempfile.TemporaryDirectory(prefix="model3d_action_limit_") as root:
+            base = Path(root)
+            model_path = base / "avatar.fbx"
+            action_path = base / "wave.json"
+            model_path.write_text("fixture", encoding="utf-8")
+            action_path.write_text("{" + ("x" * model3d_backend._ACTION_JSON_PARSE_LIMIT), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "model": {"path": str(model_path)},
+                "action": {"name": "wave", "file": "wave.json"},
+            })["nodes"][0]
+
+            with mock.patch.object(json, "load", wraps=json.load) as load:
+                meta = get_action_metadata(node)
+
+        self.assertEqual(load.call_count, 0)
+        self.assertEqual(meta["file_kind"], "json")
+        self.assertIn("exceeds action json parse limit", "; ".join(meta["errors"]))
+        self.assertIn("_load_error", meta["selected"])
 
     def test_action_metadata_treats_non_json_file_as_motion_file(self) -> None:
         clear_model3d_metadata_caches()

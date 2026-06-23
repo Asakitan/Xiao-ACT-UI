@@ -139,6 +139,81 @@ def run_selftest() -> dict[str, Any]:
             "missing": missing,
             "plugins": sorted(records),
         }
+    localized = {item.get("id"): item for item in manager.list_plugins("en-US")}
+    zh_status = {item.get("id"): item for item in manager.list_plugins("zh-CN")}
+    expected_locale = {
+        "script_world_clock_angelscript": (
+            "World Clock AngelScript", "World Clock", "世界时钟 AngelScript", "世界时钟"),
+        "script_stickwoman_csharp": (
+            "C# Character Model", "Character Model", "小人模型 C#", "小人模型"),
+        "script_flappy_emma": (
+            "Emma Flappy", "Flappy", "Emma Flappy", "飞鸟小游戏"),
+        "script_snake_lua": (
+            "Lua Snake", "Snake", "Lua 贪吃蛇", "贪吃蛇"),
+    }
+    for plugin_id, (expected_name, expected_menu, expected_zh_name, expected_zh_menu) in expected_locale.items():
+        item = localized.get(plugin_id) if isinstance(localized.get(plugin_id), dict) else {}
+        menu = item.get("sao_menu") if isinstance(item.get("sao_menu"), dict) else {}
+        actions = menu.get("actions") if isinstance(menu.get("actions"), list) else []
+        first_action = actions[0] if actions and isinstance(actions[0], dict) else {}
+        schema = item.get("settings_schema") if isinstance(item.get("settings_schema"), dict) else {}
+        overlay_setting = schema.get("overlay_enabled") if isinstance(schema.get("overlay_enabled"), dict) else {}
+        if item.get("name") != expected_name or menu.get("name") != expected_menu:
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "localized_manifest",
+                "status": item,
+            }
+        if first_action.get("label") != "Read state":
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "localized_action_label",
+                "action": first_action,
+            }
+        if not str(overlay_setting.get("description") or "").isascii():
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "localized_setting_description",
+                "setting": overlay_setting,
+            }
+        zh_item = zh_status.get(plugin_id) if isinstance(zh_status.get(plugin_id), dict) else {}
+        zh_menu = zh_item.get("sao_menu") if isinstance(zh_item.get("sao_menu"), dict) else {}
+        if zh_item.get("name") != expected_zh_name or zh_menu.get("name") != expected_zh_menu:
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "zh_manifest_fallback",
+                "status": zh_item,
+            }
+    for record in records.values():
+        record.enabled = True
+    try:
+        menu_entries = {item.get("id"): item for item in manager.list_script_menu_entries("en-US")}
+    finally:
+        for record in records.values():
+            record.enabled = False
+    for plugin_id, (expected_name, expected_menu, _, _) in expected_locale.items():
+        item = menu_entries.get(plugin_id) if isinstance(menu_entries.get(plugin_id), dict) else {}
+        menu = item.get("menu") if isinstance(item.get("menu"), dict) else {}
+        actions = menu.get("actions") if isinstance(menu.get("actions"), list) else []
+        first_action = actions[0] if actions and isinstance(actions[0], dict) else {}
+        if item.get("name") != expected_name or menu.get("name") != expected_menu:
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "localized_script_menu",
+                "item": item,
+            }
+        if first_action.get("label") != "Read state":
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "stage": "localized_script_menu_action_label",
+                "action": first_action,
+            }
 
     summaries: dict[str, dict[str, Any]] = {}
     for index, plugin_id in enumerate(required):

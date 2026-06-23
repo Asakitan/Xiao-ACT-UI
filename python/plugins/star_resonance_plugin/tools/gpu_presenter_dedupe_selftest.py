@@ -16,8 +16,11 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_PY_ROOT = _HERE.parents[2]
+for _path in (str(_ROOT), str(_PY_ROOT)):
+    if _path in sys.path:
+        sys.path.remove(_path)
+    sys.path.insert(0, _path)
 
 _passed = 0
 _failed = 0
@@ -65,12 +68,12 @@ def test_bgra_presenter_sequencing() -> None:
 
 def test_no_id_identity_left() -> None:
     print("[id() identity comparisons removed]")
-    gow = (_ROOT / "render" / "gpu_overlay_window.py").read_text(encoding="utf-8")
+    gow = (_PY_ROOT / "render" / "gpu_overlay_window.py").read_text(encoding="utf-8")
     check("BgraPresenter no longer tracks _last_uploaded_id", "_last_uploaded_id" not in gow)
     check("BgraPresenter no longer keys uploads on id()", "id(bgra)" not in gow)
     check("BgraPresenter render reads atomic snapshot", "snap = self._frame_snap" in gow)
 
-    fisheye = (_ROOT / "gui_modules" / "sao_gui_fisheye_mixin.py").read_text(encoding="utf-8")
+    fisheye = (_PY_ROOT / "gui_modules" / "sao_gui_fisheye_mixin.py").read_text(encoding="utf-8")
     check("fisheye presenter no longer keys uploads on id()", "id(rgb)" not in fisheye)
     check(
         "fisheye presenter stages atomic snapshot",
