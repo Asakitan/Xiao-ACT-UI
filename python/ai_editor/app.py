@@ -2759,6 +2759,13 @@ class AIEditorAPI:
             "signatures": "signatureHelp",
             "definition": "definition",
             "definitions": "definition",
+            "typeDefinition": "typeDefinition",
+            "typeDefinitions": "typeDefinition",
+            "type_definition": "typeDefinition",
+            "declaration": "declaration",
+            "declarations": "declaration",
+            "implementation": "implementation",
+            "implementations": "implementation",
             "reference": "references",
             "references": "references",
             "documentHighlight": "documentHighlight",
@@ -2890,6 +2897,45 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "definitions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "typeDefinition":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeTypeDefinitionProvider",
+                    document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "typeDefinitions": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "declaration":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeDeclarationProvider",
+                    document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "declarations": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "implementation":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeImplementationProvider",
+                    document.uri, position)
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "implementations": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "references":

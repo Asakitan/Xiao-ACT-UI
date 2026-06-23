@@ -1310,6 +1310,15 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerDefinitionProvider(selector, provider) {
                     return _registerLangProvider('definition', selector, provider);
                 },
+                registerTypeDefinitionProvider(selector, provider) {
+                    return _registerLangProvider('typeDefinition', selector, provider);
+                },
+                registerDeclarationProvider(selector, provider) {
+                    return _registerLangProvider('declaration', selector, provider);
+                },
+                registerImplementationProvider(selector, provider) {
+                    return _registerLangProvider('implementation', selector, provider);
+                },
                 registerReferenceProvider(selector, provider) {
                     return _registerLangProvider('references', selector, provider);
                 },
@@ -1891,6 +1900,9 @@ function _languageProviderMethod(kind) {
         hover: 'provideHover',
         signatureHelp: 'provideSignatureHelp',
         definition: 'provideDefinition',
+        typeDefinition: 'provideTypeDefinition',
+        declaration: 'provideDeclaration',
+        implementation: 'provideImplementation',
         references: 'provideReferences',
         documentHighlight: 'provideDocumentHighlights',
         prepareRename: 'prepareRename',

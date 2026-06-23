@@ -411,6 +411,24 @@ def test_app_settings_parity() -> None:
                 Range(Position(0, 0), Position(0, 6)),
             )
 
+        def provideTypeDefinition(self, document, position, token):
+            return Location(
+                document.uri,
+                Range(Position(0, 1), Position(0, 6)),
+            )
+
+        def provideDeclaration(self, document, position, token):
+            return Location(
+                document.uri,
+                Range(Position(0, 2), Position(0, 6)),
+            )
+
+        def provideImplementation(self, document, position, token):
+            return Location(
+                document.uri,
+                Range(Position(0, 3), Position(0, 6)),
+            )
+
         def provideReferences(self, document, position, context, token):
             self.seen_reference_context = dict(context)
             return [
@@ -528,6 +546,9 @@ def test_app_settings_parity() -> None:
     lang_api["registerDocumentFormattingEditProvider"]("python", editor_provider)
     lang_api["registerCodeActionsProvider"]("python", editor_provider)
     lang_api["registerDefinitionProvider"]("python", editor_provider)
+    lang_api["registerTypeDefinitionProvider"]("python", editor_provider)
+    lang_api["registerDeclarationProvider"]("python", editor_provider)
+    lang_api["registerImplementationProvider"]("python", editor_provider)
     lang_api["registerReferenceProvider"]("python", editor_provider)
     lang_api["registerDocumentLinkProvider"]("python", editor_provider)
     lang_api["registerInlayHintsProvider"]("python", editor_provider)
@@ -567,6 +588,12 @@ def test_app_settings_parity() -> None:
             }))
         definition_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="definition"))
+        type_definition_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="typeDefinition"))
+        declaration_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="declaration"))
+        implementation_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="implementation"))
         references_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="references", includeDeclaration=False))
         document_link_result = provider_api.editor_language_provider(
@@ -643,6 +670,23 @@ def test_app_settings_parity() -> None:
                and definition.get("range", {}).get("start", {}).get("line") == 0
                and definition.get("range", {}).get("end", {})
                .get("character") == 6)
+        type_definition = type_definition_result.get(
+            "typeDefinitions", [{}])[0]
+        _check("editor_language_provider serializes type definitions",
+               type_definition_result.get("ok") is True
+               and type_definition.get("range", {}).get("start", {})
+               .get("character") == 1)
+        declaration = declaration_result.get("declarations", [{}])[0]
+        _check("editor_language_provider serializes declarations",
+               declaration_result.get("ok") is True
+               and declaration.get("range", {}).get("start", {})
+               .get("character") == 2)
+        implementation = implementation_result.get(
+            "implementations", [{}])[0]
+        _check("editor_language_provider serializes implementations",
+               implementation_result.get("ok") is True
+               and implementation.get("range", {}).get("start", {})
+               .get("character") == 3)
         reference = references_result.get("references", [{}])[0]
         _check("editor_language_provider serializes references",
                references_result.get("ok") is True
@@ -1794,7 +1838,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorCodeActionEdits(action)" in html
            and "function applyEditorCodeAction(action)" in html
            and "function requestEditorDefinition(quiet)" in html
-           and "function navigateEditorDefinition(target)" in html
+           and "function requestEditorTypeDefinition(quiet)" in html
+           and "function requestEditorDeclaration(quiet)" in html
+           and "function requestEditorImplementation(quiet)" in html
+           and "function requestEditorLocationProvider(kind,resultKey,label,quiet)" in html
+           and "function navigateEditorDefinition(target,label)" in html
+           and "requestEditorLocationProvider('typeDefinition','typeDefinitions','Type definition',quiet)" in html
+           and "requestEditorLocationProvider('declaration','declarations','Declaration',quiet)" in html
+           and "requestEditorLocationProvider('implementation','implementations','Implementation',quiet)" in html
            and "function editorRevealRange(range)" in html
            and "function requestEditorReferences(quiet)" in html
            and "function showEditorReferences(references,position)" in html
@@ -1858,8 +1909,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Ctrl+." in html
            and "F12" in html
            and "Shift+F12" in html
+           and "Ctrl+F12" in html
            and "F2" in html
            and "Go to Definition" in html
+           and "Go to Type Definition" in html
+           and "Go to Declaration" in html
+           and "Go to Implementation" in html
            and "Find All References" in html
            and "Open Link" in html
            and "Rename Symbol" in html
@@ -3447,6 +3502,18 @@ def test_vscode_api() -> None:
             def provideDefinition(self, document, position, token):
                 return Location(document.uri, Range(Position(0, 0), Position(0, 4)))
 
+        class _TypeDefinitionProvider:
+            def provideTypeDefinition(self, document, position, token):
+                return Location(document.uri, Range(Position(0, 1), Position(0, 4)))
+
+        class _DeclarationProvider:
+            def provideDeclaration(self, document, position, token):
+                return Location(document.uri, Range(Position(0, 2), Position(0, 4)))
+
+        class _ImplementationProvider:
+            def provideImplementation(self, document, position, token):
+                return Location(document.uri, Range(Position(0, 3), Position(0, 4)))
+
         class _ReferenceProvider:
             def __init__(self):
                 self.contexts = []
@@ -3618,6 +3685,12 @@ def test_vscode_api() -> None:
             "python", signature_provider, "(", ",")
         api["languages"]["registerDefinitionProvider"](
             "python", _DefinitionProvider())
+        api["languages"]["registerTypeDefinitionProvider"](
+            "python", _TypeDefinitionProvider())
+        api["languages"]["registerDeclarationProvider"](
+            "python", _DeclarationProvider())
+        api["languages"]["registerImplementationProvider"](
+            "python", _ImplementationProvider())
         reference_provider = _ReferenceProvider()
         api["languages"]["registerReferenceProvider"](
             "python", reference_provider)
@@ -3665,6 +3738,12 @@ def test_vscode_api() -> None:
             "vscode.executeSignatureHelpProvider", doc.uri, Position(0, 4), "(")
         definitions = api["commands"]["executeCommand"](
             "vscode.executeDefinitionProvider", doc.uri, Position(0, 0))
+        type_definitions = api["commands"]["executeCommand"](
+            "vscode.executeTypeDefinitionProvider", doc.uri, Position(0, 0))
+        declarations = api["commands"]["executeCommand"](
+            "vscode.executeDeclarationProvider", doc.uri, Position(0, 0))
+        implementations = api["commands"]["executeCommand"](
+            "vscode.executeImplementationProvider", doc.uri, Position(0, 0))
         references = api["commands"]["executeCommand"](
             "vscode.executeReferenceProvider", doc.uri, Position(0, 0),
             {"includeDeclaration": False})
@@ -3751,6 +3830,15 @@ def test_vscode_api() -> None:
                and signature_provider.contexts[-1]["triggerCharacter"] == "(")
         _check("executeDefinitionProvider invokes matching providers",
                definitions and definitions[0].uri == doc.uri)
+        _check("executeTypeDefinitionProvider invokes matching providers",
+               type_definitions
+               and type_definitions[0].range.start.character == 1)
+        _check("executeDeclarationProvider invokes matching providers",
+               declarations
+               and declarations[0].range.start.character == 2)
+        _check("executeImplementationProvider invokes matching providers",
+               implementations
+               and implementations[0].range.start.character == 3)
         _check("executeReferenceProvider invokes matching providers",
                references and references[0].uri == doc.uri
                and reference_provider.contexts[-1]["includeDeclaration"] is False)
@@ -3842,6 +3930,12 @@ def test_vscode_api() -> None:
                "vscode.executeCompletionItemProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeReferenceProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeTypeDefinitionProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeDeclarationProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeImplementationProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeLinkProvider"
                in api["commands"]["getCommands"]()
@@ -5111,6 +5205,21 @@ function activate(context) {
       return new vscode.Location(document.uri, new vscode.Range(0, 0, 0, 4));
     },
   });
+  vscode.languages.registerTypeDefinitionProvider('python', {
+    provideTypeDefinition(document, position, token) {
+      return new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4));
+    },
+  });
+  vscode.languages.registerDeclarationProvider('python', {
+    provideDeclaration(document, position, token) {
+      return new vscode.Location(document.uri, new vscode.Range(0, 2, 0, 4));
+    },
+  });
+  vscode.languages.registerImplementationProvider('python', {
+    provideImplementation(document, position, token) {
+      return new vscode.Location(document.uri, new vscode.Range(0, 3, 0, 4));
+    },
+  });
   vscode.languages.registerReferenceProvider('python', {
     provideReferences(document, position, context, token) {
       return [new vscode.Location(document.uri, new vscode.Range(0, 1, 0, 4))];
@@ -5343,6 +5452,15 @@ module.exports = { activate, deactivate };
                     node_uri, Position(0, 5), "(")
                 node_definition = api._ext_host.commands.execute(
                     "vscode.executeDefinitionProvider", node_uri, Position(0, 1))
+                node_type_definitions = api._ext_host.commands.execute(
+                    "vscode.executeTypeDefinitionProvider",
+                    node_uri, Position(0, 1))
+                node_declarations = api._ext_host.commands.execute(
+                    "vscode.executeDeclarationProvider",
+                    node_uri, Position(0, 1))
+                node_implementations = api._ext_host.commands.execute(
+                    "vscode.executeImplementationProvider",
+                    node_uri, Position(0, 1))
                 node_references = api._ext_host.commands.execute(
                     "vscode.executeReferenceProvider", node_uri, Position(0, 1))
                 node_document_highlights = api._ext_host.commands.execute(
@@ -5428,6 +5546,18 @@ module.exports = { activate, deactivate };
                 _check("node host language provider invokes JS definition",
                        node_definition
                        and node_definition[0].get("uri", "").endswith("node_provider.py"))
+                _check("node host language provider invokes JS type definitions",
+                       node_type_definitions
+                       and node_type_definitions[0].get("range", {})
+                       .get("start", {}).get("character") == 1)
+                _check("node host language provider invokes JS declarations",
+                       node_declarations
+                       and node_declarations[0].get("range", {})
+                       .get("start", {}).get("character") == 2)
+                _check("node host language provider invokes JS implementations",
+                       node_implementations
+                       and node_implementations[0].get("range", {})
+                       .get("start", {}).get("character") == 3)
                 _check("node host language provider invokes JS references",
                        node_references
                        and node_references[0].get("uri", "").endswith("node_provider.py")

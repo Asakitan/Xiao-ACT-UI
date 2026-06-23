@@ -1374,6 +1374,12 @@ class VscodeNamespace:
             "vscode.executeHoverProvider": self._execute_hover_provider,
             "vscode.executeSignatureHelpProvider": self._execute_signature_help_provider,
             "vscode.executeDefinitionProvider": self._execute_definition_provider,
+            "_executeTypeDefinitionProvider": self._execute_type_definition_provider,
+            "vscode.executeTypeDefinitionProvider": self._execute_type_definition_provider,
+            "_executeDeclarationProvider": self._execute_declaration_provider,
+            "vscode.executeDeclarationProvider": self._execute_declaration_provider,
+            "_executeImplementationProvider": self._execute_implementation_provider,
+            "vscode.executeImplementationProvider": self._execute_implementation_provider,
             "vscode.executeReferenceProvider": self._execute_reference_provider,
             "_executeDocumentHighlightProvider": self._execute_document_highlight_provider,
             "vscode.executeDocumentHighlightProvider": self._execute_document_highlight_provider,
@@ -1702,14 +1708,35 @@ class VscodeNamespace:
 
     def _execute_definition_provider(
             self, uri: Any, position: Any = None) -> List[Any]:
+        return self._execute_location_provider(
+            "definition", "provideDefinition", uri, position)
+
+    def _execute_type_definition_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        return self._execute_location_provider(
+            "typeDefinition", "provideTypeDefinition", uri, position)
+
+    def _execute_declaration_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        return self._execute_location_provider(
+            "declaration", "provideDeclaration", uri, position)
+
+    def _execute_implementation_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        return self._execute_location_provider(
+            "implementation", "provideImplementation", uri, position)
+
+    def _execute_location_provider(
+            self, kind: str, method_name: str, uri: Any,
+            position: Any = None) -> List[Any]:
         document = self._resolve_language_document(uri)
         pos = _coerce_position(position)
         results = self._collect_language_provider_results(
-            "definition", document, "provideDefinition",
+            kind, document, method_name,
             (document, pos, CancellationToken.NONE))
         results.extend(self._provider_values(
             self._request_external_language_provider(
-                "definition", document, position=self._position_payload(pos))))
+                kind, document, position=self._position_payload(pos))))
         return results
 
     def _execute_reference_provider(
@@ -3139,6 +3166,9 @@ class VscodeNamespace:
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
             "registerSignatureHelpProvider": lambda selector, provider, *metadata: self._register_language_provider("signatureHelp", selector, provider, self._signature_help_registration_metadata(metadata)),
             "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
+            "registerTypeDefinitionProvider": lambda selector, provider: self._register_language_provider("typeDefinition", selector, provider),
+            "registerDeclarationProvider": lambda selector, provider: self._register_language_provider("declaration", selector, provider),
+            "registerImplementationProvider": lambda selector, provider: self._register_language_provider("implementation", selector, provider),
             "registerReferenceProvider": lambda selector, provider: self._register_language_provider("references", selector, provider),
             "registerDocumentHighlightProvider": lambda selector, provider: self._register_language_provider("documentHighlight", selector, provider),
             "registerRenameProvider": lambda selector, provider: self._register_language_provider("rename", selector, provider),
