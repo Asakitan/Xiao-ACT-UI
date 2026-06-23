@@ -2521,7 +2521,8 @@ def test_vscode_api() -> None:
         WorkspaceConfiguration, LanguageModelToolResult,
         AuthenticationProviderBase, Diagnostic, WorkspaceEdit,
         Position, Range, AuthenticationSession, PreparedToolInvocation,
-        EventEmitter,
+        EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
+        TextEdit, Location,
     )
 
     host = ExtensionHost()
@@ -2549,6 +2550,10 @@ def test_vscode_api() -> None:
     _check("api.Position", api["Position"] is not None)
     _check("api.Uri", api["Uri"] is not None)
     _check("api.Disposable", api["Disposable"] is not None)
+    _check("api.CompletionItem", api["CompletionItem"] is CompletionItem)
+    _check("api.Hover", api["Hover"] is Hover)
+    _check("api.TextEdit", api["TextEdit"] is TextEdit)
+    _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
 
     # Commands via namespace
     box = []
@@ -2808,6 +2813,114 @@ def test_vscode_api() -> None:
         provider_dispose = api["languages"]["registerHoverProvider"]("python", object())
         _check("languages provider registration disposable", hasattr(provider_dispose, "dispose"))
         _check("languages.match", api["languages"]["match"]("python", doc) == 10)
+
+        class _BadCompletionProvider:
+            def provideCompletionItems(self, document, position, token, context):
+                raise RuntimeError("bad completion provider")
+
+        class _GenericCompletionProvider:
+            def __init__(self):
+                self.contexts = []
+
+            def provideCompletionItems(self, document, position, token, context):
+                self.contexts.append(context)
+                item = CompletionItem("selftestGeneric",
+                                      api["CompletionItemKind"]["Function"])
+                item.detail = document.languageId
+                return CompletionList([item], True)
+
+        class _DotCompletionProvider:
+            def provideCompletionItems(self, document, position, token, context):
+                return [CompletionItem("selftestDot")]
+
+        generic_completion = _GenericCompletionProvider()
+        api["languages"]["registerCompletionItemProvider"](
+            "python", _BadCompletionProvider())
+        generic_completion_dispose = api["languages"]["registerCompletionItemProvider"](
+            "python", generic_completion)
+        dot_completion_dispose = api["languages"]["registerCompletionItemProvider"](
+            "python", _DotCompletionProvider(), ".")
+        completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1))
+        completion_labels = [item.label for item in completions.items]
+        _check("executeCompletionItemProvider merges provider results",
+               isinstance(completions, CompletionList)
+               and completions.isIncomplete is True
+               and "selftestGeneric" in completion_labels
+               and "selftestDot" in completion_labels
+               and generic_completion.contexts[-1]["triggerKind"] == 1)
+        semicolon_completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), ";")
+        semicolon_labels = [item.label for item in semicolon_completions.items]
+        _check("completion trigger chars filter specialized providers",
+               "selftestGeneric" not in semicolon_labels
+               and "selftestDot" not in semicolon_labels)
+        dot_completion_dispose.dispose()
+        dot_after_dispose = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1), ".")
+        _check("completion provider disposal removes dynamic provider",
+               "selftestDot" not in [item.label for item in dot_after_dispose.items])
+        generic_completion_dispose.dispose()
+
+        class _HoverProvider:
+            def provideHover(self, document, position, token):
+                return Hover(["selftest hover"], Range(position, position))
+
+        class _DefinitionProvider:
+            def provideDefinition(self, document, position, token):
+                return Location(document.uri, Range(Position(0, 0), Position(0, 4)))
+
+        class _DocumentSymbolProvider:
+            def provideDocumentSymbols(self, document, token):
+                return [{"name": "selftest_symbol",
+                         "kind": api["SymbolKind"]["Function"]}]
+
+        class _CodeActionProvider:
+            def provideCodeActions(self, document, range, context, token):
+                action = CodeAction("Fix boom", api["CodeActionKind"]["QuickFix"])
+                action.diagnostics = context["diagnostics"]
+                return [action]
+
+        class _FormatProvider:
+            def provideDocumentFormattingEdits(self, document, options, token):
+                return [TextEdit.replace(
+                    Range(Position(0, 0), Position(0, 4)), "fmt")]
+
+        hover_runtime = api["languages"]["registerHoverProvider"](
+            {"language": "python", "scheme": "file"}, _HoverProvider())
+        api["languages"]["registerDefinitionProvider"](
+            "python", _DefinitionProvider())
+        api["languages"]["registerDocumentSymbolProvider"](
+            "python", _DocumentSymbolProvider())
+        api["languages"]["registerCodeActionsProvider"](
+            "python", _CodeActionProvider())
+        api["languages"]["registerDocumentFormattingEditProvider"](
+            "python", _FormatProvider())
+        hovers = api["commands"]["executeCommand"](
+            "vscode.executeHoverProvider", doc.uri, Position(0, 0))
+        definitions = api["commands"]["executeCommand"](
+            "vscode.executeDefinitionProvider", doc.uri, Position(0, 0))
+        symbols = api["commands"]["executeCommand"](
+            "vscode.executeDocumentSymbolProvider", doc.uri)
+        actions = api["commands"]["executeCommand"](
+            "vscode.executeCodeActionProvider", doc.uri,
+            Range(Position(0, 0), Position(0, 1)), api["CodeActionKind"]["QuickFix"])
+        format_edits = api["commands"]["executeCommand"](
+            "vscode.executeFormatDocumentProvider", doc.uri, {"tabSize": 4})
+        _check("executeHoverProvider invokes matching providers",
+               hovers and hovers[0].contents == ["selftest hover"])
+        _check("executeDefinitionProvider invokes matching providers",
+               definitions and definitions[0].uri == doc.uri)
+        _check("executeDocumentSymbolProvider invokes matching providers",
+               symbols and symbols[0]["name"] == "selftest_symbol")
+        _check("executeCodeActionProvider passes diagnostics context",
+               actions and actions[0].diagnostics[0].message == "boom")
+        _check("executeFormatDocumentProvider invokes formatting providers",
+               format_edits and format_edits[0]["newText"] == "fmt")
+        hover_runtime.dispose()
+        _check("language execute commands are registered",
+               "vscode.executeCompletionItemProvider"
+               in api["commands"]["getCommands"]())
         class _TaskProvider:
             def provideTasks(self):
                 return [{

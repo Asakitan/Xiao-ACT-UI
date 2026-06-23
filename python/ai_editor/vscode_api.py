@@ -130,6 +130,55 @@ def _resolve_thenable_provider_result(
     return default
 
 
+def _call_with_compatible_args(fn: Callable, args: Sequence[Any]) -> Any:
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn(*args)
+    params = list(signature.parameters.values())
+    if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params):
+        return fn(*args)
+    positional = [
+        p for p in params
+        if p.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    if not positional:
+        return fn()
+    required = [
+        p for p in positional
+        if p.default is inspect.Parameter.empty
+    ]
+    count = min(len(args), len(positional))
+    if count < len(required):
+        count = len(args)
+    return fn(*args[:count])
+
+
+def _completion_list_from_provider_result(value: Any) -> Optional["CompletionList"]:
+    if value is None:
+        return None
+    if isinstance(value, CompletionList):
+        return value
+    if isinstance(value, list):
+        return CompletionList(value)
+    if isinstance(value, dict) and "items" in value:
+        return CompletionList(
+            value.get("items") or [],
+            bool(value.get("isIncomplete") or value.get("is_incomplete")),
+        )
+    items = getattr(value, "items", None)
+    if items is not None:
+        return CompletionList(
+            items,
+            bool(getattr(value, "isIncomplete",
+                         getattr(value, "is_incomplete", False))),
+        )
+    return CompletionList([value])
+
+
 # NOTE: UIBridge Protocol is defined once below (after WorkspaceEdit) with
 # the complete method set including show_quick_pick, show_input_box, and
 # webview panel methods.  Do NOT add a duplicate here.
@@ -743,6 +792,58 @@ class Diagnostic:
     related_information: List[Any] = field(default_factory=list)
 
 
+class CompletionItem:
+    def __init__(self, label: Any = "", kind: Any = None) -> None:
+        self.label = label
+        self.kind = kind
+        self.detail = None
+        self.documentation = None
+        self.sortText = None
+        self.filterText = None
+        self.insertText = None
+        self.range = None
+        self.textEdit = None
+        self.additionalTextEdits = []
+        self.command = None
+
+
+class CompletionList:
+    def __init__(self, items: Any = None, is_incomplete: bool = False) -> None:
+        self.items = list(items or [])
+        self.isIncomplete = bool(is_incomplete)
+
+
+class Hover:
+    def __init__(self, contents: Any, range: Any = None) -> None:
+        self.contents = contents if isinstance(contents, list) else [contents]
+        self.range = range
+
+
+class CodeAction:
+    def __init__(self, title: str = "", kind: Any = None) -> None:
+        self.title = title
+        self.kind = kind
+        self.diagnostics = []
+        self.edit = None
+        self.command = None
+        self.isPreferred = False
+        self.disabled = None
+
+
+class TextEdit:
+    @staticmethod
+    def replace(range: Any, new_text: str) -> Dict[str, Any]:
+        return {"kind": "replace", "range": range, "newText": str(new_text or "")}
+
+    @staticmethod
+    def insert(position: Any, new_text: str) -> Dict[str, Any]:
+        return {"kind": "insert", "position": position, "newText": str(new_text or "")}
+
+    @staticmethod
+    def delete(range: Any) -> Dict[str, Any]:
+        return {"kind": "delete", "range": range, "newText": ""}
+
+
 class WorkspaceEdit:
     """Collect workspace edits without pretending SAO can safely apply them."""
 
@@ -929,16 +1030,175 @@ class VscodeNamespace:
         self._tasks_api: Optional[Dict[str, Any]] = None
         self._debug_api: Optional[Dict[str, Any]] = None
         self._extensions_api: Optional[Dict[str, Any]] = None
+        self._language_command_disposables: List[Callable] = []
         try:
             host.on_did_change(self._on_host_extensions_changed)
         except Exception:
             pass
+        self._register_language_execute_commands()
 
     def _on_host_extensions_changed(self, event: Any = None) -> None:
         self._sync_extensions_state()
         self._sync_tasks_state()
         self._sync_debug_state()
         self._extensions_change_emitter.fire(event or {})
+
+    def _register_language_execute_commands(self) -> None:
+        commands = {
+            "vscode.executeCompletionItemProvider": self._execute_completion_item_provider,
+            "vscode.executeHoverProvider": self._execute_hover_provider,
+            "vscode.executeDefinitionProvider": self._execute_definition_provider,
+            "vscode.executeDocumentSymbolProvider": self._execute_document_symbol_provider,
+            "vscode.executeCodeActionProvider": self._execute_code_action_provider,
+            "vscode.executeFormatDocumentProvider": self._execute_format_document_provider,
+        }
+        for command_id, handler in commands.items():
+            try:
+                if self._host.commands.has(command_id):
+                    continue
+                self._language_command_disposables.append(
+                    self._host.commands.register(command_id, handler))
+            except Exception:
+                pass
+
+    def _resolve_language_document(self, document_or_uri: Any) -> "_TextDocument":
+        if isinstance(document_or_uri, _TextDocument):
+            return document_or_uri
+        uri = _coerce_uri(document_or_uri)
+        if uri is None:
+            raise ValueError("language provider execution requires a document or URI")
+        document = self._get_or_open_document(uri)
+        if document is None:
+            document = self._open_text_document(uri)
+        return document
+
+    def _matching_language_providers(
+            self, kind: str, document: Any) -> List[Dict[str, Any]]:
+        matches: List[Any] = []
+        for entry in list(self._language_providers.get(kind, [])):
+            score = self._language_match(entry.get("selector"), document)
+            if score > 0:
+                matches.append((score, entry))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        return [entry for _score, entry in matches]
+
+    def _call_language_provider(
+            self,
+            provider: Any,
+            method_name: str,
+            args: Sequence[Any],
+            default: Any = None) -> Any:
+        method = None
+        if isinstance(provider, dict):
+            method = provider.get(method_name)
+        if method is None:
+            method = getattr(provider, method_name, None)
+        if method is None and callable(provider):
+            method = provider
+        if not callable(method):
+            return default
+        try:
+            value = _call_with_compatible_args(method, args)
+            return _resolve_provider_result(value, default=default)
+        except Exception:
+            return default
+
+    def _collect_language_provider_results(
+            self,
+            kind: str,
+            document: Any,
+            method_name: str,
+            args: Sequence[Any]) -> List[Any]:
+        results: List[Any] = []
+        for entry in self._matching_language_providers(kind, document):
+            value = self._call_language_provider(
+                entry.get("provider"), method_name, args, default=None)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                results.extend(value)
+            else:
+                results.append(value)
+        return results
+
+    def _provide_completion_items(
+            self,
+            document_or_uri: Any,
+            position: Any = None,
+            trigger_character: Any = None) -> CompletionList:
+        document = self._resolve_language_document(document_or_uri)
+        pos = _coerce_position(position)
+        trigger = "" if trigger_character is None else str(trigger_character)
+        context = {
+            "triggerKind": 2 if trigger else 1,
+            "triggerCharacter": trigger or None,
+        }
+        items: List[Any] = []
+        incomplete = False
+        for entry in self._matching_language_providers("completion", document):
+            triggers = tuple(str(item) for item in (entry.get("metadata") or ()))
+            if trigger and trigger not in triggers:
+                continue
+            value = self._call_language_provider(
+                entry.get("provider"),
+                "provideCompletionItems",
+                (document, pos, CancellationToken.NONE, context),
+                default=None)
+            normalized = _completion_list_from_provider_result(value)
+            if normalized is None:
+                continue
+            items.extend(normalized.items)
+            incomplete = incomplete or bool(normalized.isIncomplete)
+        return CompletionList(items, incomplete)
+
+    def _execute_completion_item_provider(
+            self,
+            uri: Any,
+            position: Any = None,
+            trigger_character: Any = None,
+            item_resolve_count: Any = None) -> CompletionList:
+        _ = item_resolve_count
+        return self._provide_completion_items(uri, position, trigger_character)
+
+    def _execute_hover_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        return self._collect_language_provider_results(
+            "hover", document, "provideHover",
+            (document, pos, CancellationToken.NONE))
+
+    def _execute_definition_provider(
+            self, uri: Any, position: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        pos = _coerce_position(position)
+        return self._collect_language_provider_results(
+            "definition", document, "provideDefinition",
+            (document, pos, CancellationToken.NONE))
+
+    def _execute_document_symbol_provider(self, uri: Any) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        return self._collect_language_provider_results(
+            "documentSymbol", document, "provideDocumentSymbols",
+            (document, CancellationToken.NONE))
+
+    def _execute_code_action_provider(
+            self, uri: Any, range: Any = None, kind: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        action_range = _coerce_range(range)
+        context = {"diagnostics": self._get_diagnostics(document.uri)}
+        if kind is not None:
+            context["only"] = kind
+        return self._collect_language_provider_results(
+            "codeActions", document, "provideCodeActions",
+            (document, action_range, context, CancellationToken.NONE))
+
+    def _execute_format_document_provider(
+            self, uri: Any, options: Any = None) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        return self._collect_language_provider_results(
+            "formatting", document, "provideDocumentFormattingEdits",
+            (document, options or {}, CancellationToken.NONE))
 
     def set_ui_bridge(self, bridge: UIBridge) -> None:
         """Connect this namespace to a live HTML UI bridge (e.g. AIEditorAPI).
@@ -1057,6 +1317,11 @@ class VscodeNamespace:
             "LanguageModelError": LanguageModelError,
             "Location": Location,
             "Diagnostic": Diagnostic,
+            "CompletionItem": CompletionItem,
+            "CompletionList": CompletionList,
+            "Hover": Hover,
+            "CodeAction": CodeAction,
+            "TextEdit": TextEdit,
             "WorkspaceEdit": WorkspaceEdit,
             "ChatResultFeedback": ChatResult,
             "ChatResponseStream": ChatResponseStream,
@@ -1069,6 +1334,37 @@ class VscodeNamespace:
             "ChatLocation": {"Panel": 1, "Terminal": 2, "Notebook": 3, "Editor": 4},
             "ChatSessionStatus": {"Failed": 0, "Completed": 1, "InProgress": 2},
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
+            "CompletionItemKind": {
+                "Text": 0, "Method": 1, "Function": 2, "Constructor": 3,
+                "Field": 4, "Variable": 5, "Class": 6, "Interface": 7,
+                "Module": 8, "Property": 9, "Unit": 10, "Value": 11,
+                "Enum": 12, "Keyword": 13, "Snippet": 14, "Color": 15,
+                "File": 16, "Reference": 17, "Folder": 18,
+                "EnumMember": 19, "Constant": 20, "Struct": 21,
+                "Event": 22, "Operator": 23, "TypeParameter": 24,
+                "User": 25, "Issue": 26,
+            },
+            "SymbolKind": {
+                "File": 0, "Module": 1, "Namespace": 2, "Package": 3,
+                "Class": 4, "Method": 5, "Property": 6, "Field": 7,
+                "Constructor": 8, "Enum": 9, "Interface": 10,
+                "Function": 11, "Variable": 12, "Constant": 13,
+                "String": 14, "Number": 15, "Boolean": 16, "Array": 17,
+                "Object": 18, "Key": 19, "Null": 20,
+                "EnumMember": 21, "Struct": 22, "Event": 23,
+                "Operator": 24, "TypeParameter": 25,
+            },
+            "CodeActionKind": {
+                "QuickFix": "quickfix",
+                "Refactor": "refactor",
+                "RefactorExtract": "refactor.extract",
+                "RefactorInline": "refactor.inline",
+                "RefactorRewrite": "refactor.rewrite",
+                "Source": "source",
+                "SourceOrganizeImports": "source.organizeImports",
+                "SourceFixAll": "source.fixAll",
+                "Empty": "",
+            },
             "DiagnosticSeverity": {"Error": 0, "Warning": 1, "Information": 2, "Hint": 3},
             "DiagnosticTag": {"Unnecessary": 1, "Deprecated": 2},
             "FileType": {"Unknown": 0, "File": 1, "Directory": 2, "SymbolicLink": 64},
@@ -1821,8 +2117,12 @@ class VscodeNamespace:
             "registerHoverProvider": lambda selector, provider: self._register_language_provider("hover", selector, provider),
             "registerCompletionItemProvider": lambda selector, provider, *trigger: self._register_language_provider("completion", selector, provider, trigger),
             "registerDefinitionProvider": lambda selector, provider: self._register_language_provider("definition", selector, provider),
+            "registerDocumentSymbolProvider": lambda selector, provider: self._register_language_provider("documentSymbol", selector, provider),
             "registerDocumentFormattingEditProvider": lambda selector, provider: self._register_language_provider("formatting", selector, provider),
             "registerCodeActionsProvider": lambda selector, provider, metadata=None: self._register_language_provider("codeActions", selector, provider, metadata),
+            "registerCodeLensProvider": lambda selector, provider: self._register_language_provider("codeLens", selector, provider),
+            "registerDocumentLinkProvider": lambda selector, provider: self._register_language_provider("documentLink", selector, provider),
+            "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),
         }
 
