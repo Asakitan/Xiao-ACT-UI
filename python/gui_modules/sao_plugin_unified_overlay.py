@@ -579,7 +579,7 @@ class PluginUnifiedOverlayHost:
                 layer.request_redraw()
             except Exception:
                 pass
-        self._force_host_passthrough()
+        self._sync_host_input_mode()
 
     def mark_dirty(self) -> None:
         self._dirty = True
@@ -632,17 +632,19 @@ class PluginUnifiedOverlayHost:
         try:
             overlay = get_unified_overlay(self.root)
             self._overlay = overlay
-            self._force_host_passthrough()
+            self._sync_host_input_mode()
             return overlay
         except Exception:
             self._overlay = None
             return None
 
-    def _force_host_passthrough(self) -> None:
+    def _sync_host_input_mode(self) -> None:
         overlay = self._overlay
         if overlay is None:
             return
-        fn = getattr(overlay, "force_host_input_passthrough", None)
+        fn = getattr(overlay, "sync_host_input_mode", None)
+        if not callable(fn):
+            fn = getattr(overlay, "force_host_input_passthrough", None)
         if callable(fn):
             try:
                 fn()
@@ -778,11 +780,8 @@ class PluginUnifiedOverlayHost:
 
         try:
             layer.set_input_callbacks(cursor_pos_fn=_motion, mouse_button_fn=_mouse)
-            if hasattr(layer, "create_input_proxy"):
-                layer.create_input_proxy(self.root)
-            if hasattr(layer, "sync_input_proxy"):
-                layer.sync_input_proxy()
             state["input_ready"] = True
+            self._sync_host_input_mode()
         except Exception:
             state["input_ready"] = False
             pass
@@ -853,8 +852,6 @@ class PluginUnifiedOverlayHost:
                             layer.click_through = click_through
                             if click_through:
                                 layer.destroy_input_proxy()
-                            else:
-                                layer.create_input_proxy(self.root)
                             layer.sync_input_proxy()
                         except Exception:
                             pass
@@ -895,7 +892,7 @@ class PluginUnifiedOverlayHost:
                         except Exception:
                             pass
                     if geometry_changed or click_through_changed:
-                        self._force_host_passthrough()
+                        self._sync_host_input_mode()
                     return state
                 except Exception:
                     self._destroy_layer(key)
@@ -936,7 +933,7 @@ class PluginUnifiedOverlayHost:
             self._layers[key] = state
             if draggable:
                 self._install_drag_callbacks(key, state)
-            self._force_host_passthrough()
+            self._sync_host_input_mode()
             return state
         except Exception:
             self._destroy_layer(key)
@@ -958,7 +955,7 @@ class PluginUnifiedOverlayHost:
                 layer.sync_input_proxy()
             except Exception:
                 pass
-        self._force_host_passthrough()
+        self._sync_host_input_mode()
 
     def _refresh_now(self) -> None:
         try:
@@ -1051,7 +1048,7 @@ class PluginUnifiedOverlayHost:
                 self._destroy_layer(key)
                 active_keys.discard(key)
         self._destroy_stale_layers(active_keys)
-        self._force_host_passthrough()
+        self._sync_host_input_mode()
 
     def _tick(self) -> None:
         self._after_id = None

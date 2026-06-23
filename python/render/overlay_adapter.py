@@ -25,8 +25,12 @@ from typing import Any, Callable, Optional
 from render.overlay_compositor import (
     CompositorLayer,
     UnifiedOverlay,
-    get_unified_overlay,
 )
+
+try:
+    from render.gpu_overlay_window import _get_unified_overlay as get_unified_overlay
+except Exception:  # pragma: no cover - fallback for isolated imports/tests
+    from render.overlay_compositor import get_unified_overlay
 
 
 _next_layer_id = 0
@@ -118,6 +122,10 @@ class CompositorOverlayWindow:
         self._visible = False
         self._layer.hide()
         self._layer.sync_input_proxy()
+        try:
+            self._compositor.sync_host_input_mode()
+        except Exception:
+            pass
 
     def destroy(self) -> None:
         if self._destroyed:
@@ -126,6 +134,10 @@ class CompositorOverlayWindow:
         self._visible = False
         self._layer.destroy_input_proxy()
         self._compositor.destroy_layer(self._name)
+        try:
+            self._compositor.sync_host_input_mode()
+        except Exception:
+            pass
 
     def prepare_async(self) -> bool:
         return True  # always ready
@@ -178,14 +190,10 @@ class CompositorOverlayWindow:
             cursor_pos_fn, cursor_leave_fn,
             mouse_button_fn, scroll_fn,
         )
-        # Create Tk input proxy for interactive layers
-        if not self._layer.click_through and mouse_button_fn:
-            root = self._compositor._root
-            if root is not None:
-                try:
-                    self._layer.create_input_proxy(root)
-                except Exception:
-                    pass
+        try:
+            self._compositor.sync_host_input_mode()
+        except Exception:
+            pass
 
     # ── Fade / Alpha ─────────────────────────────────────────
 

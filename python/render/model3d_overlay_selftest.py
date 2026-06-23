@@ -19,6 +19,7 @@ if str(_PY_ROOT) not in sys.path:
 from act_platform.ui_spec import MAX_LAYER_POS, MAX_LAYER_Z, UI, normalize_ui_spec
 from gui_modules import sao_plugin_unified_overlay as overlay_mod
 from render import model3d_backend
+from render import overlay_adapter as overlay_adapter_mod
 from render.model3d_backend import (
     clear_model3d_metadata_caches,
     diagnose_model3d_node,
@@ -1778,6 +1779,67 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
             "_get_unified_overlay",
         )
 
+    def test_overlay_adapter_uses_platform_unified_overlay_provider(self) -> None:
+        self.assertEqual(
+            getattr(overlay_adapter_mod.get_unified_overlay, "__name__", ""),
+            "_get_unified_overlay",
+        )
+
+    def test_overlay_adapter_routes_input_without_tk_proxy(self) -> None:
+        class FakeLayer:
+            def __init__(self):
+                self.click_through = False
+                self.callbacks = None
+                self.proxy_created = False
+
+            def set_render_fn(self, _fn):
+                return None
+
+            def set_input_callbacks(self, *callbacks):
+                self.callbacks = callbacks
+
+            def create_input_proxy(self, _root):
+                self.proxy_created = True
+                raise AssertionError("adapter should not create a Tk proxy")
+
+            def sync_input_proxy(self):
+                return None
+
+            def show(self):
+                return None
+
+            def hide(self):
+                return None
+
+            def destroy_input_proxy(self):
+                return None
+
+        class FakeOverlay:
+            def __init__(self):
+                self.layer = FakeLayer()
+                self.syncs = 0
+
+            def create_layer(self, *_args, **_kwargs):
+                return self.layer
+
+            def destroy_layer(self, _name):
+                return None
+
+            def sync_host_input_mode(self):
+                self.syncs += 1
+
+            def force_host_input_passthrough(self):
+                self.sync_host_input_mode()
+
+        fake = FakeOverlay()
+        win = overlay_adapter_mod.CompositorOverlayWindow(
+            fake, w=20, h=10, click_through=False)
+        win.set_input_callbacks(mouse_button_fn=lambda *_args: None)
+
+        self.assertIsNotNone(fake.layer.callbacks)
+        self.assertFalse(fake.layer.proxy_created)
+        self.assertEqual(fake.syncs, 1)
+
     def test_plugin_host_does_not_own_overlay_startup(self) -> None:
         class FakeOverlay:
             def __init__(self):
@@ -1800,6 +1862,36 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
 
         self.assertEqual(fake_overlay.start_calls, 0)
         self.assertEqual(fake_overlay.passthrough_calls, 1)
+
+    def test_unified_overlay_host_input_mode_follows_interactive_layers(self) -> None:
+        from render.overlay_compositor import UnifiedOverlay
+
+        class FakeHost:
+            def __init__(self):
+                self.passthrough = []
+
+            def set_input_passthrough(self, enabled):
+                self.passthrough.append(bool(enabled))
+
+        overlay = UnifiedOverlay(root=None)
+        overlay._host = FakeHost()
+        layer = overlay.create_layer(
+            "drag_model", width=40, height=30, x=10, y=20, z=5,
+            click_through=False)
+
+        overlay.sync_host_input_mode()
+        overlay._cmd_q.get_nowait()()
+        self.assertEqual(overlay._host.passthrough[-1], True)
+
+        layer.show()
+        overlay.sync_host_input_mode()
+        overlay._cmd_q.get_nowait()()
+        self.assertEqual(overlay._host.passthrough[-1], False)
+
+        layer.hide()
+        overlay.sync_host_input_mode()
+        overlay._cmd_q.get_nowait()()
+        self.assertEqual(overlay._host.passthrough[-1], True)
 
     def test_clean_tick_idles_until_next_invalidate(self) -> None:
         class FakeRoot:
@@ -1996,6 +2088,7 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertIs(fake_overlay.created[1].click_through, False)
         self.assertIsNotNone(fake_overlay.created[1].cursor_pos_fn)
         self.assertIsNotNone(fake_overlay.created[1].mouse_button_fn)
+        self.assertFalse(hasattr(fake_overlay.created[1], "proxy_created"))
         self.assertEqual(fake_overlay.created[1].z_order, overlay_mod._BASE_Z + 8)
         self.assertGreater(fake_overlay.passthrough_calls, 0)
         self.assertEqual(set(host._layers), {"canvas:plug/meter", "model3d:plug/avatar"})
@@ -2332,6 +2425,7 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
             self.assertEqual(fake_overlay.created[0].geometry, (11, 22, 20, 10))
             self.assertIs(fake_overlay.created[0].click_through, True)
             self.assertIs(fake_overlay.created[1].click_through, False)
+            self.assertFalse(hasattr(fake_overlay.created[1], "proxy_created"))
             fake_overlay.created[1].mouse_button_fn(0, 1, 0, 10.0, 20.0)
             fake_overlay.created[1].cursor_pos_fn(40.0, 70.0)
             fake_overlay.created[1].mouse_button_fn(0, 0, 0, 40.0, 70.0)

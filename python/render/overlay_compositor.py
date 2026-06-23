@@ -567,17 +567,37 @@ class UnifiedOverlay:
                 self._host.set_capture_mode(exclude)
         self._cmd_q.put(_set)
 
-    def force_host_input_passthrough(self) -> None:
-        """Keep the fullscreen compositor host from becoming a mouse shield.
+    def _has_visible_interactive_layers(self) -> bool:
+        with self._lock:
+            return any(
+                layer.visible and not layer.click_through
+                for layer in self._z_sorted
+            )
 
-        Interactive layers use small Tk input proxies. The OpenGL host itself
-        should always pass mouse input through to the game/desktop.
+    def sync_host_input_mode(self) -> None:
+        """Route input through the single overlay HWND only when needed.
+
+        Plugin layers should not create auxiliary transparent windows just to
+        drag a model/canvas.  When any visible layer is interactive, the host
+        HWND stays input-capable and ``WM_NCHITTEST`` returns ``HTCLIENT`` only
+        for that layer's rectangle; everywhere else remains click-through.
         """
 
         def _set():
             if self._host:
-                self._host.set_input_passthrough(True)
+                self._host.set_input_passthrough(
+                    not self._has_visible_interactive_layers())
         self._cmd_q.put(_set)
+
+    def force_host_input_passthrough(self) -> None:
+        """Compatibility alias for older callers.
+
+        The compositor now prefers host hit-testing for interactive layers, so
+        this keeps the host pass-through only when no visible interactive layer
+        needs it.
+        """
+
+        self.sync_host_input_mode()
 
     # ── Tk callback bridge ───────────────────────────────────
 
