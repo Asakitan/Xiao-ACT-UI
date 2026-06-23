@@ -375,6 +375,7 @@ def test_app_settings_parity() -> None:
             self.seen_reference_context = None
             self.seen_rename_name = None
             self.seen_range_format_range = None
+            self.seen_semantic_range = None
             self.seen_on_type_trigger = None
 
         def provideCompletionItems(self, document, position, token, context):
@@ -490,6 +491,13 @@ def test_app_settings_parity() -> None:
             builder = SemanticTokensBuilder(self.semantic_legend)
             builder.push(0, 0, 6, "function")
             return builder.build("editor-semantic-1")
+
+        def provideDocumentRangeSemanticTokens(
+                self, document, token_range, token):
+            self.seen_semantic_range = token_range
+            builder = SemanticTokensBuilder(self.semantic_legend)
+            builder.push(0, 1, 3, "variable")
+            return builder.build("editor-semantic-range-1")
 
         def provideFoldingRanges(self, document, context, token):
             return [FoldingRange(0, 2, 3)]
@@ -703,6 +711,8 @@ def test_app_settings_parity() -> None:
     lang_api["registerColorProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
+    lang_api["registerDocumentRangeSemanticTokensProvider"](
+        "python", editor_provider, editor_provider.semantic_legend)
     lang_api["registerRenameProvider"]("python", editor_provider)
     tmp_provider_dir = tempfile.mkdtemp()
     try:
@@ -813,6 +823,11 @@ def test_app_settings_parity() -> None:
                  }))
         semantic_tokens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="semanticTokens"))
+        semantic_range_tokens_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="semanticTokensRange", range={
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 6},
+            }))
         prepare_rename_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareRename"))
         rename_result = provider_api.editor_language_provider(
@@ -1014,6 +1029,16 @@ def test_app_settings_parity() -> None:
                .get("resultId") == "editor-semantic-1"
                and semantic_tokens_result.get("tokens", {})
                .get("data") == [0, 0, 6, 0, 0])
+        _check("editor_language_provider serializes range semantic tokens",
+               semantic_range_tokens_result.get("ok") is True
+               and semantic_range_tokens_result.get("legend", {})
+               .get("tokenTypes", [None, None])[1] == "variable"
+               and semantic_range_tokens_result.get("tokens", {})
+               .get("resultId") == "editor-semantic-range-1"
+               and semantic_range_tokens_result.get("tokens", {})
+               .get("data") == [0, 1, 3, 1, 0]
+               and editor_provider.seen_semantic_range is not None
+               and editor_provider.seen_semantic_range.end.character == 6)
         _check("editor_language_provider serializes rename prepare",
                prepare_rename_result.get("ok") is True
                and prepare_rename_result.get("prepareRename", {})
@@ -2203,13 +2228,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editor-color-swatch" in html
            and "editor-color-presentation-menu" in html
            and "function requestEditorSemanticTokens(quiet)" in html
+           and "function editorVisibleRangePayload()" in html
+           and "function editorSemanticTokenFallbackLines(lines,lang,range)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function editorSemanticTokenThemeStyle(token)" in html
            and "function applyExtensionSemanticTokenColors(colors)" in html
            and "function semanticTokenThemeRule(selector,value)" in html
            and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
            and "function scheduleEditorSemanticTokens(delay)" in html
+           and "editorProviderPayload('semanticTokensRange'" in html
            and "editorProviderPayload('semanticTokens'" in html
+           and "_editorSemanticTokensRangeActive" in html
            and "semanticTokenColors" in html
            and "Refresh Semantic Tokens" in html
            and ".sem-function" in html
