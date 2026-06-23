@@ -370,9 +370,20 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps", "state": fps_state}
                 if abs(float(fps_state.get("tick_interval") or 0.0) - (1.0 / 12.0)) > 0.0001:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps_interval", "state": fps_state}
+                twist_action = act_plugin_action(
+                    owner, "script.retarget.set_twist_limit", {"twist_limit": 0.2}, plugin_id=plugin_id)
+                twist_state = _state(twist_action)
+                if abs(float(twist_state.get("retarget_twist_limit") or 0.0) - 0.2) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_retarget_twist_limit",
+                        "state": twist_state,
+                    }
                 state = dict(state)
                 state["animation_fps"] = fps_state.get("animation_fps")
-                state["tick_interval"] = fps_state.get("tick_interval")
+                state["tick_interval"] = twist_state.get("tick_interval")
+                state["retarget_twist_limit"] = twist_state.get("retarget_twist_limit")
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
@@ -425,6 +436,14 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_model3d_node",
                         "overlays": overlays,
                     }
+                retarget = model_node.get("retarget") if isinstance(model_node.get("retarget"), dict) else {}
+                if abs(float(retarget.get("twist_limit") or 0.0) - 0.2) > 0.0001:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_overlay_twist_limit",
+                        "retarget": retarget,
+                    }
                 if callable(get_model_metadata):
                     meta = get_model_metadata(model_node)
                     mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
@@ -466,6 +485,7 @@ def run_selftest() -> dict[str, Any]:
                 "render_count": state.get("render_count"),
                 "spec_build_count": state.get("spec_build_count"),
                 "animation_fps": state.get("animation_fps"),
+                "retarget_twist_limit": state.get("retarget_twist_limit"),
                 "default_vertex_count": state.get("default_vertex_count"),
                 "default_face_count": state.get("default_face_count"),
                 "default_preview_skin_count": state.get("default_preview_skin_count"),
