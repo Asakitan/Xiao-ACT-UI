@@ -359,8 +359,20 @@ def run_selftest() -> dict[str, Any]:
             elif plugin_id == "script_stickwoman_csharp":
                 if state.get("timer_active") is not True or not _plugin_timer_active(manager, plugin_id):
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_timer_active", "state": state}
-                if abs(float(state.get("tick_interval") or 0.0) - 0.05) > 0.0001:
+                default_fps = float(state.get("animation_fps") or 0.0)
+                default_interval = float(state.get("tick_interval") or 0.0)
+                if abs(default_fps - 15.0) > 0.01 or abs(default_interval - (1.0 / 15.0)) > 0.0001:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_tick_interval", "state": state}
+                fps_action = act_plugin_action(
+                    owner, "script.model3d.set_fps", {"fps": 12}, plugin_id=plugin_id)
+                fps_state = _state(fps_action)
+                if abs(float(fps_state.get("animation_fps") or 0.0) - 12.0) > 0.01:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps", "state": fps_state}
+                if abs(float(fps_state.get("tick_interval") or 0.0) - (1.0 / 12.0)) > 0.0001:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "stickwoman_animation_fps_interval", "state": fps_state}
+                state = dict(state)
+                state["animation_fps"] = fps_state.get("animation_fps")
+                state["tick_interval"] = fps_state.get("tick_interval")
                 action = act_plugin_action(
                     owner, "script.avatar.action", {"name": "walk"}, plugin_id=plugin_id)
                 action_state = _state(action)
@@ -395,6 +407,7 @@ def run_selftest() -> dict[str, Any]:
                 state["tick_count"] = action_state.get("tick_count")
                 state["render_count"] = action_state.get("render_count")
                 state["spec_build_count"] = action_state.get("spec_build_count")
+                state["animation_fps"] = action_state.get("animation_fps")
                 overlays = render_overlays(owner, "unioverlay").get("overlays") or []
                 overlay_text = json.dumps(overlays, ensure_ascii=False, sort_keys=True, default=str)
                 if "keyframes" not in overlay_text or '"time"' not in overlay_text:
@@ -452,6 +465,7 @@ def run_selftest() -> dict[str, Any]:
                 "tick_count": state.get("tick_count"),
                 "render_count": state.get("render_count"),
                 "spec_build_count": state.get("spec_build_count"),
+                "animation_fps": state.get("animation_fps"),
                 "default_vertex_count": state.get("default_vertex_count"),
                 "default_face_count": state.get("default_face_count"),
                 "default_preview_skin_count": state.get("default_preview_skin_count"),
