@@ -1179,7 +1179,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "grammarScopes" in html
             and "badges.push('TextMate')" in html
             and "LANGUAGE_BY_EXT" in html
-            and "languageForFileName(name)" in html)
+            and "languageForFileName(name)" in html
+            and "id=\"editor-syntax-highlight\"" in html
+            and "class=\"editor-syntax-layer\"" in html
+            and "function updateEditorSyntaxHighlight()" in html
+            and "function languageHighlightFamily(lang)" in html
+            and "meta.tokenizer==='textmate'||scopes" in html
+            and "wrap.classList.toggle('syntax-on'" in html
+            and "highlightCode(ta.value||'',editorLang)" in html
+            and "syncEditorSyntaxScroll()" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "reset_extension_setting" in html

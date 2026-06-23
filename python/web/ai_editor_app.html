@@ -206,12 +206,21 @@ body.window-resizing * { cursor:inherit !important; }
 
 /* ── Editor ── */
 .editor-area { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
-.editor-container { flex:1; display:flex; overflow:hidden; }
+.editor-container { flex:1; display:flex; overflow:hidden; position:relative; }
 .line-numbers { width:50px; background:var(--bg-editor); color:var(--fg-dim); font:12px/1.5 var(--mono);
   padding:8px 8px 8px 0; text-align:right; overflow:hidden; user-select:none; flex-shrink:0; }
+.editor-syntax-layer { position:absolute; inset:0 0 0 50px; z-index:0; pointer-events:none;
+  background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
+  padding:8px 12px; white-space:pre; overflow:hidden; tab-size:4; }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
-  overflow:auto; caret-color:var(--fg-accent); }
+  overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
+.editor-container.syntax-on .editor-textarea {
+  background:transparent; color:transparent; -webkit-text-fill-color:transparent;
+}
+.editor-container.syntax-on .editor-textarea::placeholder {
+  color:var(--fg-dim); -webkit-text-fill-color:var(--fg-dim);
+}
 .editor-textarea::selection { background:var(--selection); }
 .editor-welcome { display:flex; align-items:center; justify-content:center; flex:1;
   color:var(--fg-dim); font-size:14px; flex-direction:column; gap:12px; }
@@ -364,6 +373,12 @@ pre.code-block code .num { color:var(--fg-num); }
 pre.code-block code .cmt { color:var(--fg-cmt); }
 pre.code-block code .fn { color:var(--fg-fn); }
 pre.code-block code .type { color:var(--fg-type); }
+.editor-syntax-layer .kw { color:var(--fg-kw); }
+.editor-syntax-layer .str { color:var(--fg-str); }
+.editor-syntax-layer .num { color:var(--fg-num); }
+.editor-syntax-layer .cmt { color:var(--fg-cmt); }
+.editor-syntax-layer .fn { color:var(--fg-fn); }
+.editor-syntax-layer .type { color:var(--fg-type); }
 
 /* Chat input */
 .chat-input-area { flex-shrink:0; background:var(--bg); padding:4px 12px; max-width:950px;
@@ -1123,6 +1138,7 @@ pre.code-block { overflow:visible; }
       </div>
       <div class="editor-container" id="editor-container" style="display:none">
         <div class="line-numbers" id="line-nums">1</div>
+        <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <textarea class="editor-textarea" id="editor-text" spellcheck="false" placeholder="// Your code here..."></textarea>
         <div class="editor-line-highlight" id="editor-line-highlight" style="display:none"></div>
         <!-- EDIT-006: Minimap -->
@@ -2373,6 +2389,7 @@ const BUILTIN_LANGUAGE_EXTS={
 
 let _prevLineCount=1;
 function updateLineNums(){
+  scheduleEditorSyntaxHighlight();
   const lines=$('editor-text').value.split('\n').length;
   if(lines===_prevLineCount)return;
   _prevLineCount=lines;
@@ -2518,6 +2535,30 @@ function setEditorLanguage(lang){
   if(meta.grammarScopes&&meta.grammarScopes.length)bits.push('TextMate: '+meta.grammarScopes.join(', '));
   if(meta.extension_id)bits.push('Extension: '+meta.extension_id);
   $('status-language').title=bits.filter(Boolean).join(' · ');
+  scheduleEditorSyntaxHighlight();
+}
+
+let _editorSyntaxRaf=0;
+function scheduleEditorSyntaxHighlight(){
+  if(_editorSyntaxRaf)return;
+  _editorSyntaxRaf=requestAnimationFrame(()=>{
+    _editorSyntaxRaf=0;
+    updateEditorSyntaxHighlight();
+  });
+}
+function syncEditorSyntaxScroll(){
+  const layer=$('editor-syntax-highlight'),ta=$('editor-text');
+  if(!layer||!ta)return;
+  layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
+}
+function updateEditorSyntaxHighlight(){
+  const layer=$('editor-syntax-highlight'),ta=$('editor-text'),wrap=$('editor-container');
+  if(!layer||!ta||!wrap)return;
+  const meta=LANGUAGE_META[editorLang]||{};
+  const enabled=editorLang!=='plaintext'||meta.tokenizer==='textmate'||(meta.grammarScopes&&meta.grammarScopes.length);
+  wrap.classList.toggle('syntax-on',!!enabled);
+  layer.innerHTML=enabled?(highlightCode(ta.value||'',editorLang)||'&nbsp;'):'';
+  syncEditorSyntaxScroll();
 }
 
 // ── Undo / Redo stack for textarea editor ──
@@ -2561,7 +2602,7 @@ _undoPush(true);
 ed.addEventListener('input',_editorInputWithUndo);
 ed.addEventListener('click',updateCursorPos);
 ed.addEventListener('keyup',updateCursorPos);
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;updateCursorPos()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();updateCursorPos()});
 ed.addEventListener('keydown',function(e){
   // Ctrl+Z → Undo
   if(e.key==='z'&&e.ctrlKey&&!e.shiftKey){e.preventDefault();editorUndo();return}
@@ -2794,17 +2835,55 @@ window.showLanguagePicker=showLanguagePicker;window.filterLanguages=filterLangua
 // ── Syntax highlighting ──
 const KW_PY=new Set('def class import from return if elif else for while try except finally with as yield async await lambda pass break continue raise True False None and or not in is'.split(' '));
 const KW_JS=new Set('function const let var return if else for while try catch finally async await class import export from new this true false null undefined typeof instanceof switch case break default throw yield of in'.split(' '));
+const KW_CLIKE=new Set('if else for while do switch case break continue return class struct enum namespace using public private protected static const void int long float double bool true false null new try catch throw async await'.split(' '));
+const KW_SHELL=new Set('if then else elif fi for while do done case esac function in export local return true false'.split(' '));
+const KW_SQL=new Set('select from where join left right inner outer on group by order having insert update delete create alter drop table index view values into and or not null as limit offset'.split(' '));
+const KW_GENERIC=new Set('if else for while return class function import export from let const var true false null none nil async await try catch except finally'.split(' '));
+
+function languageHighlightFamily(lang){
+  const id=String(lang||'').toLowerCase();
+  const mapped=LANGUAGE_META[id]?id:(LANGUAGE_BY_EXT[normalizeLanguageExt(id)]||id);
+  const meta=LANGUAGE_META[mapped]||{};
+  const scopes=(meta.grammarScopes||[]).join(' ').toLowerCase();
+  const hay=[id,mapped,meta.name||'',meta.tokenizer||'',scopes].join(' ').toLowerCase();
+  if(/python/.test(hay))return 'python';
+  if(/typescript|javascript|ecmascript|jsx|tsx|node/.test(hay))return 'javascript';
+  if(/\bjson\b/.test(hay))return 'json';
+  if(/html|xml/.test(hay))return 'html';
+  if(/css|scss|sass|less/.test(hay))return 'css';
+  if(/markdown|mdown/.test(hay))return 'markdown';
+  if(/yaml|toml/.test(hay))return 'config';
+  if(/shell|bash|powershell|bat/.test(hay))return 'shell';
+  if(/sql/.test(hay))return 'sql';
+  if(/\b(cpp|c\+\+|csharp|java|go|rust|source\.c)\b/.test(hay))return 'clike';
+  if(meta.tokenizer==='textmate'||scopes)return 'textmate';
+  return 'plaintext';
+}
+function highlightRegex(code,kws,commentPattern){
+  const cmt=commentPattern||'#[^\\n]*|\\/\\/[^\\n]*';
+  const source="(\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(\\b\\d[\\d.xXa-fA-F_]*\\b)|("+cmt+")|(\\b[A-Za-z_]\\w*\\b)";
+  const rx=new RegExp(source,'g');
+  return code.replace(rx,(m,str,num,cmt,word)=>{
+    if(str)return '<span class="str">'+esc(str)+'</span>';
+    if(num)return '<span class="num">'+esc(num)+'</span>';
+    if(cmt)return '<span class="cmt">'+esc(cmt)+'</span>';
+    if(word&&kws.has(word.toLowerCase()))return '<span class="kw">'+esc(word)+'</span>';
+    return esc(m);
+  });
+}
 
 function highlightCode(code,lang){
-  const kws=(lang==='python'||lang==='py')?KW_PY:KW_JS;
-  return code.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d[\d.xXa-fA-F_]*\b)|(#[^\n]*|\/\/[^\n]*)|(\b\w+\b)/g,
-    (m,str,num,cmt,word)=>{
-      if(str) return '<span class="str">'+esc(str)+'</span>';
-      if(num) return '<span class="num">'+esc(num)+'</span>';
-      if(cmt) return '<span class="cmt">'+esc(cmt)+'</span>';
-      if(word&&kws.has(word)) return '<span class="kw">'+esc(word)+'</span>';
-      return esc(m);
-    });
+  const family=languageHighlightFamily(lang);
+  if(family==='plaintext')return esc(code);
+  if(family==='html')return esc(code).replace(/(&lt;!--[\s\S]*?--&gt;)/g,'<span class="cmt">$1</span>').replace(/(&lt;\/?[\w:-]+)([^&]*?)(&gt;)/g,'<span class="kw">$1</span>$2<span class="kw">$3</span>');
+  if(family==='json'||family==='config')return highlightRegex(code,KW_GENERIC,'#[^\\n]*|\\/\\/[^\\n]*');
+  if(family==='shell')return highlightRegex(code,KW_SHELL,'#[^\\n]*');
+  if(family==='sql')return highlightRegex(code,KW_SQL,'--[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/');
+  if(family==='clike')return highlightRegex(code,KW_CLIKE,'\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/');
+  if(family==='python')return highlightRegex(code,KW_PY,'#[^\\n]*');
+  if(family==='javascript')return highlightRegex(code,KW_JS,'\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/');
+  if(family==='markdown')return esc(code).replace(/(^|\\n)(#{1,6}\\s.*)/g,(m,p,h)=>p+'<span class="kw">'+h+'</span>').replace(/(`[^`]+`)/g,'<span class="str">$1</span>');
+  return highlightRegex(code,KW_GENERIC);
 }
 
 // ── Thinking block ──
