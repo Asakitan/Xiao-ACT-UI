@@ -154,6 +154,7 @@ _AI_EDITOR_SECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "allowed_publishers": [],
         "blocked_publishers": [],
         "enabled_contributions": ["chatParticipants", "languageModelTools", "commands", "views"],
+        "diagnostics_enabled": False,
     },
     "customization": {
         "instructions_locations": [".sao/instructions.md", ".sao/instructions"],
@@ -1467,6 +1468,17 @@ class AIEditorAPI:
                 self._sync_settings_to_node_host()
             except Exception:
                 pass
+
+    def _extension_diagnostics_enabled(self) -> bool:
+        settings = _resolve_settings(self._gui_ref)
+        ai_cfg = {}
+        if settings:
+            ai_cfg = _normalize_ai_editor_config(
+                settings.get("ai_editor", {}) or {})
+        ext_cfg = ai_cfg.get("extensions", {}) if isinstance(ai_cfg, dict) else {}
+        return bool(
+            isinstance(ext_cfg, dict)
+            and ext_cfg.get("diagnostics_enabled") is True)
 
     def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
         settings = _resolve_settings(self._gui_ref)
@@ -4877,6 +4889,7 @@ class AIEditorAPI:
             script_path=script_path,
             ui_bridge=ui_bridge,
         )
+        host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
         host.set_command_service(self._ext_host.commands)
         host.on_tree_event(self._handle_node_tree_event)
 
@@ -4922,6 +4935,7 @@ class AIEditorAPI:
         if not settings:
             return
         try:
+            host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
             # Build a flat section dict from all known settings
             raw: Dict[str, Any] = {}
             # Expose the full ai_editor config as a section
@@ -5797,6 +5811,39 @@ class AIEditorAPI:
         return {
             "summary": self._ext_host.get_contributes_summary(),
             "contributions": contributions,
+        }
+
+    def get_extension_host_diagnostics(self, reset: bool = False) -> Dict:
+        """Return lightweight Node extension host request diagnostics."""
+        host = getattr(self, "_node_ext_host", None)
+        if host is None:
+            return {
+                "enabled": self._extension_diagnostics_enabled(),
+                "running": False,
+                "activated": 0,
+                "pending": {"commands": 0, "tree": 0, "language": 0},
+                "categories": {},
+            }
+        if reset:
+            host.reset_diagnostics()
+        return host.diagnostics_snapshot()
+
+    def set_extension_host_diagnostics(self, enabled: bool) -> Dict:
+        """Persist and apply the default-off Node extension diagnostics flag."""
+        settings = _resolve_settings(self._gui_ref)
+        current = settings.get("ai_editor", {}) if settings else self.load_config()
+        normalized = _normalize_ai_editor_config(current or {})
+        ext_cfg = dict(normalized.get("extensions", {}) or {})
+        ext_cfg["diagnostics_enabled"] = bool(enabled)
+        merged = self._save_config_patch({"extensions": ext_cfg})
+        host = getattr(self, "_node_ext_host", None)
+        if host is not None:
+            host.set_diagnostics_enabled(bool(enabled))
+        return {
+            "ok": True,
+            "enabled": bool(enabled),
+            "extensions": merged.get("extensions", {}),
+            "diagnostics": self.get_extension_host_diagnostics(),
         }
 
     def get_extension_settings(self, ext_id: str = "") -> Dict:

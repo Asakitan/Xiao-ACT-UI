@@ -1573,6 +1573,9 @@ class NodeExtensionHost:
         self._command_service: Optional[CommandService] = None
         self._command_request_lock = threading.Lock()
         self._command_requests: Dict[str, Dict[str, Any]] = {}
+        self._diagnostics_enabled = False
+        self._diagnostics_lock = threading.Lock()
+        self._diagnostics: Dict[str, Dict[str, Any]] = {}
         self._on_activated_callbacks: List[Callable[[str], None]] = []
         self._on_error_callbacks: List[Callable[[str, str], None]] = []
         self._on_config_set_callbacks: List[
@@ -1872,17 +1875,23 @@ class NodeExtensionHost:
             args = msg.get("args") or []
             if not isinstance(args, list):
                 args = [args]
+            started = time.perf_counter()
+            ok = False
+            timed_out = False
+            error = ""
             if not self._command_service:
+                error = "Command service is not available"
                 if request_id:
                     self._send({
                         "type": "execute_command_response",
                         "requestId": request_id,
                         "ok": False,
-                        "error": "Command service is not available",
+                        "error": error,
                     })
             else:
                 try:
                     value = self._command_service.execute(command_id, *args)
+                    ok = True
                     if request_id:
                         self._send({
                             "type": "execute_command_response",
@@ -1891,13 +1900,32 @@ class NodeExtensionHost:
                             "value": value,
                         })
                 except Exception as exc:
+                    error = str(exc)
                     if request_id:
                         self._send({
                             "type": "execute_command_response",
                             "requestId": request_id,
                             "ok": False,
-                            "error": str(exc),
+                            "error": error,
                         })
+            self._record_diagnostic(
+                "python_command",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=command_id,
+                error=error,
+            )
+
+        elif msg_type == "diagnostic_event":
+            self._record_diagnostic(
+                str(msg.get("category", "node")),
+                float(msg.get("elapsedMs") or 0),
+                ok=bool(msg.get("ok", True)),
+                timeout=bool(msg.get("timeout", False)),
+                detail=str(msg.get("detail", "")),
+                error=str(msg.get("error", "")),
+            )
 
         elif msg_type == "output":
             channel = str(
@@ -2050,11 +2078,19 @@ class NodeExtensionHost:
             self, command_id: str, args: Optional[List[Any]] = None,
             default: Any = None, timeout: float = 3.0) -> Dict[str, Any]:
         """Synchronously execute a Node-registered command and return its result."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
         if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "command", 0, ok=False, detail=str(command_id or ""),
+                error=error)
             return {
                 "ok": False,
                 "value": default,
-                "error": "Node extension host is not running",
+                "error": error,
             }
         request_id = str(uuid.uuid4())
         event = threading.Event()
@@ -2068,36 +2104,49 @@ class NodeExtensionHost:
                 "args": list(args or []),
             })
             if not sent:
+                error = "Node command request could not be sent"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node command request could not be sent",
+                    "error": error,
                 }
             if not event.wait(timeout):
+                timed_out = True
+                error = "Node command request timed out"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node command request timed out",
+                    "error": error,
                     "timeout": True,
                 }
             with self._command_request_lock:
                 pending = self._command_requests.get(request_id, {})
             response = pending.get("response", {})
             if isinstance(response, dict) and response.get("ok"):
+                ok = True
                 return {
                     "ok": True,
                     "value": response.get("value", default),
                 }
+            error = (
+                response.get("error")
+                if isinstance(response, dict) else "Node command failed")
             return {
                 "ok": False,
                 "value": default,
-                "error": (
-                    response.get("error")
-                    if isinstance(response, dict) else "Node command failed"),
+                "error": error,
             }
         finally:
             with self._command_request_lock:
                 self._command_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "command",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=str(command_id or ""),
+                error=error,
+            )
 
     def request_tree_data(
             self, view_id: str, op: str, element_handle: str = "",
@@ -2111,11 +2160,19 @@ class NodeExtensionHost:
             self, view_id: str, op: str, element_handle: str = "",
             default: Any = None, timeout: float = 0.85) -> Dict[str, Any]:
         """Return a structured Node TreeDataProvider request result."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        detail = f"{view_id}:{op}"
         if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "tree", 0, ok=False, detail=detail, error=error)
             return {
                 "ok": False,
                 "value": default,
-                "error": "Node extension host is not running",
+                "error": error,
             }
         request_id = str(uuid.uuid4())
         event = threading.Event()
@@ -2130,36 +2187,49 @@ class NodeExtensionHost:
                 "elementHandle": str(element_handle or ""),
             })
             if not sent:
+                error = "Node tree provider request could not be sent"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node tree provider request could not be sent",
+                    "error": error,
                 }
             if not event.wait(timeout):
+                timed_out = True
+                error = "Node tree provider request timed out"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node tree provider request timed out",
+                    "error": error,
                     "timeout": True,
                 }
             with self._tree_request_lock:
                 pending = self._tree_requests.get(request_id, {})
             response = pending.get("response", {})
             if isinstance(response, dict) and response.get("ok"):
+                ok = True
                 return {
                     "ok": True,
                     "value": response.get("value", default),
                 }
+            error = (
+                response.get("error")
+                if isinstance(response, dict) else "Node tree provider failed")
             return {
                 "ok": False,
                 "value": default,
-                "error": (
-                    response.get("error")
-                    if isinstance(response, dict) else "Node tree provider failed"),
+                "error": error,
             }
         finally:
             with self._tree_request_lock:
                 self._tree_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "tree",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=detail,
+                error=error,
+            )
 
     def request_language_provider(
             self, payload: Dict[str, Any], default: Any = None,
@@ -2173,11 +2243,19 @@ class NodeExtensionHost:
             self, payload: Dict[str, Any], default: Any = None,
             timeout: float = 0.85) -> Dict[str, Any]:
         """Return a structured Node language-provider request result."""
+        started = time.perf_counter()
+        ok = False
+        timed_out = False
+        error = ""
+        kind = str((payload or {}).get("kind", ""))
         if not self.is_running:
+            error = "Node extension host is not running"
+            self._record_diagnostic(
+                "language", 0, ok=False, detail=kind, error=error)
             return {
                 "ok": False,
                 "value": default,
-                "error": "Node extension host is not running",
+                "error": error,
             }
         request_id = str(uuid.uuid4())
         event = threading.Event()
@@ -2191,37 +2269,50 @@ class NodeExtensionHost:
             msg.update(dict(payload or {}))
             sent = self._send(msg)
             if not sent:
+                error = "Node language provider request could not be sent"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node language provider request could not be sent",
+                    "error": error,
                 }
             if not event.wait(timeout):
+                timed_out = True
+                error = "Node language provider request timed out"
                 return {
                     "ok": False,
                     "value": default,
-                    "error": "Node language provider request timed out",
+                    "error": error,
                     "timeout": True,
                 }
             with self._language_request_lock:
                 pending = self._language_requests.get(request_id, {})
             response = pending.get("response", {})
             if isinstance(response, dict) and response.get("ok"):
+                ok = True
                 return {
                     "ok": True,
                     "value": response.get("value", default),
                 }
+            error = (
+                response.get("error")
+                if isinstance(response, dict)
+                else "Node language provider failed")
             return {
                 "ok": False,
                 "value": default,
-                "error": (
-                    response.get("error")
-                    if isinstance(response, dict)
-                    else "Node language provider failed"),
+                "error": error,
             }
         finally:
             with self._language_request_lock:
                 self._language_requests.pop(request_id, None)
+            self._record_diagnostic(
+                "language",
+                (time.perf_counter() - started) * 1000,
+                ok=ok,
+                timeout=timed_out,
+                detail=kind,
+                error=error,
+            )
 
     def send_tree_view_event(
             self, view_id: str, event: str, element: Any = None,
@@ -2281,7 +2372,89 @@ class NodeExtensionHost:
         """Return registered language provider capabilities from Node."""
         return list(self._language_providers)
 
+    def set_diagnostics_enabled(self, enabled: bool) -> None:
+        """Enable lightweight in-memory request diagnostics."""
+        self._diagnostics_enabled = bool(enabled)
+
+    def diagnostics_enabled(self) -> bool:
+        return self._diagnostics_enabled
+
+    def reset_diagnostics(self) -> None:
+        with self._diagnostics_lock:
+            self._diagnostics.clear()
+
+    def diagnostics_snapshot(self) -> Dict[str, Any]:
+        with self._diagnostics_lock:
+            categories = {
+                name: self._diagnostic_snapshot_for(data)
+                for name, data in self._diagnostics.items()
+            }
+        return {
+            "enabled": self._diagnostics_enabled,
+            "running": self.is_running,
+            "activated": len(self._activated_ids),
+            "pending": {
+                "commands": len(self._command_requests),
+                "tree": len(self._tree_requests),
+                "language": len(self._language_requests),
+            },
+            "categories": categories,
+        }
+
     # -- Private helpers -----------------------------------------------------
+
+    def _record_diagnostic(
+            self, category: str, elapsed_ms: float, ok: bool = True,
+            timeout: bool = False, detail: str = "",
+            error: str = "") -> None:
+        if not self._diagnostics_enabled:
+            return
+        name = str(category or "node")
+        try:
+            elapsed = float(elapsed_ms)
+        except Exception:
+            elapsed = 0.0
+        with self._diagnostics_lock:
+            data = self._diagnostics.setdefault(name, {
+                "count": 0,
+                "ok": 0,
+                "errors": 0,
+                "timeouts": 0,
+                "total_ms": 0.0,
+                "max_ms": 0.0,
+                "last_ms": 0.0,
+                "last_detail": "",
+                "last_error": "",
+            })
+            data["count"] += 1
+            if ok:
+                data["ok"] += 1
+            else:
+                data["errors"] += 1
+            if timeout:
+                data["timeouts"] += 1
+            data["total_ms"] += max(0.0, elapsed)
+            data["last_ms"] = max(0.0, elapsed)
+            data["max_ms"] = max(float(data.get("max_ms") or 0), elapsed)
+            data["last_detail"] = str(detail or "")[:200]
+            data["last_error"] = str(error or "")[:300]
+
+    @staticmethod
+    def _diagnostic_snapshot_for(data: Dict[str, Any]) -> Dict[str, Any]:
+        count = int(data.get("count") or 0)
+        total = float(data.get("total_ms") or 0.0)
+        avg = total / count if count else 0.0
+        return {
+            "count": count,
+            "ok": int(data.get("ok") or 0),
+            "errors": int(data.get("errors") or 0),
+            "timeouts": int(data.get("timeouts") or 0),
+            "avg_ms": round(avg, 3),
+            "max_ms": round(float(data.get("max_ms") or 0.0), 3),
+            "last_ms": round(float(data.get("last_ms") or 0.0), 3),
+            "last_detail": data.get("last_detail", ""),
+            "last_error": data.get("last_error", ""),
+        }
 
     def _resolve_node(self) -> Optional[str]:
         """Find the node executable: explicit path, then PATH lookup."""

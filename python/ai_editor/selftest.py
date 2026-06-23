@@ -338,6 +338,7 @@ def test_app_settings_parity() -> None:
         "get_extension_contributions",
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
+        "get_extension_host_diagnostics", "set_extension_host_diagnostics",
         "list_editor_languages", "list_editor_grammars",
         "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
@@ -2588,6 +2589,12 @@ console.log("frontend auto-close behavior ok");
     ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
     _check("extension views contribution remains enabled for old settings",
            "views" in ext_defaults._enabled_extension_contributions())
+    diag_settings_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    diag_result = diag_settings_api.set_extension_host_diagnostics(True)
+    diag_loaded = diag_settings_api.load_config()
+    _check("extension host diagnostics setting persists",
+           diag_result.get("ok") is True
+           and diag_loaded.get("extensions", {}).get("diagnostics_enabled") is True)
 
 
 def test_tool_registry() -> None:
@@ -6267,6 +6274,8 @@ module.exports = { activate, deactivate };
             )
             previous_node_host = api._node_ext_host
             api._node_ext_host = node_host
+            node_diag_initial = node_host.diagnostics_snapshot()
+            node_host.set_diagnostics_enabled(True)
             node_host.set_command_service(api._ext_host.commands)
             node_host.on_tree_event(api._handle_node_tree_event)
             python_echo_dispose = api._ext_host.commands.register(
@@ -6277,6 +6286,17 @@ module.exports = { activate, deactivate };
                 })
             try:
                 node_started = node_host.start()
+                if node_started:
+                    node_host.send_settings_sync({
+                        "ai_editor": {
+                            "extensions": {
+                                "diagnostics_enabled": True,
+                            },
+                        },
+                        "extensions": {
+                            "diagnostics_enabled": True,
+                        },
+                    })
                 sent = node_host.activate(node_tree_tmp, node_tree_desc.id, {
                     "name": node_tree_desc.name,
                     "publisher": node_tree_desc.publisher,
@@ -6747,6 +6767,18 @@ module.exports = { activate, deactivate };
                     timeout=3.0)
                 _check("node host tree view events and item actions receive JS element",
                        action_result.get("ok") is True and output_seen)
+                node_diagnostics = node_host.diagnostics_snapshot()
+                node_diag_categories = node_diagnostics.get("categories", {})
+                _check("node host diagnostics are default-off and record enabled probes",
+                       node_diag_initial.get("enabled") is False
+                       and node_diagnostics.get("enabled") is True
+                       and node_diag_categories.get("command", {}).get("count", 0) >= 3
+                       and node_diag_categories.get("python_command", {}).get("count", 0) >= 1
+                       and node_diag_categories.get("language", {}).get("count", 0) >= 5
+                       and node_diag_categories.get("tree", {}).get("count", 0) >= 1
+                       and node_diag_categories.get("workspace.applyEdit", {}).get("count", 0) >= 2
+                       and node_diag_categories.get("workspace.findFiles", {}).get("count", 0) >= 1,
+                       json.dumps(node_diagnostics, ensure_ascii=False))
             finally:
                 api._vscode_ns.set_language_provider_request_callback(None)
                 try:

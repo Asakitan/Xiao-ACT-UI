@@ -844,6 +844,46 @@ function _deserializeArgFromPython(value) {
     return value;
 }
 
+function _extensionDiagnosticsEnabled() {
+    const direct = _settings && _settings.extensions;
+    const nested = _settings && _settings.ai_editor && _settings.ai_editor.extensions;
+    return !!(
+        (direct && direct.diagnostics_enabled === true)
+        || (nested && nested.diagnostics_enabled === true)
+    );
+}
+
+function _sendDiagnosticEvent(category, startedAt, ok, detail, error) {
+    if (!_extensionDiagnosticsEnabled()) return;
+    send({
+        type: 'diagnostic_event',
+        category,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        ok: !!ok,
+        detail: detail === undefined || detail === null ? '' : String(detail).slice(0, 200),
+        error: error ? String(error).slice(0, 300) : '',
+    });
+}
+
+async function _diagnoseAsync(category, detail, fn) {
+    if (!_extensionDiagnosticsEnabled()) return fn();
+    const startedAt = Date.now();
+    try {
+        const value = await fn();
+        _sendDiagnosticEvent(category, startedAt, true, detail, '');
+        return value;
+    } catch (err) {
+        _sendDiagnosticEvent(
+            category,
+            startedAt,
+            false,
+            detail,
+            err && err.message ? err.message : String(err),
+        );
+        throw err;
+    }
+}
+
 function _executePythonCommand(commandId, args) {
     const requestId = `pycmd-${_nextPythonCommandRequestHandle++}`;
     return new Promise((resolve, reject) => {
@@ -1247,6 +1287,15 @@ function _workspaceEditUri(entry) {
 function _workspaceEditTargetUri(entry) {
     return _workspaceUriFromInput(entry && (
         entry.newUri || entry.target || entry.to || entry.newResource || entry.destination));
+}
+
+function _workspaceOpenDetail(uriOrPath) {
+    if (uriOrPath && typeof uriOrPath === 'object'
+        && !(uriOrPath instanceof Uri)
+        && (uriOrPath.content !== undefined || uriOrPath.language !== undefined)) {
+        return `untitled:${uriOrPath.language || 'plaintext'}`;
+    }
+    return _workspaceRelativePath(uriOrPath);
 }
 
 async function _workspacePathExists(fsPath) {
@@ -1795,25 +1844,61 @@ function buildVscodeModule(extDesc, extensionPath) {
             get rootPath() { return _workspaceRoot; },
             get textDocuments() { return Array.from(_workspaceTextDocuments.values()); },
             fs: {
-                readFile: (uri) => fsp.readFile(uri.fsPath),
-                writeFile: (uri, content) => fsp.writeFile(uri.fsPath, content),
-                stat: (uri) => fsp.stat(uri.fsPath).then(s => ({ type: s.isDirectory() ? 2 : 1, size: s.size, ctime: s.ctimeMs, mtime: s.mtimeMs })),
-                readDirectory: (uri) => fsp.readdir(uri.fsPath, { withFileTypes: true }).then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1])),
-                createDirectory: (uri) => fsp.mkdir(uri.fsPath, { recursive: true }),
-                delete: (uri) => fsp.rm(uri.fsPath, { force: true }),
-                rename: (src, dst) => fsp.rename(src.fsPath, dst.fsPath),
-                copy: (src, dst) => fsp.copyFile(src.fsPath, dst.fsPath),
+                readFile: (uri) => _diagnoseAsync(
+                    'workspace.fs.readFile', _workspaceRelativePath(uri),
+                    () => fsp.readFile(uri.fsPath)),
+                writeFile: (uri, content) => _diagnoseAsync(
+                    'workspace.fs.writeFile', _workspaceRelativePath(uri),
+                    () => fsp.writeFile(uri.fsPath, content)),
+                stat: (uri) => _diagnoseAsync(
+                    'workspace.fs.stat', _workspaceRelativePath(uri),
+                    () => fsp.stat(uri.fsPath).then(s => ({
+                        type: s.isDirectory() ? 2 : 1,
+                        size: s.size,
+                        ctime: s.ctimeMs,
+                        mtime: s.mtimeMs,
+                    }))),
+                readDirectory: (uri) => _diagnoseAsync(
+                    'workspace.fs.readDirectory', _workspaceRelativePath(uri),
+                    () => fsp.readdir(uri.fsPath, { withFileTypes: true })
+                        .then(ents => ents.map(e => [e.name, e.isDirectory() ? 2 : 1]))),
+                createDirectory: (uri) => _diagnoseAsync(
+                    'workspace.fs.createDirectory', _workspaceRelativePath(uri),
+                    () => fsp.mkdir(uri.fsPath, { recursive: true })),
+                delete: (uri) => _diagnoseAsync(
+                    'workspace.fs.delete', _workspaceRelativePath(uri),
+                    () => fsp.rm(uri.fsPath, { force: true })),
+                rename: (src, dst) => _diagnoseAsync(
+                    'workspace.fs.rename',
+                    `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
+                    () => fsp.rename(src.fsPath, dst.fsPath)),
+                copy: (src, dst) => _diagnoseAsync(
+                    'workspace.fs.copy',
+                    `${_workspaceRelativePath(src)} -> ${_workspaceRelativePath(dst)}`,
+                    () => fsp.copyFile(src.fsPath, dst.fsPath)),
             },
             onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
             onDidChangeWorkspaceFolders: new EventEmitter().event,
             findFiles(include, exclude, maxResults) {
-                return _workspaceFindFiles(include, exclude, maxResults);
+                return _diagnoseAsync(
+                    'workspace.findFiles',
+                    _workspacePatternText(include),
+                    () => _workspaceFindFiles(include, exclude, maxResults),
+                );
             },
             applyEdit(edit) {
-                return _workspaceApplyEdit(edit);
+                return _diagnoseAsync(
+                    'workspace.applyEdit',
+                    String(_workspaceEditEntries(edit).length),
+                    () => _workspaceApplyEdit(edit),
+                );
             },
             openTextDocument(uriOrPath) {
-                return _workspaceOpenTextDocument(uriOrPath);
+                return _diagnoseAsync(
+                    'workspace.openTextDocument',
+                    _workspaceOpenDetail(uriOrPath),
+                    () => _workspaceOpenTextDocument(uriOrPath),
+                );
             },
             asRelativePath(pathOrUri, includeWorkspaceFolder) {
                 return _workspaceRelativePath(pathOrUri, includeWorkspaceFolder);
