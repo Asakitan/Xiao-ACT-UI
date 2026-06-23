@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import os
 import tempfile
@@ -38,6 +39,57 @@ def _wait_until(predicate, timeout: float = 2.0) -> bool:
             return True
         time.sleep(0.05)
     return predicate()
+
+
+def _extract_js_function(html: str, name: str) -> str:
+    marker = f"function {name}("
+    start = html.find(marker)
+    if start < 0:
+        raise ValueError(f"Missing JS function: {name}")
+    brace = html.find("{", start)
+    if brace < 0:
+        raise ValueError(f"Missing JS function body: {name}")
+    depth = 0
+    in_quote = ""
+    escaped = False
+    in_line_comment = False
+    in_block_comment = False
+    for index in range(brace, len(html)):
+        ch = html[index]
+        nxt = html[index + 1] if index + 1 < len(html) else ""
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+            continue
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+            continue
+        if escaped:
+            escaped = False
+            continue
+        if in_quote:
+            if ch == "\\":
+                escaped = True
+            elif ch == in_quote:
+                in_quote = ""
+            continue
+        if ch in ("'", '"', "`"):
+            in_quote = ch
+            continue
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:index + 1]
+    raise ValueError(f"Unterminated JS function: {name}")
 
 
 def test_imports() -> None:
@@ -1262,6 +1314,98 @@ def test_phase1_ai_editor_regressions() -> None:
             and "icon.uri||icon.iconUri" in html
             and "function iconThemeFileGlyph(name,language)" in html
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
+    try:
+        from ai_editor.node_runtime import get_node_path
+        node_path = get_node_path()
+    except Exception:
+        node_path = ""
+    if not node_path:
+        _check("frontend auto-close notIn behavior skipped without Node.js", True)
+    else:
+        function_names = [
+            "languageConfiguration",
+            "languagePairArray",
+            "normalizeLanguagePairs",
+            "languageCommentTokens",
+            "languageAutoClosingPairs",
+            "languageSurroundingPairs",
+            "editorLineSpanAt",
+            "editorLineStringScopes",
+            "editorRegexScopes",
+            "editorBlockCommentOpenAt",
+            "languageGrammarTokenTypes",
+            "editorRegexLikeLanguage",
+            "editorTokenContextAt",
+            "editorContextScopesAt",
+            "autoClosingPairBlockedByContext",
+            "autoClosingPairForKey",
+        ]
+        js_functions = "\n".join(
+            _extract_js_function(html, name) for name in function_names)
+        js = r"""
+const LANGUAGE_META = Object.create(null);
+LANGUAGE_META.javascript = {
+  configuration: {
+    comments: { lineComment: "//", blockComment: ["/*", "*/"] },
+    autoClosingPairs: [
+      { open: "\"", close: "\"", notIn: ["string", "comment"] },
+      { open: "/", close: "/", notIn: ["string", "comment", "regex"] },
+      { open: "(", close: ")", notIn: [] }
+    ],
+    surroundingPairs: [["(", ")"]]
+  },
+  tokenizer: "textmate",
+  grammarScopes: ["source.js"],
+  grammars: [{ tokenTypes: { "string.quoted.double.js": "string", "comment.line.double-slash.js": "comment" } }]
+};
+const BUILTIN_LANGUAGE_COMMENTS = {};
+const DEFAULT_AUTO_CLOSING_PAIRS = [{open:"(",close:")"},{open:"\"",close:"\""}];
+function languageHighlightFamily(lang){ return lang === "javascript" ? "javascript" : "plaintext"; }
+""" + js_functions + r"""
+function assert(ok, label){ if(!ok){ throw new Error(label); } }
+let value = "const s = ";
+assert(autoClosingPairForKey("javascript", "\"", value, value.length, false).open === "\"", "quote closes in normal code");
+value = "const s = \"abc";
+assert(autoClosingPairForKey("javascript", "\"", value, value.length, false) === null, "quote suppressed inside string");
+value = "// comment ";
+assert(autoClosingPairForKey("javascript", "\"", value, value.length, false) === null, "quote suppressed inside line comment");
+value = "/* block comment ";
+assert(autoClosingPairForKey("javascript", "\"", value, value.length, false) === null, "quote suppressed inside block comment");
+value = "const r = ";
+assert(autoClosingPairForKey("javascript", "/", value, value.length, false).open === "/", "slash closes outside regex");
+value = "const r = /abc";
+const regexContext = editorTokenContextAt("javascript", value, value.length);
+assert(regexContext.scopes.has("regex"), "regex scope detected");
+assert(regexContext.source.indexOf("textmate-hints") === 0, "TextMate grammar hints retained");
+assert((regexContext.grammarTokenTypes.string || []).includes("string.quoted.double.js"), "grammar token type hints retained");
+assert(autoClosingPairForKey("javascript", "/", value, value.length, false) === null, "slash suppressed inside regex");
+console.log("frontend auto-close behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check("frontend auto-close notIn behavior",
+                   result.returncode == 0 and "frontend auto-close behavior ok" in result.stdout,
+                   (result.stderr or result.stdout).strip())
+        except Exception as exc:
+            _check("frontend auto-close notIn behavior", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "reset_extension_setting" in html

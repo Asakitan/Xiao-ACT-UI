@@ -2559,7 +2559,7 @@ function editorRegexScopes(prefix,lineComment){
       if(next==='/'||next==='*')continue;
       const before=text.slice(0,i).trimEnd(),prev=before.slice(-1);
       const keyword=/\b(return|case|throw|typeof|delete|void|yield|await|in|of)$/.test(before);
-      if(!before||keyword||/[({\[\]=:;,!?&|+\-*~%^<>]/.test(prev))inRegex=true;
+      if(!before||keyword||'({[=:;,!?&|+-*~%^<>'.includes(prev))inRegex=true;
     }
   }
   return inRegex?['regex']:[];
