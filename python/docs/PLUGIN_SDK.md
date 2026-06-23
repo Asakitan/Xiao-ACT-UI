@@ -126,6 +126,16 @@ my_plugin/
       "default": 5,
       "description": "刷新间隔（秒）"
     },
+    "detail_mode": {
+      "type": "string",
+      "default": "seconds",
+      "enum": ["seconds", "minute"],
+      "enum_labels": {
+        "seconds": "秒级刷新",
+        "minute": "分钟刷新"
+      },
+      "description": "刷新细节"
+    },
     "api_key": {
       "type": "string",
       "default": "",
@@ -152,6 +162,13 @@ my_plugin/
       "settings_schema": {
         "sound_enabled": {
           "description": "Enable sound effects"
+        },
+        "detail_mode": {
+          "description": "Refresh detail",
+          "enum_labels": {
+            "seconds": "Seconds",
+            "minute": "Minute"
+          }
         }
       }
     }
@@ -184,9 +201,9 @@ my_plugin/
 - `sao_menu`：`name`、`category`、`title`、`label`、`script_label`、`toggle_label`、`enable_label`、`disable_label`
 - `sao_menu.actions`：按 `id` 覆盖 `label`、`title`、`description`、`tooltip`
 - `capabilities`：按 `id` 覆盖 `label`、`title`、`description`、`display_name`、`render_hint`
-- `settings_schema`：按设置 key 覆盖 `label`、`title`、`description`、`help`、`tooltip`、`placeholder`、`unit`、`prefix`、`suffix`
+- `settings_schema`：按设置 key 覆盖 `label`、`title`、`description`、`help`、`tooltip`、`placeholder`、`unit`、`prefix`、`suffix`；设置项里的 `options`/`choices` 可按既有 `id`/`value` 覆盖选项 `label`、`title`、`description`、`help`、`tooltip`，`enum_labels`/`value_labels` 可按既有枚举值覆盖显示文案
 
-不会从 locale 覆盖新增/删除 action、capability 或 setting，也不会覆盖 `enabled`、`default`、`type`、`priority`、`surface`、`action_id`、坐标、权限等行为字段。这样菜单和设置可以即时切换语言，同时避免翻译文件改变插件加载、开关或权限语义。
+不会从 locale 覆盖新增/删除 action、capability、setting 或 setting option，也不会覆盖 `enabled`、`default`、`type`、`enum`、`priority`、`surface`、`action_id`、坐标、权限、选项 `value` 等行为字段。这样菜单和设置可以即时切换语言，同时避免翻译文件改变插件加载、开关或权限语义。
 
 ### capabilities 详解
 

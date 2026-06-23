@@ -65,6 +65,20 @@ def _write_script_menu_plugin(root: str) -> str:
             "enabled": False,
             "settings_schema": {
                 "overlay_enabled": {"type": "boolean", "default": True, "description": "显示叠加层"},
+                "detail_mode": {
+                    "type": "string",
+                    "default": "seconds",
+                    "description": "刷新细节",
+                    "enum": ["seconds", "minute"],
+                    "enum_labels": {
+                        "seconds": "秒级刷新",
+                        "minute": "分钟刷新",
+                    },
+                    "options": [
+                        {"id": "seconds", "value": "seconds", "label": "秒级", "description": "每秒刷新"},
+                        {"id": "minute", "value": "minute", "label": "分钟级", "description": "每分钟刷新"},
+                    ],
+                },
             },
             "sao_menu": {
                 "name": "脚本演示",
@@ -88,6 +102,29 @@ def _write_script_menu_plugin(root: str) -> str:
                         "overlay_enabled": {
                             "description": "Show overlay",
                             "default": False,
+                        },
+                        "detail_mode": {
+                            "description": "Refresh detail",
+                            "default": "minute",
+                            "enum_labels": {
+                                "seconds": "Seconds",
+                                "minute": "Minute",
+                                "frame": "Frame",
+                            },
+                            "options": {
+                                "seconds": {
+                                    "label": "Seconds",
+                                    "description": "Refresh every second",
+                                    "value": "frames",
+                                },
+                                "minute": {
+                                    "label": "Minute",
+                                    "description": "Refresh every minute",
+                                },
+                                "frame": {
+                                    "label": "Frame",
+                                },
+                            },
                         },
                     },
                     "sao_menu": {
@@ -285,6 +322,9 @@ dictionary@ state()
         assert script_record.get("description") == "中文脚本菜单演示", script_record
         assert script_record.get("sao_menu", {}).get("name") == "脚本演示", script_record
         assert script_record.get("settings_schema", {}).get("overlay_enabled", {}).get("description") == "显示叠加层", script_record
+        zh_detail = script_record.get("settings_schema", {}).get("detail_mode", {})
+        assert zh_detail.get("enum_labels", {}).get("seconds") == "秒级刷新", script_record
+        assert zh_detail.get("options", [{}])[0].get("label") == "秒级", script_record
         assert script_record.get("sao_menu", {}).get("actions", [{}])[0].get("label") == "读取状态", script_record
         settings.data["act_plugin_locale"] = "en-US"
         localized_status = manager.status()
@@ -301,6 +341,19 @@ dictionary@ state()
         assert localized_record.get("sao_menu", {}).get("surface") != "other_surface", localized_record
         assert localized_record.get("settings_schema", {}).get("overlay_enabled", {}).get("description") == "Show overlay", localized_record
         assert localized_record.get("settings_schema", {}).get("overlay_enabled", {}).get("default") is True, localized_record
+        localized_detail = localized_record.get("settings_schema", {}).get("detail_mode", {})
+        assert localized_detail.get("description") == "Refresh detail", localized_record
+        assert localized_detail.get("default") == "seconds", localized_record
+        assert localized_detail.get("enum") == ["seconds", "minute"], localized_record
+        assert localized_detail.get("enum_labels", {}).get("seconds") == "Seconds", localized_record
+        assert localized_detail.get("enum_labels", {}).get("minute") == "Minute", localized_record
+        assert "frame" not in localized_detail.get("enum_labels", {}), localized_record
+        localized_options = localized_detail.get("options") or []
+        assert localized_options[0].get("label") == "Seconds", localized_record
+        assert localized_options[0].get("description") == "Refresh every second", localized_record
+        assert localized_options[0].get("value") == "seconds", localized_record
+        assert localized_options[1].get("label") == "Minute", localized_record
+        assert len(localized_options) == 2, localized_record
         assert localized_record.get("sao_menu", {}).get("actions", [{}])[0].get("label") == "Read state", localized_record
         settings.data["act_plugin_locale"] = "en-GB"
         gb_record = next(

@@ -190,7 +190,7 @@ my_plugin/
 | `mcpServers` | 否 | 向 AI 编辑器暴露的 MCP 工具 |
 | `locales`/`i18n`/`translations` | 否 | 按 locale 覆盖插件管理、SAO 菜单、能力和设置的显示文本 |
 
-`locales` 只用于本地化展示文本，不改变插件行为。平台会按当前设置语言读取 `name`、`description`、`sao_menu` 文案、`capabilities` 文案和 `settings_schema` 说明；`enabled`、设置 `default/type`、权限、能力/action id、菜单 `priority/surface` 等字段始终以基础 manifest 为准。
+`locales` 只用于本地化展示文本，不改变插件行为。平台会按当前设置语言读取 `name`、`description`、`sao_menu` 文案、`capabilities` 文案和 `settings_schema` 说明；设置项里的 `options`/`choices` 只按既有 `id`/`value` 覆盖选项文案，`enum_labels`/`value_labels` 只按既有枚举值覆盖显示文案。`enabled`、设置 `default/type/enum`、选项 `value`、权限、能力/action id、菜单 `priority/surface` 等字段始终以基础 manifest 为准。
 
 ### 插件生命周期
 

@@ -294,6 +294,15 @@ _LOCALIZED_SETTING_TEXT_KEYS = {
     "prefix",
     "suffix",
 }
+_LOCALIZED_SETTING_OPTION_TEXT_KEYS = {
+    "label",
+    "title",
+    "description",
+    "help",
+    "tooltip",
+}
+_SETTING_OPTION_LIST_KEYS = ("options", "choices")
+_SETTING_OPTION_LABEL_MAP_KEYS = ("enum_labels", "value_labels")
 
 
 def _localized_sao_menu(base: Mapping[str, Any], override: Any) -> dict[str, Any]:
@@ -385,8 +394,102 @@ def _localized_settings_schema(base: Mapping[str, Any], override: Any) -> dict[s
         for key in _LOCALIZED_SETTING_TEXT_KEYS:
             if key in setting_override:
                 merged[key] = copy.deepcopy(setting_override.get(key))
+        _localized_setting_options(merged, setting_override)
         out[str(setting_key)] = merged
     return out
+
+
+def _localized_setting_options(target: dict[str, Any], override: Mapping[str, Any]) -> None:
+    for key in _SETTING_OPTION_LIST_KEYS:
+        if key in target and key in override:
+            target[key] = _localized_option_list(target.get(key), override.get(key))
+    for key in _SETTING_OPTION_LABEL_MAP_KEYS:
+        _localized_label_map(target, override, key)
+
+
+def _localized_option_list(base: Any, override: Any) -> Any:
+    if not isinstance(base, list):
+        return copy.deepcopy(base)
+    out = [copy.deepcopy(item) for item in base]
+    if isinstance(override, Mapping):
+        override_items = []
+        for key, value in override.items():
+            if isinstance(value, Mapping):
+                item = dict(value)
+                item["_locale_target_id"] = str(key)
+                override_items.append(item)
+            else:
+                override_items.append(value)
+    elif isinstance(override, (list, tuple)):
+        override_items = list(override)
+    else:
+        return out
+    index_by_id: dict[str, int] = {}
+    for idx, item in enumerate(out):
+        if not isinstance(item, Mapping):
+            continue
+        option_id = _setting_option_id(item)
+        if option_id:
+            index_by_id[option_id] = idx
+    for item in override_items:
+        if not isinstance(item, Mapping):
+            continue
+        option_id = _setting_option_id(item)
+        if not option_id or option_id not in index_by_id:
+            continue
+        target = out[index_by_id[option_id]]
+        if not isinstance(target, Mapping):
+            continue
+        merged = dict(target)
+        for key in _LOCALIZED_SETTING_OPTION_TEXT_KEYS:
+            if key in item:
+                merged[key] = copy.deepcopy(item.get(key))
+        out[index_by_id[option_id]] = merged
+    return out
+
+
+def _setting_option_id(item: Mapping[str, Any]) -> str:
+    for key in ("_locale_target_id", "id", "value"):
+        if key in item:
+            return str(item.get(key) or "")
+    return ""
+
+
+def _localized_label_map(target: dict[str, Any], override: Mapping[str, Any], key: str) -> None:
+    raw = override.get(key)
+    if not isinstance(raw, Mapping):
+        return
+    current = target.get(key)
+    label_map = dict(current) if isinstance(current, Mapping) else {}
+    allowed = _setting_value_ids(target)
+    for label_key, label_value in raw.items():
+        text_key = str(label_key or "")
+        if not text_key:
+            continue
+        if allowed and text_key not in allowed and text_key not in label_map:
+            continue
+        label_map[text_key] = copy.deepcopy(label_value)
+    if label_map:
+        target[key] = label_map
+
+
+def _setting_value_ids(setting: Mapping[str, Any]) -> set[str]:
+    allowed: set[str] = set()
+    enum_values = setting.get("enum")
+    if isinstance(enum_values, (list, tuple)):
+        allowed.update(str(item) for item in enum_values if item is not None)
+    for key in _SETTING_OPTION_LIST_KEYS:
+        value = setting.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, Mapping):
+                option_id = _setting_option_id(item)
+                if option_id:
+                    allowed.add(option_id)
+            elif item is not None:
+                allowed.add(str(item))
+    return allowed
 
 
 def _normalize_sao_menu(value: Any) -> dict[str, Any]:

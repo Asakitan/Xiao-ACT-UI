@@ -80,6 +80,16 @@ my_lua_plugin/
       "type": "boolean",
       "default": false,
       "description": "是否显示叠加层"
+    },
+    "detail_mode": {
+      "type": "string",
+      "default": "seconds",
+      "enum": ["seconds", "minute"],
+      "enum_labels": {
+        "seconds": "秒级刷新",
+        "minute": "分钟刷新"
+      },
+      "description": "刷新细节"
     }
   },
   "locales": {
@@ -96,6 +106,13 @@ my_lua_plugin/
       "settings_schema": {
         "overlay_enabled": {
           "description": "Show the overlay"
+        },
+        "detail_mode": {
+          "description": "Refresh detail",
+          "enum_labels": {
+            "seconds": "Seconds",
+            "minute": "Minute"
+          }
         }
       }
     }
@@ -103,7 +120,7 @@ my_lua_plugin/
 }
 ```
 
-本地化覆盖只改显示文本，不会改变 `enabled`、设置 `default/type`、菜单 `priority/surface`、权限、capability id 或 action id。这样插件管理器、SAO popup、settings 面板可以即时换语言，同时不会因为翻译包改变脚本加载和运行行为。
+本地化覆盖只改显示文本，不会改变 `enabled`、设置 `default/type/enum`、设置选项 `value`、菜单 `priority/surface`、权限、capability id 或 action id。`settings_schema` 里已有 `options`/`choices` 的选项文案可按 `id`/`value` 覆盖，`enum_labels`/`value_labels` 可按已有枚举值覆盖。这样插件管理器、SAO popup、settings 面板可以即时换语言，同时不会因为翻译包改变脚本加载和运行行为。
 
 ### 第三步：写入口脚本
 
