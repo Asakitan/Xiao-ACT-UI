@@ -743,6 +743,12 @@ pre.code-block { overflow:visible; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-error { display:none; color:var(--fg-error); font-size:11px; margin-top:3px; }
 .ext-setting-row.invalid .ext-setting-error { display:block; }
+.ext-settings-filter { display:grid; grid-template-columns:minmax(140px,1fr) auto auto; align-items:center;
+  gap:6px; margin:8px 0 4px; padding:6px 8px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; }
+.ext-settings-filter select { min-width:0; }
+.ext-settings-filter label { display:flex; align-items:center; gap:5px; margin:0; color:var(--fg-dim); font-size:11px; }
+.ext-settings-filter input[type="checkbox"] { width:auto; margin:0; }
+.ext-settings-filter .ext-settings-count { color:var(--fg-dim); font:11px var(--mono); white-space:nowrap; }
 
 /* ── SETTINGS-05: Keyboard shortcuts editor ── */
 .kb-modal-bg { position:fixed; inset:0; background:#00000080; z-index:700; display:none; align-items:center; justify-content:center; }
@@ -4730,6 +4736,7 @@ function filterSettings(){
     extSections.forEach(s=>{if(s.style.display!=='none')anyExtVisible=true});
     const extDivider=extContainer.querySelector('.sb-group');
     if(extDivider)extDivider.style.display=(!lq||anyExtVisible)?'':'none';
+    applyExtensionSettingsFilter();
   }
   const inp=$('settings-search');if(inp)inp.placeholder=lq?visible+' matches':'Search settings...';
 }
@@ -5321,11 +5328,50 @@ function readExtensionSettingInputValue(input,schema,type){
 function markExtensionSettingRow(row,modified){
   row.classList.toggle('modified',!!modified);
   row.dataset.modified=modified?'1':'0';
+  row.dataset.extSettingModified=modified?'1':'0';
+  const badge=row.querySelector('.ext-setting-badge');
+  if(badge)badge.textContent=modified?'Modified':'';
 }
 function setExtensionSettingError(row,message){
   row.classList.toggle('invalid',!!message);
   const el=row.querySelector('.ext-setting-error');
   if(el)el.textContent=message||'';
+}
+function extensionSettingsQuery(){
+  const raw=(($('settings-search')||{}).value||'').trim();
+  const hasModified=/(^|\s)@modified(?=\s|$)/i.test(raw);
+  return {
+    modifiedOnly:(($('ext-settings-modified')||{}).checked===true)||hasModified,
+    text:raw.replace(/(^|\s)@modified(?=\s|$)/ig,' ').trim().toLowerCase(),
+  };
+}
+function applyExtensionSettingsFilter(){
+  const container=$('ext-settings-container');if(!container)return;
+  const category=(($('ext-settings-category')||{}).value)||'';
+  const query=extensionSettingsQuery();
+  const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
+  const sections=container.querySelectorAll('details[data-ext-settings-section]');
+  let visibleRows=0,totalRows=0,visibleSections=0;
+  sections.forEach(section=>{
+    const categoryOk=!category||section.dataset.extSettingsCategory===category;
+    let sectionRows=0;
+    section.querySelectorAll('.ext-setting-row').forEach(row=>{
+      totalRows++;
+      const textOk=!query.text||row.textContent.toLowerCase().includes(query.text);
+      const modifiedOk=!query.modifiedOnly||row.dataset.extSettingModified==='1';
+      const show=categoryOk&&textOk&&modifiedOk;
+      row.style.display=show?'':'none';
+      if(show){visibleRows++;sectionRows++}
+    });
+    section.style.display=sectionRows?'':'none';
+    if(sectionRows){visibleSections++;if(query.text||query.modifiedOnly||category)section.open=true}
+  });
+  const count=$('ext-settings-filter-count');
+  if(count)count.textContent=visibleRows+' / '+totalRows;
+  const divider=container.querySelector('[data-ext-settings-divider="1"]');
+  if(divider)divider.style.display=visibleSections?'':'none';
+  const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
+  if(toolbar)toolbar.style.display=totalRows?'':'none';
 }
 async function renderExtensionSettings(){
   const container=$('ext-settings-container');if(!container)return;
@@ -5336,7 +5382,18 @@ async function renderExtensionSettings(){
   // Extensions divider
   const divider=document.createElement('div');divider.className='sb-group';
   divider.style.cssText='padding:0;margin-top:16px;border-top:1px solid var(--border);padding-top:12px';
+  divider.dataset.extSettingsDivider='1';
   divider.textContent='Extensions';container.appendChild(divider);
+  const filter=document.createElement('div');filter.className='ext-settings-filter';filter.dataset.extSettingsFilter='1';
+  const categorySelect=document.createElement('select');categorySelect.id='ext-settings-category';
+  categorySelect.innerHTML='<option value="">All Extension Settings</option>';
+  const modifiedLabel=document.createElement('label');
+  const modifiedBox=document.createElement('input');modifiedBox.type='checkbox';modifiedBox.id='ext-settings-modified';
+  modifiedLabel.appendChild(modifiedBox);modifiedLabel.appendChild(document.createTextNode('@modified'));
+  const count=document.createElement('span');count.className='ext-settings-count';count.id='ext-settings-filter-count';count.textContent='0 / 0';
+  filter.appendChild(categorySelect);filter.appendChild(modifiedLabel);filter.appendChild(count);
+  container.appendChild(filter);
+  const seenCategories=new Set();
   configs.forEach(cfg=>{
     const extId=cfg.extension_id||'';
     const displayName=cfg.display_name||cfg.title||extId;
@@ -5356,6 +5413,13 @@ async function renderExtensionSettings(){
     const summary=document.createElement('summary');
     summary.style.cssText='cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none;padding:4px 0';
     const headerLabel=title?(displayName+' — '+title):displayName;
+    const categoryId=extId+'::'+headerLabel;
+    section.dataset.extSettingsCategory=categoryId;
+    if(!seenCategories.has(categoryId)){
+      seenCategories.add(categoryId);
+      const opt=document.createElement('option');opt.value=categoryId;opt.textContent=headerLabel;
+      categorySelect.appendChild(opt);
+    }
     summary.textContent='▸ '+headerLabel+' ('+propKeys.length+')';
     section.appendChild(summary);
     const inner=document.createElement('div');inner.style.cssText='padding:8px 0';
@@ -5412,7 +5476,7 @@ async function renderExtensionSettings(){
       reset.onclick=async ev=>{
         ev.preventDefault();ev.stopPropagation();setExtensionSettingError(row,'');
         const r=await call('reset_extension_setting',key);
-        if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);markExtensionSettingRow(row,false)}
+        if(r&&r.ok){setExtensionSettingInputValue(input,schema,type,hasDefaultValue?r.value:defaultVal);markExtensionSettingRow(row,false);applyExtensionSettingsFilter()}
         else showToast('Reset failed: '+((r&&r.error)||'unknown'),'error');
       };
       row.appendChild(reset);
@@ -5422,7 +5486,7 @@ async function renderExtensionSettings(){
         try{nextValue=readExtensionSettingInputValue(input,schema,type)}
         catch(e){setExtensionSettingError(row,'Invalid JSON: '+e.message);return}
         const r=await call('set_extension_setting',key,nextValue);
-        if(r&&r.ok)markExtensionSettingRow(row,true);
+        if(r&&r.ok){markExtensionSettingRow(row,true);applyExtensionSettingsFilter()}
         else showToast('Setting save failed: '+((r&&r.error)||'unknown'),'error');
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
@@ -5432,6 +5496,9 @@ async function renderExtensionSettings(){
     section.appendChild(inner);
     container.appendChild(section);
   });
+  categorySelect.onchange=applyExtensionSettingsFilter;
+  modifiedBox.onchange=applyExtensionSettingsFilter;
+  applyExtensionSettingsFilter();
 }
 
 // ── MCP Server management ──

@@ -1180,6 +1180,10 @@ def test_phase1_ai_editor_regressions() -> None:
             "function renderExtensionSettings()" in html
             and "reset_extension_setting" in html
             and "markExtensionSettingRow" in html
+            and "function applyExtensionSettingsFilter()" in html
+            and "ext-settings-category" in html
+            and "dataset.extSettingsCategory" in html
+            and "@modified" in html
             and "ext-setting-badge" in html
             and "Invalid JSON" in html)
     _check("frontend renders extension activity bar views dynamically",
