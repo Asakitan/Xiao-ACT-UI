@@ -11084,6 +11084,22 @@ function defaultCustomEditorSaveAsTarget(tab){
   }
   return uri||tab&&tab.name||'';
 }
+function saveAsSuggestedName(tab){
+  const raw=(tab&&tab.name)||editorFileName||defaultCustomEditorSaveAsTarget(tab)||'untitled.txt';
+  return String(raw||'untitled.txt').split(/[\\/]/).pop()||'untitled.txt';
+}
+async function pickSaveAsTarget(tab){
+  const fallback=defaultCustomEditorSaveAsTarget(tab);
+  const suggested=saveAsSuggestedName(tab);
+  let picked=null;
+  if(window.pywebview&&window.pywebview.api&&window.pywebview.api.save_file_dialog){
+    picked=await call('save_file_dialog',suggested);
+    if(picked&&picked.ok&&picked.path)return picked.path;
+    if(picked&&picked.cancelled)return '';
+  }
+  const target=window.prompt('Save As target path',fallback||suggested);
+  return target||'';
+}
 async function saveCustomEditorTabAs(tab){
   const ce=tab&&tab.customEditor||{};
   if(!(ce.supportsSaveAs||ce.supports_save_as||ce.textEditor||ce.text_editor)){
@@ -11093,7 +11109,7 @@ async function saveCustomEditorTabAs(tab){
   const viewId=customEditorWebviewIdFromTab(tab);
   const viewType=customEditorViewTypeFromTab(tab);
   const uri=customEditorUriFromTab(tab);
-  const target=window.prompt('Save As target path',defaultCustomEditorSaveAsTarget(tab));
+  const target=await pickSaveAsTarget(tab);
   if(!target)return {ok:false,cancelled:true};
   const r=await call('save_extension_custom_editor_as',viewId,viewType,uri,target);
   if(!callSucceeded(r)){
@@ -11109,13 +11125,31 @@ async function saveCustomEditorTabAs(tab){
   showToast('Saved As: '+tab.name,'success',1500);
   return r;
 }
+async function saveTextTabAs(tab){
+  const content=$('editor-text').value;
+  const r=await call('save_file_as',content,saveAsSuggestedName(tab));
+  if(r&&r.ok){
+    if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang}
+    editorDirty=false;
+    const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
+    if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
+    renderTabs();
+    showToast('Saved: '+r.path,'success',1500);
+    return r;
+  }
+  if(r&&r.cancelled)return r;
+  if(r&&r.error){showToast('Save failed: '+r.error,'error');return r}
+  try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard','info',2000)}
+  catch(e2){showToast('No file path to save to','warning',2000)}
+  return r||{error:'save_file_as unavailable'};
+}
 async function saveFileAs(){
   const tab=tabs.find(t=>t.id===activeTab);
   if(isExtensionCustomEditorTab(tab)){
     await saveCustomEditorTabAs(tab);
     return;
   }
-  showToast('Save As is available for extension custom editors','info',2000);
+  await saveTextTabAs(tab);
 }
 async function saveFile(){
   const tab=tabs.find(t=>t.id===activeTab);
@@ -11131,15 +11165,7 @@ async function saveFile(){
     editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     showToast('Saved: '+tab.filePath,'success',1500);
   }else{
-    const r=await call('save_file_as',content,editorFileName||'untitled.txt');
-    if(r&&r.ok){
-      if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang}
-      editorDirty=false;const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
-      if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
-      showToast('Saved: '+r.path,'success',1500);
-    }else if(r&&r.cancelled){/* user cancelled dialog */}
-    else if(r&&r.error){showToast('Save failed: '+r.error,'error')}
-    else{try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard','info',2000)}catch(e2){showToast('No file path to save to','warning',2000)}}
+    await saveTextTabAs(tab);
   }
 }
 

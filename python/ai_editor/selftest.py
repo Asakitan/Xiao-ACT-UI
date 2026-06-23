@@ -412,7 +412,7 @@ def test_app_settings_parity() -> None:
         "delete_custom_model", "search_extensions",
         "list_installed_extensions", "uninstall_extension",
         "install_extension", "win_minimize", "win_maximize", "win_close",
-        "open_text_file", "save_feedback",
+        "open_text_file", "save_file_dialog", "save_file_as", "save_feedback",
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
@@ -1434,6 +1434,8 @@ def test_app_settings_parity() -> None:
            and "not available" in no_window_editor.editor_find_replace("x", "y").get("error", ""))
     _check("open_text_file reports missing window explicitly",
            "No window" in no_window_editor.open_text_file().get("error", ""))
+    _check("save_file_dialog reports missing window explicitly",
+           "No window" in no_window_editor.save_file_dialog("x.txt").get("error", ""))
 
     feedback_gui = _SettingsGui({"ai_editor": {}})
     feedback_api = AIEditorAPI(feedback_gui)
@@ -1503,11 +1505,14 @@ def test_app_settings_parity() -> None:
 
     with tempfile.TemporaryDirectory() as text_tmp:
         text_path = os.path.join(text_tmp, "picked.py")
+        save_path = os.path.join(text_tmp, "saved.md")
         with open(text_path, "w", encoding="utf-8") as fh:
             fh.write("print('picked')\n")
 
         class _TextDialogWindow:
             def create_file_dialog(self, **kw):
+                if kw.get("dialog_type") == 20:
+                    return [save_path]
                 return [text_path]
 
         picker_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
@@ -1517,6 +1522,16 @@ def test_app_settings_parity() -> None:
                picked.get("ok") is True
                and picked.get("language") == "python"
                and "print('picked')" in picked.get("content", ""))
+        save_pick = picker_api.save_file_dialog("saved.md")
+        _check("save_file_dialog returns selected save target",
+               save_pick.get("ok") is True
+               and save_pick.get("path") == save_path
+               and save_pick.get("language") == "markdown")
+        saved_text = picker_api.save_file_as("# saved", "saved.md")
+        _check("save_file_as writes through native save dialog",
+               saved_text.get("ok") is True
+               and saved_text.get("path") == save_path
+               and open(save_path, "r", encoding="utf-8").read() == "# saved")
 
     unsupported_tool_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     unsupported_tool_api._ensure_engine()
@@ -2528,7 +2543,10 @@ console.log("frontend auto-close behavior ok");
            and "function saveCustomEditorTab(tab)" in html
            and "call('save_extension_custom_editor',viewId,viewType,uri)" in html
            and "function saveCustomEditorTabAs(tab)" in html
+           and "call('save_file_dialog',suggested)" in html
            and "call('save_extension_custom_editor_as',viewId,viewType,uri,target)" in html
+           and "function saveTextTabAs(tab)" in html
+           and "call('save_file_as',content,saveAsSuggestedName(tab))" in html
            and "'Ctrl+Shift+S':()=>saveFileAs()" in html
            and "runCustomEditorEditLifecycle(active,'undo')" in html
            and "undo_extension_custom_editor" in html

@@ -2246,8 +2246,8 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
-    def save_file_as(self, content: str, suggested_name: str = "") -> Dict:
-        """Show a native Save-As dialog, write *content* to the chosen path."""
+    def save_file_dialog(self, suggested_name: str = "") -> Dict:
+        """Show a native Save-As dialog and return the chosen target path."""
         if not self._window:
             return {"error": "No window"}
         try:
@@ -2263,13 +2263,29 @@ class AIEditorAPI:
                 return {"cancelled": True}
             path = result if isinstance(result, str) else (
                 result[0] if isinstance(result, (list, tuple)) else str(result))
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(content)
             return {
                 "ok": True,
                 "path": path,
                 "name": os.path.basename(path),
                 "language": self._editor_language_for_path(path),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def save_file_as(self, content: str, suggested_name: str = "") -> Dict:
+        """Show a native Save-As dialog, write *content* to the chosen path."""
+        target = self.save_file_dialog(suggested_name)
+        if not target.get("ok"):
+            return target
+        try:
+            path = target.get("path", "")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            return {
+                "ok": True,
+                "path": path,
+                "name": target.get("name") or os.path.basename(path),
+                "language": target.get("language") or self._editor_language_for_path(path),
             }
         except Exception as exc:
             return {"error": str(exc)}
