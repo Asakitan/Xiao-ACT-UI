@@ -2518,13 +2518,71 @@ function languageSingleCharPairMap(lang){
   });
   return map;
 }
+function editorLineStringScopes(prefix,lineComment){
+  const text=String(prefix||''),lineToken=String(lineComment||'');
+  let quote='',escaped=false;
+  for(let i=0;i<text.length;i++){
+    if(!quote&&lineToken&&text.startsWith(lineToken,i))return ['comment'];
+    const ch=text[i];
+    if(escaped){escaped=false;continue}
+    if(quote){
+      if(ch==='\\'){escaped=true;continue}
+      if(ch===quote)quote='';
+      continue;
+    }
+    if(ch==='"'||ch==="'"||ch==='`')quote=ch;
+  }
+  return quote?['string']:[];
+}
+function editorBlockCommentOpenAt(value,pos,blockComment,lineComment){
+  if(!blockComment||!blockComment[0]||!blockComment[1])return false;
+  const open=String(blockComment[0]),close=String(blockComment[1]),text=String(value||'').slice(0,pos);
+  const lineToken=String(lineComment||'');
+  let depth=0,i=0,quote='',escaped=false;
+  while(i<text.length){
+    const ch=text[i];
+    if(depth>0){
+      if(text.startsWith(close,i)){depth--;i+=close.length;continue}
+      i++;continue;
+    }
+    if(escaped){escaped=false;i++;continue}
+    if(quote){
+      if(ch==='\\'){escaped=true;i++;continue}
+      if(ch===quote)quote='';
+      i++;continue;
+    }
+    if(lineToken&&text.startsWith(lineToken,i)){
+      const nl=text.indexOf('\n',i+lineToken.length);
+      if(nl<0)break;
+      i=nl+1;continue;
+    }
+    if(text.startsWith(open,i)){depth++;i+=open.length;continue}
+    if(ch==='"'||ch==="'"||ch==='`'){quote=ch;i++;continue}
+    i++;
+  }
+  return depth>0;
+}
+function editorContextScopesAt(lang,value,pos){
+  value=String(value||'');pos=Math.max(0,Math.min(value.length,pos));
+  const tokens=languageCommentTokens(lang),scopes=new Set();
+  if(editorBlockCommentOpenAt(value,pos,tokens.blockComment,tokens.lineComment))scopes.add('comment');
+  const span=editorLineSpanAt(value,pos);
+  editorLineStringScopes(value.slice(span.lineStart,pos),tokens.lineComment).forEach(scope=>scopes.add(scope));
+  return scopes;
+}
+function autoClosingPairBlockedByContext(pair,scopes){
+  const blocked=Array.isArray(pair&&pair.notIn)?pair.notIn.map(v=>String(v).toLowerCase()):[];
+  return blocked.some(scope=>scopes.has(scope));
+}
 function autoClosingPairForKey(lang,key,value,pos,hasSelection){
   if(String(key||'').length!==1)return null;
   const before=String(value||'').slice(0,pos);
+  const scopes=editorContextScopesAt(lang,value,pos);
   const pairs=(hasSelection?languageSurroundingPairs(lang):languageAutoClosingPairs(lang))
     .filter(pair=>pair&&pair.open&&typeof pair.close==='string'&&pair.open.endsWith(key))
     .sort((a,b)=>b.open.length-a.open.length);
   for(const pair of pairs){
+    if(autoClosingPairBlockedByContext(pair,scopes))continue;
     if(hasSelection&&pair.open!==key)continue;
     if(pair.open===key)return pair;
     const prefix=pair.open.slice(0,-key.length);

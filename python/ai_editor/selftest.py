@@ -1198,6 +1198,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function languageCommentTokens(lang)" in html
             and "function languageAutoClosingPairs(lang)" in html
             and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
+            and "function editorLineStringScopes(prefix,lineComment)" in html
+            and "function editorBlockCommentOpenAt(value,pos,blockComment,lineComment)" in html
+            and "function editorContextScopesAt(lang,value,pos)" in html
+            and "function autoClosingPairBlockedByContext(pair,scopes)" in html
             and "function languageIndentationRules(lang)" in html
             and "function languageOnEnterRules(lang)" in html
             and "function languageFoldingMarkers(lang)" in html
