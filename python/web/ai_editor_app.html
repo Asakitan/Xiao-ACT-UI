@@ -2407,6 +2407,7 @@ const DEFAULT_AUTO_CLOSING_PAIRS=[
   {open:'(',close:')'},{open:'[',close:']'},{open:'{',close:'}'},
   {open:"'",close:"'"},{open:'"',close:'"'},{open:'`',close:'`'}
 ];
+const INDENT_UNIT='    ';
 
 let _prevLineCount=1;
 function updateLineNums(){
@@ -2519,6 +2520,84 @@ function autoClosingPairForKey(lang,key,value,pos,hasSelection){
   return null;
 }
 function escapeRegExpText(text){return String(text||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+function languageRegexFlags(flags){
+  return Array.from(new Set(String(flags||'').replace(/[^gimsuy]/g,'').split(''))).join('');
+}
+function languageRegexSpec(value){
+  if(typeof value==='string')return {pattern:value,flags:''};
+  if(value&&typeof value==='object'&&typeof value.pattern==='string'){
+    return {pattern:value.pattern,flags:languageRegexFlags(value.flags)};
+  }
+  return null;
+}
+function testLanguageRegex(value,text){
+  const spec=languageRegexSpec(value);if(!spec||!spec.pattern)return false;
+  try{return new RegExp(spec.pattern,spec.flags).test(String(text||''))}
+  catch{return false}
+}
+function languageIndentationRules(lang){
+  const rules=languageConfiguration(lang).indentationRules;
+  return rules&&typeof rules==='object'&&!Array.isArray(rules)?rules:{};
+}
+function languageOnEnterRules(lang){
+  const rules=languageConfiguration(lang).onEnterRules;
+  return Array.isArray(rules)?rules:[];
+}
+function editorLineContext(value,pos){
+  const text=String(value||''),lineStart=pos>0?text.lastIndexOf('\n',pos-1)+1:0;
+  let lineEnd=text.indexOf('\n',pos);if(lineEnd===-1)lineEnd=text.length;
+  const beforeText=text.slice(lineStart,pos),afterText=text.slice(pos,lineEnd);
+  let prevStart=0,previousLineText='';
+  if(lineStart>0){
+    prevStart=text.lastIndexOf('\n',lineStart-2)+1;
+    previousLineText=text.slice(prevStart,lineStart-1);
+  }
+  const indent=(beforeText.match(/^\s*/)||[''])[0];
+  return {beforeText,afterText,previousLineText,indent};
+}
+function outdentIndent(indent){
+  const value=String(indent||'');
+  if(value.endsWith(INDENT_UNIT))return value.slice(0,-INDENT_UNIT.length);
+  if(value.endsWith('\t'))return value.slice(0,-1);
+  return value.replace(/ {1,4}$/,'');
+}
+function onEnterRuleMatches(rule,ctx){
+  if(!rule||!rule.action)return false;
+  for(const key of ['beforeText','afterText','previousLineText']){
+    if(rule[key]&&!testLanguageRegex(rule[key],ctx[key]))return false;
+  }
+  return !!(rule.beforeText||rule.afterText||rule.previousLineText);
+}
+function enterTextForAction(ctx,action){
+  let indent=ctx.indent;
+  const removeText=Number(action.removeText)||0;
+  if(removeText>0)indent=indent.slice(0,Math.max(0,indent.length-removeText));
+  const appendText=String(action.appendText||'');
+  const mode=String(action.indent||'none');
+  if(mode==='outdent')indent=outdentIndent(indent);
+  if(mode==='indent')indent+=INDENT_UNIT;
+  if(mode==='indentOutdent'){
+    const inner=indent+INDENT_UNIT+appendText;
+    return {text:'\n'+inner+'\n'+indent,cursorOffset:1+inner.length};
+  }
+  const text='\n'+indent+appendText;
+  return {text,cursorOffset:text.length};
+}
+function editorEnterInsertion(value,start){
+  const ctx=editorLineContext(value,start);
+  for(const rule of languageOnEnterRules(editorLang)){
+    if(onEnterRuleMatches(rule,ctx))return enterTextForAction(ctx,rule.action||{});
+  }
+  const rules=languageIndentationRules(editorLang);
+  let indent=ctx.indent;
+  if(testLanguageRegex(rules.decreaseIndentPattern,ctx.beforeText))indent=outdentIndent(indent);
+  if(testLanguageRegex(rules.increaseIndentPattern,ctx.beforeText)
+      ||(!rules.increaseIndentPattern&&(ctx.beforeText.trimEnd().endsWith(':')||ctx.beforeText.trimEnd().endsWith('{')))){
+    indent+=INDENT_UNIT;
+  }
+  const text='\n'+indent;
+  return {text,cursorOffset:text.length};
+}
 function languageForFileName(name){
   const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
   if(!base)return '';
@@ -2711,6 +2790,9 @@ function setEditorLanguage(lang){
   if(Array.isArray(cfg.brackets)&&cfg.brackets.length)configBits.push('brackets');
   if(Array.isArray(cfg.autoClosingPairs)&&cfg.autoClosingPairs.length)configBits.push('autoClosingPairs');
   if(Array.isArray(cfg.surroundingPairs)&&cfg.surroundingPairs.length)configBits.push('surroundingPairs');
+  if(cfg.indentationRules)configBits.push('indentationRules');
+  if(Array.isArray(cfg.onEnterRules)&&cfg.onEnterRules.length)configBits.push('onEnterRules');
+  if(cfg.wordPattern)configBits.push('wordPattern');
   if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
   scheduleEditorSyntaxHighlight();
@@ -2813,14 +2895,10 @@ ed.addEventListener('keydown',function(e){
   // Enter → Auto-indent
   if(e.key==='Enter'&&!e.ctrlKey){
     _undoPush(true);
-    const pos=this.selectionStart,before=this.value.substring(0,pos);
-    const line=before.split('\n').pop();
-    const indent=line.match(/^(\s*)/)[1];
-    const extra=(line.trimEnd().endsWith(':')||line.trimEnd().endsWith('{'))?'    ':'';
+    const pos=this.selectionStart,enter=editorEnterInsertion(this.value,pos);
     e.preventDefault();
-    const ins='\n'+indent+extra;
-    this.value=this.value.substring(0,pos)+ins+this.value.substring(this.selectionEnd);
-    this.selectionStart=this.selectionEnd=pos+ins.length;
+    this.value=this.value.substring(0,pos)+enter.text+this.value.substring(this.selectionEnd);
+    this.selectionStart=this.selectionEnd=pos+enter.cursorOffset;
     updateLineNums();updateCursorPos()}
   // Auto-closing brackets/quotes (EDIT-001)
   const pair=autoClosingPairForKey(editorLang,e.key,this.value,this.selectionStart,this.selectionStart!==this.selectionEnd);

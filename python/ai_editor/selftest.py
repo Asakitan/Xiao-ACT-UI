@@ -1198,9 +1198,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function languageCommentTokens(lang)" in html
             and "function languageAutoClosingPairs(lang)" in html
             and "function autoClosingPairForKey(lang,key,value,pos,hasSelection)" in html
+            and "function languageIndentationRules(lang)" in html
+            and "function languageOnEnterRules(lang)" in html
+            and "function editorEnterInsertion(value,start)" in html
+            and "function onEnterRuleMatches(rule,ctx)" in html
             and "function toggleLineComment(token)" in html
             and "function toggleBlockComment(open,close)" in html
             and "Line comment: " in html
+            and "indentationRules" in html
+            and "onEnterRules" in html
             and "id=\"editor-syntax-highlight\"" in html
             and "class=\"editor-syntax-layer\"" in html
             and "function updateEditorSyntaxHighlight()" in html
@@ -3068,6 +3074,22 @@ def test_app_extension_runtime_support() -> None:
     {"open": "\\"", "close": "\\"", "notIn": ["string"]},
   ],
   "surroundingPairs": [["(", ")"]],
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*",
+  "indentationRules": {
+    "increaseIndentPattern": "^.*:\\\\s*$",
+    "decreaseIndentPattern": {"pattern": "^\\\\s*end\\\\b"},
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\\\s*block\\\\b.*$",
+      "action": {"indent": "indent", "appendText": ";; "},
+    },
+    {
+      "beforeText": {"pattern": "^\\\\s*pair\\\\s*\\\\{$"},
+      "afterText": {"pattern": "^\\\\s*\\\\}"},
+      "action": {"indent": "indentOutdent"},
+    },
+  ],
 }
 """)
         language_desc = ExtensionDescription.from_package_json({
@@ -3139,7 +3161,27 @@ def test_app_extension_runtime_support() -> None:
                        and pair.get("close") == "\""
                        and "string" in pair.get("notIn", [])
                        for pair in selflang_config.get("autoClosingPairs", []))
-               and ["(", ")"] in selflang_config.get("surroundingPairs", []))
+               and ["(", ")"] in selflang_config.get("surroundingPairs", [])
+               and selflang_config.get("wordPattern", {}).get("pattern")
+                   == "[A-Za-z_][A-Za-z0-9_]*"
+               and selflang_config.get("indentationRules", {})
+                   .get("increaseIndentPattern", {}).get("pattern")
+                   == r"^.*:\s*$"
+               and selflang_config.get("indentationRules", {})
+                   .get("decreaseIndentPattern", {}).get("pattern")
+                   == r"^\s*end\b"
+               and any(rule.get("beforeText", {}).get("pattern")
+                       == r"^\s*block\b.*$"
+                       and rule.get("action", {}).get("indent") == "indent"
+                       and rule.get("action", {}).get("appendText") == ";; "
+                       for rule in selflang_config.get("onEnterRules", []))
+               and any(rule.get("beforeText", {}).get("pattern")
+                       == r"^\s*pair\s*\{$"
+                       and rule.get("afterText", {}).get("pattern")
+                       == r"^\s*\}"
+                       and rule.get("action", {}).get("indent")
+                       == "indentOutdent"
+                       for rule in selflang_config.get("onEnterRules", [])))
         _check("extension grammars feed editor language metadata",
                any(item.get("language") == "selflang"
                    and item.get("scopeName") == "source.selflang"

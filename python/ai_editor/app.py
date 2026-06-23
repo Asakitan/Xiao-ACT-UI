@@ -2043,6 +2043,17 @@ class AIEditorAPI:
             payload.get("surroundingPairs"), allow_empty_close=True)
         if surrounding_pairs:
             result["surroundingPairs"] = surrounding_pairs
+        indentation_rules = cls._safe_editor_indentation_rules(
+            payload.get("indentationRules"))
+        if indentation_rules:
+            result["indentationRules"] = indentation_rules
+        on_enter_rules = cls._safe_editor_on_enter_rules(
+            payload.get("onEnterRules"))
+        if on_enter_rules:
+            result["onEnterRules"] = on_enter_rules
+        word_pattern = cls._safe_editor_regex(payload.get("wordPattern"))
+        if word_pattern:
+            result["wordPattern"] = word_pattern
         return result
 
     @classmethod
@@ -2113,6 +2124,83 @@ class AIEditorAPI:
         if not open_token or (not close_token and not allow_empty_close):
             return []
         return [open_token, close_token]
+
+    @classmethod
+    def _safe_editor_indentation_rules(cls, value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result: Dict[str, Any] = {}
+        for key in (
+                "increaseIndentPattern", "decreaseIndentPattern",
+                "indentNextLinePattern", "unIndentedLinePattern"):
+            pattern = cls._safe_editor_regex(value.get(key))
+            if pattern:
+                result[key] = pattern
+        return result
+
+    @classmethod
+    def _safe_editor_on_enter_rules(cls, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        rules: List[Dict[str, Any]] = []
+        for raw in value[:64]:
+            if not isinstance(raw, dict):
+                continue
+            action = cls._safe_editor_enter_action(raw.get("action"))
+            if not action:
+                continue
+            rule: Dict[str, Any] = {"action": action}
+            has_pattern = False
+            for key in ("beforeText", "afterText", "previousLineText"):
+                pattern = cls._safe_editor_regex(raw.get(key))
+                if pattern:
+                    rule[key] = pattern
+                    has_pattern = True
+            if has_pattern:
+                rules.append(rule)
+        return rules
+
+    @classmethod
+    def _safe_editor_enter_action(cls, value: Any) -> Dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        action: Dict[str, Any] = {}
+        indent = str(value.get("indent") or "").strip()
+        if indent in {"none", "indent", "indentOutdent", "outdent"}:
+            action["indent"] = indent
+        append_text = cls._safe_editor_language_text(
+            value.get("appendText"), allow_empty=True)
+        if append_text:
+            action["appendText"] = append_text
+        try:
+            remove_text = int(value.get("removeText"))
+        except (TypeError, ValueError, OverflowError):
+            remove_text = 0
+        if 0 < remove_text <= 80:
+            action["removeText"] = remove_text
+        return action
+
+    @classmethod
+    def _safe_editor_regex(cls, value: Any) -> Dict[str, str]:
+        pattern_value: Any = value
+        flags_value = ""
+        if isinstance(value, dict):
+            pattern_value = value.get("pattern")
+            flags_value = value.get("flags", "")
+        pattern = cls._safe_editor_regex_pattern(pattern_value)
+        if not pattern:
+            return {}
+        flags = "".join(
+            ch for ch in str(flags_value or "") if ch in "dgimsuvy")
+        return {"pattern": pattern, "flags": "".join(dict.fromkeys(flags))}
+
+    @staticmethod
+    def _safe_editor_regex_pattern(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        if "\r" in value or "\n" in value or len(value) > 1000:
+            return ""
+        return value
 
     @staticmethod
     def _safe_editor_language_text(
