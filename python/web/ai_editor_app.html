@@ -2376,7 +2376,7 @@ const BUILTIN_LANGUAGE_IDS=['plaintext','python','javascript','typescript','json
   'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
 let LANGUAGES=[...BUILTIN_LANGUAGE_IDS];
 let LANGUAGE_META=Object.create(null),LANGUAGE_BY_EXT=Object.create(null),LANGUAGE_BY_FILENAME=Object.create(null);
-let EXTENSION_EDITOR_THEMES=[];
+let EXTENSION_EDITOR_THEMES=[],EXTENSION_ICON_THEME=null;
 const LANGUAGE_ICONS={python:'🐍',javascript:'JS',typescript:'TS',json:'{}',html:'<>',css:'#',
   markdown:'M↓',yaml:'YAML',shell:'$_',lua:'Lua',sql:'SQL',plaintext:'{}'};
 const BUILTIN_LANGUAGE_EXTS={
@@ -2481,14 +2481,27 @@ async function loadEditorLanguages(){
   }catch(e){}
 }
 async function loadEditorThemes(){
-  EXTENSION_EDITOR_THEMES=[];
+  EXTENSION_EDITOR_THEMES=[];EXTENSION_ICON_THEME=null;
   try{
     const r=await call('list_editor_themes');
     if(r&&Array.isArray(r.themes))EXTENSION_EDITOR_THEMES=r.themes;
   }catch(e){}
+  await loadEditorIconTheme();
 }
 function extensionColorThemes(){
   return EXTENSION_EDITOR_THEMES.filter(t=>t&&t.themeType==='color');
+}
+function extensionIconThemes(){
+  return EXTENSION_EDITOR_THEMES.filter(t=>t&&t.themeType!=='color');
+}
+async function loadEditorIconTheme(){
+  EXTENSION_ICON_THEME=null;
+  const theme=extensionIconThemes()[0];
+  if(!theme)return;
+  try{
+    const r=await call('get_editor_icon_theme',String(theme.id||theme.label||''));
+    if(r&&r.ok)EXTENSION_ICON_THEME=r;
+  }catch(e){}
 }
 function extensionThemeValue(theme){return 'ext:'+String(theme&&theme.id||'')}
 function extensionThemeByValue(value){
@@ -3483,9 +3496,52 @@ function pathBaseName(path){
 }
 
 function explorerFileIcon(name){
+  const themed=iconThemeFileGlyph(name);
+  if(themed)return themed;
   const ext=String(name||'').split('.').pop().toLowerCase();
   const icons={py:'🐍',pyw:'🐍',js:'JS',mjs:'JS',cjs:'JS',ts:'TS',tsx:'TS',json:'{}',html:'<>',htm:'<>',css:'#',scss:'#',sass:'#',md:'M↓',markdown:'M↓',yml:'📄',yaml:'📄',xml:'<>',sql:'🗃',sh:'$_',ps1:'$_',bat:'$_',cmd:'$_',lua:'🌙',c:'C',cc:'C++',cpp:'C++',cxx:'C++',h:'H',hpp:'H',cs:'C#',java:'☕',go:'Go',rs:'Rs',toml:'⚙'};
   return icons[ext]||'📄';
+}
+function iconThemeDefinitionGlyph(iconId,fallback){
+  const theme=EXTENSION_ICON_THEME;
+  if(!theme||!iconId)return fallback||'';
+  const def=(theme.iconDefinitions||{})[iconId]||{};
+  const ch=String(def.fontCharacter||'');
+  if(ch)return ch;
+  const raw=String(iconId||'').replace(/^[_-]+/,'').replace(/^(file|folder)[_-]?/,'');
+  return raw?raw.slice(0,3).toUpperCase():(fallback||'');
+}
+function iconThemeFileGlyph(name,language){
+  const theme=EXTENSION_ICON_THEME;
+  if(!theme)return '';
+  const base=String(name||'').split(/[\\/]/).pop().toLowerCase();
+  const byName=(theme.fileNames||{})[base];
+  if(byName)return iconThemeDefinitionGlyph(byName,'📄');
+  const parts=base.split('.');
+  for(let i=1;i<parts.length;i++){
+    const suffix=parts.slice(i).join('.');
+    const byExt=(theme.fileExtensions||{})[suffix];
+    if(byExt)return iconThemeDefinitionGlyph(byExt,'📄');
+  }
+  const lang=String(language||languageForFileName(base)||'').toLowerCase();
+  const byLang=(theme.languageIds||{})[lang];
+  if(byLang)return iconThemeDefinitionGlyph(byLang,'📄');
+  return iconThemeDefinitionGlyph(theme.file,'📄');
+}
+function explorerFolderIcon(name,expanded,isRoot){
+  const theme=EXTENSION_ICON_THEME;
+  if(theme){
+    const base=String(name||'').toLowerCase();
+    const folderMap=expanded?(theme.folderNamesExpanded||{}):(theme.folderNames||{});
+    const byName=folderMap[base]||(theme.folderNames||{})[base];
+    if(byName)return iconThemeDefinitionGlyph(byName,expanded?'📂':'📁');
+    const id=isRoot
+      ?(expanded?(theme.rootFolderExpanded||theme.folderExpanded):(theme.rootFolder||theme.folder))
+      :(expanded?(theme.folderExpanded||theme.folder):theme.folder);
+    const glyph=iconThemeDefinitionGlyph(id,expanded?'📂':'📁');
+    if(glyph)return glyph;
+  }
+  return isRoot?(expanded?'🗂':'🗂'):(expanded?'📂':'📁');
 }
 
 async function refreshExplorer(relPath=''){
@@ -3507,6 +3563,7 @@ async function refreshExplorer(relPath=''){
   const children=rootNode.querySelector('.tree-children');
   rootNode.classList.add('open');
   const rootTwist=rootNode.querySelector('.tree-twist');if(rootTwist)rootTwist.textContent='▾';
+  const rootIcon=rootNode.querySelector('.tree-icon');if(rootIcon)rootIcon.textContent=explorerFolderIcon(explorerRootName,true,true);
   renderExplorerEntries(children,res.entries||[],1,currentPath);
   tree.dataset.loaded='1';
 }
@@ -3542,7 +3599,9 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
   const twist=document.createElement('span');twist.className='tree-twist';
   twist.textContent=entry.type==='directory'?'▸':'';
   const icon=document.createElement('span');icon.className='tree-icon';
-  icon.textContent=entry.type==='directory'?(isRoot?'🗂':'📁'):explorerFileIcon(entry.name);
+  icon.textContent=entry.type==='directory'
+    ?explorerFolderIcon(entry.name,false,isRoot)
+    :explorerFileIcon(entry.name);
   const label=document.createElement('span');label.className='tree-label';label.textContent=entry.name;
   row.appendChild(twist);row.appendChild(icon);row.appendChild(label);
   node.appendChild(row);
@@ -3555,7 +3614,8 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
       const opening=!node.classList.contains('open');
       node.classList.toggle('open');
       twist.textContent=node.classList.contains('open')?'▾':'▸';
-      if(!isRoot)icon.textContent=node.classList.contains('open')?'📂':'📁';
+      icon.textContent=explorerFolderIcon(
+        entry.name,node.classList.contains('open'),isRoot);
       if(opening&&!node.dataset.loaded){
         children.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
         const res=await call('list_workspace_tree',entry.path||'');
@@ -5768,8 +5828,15 @@ function extensionTreeIconGlyph(node,collapsible){
   const icon=String((node&&node.icon)||'');
   if(icon.startsWith('$(')&&icon.endsWith(')'))return extensionTreeThemeIconGlyph(icon.slice(2,-1));
   if(icon&&icon.length<=3)return icon;
-  if(node&&node.resourceUri)return extensionTreeThemeIconGlyph('file');
-  if(collapsible)return extensionTreeThemeIconGlyph('folder');
+  if(node&&node.resourceUri){
+    const resource=String(node.resourceUri||'').split(/[?#]/)[0];
+    let fileName=resource.split('/').pop()||resource;
+    try{fileName=decodeURIComponent(fileName)}catch(e){}
+    const themed=iconThemeFileGlyph(fileName);
+    if(themed)return themed;
+    return extensionTreeThemeIconGlyph('file');
+  }
+  if(collapsible)return explorerFolderIcon('',false,false)||extensionTreeThemeIconGlyph('folder');
   return '';
 }
 function extensionTreeItemTitle(node){

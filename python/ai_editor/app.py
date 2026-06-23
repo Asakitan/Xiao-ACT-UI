@@ -961,6 +961,91 @@ class AIEditorAPI:
             "type": str(payload.get("type") or theme.get("uiTheme") or ""),
         }
 
+    def get_editor_icon_theme(self, theme_id: str) -> Dict:
+        """Return safe file icon theme data for extension-contributed icons."""
+        self._ensure_engine()
+        requested = str(theme_id or "").strip()
+        if not requested:
+            return {"error": "icon theme id is required"}
+        theme = next((
+            item for item in self._editor_theme_entries()
+            if item.get("themeType") != "color"
+            and requested in {
+                str(item.get("id") or ""),
+                str(item.get("label") or ""),
+            }
+        ), None)
+        if not theme:
+            return {"error": f"Icon theme not found: {requested}"}
+        path = str(theme.get("resolvedPath") or "")
+        if not path or not os.path.isabs(path) or not os.path.exists(path):
+            return {"error": "Icon theme file is not available", "theme": theme}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:
+            return {"error": f"Failed to read icon theme JSON: {exc}", "theme": theme}
+        if not isinstance(payload, dict):
+            return {"error": "Icon theme JSON must be an object", "theme": theme}
+        icon_definitions = self._safe_icon_theme_definitions(
+            payload.get("iconDefinitions"))
+        return {
+            "ok": True,
+            "theme": theme,
+            "name": str(payload.get("name") or theme.get("label") or ""),
+            "hidesExplorerArrows": bool(payload.get("hidesExplorerArrows")),
+            "showLanguageModeIcons": bool(payload.get("showLanguageModeIcons")),
+            "iconDefinitions": icon_definitions,
+            "file": self._safe_icon_theme_id(payload.get("file")),
+            "folder": self._safe_icon_theme_id(payload.get("folder")),
+            "folderExpanded": self._safe_icon_theme_id(
+                payload.get("folderExpanded")),
+            "rootFolder": self._safe_icon_theme_id(payload.get("rootFolder")),
+            "rootFolderExpanded": self._safe_icon_theme_id(
+                payload.get("rootFolderExpanded")),
+            "fileExtensions": self._safe_icon_theme_map(
+                payload.get("fileExtensions")),
+            "fileNames": self._safe_icon_theme_map(payload.get("fileNames")),
+            "folderNames": self._safe_icon_theme_map(
+                payload.get("folderNames")),
+            "folderNamesExpanded": self._safe_icon_theme_map(
+                payload.get("folderNamesExpanded")),
+            "languageIds": self._safe_icon_theme_map(payload.get("languageIds")),
+        }
+
+    @staticmethod
+    def _safe_icon_theme_id(value: Any) -> str:
+        return str(value or "").strip() if value else ""
+
+    @classmethod
+    def _safe_icon_theme_map(cls, value: Any) -> Dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key).strip().casefold(): cls._safe_icon_theme_id(icon_id)
+            for key, icon_id in value.items()
+            if str(key or "").strip() and cls._safe_icon_theme_id(icon_id)
+        }
+
+    @classmethod
+    def _safe_icon_theme_definitions(
+            cls, value: Any) -> Dict[str, Dict[str, str]]:
+        if not isinstance(value, dict):
+            return {}
+        result: Dict[str, Dict[str, str]] = {}
+        for icon_id, raw in value.items():
+            normalized_id = cls._safe_icon_theme_id(icon_id)
+            if not normalized_id or not isinstance(raw, dict):
+                continue
+            item: Dict[str, str] = {}
+            for key in ("fontCharacter", "fontColor", "iconPath"):
+                raw_value = raw.get(key)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    item[key] = raw_value.strip()
+            if item:
+                result[normalized_id] = item
+        return result
+
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
         merged = _merge_ai_editor_config({}, data)

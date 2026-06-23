@@ -285,7 +285,7 @@ def test_app_settings_parity() -> None:
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
         "list_editor_languages", "list_editor_grammars",
-        "list_editor_themes", "get_editor_theme",
+        "list_editor_themes", "get_editor_theme", "get_editor_icon_theme",
         "list_extension_activity_bar_items",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -1170,6 +1170,7 @@ def test_phase1_ai_editor_regressions() -> None:
             "call('list_editor_languages')" in html
             and "call('list_editor_themes')" in html
             and "call('get_editor_theme'" in html
+            and "call('get_editor_icon_theme'" in html
             and "function applyEditorLanguages(rows)" in html
             and "function loadEditorThemes()" in html
             and "function renderEditorColorThemeOptions()" in html
@@ -1187,7 +1188,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "meta.tokenizer==='textmate'||scopes" in html
             and "wrap.classList.toggle('syntax-on'" in html
             and "highlightCode(ta.value||'',editorLang)" in html
-            and "syncEditorSyntaxScroll()" in html)
+            and "syncEditorSyntaxScroll()" in html
+            and "EXTENSION_ICON_THEME" in html
+            and "function extensionIconThemes()" in html
+            and "function iconThemeFileGlyph(name,language)" in html
+            and "function explorerFolderIcon(name,expanded,isRoot)" in html)
     _check("frontend renders extension settings modified reset controls",
             "function renderExtensionSettings()" in html
             and "reset_extension_setting" in html
@@ -2974,6 +2979,24 @@ def test_app_extension_runtime_support() -> None:
                     "statusBar.background": "#203040",
                 },
             }, f)
+        with open(os.path.join(language_tmp, "themes", "self-icons.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "Self Icons",
+                "showLanguageModeIcons": True,
+                "iconDefinitions": {
+                    "_file": {"fontCharacter": "F"},
+                    "_self": {"fontCharacter": "S", "fontColor": "#68e4ff"},
+                    "_folder": {"fontCharacter": "D"},
+                    "_folder_open": {"fontCharacter": "O"},
+                },
+                "file": "_file",
+                "folder": "_folder",
+                "folderExpanded": "_folder_open",
+                "fileExtensions": {"self": "_self"},
+                "fileNames": {"SELFFILE": "_self"},
+                "languageIds": {"selflang": "_self"},
+            }, f)
         language_desc = ExtensionDescription.from_package_json({
             "name": "language-pack",
             "publisher": "selftest",
@@ -3014,6 +3037,7 @@ def test_app_extension_runtime_support() -> None:
         editor_grammars = api.list_editor_grammars().get("grammars", [])
         editor_themes = api.list_editor_themes()
         editor_theme_data = api.get_editor_theme("Self Dark")
+        editor_icon_theme_data = api.get_editor_icon_theme("self-icons")
         selflang_grammars = (
             editor_languages.get("selflang", {}).get("grammars") or [{}])
         selflang_resolved_path = (
@@ -3045,6 +3069,21 @@ def test_app_extension_runtime_support() -> None:
                editor_theme_data.get("ok") is True
                and editor_theme_data.get("colors", {}).get("editor.background") == "#101820"
                and editor_theme_data.get("theme", {}).get("label") == "Self Dark")
+        _check("extension icon themes feed editor file icon metadata",
+               editor_icon_theme_data.get("ok") is True
+               and editor_icon_theme_data.get("showLanguageModeIcons") is True
+               and editor_icon_theme_data.get("iconDefinitions", {})
+                   .get("_self", {}).get("fontCharacter") == "S"
+               and editor_icon_theme_data.get("iconDefinitions", {})
+                   .get("_self", {}).get("fontColor") == "#68e4ff"
+               and editor_icon_theme_data.get("fileExtensions", {})
+                   .get("self") == "_self"
+               and editor_icon_theme_data.get("fileNames", {})
+                   .get("selffile") == "_self"
+               and editor_icon_theme_data.get("languageIds", {})
+                   .get("selflang") == "_self"
+               and editor_icon_theme_data.get("folder") == "_folder"
+               and editor_icon_theme_data.get("folderExpanded") == "_folder_open")
         _check("extension language extensions and filenames drive file detection",
                api._editor_language_for_path("demo.self") == "selflang"
                and api._editor_language_for_path("SELFFILE") == "selflang")
