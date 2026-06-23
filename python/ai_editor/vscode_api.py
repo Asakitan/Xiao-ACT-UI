@@ -832,6 +832,19 @@ class CodeLens:
         return self.command is not None
 
 
+class FoldingRange:
+    def __init__(self, start: Any, end: Any, kind: Any = None) -> None:
+        try:
+            self.start = max(0, int(start or 0))
+        except Exception:
+            self.start = 0
+        try:
+            self.end = max(0, int(end or 0))
+        except Exception:
+            self.end = 0
+        self.kind = kind
+
+
 class SemanticTokensLegend:
     def __init__(
             self,
@@ -1299,6 +1312,8 @@ class VscodeNamespace:
             "_executeInlineCompletionProvider": self._execute_inline_completion_provider,
             "_executeCodeLensProvider": self._execute_code_lens_provider,
             "vscode.executeCodeLensProvider": self._execute_code_lens_provider,
+            "_executeFoldingRangeProvider": self._execute_folding_range_provider,
+            "vscode.executeFoldingRangeProvider": self._execute_folding_range_provider,
             "_provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "vscode.provideDocumentSemanticTokensLegend": self._execute_document_semantic_tokens_legend,
             "_provideDocumentSemanticTokens": self._execute_document_semantic_tokens_provider,
@@ -1787,6 +1802,16 @@ class VscodeNamespace:
         results.extend(self._provider_values(external))
         return results
 
+    def _execute_folding_range_provider(self, uri: Any) -> List[Any]:
+        document = self._resolve_language_document(uri)
+        results = self._collect_language_provider_results(
+            "foldingRange", document, "provideFoldingRanges",
+            (document, {}, CancellationToken.NONE))
+        results.extend(self._provider_values(
+            self._request_external_language_provider(
+                "foldingRange", document, context={})))
+        return results
+
     def _execute_document_semantic_tokens_legend(self, uri: Any) -> Any:
         document = self._resolve_language_document(uri)
         for entry in self._matching_language_providers(
@@ -2029,6 +2054,7 @@ class VscodeNamespace:
             "InlineCompletionItem": InlineCompletionItem,
             "InlineCompletionList": InlineCompletionList,
             "CodeLens": CodeLens,
+            "FoldingRange": FoldingRange,
             "SemanticTokensLegend": SemanticTokensLegend,
             "SemanticTokensBuilder": SemanticTokensBuilder,
             "SemanticTokens": SemanticTokens,
@@ -2049,6 +2075,7 @@ class VscodeNamespace:
             "ExtensionMode": {"Production": 1, "Development": 2, "Test": 3},
             "InlayHintKind": {"Type": 1, "Parameter": 2},
             "InlineCompletionTriggerKind": {"Invoke": 0, "Automatic": 1},
+            "FoldingRangeKind": {"Comment": 1, "Imports": 2, "Region": 3},
             "CompletionItemKind": {
                 "Text": 0, "Method": 1, "Function": 2, "Constructor": 3,
                 "Field": 4, "Variable": 5, "Class": 6, "Interface": 7,
@@ -2884,6 +2911,7 @@ class VscodeNamespace:
             "registerDocumentLinkProvider": lambda selector, provider: self._register_language_provider("documentLink", selector, provider),
             "registerInlayHintsProvider": lambda selector, provider: self._register_language_provider("inlayHint", selector, provider),
             "registerInlineCompletionItemProvider": lambda selector, provider: self._register_language_provider("inlineCompletion", selector, provider),
+            "registerFoldingRangeProvider": lambda selector, provider: self._register_language_provider("foldingRange", selector, provider),
             "registerDocumentSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokens", selector, provider, legend),
             "registerDocumentRangeSemanticTokensProvider": lambda selector, provider, legend: self._register_language_provider("semanticTokensRange", selector, provider, legend),
             "setTextDocumentLanguage": lambda doc, language_id: _set_document_language(doc, language_id),

@@ -143,6 +143,14 @@ class Location {
     }
 }
 
+class FoldingRange {
+    constructor(start, end, kind) {
+        this.start = Math.max(0, Number(start || 0));
+        this.end = Math.max(0, Number(end || 0));
+        this.kind = kind;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Semantic tokens
 // -------------------------------------------------------------------------
@@ -1291,6 +1299,9 @@ function buildVscodeModule(extDesc, extensionPath) {
                 registerInlineCompletionItemProvider(selector, provider) {
                     return _registerLangProvider('inlineCompletion', selector, provider);
                 },
+                registerFoldingRangeProvider(selector, provider) {
+                    return _registerLangProvider('foldingRange', selector, provider);
+                },
                 registerDocumentSemanticTokensProvider(selector, provider, legend) {
                     return _registerLangProvider('semanticTokens', selector, provider, {
                         metadata: legend || new SemanticTokensLegend([], []),
@@ -1469,6 +1480,8 @@ function buildVscodeModule(extDesc, extensionPath) {
         InlineCompletionList: class { constructor(items) { this.items = items || []; } },
         InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
         CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } get isResolved() { return !!this.command; } },
+        FoldingRange,
+        FoldingRangeKind: { Comment: 1, Imports: 2, Region: 3 },
         SemanticTokensLegend,
         SemanticTokensBuilder,
         SemanticTokens,
@@ -1787,6 +1800,7 @@ function _languageProviderMethod(kind) {
         inlayHint: 'provideInlayHints',
         inlineCompletion: 'provideInlineCompletionItems',
         codeLens: 'provideCodeLenses',
+        foldingRange: 'provideFoldingRanges',
         semanticTokens: 'provideDocumentSemanticTokens',
         semanticTokensLegend: 'provideDocumentSemanticTokens',
         semanticTokensRange: 'provideDocumentRangeSemanticTokens',
@@ -2100,6 +2114,8 @@ async function handleLanguageProviderRequest(msg) {
                         triggerKind: 1,
                         selectedCompletionInfo: undefined,
                     }, msg.context || {}), token);
+                } else if (kind === 'foldingRange') {
+                    value = await fn.call(provider, document, msg.context || {}, token);
                 } else if (kind === 'documentSymbol') {
                     value = await fn.call(provider, document, token);
                 } else {

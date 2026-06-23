@@ -490,7 +490,7 @@ _LANGUAGE_RESULT_ATTRS = (
     "signatures", "activeSignature", "activeParameter", "parameters",
     "placeholder", "rejectReason", "target", "tooltip", "textEdits",
     "paddingLeft", "paddingRight", "location", "isResolved", "data",
-    "resultId", "edits", "start", "deleteCount", "tokenTypes",
+    "resultId", "edits", "start", "end", "deleteCount", "tokenTypes",
     "tokenModifiers",
 )
 
@@ -2748,6 +2748,9 @@ class AIEditorAPI:
             "codeLenses": "codeLens",
             "lens": "codeLens",
             "lenses": "codeLens",
+            "foldingRange": "foldingRange",
+            "foldingRanges": "foldingRange",
+            "folds": "foldingRange",
             "semanticToken": "semanticTokens",
             "semanticTokens": "semanticTokens",
             "documentSemanticTokens": "semanticTokens",
@@ -2983,6 +2986,20 @@ class AIEditorAPI:
                     "uri": str(document.uri),
                     "version": document.version,
                     "lenses": value if isinstance(value, list) else (
+                        [] if value is None else [value]),
+                }
+            if kind == "foldingRange":
+                result = self._ext_host.commands.execute(
+                    "vscode.executeFoldingRangeProvider",
+                    document.uri,
+                )
+                value = _json_ready_language_value(result)
+                return {
+                    "ok": True,
+                    "kind": kind,
+                    "uri": str(document.uri),
+                    "version": document.version,
+                    "ranges": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
             if kind == "semanticTokens":

@@ -357,7 +357,7 @@ def test_app_settings_parity() -> None:
         CompletionItem, CompletionList, Hover, TextEdit, Position, Range,
         SignatureHelp, SignatureInformation, ParameterInformation,
         CodeAction, DocumentLink, InlayHint, InlineCompletionItem,
-        CodeLens, SemanticTokensLegend, SemanticTokensBuilder,
+        CodeLens, FoldingRange, SemanticTokensLegend, SemanticTokensBuilder,
         WorkspaceEdit, Location,
     )
     provider_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
@@ -457,6 +457,9 @@ def test_app_settings_parity() -> None:
             builder.push(0, 0, 6, "function")
             return builder.build("editor-semantic-1")
 
+        def provideFoldingRanges(self, document, context, token):
+            return [FoldingRange(0, 2, 3)]
+
         def prepareRename(self, document, position, token):
             return {
                 "range": Range(Position(0, 0), Position(0, 6)),
@@ -485,6 +488,7 @@ def test_app_settings_parity() -> None:
     lang_api["registerInlayHintsProvider"]("python", editor_provider)
     lang_api["registerInlineCompletionItemProvider"]("python", editor_provider)
     lang_api["registerCodeLensProvider"]("python", editor_provider)
+    lang_api["registerFoldingRangeProvider"]("python", editor_provider)
     lang_api["registerDocumentSemanticTokensProvider"](
         "python", editor_provider, editor_provider.semantic_legend)
     lang_api["registerRenameProvider"]("python", editor_provider)
@@ -526,6 +530,8 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="inlineCompletion", triggerKind=0))
         code_lens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="codeLens", itemResolveCount=10))
+        folding_range_result = provider_api.editor_language_provider(
+            dict(provider_payload, kind="foldingRange"))
         semantic_tokens_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="semanticTokens"))
         prepare_rename_result = provider_api.editor_language_provider(
@@ -604,6 +610,11 @@ def test_app_settings_parity() -> None:
                and lens.get("command", {}).get("arguments") == ["lens-ok"]
                and lens.get("range", {}).get("end", {})
                .get("character") == 6)
+        _check("editor_language_provider serializes folding ranges",
+               folding_range_result.get("ok") is True
+               and folding_range_result.get("ranges", [{}])[0].get("start") == 0
+               and folding_range_result.get("ranges", [{}])[0].get("end") == 2
+               and folding_range_result.get("ranges", [{}])[0].get("kind") == 3)
         _check("editor_language_provider serializes semantic tokens",
                semantic_tokens_result.get("ok") is True
                and semantic_tokens_result.get("legend", {})
@@ -1576,6 +1587,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function renderFoldRegionList()" in html
             and "function openFoldRegionPicker()" in html
             and "function closeFoldRegionPicker()" in html
+            and "function requestEditorFoldingRanges(quiet)" in html
+            and "function scheduleEditorFoldingRanges(delay)" in html
+            and "function editorProviderFoldingRegions()" in html
+            and "editorProviderPayload('foldingRange'" in html
+            and "Refresh Folding Ranges" in html
             and "Fold Regions" in html
             and "ArrowDown" in html
             and "function languageWordPattern(lang)" in html
@@ -2905,8 +2921,9 @@ def test_vscode_api() -> None:
         Position, Range, AuthenticationSession, PreparedToolInvocation,
         EventEmitter, CompletionItem, CompletionList, Hover, CodeAction,
         DocumentLink, InlayHint, InlayHintLabelPart, InlineCompletionItem,
-        CodeLens, SemanticTokensLegend, SemanticTokensBuilder, TextEdit,
-        Location, SignatureHelp, SignatureInformation, ParameterInformation,
+        CodeLens, FoldingRange, SemanticTokensLegend, SemanticTokensBuilder,
+        TextEdit, Location, SignatureHelp, SignatureInformation,
+        ParameterInformation,
     )
 
     host = ExtensionHost()
@@ -2938,6 +2955,7 @@ def test_vscode_api() -> None:
     _check("api.Hover", api["Hover"] is Hover)
     _check("api.SignatureHelp", api["SignatureHelp"] is SignatureHelp)
     _check("api.TextEdit", api["TextEdit"] is TextEdit)
+    _check("api.FoldingRange", api["FoldingRange"] is FoldingRange)
     _check("api.SemanticTokensBuilder",
            api["SemanticTokensBuilder"] is SemanticTokensBuilder)
     _check("api.CompletionItemKind", api["CompletionItemKind"]["Function"] == 2)
@@ -3333,6 +3351,10 @@ def test_vscode_api() -> None:
                 }
                 return lens
 
+        class _FoldingRangeProvider:
+            def provideFoldingRanges(self, document, context, token):
+                return [FoldingRange(0, 2, api["FoldingRangeKind"]["Region"])]
+
         class _SemanticTokensProvider:
             def provideDocumentSemanticTokens(self, document, token):
                 builder = SemanticTokensBuilder(semantic_legend)
@@ -3396,6 +3418,8 @@ def test_vscode_api() -> None:
         code_lens_provider = _CodeLensProvider()
         api["languages"]["registerCodeLensProvider"](
             "python", code_lens_provider)
+        api["languages"]["registerFoldingRangeProvider"](
+            "python", _FoldingRangeProvider())
         semantic_legend = SemanticTokensLegend(
             ["function", "variable"], ["readonly"])
         api["languages"]["registerDocumentSemanticTokensProvider"](
@@ -3437,6 +3461,8 @@ def test_vscode_api() -> None:
             "vscode.executeCodeLensProvider", doc.uri)
         code_lenses = api["commands"]["executeCommand"](
             "vscode.executeCodeLensProvider", doc.uri, 1)
+        folding_ranges = api["commands"]["executeCommand"](
+            "vscode.executeFoldingRangeProvider", doc.uri)
         semantic_legend_result = api["commands"]["executeCommand"](
             "vscode.provideDocumentSemanticTokensLegend", doc.uri)
         semantic_tokens = api["commands"]["executeCommand"](
@@ -3492,6 +3518,11 @@ def test_vscode_api() -> None:
                and code_lenses
                and code_lenses[0].command["title"] == "Selftest Lens"
                and code_lens_provider.resolved == 1)
+        _check("executeFoldingRangeProvider invokes matching providers",
+               folding_ranges
+               and folding_ranges[0].start == 0
+               and folding_ranges[0].end == 2
+               and folding_ranges[0].kind == api["FoldingRangeKind"]["Region"])
         _check("provideDocumentSemanticTokens invokes matching providers",
                semantic_legend_result
                and semantic_legend_result.tokenTypes == ["function", "variable"]
@@ -3522,6 +3553,8 @@ def test_vscode_api() -> None:
                and "_executeInlineCompletionProvider"
                in api["commands"]["getCommands"]()
                and "vscode.executeCodeLensProvider"
+               in api["commands"]["getCommands"]()
+               and "vscode.executeFoldingRangeProvider"
                in api["commands"]["getCommands"]()
                and "vscode.provideDocumentSemanticTokens"
                in api["commands"]["getCommands"]()
@@ -4808,6 +4841,11 @@ function activate(context) {
       return lens;
     },
   });
+  vscode.languages.registerFoldingRangeProvider('python', {
+    provideFoldingRanges(document, context, token) {
+      return [new vscode.FoldingRange(0, 2, vscode.FoldingRangeKind.Region)];
+    },
+  });
   const semanticLegend = new vscode.SemanticTokensLegend(
     ['function', 'variable'],
     ['readonly'],
@@ -4956,6 +4994,8 @@ module.exports = { activate, deactivate };
                     {"triggerKind": 0})
                 node_code_lenses = api._ext_host.commands.execute(
                     "vscode.executeCodeLensProvider", node_uri, 1)
+                node_folding_ranges = api._ext_host.commands.execute(
+                    "vscode.executeFoldingRangeProvider", node_uri)
                 node_semantic_legend = api._ext_host.commands.execute(
                     "vscode.provideDocumentSemanticTokensLegend", node_uri)
                 node_semantic_tokens = api._ext_host.commands.execute(
@@ -5030,6 +5070,11 @@ module.exports = { activate, deactivate };
                        .get("title") == "Node Lens"
                        and node_code_lenses[0].get("command", {})
                        .get("arguments", [{}])[0].get("id") == "lens-root")
+                _check("node host language provider invokes JS folding ranges",
+                       node_folding_ranges
+                       and node_folding_ranges[0].get("start") == 0
+                       and node_folding_ranges[0].get("end") == 2
+                       and node_folding_ranges[0].get("kind") == 3)
                 _check("node host language provider invokes JS semantic tokens",
                        node_semantic_legend
                        and node_semantic_legend.get("tokenTypes", [None])[0]

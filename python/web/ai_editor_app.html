@@ -2464,6 +2464,7 @@ function openInEditor(code,lang){
   if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
   if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+  if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   updateLineNums();updateCursorPos();
   if(lang&&LANGUAGES.includes(lang))setEditorLanguage(lang);
   else detectLanguage(code,'');
@@ -2472,6 +2473,7 @@ function openInEditor(code,lang){
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(260);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(300);
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(360);
 }
 function showEditorArea(){
   _editorVis=true;
@@ -2922,7 +2924,33 @@ function editorEnterInsertion(value,start){
   const text='\n'+indent;
   return {text,cursorOffset:text.length};
 }
-function editorFoldingRegions(){
+function foldingRangeKindLabel(kind){
+  const raw=String(kind==null?'':kind).toLowerCase();
+  if(raw==='1'||raw==='comment')return 'Comment';
+  if(raw==='2'||raw==='imports')return 'Imports';
+  if(raw==='3'||raw==='region')return 'Region';
+  return raw?raw.replace(/^\w/,c=>c.toUpperCase()):'Range';
+}
+function normalizeEditorFoldingRange(range,index){
+  if(!range||typeof range!=='object')return null;
+  const start=range.startLine??range.start??range.start_line;
+  const end=range.endLine??range.end??range.end_line;
+  const startLine=Math.max(0,Number(start)||0),endLine=Math.max(0,Number(end)||0);
+  if(endLine<=startLine)return null;
+  return {
+    startLine,endLine,
+    kind:range.kind,
+    label:range.label||range.name||foldingRangeKindLabel(range.kind)+' '+(index+1),
+    source:'provider'
+  };
+}
+function editorProviderFoldingRegions(){
+  if(_editorFoldingRangeContentLength!==String(ed.value||'').length)return [];
+  return (Array.isArray(_editorFoldingRanges)?_editorFoldingRanges:[])
+    .map(normalizeEditorFoldingRange)
+    .filter(Boolean);
+}
+function editorMarkerFoldingRegions(){
   const markers=languageFoldingMarkers(editorLang);if(!markers)return [];
   const startSpec=languageRegexSpec(markers.start),endSpec=languageRegexSpec(markers.end);
   if(!startSpec||!endSpec)return [];
@@ -2937,10 +2965,42 @@ function editorFoldingRegions(){
     if(startRe.test(line)){stack.push({line:i,text:line.trim()});return}
     if(endRe.test(line)&&stack.length){
       const start=stack.pop();
-      if(i>start.line)regions.push({startLine:start.line,endLine:i,label:start.text||('Region '+(regions.length+1))});
+      if(i>start.line)regions.push({startLine:start.line,endLine:i,label:start.text||('Region '+(regions.length+1)),kind:3,source:'markers'});
     }
   });
   return regions.sort((a,b)=>a.startLine-b.startLine||a.endLine-b.endLine);
+}
+function editorFoldingRegions(){
+  const seen=new Set(),regions=[];
+  [...editorProviderFoldingRegions(),...editorMarkerFoldingRegions()].forEach(region=>{
+    const key=region.startLine+':'+region.endLine+':'+String(region.kind||'');
+    if(seen.has(key))return;
+    seen.add(key);regions.push(region);
+  });
+  return regions.sort((a,b)=>a.startLine-b.startLine||a.endLine-b.endLine);
+}
+function clearEditorFoldingRanges(){
+  _editorFoldingRangeRequest++;
+  clearTimeout(_editorFoldingRangeTimer);
+  _editorFoldingRanges=[];
+  _editorFoldingRangeContentLength=-1;
+}
+async function requestEditorFoldingRanges(quiet){
+  const wrap=$('editor-container');
+  if(!ed||!wrap||wrap.style.display==='none')return;
+  const requestId=++_editorFoldingRangeRequest;
+  const contentLength=String(ed.value||'').length;
+  const res=await call('editor_language_provider',editorProviderPayload('foldingRange'));
+  if(requestId!==_editorFoldingRangeRequest||contentLength!==String(ed.value||'').length)return;
+  if(res&&res.error){_editorFoldingRanges=[];_editorFoldingRangeContentLength=-1;if(!quiet)setStatus('Folding ranges failed: '+res.error);return}
+  _editorFoldingRanges=(res&&res.ok&&Array.isArray(res.ranges)?res.ranges:[]).filter(range=>normalizeEditorFoldingRange(range,0));
+  _editorFoldingRangeContentLength=contentLength;
+  if($('fold-region-picker')&&$('fold-region-picker').classList.contains('open'))renderFoldRegionList();
+  if(!quiet)setStatus(_editorFoldingRanges.length+' folding range'+(_editorFoldingRanges.length===1?'':'s'));
+}
+function scheduleEditorFoldingRanges(delay){
+  clearTimeout(_editorFoldingRangeTimer);
+  _editorFoldingRangeTimer=setTimeout(()=>requestEditorFoldingRanges(true),delay==null?680:delay);
 }
 function editorCursorLine(){
   return ed.value.slice(0,ed.selectionStart).split('\n').length-1;
@@ -2975,7 +3035,7 @@ function foldRegionDisplayLabel(region,index){
     .replace(/\*\/\s*$/,'')
     .replace(/-->\s*$/,'')
     .trim();
-  return cleaned||('Region '+(index+1));
+  return cleaned||(region&&region.kind?foldingRangeKindLabel(region.kind)+' '+(index+1):'Region '+(index+1));
 }
 function renderFoldRegionList(){
   const list=$('fold-region-list'),count=$('fold-region-count');if(!list)return;
@@ -3020,6 +3080,7 @@ function openFoldRegionPicker(){
   const picker=$('fold-region-picker');if(!picker)return;
   picker.classList.add('open');
   renderFoldRegionList();
+  requestEditorFoldingRanges(true);
 }
 function closeFoldRegionPicker(){
   const picker=$('fold-region-picker');if(picker)picker.classList.remove('open');
@@ -3224,11 +3285,13 @@ function setEditorLanguage(lang){
   if(configBits.length)bits.push('Config: '+configBits.join(', '));
   $('status-language').title=bits.filter(Boolean).join(' · ');
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+  if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
   scheduleEditorSyntaxHighlight();
   if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(220);
   if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(260);
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(320);
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(360);
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(420);
 }
 
 let _editorSyntaxRaf=0;
@@ -3287,6 +3350,8 @@ function editorUndo(){
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
+  if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(460);
 }
 function editorRedo(){
   const ta=$('editor-text');if(!ta||!_redoStack.length)return;
@@ -3302,6 +3367,8 @@ function editorRedo(){
   if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(360);
   if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(420);
+  if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
+  if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(460);
 }
 function _editorInputWithUndo(e){
   updateLineNums();updateCursorPos();editorDirty=true;
@@ -3325,6 +3392,8 @@ function _editorInputWithUndo(e){
   scheduleEditorCodeLenses();
   clearEditorSemanticTokens();
   scheduleEditorSemanticTokens();
+  clearEditorFoldingRanges();
+  scheduleEditorFoldingRanges();
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0;
@@ -3338,6 +3407,7 @@ let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
 let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1;
+let _editorFoldingRanges=[],_editorFoldingRangeRequest=0,_editorFoldingRangeTimer=null,_editorFoldingRangeContentLength=-1;
 function activeEditorTab(){
   return (typeof tabs!=='undefined'&&Array.isArray(tabs)?tabs.find(t=>t.id===activeTab):null)||{};
 }
@@ -4600,6 +4670,7 @@ ed.addEventListener('contextmenu',function(e){
     {sep:true},
     {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
     {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
+    {label:'Refresh Folding Ranges',shortcut:'',action:()=>requestEditorFoldingRanges(false)},
     {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
     {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
     {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
@@ -8347,12 +8418,14 @@ function switchTab(id){
     if(typeof clearEditorInlineCompletions==='function')clearEditorInlineCompletions();
     if(typeof clearEditorCodeLenses==='function')clearEditorCodeLenses();
     if(typeof clearEditorSemanticTokens==='function')clearEditorSemanticTokens();
+    if(typeof clearEditorFoldingRanges==='function')clearEditorFoldingRanges();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
     if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(340);
+    if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(380);
   }
   renderTabs();
 }
@@ -8709,6 +8782,7 @@ const COMMANDS=[
   {label:'Go to Line',shortcut:'Ctrl+G',action:()=>goToLinePrompt()},
   {label:'Select Word',shortcut:'',action:()=>editorSelectWordAtCursor()},
   {label:'Fold Regions',shortcut:'',action:()=>openFoldRegionPicker()},
+  {label:'Refresh Folding Ranges',shortcut:'',action:()=>requestEditorFoldingRanges(false)},
   {label:'Next Fold Region',shortcut:'',action:()=>goToNextFoldRegion()},
   {label:'Previous Fold Region',shortcut:'',action:()=>goToPreviousFoldRegion()},
   {label:'Toggle Comment',shortcut:'Ctrl+/',action:()=>toggleComment()},
