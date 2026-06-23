@@ -2756,6 +2756,96 @@ class UnifiedOverlayDrawableTests(unittest.TestCase):
         self.assertEqual(fake_overlay.start_calls, 0)
         self.assertEqual(fake_overlay.passthrough_calls, 1)
 
+    @unittest.skipIf(overlay_mod.Image is None, "PIL is unavailable")
+    def test_plugin_host_refresh_never_creates_legacy_overlay_window(self) -> None:
+        overlays = [{
+            "plugin_id": "plug",
+            "surface": "unioverlay",
+            "spec": normalize_ui_spec({
+                "nodes": [
+                    UI.canvas(20, 10, [UI.rect(0, 0, 20, 10, fill="accent")],
+                              x=11, y=22, z=3, id="meter")
+                ],
+            }),
+        }]
+
+        class FakeLayer:
+            def __init__(self, name, w, h, x, y, z, click_through=True):
+                self.name = name
+                self.geometry = (x, y, w, h)
+                self.z_order = z
+                self.click_through = click_through
+                self.visible = False
+
+            def show(self):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def request_redraw(self):
+                return None
+
+            def set_geometry(self, x, y, w, h):
+                self.geometry = (x, y, w, h)
+
+            def set_input_callbacks(self, cursor_pos_fn=None, cursor_leave_fn=None,
+                                    mouse_button_fn=None, scroll_fn=None):
+                return None
+
+            def create_input_proxy(self, _root):
+                raise AssertionError("plugin host should not create a Tk proxy")
+
+            def sync_input_proxy(self):
+                return None
+
+            def destroy_input_proxy(self):
+                return None
+
+        class FakeOverlay:
+            def __init__(self):
+                self._running = True
+                self.created = []
+                self.passthrough_calls = 0
+
+            def create_layer(self, name, w, h, x, y, z, click_through=True, bgra_swizzle=True):
+                layer = FakeLayer(name, w, h, x, y, z, click_through)
+                self.created.append(layer)
+                return layer
+
+            def destroy_layer(self, _name):
+                return None
+
+            def force_host_input_passthrough(self):
+                self.passthrough_calls += 1
+
+        class FakePresenter:
+            def __init__(self, layer):
+                self.layer = layer
+                self.frames = []
+
+            def set_frame(self, bgra, w, h):
+                self.frames.append((len(bgra), w, h))
+
+        host = overlay_mod.PluginUnifiedOverlayHost(
+            SimpleNamespace(root=object()), surface="unioverlay")
+        fake_overlay = FakeOverlay()
+
+        with mock.patch.object(overlay_mod, "get_unified_overlay", lambda _root: fake_overlay), \
+             mock.patch.object(overlay_mod, "CompositorBgraPresenter", FakePresenter), \
+             mock.patch.object(overlay_mod, "render_overlays",
+                               lambda _owner, _surface: {"overlays": overlays}), \
+             mock.patch.object(overlay_adapter_mod, "create_overlay_window",
+                               side_effect=AssertionError("legacy overlay window must not be created")), \
+             mock.patch("render.gpu_overlay_window.GpuOverlayWindow",
+                        side_effect=AssertionError("GpuOverlayWindow must not be created")):
+            host._refresh_now()
+
+        self.assertEqual(len(fake_overlay.created), 1)
+        self.assertEqual(fake_overlay.created[0].geometry, (11, 22, 20, 10))
+        self.assertTrue(fake_overlay.created[0].visible)
+        self.assertGreater(fake_overlay.passthrough_calls, 0)
+
     def test_unified_overlay_host_input_mode_follows_interactive_layers(self) -> None:
         from render.overlay_compositor import UnifiedOverlay
 
