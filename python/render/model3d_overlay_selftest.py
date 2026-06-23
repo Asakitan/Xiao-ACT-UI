@@ -904,6 +904,80 @@ Objects:  {
         self.assertEqual(plan["bone_map"]["hips"], "mixamorig:Hips")
         self.assertEqual(plan["bone_map"]["head"], "mixamorig:Head")
 
+    def test_sidecar_preview_skin_animates_ascii_fbx_preview(self) -> None:
+        clear_model3d_metadata_caches()
+        clear_native_model3d_renderers()
+        with tempfile.TemporaryDirectory(prefix="model3d_fbx_sidecar_skin_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text(
+                """
+Objects:  {
+    Geometry: 1, "Geometry::Cube", "Mesh" {
+        Vertices: *24 {
+            a: -0.5,-0.5,-0.5, 0.5,-0.5,-0.5, 0.5,0.5,-0.5, -0.5,0.5,-0.5,
+               -0.5,-0.5,0.5, 0.5,-0.5,0.5, 0.5,0.5,0.5, -0.5,0.5,0.5
+        }
+        PolygonVertexIndex: *24 {
+            a: 0,1,2,-4, 4,5,6,-8, 0,1,5,-5, 2,3,7,-7, 1,2,6,-6, 0,3,7,-5
+        }
+    }
+    Model: 2, "Model::Cube", "Mesh" {}
+}
+""",
+                encoding="utf-8",
+            )
+            skin = (
+                [[{"joint": "hips", "weight": 1.0}] for _ in range(4)]
+                + [[{"joint": "head", "weight": 1.0}] for _ in range(4)]
+            )
+            model_path.with_suffix(".model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": ["Hips", "Head"],
+                    "bone_map": {"hips": "Hips", "head": "Head"},
+                    "rest_positions": {
+                        "Hips": [0.0, -0.5, 0.0],
+                        "Head": [0.0, 0.5, 0.0],
+                    },
+                },
+                "mesh": {"preview": {"skin": skin}},
+            }), encoding="utf-8")
+            action_json = {
+                "nod": {
+                    "keyframes": [
+                        {"time": 0.0, "offsets": {"head": [0.0, 0.0, 0.0]}},
+                        {"time": 0.5, "offsets": {"head": [0.22, 0.10, 0.0]}},
+                    ],
+                },
+            }
+            first = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 160,
+                "height": 160,
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.2},
+                "action": {"name": "nod", "json": action_json, "time": 0.0},
+            })["nodes"][0]
+            moved = normalize_ui_spec({
+                "type": "model3d",
+                "id": "avatar",
+                "width": 160,
+                "height": 160,
+                "model": {"path": str(model_path)},
+                "retarget": {"mode": "humanoid_auto", "stretch_limit": 0.2},
+                "action": {"name": "nod", "json": action_json, "time": 0.25},
+            })["nodes"][0]
+
+            meta = get_model_metadata(first)
+            image_a = render_model3d_node(first, {"accent": "#7dd3fc"})
+            image_b = render_model3d_node(moved, {"accent": "#7dd3fc"})
+
+        preview = meta["mesh"]["preview"]
+        self.assertEqual(preview["skin_source"], "sidecar")
+        self.assertEqual(preview["skin"][0][0]["joint"], "hips")
+        self.assertEqual(preview["skin"][4][0]["joint"], "head")
+        self.assertNotEqual(image_a.tobytes(), image_b.tobytes())
+
     def test_model_metadata_extracts_gltf_json_names_and_bounds(self) -> None:
         clear_model3d_metadata_caches()
         with tempfile.TemporaryDirectory(prefix="model3d_gltf_meta_") as root:

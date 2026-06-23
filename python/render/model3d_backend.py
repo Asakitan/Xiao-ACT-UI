@@ -480,11 +480,49 @@ def _extract_rest_positions(value: Any) -> dict[str, tuple[float, float, float]]
     return out
 
 
+def _extract_preview_skin(value: Any) -> list[list[dict[str, float | str]]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: list[list[dict[str, float | str]]] = []
+    any_weight = False
+    for raw_vertex in value[:_MESH_PREVIEW_VERTEX_LIMIT]:
+        if isinstance(raw_vertex, Mapping):
+            raw_items: Any = (raw_vertex,)
+        elif isinstance(raw_vertex, (list, tuple)):
+            raw_items = raw_vertex
+        else:
+            raw_items = ()
+        influences: list[dict[str, float | str]] = []
+        for raw_item in list(raw_items)[:8]:
+            if not isinstance(raw_item, Mapping):
+                continue
+            joint = str(
+                raw_item.get("joint")
+                or raw_item.get("bone")
+                or raw_item.get("name")
+                or ""
+            ).strip()
+            if not joint:
+                continue
+            try:
+                weight = float(raw_item.get("weight", 0.0) or 0.0)
+            except Exception:
+                continue
+            if not math.isfinite(weight) or weight <= 0.000001:
+                continue
+            influences.append({"joint": joint, "weight": float(weight)})
+            any_weight = True
+        out.append(influences)
+    return out if any_weight else []
+
+
 def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
     src = dict(value)
     skeleton = src.get("skeleton") if isinstance(src.get("skeleton"), Mapping) else {}
+    mesh = src.get("mesh") if isinstance(src.get("mesh"), Mapping) else {}
+    preview = mesh.get("preview") if isinstance(mesh.get("preview"), Mapping) else {}
     bones = (
         _extract_names(src.get("bones"))
         or _extract_names(src.get("bone_names"))
@@ -513,12 +551,46 @@ def _extract_sidecar_metadata(value: Any) -> dict[str, Any]:
     )
     if rest_positions:
         out["rest_positions"] = dict(rest_positions)
+    preview_skin = (
+        _extract_preview_skin(src.get("preview_skin"))
+        or _extract_preview_skin((preview or {}).get("skin"))
+        or _extract_preview_skin((mesh or {}).get("skin"))
+    )
+    if preview_skin:
+        out["preview_skin"] = preview_skin
     for key in ("profile", "up_axis", "unit_scale", "rest_pose"):
         if key in src:
             out[key] = _json_safe_scalar(src.get(key))
         elif skeleton and key in skeleton:
             out[key] = _json_safe_scalar(skeleton.get(key))
     return out
+
+
+def _merge_sidecar_preview_skin(
+    file_mesh: Any,
+    sidecar_meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    mesh = copy.deepcopy(file_mesh) if isinstance(file_mesh, Mapping) else {}
+    skin = sidecar_meta.get("preview_skin")
+    if not isinstance(skin, list) or not skin:
+        return mesh
+    preview = mesh.get("preview") if isinstance(mesh.get("preview"), Mapping) else {}
+    preview = dict(preview or {})
+    vertices = preview.get("vertices")
+    try:
+        vertex_count = len(vertices) if isinstance(vertices, (list, tuple)) else len(skin)
+    except Exception:
+        vertex_count = len(skin)
+    vertex_count = max(0, min(_MESH_PREVIEW_VERTEX_LIMIT, int(vertex_count or 0)))
+    if vertex_count <= 0:
+        return mesh
+    merged_skin = copy.deepcopy(skin[:vertex_count])
+    while len(merged_skin) < vertex_count:
+        merged_skin.append([])
+    preview["skin"] = merged_skin
+    preview["skin_source"] = "sidecar"
+    mesh["preview"] = preview
+    return mesh
 
 
 def _json_safe_scalar(value: Any) -> Any:
@@ -1658,7 +1730,7 @@ def get_model_metadata(node: Mapping[str, Any]) -> dict[str, Any]:
         "mtime_ns": mtime_ns,
         "extension": resolved.suffix.lower(),
         "sidecar": dict(sidecar_meta),
-        "mesh": dict(file_meta.get("mesh") or {}),
+        "mesh": _merge_sidecar_preview_skin(file_meta.get("mesh") or {}, sidecar_meta),
         "skins": copy.deepcopy(file_meta.get("skins") or []),
         "nodes": tuple(file_meta.get("nodes") or ()),
         "materials": tuple(file_meta.get("materials") or ()),

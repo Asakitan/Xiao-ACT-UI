@@ -16,6 +16,11 @@ from typing import Any
 from .plugins import PluginManager
 from .runtime import act_plugin_action, act_plugin_disable, act_plugin_enable, render_overlays
 
+try:
+    from render.model3d_backend import get_model_metadata
+except Exception:  # pragma: no cover - render package can be absent in narrow imports
+    get_model_metadata = None  # type: ignore[assignment]
+
 
 def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -37,6 +42,22 @@ def _require_action(owner: Any, plugin_id: str, action_id: str,
 
 def _plugin_timer_active(manager: PluginManager, plugin_id: str) -> bool:
     return bool(manager._timers.get(plugin_id) or {})
+
+
+def _find_model3d_node(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if str(value.get("type") or "").lower() == "model3d":
+            return dict(value)
+        for item in value.values():
+            found = _find_model3d_node(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_model3d_node(item)
+            if found:
+                return found
+    return {}
 
 
 def run_selftest() -> dict[str, Any]:
@@ -383,6 +404,37 @@ def run_selftest() -> dict[str, Any]:
                         "stage": "stickwoman_overlay_keyframes",
                         "overlays": overlays,
                     }
+                model_node = _find_model3d_node(overlays)
+                if not model_node:
+                    return {
+                        "ok": False,
+                        "plugin_id": plugin_id,
+                        "stage": "stickwoman_model3d_node",
+                        "overlays": overlays,
+                    }
+                if callable(get_model_metadata):
+                    meta = get_model_metadata(model_node)
+                    mesh = meta.get("mesh") if isinstance(meta.get("mesh"), dict) else {}
+                    preview = mesh.get("preview") if isinstance(mesh.get("preview"), dict) else {}
+                    skin = preview.get("skin") if isinstance(preview.get("skin"), list) else []
+                    vertex_count = int(mesh.get("vertex_count") or 0)
+                    face_count = int(mesh.get("face_count") or 0)
+                    if vertex_count < 40 or face_count < 20 or not any(skin):
+                        return {
+                            "ok": False,
+                            "plugin_id": plugin_id,
+                            "stage": "stickwoman_default_asset_quality",
+                            "model": model_node.get("model"),
+                            "mesh": {
+                                "vertex_count": vertex_count,
+                                "face_count": face_count,
+                                "preview_skin_count": len(skin),
+                                "preview_skin_source": preview.get("skin_source"),
+                            },
+                        }
+                    state["default_vertex_count"] = vertex_count
+                    state["default_face_count"] = face_count
+                    state["default_preview_skin_count"] = len(skin)
             if not action.get("ok"):
                 return {"ok": False, "plugin_id": plugin_id, "stage": "game_action", "result": action}
             summaries[plugin_id] = {
@@ -400,6 +452,9 @@ def run_selftest() -> dict[str, Any]:
                 "tick_count": state.get("tick_count"),
                 "render_count": state.get("render_count"),
                 "spec_build_count": state.get("spec_build_count"),
+                "default_vertex_count": state.get("default_vertex_count"),
+                "default_face_count": state.get("default_face_count"),
+                "default_preview_skin_count": state.get("default_preview_skin_count"),
                 "cache_hit_count": state.get("cache_hit_count"),
                 "pending_turns": state.get("pending_turns"),
                 "queued_flaps": state.get("queued_flaps"),
