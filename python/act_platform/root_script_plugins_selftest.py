@@ -242,6 +242,8 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_detail_mode_state", "state": detail_state}
                 if detail_state.get("signature_granularity") != "minute":
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_detail_mode_granularity", "state": detail_state}
+                if abs(float(detail_state.get("tick_interval") or 0.0) - 60.0) > 0.0001:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_minute_tick_interval", "state": detail_state}
                 if int(detail_state.get("render_count") or 0) <= int(redraw_state.get("render_count") or 0):
                     return {
                         "ok": False,
@@ -279,6 +281,8 @@ def run_selftest() -> dict[str, Any]:
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_mode_state", "state": seconds_state}
                 if seconds_state.get("signature_granularity") != "second":
                     return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_mode_granularity", "state": seconds_state}
+                if abs(float(seconds_state.get("tick_interval") or 0.0) - 1.0) > 0.0001:
+                    return {"ok": False, "plugin_id": plugin_id, "stage": "clock_seconds_tick_interval", "state": seconds_state}
                 state = dict(seconds_state)
 
             if plugin_id == "script_flappy_emma":
