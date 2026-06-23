@@ -1350,6 +1350,13 @@ pre.code-block { overflow:visible; }
     <div id="s-perms" style="margin-top:6px;font-size:11px"></div>
 
     <div class="settings-section">
+      <div class="sb-group" style="padding:0;margin-top:0">Appearance</div>
+      <label>Color Theme</label>
+      <select id="s-color-theme" style="width:100%"></select>
+      <div class="settings-help" id="s-color-theme-info">Extension color themes are loaded from contributed theme JSON files.</div>
+    </div>
+
+    <div class="settings-section">
       <div class="sb-group" style="padding:0;margin-top:0">Claude Code</div>
       <div class="settings-grid">
         <div><label>CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
@@ -1524,7 +1531,7 @@ const SETTINGS_SECTION_DEFAULTS={
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -2462,6 +2469,38 @@ async function loadEditorThemes(){
     const r=await call('list_editor_themes');
     if(r&&Array.isArray(r.themes))EXTENSION_EDITOR_THEMES=r.themes;
   }catch(e){}
+}
+function extensionColorThemes(){
+  return EXTENSION_EDITOR_THEMES.filter(t=>t&&t.themeType==='color');
+}
+function extensionThemeValue(theme){return 'ext:'+String(theme&&theme.id||'')}
+function extensionThemeByValue(value){
+  const id=String(value||'').replace(/^ext:/,'');
+  return extensionColorThemes().find(t=>String(t.id||'')===id)||null;
+}
+function extensionThemeBase(theme){
+  const ui=String(theme&&theme.uiTheme||'').toLowerCase();
+  return (ui==='vs'||ui==='hc-light')?'light':'dark';
+}
+function renderEditorColorThemeOptions(){
+  const sel=$('s-color-theme');if(!sel)return;
+  const selected=config.color_theme||config.theme||'dark';
+  sel.innerHTML='';
+  sel.appendChild(new Option('Dark', 'dark'));
+  sel.appendChild(new Option('Light', 'light'));
+  const colorThemes=extensionColorThemes();
+  if(colorThemes.length){
+    const group=document.createElement('optgroup');group.label='Extensions';
+    colorThemes.forEach(theme=>{
+      const label=(theme.label||theme.id||'Extension Theme')+(theme.extension_id?' · '+theme.extension_id:'');
+      const opt=new Option(label,extensionThemeValue(theme));
+      opt.title=theme.resolvedPath||theme.path||'';
+      group.appendChild(opt);
+    });
+    sel.appendChild(group);
+  }
+  const value=Array.from(sel.options).some(o=>o.value===selected)?selected:(config.theme||'dark');
+  sel.value=value;
 }
 function detectLanguage(code,name){
   const byName=languageForFileName(name);
@@ -4664,6 +4703,9 @@ function openSettings(){
   $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
   $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
   $('s-mode').value=normalizeMode(currentMode||config.mode||'agent');renderPermissions();showModelInfo();
+  renderEditorColorThemeOptions();
+  const selectedThemeOption=($('s-color-theme').selectedOptions||[])[0];
+  setColorThemeInfo(currentColorTheme&&selectedThemeOption?('Active: '+selectedThemeOption.textContent):'',false);
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
   if($('sk-openai'))$('sk-openai').value=keys.openai||'';
@@ -4898,6 +4940,7 @@ async function saveSettings(){
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readListValue('s-ext-contribs',true)};
   config.customization={...settingSection('customization'),use_agent_md:readCheckedValue('s-cust-agent-md'),use_claude_md:readCheckedValue('s-cust-claude-md'),instructions_locations:readListValue('s-cust-instructions',true),agent_locations:readListValue('s-cust-agents',true),workflow_locations:readListValue('s-cust-workflows',true),skill_locations:readListValue('s-cust-skills',true)};
+  await applyEditorColorTheme(readInputValue('s-color-theme')||config.color_theme||config.theme||'dark');
   const newMode=normalizeMode($('s-mode').value);
   config.mode=newMode;
   if(newMode!==currentMode){
@@ -6223,17 +6266,96 @@ window.doSend=doSend;
 
 // ── Theme toggle ──
 let currentTheme='dark';
+let currentColorTheme='';
+const THEME_COLOR_VAR_MAP={
+  'foreground':'--fg',
+  'descriptionForeground':'--fg-dim',
+  'errorForeground':'--fg-error',
+  'focusBorder':'--border-focus',
+  'editor.background':'--bg-editor',
+  'editor.foreground':'--fg-code',
+  'editor.selectionBackground':'--selection',
+  'editor.lineHighlightBackground':'--line-highlight',
+  'sideBar.background':'--bg-sidebar',
+  'sideBar.foreground':'--fg',
+  'activityBar.background':'--bg-sidebar',
+  'activityBar.foreground':'--fg-bright',
+  'panel.background':'--bg-panel',
+  'tab.activeBackground':'--bg-tab-active',
+  'tab.inactiveBackground':'--bg-tab',
+  'input.background':'--bg-input',
+  'input.foreground':'--fg',
+  'dropdown.background':'--bg-input',
+  'button.background':'--btn',
+  'button.hoverBackground':'--btn-hover',
+  'list.hoverBackground':'--bg-hover',
+  'list.activeSelectionBackground':'--bg-active',
+  'badge.background':'--bg-badge',
+  'statusBar.background':'--statusbar-bg',
+  'statusBar.foreground':'--statusbar-fg',
+  'editorWidget.background':'--bg2',
+  'editorGroupHeader.tabsBackground':'--bg2',
+  'terminal.background':'--bg-panel',
+  'terminal.foreground':'--fg-code'
+};
+const THEME_COLOR_VARS=[...new Set(Object.values(THEME_COLOR_VAR_MAP))];
 
 async function toggleTheme(){
   currentTheme=currentTheme==='dark'?'light':'dark';
   applyTheme(currentTheme);
-  const r=await persistConfigPatch({theme:currentTheme},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
+  currentColorTheme='';config.color_theme='';
+  const r=await persistConfigPatch({theme:currentTheme,color_theme:''},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
   if(callSucceeded(r))showToast('Theme: '+currentTheme,'info');
 }
 
+function clearExtensionThemeColors(){
+  const style=document.documentElement.style;
+  THEME_COLOR_VARS.forEach(name=>style.removeProperty(name));
+}
+function safeThemeColor(value){
+  const v=String(value||'').trim();
+  return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)?v:'';
+}
+function applyExtensionThemeColors(colors){
+  if(!colors||typeof colors!=='object')return;
+  const style=document.documentElement.style;
+  Object.entries(THEME_COLOR_VAR_MAP).forEach(([key,varName])=>{
+    const color=safeThemeColor(colors[key]);
+    if(color)style.setProperty(varName,color);
+  });
+}
 function applyTheme(theme){
+  clearExtensionThemeColors();
   document.documentElement.setAttribute('data-theme',theme);
   currentTheme=theme;
+}
+async function applyEditorColorTheme(value,options){
+  const opts=options||{};
+  const selected=String(value||'').trim();
+  const theme=selected.startsWith('ext:')?extensionThemeByValue(selected):null;
+  if(theme){
+    const base=extensionThemeBase(theme);
+    applyTheme(base);
+    currentColorTheme=selected;config.color_theme=selected;config.theme=base;
+    const r=await call('get_editor_theme',String(theme.id||theme.label||''));
+    if(r&&r.ok){applyExtensionThemeColors(r.colors||{});setColorThemeInfo(theme.label||theme.id||'',false)}
+    else setColorThemeInfo((r&&r.error)||'Theme colors unavailable',true);
+    if(opts.persist){
+      await persistConfigPatch({theme:base,color_theme:selected},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
+    }
+    return;
+  }
+  const builtin=selected==='light'?'light':'dark';
+  applyTheme(builtin);currentColorTheme='';config.theme=builtin;config.color_theme='';
+  setColorThemeInfo('',false);
+  if(opts.persist){
+    await persistConfigPatch({theme:builtin,color_theme:''},{errorPrefix:'Theme save failed: ',partialPrefix:'Theme updated only for current session: '});
+  }
+}
+function setColorThemeInfo(text,isError){
+  const el=$('s-color-theme-info');if(!el)return;
+  el.textContent=text||'Extension color themes are loaded from contributed theme JSON files.';
+  el.style.color=isError?'var(--fg-error)':'var(--fg-dim)';
 }
 
 // Load theme from config on init
@@ -6242,7 +6364,7 @@ const _origInit=init;
 init=async function(){
   if(_initDone)return;_initDone=true;
   await _origInit();
-  if(config.theme)applyTheme(config.theme);
+  await applyEditorColorTheme(config.color_theme||config.theme||'dark');
 };
 window.toggleTheme=toggleTheme;
 

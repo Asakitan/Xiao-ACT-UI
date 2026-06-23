@@ -285,7 +285,7 @@ def test_app_settings_parity() -> None:
         "list_extension_settings", "get_extension_setting",
         "set_extension_setting", "reset_extension_setting",
         "list_editor_languages", "list_editor_grammars",
-        "list_editor_themes",
+        "list_editor_themes", "get_editor_theme",
         "list_extension_activity_bar_items",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
@@ -1169,8 +1169,12 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend loads dynamic editor language contributions",
             "call('list_editor_languages')" in html
             and "call('list_editor_themes')" in html
+            and "call('get_editor_theme'" in html
             and "function applyEditorLanguages(rows)" in html
             and "function loadEditorThemes()" in html
+            and "function renderEditorColorThemeOptions()" in html
+            and "function applyEditorColorTheme(value,options)" in html
+            and "THEME_COLOR_VAR_MAP" in html
             and "EXTENSION_EDITOR_THEMES" in html
             and "grammarScopes" in html
             and "badges.push('TextMate')" in html
@@ -2888,6 +2892,7 @@ def test_app_extension_runtime_support() -> None:
     from ai_editor.vscode_api import LanguageModelToolResult
 
     previous_host = extension_host_module._host
+    language_tmp = ""
     settings_tmp = ""
     extension_host_module._host = ExtensionHost()
     try:
@@ -2918,6 +2923,19 @@ def test_app_extension_runtime_support() -> None:
                ext_contribs.get("summary", {}).get("languageModelTools", 0) >= 1
                and "languageModelTools" in ext_contribs.get("contributions", {}))
 
+        language_tmp = tempfile.mkdtemp(prefix="sao_ext_language_")
+        os.makedirs(os.path.join(language_tmp, "themes"), exist_ok=True)
+        with open(os.path.join(language_tmp, "themes", "self-dark.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "Self Dark",
+                "type": "dark",
+                "colors": {
+                    "editor.background": "#101820",
+                    "editor.foreground": "#f0f3f8",
+                    "statusBar.background": "#203040",
+                },
+            }, f)
         language_desc = ExtensionDescription.from_package_json({
             "name": "language-pack",
             "publisher": "selftest",
@@ -2948,7 +2966,8 @@ def test_app_extension_runtime_support() -> None:
                     "path": "./themes/self-icons.json",
                 }],
             },
-        }, "/tmp/selftest-language")
+        }, language_tmp)
+        api._ext_host.registry.register(language_desc)
         api._ext_host.ext_points.process(language_desc)
         editor_languages = {
             item.get("id"): item
@@ -2956,6 +2975,7 @@ def test_app_extension_runtime_support() -> None:
         }
         editor_grammars = api.list_editor_grammars().get("grammars", [])
         editor_themes = api.list_editor_themes()
+        editor_theme_data = api.get_editor_theme("Self Dark")
         selflang_grammars = (
             editor_languages.get("selflang", {}).get("grammars") or [{}])
         selflang_resolved_path = (
@@ -2983,6 +3003,10 @@ def test_app_extension_runtime_support() -> None:
                and any(item.get("id") == "self-icons"
                        and item.get("themeType") == "icon"
                        for item in editor_themes.get("themes", [])))
+        _check("extension color theme JSON feeds editor theme colors",
+               editor_theme_data.get("ok") is True
+               and editor_theme_data.get("colors", {}).get("editor.background") == "#101820"
+               and editor_theme_data.get("theme", {}).get("label") == "Self Dark")
         _check("extension language extensions and filenames drive file detection",
                api._editor_language_for_path("demo.self") == "selflang"
                and api._editor_language_for_path("SELFFILE") == "selflang")
@@ -3479,6 +3503,8 @@ def test_app_extension_runtime_support() -> None:
                "no registered handler" in missing_data.get("error", ""))
     finally:
         extension_host_module._host = previous_host
+        if language_tmp:
+            shutil.rmtree(language_tmp, ignore_errors=True)
         if settings_tmp:
             shutil.rmtree(settings_tmp, ignore_errors=True)
 

@@ -918,6 +918,48 @@ class AIEditorAPI:
                 1 for item in themes if item.get("themeType") != "color"),
         }
 
+    def get_editor_theme(self, theme_id: str) -> Dict:
+        """Return safe color data for one extension-contributed color theme."""
+        self._ensure_engine()
+        requested = str(theme_id or "").strip()
+        if not requested:
+            return {"error": "theme id is required"}
+        theme = next((
+            item for item in self._editor_theme_entries()
+            if item.get("themeType") == "color"
+            and requested in {
+                str(item.get("id") or ""),
+                str(item.get("label") or ""),
+            }
+        ), None)
+        if not theme:
+            return {"error": f"Color theme not found: {requested}"}
+        path = str(theme.get("resolvedPath") or "")
+        if not path or not os.path.isabs(path) or not os.path.exists(path):
+            return {"error": "Theme file is not available", "theme": theme}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:
+            return {"error": f"Failed to read theme JSON: {exc}", "theme": theme}
+        if not isinstance(payload, dict):
+            return {"error": "Theme JSON must be an object", "theme": theme}
+        colors = payload.get("colors") or {}
+        if not isinstance(colors, dict):
+            colors = {}
+        safe_colors = {
+            str(key): str(value)
+            for key, value in colors.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        return {
+            "ok": True,
+            "theme": theme,
+            "colors": safe_colors,
+            "name": str(payload.get("name") or theme.get("label") or ""),
+            "type": str(payload.get("type") or theme.get("uiTheme") or ""),
+        }
+
     def save_config(self, data: Dict) -> Dict:
         settings = _resolve_settings(self._gui_ref)
         merged = _merge_ai_editor_config({}, data)
