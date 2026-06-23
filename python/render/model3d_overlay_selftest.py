@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import struct
 import sys
 import tempfile
@@ -1161,6 +1162,72 @@ Objects:  {
         self.assertEqual(pose["motion_source"], "keyframes")
         self.assertEqual(pose["motion_sample"]["rotation_count"], 1)
         self.assertGreater(pose["positions"]["right_hand"][1], 0.65)
+
+    def test_evaluate_retarget_pose_clamps_extreme_keyframe_rotation_twist(self) -> None:
+        clear_model3d_metadata_caches()
+
+        def quat_angle(value):
+            x, y, z, w = [float(item) for item in value]
+            if w < 0.0:
+                x, y, z, w = -x, -y, -z, -w
+            axis = math.sqrt(x * x + y * y + z * z)
+            return 2.0 * math.atan2(axis, max(-1.0, min(1.0, w)))
+
+        with tempfile.TemporaryDirectory(prefix="model3d_twist_limit_") as root:
+            model_path = Path(root) / "avatar.fbx"
+            model_path.write_text("fixture", encoding="utf-8")
+            (Path(root) / "avatar.model3d.json").write_text(json.dumps({
+                "skeleton": {
+                    "bones": [
+                        "mixamorig:RightArm",
+                        "mixamorig:RightForeArm",
+                        "mixamorig:RightHand",
+                    ],
+                    "bone_map": {
+                        "right_arm": "mixamorig:RightArm",
+                        "right_forearm": "mixamorig:RightForeArm",
+                        "right_hand": "mixamorig:RightHand",
+                    },
+                    "rest_positions": {
+                        "mixamorig:RightArm": [0.32, 0.82, 0.0],
+                        "mixamorig:RightForeArm": [0.58, 0.58, 0.0],
+                        "mixamorig:RightHand": [0.76, 0.36, 0.0],
+                    },
+                },
+            }), encoding="utf-8")
+            node = normalize_ui_spec({
+                "type": "model3d",
+                "model": {"path": str(model_path)},
+                "retarget": {
+                    "mode": "humanoid_auto",
+                    "twist_limit": 0.10,
+                    "stretch_limit": 0.5,
+                },
+                "action": {
+                    "name": "wave",
+                    "time": 0.0,
+                    "json": {
+                        "wave": {
+                            "keyframes": [
+                                {"time": 0.0, "rotations": {"right_arm": [0.0, 0.0, 1.0, 0.0]}},
+                            ],
+                        },
+                    },
+                },
+            })["nodes"][0]
+
+            pose = evaluate_retarget_pose(node)
+
+        limit = pose["rotation_limit"]
+        max_angle = 0.10 * math.pi
+        self.assertTrue(pose["ok"], pose)
+        self.assertEqual(pose["motion_sample"]["rotation_count"], 1)
+        self.assertEqual(limit["clamped_count"], 1, limit)
+        self.assertIn("right_arm", limit["clamped"])
+        self.assertAlmostEqual(limit["max_angle"], max_angle)
+        self.assertGreater(limit["source_angles"]["right_arm"], math.pi * 0.99)
+        self.assertLessEqual(limit["angles"]["right_arm"], max_angle + 0.000001)
+        self.assertLessEqual(quat_angle(pose["rotations"]["right_arm"]), max_angle + 0.000001)
 
     def test_retarget_plan_maps_mixamo_sidecar_bones(self) -> None:
         clear_model3d_metadata_caches()

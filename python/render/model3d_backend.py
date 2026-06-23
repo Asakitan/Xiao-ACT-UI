@@ -2050,6 +2050,38 @@ def _quat_normalize(q: tuple[float, float, float, float]) -> tuple[float, float,
     return q[0] / length, q[1] / length, q[2] / length, q[3] / length
 
 
+def _quat_shortest(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    q = _quat_normalize(q)
+    if q[3] < 0.0:
+        return -q[0], -q[1], -q[2], -q[3]
+    return q
+
+
+def _quat_angle(q: tuple[float, float, float, float]) -> float:
+    q = _quat_shortest(q)
+    axis_len = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2])
+    return 2.0 * math.atan2(axis_len, max(-1.0, min(1.0, q[3])))
+
+
+def _limit_quat_angle(
+    q: tuple[float, float, float, float],
+    max_angle: float,
+) -> tuple[tuple[float, float, float, float], float, float, bool]:
+    q = _quat_shortest(q)
+    angle = _quat_angle(q)
+    limit = max(0.0, min(math.pi, float(max_angle or 0.0)))
+    if angle <= limit + 0.000001:
+        return q, angle, angle, False
+    axis_len = math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2])
+    if axis_len <= 0.000001 or limit <= 0.000001:
+        return (0.0, 0.0, 0.0, 1.0), angle, 0.0, True
+    axis = (q[0] / axis_len, q[1] / axis_len, q[2] / axis_len)
+    half = limit * 0.5
+    s = math.sin(half)
+    limited = (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half))
+    return _quat_normalize(limited), angle, limit, True
+
+
 def _quat_rotate_vec(
     q: tuple[float, float, float, float],
     v: tuple[float, float, float],
@@ -2351,6 +2383,51 @@ def _rotation_offsets_from_samples(
     return out
 
 
+def _twist_limit_angle(plan: Mapping[str, Any]) -> float:
+    try:
+        raw = float(plan.get("twist_limit") or 0.0)
+    except Exception:
+        raw = 0.0
+    if raw <= 0.0:
+        return 0.0
+    # Existing specs express values in the same small 0..1 style as
+    # stretch_limit; treat that range as a fraction of a half-turn. Larger
+    # values are accepted as radians for advanced/native backends.
+    if raw <= 1.0:
+        return min(math.pi, raw * math.pi)
+    return min(math.pi, raw)
+
+
+def _limit_keyframe_rotations(
+    rotations: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> tuple[dict[str, tuple[float, float, float, float]], dict[str, Any]]:
+    max_angle = _twist_limit_angle(plan)
+    out: dict[str, tuple[float, float, float, float]] = {}
+    angles: dict[str, float] = {}
+    source_angles: dict[str, float] = {}
+    clamped: list[str] = []
+    for bone, raw_quat in rotations.items():
+        canonical = _canonical_from_token(bone)
+        quat = _quat4(raw_quat)
+        if not canonical or quat is None:
+            continue
+        limited, source_angle, limited_angle, was_clamped = _limit_quat_angle(quat, max_angle)
+        out[canonical] = limited
+        angles[canonical] = float(limited_angle)
+        source_angles[canonical] = float(source_angle)
+        if was_clamped:
+            clamped.append(canonical)
+    return out, {
+        "enabled": True,
+        "max_angle": float(max_angle),
+        "clamped_count": len(clamped),
+        "clamped": tuple(sorted(clamped)),
+        "angles": {bone: float(value) for bone, value in sorted(angles.items())},
+        "source_angles": {bone: float(value) for bone, value in sorted(source_angles.items())},
+    }
+
+
 def _motion_scale_for_bone(
     bone: str,
     rest: Mapping[str, tuple[float, float, float]],
@@ -2521,6 +2598,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
     keyframe_rotations = (
         keyframe_info.get("rotations") if isinstance(keyframe_info.get("rotations"), Mapping) else {}
     )
+    keyframe_rotations, rotation_limit = _limit_keyframe_rotations(keyframe_rotations, plan)
     rotation_offsets = _rotation_offsets_from_samples(rest, keyframe_rotations)
     has_keyframe_motion = keyframe_info.get("motion_source") == "keyframes"
     use_procedural = (
@@ -2590,6 +2668,7 @@ def evaluate_retarget_pose(node: Mapping[str, Any]) -> dict[str, Any]:
         "motion_source": keyframe_info.get("motion_source") or ("procedural" if use_procedural else "offsets"),
         "motion_sample": dict(keyframe_info),
         "rotations": dict(keyframe_rotations),
+        "rotation_limit": dict(rotation_limit),
         "motion_scale": dict(motion_scale),
         "model_rest_bones": tuple(sorted(model_rest_bones)),
         "rest_positions": {key: [float(x) for x in value] for key, value in rest.items()},
