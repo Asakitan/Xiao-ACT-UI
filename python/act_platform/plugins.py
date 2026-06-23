@@ -2520,8 +2520,8 @@ class PluginManager:
         if not bool(getattr(record, "script_runtime_active", False)):
             return
         try:
-            from .scripting import get_runtime
-            runtime = get_runtime(record.language)
+            from .scripting import get_cached_runtime
+            runtime = get_cached_runtime(record.language)
             unload = getattr(runtime, "unload_script", None)
             if callable(unload):
                 unload(record)

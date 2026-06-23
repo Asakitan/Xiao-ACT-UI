@@ -111,6 +111,23 @@ def _write_action_script_plugin(root: str) -> str:
     return plugin_dir
 
 
+def _write_action_script_two_plugin(root: str) -> str:
+    plugin_dir = os.path.join(root, "action_script_two_demo")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": "action_script_two_demo",
+            "name": "Action Script Two Demo",
+            "version": "0.1.0",
+            "entry": "plugin.lua",
+            "language": "lua",
+            "enabled": True,
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.lua"), "w", encoding="utf-8") as fp:
+        fp.write("-- fake runtime shares the cached lua engine\n")
+    return plugin_dir
+
+
 def _write_hot_script_plugin(root: str) -> str:
     plugin_dir = os.path.join(root, "hot_script_demo")
     os.makedirs(plugin_dir, exist_ok=True)
@@ -364,10 +381,11 @@ dictionary@ state()
             def __init__(self) -> None:
                 self.loaded = []
                 self.unloaded = []
+                self.disposed = 0
 
             def load_script(self, _entry_path, record, ctx):
                 self.loaded.append(record.plugin_id)
-                if record.plugin_id == "action_script_demo":
+                if record.plugin_id in {"action_script_demo", "action_script_two_demo"}:
                     module = ModuleType(f"act_plugin_lua_{record.plugin_id}")
 
                     def on_load(_ctx):
@@ -387,13 +405,22 @@ dictionary@ state()
             def unload_script(self, record) -> None:
                 self.unloaded.append(record.plugin_id)
 
-        original_get_runtime = scripting.get_runtime
+            def dispose(self) -> None:
+                self.disposed += 1
+
+        _write_action_script_two_plugin(root)
+        manager.sync_discovery(force=True)
+        original_runtime_cache = dict(scripting._runtimes)
+        original_create_runtime = scripting._create_runtime
         fake_runtime = FakeLuaRuntime()
-        scripting.get_runtime = (
-            lambda language: fake_runtime
-            if str(language or "").lower() == "lua"
-            else original_get_runtime(language)
-        )
+        runtime_create_calls = []
+
+        def _unexpected_runtime_create(language):
+            runtime_create_calls.append(language)
+            raise RuntimeError("unload must not instantiate script runtimes")
+
+        scripting._runtimes.clear()
+        scripting._runtimes["lua"] = fake_runtime
         try:
             action_result = act_plugin_action(
                 owner,
@@ -404,19 +431,54 @@ dictionary@ state()
             assert action_result.get("ok"), action_result
             assert fake_runtime.loaded == ["action_script_demo"], fake_runtime.loaded
             assert manager._records["action_script_demo"].loaded, manager.status()
-            assert not manager._records["failing_script_demo"].loaded, manager.status()
-            assert not manager.load_plugin("failing_script_demo"), manager.status()
+            action_two_result = act_plugin_action(
+                owner,
+                "script.overlay.set_enabled",
+                {"enabled": True},
+                plugin_id="action_script_two_demo",
+            )
+            assert action_two_result.get("ok"), action_two_result
+            assert fake_runtime.loaded == ["action_script_demo", "action_script_two_demo"], fake_runtime.loaded
+            assert manager._records["action_script_two_demo"].loaded, manager.status()
+            assert scripting.runtime_loaded("lua"), scripting.list_runtimes()
             assert manager.forget_plugin("action_script_demo"), manager.status()
             assert fake_runtime.unloaded[-1:] == ["action_script_demo"], fake_runtime.unloaded
+            assert scripting.runtime_loaded("lua"), scripting.list_runtimes()
+            assert fake_runtime.disposed == 0, fake_runtime.disposed
+            assert manager.forget_plugin("action_script_two_demo"), manager.status()
+            assert fake_runtime.unloaded[-1:] == ["action_script_two_demo"], fake_runtime.unloaded
+            assert not scripting.runtime_loaded("lua"), scripting.list_runtimes()
+            assert fake_runtime.disposed == 1, fake_runtime.disposed
+            assert not manager._records["failing_script_demo"].loaded, manager.status()
+            scripting._runtimes["lua"] = fake_runtime
+            assert not manager.load_plugin("failing_script_demo"), manager.status()
+            assert fake_runtime.unloaded[-1:] == ["failing_script_demo"], fake_runtime.unloaded
+            assert not scripting.runtime_loaded("lua"), scripting.list_runtimes()
+            assert fake_runtime.disposed == 2, fake_runtime.disposed
             assert not manager.dispatch_plugin_action(
                 "script.overlay.set_enabled",
                 {"enabled": False},
                 plugin_id="action_script_demo",
             ).get("ok")
+            scripting._create_runtime = _unexpected_runtime_create
+            manager._records["failing_script_demo"].script_runtime_active = True
+            manager._unload_script_runtime(manager._records["failing_script_demo"])
+            assert not runtime_create_calls, runtime_create_calls
+            assert manager._records["failing_script_demo"].script_runtime_active is False
         finally:
-            scripting.get_runtime = original_get_runtime
-        assert fake_runtime.loaded == ["action_script_demo", "failing_script_demo"], fake_runtime.loaded
-        assert fake_runtime.unloaded == ["failing_script_demo", "action_script_demo"], fake_runtime.unloaded
+            scripting._create_runtime = original_create_runtime
+            scripting._runtimes.clear()
+            scripting._runtimes.update(original_runtime_cache)
+        assert fake_runtime.loaded == [
+            "action_script_demo",
+            "action_script_two_demo",
+            "failing_script_demo",
+        ], fake_runtime.loaded
+        assert fake_runtime.unloaded == [
+            "action_script_demo",
+            "action_script_two_demo",
+            "failing_script_demo",
+        ], fake_runtime.unloaded
         assert manager.render_registry.status().get("overlay_count") == 0, manager.render_registry.status()
         assert not manager._timers.get("failing_script_demo"), manager._timers
         assert not any(

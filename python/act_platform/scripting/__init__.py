@@ -17,6 +17,7 @@ Usage from PluginManager::
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ ENTRY_EXTENSIONS: dict[str, str] = {
 }
 
 _runtimes: dict[str, "ScriptRuntime"] = {}
+_runtime_lock = threading.RLock()
 
 
 def get_runtime(language: str) -> "ScriptRuntime":
@@ -59,13 +61,23 @@ def get_runtime(language: str) -> "ScriptRuntime":
     if lang not in SUPPORTED_LANGUAGES:
         raise ValueError(f"unsupported plugin language: {language!r}")
 
-    cached = _runtimes.get(lang)
-    if cached is not None:
-        return cached
+    with _runtime_lock:
+        cached = _runtimes.get(lang)
+        if cached is not None:
+            return cached
 
-    rt = _create_runtime(lang)
-    _runtimes[lang] = rt
-    return rt
+        rt = _create_runtime(lang)
+        _runtimes[lang] = rt
+        return rt
+
+
+def get_cached_runtime(language: str) -> Optional["ScriptRuntime"]:
+    """Return an already-created non-Python runtime without instantiating it."""
+    lang = _normalize(language)
+    if lang == LANGUAGE_PYTHON:
+        return None
+    with _runtime_lock:
+        return _runtimes.get(lang)
 
 
 def release_runtime(language: str) -> bool:
@@ -78,17 +90,18 @@ def release_runtime(language: str) -> bool:
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return False
-    rt = _runtimes.pop(lang, None)
-    if rt is None:
-        return False
-    for name in ("dispose", "shutdown", "close"):
-        fn = getattr(rt, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-            break
+    with _runtime_lock:
+        rt = _runtimes.pop(lang, None)
+        if rt is None:
+            return False
+        for name in ("dispose", "shutdown", "close"):
+            fn = getattr(rt, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
     return True
 
 
@@ -97,7 +110,8 @@ def runtime_loaded(language: str) -> bool:
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return True
-    return lang in _runtimes
+    with _runtime_lock:
+        return lang in _runtimes
 
 
 def runtime_available(language: str) -> bool:
@@ -137,7 +151,8 @@ def list_runtimes(*, probe: bool = False) -> dict[str, dict]:
         if lang == LANGUAGE_PYTHON:
             out[lang] = {"available": True, "loaded": True, "error": ""}
             continue
-        cached = _runtimes.get(lang)
+        with _runtime_lock:
+            cached = _runtimes.get(lang)
         if cached is not None:
             out[lang] = {
                 "available": True,
